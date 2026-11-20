@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -15,7 +16,9 @@
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/browser/BrowserDeferredCalls.h"
 #include "donner/gpu/browser/tests/FakeBrowserBridge.h"
+#include "donner/gpu/browser/tests/FakeOwnerChannel.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/RecordingDeviceObserver.h"
 
@@ -2771,6 +2774,120 @@ TEST(BrowserDevicePublishedState, ABridgeThatDoesNotPublishKeepsAskingTheBrowser
   // Without publication, a loss the browser records is seen on the next query.
   fixture.bridge->lost = true;
   EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsTrue());
+}
+
+// A write or bind group construction this device deferred that the browser refused surfaces at the
+// device's next operation of any kind, as a loss, and to every device sharing the loss condition,
+// rather than being dropped.
+TEST(BrowserDeviceDeferredRefusal, TheNextOperationFailsClosedAndDeclaresTheLoss) {
+  const auto refused = IsGpuErrorWithMessage(
+      GpuErrorType::InvalidState,
+      HasSubstr("the browser refused a write or bind group construction this device deferred"));
+  for (const auto& [name, next] :
+       std::vector<std::pair<std::string, std::function<Status(BrowserDevice&, Buffer&)>>>{
+           {"writeBuffer",
+            [](BrowserDevice& device, Buffer& buffer) {
+              const std::array<uint8_t, 4> bytes{1, 2, 3, 4};
+              return device.writeBuffer(buffer, 0, bytes);
+            }},
+           {"createBuffer",
+            [](BrowserDevice& device, Buffer&) -> Status {
+              Result<Buffer> created = device.createBuffer(SimpleBuffer(BufferUsage::Vertex));
+              return created.hasError() ? std::move(created).error() : OkStatus();
+            }},
+       }) {
+    SCOPED_TRACE(name);
+    auto lostState = std::make_shared<DeviceLostState>();
+    auto bridge = std::make_unique<FakeBrowserBridge>();
+    FakeBrowserBridge* raw = bridge.get();
+    Result<std::unique_ptr<BrowserDevice>> device =
+        BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+    ASSERT_THAT(device, HasResult());
+    Result<Buffer> buffer = device.result()->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
+    ASSERT_THAT(buffer, HasResult());
+
+    // The browser refuses a write this device deferred, in the round trip that carries it.
+    FakeOwnerChannel channel;
+    BrowserDeferredCalls deferred(channel);
+    deferred.defer(raw->deferredOriginForTesting(), BrowserDeferredOperation::WriteBuffer, 1,
+                   [] { return BridgeStatus::UnknownObject; });
+    deferred.flush();
+    const size_t callsBefore = raw->calls->size();
+    EXPECT_THAT(next(*device.result(), buffer.result()), refused);
+    EXPECT_EQ(raw->calls->size(), callsBefore) << "nothing reaches the browser after the refusal";
+    EXPECT_THAT(device.result()->isDeviceLost(), testing::IsTrue());
+    EXPECT_THAT(lostState->lost.load(), testing::IsTrue());
+  }
+}
+
+TEST(BrowserDeviceDeferredRefusal, ASubmissionSkippedForARefusalInItsOwnTripDeclaresTheLoss) {
+  auto lostState = std::make_shared<DeviceLostState>();
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  FakeBrowserBridge* raw = bridge.get();
+  Result<std::unique_ptr<BrowserDevice>> device =
+      BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+  ASSERT_THAT(device, HasResult());
+  Result<Texture> target =
+      device.result()->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      device.result()->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  // The submission's own round trip carries a write of this device that the browser refuses, so
+  // the bridge does not make the submission and reports the device lost.
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  raw->beforeSubmit = [&] {
+    deferred.defer(raw->deferredOriginForTesting(), BrowserDeferredOperation::WriteBuffer, 1,
+                   [] { return BridgeStatus::Failed; });
+    deferred.flush();
+  };
+  raw->failOperation = "submitCommandBuffers";
+  raw->failStatus = BridgeStatus::DeviceLost;
+  EXPECT_THAT(device.result()->submit(RecordClearPass(*device.result(), view.result())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState,
+                                    HasSubstr("refused a write or bind group construction")));
+  EXPECT_THAT(lostState->lost.load(), testing::IsTrue()) << "the shared loss is declared there";
+}
+
+TEST(BrowserDeviceDeferredRefusal, ACommandSkippedForARefusalInItsBatchDeclaresTheLoss) {
+  auto lostState = std::make_shared<DeviceLostState>();
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  FakeBrowserBridge* raw = bridge.get();
+  Result<std::unique_ptr<BrowserDevice>> device =
+      BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+  ASSERT_THAT(device, HasResult());
+  Result<Texture> target =
+      device.result()->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      device.result()->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  // A full command batch sent from inside a recorded command carries a write of this device that
+  // the browser refuses, so the bridge refuses that command as a loss.
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  raw->beforePassCommand = [&] {
+    deferred.defer(raw->deferredOriginForTesting(), BrowserDeferredOperation::WriteBuffer, 1,
+                   [] { return BridgeStatus::Failed; });
+    deferred.flush();
+  };
+  raw->failOperation = "endRenderPass";
+  raw->failStatus = BridgeStatus::DeviceLost;
+  EXPECT_THAT(device.result()->submit(RecordClearPass(*device.result(), view.result())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState,
+                                    HasSubstr("refused a write or bind group construction")));
+  EXPECT_THAT(lostState->lost.load(), testing::IsTrue()) << "the shared loss is declared there";
+}
+
+TEST(BrowserDeviceDeferredRefusal, AnUnrefusedDeviceIsUnaffected) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  EXPECT_EQ(fixture.bridge->deferredOrigin().refusal.load(), 0u);
+  EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
+  EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsFalse());
 }
 
 }  // namespace donner::gpu::browser

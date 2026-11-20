@@ -9,6 +9,7 @@
 
 #include <array>
 #include <atomic>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdio>
 #include <functional>
@@ -19,12 +20,14 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "donner/gpu/browser/BrowserBindGroupConstruction.h"
+#include "donner/gpu/browser/BrowserDeferredCalls.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/gpu/browser/BrowserShareReleaseQueue.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
@@ -201,16 +204,100 @@ constexpr BrowserGpuOperationKind BrowserQueryKind() {
   }();
 }
 
+/// Reaches the registered GPU owner, or runs calls at once where none crosses threads.
+class OwnerChannel final : public BrowserOwnerChannel {
+public:
+  bool crossesThreads() const override {
+    return UsesBrowserGpuOwner() && !IsBrowserGpuOwnerThread();
+  }
+  void run(void (*callback)(void*), void* context, uint32_t kind) override {
+    RunOnBrowserGpuOwner(callback, context, static_cast<BrowserGpuOperationKind>(kind));
+  }
+};
+
+static_assert(BrowserDeferredCalls::kCommandBatchKind ==
+              static_cast<uint32_t>(BrowserGpuOperationKind::CommandBatch));
+
+/// The one channel; never destroyed, so a thread's queue can still send at thread exit.
+OwnerChannel& Channel() {
+  static OwnerChannel* const channel = new OwnerChannel();
+  return *channel;
+}
+
+/// Calls this thread has deferred since its last owner round trip. At thread exit its destructor
+/// drops what is still held without a round trip, and marks a refusal on each live device whose
+/// write or bind group construction it dropped, so that device fails closed if used again.
+thread_local BrowserDeferredCalls tDeferredCalls(Channel());
+
+/// Prints what a round trip's held calls reported, after the owner callback: owner callbacks must
+/// not lock, and printing does. Each refusing device has already been told through its origin.
+void PrintDeferredReport(const BrowserDeferredCalls::Report& report) {
+  if (report.refused != 0) {
+    const std::string_view operation = BrowserDeferredOperationName(report.operation);
+    std::fprintf(stderr,
+                 "[Geode/browser/deferred] refused operation=%.*s object=%" PRIu64
+                 " status=%u refused=%zu carriedCallSkipped=%d\n",
+                 static_cast<int>(operation.size()), operation.data(), report.objectId,
+                 static_cast<unsigned int>(report.status), report.refused,
+                 report.carriedCallSkipped ? 1 : 0);
+  }
+}
+
+/**
+ * Runs \p operation on the owner in one round trip with every call this thread deferred before
+ * it, which run first, so the owner sees this thread's calls in the order they were made.
+ * @param operation Nonblocking browser primitive. @param kind Diagnostic category.
+ * @param carrying Device \p operation belongs to, or null; see \ref BrowserDeferredCalls::run.
+ * @return Whether \p operation ran.
+ */
+template <typename Function>
+bool RunAfterDeferredCalls(Function&& operation, BrowserGpuOperationKind kind,
+                           const BrowserDeferredOrigin* carrying = nullptr) {
+  const BrowserDeferredCalls::Report report =
+      tDeferredCalls.run(operation, static_cast<uint32_t>(kind), carrying);
+  PrintDeferredReport(report);
+  return !report.carriedCallSkipped;
+}
+
+}  // namespace
+
+void FlushBrowserDeferredCallsOnThisThread() {
+  PrintDeferredReport(tDeferredCalls.flush());
+}
+
+/**
+ * Defers a call to this thread's next owner round trip; see \ref BrowserDeferredCalls::defer.
+ * @param operation Its kind. @param objectId Object the call acts on.
+ * @param now The call over borrowed inputs, for when it runs at once.
+ * @param makeHeld Builds the call over owned copies, only if it is held.
+ * @param payloadBytes Bytes the held call would copy.
+ * @return Success once deferred, or the call's own status when it ran now.
+ */
+BridgeStatus EmscriptenBrowserBridge::deferCall(
+    BrowserDeferredOperation operation, BrowserObjectId objectId,
+    const BrowserDeferredCalls::HeldCall& now,
+    const BrowserDeferredCalls::HeldCallFactory& makeHeld, std::size_t payloadBytes) {
+  return tDeferredCalls.defer(deferredOriginHandle(), operation, objectId, now, makeHeld,
+                              payloadBytes);
+}
+
+void EmscriptenBrowserBridge::flushDeferredCalls() {
+  FlushBrowserDeferredCallsOnThisThread();
+}
+
+namespace {
+
 /// Dispatch only the imported JavaScript primitive; callbacks cannot allocate or lock C++ state.
+/// The thread's deferred calls ride along ahead of it.
 template <auto Function, BrowserGpuOperationKind Kind = BrowserQueryKind<Function>(),
           typename... Args>
 auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
   using Result = decltype(Function(args...));
   if constexpr (std::is_void_v<Result>) {
-    RunOnBrowserGpuOwner([&] { Function(args...); }, Kind);
+    RunAfterDeferredCalls([&] { Function(args...); }, Kind);
   } else {
     Result result{};
-    RunOnBrowserGpuOwner([&] { result = Function(args...); }, Kind);
+    RunAfterDeferredCalls([&] { result = Function(args...); }, Kind);
     return result;
   }
 }
@@ -435,6 +522,10 @@ EmscriptenBrowserBridge::~EmscriptenBrowserBridge() {
   // Releases other threads posted for this one run first, while this logical device still keeps
   // the browser device, and the shares they name, open.
   DrainThreadShareReleases();
+  // This thread's held calls run while the device is still open. Calls this device left held on
+  // another thread see it released and do not run; they keep the origin they report to alive.
+  FlushBrowserDeferredCallsOnThisThread();
+  deferredOriginHandle()->live.store(false, std::memory_order_release);
   // Release this logical device's state and nothing else: another logical device in this worker,
   // such as the renderer a capture context sat beside, goes on with its own. The library lets the
   // browser device go once no logical device over it is left, so a later bridge then starts from
@@ -562,36 +653,72 @@ BridgeStatus EmscriptenBrowserBridge::createSampler(BrowserObjectId id, uint32_t
           logicalDevice_, id, magFilterCode, minFilterCode, addressUCode, addressVCode));
 }
 
-BridgeStatus EmscriptenBrowserBridge::createBindGroupLayout(
-    BrowserObjectId id, std::span<const BrowserBindGroupLayoutEntry> entries) {
+namespace {
+
+/// Builds bind group layout \p id from \p entries on the browser side. Runs on the owner.
+BridgeStatus BuildBindGroupLayout(unsigned int device, BrowserObjectId id,
+                                  std::span<const BrowserBindGroupLayoutEntry> entries) {
   return ConstructBrowserBindGroup(
-      entries,
-      [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_begin(logicalDevice_)); },
+      entries, [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_begin(device)); },
       [&](const BrowserBindGroupLayoutEntry& entry) {
         return StatusFromBrowser(
-            donner_gpu_bind_group_layout_entry(logicalDevice_, entry.binding, entry.visibilityBits,
+            donner_gpu_bind_group_layout_entry(device, entry.binding, entry.visibilityBits,
                                                entry.bindingTypeCode, entry.storageTextureFormat));
       },
-      [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_finish(logicalDevice_, id)); },
-      [](auto&& operation) {
-        RunOnBrowserGpuOwner(operation, BrowserGpuOperationKind::BindGroupConstruction);
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_finish(device, id)); },
+      [](auto&& operation) { operation(); });
+}
+
+/// Builds bind group \p id over \p layoutId from \p entries on the browser side. Runs on the
+/// owner.
+BridgeStatus BuildBindGroup(unsigned int device, BrowserObjectId id, BrowserObjectId layoutId,
+                            std::span<const BrowserBindGroupEntry> entries) {
+  return ConstructBrowserBindGroup(
+      entries, [&] { return StatusFromBrowser(donner_gpu_bind_group_begin(device, layoutId)); },
+      [&](const BrowserBindGroupEntry& entry) {
+        return StatusFromBrowser(donner_gpu_bind_group_entry(
+            device, entry.binding, static_cast<unsigned int>(entry.resource), entry.resourceId,
+            static_cast<double>(entry.offsetBytes), static_cast<double>(entry.sizeBytes)));
+      },
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_finish(device, id)); },
+      [](auto&& operation) { operation(); });
+}
+
+}  // namespace
+
+BridgeStatus EmscriptenBrowserBridge::createBindGroupLayout(
+    BrowserObjectId id, std::span<const BrowserBindGroupLayoutEntry> entries) {
+  if (entries.size() > kMaxBindings) {
+    return BridgeStatus::Failed;
+  }
+  const unsigned int device = logicalDevice_;
+  return deferCall(
+      BrowserDeferredOperation::CreateBindGroupLayout, id,
+      [&] { return BuildBindGroupLayout(device, id, entries); },
+      [&] {
+        return BrowserDeferredCalls::HeldCall(
+            [device, id,
+             owned = std::vector<BrowserBindGroupLayoutEntry>(entries.begin(), entries.end())] {
+              return BuildBindGroupLayout(device, id, owned);
+            });
       });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createBindGroup(
     BrowserObjectId id, BrowserObjectId layoutId, std::span<const BrowserBindGroupEntry> entries) {
-  return ConstructBrowserBindGroup(
-      entries,
-      [&] { return StatusFromBrowser(donner_gpu_bind_group_begin(logicalDevice_, layoutId)); },
-      [&](const BrowserBindGroupEntry& entry) {
-        return StatusFromBrowser(donner_gpu_bind_group_entry(
-            logicalDevice_, entry.binding, static_cast<unsigned int>(entry.resource),
-            entry.resourceId, static_cast<double>(entry.offsetBytes),
-            static_cast<double>(entry.sizeBytes)));
-      },
-      [&] { return StatusFromBrowser(donner_gpu_bind_group_finish(logicalDevice_, id)); },
-      [](auto&& operation) {
-        RunOnBrowserGpuOwner(operation, BrowserGpuOperationKind::BindGroupConstruction);
+  if (entries.size() > kMaxBindings) {
+    return BridgeStatus::Failed;
+  }
+  const unsigned int device = logicalDevice_;
+  return deferCall(
+      BrowserDeferredOperation::CreateBindGroup, id,
+      [&] { return BuildBindGroup(device, id, layoutId, entries); },
+      [&] {
+        return BrowserDeferredCalls::HeldCall(
+            [device, id, layoutId,
+             owned = std::vector<BrowserBindGroupEntry>(entries.begin(), entries.end())] {
+              return BuildBindGroup(device, id, layoutId, owned);
+            });
       });
 }
 
@@ -693,18 +820,26 @@ BridgeStatus EmscriptenBrowserBridge::destroyObject(BrowserObjectKind kind, Brow
   if (!kindCode.has_value()) {
     return BridgeStatus::WrongObjectKind;
   }
-  return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_destroy_object, BrowserGpuOperationKind::ResourceDestruction>(
-          logicalDevice_, *kindCode, id));
+  const BrowserDeferredCalls::HeldCall destroy = [device = logicalDevice_, code = *kindCode, id] {
+    return StatusFromBrowser(donner_gpu_destroy_object(device, code, id));
+  };
+  return deferCall(BrowserDeferredOperation::DestroyObject, id, destroy, [&] { return destroy; });
 }
 
 BridgeStatus EmscriptenBrowserBridge::writeBuffer(BrowserObjectId bufferId, uint64_t offsetBytes,
                                                   std::span<const uint8_t> data) {
   RecordBrowserBufferWriteSize(data.size());
-  return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_write_buffer, BrowserGpuOperationKind::BufferWrite>(
-          logicalDevice_, bufferId, static_cast<double>(offsetBytes), data.data(),
-          static_cast<double>(data.size())));
+  const auto write = [device = logicalDevice_, bufferId,
+                      offsetBytes](std::span<const uint8_t> bytes) {
+    return StatusFromBrowser(donner_gpu_write_buffer(device, bufferId,
+                                                     static_cast<double>(offsetBytes), bytes.data(),
+                                                     static_cast<double>(bytes.size())));
+  };
+  // The copy is made only if the write is held: not for a write that runs at once, nor for one
+  // too large to hold.
+  return deferCall(
+      BrowserDeferredOperation::WriteBuffer, bufferId, [&] { return write(data); },
+      [&] { return BrowserDeferredCalls::OwningWrite(data, write); }, data.size());
 }
 
 BridgeStatus EmscriptenBrowserBridge::writeTexture(BrowserObjectId textureId,
@@ -732,7 +867,7 @@ BridgeStatus EmscriptenBrowserBridge::flushCommands() {
   std::vector<PendingCommand> commands = std::move(pendingCommands_);
   BridgeStatus result = BridgeStatus::Success;
   const char* failedOperation = nullptr;
-  RunOnBrowserGpuOwner(
+  const bool ran = RunAfterDeferredCalls(
       [&] {
         for (const PendingCommand& command : commands) {
           result = command.execute();
@@ -742,7 +877,12 @@ BridgeStatus EmscriptenBrowserBridge::flushCommands() {
           }
         }
       },
-      BrowserGpuOperationKind::CommandBatch);
+      BrowserGpuOperationKind::CommandBatch, &deferredOrigin());
+  if (!ran) {
+    // A write or bind group this device deferred was refused in this trip; its commands would run
+    // over stale or missing objects, so none of them did.
+    return BridgeStatus::DeviceLost;
+  }
   if (failedOperation != nullptr) {
     std::fprintf(stderr, "[Geode/browser/record] operation=%s status=%u\n", failedOperation,
                  static_cast<unsigned int>(result));
@@ -911,9 +1051,16 @@ BridgeStatus EmscriptenBrowserBridge::endCommandBuffer(uint64_t submissionSerial
 }
 
 BridgeStatus EmscriptenBrowserBridge::submitCommandBuffers(uint64_t submissionSerial) {
-  return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_submit_command_buffers, BrowserGpuOperationKind::QueueSubmit>(
-          logicalDevice_, static_cast<double>(submissionSerial)));
+  int status = 0;
+  const bool ran = RunAfterDeferredCalls(
+      [&] {
+        status = donner_gpu_submit_command_buffers(logicalDevice_,
+                                                   static_cast<double>(submissionSerial));
+      },
+      BrowserGpuOperationKind::QueueSubmit, &deferredOrigin());
+  // A write or bind group this device deferred was refused in this trip, so the submission would
+  // run over stale or missing contents; it was not made.
+  return ran ? StatusFromBrowser(status) : BridgeStatus::DeviceLost;
 }
 
 BridgeStatus EmscriptenBrowserBridge::mapBufferAsync(BrowserObjectId mappingId,
@@ -960,6 +1107,8 @@ void EmscriptenBrowserBridge::yieldToBrowser(double seconds) {
   if (!(milliseconds < kMaxSleepMilliseconds)) {
     milliseconds = kMaxSleepMilliseconds;
   }
+  // Nothing else may send this thread's held calls while it waits, so they go first.
+  FlushBrowserDeferredCallsOnThisThread();
   emscripten_sleep(static_cast<unsigned int>(milliseconds));
   // Handing the thread over is where the owner runs the share releases other threads posted for
   // it, so a release let go elsewhere waits at most until the next wait here.
