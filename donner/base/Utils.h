@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 
 #ifndef DOXYGEN_SHOULD_SKIP_THIS
 
@@ -104,7 +105,7 @@
     const bool _utilsResult = (x);                                     \
     if (!_utilsResult) {                                               \
       fprintf(stderr, "Error: UTILS_RELEASE_ASSERT failed: %s\n", #x); \
-      abort();                                                         \
+      std::abort();                                                    \
     }                                                                  \
   } while (false)
 
@@ -113,7 +114,7 @@
     const bool _utilsResult = static_cast<bool>(x);                               \
     if (!_utilsResult) {                                                          \
       fprintf(stderr, "Error: UTILS_RELEASE_ASSERT failed: %s, %s\n", #x, (msg)); \
-      abort();                                                                    \
+      std::abort();                                                               \
     }                                                                             \
   } while (false)
 #else
