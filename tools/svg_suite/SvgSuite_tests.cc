@@ -8,6 +8,11 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "tools/svg_suite/StaticSuite.h"
 
@@ -262,6 +267,153 @@ TEST(ImageCompareTest, DimensionMismatchHasNoInventedPixelCount) {
   EXPECT_THAT(result.error, Eq("dimension-mismatch"));
   EXPECT_THAT(result.mismatchedPixels.has_value(), Eq(false));
   EXPECT_THAT(result.passed, Eq(false));
+}
+
+/// The counts \ref CompareImages reports for one comparison, printable as a whole on failure.
+struct EdgeCoverageOutcome {
+  std::optional<int> mismatchedPixels;
+  int edgeCoveragePixels = 0;
+  int maxEdgeCoverageAlphaDelta = 0;
+  std::string error;
+
+  friend bool operator==(const EdgeCoverageOutcome&, const EdgeCoverageOutcome&) = default;
+
+  friend void PrintTo(const EdgeCoverageOutcome& outcome, std::ostream* os) {
+    *os << "{mismatched=" << (outcome.mismatchedPixels ? *outcome.mismatchedPixels : -1)
+        << ", edgeCoverage=" << outcome.edgeCoveragePixels
+        << ", maxAlphaDelta=" << outcome.maxEdgeCoverageAlphaDelta << ", error=\"" << outcome.error
+        << "\"}";
+  }
+};
+
+using Rgba = std::array<uint8_t, 4>;
+
+/// A 3x3 image of one color. Every pixel has eight identical neighbors or touches the border with
+/// identical neighbors, so pixelmatch never classifies a difference in it as anti-aliasing.
+Image UniformImage(Rgba pixel) {
+  Image image{3, 3, 3, {}};
+  for (int i = 0; i < 9; ++i) {
+    image.data.insert(image.data.end(), pixel.begin(), pixel.end());
+  }
+  return image;
+}
+
+ComparisonOptions EdgeCoverageOptions(double threshold = 0.0) {
+  return {.threshold = threshold,
+          .maxMismatchedPixels = 0,
+          .includeAntiAliasing = false,
+          .acceptQuarterPixelEdgeCoverage = true};
+}
+
+EdgeCoverageOutcome CompareUniform(Rgba expected, Rgba actual, const ComparisonOptions& options) {
+  const Image expectedImage = UniformImage(expected);
+  const Image actualImage = UniformImage(actual);
+  const ComparisonResult result = CompareImages(View(expectedImage), View(actualImage), options);
+  return {result.mismatchedPixels, result.edgeCoveragePixels, result.maxEdgeCoverageAlphaDelta,
+          result.error};
+}
+
+TEST(ImageCompareEdgeCoverageTest, IsOffByDefault) {
+  const ComparisonOptions defaults{
+      .threshold = 0.0, .maxMismatchedPixels = 0, .includeAntiAliasing = false};
+  EXPECT_THAT(defaults.acceptQuarterPixelEdgeCoverage, Eq(false));
+  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, 159}, defaults),
+              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+}
+
+TEST(ImageCompareEdgeCoverageTest, AcceptsPartialCoverageDifferencesUpToTheBound) {
+  for (const int delta : {1, 32, kQuarterPixelEdgeCoverageMaxAlphaDelta}) {
+    SCOPED_TRACE(testing::Message() << "alpha delta " << delta);
+    const auto actualAlpha = static_cast<uint8_t>(128 + delta);
+    EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, actualAlpha}, EdgeCoverageOptions()),
+                Eq(EdgeCoverageOutcome{0, 9, delta, ""}));
+    EXPECT_THAT(CompareUniform({0, 0, 0, actualAlpha}, {0, 0, 0, 128}, EdgeCoverageOptions()),
+                Eq(EdgeCoverageOutcome{0, 9, delta, ""}));
+  }
+  // A colored edge near both ends of the alpha range.
+  EXPECT_THAT(CompareUniform({40, 90, 200, 1}, {40, 90, 200, 34}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 9, 33, ""}));
+  EXPECT_THAT(CompareUniform({40, 90, 200, 254}, {40, 90, 200, 221}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 9, 33, ""}));
+  // The crosshair case: three quarter rows stored as 192 against an exact 0.625 coverage.
+  EXPECT_THAT(CompareUniform({0, 0, 0, 192}, {0, 0, 0, 159}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 9, 33, ""}));
+  // At the suite's default threshold pixelmatch counts only some of these pixels, depending on
+  // their checkerboard background; the rule accepts every one it counts.
+  const EdgeCoverageOutcome atDefaultThreshold =
+      CompareUniform({40, 90, 200, 254}, {40, 90, 200, 222}, EdgeCoverageOptions(0.02));
+  EXPECT_THAT(atDefaultThreshold.mismatchedPixels, Eq(std::optional<int>(0)));
+  EXPECT_THAT(atDefaultThreshold.edgeCoveragePixels, testing::Gt(0));
+}
+
+TEST(ImageCompareEdgeCoverageTest, CountsCoverageDifferencesAboveTheBound) {
+  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, 162}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  EXPECT_THAT(CompareUniform({0, 0, 0, 200}, {0, 0, 0, 100}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+}
+
+TEST(ImageCompareEdgeCoverageTest, CountsPixelsFullyCoveredOrEmptyInEitherImage) {
+  for (const auto& [expected, actual] : std::vector<std::pair<Rgba, Rgba>>{
+           {{0, 0, 0, 255}, {0, 0, 0, 230}},
+           {{0, 0, 0, 230}, {0, 0, 0, 255}},
+           {{0, 0, 0, 0}, {0, 0, 0, 20}},
+           {{0, 0, 0, 20}, {0, 0, 0, 0}},
+       }) {
+    SCOPED_TRACE(testing::Message() << "alphas " << static_cast<int>(expected[3]) << ", "
+                                    << static_cast<int>(actual[3]));
+    EXPECT_THAT(CompareUniform(expected, actual, EdgeCoverageOptions()),
+                Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  }
+}
+
+TEST(ImageCompareEdgeCoverageTest, CountsColorDifferencesAtEdgePixels) {
+  // Same coverage, different color.
+  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {255, 0, 0, 128}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  // A coverage difference within the bound that also carries a color difference.
+  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 255, 150}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {70, 70, 70, 150}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+}
+
+// Deliberate: the color condition runs at the smaller alpha, at pixelmatch's sensitivity for that
+// coverage, so a black-to-white difference at alpha 2 is accepted while the same colors at alpha
+// 100 are counted.
+TEST(ImageCompareEdgeCoverageTest, ComparesColorAtTheSmallerAlpha) {
+  EXPECT_THAT(CompareUniform({0, 0, 0, 2}, {255, 255, 255, 30}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{0, 9, 28, ""}));
+  EXPECT_THAT(CompareUniform({0, 0, 0, 100}, {255, 255, 255, 128}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+}
+
+TEST(ImageCompareEdgeCoverageTest, AcceptsOnlyQualifyingPixelsAndMarksThemInTheDiff) {
+  Image expected = UniformImage({0, 0, 0, 128});
+  Image actual = UniformImage({0, 0, 0, 150});
+  // The center pixel differs by more than the bound; the other eight stay within it.
+  actual.data[4 * 4 + 3] = 200;
+  const ComparisonResult result =
+      CompareImages(View(expected), View(actual), EdgeCoverageOptions());
+  EXPECT_THAT((EdgeCoverageOutcome{result.mismatchedPixels, result.edgeCoveragePixels,
+                                   result.maxEdgeCoverageAlphaDelta, result.error}),
+              Eq(EdgeCoverageOutcome{1, 8, 22, ""}));
+  EXPECT_THAT(result.passed, Eq(false));
+  ASSERT_TRUE(result.diff.has_value());
+  std::vector<Rgba> diffPixels;
+  for (size_t pos = 0; pos < result.diff->data.size(); pos += 4) {
+    diffPixels.push_back({result.diff->data[pos], result.diff->data[pos + 1],
+                          result.diff->data[pos + 2], result.diff->data[pos + 3]});
+  }
+  std::vector<Rgba> expectedDiff(9, kEdgeCoverageDiffColor);
+  expectedDiff[4] = {255, 0, 0, 255};
+  EXPECT_THAT(diffPixels, Eq(expectedDiff));
+}
+
+TEST(ImageCompareEdgeCoverageTest, RequiresAntiAliasingDetection) {
+  ComparisonOptions options = EdgeCoverageOptions();
+  options.includeAntiAliasing = true;
+  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, 150}, options).error, HasSubstr("options"));
 }
 
 TEST_F(SvgSuiteTest, PngRoundTripAndMalformedInput) {

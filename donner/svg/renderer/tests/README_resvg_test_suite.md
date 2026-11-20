@@ -71,9 +71,18 @@ The same test also enforces these registration rules, each against a list in `pa
   its entry fails, and an entry whose lane no longer exceeds the limit is stale and fails.
 - `SKIP_ALLOWLIST` equals the set of active `Params::Skip` rows. A new skip fails, and an entry
   whose row no longer skips is stale and fails.
+- `QUARTER_PIXEL_EDGE_ALLOWLIST` equals the set of active rows that opt their Geode comparison into
+  the quarter-pixel edge coverage rule (`withGeodeQuarterPixelEdgeCoverage()`, see
+  [Quarter-pixel edge coverage on Geode](#ResvgQuarterPixelEdgeCoverage)). An opted-in row that is
+  not listed fails, as does one whose Geode lane does not compare, compares against a custom
+  golden, or counts anti-aliased pixels; an entry whose row no longer opts in is stale and fails.
+- `GEODE_GATE_ALLOWLIST` equals the set of active rows that disable their Geode comparison (see
+  [Geode gates](#ResvgGeodeGates)). A row that disables another backend, disables Geode without a
+  reason, or is not listed fails; an entry whose row no longer disables Geode is stale and fails.
 
-These lists may only shrink. A new entry, or a larger value, needs maintainer approval in the pull
-request that adds it.
+`//tools/resvg_parity:parity_report_tests` enforces in CI that each list matches the registry.
+That the lists only shrink is a review rule: a new entry, or a larger value, needs maintainer
+approval in the pull request that adds it.
 
 `--head-to-head` compares Donner with resvg's own recorded results for the same snapshot, the
 `resvg` column of `third_party/resvg-test-suite/results.csv`:
@@ -103,6 +112,70 @@ then excludes every case whose params carry a pixel-budget or threshold call (`W
 reference is an upstream resvg rendering newer than the snapshot (provenance in
 `third_party/resvg-test-suite/BUILD.bazel`), cases whose reference is not 500x500, and cases behind
 a text-full or backend capability gate.
+
+The rows in `QUARTER_PIXEL_EDGE_ALLOWLIST` are not strict passes either: their Geode comparison
+accepts pixels the default comparison counts.
+
+### Quarter-pixel edge coverage on Geode {#ResvgQuarterPixelEdgeCoverage}
+
+The resvg references sample coverage on four sub-scanlines per pixel: a horizontal edge lands on the
+nearest quarter-pixel boundary, and an edge pixel with k of its four quarter rows covered is stored
+as 64 * k (255 when all four are). Donner's CPU renderer samples the same way and matches those
+edges. Geode computes exact coverage and stores round(255 * f) for the true coverage f, which is
+within 1/8 of k/4, so the two differ by up to 31.875 + 0.25 * k + 0.5 levels: 33 at k = 3. An edge
+row covered 0.625 px, as on the references' 1.25 px crosshair, is 192 in the reference and 159 on
+Geode. On text, whose glyph, decoration and crosshair edges are mostly such pixels, that difference
+alone can exceed the default 100-pixel budget.
+
+A row whose Geode comparison against its vendored resvg reference exceeds its budget only because
+of that difference opts in with `QuarterPixelEdgeReference()` (or
+`.withGeodeQuarterPixelEdgeCoverage()` chained onto its other params) in `resvg_test_suite.cc` and
+is listed in `QUARTER_PIXEL_EDGE_ALLOWLIST`. Pixels the rule does not accept still count against
+the row's unchanged budget. A row that compares against a custom golden (a Donner or browser
+rendering) cannot opt in: that image is not quarter-pixel quantized.
+
+For an opted-in row, the Geode comparison also accepts a pixel pixelmatch counts when:
+
+- both images cover it partially (alpha strictly between 0 and 255 in each);
+- the two alphas differ by at most 33 levels (`svg_suite::kQuarterPixelEdgeCoverageMaxAlphaDelta`);
+  and
+- pixelmatch, at the row's threshold and background, finds no difference between the two straight
+  colors when both carry the smaller alpha. Color is compared at the sensitivity pixelmatch
+  applies to a pixel of that smaller coverage, so at very low alpha a color difference can fall
+  under the threshold.
+
+The rule is part of the canonical comparison
+(`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage` in
+`tools/svg_suite/ImageCompare.h`) and is off by default. It never applies to the CPU comparisons,
+to a comparison against a custom golden, or to a pixel that is fully covered or empty in either
+image, and it does not change the pixel budget. The test log reports how many pixels it
+accepted and their largest alpha difference; the diff image draws them in blue. A row whose Geode
+comparison passes without the rule leaves the list.
+
+The Geode corpus lane (`resvg_test_suite_geode`) renders the simple text tier only, so the list
+holds the rows that need the rule there. Some full-shaping rows (bidirectional, Arabic and vertical
+text) also fail the default budget on Geode without the rule and pass with it, but the resvg corpus
+has no Geode full-shaping wrapper, so they are not listed. The `*_text_full` unit test variants do
+run on Geode with full shaping; only the corpus lacks such a lane. Adding one means measuring its
+rows, opting in the ones that need the rule, and teaching `parity_report.py` that lane's
+capabilities.
+
+### Geode gates {#ResvgGeodeGates}
+
+A row whose Geode comparison fails for a cause the edge coverage rule does not cover disables its
+Geode comparison with `disableBackend(RendererBackend::Geode, reason)` and is listed in
+`GEODE_GATE_ALLOWLIST`; its CPU comparisons are unchanged. The reason names the measured cause, and
+`resvg_test_suite.cc` keeps one helper per cause (for example `GeodeCustomGoldenGate`) so the
+reason is written once. `//tools/resvg_parity:parity_report_tests` enforces in CI that the list
+matches the gated rows and that no other backend is disabled; that the list only shrinks is a review
+rule.
+
+`GeodeCpuAllowanceGate` covers rows whose CPU comparison has a budget above the default in
+`PIXEL_BUDGET_ALLOWLIST` (1,200 px for the two `text/font-variant` rows, 400 px for
+`text/textPath/closed-path`). Those budgets are not approved for the Geode lane, and comparing
+would apply budgets in the hundreds to it. On the full shaping tier the two font-variant rows
+measure 0 px on Geode, so the gate can narrow to `closed-path` once a Geode full-shaping corpus
+lane exists.
 
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.
@@ -389,6 +462,10 @@ skip already in `SKIP_ALLOWLIST`, kept until it is fixed; do not add new ones:
   is edge coverage with matching layout, and the budget is the largest residual on macOS and Linux
   for both CPU text tiers (and Geode where it runs) plus 3% rounded up to 5 pixels. Record what a
   1 px text shift does against the budget.
+- `Params().withGeodeQuarterPixelEdgeCoverage()` - a row whose Geode comparison fails only on the
+  reference's quarter-pixel edge quantization; see
+  [Quarter-pixel edge coverage on Geode](#ResvgQuarterPixelEdgeCoverage). The row must already be
+  in `QUARTER_PIXEL_EDGE_ALLOWLIST`; new entries need maintainer approval.
 - `Reference label glyphs: <cause>; analytic residual N px, supersampled M px` - the same form for
   a reference set whose label glyphs differ beyond coverage (the color-adjust-functions cases),
   where the residual is confined to the labels and deliberate filter regressions are shown to

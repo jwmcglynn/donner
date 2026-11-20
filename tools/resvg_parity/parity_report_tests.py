@@ -642,6 +642,135 @@ class ParityReportTests(unittest.TestCase):
         self.assertIn("Donner-rendered golden", parity_report.SKIP_RULE)
         self.assertIn("README_resvg_test_suite.md", parity_report.SKIP_RULE)
 
+    def _edge_coverage_report(self) -> dict[str, object]:
+        for name in ("listed.svg", "new.svg", "golden.svg", "shared.svg", "aa.svg", "cpu.svg",
+                     "plain.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        return parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"listed.svg", Params().withGeodeQuarterPixelEdgeCoverage()},'
+                '{"new.svg", Params().withGeodeQuarterPixelEdgeCoverage()},'
+                '{"golden.svg", Params().withGeodeGoldenOverride("gpu.png", "Geode golden")'
+                '.withGeodeQuarterPixelEdgeCoverage()},'
+                '{"shared.svg", Params::WithGoldenOverride("cpu.png", 0.02f, "Donner golden")'
+                '.withGeodeQuarterPixelEdgeCoverage()},'
+                '{"aa.svg", Params().includeAntiAliasingDifferences()'
+                '.withGeodeQuarterPixelEdgeCoverage()},'
+                '{"cpu.svg", Params().disableBackend(RendererBackend::Geode, "no Geode")'
+                '.withGeodeQuarterPixelEdgeCoverage()}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+    def test_quarter_pixel_edge_coverage_applies_to_the_geode_lane_only(self) -> None:
+        report = self._edge_coverage_report()
+        by_path = {case["path"]: case for case in report["cases"]}
+
+        listed = by_path["painting/fill/listed.svg"]
+        self.assertEqual(
+            {lane: entry["settings"]["quarter_pixel_edge_coverage"]
+             for lane, entry in listed["lanes"].items()},
+            {"default_text": False, "max": False, "geode": True},
+        )
+        self.assertIn("geode_edge_coverage", listed["exception_types"])
+        for golden in ("golden.svg", "shared.svg"):
+            self.assertFalse(
+                by_path["painting/fill/" + golden]["lanes"]["geode"]["settings"][
+                    "quarter_pixel_edge_coverage"])
+        plain = by_path["painting/fill/plain.svg"]
+        self.assertEqual(plain["exception_types"], [])
+        self.assertFalse(plain["lanes"]["geode"]["settings"]["quarter_pixel_edge_coverage"])
+        self.assertEqual(report["summary"]["geode_quarter_pixel_edge_cases"], 6)
+        self.assertIn("geode_edge_coverage", parity_report._LOOSENING_EXCEPTIONS)
+
+    def test_quarter_pixel_edge_allowlist_rejects_unlisted_inert_and_stale_rows(self) -> None:
+        report = self._edge_coverage_report()
+
+        violations = parity_report.quarter_pixel_edge_violations(report, {
+            "painting/fill/listed.svg", "painting/fill/golden.svg", "painting/fill/shared.svg",
+            "painting/fill/aa.svg", "painting/fill/cpu.svg", "painting/fill/fixed.svg",
+        })
+
+        self.assertEqual(violations, sorted([
+            "painting/fill/new.svg: not in QUARTER_PIXEL_EDGE_ALLOWLIST; "
+            + parity_report.QUARTER_PIXEL_EDGE_RULE,
+            *(f"painting/fill/{golden}: the Geode lane compares against a custom golden, not the "
+              "vendored quarter-pixel quantized resvg reference; remove the quarter-pixel edge "
+              "coverage rule" for golden in ("golden.svg", "shared.svg")),
+            "painting/fill/aa.svg: the quarter-pixel edge coverage rule needs anti-aliasing "
+            "detection, which includeAntiAliasingDifferences() turns off",
+            "painting/fill/cpu.svg: the Geode lane does not compare, so the quarter-pixel edge "
+            "coverage rule has no effect; remove it",
+            "painting/fill/fixed.svg: stale QUARTER_PIXEL_EDGE_ALLOWLIST entry; the row no longer "
+            "opts into the quarter-pixel edge coverage rule, so remove it",
+        ]))
+        self.assertIn("README_resvg_test_suite.md", parity_report.QUARTER_PIXEL_EDGE_RULE)
+
+    def test_quarter_pixel_edge_rows_carry_a_named_policy(self) -> None:
+        self.fixture.add_case("painting/fill/listed.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {'
+                          '{"listed.svg", Params().withGeodeQuarterPixelEdgeCoverage()}}'),
+            self.fixture.tests_root,
+        )
+
+        parity_report.add_exception_policies(report, {"rules": []})
+
+        self.assertEqual([policy["classification"] for policy in report["cases"][0]["policies"]],
+                         ["reference-edge-quantization"])
+
+    def test_geode_gate_allowlist_rejects_unlisted_cpu_unexplained_and_stale_gates(self) -> None:
+        for name in ("listed.svg", "new.svg", "cpu.svg", "silent.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"listed.svg", Params().disableBackend(RendererBackend::Geode, "Bug: listed")},'
+                '{"new.svg", Params().disableBackend(RendererBackend::Geode, "Bug: new")},'
+                '{"cpu.svg", Params().disableBackend(RendererBackend::TinySkia, "no CPU")},'
+                '{"silent.svg", Params().disableBackend(RendererBackend::Geode)}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        violations = parity_report.geode_gate_violations(report, {
+            "painting/fill/listed.svg", "painting/fill/cpu.svg", "painting/fill/silent.svg",
+            "painting/fill/fixed.svg",
+        })
+
+        self.assertEqual(violations, sorted([
+            "painting/fill/new.svg: not in GEODE_GATE_ALLOWLIST; " + parity_report.GEODE_GATE_RULE,
+            "painting/fill/cpu.svg: disables ['tiny-skia']; " + parity_report.GEODE_GATE_RULE,
+            "painting/fill/silent.svg: disables the Geode comparison without a reason",
+            "painting/fill/fixed.svg: stale GEODE_GATE_ALLOWLIST entry; the row no longer disables "
+            "its Geode comparison, so remove it",
+        ]))
+
+    def test_gate_helper_around_another_helper_expands_both(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        source = textwrap.dedent(
+            """
+            ImageComparisonParams Golden(std::string_view path) {
+              return Params::WithGoldenOverride(path, kDefaultThreshold, "Reference disagreement");
+            }
+            ImageComparisonParams Gate(ImageComparisonParams params) {
+              return params.disableBackend(RendererBackend::Geode, "Bug: gated");
+            }
+            """
+        ) + _registration("PaintingFill", '"painting/fill", {{"a.svg", Gate(Golden("g.png"))}}')
+
+        case = parity_report.build_report(source, self.fixture.tests_root)["cases"][0]
+
+        self.assertEqual(case["disabled_backends"], ["geode"])
+        self.assertIn("shared_golden", case["exception_types"])
+        self.assertEqual(parity_report._geode_disable_reason(case["raw_params_expression"]),
+                         "Bug: gated")
+
     def test_goldens_must_be_listed_in_the_digest_table_with_their_digest(self) -> None:
         golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
         (golden_root / "geode").mkdir(parents=True)
@@ -976,8 +1105,8 @@ class ParityReportTests(unittest.TestCase):
             self.assertEqual(setting["threshold"], 0.1)
             self.assertEqual(setting["canvas_size"], [800, 600])
             self.assertTrue(setting["include_antialiasing"])
-        self.assertEqual(text["lanes"]["geode"]["configured_state"], "capability-gated")
-        self.assertEqual(text["lanes"]["geode"]["missing_features"], ["text"])
+        self.assertEqual(text["lanes"]["geode"]["configured_state"], "compare")
+        self.assertEqual(text["lanes"]["geode"]["missing_features"], [])
         self.assertEqual(text["lanes"]["geode"]["observed"], "unobserved")
 
     def test_google_test_receipt_distinguishes_pass_failure_suppression_and_unobserved(self) -> None:
@@ -1014,8 +1143,11 @@ class ParityReportTests(unittest.TestCase):
 
     def test_unknown_or_duplicate_executions_cannot_be_reported_as_passes(self) -> None:
         self.fixture.add_case("text/sample/a.svg")
+        # The Geode lane renders simple text only, so a full-shaping requirement gates it.
         report = parity_report.build_report(
-            _registration("TextSample", '"text/sample"'), self.fixture.tests_root
+            _registration("TextSample", '"text/sample", {{"a.svg", Params().requireFeature('
+                          'RendererBackendFeature::TextFull, "full text shaping")}}'),
+            self.fixture.tests_root,
         )
         report["source"]["revision"] = "a" * 40
         receipt = self.fixture.root / "shard.xml"
@@ -1139,7 +1271,25 @@ class ParityReportTests(unittest.TestCase):
                 ("test.params.enableCanvasSizeFromReference();", "",
                  "corpus canvas rule differs"),
             ],
+            "RendererTestBackendGeode.cc": [
+                ("#ifdef DONNER_TEXT_ENABLED\n    case RendererBackendFeature::Text: return true;",
+                 "#ifdef DONNER_TEXT_FULL\n    case RendererBackendFeature::Text: return true;",
+                 "Geode capability Text differs"),
+                ("    case RendererBackendFeature::FilterEffects: return true;",
+                 "    case RendererBackendFeature::FilterEffects: return false;",
+                 "Geode capability FilterEffects differs"),
+            ],
             "ImageComparisonTestFixture.cc": [
+                ("mode == ComparisonMode::GeodeGolden &&\n",
+                 "mode != ComparisonMode::TinyGolden &&\n",
+                 "quarter-pixel edge coverage rule differs"),
+                ("params.overrideGoldenFilename.empty() && ", "",
+                 "quarter-pixel edge coverage rule differs"),
+                (" && params.geodeOverrideGoldenFilename.empty();", ";",
+                 "quarter-pixel edge coverage rule differs"),
+                (".acceptQuarterPixelEdgeCoverage = acceptsQuarterPixelEdgeCoverage(params, mode)}",
+                 ".acceptQuarterPixelEdgeCoverage = true}",
+                 "quarter-pixel edge coverage rule differs"),
                 ("static_cast<int>(std::max(width, height))",
                  "static_cast<int>(std::min(width, height))", "reference canvas rule differs"),
                 ("kMaxDimension = 16384;", "kMaxDimension = 8192;",
@@ -1742,6 +1892,12 @@ class RealTreeParityReportTests(unittest.TestCase):
                 parity_report.threshold_ratchet_violations(report),
             "SKIP_ALLOWLIST equals the active Params::Skip rows and may only shrink":
                 parity_report.skip_ratchet_violations(report),
+            "QUARTER_PIXEL_EDGE_ALLOWLIST equals the rows whose Geode comparison accepts "
+            "quarter-pixel edge coverage differences":
+                parity_report.quarter_pixel_edge_violations(report),
+            "GEODE_GATE_ALLOWLIST equals the rows that disable their Geode comparison, each with a "
+            "reason":
+                parity_report.geode_gate_violations(report),
             "Every registered golden needs a golden README table row with its SHA-256":
                 parity_report.golden_documentation_violations(report, repo_root),
             "Every case's canvas comes from a readable reference PNG or an explicit "
@@ -1764,6 +1920,8 @@ class RealTreeParityReportTests(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertEqual(violations, [], rule + ":\n" + "\n".join(violations))
         self.assertEqual(len(parity_report.SKIP_ALLOWLIST), report["summary"]["skip_cases"])
+        self.assertEqual(len(parity_report.QUARTER_PIXEL_EDGE_ALLOWLIST),
+                         report["summary"]["geode_quarter_pixel_edge_cases"])
         self.assertGreater(len(parity_report.referenced_goldens(report)), 0)
 
 
