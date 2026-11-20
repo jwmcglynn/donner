@@ -931,6 +931,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
           resolveSpanPaint(style->properties->fill.get().value(), style->externalFill, false);
       span.resolvedStroke =
           resolveSpanPaint(style->properties->stroke.get().value(), style->externalStroke, true);
+      span.hasComputedPaint = true;
       span.fillOpacity = style->properties->fillOpacity.get().value();
       span.strokeOpacity = style->properties->strokeOpacity.get().value();
       ResolveSpanStroke(*style->properties, styleEntity, viewBox, strokeScale, strokeLengths, span);

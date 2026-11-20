@@ -513,6 +513,20 @@ private:
   [[nodiscard]] std::optional<tiny_skia::Paint> makeFillPaint(const Box2d& bounds);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Box2d& bounds,
                                                                 const StrokeParams& stroke);
+  /**
+   * The paint the glyphs of \p span fill with: the span's own solid, gradient or pattern fill, or
+   * its fallback color, at the product of its `fill-opacity` and `opacity`; no paint when the
+   * span's own fill is none; otherwise \p textFillPaint, the text element's fill.
+   *
+   * @param span The span being drawn.
+   * @param textFillPaint The text element's fill paint.
+   * @param textBounds The text element's bounding box, which a span's gradient maps against.
+   * @param textFillColor The text element's resolved fill color.
+   */
+  [[nodiscard]] std::optional<tiny_skia::Paint> resolveSpanFillPaint(
+      const components::ComputedTextComponent::TextSpan& span,
+      const std::optional<tiny_skia::Paint>& textFillPaint, const Box2d& textBounds,
+      const css::Color& textFillColor);
   void drawImagePixmap(const tiny_skia::PixmapView& source, int sourceWidth, int sourceHeight,
                        const ImageParams& params);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
