@@ -177,6 +177,7 @@ export function loadLibrary({
   const heap = new ArrayBuffer(64 * 1024);
   const bytes = new Uint8Array(heap);
   const words = new Uint32Array(heap);
+  const doubleWords = new BigUint64Array(heap);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let next = 8;
@@ -200,6 +201,7 @@ export function loadLibrary({
     ...(timersForTesting ?? {}),
     HEAPU8: bytes,
     HEAPU32: words,
+    HEAPU64: doubleWords,
     UTF8ToString(pointer, byteCount) {
       return decoder.decode(bytes.subarray(pointer, pointer + byteCount));
     },
@@ -325,6 +327,10 @@ export function loadLibrary({
     /** Reserves a 32-bit out-parameter and returns its pointer. */
     outParameter() {
       return allocate(4);
+    },
+    /** Reads the 64-bit word at the given 8-byte-aligned pointer. */
+    read64(pointer) {
+      return doubleWords[pointer >> 3];
     },
     /** Reads the out-parameter at the given pointer. */
     read(pointer) {

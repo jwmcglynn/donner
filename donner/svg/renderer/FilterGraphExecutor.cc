@@ -907,10 +907,8 @@ void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box
   const Box2d pixelRegion = deviceFromFilter.transformBox(*filterRegion);
   const int width = static_cast<int>(pixmap.width());
   const int height = static_cast<int>(pixmap.height());
-  // A pixel belongs to the filter region when its center lies inside the half-open rectangle.
-  // This is the same rule used by the non-axis-aligned path above. Convert each continuous edge to
-  // the first integer pixel index whose center is on or beyond that edge. Clamp both sides so a
-  // fully offscreen region collapses to an empty kept rectangle without an out-of-bounds clear.
+  // Clamp both sides so a fully offscreen region collapses to an empty kept rectangle without an
+  // out-of-bounds clear.
   const auto firstPixelAtOrBeyond = [](double edge, int limit) {
     if (std::isnan(edge) || edge <= 0.5) {
       return 0;
@@ -918,7 +916,7 @@ void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box
     if (!std::isfinite(edge) || edge >= static_cast<double>(limit) + 0.5) {
       return limit;
     }
-    return static_cast<int>(std::ceil(edge - 0.5));
+    return static_cast<int>(FirstPixelCenterAtOrBeyond(edge));
   };
   const int x0 = firstPixelAtOrBeyond(pixelRegion.topLeft.x, width);
   const int y0 = firstPixelAtOrBeyond(pixelRegion.topLeft.y, height);

@@ -4374,6 +4374,160 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
+#ifdef DONNER_TEXT_ENABLED
+  /// The glyph fill of a text run, which paints a decoration that has no recorded origin.
+  struct TextRunFillPaint {
+    css::RGBA solid = css::RGBA(0, 0, 0, 0);  //!< Solid fill, transparent when not a solid.
+    /// Gradient fill server, or null when the run's fill is not a gradient.
+    const components::ResolvedPaintServer* gradient = nullptr;
+    bool pattern = false;  //!< Whether the run fills with the staged element pattern.
+    double opacity = 1.0;  //!< Opacity of a gradient or pattern fill.
+  };
+
+  /// The paint of one text decoration origin's lines. Gradients map onto the text element's
+  /// bounds, as the glyphs' gradients do.
+  struct TextDecorationPaint {
+    css::RGBA solidFill = css::RGBA(0, 0, 0, 0);  //!< Solid fill, transparent for none.
+    /// Gradient fill server, or null when the fill is not a gradient.
+    const components::ResolvedPaintServer* gradientFill = nullptr;
+    bool patternFill = false;              //!< Whether the fill samples the staged element pattern.
+    double fillOpacity = 1.0;              //!< Opacity of a gradient or pattern fill.
+    std::optional<css::RGBA> solidStroke;  //!< Solid stroke color, when stroked with one.
+    /// Gradient stroke server, or null when the stroke is not a gradient.
+    const components::ResolvedPaintServer* gradientStroke = nullptr;
+    double strokeOpacity = 1.0;              //!< Opacity of a gradient stroke.
+    std::optional<StrokeStyle> strokeStyle;  //!< Set when the decoration is stroked.
+    PaintOrder paintOrder;                   //!< Order of the decoration's fill and stroke.
+  };
+
+  /**
+   * Resolves the paint of \p decoration, declared on an element whose lines are drawn over a span
+   * of opacity \p spanOpacity. SVG 2 section 11.11 paints a decoration with the fill and stroke of
+   * the element that declares it.
+   *
+   * @param decoration Declaring origin.
+   * @param spanOpacity Opacity of the span the lines are drawn over.
+   * @param runFill The run's own fill, for a decoration without a recorded origin; null otherwise.
+   */
+  TextDecorationPaint resolveTextDecorationPaint(const components::TextDecorationOrigin& decoration,
+                                                 double spanOpacity,
+                                                 const TextRunFillPaint* runFill) {
+    TextDecorationPaint result;
+    result.paintOrder = decoration.paintOrder;
+    resolveTextDecorationFill(decoration, spanOpacity, runFill, result);
+    resolveTextDecorationStroke(decoration, spanOpacity, result);
+    return result;
+  }
+
+  /**
+   * The fill half of \ref resolveTextDecorationPaint.
+   *
+   * @param decoration Declaring origin.
+   * @param spanOpacity Opacity of the span the lines are drawn over.
+   * @param runFill The run's own fill, for a decoration without a recorded origin; null otherwise.
+   * @param result Receives the fill paint and its opacity.
+   */
+  void resolveTextDecorationFill(const components::TextDecorationOrigin& decoration,
+                                 double spanOpacity, const TextRunFillPaint* runFill,
+                                 TextDecorationPaint& result) {
+    if (runFill != nullptr) {
+      result.solidFill = runFill->solid;
+      result.gradientFill = runFill->gradient;
+      result.patternFill = runFill->pattern && patternFillPaint.has_value();
+      result.fillOpacity = runFill->opacity;
+      return;
+    }
+    result.fillOpacity = decoration.fillOpacity * spanOpacity;
+    if (paintReferenceIsGradient(decoration.fill)) {
+      result.gradientFill = &decoration.fill;
+    } else if (patternFillPaint.has_value() && decoration.usesPreparedFill(paint.fill)) {
+      result.patternFill = true;
+    } else if (const std::optional<css::RGBA> color =
+                   resolveSolidPaint(decoration.fill, result.fillOpacity)) {
+      result.solidFill = *color;
+    }
+  }
+
+  /**
+   * The stroke half of \ref resolveTextDecorationPaint.
+   *
+   * @param decoration Declaring origin.
+   * @param spanOpacity Opacity of the span the lines are drawn over.
+   * @param result Receives the stroke paint, its opacity and its style.
+   */
+  void resolveTextDecorationStroke(const components::TextDecorationOrigin& decoration,
+                                   double spanOpacity, TextDecorationPaint& result) {
+    if (!(decoration.strokeWidth > 0.0) ||
+        std::holds_alternative<PaintServer::None>(decoration.stroke)) {
+      return;
+    }
+    result.strokeOpacity = decoration.strokeOpacity * spanOpacity;
+    if (paintReferenceIsGradient(decoration.stroke)) {
+      result.gradientStroke = &decoration.stroke;
+    } else {
+      result.solidStroke = resolveSolidPaint(decoration.stroke, result.strokeOpacity);
+      if (!result.solidStroke.has_value() || result.solidStroke->a == 0) {
+        result.solidStroke.reset();
+        return;
+      }
+    }
+    StrokeParams strokeParams;
+    strokeParams.strokeWidth = decoration.strokeWidth;
+    result.strokeStyle = toStrokeStyle(strokeParams);
+  }
+
+  /**
+   * Paints one decoration line \p path, in the text element's local space, with
+   * \p decorationPaint. A gradient resolves against \p textBoundsPath, the text element's bounds,
+   * for both the fill and the stroke, as the glyphs' gradients do.
+   *
+   * @param path Decoration line outline.
+   * @param textBoundsPath The text element's bounds as a path.
+   * @param decorationPaint Resolved paint of the declaring origin.
+   */
+  void paintTextDecorationPath(const Path& path, const Path& textBoundsPath,
+                               const TextDecorationPaint& decorationPaint) {
+    if (path.empty()) {
+      return;
+    }
+    const auto fillDecoration = [&]() {
+      const geode::EncodedPath* encoded = encodeTransientGeometry(path, FillRule::NonZero);
+      if (decorationPaint.gradientFill != nullptr) {
+        drawPaintedPathAgainst(textBoundsPath, path, *decorationPaint.gradientFill,
+                               decorationPaint.fillOpacity, FillRule::NonZero, encoded);
+      } else if (decorationPaint.patternFill) {
+        syncTransform();
+        encoder->fillPathPattern(path, FillRule::NonZero,
+                                 buildPatternPaint(*patternFillPaint, decorationPaint.fillOpacity),
+                                 encoded);
+      } else if (decorationPaint.solidFill.a != 0) {
+        encoder->fillPath(path, decorationPaint.solidFill, FillRule::NonZero, encoded);
+      }
+    };
+    const auto strokeDecoration = [&]() {
+      if (!decorationPaint.strokeStyle.has_value()) {
+        return;
+      }
+      // Device-aware flattening, as in every other renderer-side stroke.
+      const Path stroked =
+          path.strokeToFill(*decorationPaint.strokeStyle, strokeFlattenTolerance());
+      if (stroked.empty()) {
+        return;
+      }
+      countStrokeOutline(stroked);
+      const geode::EncodedPath* encoded = encodeTransientGeometry(stroked, FillRule::NonZero);
+      if (decorationPaint.gradientStroke != nullptr) {
+        drawPaintedPathAgainst(textBoundsPath, stroked, *decorationPaint.gradientStroke,
+                               decorationPaint.strokeOpacity, FillRule::NonZero, encoded);
+      } else {
+        encoder->fillPath(stroked, *decorationPaint.solidStroke, FillRule::NonZero, encoded);
+      }
+    };
+    // The decoration's own fill/stroke order is the declaring element's `paint-order`.
+    PaintFillAndStroke(decorationPaint.paintOrder, fillDecoration, strokeDecoration);
+  }
+#endif  // DONNER_TEXT_ENABLED
+
   /// Most stroke outline points joined into one text stroke shape: far below the path encoder's
   /// 1 << 20 limit, and it bounds how wide one shape of a long, heavily stroked line can get.
   static constexpr std::size_t kMaximumTextStrokeGroupPoints = std::size_t{1} << 16;
@@ -8446,8 +8600,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     };
 
     // Text-decoration lines (underline / overline / line-through). Mirrors
-    // `RendererTinySkia::drawText`; solid paint only (gradient decoration paint
-    // is a separate gap). Per CSS Text Decoration 3 the decoration uses the
+    // `RendererTinySkia::drawText`. Per CSS Text Decoration 3 the decoration uses the
     // declaring element's paint + font metrics, and underlines and overlines
     // paint beneath the run's glyphs while line-throughs paint above them.
     const auto drawDecorations = [&](TextDecoration emittedLines) {
@@ -8461,76 +8614,19 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       const auto origins = span.decorations
                                ? span.decorations->origins()
                                : std::span<const components::TextDecorationOrigin>(&fallback, 1);
+      const Impl::TextRunFillPaint runFill{spanFill, fillIsGradient ? &fillServer : nullptr,
+                                           usePatternFill, fillOpacity};
       // Origins with no line in this pass are skipped before their paint is resolved.
       ForEachEmittingOrigin(
           origins, emittedLines, [&](const components::TextDecorationOrigin& decoration) {
-            css::RGBA decoFill = span.decorations ? css::RGBA(0, 0, 0, 0) : spanFill;
-            const bool decoUsesPattern =
-                impl_->patternFillPaint && ((!span.decorations && usePatternFill) ||
-                                            decoration.usesPreparedFill(impl_->paint.fill));
-            const double decoFillOpacity =
-                span.decorations ? decoration.fillOpacity * span.opacity : impl_->paint.fillOpacity;
-            if (!std::holds_alternative<PaintServer::None>(decoration.fill)) {
-              if (auto c = impl_->resolveSolidPaint(decoration.fill,
-                                                    decoration.fillOpacity * span.opacity)) {
-                decoFill = *c;
-              }
-            }
-            // Decoration stroke (solid).
-            std::optional<css::RGBA> decoStrokeColor;
-            std::optional<StrokeStyle> decoStrokeStyle;
-            if (decoration.strokeWidth > 0.0 &&
-                !std::holds_alternative<PaintServer::None>(decoration.stroke)) {
-              if (auto c = impl_->resolveSolidPaint(decoration.stroke,
-                                                    decoration.strokeOpacity * span.opacity)) {
-                if (c->a != 0) {
-                  decoStrokeColor = c;
-                  StrokeParams decoSp;
-                  decoSp.strokeWidth = decoration.strokeWidth;
-                  decoStrokeStyle = toStrokeStyle(decoSp);
-                }
-              }
-            }
-
-            const auto drawDecoPath = [&](const Path& path) {
-              if (path.empty()) {
-                return;
-              }
-              const auto fillDecoration = [&]() {
-                const geode::EncodedPath* encoded =
-                    impl_->encodeTransientGeometry(path, FillRule::NonZero);
-                if (decoUsesPattern) {
-                  impl_->syncTransform();
-                  impl_->encoder->fillPathPattern(
-                      path, FillRule::NonZero,
-                      impl_->buildPatternPaint(*impl_->patternFillPaint, decoFillOpacity), encoded);
-                } else if (decoFill.a != 0) {
-                  impl_->encoder->fillPath(path, decoFill, FillRule::NonZero, encoded);
-                }
-              };
-              const auto strokeDecoration = [&]() {
-                if (!decoStrokeColor.has_value()) {
-                  return;
-                }
-                // Device-aware flattening, as in every other renderer-side stroke.
-                const Path stroked =
-                    path.strokeToFill(*decoStrokeStyle, impl_->strokeFlattenTolerance());
-                if (!stroked.empty()) {
-                  impl_->countStrokeOutline(stroked);
-                  const FillRule strokeRule = FillRule::NonZero;
-                  const geode::EncodedPath* strokeEncoded =
-                      impl_->encodeTransientGeometry(stroked, strokeRule);
-                  impl_->encoder->fillPath(stroked, *decoStrokeColor, strokeRule, strokeEncoded);
-                }
-              };
-              // The decoration's own fill/stroke order is the declaring element's `paint-order`.
-              PaintFillAndStroke(decoration.paintOrder, fillDecoration, strokeDecoration);
-            };
-
+            const Impl::TextDecorationPaint decorationPaint = impl_->resolveTextDecorationPaint(
+                decoration, span.opacity, span.decorations ? nullptr : &runFill);
             const std::size_t workBefore = decorationWorkRemaining;
-            EmitTextDecorationPaths(run, decoration, emittedLines, origins.size(), spanFontSizePx,
-                                    textEngine, impl_->deviceFromLocalTransform,
-                                    decorationWorkRemaining, drawDecoPath);
+            EmitTextDecorationPaths(
+                run, decoration, emittedLines, origins.size(), spanFontSizePx, textEngine,
+                impl_->deviceFromLocalTransform, decorationWorkRemaining, [&](const Path& path) {
+                  impl_->paintTextDecorationPath(path, textBoundsPath, decorationPaint);
+                });
             impl_->textMaterializationBudget->consumeDecorationWork(workBefore -
                                                                     decorationWorkRemaining);
           });

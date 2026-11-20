@@ -20,6 +20,7 @@
 /// asked to do.
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -27,6 +28,7 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/base/Utils.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/TextureExport.h"
 #include "donner/gpu/browser/BrowserObjectTable.h"
@@ -213,6 +215,44 @@ public:
 };
 
 /**
+ * Liveness and completion that the browser side of one logical device publishes into memory its
+ * owning thread can read, so that thread answers its ownership, loss and completion queries
+ * without a synchronous browser call.
+ *
+ * The browser side stores each value with a sequentially consistent atomic store, after the state
+ * it reports has changed, from the same browser task that changed it; readers load with acquire.
+ * A loaded value is therefore one the browser side held at or before the load, never one it has
+ * not reached yet, which keeps every stale read conservative:
+ * - \ref completedSerial only grows, and is stored from the browser's completion callback for the
+ *   submission it names. A reader can see less work complete than has finished, never more.
+ * - \ref status moves from \ref kUnpublished to \ref kLive or \ref kLost, and from \ref kLive to
+ *   \ref kLost, never back. A reader that still sees \ref kLive has read before the browser task
+ *   that recorded the loss, which a synchronous query issued at that moment would also have
+ *   answered as live.
+ *
+ * The browser side stops storing when the logical device is released, which the bridge's
+ * destructor does before the bridge, and this state inside it, goes away. Reading it is not a
+ * browser call, so a read after the GPU owner has stopped does not fail closed by itself; the
+ * reader's next browser call does.
+ */
+struct BrowserPublishedState {
+  /// \ref status before the browser side has published anything: every query asks the browser.
+  static constexpr uint32_t kUnpublished = 0;
+  /// \ref status of an owned, live device.
+  static constexpr uint32_t kLive = 1;
+  /// \ref status of an owned device the browser has reported lost. Permanent.
+  static constexpr uint32_t kLost = 2;
+
+  /// One of \ref kUnpublished, \ref kLive or \ref kLost.
+  std::atomic<uint32_t> status{kUnpublished};
+  /// Serial of the most recent submission the browser has reported finished.
+  std::atomic<uint64_t> completedSerial{0};
+};
+
+static_assert(std::atomic<uint32_t>::is_always_lock_free);
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
+
+/**
  * The browser's GPU service, as the runtime uses it.
  *
  * One instance stands for one logical device: the state one runtime device keeps on the browser
@@ -252,7 +292,9 @@ public:
 
   /// Checks current ownership and loss together. Returns Success for an owned, live device,
   /// NotOwner for a missing device or foreign context, or DeviceLost for an owned, lost device.
-  /// Other statuses indicate a failed query. Implementations must not cache this state.
+  /// Other statuses indicate a failed query. Implementations answer from the browser's current
+  /// state rather than from a value they kept; a device that reads \ref publishedState instead
+  /// relies on the browser side storing each change as it happens.
   virtual BridgeStatus deviceStatus() const = 0;
 
   /// Whether the browser has reported the device lost. Once true it never becomes false again.
@@ -264,6 +306,21 @@ public:
   /// Serial of this logical device's most recent submission the browser has reported finished
   /// (0 if none). Each logical device numbers its submissions on its own.
   virtual uint64_t completedSerial() const = 0;
+
+  /**
+   * Asks the browser side to publish this logical device's liveness and completed serial into
+   * \ref publishedState from now on, and to store their current values before returning.
+   * Called once the request is Ready, on the thread that owns the device.
+   *
+   * @return Whether the browser side now publishes. Without it every query stays a browser call;
+   *   an implementation that cannot publish keeps this default.
+   */
+  virtual bool beginPublishingState() { return false; }
+
+  /// What the browser side publishes once \ref beginPublishingState has succeeded.
+  [[nodiscard]] const BrowserPublishedState& publishedState() const UTILS_LIFETIME_BOUND {
+    return published_;
+  }
 
   /// Largest width or height of a 2D texture the browser device supports, as its limits report
   /// it, or 0 when this logical device holds no device or the browser reports no such limit.
@@ -553,6 +610,12 @@ public:
 protected:
   /// Constructor for implementations.
   BrowserBridge();
+
+  /// Storage the browser side publishes into. @return The state \ref publishedState reads.
+  BrowserPublishedState& publishedStateStorage() UTILS_LIFETIME_BOUND { return published_; }
+
+private:
+  BrowserPublishedState published_;
 };
 
 }  // namespace donner::gpu::browser

@@ -2697,6 +2697,10 @@ class CiLaneParityTest(unittest.TestCase):
         # The contract job waits for every job whose receipt it reads.
         manifest = self._coverage_manifest()
         jobs = _jobs(self.workflows["main.yml"])
+        contract = jobs["coverage-contract"]
+        self.assertEqual(contract["runs-on"], "ubuntu-24.04")
+        self.assertIn("!cancelled() &&", contract["if"])
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_linux == 'true'", contract["if"])
         declared = {(c["job"], c["step"]) for c in self._counterparts(manifest)}
         self.assertLessEqual({job for job, _ in declared},
                              set(_needs(jobs["coverage-contract"])))

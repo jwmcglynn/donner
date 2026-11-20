@@ -1335,9 +1335,42 @@ python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
   /tmp/tinyskia-labels.png /tmp/geode-labels.png /tmp/color-adjust-references
 ```
 
+## Geode feGaussianBlur complex-transform golden
+
+`geode/filters_feGaussianBlur_complex-transform.png` is the Geode rendering of the unchanged corpus
+file `filters/feGaussianBlur/complex-transform` at 500x500, written by the resvg suite harness on
+software Vulkan (Mesa 25.2.6 lavapipe, llvmpipe with LLVM 21.1.7) at the commit that adds it. Only
+the `GeodeGolden` comparison uses it; the CPU renderer compares against the vendored reference and
+differs from it by 99 pixels.
+
+The rotated rect's covered area agrees with a 16x scan control to under 0.3 px in total. Coverage
+along its edges differs from the reference's, and the directional `stdDeviation="12 0"` blur widens
+that into a thin band, so the Geode render differs from the vendored reference by 247 pixels on
+software Vulkan and 262 on Metal at the default threshold. Against this golden, at the default 0.02
+threshold and 100-pixel allowance, software Vulkan differs by 0 pixels and Metal by 9.
+
+The rotated filter runs in a local raster scaled by 2.5, so the filter region's edges fall on half
+pixels there. The image keeps only the output pixels whose centers lie inside the filter region, the
+rule both renderers apply, and so has no half-covered column of blurred content beyond the region.
+Compared with the image it replaces, it differs in a three-pixel band along that far edge (427
+pixels, 6 to 57 premultiplied levels), in a one-pixel line of 144 pixels along the rect's left edge
+under its stroke (139 of them by 5 levels, the rest by 4 to 22), and elsewhere by at most 2 levels,
+the low-order differences of the rendering environment.
+
+To regenerate, delete the file and run from the repository root on Linux with the lavapipe ICD:
+
+```sh
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run --config=geode \
+  //donner/svg/renderer/tests:resvg_test_suite_geode -- \
+  '--gtest_filter=FiltersFeGaussianBlur/*complex_transform_GeodeGolden'
+```
+
+PNG SHA-256: `871da8f754631be06f0c5dd6d81ac07b4ca10287845f67ecc29f3796a131a718`.
+
 ## Goldens without recorded provenance
 
-The renderer and the regeneration command of these two goldens are not recorded.
+The renderer and the regeneration command of this golden are not recorded.
 
 - `resvg-indirect.png` (`text/text-decoration/indirect`): provenance not recorded. It was first
   committed in `0c5402b1d` under a numbered corpus name, with a source comment saying the vendored
@@ -1345,10 +1378,6 @@ The renderer and the regeneration command of these two goldens are not recorded.
   vendored `indirect.png` outlines the glyphs and the underline in green, while the SVG paints
   no green: 2,269 of its pixels are exactly opaque RGBA (0, 128, 0, 255), and 7,309 have any
   alpha with a green channel above both red and blue. This golden has none by either count.
-- `geode/filters_feGaussianBlur_complex-transform.png` (`filters/feGaussianBlur/complex-transform`,
-  Geode only): provenance not recorded. It was added in `eb1cd0fcb` as a per-backend Geode golden.
-  The registration's reason records the measured coverage evidence; the renderer build and the
-  command that wrote the file are not recorded.
 
 ## Registered golden digests
 
@@ -1394,7 +1423,7 @@ regenerates or adds a golden.
 | `geode/donner-color-adjust-functions-200percent.png` | `7872a95c6ad4b81072f6c0dcbb3c68818add843a3762d9f15f234645293dd3cc` | Color-adjust filter references |
 | `geode/donner-color-adjust-functions-50percent.png` | `d17790f2c6ee6d19c152cc42f932ca44740f6076eb34a49248fb21ac9fdfa3bc` | Color-adjust filter references |
 | `geode/donner-color-adjust-functions-negative.png` | `21ac65ab93ac649542f122e75ea04b88db85a9abb11970da46729b14301014d8` | Color-adjust filter references |
-| `geode/filters_feGaussianBlur_complex-transform.png` | `78e9339f1048417698d6b517036590937fb86a3a04f50a070ac7c557d4ef29d2` | Provenance not recorded; see Goldens without recorded provenance |
+| `geode/filters_feGaussianBlur_complex-transform.png` | `871da8f754631be06f0c5dd6d81ac07b4ca10287845f67ecc29f3796a131a718` | Geode feGaussianBlur complex-transform golden |
 | `resvg-all-types-inline-bands.png` | `4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911` | Inline text decoration and malformed lists |
 | `resvg-all-types-inline-no-decoration.png` | `2550df9e39e1e949b633b924c98995203e5bc5c134bfb9537cf8a9868e2082f7` | Inline text decoration and malformed lists |
 | `resvg-complex-graphemes-and-coordinates-list.png` | `0c37edfeafdd94c8a9b8414f1c5794fee897b933a0dbd6a3e1ad8087bcba6b83` | Cyrillic combining mark position |

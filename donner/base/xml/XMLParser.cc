@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>  // For std::size_t
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
