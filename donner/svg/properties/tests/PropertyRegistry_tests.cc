@@ -139,6 +139,72 @@ TEST(PropertyRegistry, Set) {
 )"));
 }
 
+// Clearing a presentation attribute removes only the declaration it made: a `style` declaration of
+// the same property stays, a resource color keeps its inline value, and names that are not stored
+// in the registry report false.
+TEST(PropertyRegistry, ClearPresentationAttributeRemovesOnlyItsDeclaration) {
+  using Clear = PropertyRegistry::PresentationAttributeClear;
+  PropertyRegistry registry;
+  EXPECT_EQ(registry.clearPresentationAttribute("color"), Clear::NotSet);
+  ASSERT_THAT(registry.parsePresentationAttribute("color", "red"), ParseResultIs(true));
+  EXPECT_EQ(registry.clearPresentationAttribute("color"), Clear::Cleared);
+  EXPECT_FALSE(registry.color.isSpecified());
+
+  ASSERT_THAT(registry.parsePresentationAttribute("color", "red"), ParseResultIs(true));
+  ASSERT_TRUE(registry.parseStyle("color: lime"));
+  EXPECT_EQ(registry.clearPresentationAttribute("color"), Clear::NotSet);
+  EXPECT_THAT(registry.color.get(), Optional(css::Color(css::RGBA::RGB(0, 255, 0))));
+
+  ASSERT_THAT(registry.parsePresentationAttribute("flood-color", "red"), ParseResultIs(true));
+  EXPECT_EQ(registry.clearPresentationAttribute("flood-color"), Clear::Cleared);
+  EXPECT_FALSE(registry.floodColor.isSpecified());
+  ASSERT_THAT(registry.parsePresentationAttribute("flood-color", "red"), ParseResultIs(true));
+  ASSERT_TRUE(registry.parseStyle("flood-color: lime"));
+  EXPECT_EQ(registry.clearPresentationAttribute("flood-color"), Clear::Cleared);
+  EXPECT_THAT(registry.floodColor.get(), Optional(css::Color(css::RGBA::RGB(0, 255, 0))));
+
+  EXPECT_EQ(registry.clearPresentationAttribute("transform"), Clear::NotStored);
+  EXPECT_EQ(registry.clearPresentationAttribute("cx"), Clear::NotStored);
+}
+
+/// Names of the properties specified in \p registry.
+std::vector<std::string_view> SpecifiedProperties(const PropertyRegistry& registry) {
+  std::vector<std::string_view> names;
+  const auto properties = registry.allProperties();
+  PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>([&](auto i) {
+    if (std::get<i.value>(properties).isSpecified()) {
+      names.push_back(std::get<i.value>(properties).name);
+    }
+  });
+  return names;
+}
+
+// Every presentation attribute stored as a property clears everything it writes, including the
+// longhands of a shorthand and the target of an alias, so no written property is left behind.
+TEST(PropertyRegistry, ClearPresentationAttributeCoversEveryWrittenProperty) {
+  for (const std::string_view name : PropertyRegistry::propertyNames()) {
+    if (!PropertyRegistry::isPresentationAttributeName(name)) {
+      continue;
+    }
+    SCOPED_TRACE(name);
+    PropertyRegistry registry;
+    ASSERT_THAT(registry.parsePresentationAttribute(name, "inherit"), ParseResultIs(true));
+    ASSERT_THAT(SpecifiedProperties(registry), testing::Not(testing::IsEmpty()));
+    EXPECT_EQ(registry.clearPresentationAttribute(name),
+              PropertyRegistry::PresentationAttributeClear::Cleared);
+    EXPECT_THAT(SpecifiedProperties(registry), testing::IsEmpty());
+  }
+}
+
+TEST(PropertyRegistry, ClearPresentationAttributeClearsShorthandLonghands) {
+  PropertyRegistry registry;
+  ASSERT_THAT(registry.parsePresentationAttribute("text-decoration", "overline wavy red"),
+              ParseResultIs(true));
+  EXPECT_EQ(registry.clearPresentationAttribute("text-decoration"),
+            PropertyRegistry::PresentationAttributeClear::Cleared);
+  EXPECT_THAT(SpecifiedProperties(registry), testing::IsEmpty());
+}
+
 TEST(PropertyRegistry, PropertyNamesExposeCssRegistryKeys) {
   EXPECT_THAT(PropertyRegistry::propertyNames().subspan(0, 3),
               testing::ElementsAre(std::string_view("color"), std::string_view("flood-color"),

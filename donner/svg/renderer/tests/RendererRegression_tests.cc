@@ -5885,5 +5885,25 @@ TEST_F(RendererRegressionTests, FeImageFragmentInstancesAreNotReturnedByRectQuer
   EXPECT_THAT(renderingContext.findIntersectingRect(canvas), testing::ElementsAreArray(beforeDraw));
 }
 
+// Removing a presentation attribute through the DOM renders like a document authored without it:
+// the rect inherits its group's fill again instead of taking the initial black.
+TEST_F(RendererRegressionTests, RemovedFillPresentationAttributeInheritsAgain) {
+  SVGDocument document = instantiateSubtree(
+      "<g fill='red'><rect id='t' x='4' y='4' width='8' height='8' fill='blue'/></g>", {},
+      Vector2i(16, 16));
+  (void)RenderDocumentWithActiveBackend(document);
+  std::optional<SVGElement> target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  target->removeAttribute("fill");
+
+  SVGDocument fresh = instantiateSubtree(
+      "<g fill='red'><rect x='4' y='4' width='8' height='8'/></g>", {}, Vector2i(16, 16));
+  const RendererBitmap expected = RenderDocumentWithActiveBackend(fresh);
+  AssertVisibleFixture(expected, "removed_fill_oracle");
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expected,
+                                       "removed_fill_inherits",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg
