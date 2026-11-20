@@ -1502,7 +1502,7 @@ THRESHOLD_ALLOWLIST: dict[str, dict[str, float]] = {
     "filters/feDiffuseLighting/complex-transform.svg": {
         "default_text": 0.11, "max": 0.11, "geode": 0.11,
     },
-    "filters/feMerge/complex-transform.svg": {"default_text": 0.14, "max": 0.14, "geode": 0.14},
+    "filters/feMerge/complex-transform.svg": {"default_text": 0.09, "max": 0.09, "geode": 0.09},
     "filters/fePointLight/complex-transform.svg": {
         "default_text": 0.11, "max": 0.11, "geode": 0.11,
     },

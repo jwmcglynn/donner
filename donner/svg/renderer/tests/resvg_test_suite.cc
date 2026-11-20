@@ -402,8 +402,8 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/feMerge",
                 {
                     {"complex-transform.svg",
-                     Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                           "Reference blurs inputs before skew")},
+                     Params::WithThreshold(0.09f, kDefaultMismatchedPixels,
+                                           "Skewed blur edges mix colors differently")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
