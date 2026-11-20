@@ -93,6 +93,7 @@ playwright_bin.playwright_test(
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
+        "drag-input-stream.mjs",
         "firefox-launch-env.cjs",
         "first-click-breakdown.mjs",
         "flat-capture-retake.mjs",

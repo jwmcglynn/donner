@@ -2,10 +2,10 @@
 //
 // Every run records each gate's measured value and each completion check's result. A gate miss
 // fails the run unless the run sets DONNER_BROWSER_LATENCY_GATES=report, and a completion check
-// miss fails it unless the run sets DONNER_BROWSER_COMPLETION_CHECKS=report and the miss is in the
-// browser (and, when the check names them, the phases) that check is tracked for. Only the
-// GitHub-hosted macOS Perf job sets either: the gates miss their targets on that runner (#1666),
-// and the completion checks fail there (#1675, #1676, #2106).
+// miss fails it unless the run sets DONNER_BROWSER_COMPLETION_CHECKS=report and the miss is in a
+// browser and phase that the check's report scope covers. Only the GitHub-hosted macOS Perf job
+// sets either: the gates miss their targets on that runner (#1666), and the completion checks fail
+// there (#1675, #1676, #2106).
 
 import { kNominalCompletedResultHandoffLimitMs } from "./completed-result-handoff.mjs";
 
@@ -31,41 +31,60 @@ export const kLatencyGateRecordPrefix = "latency-gate ";
 export const kCompletionChecksEnv = "DONNER_BROWSER_COMPLETION_CHECKS";
 
 /**
- * Hard checks of this lane that the hosted macOS Perf job only reports, each in the one browser
- * whose misses its issue tracks and, when `phases` or `projects` is set, only in those phases and
- * Playwright projects; every other browser, project and phase keeps enforcing the check. The fix restores enforcement: remove the entry once
- * its issue is fixed.
+ * Hard checks of this lane: what each observes and, for a check the hosted macOS Perf job only
+ * reports, its report scope: the browsers and, when `phases` is set, the phases whose misses the
+ * scope's issue tracks, and `restoreWhen`, the condition for removing the scope. That job
+ * enforces the check in every other browser and phase, and every run that does not set report
+ * mode enforces it everywhere; no CI job other than the hosted Perf job runs the browser
+ * responsiveness targets, so those are manual runs. browser_matrix_tests pins this table, so a new
+ * or wider scope is a visible, reviewed change.
  */
 export const kCompletionChecks = {
-  coldZoomPresents: { browser: "chromium", issue: "#1675" },
-  dragInputsComplete: { browser: "firefox", issue: "#1676" },
-  // Masked-child drags render too slowly on the hosted runner to complete a second held position
-  // (#2106). Re-enforce once #2106 is fixed.
-  heldDragPositions: { browser: "chromium", phases: ["geode-crown"], issue: "#2106" },
-  // At device pixel ratio 1, which only the firefox-dpr1 project runs for this phase, each held
-  // masked-child move rasterizes the whole owning tile instead of patching its damage (#2106).
-  // Re-enforce once #2106 is fixed.
-  heldMaskedDragDamagePatch: {
-    browser: "firefox",
-    projects: ["firefox-dpr1"],
-    phases: ["geode-crown"],
-    issue: "#2106",
+  coldZoomPresents: {
+    observes: "cold zoom presentation",
+    report: Object.freeze({
+      browsers: Object.freeze(["chromium"]),
+      issue: "#1675",
+      restoreWhen: "#1675 is fixed",
+    }),
   },
+  dragInputsComplete: {
+    observes: "drag input completion",
+    report: Object.freeze({
+      browsers: Object.freeze(["firefox"]),
+      issue: "#1676",
+      restoreWhen: "#1676 is fixed",
+    }),
+  },
+  // In Chromium the masked crown drag renders too slowly on the hosted runner to complete a second
+  // held position (#2106). Firefox stays enforced.
+  heldDragPositions: {
+    observes: "held drag progress",
+    report: Object.freeze({
+      browsers: Object.freeze(["chromium"]),
+      phases: Object.freeze(["geode-crown"]),
+      issue: "#2106",
+      restoreWhen: "#2106 is fixed",
+    }),
+  },
+  // Whether any move rendered a fast-path result while the masked child was held. A drag slower
+  // than its hold fails this, with a message that says so, on every project and run.
+  heldDragFastPathResults: { observes: "held drag progress" },
+  // A slow-path or unpatched held result is a fast-path defect, never slowness: always enforced.
+  heldMaskedDragDamagePatch: { observes: "held masked-child result shape" },
 };
 
 /**
- * Whether a completion check miss in this browser, phase and project is tracked by the check's
- * issue.
+ * Whether the report scope of a check covers a miss in this browser and phase.
  * @param {keyof typeof kCompletionChecks} check Check that missed.
  * @param {string} browserName Playwright browser name, such as "chromium".
  * @param {string} phase Measured phase of the miss.
- * @param {string} [project] Playwright project name, such as "firefox-dpr1".
  * @returns {boolean}
  */
-export function completionCheckTracks(check, browserName, phase, project) {
-  const { browser, phases, projects } = kCompletionChecks[check];
-  return browserName === browser && (phases === undefined || phases.includes(phase))
-    && (projects === undefined || projects.includes(project));
+export function completionCheckTracks(check, browserName, phase) {
+  const { report } = kCompletionChecks[check];
+  return report !== undefined && report.browsers.includes(browserName)
+    && (report.phases === undefined || report.phases.includes(phase));
 }
 
 /** Line prefix of a recorded completion check result in the test log. */
@@ -104,8 +123,7 @@ export function completionCheckMode(env = process.env) {
 
 /**
  * Run one completion check's assertion and record whether it held. A miss rethrows the assertion's
- * error unless the run reports completion checks and the miss is in the browser and phase the check
- * is tracked for.
+ * error unless the run reports completion checks and the check's report scope covers the miss.
  * @param {keyof typeof kCompletionChecks} check Check to run.
  * @param {() => unknown} assertion Throws, or returns a promise that rejects, on a miss.
  * @param {{
@@ -136,7 +154,7 @@ export async function runCompletionCheck(check, assertion, options) {
     detail: options.detail,
     met: failure === undefined,
     mode: options.mode === "report"
-        && completionCheckTracks(check, options.browserName, options.phase, options.project)
+        && completionCheckTracks(check, options.browserName, options.phase)
       ? "report"
       : "enforce",
   };
