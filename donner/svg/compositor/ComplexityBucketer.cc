@@ -20,6 +20,21 @@ struct Candidate {
 
 }  // namespace
 
+namespace {
+
+/// Removes the mask, marker and pattern content drawn for other elements from @p entities. That
+/// content reaches the frame only through the element that draws it, so it is never bucketed into
+/// a layer of its own.
+void EraseDrawnContent(Registry& registry, std::vector<Entity>& entities) {
+  const std::vector<std::pair<int, int>> drawnContent = DrawnContentDrawOrders(registry);
+  std::erase_if(entities, [&](Entity entity) {
+    return InDrawOrderRanges(
+        drawnContent, registry.get<components::RenderingInstanceComponent>(entity).drawOrder);
+  });
+}
+
+}  // namespace
+
 void ComplexityBucketer::reconcile(Registry& registry) {
   stats_ = {};
 
@@ -36,6 +51,7 @@ void ComplexityBucketer::reconcile(Registry& registry) {
     }
   }
   std::reverse(drawOrder.begin(), drawOrder.end());
+  EraseDrawnContent(registry, drawOrder);
 
   if (drawOrder.empty()) {
     // Empty document - drop any lingering hints and exit.
@@ -49,20 +65,11 @@ void ComplexityBucketer::reconcile(Registry& registry) {
   // candidate; the root would never benefit from being its own bucket.
   ++stats_.entitiesEvaluated;
 
-  const std::vector<std::pair<int, int>> drawnContent = DrawnContentDrawOrders(registry);
-
   std::vector<Candidate> candidates;
   size_t i = 1;
   while (i < drawOrder.size()) {
     const Entity childRoot = drawOrder[i];
     const auto& childInstance = registry.get<components::RenderingInstanceComponent>(childRoot);
-    // Mask, marker and pattern content reaches the frame only through the element that draws it,
-    // so it is never bucketed into a layer of its own.
-    if (InDrawOrderRanges(drawnContent, childInstance.drawOrder)) {
-      ++stats_.entitiesEvaluated;
-      ++i;
-      continue;
-    }
     const Entity subtreeEnd = childInstance.subtreeInfo.has_value()
                                   ? childInstance.subtreeInfo->lastRenderedEntity
                                   : childRoot;
