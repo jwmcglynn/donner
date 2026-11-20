@@ -1,8 +1,8 @@
 {
   "tree": {
-    "lines": 5077,
-    "comment_lines": 536,
-    "multiline_runs": 64,
+    "lines": 5164,
+    "comment_lines": 535,
+    "multiline_runs": 65,
     "longest_run": 194,
     "run_expressions": 12,
     "longest_if": 369
@@ -65,12 +65,12 @@
       "longest_if": 342
     },
     ".github/workflows/editor_wasm.yml": {
-      "lines": 310,
-      "comment_lines": 32,
-      "multiline_runs": 2,
-      "longest_run": 3,
+      "lines": 378,
+      "comment_lines": 35,
+      "multiline_runs": 3,
+      "longest_run": 5,
       "run_expressions": 0,
-      "longest_if": 138
+      "longest_if": 247
     },
     ".github/workflows/fuzz.yml": {
       "lines": 131,
@@ -97,8 +97,8 @@
       "longest_if": 166
     },
     ".github/workflows/main.yml": {
-      "lines": 885,
-      "comment_lines": 140,
+      "lines": 856,
+      "comment_lines": 136,
       "multiline_runs": 7,
       "longest_run": 47,
       "run_expressions": 6,
@@ -215,6 +215,14 @@
       "longest_run": 29,
       "run_expressions": 0,
       "longest_if": 0
+    },
+    ".github/actions/prepare-bazel-diff/action.yml": {
+      "lines": 48,
+      "comment_lines": 0,
+      "multiline_runs": 0,
+      "longest_run": 0,
+      "run_expressions": 0,
+      "longest_if": 21
     },
     ".github/actions/re-turnstile/action.yml": {
       "lines": 137,
