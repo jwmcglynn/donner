@@ -358,5 +358,25 @@ TEST(BrowserDeferredCalls, ThreadExitDropsWhatIsStillHeldWithoutARoundTrip) {
   EXPECT_EQ(channel.roundTrips(), 1u) << "thread exit makes no round trip";
 }
 
+TEST(BrowserDeferredCalls, AWriteDroppedAtThreadExitMakesItsLiveDeviceFailClosed) {
+  FakeOwnerChannel channel;
+  const auto writing = std::make_shared<BrowserDeferredOrigin>();
+  const auto building = std::make_shared<BrowserDeferredOrigin>();
+  const auto releasing = std::make_shared<BrowserDeferredOrigin>();
+  std::vector<std::string> ran;
+  std::thread exiting([&] {
+    BrowserDeferredCalls& queue = ThreadQueue(channel);
+    queue.defer(writing, BrowserDeferredOperation::WriteBuffer, 1, Recording(ran, "write"));
+    queue.defer(building, BrowserDeferredOperation::CreateBindGroup, 2, Recording(ran, "group"));
+    queue.defer(releasing, BrowserDeferredOperation::DestroyObject, 3, Recording(ran, "destroy"));
+  });
+  exiting.join();
+  EXPECT_TRUE(ran.empty());
+  EXPECT_NE(writing->refusal.load(), 0u) << "a dropped write leaves its device out of step";
+  EXPECT_NE(building->refusal.load(), 0u) << "a dropped bind group leaves no browser object";
+  EXPECT_EQ(releasing->refusal.load(), 0u) << "a dropped release waits for device release";
+  EXPECT_EQ(releasing->destroyRefusals.load(), 0u);
+}
+
 }  // namespace
 }  // namespace donner::gpu::browser

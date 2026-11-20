@@ -2851,6 +2851,37 @@ TEST(BrowserDeviceDeferredRefusal, ASubmissionSkippedForARefusalInItsOwnTripDecl
   EXPECT_THAT(lostState->lost.load(), testing::IsTrue()) << "the shared loss is declared there";
 }
 
+TEST(BrowserDeviceDeferredRefusal, ACommandSkippedForARefusalInItsBatchDeclaresTheLoss) {
+  auto lostState = std::make_shared<DeviceLostState>();
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  FakeBrowserBridge* raw = bridge.get();
+  Result<std::unique_ptr<BrowserDevice>> device =
+      BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+  ASSERT_THAT(device, HasResult());
+  Result<Texture> target =
+      device.result()->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      device.result()->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  // A full command batch sent from inside a recorded command carries a write of this device that
+  // the browser refuses, so the bridge refuses that command as a loss.
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  raw->beforePassCommand = [&] {
+    deferred.defer(raw->deferredOriginForTesting(), BrowserDeferredOperation::WriteBuffer, 1,
+                   [] { return BridgeStatus::Failed; });
+    deferred.flush();
+  };
+  raw->failOperation = "endRenderPass";
+  raw->failStatus = BridgeStatus::DeviceLost;
+  EXPECT_THAT(device.result()->submit(RecordClearPass(*device.result(), view.result())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState,
+                                    HasSubstr("refused a write or bind group construction")));
+  EXPECT_THAT(lostState->lost.load(), testing::IsTrue()) << "the shared loss is declared there";
+}
+
 TEST(BrowserDeviceDeferredRefusal, AnUnrefusedDeviceIsUnaffected) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

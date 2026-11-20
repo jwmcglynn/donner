@@ -804,6 +804,9 @@ public:
   /// Run when a submission arrives, before it is checked, so a test can make something happen in
   /// the round trip that carries it.
   std::function<void()> beforeSubmit;
+  /// Run when a command inside a pass arrives, before it is checked, as a full command batch sent
+  /// from inside a recorded command would.
+  std::function<void()> beforePassCommand;
 
   BridgeStatus submitCommandBuffers(uint64_t submissionSerial) override {
     if (beforeSubmit) {
@@ -1042,6 +1045,9 @@ private:
   BridgeStatus requirePass(const std::string& line) {
     if (!encoderOpen_ || !passOpen_) {
       return BridgeStatus::Failed;
+    }
+    if (beforePassCommand) {
+      beforePassCommand();
     }
     return guard(line);
   }

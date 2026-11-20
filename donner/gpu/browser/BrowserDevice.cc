@@ -1351,8 +1351,12 @@ Status BrowserDevice::replayCommandBuffer(uint64_t submissionSerial, uint32_t co
   for (const Command& command : commands) {
     // A refused command leaves the browser-side recording open and unsubmitted, and the buffers
     // this submission already finished are dropped when its first buffer is recorded again, so
-    // nothing recorded before the refusal reaches the queue.
+    // nothing recorded before the refusal reaches the queue. A full command batch is sent from
+    // inside a command, so a deferred call refused in its round trip is declared here.
     if (Status status = replayCommand(command, operation); status.hasError()) {
+      if (deferredRefusal() != BridgeStatus::Success) {
+        return checkDeferredRefusal(operation);
+      }
       return status;
     }
   }

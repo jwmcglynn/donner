@@ -79,8 +79,10 @@ public:
  *   same trip does not run that call, so a submission cannot go ahead over a write that failed.
  * - **Thread exit:** a thread flushes before it exits. Calls still held when its queue is
  *   destroyed are dropped, never sent: a thread-exit round trip could wait on an owner that is
- *   itself waiting for this thread to be joined. The drop is printed; a dropped destruction of a
- *   live device then waits for that device's release, which frees all of its objects.
+ *   itself waiting for this thread to be joined. The drop is printed. A dropped write or bind
+ *   group construction of a live device stores a refusal in its origin, so that device fails
+ *   closed if it is used again; a dropped destruction only waits for its device's release, which
+ *   frees all of its objects.
  */
 class BrowserDeferredCalls {
 public:
@@ -124,6 +126,16 @@ public:
   /// queue is destroyed at thread exit, after the thread's last flush.
   ~BrowserDeferredCalls() {
     dropReleased();
+    for (const Call& call : calls_) {
+      // A dropped write or bind group leaves its device's browser state behind what the device
+      // believes, so the device fails closed if it is used again. A dropped release does not.
+      if (call.operation != BrowserDeferredOperation::DestroyObject) {
+        uint32_t none = static_cast<uint32_t>(BridgeStatus::Success);
+        call.origin->refusal.compare_exchange_strong(
+            none, static_cast<uint32_t>(BridgeStatus::Failed), std::memory_order_release,
+            std::memory_order_relaxed);
+      }
+    }
     if (!calls_.empty()) {
       std::fprintf(stderr,
                    "[Geode/browser/deferred] dropped calls=%zu at thread exit; their devices "
