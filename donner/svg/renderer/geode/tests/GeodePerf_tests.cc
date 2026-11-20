@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -32,6 +33,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -897,6 +899,280 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
       << "Resident gradient strokes must re-upload zero geometry on an unchanged frame.";
   EXPECT_LE(c.bindgroupCreates, 1u)
       << "The cached gradient-stroke bind group must be reused on an unchanged frame.";
+}
+
+/// Six rects filled with one 40-stop gradient, more stops than a draw carries inline, so each
+/// draws through the gradient pipeline with the gradient's stop ramp.
+std::string SharedManyStopGradientSvg() {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg"
+      R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="120" y2="0">)svg";
+  for (int i = 0; i < 40; ++i) {
+    source += "<stop offset=\"" + std::to_string(i / 39.0) + "\" stop-color=\"" +
+              (i % 2 == 0 ? "#2050c0" : "#c05020") + "\"/>";
+  }
+  source += "</linearGradient></defs>";
+  for (int i = 0; i < 6; ++i) {
+    source += "<rect x=\"" + std::to_string(i * 20) +
+              R"svg(" y="10" width="18" height="60" fill="url(#g)"/>)svg";
+  }
+  return source + "</svg>";
+}
+
+/// The six draws of one many-stop gradient upload its ramp once, and an unchanged second frame
+/// uploads nothing and creates no texture or bind group: each entity keeps the ramp and the bind
+/// group that binds it.
+TEST_F(GeodePerfTest, ManyStopGradient_OneRampThenZeroWrites) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto warmUp = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="10" height="10" fill="red"/></svg>)svg",
+      sink);
+  auto parsed = parser::SVGParser::ParseSVG(SharedManyStopGradientSvg(), sink);
+  ASSERT_FALSE(warmUp.hasError());
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument warmUpDocument = std::move(warmUp.result());
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  // The first frame of a renderer also creates its target; a frame of another document of the
+  // same size takes that out of the counts below.
+  renderer.draw(warmUpDocument);
+
+  renderer.draw(document);
+  const geode::GeodeCounters first = renderer.lastFrameTimings().counters;
+  printCounters("ManyStopGradient (frame1)", first);
+  EXPECT_EQ(first.textureCreates, 1u) << "Six draws of one gradient upload one ramp";
+  // 40 stops lay out as one pair of 48-texel rows of 16 bytes each.
+  EXPECT_EQ(first.textureWriteBytes, 48u * 2u * 16u);
+
+  renderer.draw(document);
+  const geode::GeodeCounters second = renderer.lastFrameTimings().counters;
+  printCounters("ManyStopGradient (frame2)", second);
+  EXPECT_EQ(second.textureCreates, 0u);
+  EXPECT_EQ(second.textureWriteBytes, 0u) << "An unchanged frame uploads no ramp";
+  EXPECT_EQ(second.bindgroupCreates, 0u) << "An unchanged frame reuses each ramp bind group";
+  EXPECT_EQ(second.bufferWriteBytes, 0u) << "Resident gradient draws rewrite nothing";
+}
+
+/// A linear gradient \p id with \p stops stops across a 120-pixel document, alternating two
+/// colors.
+std::string ManyStopGradientDefs(std::string_view id, int stops) {
+  std::string source = std::string(R"svg(<linearGradient id=")svg") + std::string(id) +
+                       R"svg(" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="120" y2="0">)svg";
+  for (int i = 0; i < stops; ++i) {
+    source += "<stop offset=\"" + std::to_string(i / (stops - 1.0)) + "\" stop-color=\"" +
+              (i % 2 == 0 ? "#2050c0" : "#c05020") + "\"/>";
+  }
+  return source + "</linearGradient>";
+}
+
+/// Parses \p source, failing the test on a parse error.
+SVGDocument ParsePerfDocument(const std::string& source) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, sink);
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
+/// Renders \p document twice through a fresh renderer and returns the second frame's counters.
+geode::GeodeCounters secondFrameCounters(const std::shared_ptr<geode::GeodeDevice>& device,
+                                         SVGDocument& document) {
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  renderer.draw(document);
+  return renderer.lastFrameTimings().counters;
+}
+
+/// An arena draw of a many-stop gradient that comes before resident draws of the same gradient
+/// uploads its own ramp every frame; the resident draws keep theirs, so on an unchanged frame they
+/// add no upload and no bind group to what the arena draw alone costs.
+TEST_F(GeodePerfTest, ManyStopGradient_ArenaDrawBeforeResidentDrawsLeavesThemCached) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  const std::string defs =
+      ManyStopGradientDefs("g", 40) +
+      R"svg(<clipPath id="c"><path d="M-10,-10 L300,-10 L-10,300 Z"/></clipPath>)svg";
+  const std::string clipped =
+      R"svg(<rect width="20" height="80" fill="url(#g)" clip-path="url(#c)"/>)svg";
+  const std::string head =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" + defs +
+      "</defs>" + clipped;
+  SVGDocument arenaOnly = ParsePerfDocument(head + "</svg>");
+  std::string mixedSource = head;
+  for (int i = 1; i < 6; ++i) {
+    mixedSource += "<rect x=\"" + std::to_string(i * 20) +
+                   R"svg(" width="18" height="80" fill="url(#g)"/>)svg";
+  }
+  SVGDocument mixed = ParsePerfDocument(mixedSource + "</svg>");
+
+  const geode::GeodeCounters arena = secondFrameCounters(device, arenaOnly);
+  printCounters("ManyStopGradient arena only (frame2)", arena);
+  // The arena draw uploads one ramp per frame: 40 stops are one pair of 48-texel rows.
+  EXPECT_EQ(arena.textureWriteBytes, 48u * 2u * 16u);
+
+  const geode::GeodeCounters both = secondFrameCounters(device, mixed);
+  printCounters("ManyStopGradient arena then resident (frame2)", both);
+  EXPECT_EQ(both.textureCreates, arena.textureCreates);
+  EXPECT_EQ(both.textureWriteBytes, arena.textureWriteBytes);
+  EXPECT_EQ(both.bindgroupCreates, arena.bindgroupCreates)
+      << "The resident draws must keep the bind groups that bind their ramps";
+}
+
+/// Moving a shape painted with a resident many-stop gradient, as a drag does, re-uploads no ramp
+/// and creates no texture.
+TEST_F(GeodePerfTest, ManyStopGradient_TransformChangeKeepsTheRamp) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  SVGDocument document = ParsePerfDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" +
+      ManyStopGradientDefs("g", 40) +
+      R"svg(</defs><rect id="r" x="10" y="10" width="60" height="60" fill="url(#g)"/></svg>)svg");
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  for (int step = 1; step <= 3; ++step) {
+    SCOPED_TRACE(step);
+    std::optional<SVGElement> rect = document.querySelector("#r");
+    ASSERT_TRUE(rect.has_value());
+    rect->setAttribute("transform", "translate(" + std::to_string(step * 5) + " 0)");
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("ManyStopGradient drag step", c);
+    EXPECT_EQ(c.textureCreates, 0u);
+    EXPECT_EQ(c.textureWriteBytes, 0u) << "A moved shape keeps its gradient's ramp";
+  }
+}
+
+/// A shape whose gradient drops to 16 stops or fewer draws through the fill batch, and its
+/// gradient slot lets go of the ramp it held: returning to the many-stop gradient uploads the ramp
+/// again, where a slot that kept it would not.
+TEST_F(GeodePerfTest, ManyStopGradient_SlotReleasesItsRampBelowSeventeenStops) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  SVGDocument document = ParsePerfDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" +
+      ManyStopGradientDefs("many", 40) + ManyStopGradientDefs("few", 4) +
+      R"svg(</defs><rect id="r" x="10" y="10" width="60" height="60" fill="url(#many)"/></svg>)svg");
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  renderer.draw(document);
+  ASSERT_EQ(renderer.lastFrameTimings().counters.textureWriteBytes, 0u)
+      << "Premise: an unchanged frame keeps the ramp";
+
+  std::optional<SVGElement> rect = document.querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+  rect->setAttribute("fill", "url(#few)");
+  renderer.draw(document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureWriteBytes, 0u);
+
+  rect->setAttribute("fill", "url(#many)");
+  renderer.draw(document);
+  const geode::GeodeCounters back = renderer.lastFrameTimings().counters;
+  printCounters("ManyStopGradient back to many stops", back);
+  EXPECT_EQ(back.textureCreates, 1u) << "The released ramp is uploaded again";
+  EXPECT_EQ(back.textureWriteBytes, 48u * 2u * 16u);
+}
+
+/// A shape whose fill or stroke turns from a many-stop gradient to a solid color, or whose fill
+/// turns to a pattern, lets go of the ramp its gradient slot held: returning to the gradient
+/// uploads the ramp again, where a slot that kept it would not.
+TEST_F(GeodePerfTest, ManyStopGradient_SolidOrPatternPaintReleasesTheRamp) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  struct PaintSwitch {
+    const char* property;
+    const char* otherPaint;
+  };
+  for (const PaintSwitch& paintSwitch :
+       {PaintSwitch{"fill", "#2050c0"}, PaintSwitch{"stroke", "#2050c0"},
+        PaintSwitch{"fill", "url(#p)"}}) {
+    SCOPED_TRACE(std::string(paintSwitch.property) + " " + paintSwitch.otherPaint);
+    const std::string paint =
+        std::string_view(paintSwitch.property) == "fill"
+            ? std::string(R"svg(fill="url(#g)")svg")
+            : std::string(R"svg(fill="none" stroke="url(#g)" stroke-width="8")svg");
+    SVGDocument document = ParsePerfDocument(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" +
+        ManyStopGradientDefs("g", 40) +
+        R"svg(<pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="red"/></pattern>)svg"
+        R"svg(</defs><rect id="r" x="10" y="10" width="60" height="60" )svg" +
+        paint + "/></svg>");
+    RendererGeode renderer(device);
+    renderer.draw(document);
+    renderer.draw(document);
+    ASSERT_EQ(renderer.lastFrameTimings().counters.textureWriteBytes, 0u)
+        << "Premise: an unchanged frame keeps the ramp";
+
+    std::optional<SVGElement> rect = document.querySelector("#r");
+    ASSERT_TRUE(rect.has_value());
+    rect->setAttribute(paintSwitch.property, paintSwitch.otherPaint);
+    renderer.draw(document);
+    rect->setAttribute(paintSwitch.property, "url(#g)");
+    renderer.draw(document);
+    const geode::GeodeCounters back = renderer.lastFrameTimings().counters;
+    printCounters("ManyStopGradient back from another paint", back);
+    EXPECT_EQ(back.textureCreates, 1u) << "The released ramp is uploaded again";
+    EXPECT_EQ(back.textureWriteBytes, 48u * 2u * 16u);
+  }
+}
+
+/// A frame converts a gradient draw's stops only after its stop budget admits them, once per draw
+/// even when the fill leaves the batch, and converts none once the budget has refused a draw.
+/// Forty rects share one 400-stop gradient: unbounded, the frame converts all 16,000 stops; under
+/// a cap of 3,000 it converts the seven draws that fit, 2,800 stops, and nothing after the
+/// eighth is refused. Finding the draws' stop ramp hashes each charged stop at most once and
+/// compares it at most six times, the bound on stop lookup work per frame.
+TEST_F(GeodePerfTest, ManyStopGradient_StopConversionsStayWithinTheFrameBudget) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" +
+      ManyStopGradientDefs("g", 400) + "</defs>";
+  for (int i = 0; i < 40; ++i) {
+    source += "<rect x=\"" + std::to_string((i % 10) * 12) + "\" y=\"" +
+              std::to_string((i / 10) * 20) + R"svg(" width="10" height="18" fill="url(#g)"/>)svg";
+  }
+  source += "</svg>";
+
+  for (const std::size_t cap : {RendererDrawBudget::kMaximumGradientStops, std::size_t{3000}}) {
+    SCOPED_TRACE(cap);
+    SVGDocument document = ParsePerfDocument(source);
+    RendererGeode renderer(device);
+    renderer.setGradientStopBudgetForTesting(cap);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("ManyStopGradient stop conversions", c);
+    const RendererResourceStats stats = renderer.resourceStats();
+    const std::uint64_t expected = cap < 16000u ? 7u * 400u : 40u * 400u;
+    EXPECT_EQ(c.gradientStopConversions, expected);
+    EXPECT_EQ(stats.gradientStops, expected);
+    EXPECT_EQ(stats.drawBudgetRejected, cap < 16000u);
+    const std::uint64_t chargedBytes =
+        stats.gradientStops * sizeof(geode::LinearGradientParams::Stop);
+    EXPECT_LE(c.gradientStopBytesHashed, chargedBytes);
+    EXPECT_LE(c.gradientStopBytesCompared, 6u * chargedBytes);
+  }
+}
+
+/// A gradient the fill batch resolved but did not take is drawn from that resolution, so its
+/// stops are converted once. A `<use>` repeats a rect filled with a 3-stop gradient in the same
+/// frame; the batch declines the repeat, which is then drawn directly.
+TEST_F(GeodePerfTest, BatchableGradientDrawnDirectlyConvertsItsStopsOnce) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  SVGDocument document = ParsePerfDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg"
+      R"svg(<linearGradient id="g"><stop stop-color="red"/><stop offset="0.5" stop-color="lime"/>)svg"
+      R"svg(<stop offset="1" stop-color="blue"/></linearGradient></defs>)svg"
+      R"svg(<rect id="r" x="10" y="10" width="40" height="40" fill="url(#g)"/>)svg"
+      R"svg(<use href="#r" x="50"/></svg>)svg");
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+  printCounters("Batchable gradient drawn directly", c);
+  EXPECT_EQ(renderer.resourceStats().gradientStops, 2u * 3u);
+  EXPECT_EQ(c.gradientStopConversions, 2u * 3u);
 }
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {

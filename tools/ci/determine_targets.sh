@@ -63,6 +63,23 @@ read_pr_event() {
   )"
 }
 
+# The PR event and the checkout can observe different base tips. Hash the tree
+# that Git actually merged into, and require the second parent to be this PR head.
+tested_base() {
+  [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] || return 1
+  local ancestry checkout first second extra
+  ancestry=$(git rev-list --parents -1 HEAD) || return 1
+  read -r checkout first second extra <<< "$ancestry"
+  if [[ "$checkout" == "$HEAD_SHA" ]]; then
+    # A caller checking out the PR head directly has no synthetic merge parent.
+    printf '%s\n' "$BASE_SHA"
+  elif [[ -n "$first" && "$second" == "$HEAD_SHA" && -z "$extra" ]]; then
+    printf '%s\n' "$first"
+  else
+    return 1
+  fi
+}
+
 # Only an identical base, PR head and actual build checkout prove there is no source delta.
 # An unavailable Git object, base drift or a full-suite override takes the normal planning path.
 identical_pr_tree() {
@@ -79,7 +96,8 @@ pr_meta() {
   base_sha=""
   if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
     read_pr_event
-    base_sha="$BASE_SHA"
+    base_sha=$(tested_base) || base_sha=""
+    BASE_SHA="$base_sha"
     if identical_pr_tree; then
       echo "identical_tree=true" >> "$GITHUB_OUTPUT"
     fi
@@ -147,6 +165,14 @@ determine() {
 
   echo "full_test=false" >> "$GITHUB_OUTPUT"
 
+  if ! BASE_SHA=$(tested_base); then
+    echo "Cannot bind the tested checkout to the PR head; selecting full //... coverage."
+    echo "fallback=true" >> "$GITHUB_OUTPUT"
+    echo "affected=" >> "$GITHUB_OUTPUT"
+    echo "wgpu_reference_unknown=true" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+
   if identical_pr_tree; then
     echo "Identical source trees; no affected build or test targets."
     echo "browser_affected=false" >> "$GITHUB_OUTPUT"
@@ -156,12 +182,9 @@ determine() {
     exit 0
   fi
 
-  # Diff from the merge-base, not the base tip. The event payload's
-  # base.sha is the base branch's CURRENT tip, so a two-dot diff
-  # attributes post-fork drift on main (e.g. a workflow file merged
-  # after this branch forked) to the PR, tripping the infra detector
-  # and forcing a spurious full //... fallback. Merge-base semantics
-  # sees only branch-side changes. Fail closed: if merge-base cannot
+  # Use the merge base of the tested base and PR head for path hints. A
+  # two-dot diff against a newer base also sees main's post-fork changes
+  # and can incorrectly trigger full CI for an unrelated workflow edit. Fail closed: if merge-base cannot
   # be computed, keep the base-tip diff (over-inclusion only ever
   # widens to the fallback path, never skips it).
   if diff_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"; then
@@ -316,20 +339,8 @@ determine() {
   }
   trap cleanup EXIT
 
-  # Hash the current base TIP against the PR's MERGE commit (the
-  # workspace checkout, refs/pull/N/merge), not against HEAD_SHA.
-  # Hashing base-tip vs HEAD_SHA attributes post-fork drift on main to
-  # the PR, inflating the affected set on any branch that has not
-  # rebased (measured up to 126x over-inclusion). In the tip-vs-merge
-  # comparison, drift is
-  # present on BOTH sides, so unchanged-by-the-PR targets hash
-  # identically and drop out; and because the merge graph is the one
-  # hashed, reverse dependencies that exist ONLY in the merge (a dep
-  # edge added on main after the fork onto code this PR touches) are
-  # still caught - the downstream jobs build this same merge ref.
-  # Fail closed: if the workspace is not a merge commit (e.g. a
-  # checkout override), it IS the PR head and this degrades to exactly
-  # the old base-tip-vs-head comparison.
+  # Hash the tested base against the actual checkout. This excludes changes
+  # already on main and includes reverse dependencies first introduced on main.
   merge_sha="$(git rev-parse HEAD)"
   git worktree add --detach "$head_dir" "$merge_sha"
 

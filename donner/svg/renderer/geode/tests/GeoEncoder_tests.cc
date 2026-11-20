@@ -1199,6 +1199,143 @@ TEST_F(GeoEncoderTest, FillTriangle) {
       << "Top-right corner should stay outside the green triangle";
 }
 
+/// \p count evenly spaced opaque stops whose colors differ from one stop to the next; \p seed
+/// shifts the colors so two calls with different seeds give different gradients.
+std::vector<LinearGradientParams::Stop> DistinctStops(size_t count, uint32_t seed) {
+  std::vector<LinearGradientParams::Stop> stops(count);
+  for (size_t i = 0; i < count; ++i) {
+    stops[i].offset = static_cast<float>(i) / static_cast<float>(count - 1);
+    stops[i].rgba[0] = static_cast<float>((i * 67 + seed) % 256) / 255.0f;
+    stops[i].rgba[1] = static_cast<float>((i * 151 + 101) % 256) / 255.0f;
+    stops[i].rgba[2] = static_cast<float>((i * 29 + 200) % 256) / 255.0f;
+    stops[i].rgba[3] = 1.0f;
+  }
+  return stops;
+}
+
+/// A horizontal linear gradient across the 64-pixel target.
+LinearGradientParams HorizontalGradient(std::span<const LinearGradientParams::Stop> stops) {
+  LinearGradientParams params;
+  params.endGrad = Vector2d(64.0, 0.0);
+  params.stops = stops;
+  return params;
+}
+
+/// Every draw of one gradient in an encoder binds one stop ramp, uploaded once; a gradient with
+/// different stops gets its own.
+TEST_F(GeoEncoderTest, DrawsOfOneManyStopGradientShareOneRamp) {
+  const std::vector<LinearGradientParams::Stop> first = DistinctStops(40, 13);
+  const std::vector<LinearGradientParams::Stop> second = DistinctStops(40, 14);
+  GeodeCounters counters;
+  device_->setCounters(&counters);
+  struct CounterScope {
+    GeodeDevice* device;
+    ~CounterScope() { device->setCounters(nullptr); }
+  } counterScope{device_.get()};
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
+  encoder.clear(css::RGBA(0, 0, 0, 0));
+  for (int i = 0; i < 4; ++i) {
+    encoder.fillPathLinearGradient(
+        PathBuilder().addRect(Box2d({0, 8.0 * i}, {64, 8.0 * i + 8})).build(),
+        HorizontalGradient(first), FillRule::NonZero);
+  }
+  EXPECT_EQ(counters.textureCreates, 1u) << "Four draws of one gradient upload one ramp";
+  // 40 stops lay out as one pair of 48-texel rows of 16 bytes each.
+  EXPECT_EQ(counters.textureWriteBytes, 48u * 2u * 16u);
+  encoder.fillPathLinearGradient(PathBuilder().addRect(Box2d({0, 32}, {64, 64})).build(),
+                                 HorizontalGradient(second), FillRule::NonZero);
+  EXPECT_EQ(counters.textureCreates, 2u) << "A gradient with other stops uploads its own ramp";
+  encoder.finish();
+}
+
+/// A gradient with more stops than one ramp holds is refused outright: nothing is uploaded and
+/// nothing is drawn, while the same draw within the ramp's capacity draws.
+TEST_F(GeoEncoderTest, GradientPastTheRampCapacityIsRefused) {
+  const std::vector<LinearGradientParams::Stop> tooMany =
+      DistinctStops(GeoEncoder::kMaxGradientRampStops + 1u, 13);
+  const std::vector<LinearGradientParams::Stop> fitting = DistinctStops(40, 13);
+  const Path rect = PathBuilder().addRect(Box2d({0, 0}, {64, 64})).build();
+  GeodeCounters counters;
+  device_->setCounters(&counters);
+  struct CounterScope {
+    GeodeDevice* device;
+    ~CounterScope() { device->setCounters(nullptr); }
+  } counterScope{device_.get()};
+  {
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                       kTargetSize);
+    encoder.clear(css::RGBA(0, 0, 0, 0));
+    encoder.fillPathLinearGradient(rect, HorizontalGradient(tooMany), FillRule::NonZero);
+    encoder.finish();
+  }
+  EXPECT_EQ(counters.textureCreates, 0u);
+  EXPECT_EQ(counters.drawCalls, 0u);
+  EXPECT_THAT(pixelAt(readback(), 32, 32), RgbaEq(0, 0, 0, 0));
+  {
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                       kTargetSize);
+    encoder.clear(css::RGBA(0, 0, 0, 0));
+    encoder.fillPathLinearGradient(rect, HorizontalGradient(fitting), FillRule::NonZero);
+    encoder.finish();
+  }
+  EXPECT_EQ(counters.textureCreates, 1u);
+  EXPECT_EQ(counters.drawCalls, 1u);
+  EXPECT_THAT(pixelAt(readback(), 32, 32), testing::Not(RgbaEq(0, 0, 0, 0)));
+}
+
+/// The radial and resident gradient entry points refuse a gradient with more stops than one ramp
+/// holds the same way: no geometry is admitted, nothing is uploaded and nothing is drawn.
+TEST_F(GeoEncoderTest, OtherGradientEntryPointsPastTheRampCapacityAreRefused) {
+  const std::vector<LinearGradientParams::Stop> tooMany =
+      DistinctStops(GeoEncoder::kMaxGradientRampStops + 1u, 13);
+  const Path rect = PathBuilder().addRect(Box2d({0, 0}, {64, 64})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(rect, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  RadialGradientParams radial;
+  radial.center = Vector2d(32.0, 32.0);
+  radial.focalCenter = radial.center;
+  radial.radius = 32.0;
+  radial.stops = tooMany;
+  const LinearGradientParams linear = HorizontalGradient(tooMany);
+
+  enum class EntryPoint { Radial, ResidentLinear, ResidentRadial };
+  for (const EntryPoint entryPoint :
+       {EntryPoint::Radial, EntryPoint::ResidentLinear, EntryPoint::ResidentRadial}) {
+    SCOPED_TRACE(static_cast<int>(entryPoint));
+    GeodeCounters counters;
+    device_->setCounters(&counters);
+    struct CounterScope {
+      GeodeDevice* device;
+      ~CounterScope() { device->setCounters(nullptr); }
+    } counterScope{device_.get()};
+    ProbeGeometryAdmission admission;
+    GeodeResidentGradientSlot slot;
+    {
+      GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                         kTargetSize);
+      encoder.setGeometryAdmission(&admission);
+      encoder.clear(css::RGBA(0, 0, 0, 0));
+      switch (entryPoint) {
+        case EntryPoint::Radial:
+          encoder.fillPathRadialGradient(rect, radial, FillRule::NonZero);
+          break;
+        case EntryPoint::ResidentLinear:
+          encoder.fillPathLinearGradientResident(slot, encoded, linear, FillRule::NonZero, 1u);
+          break;
+        case EntryPoint::ResidentRadial:
+          encoder.fillPathRadialGradientResident(slot, encoded, radial, FillRule::NonZero, 1u);
+          break;
+      }
+      encoder.finish();
+    }
+    EXPECT_EQ(admission.admittedDraws, 0u);
+    EXPECT_EQ(counters.textureCreates, 0u);
+    EXPECT_EQ(counters.drawCalls, 0u);
+    EXPECT_THAT(pixelAt(readback(), 32, 32), RgbaEq(0, 0, 0, 0));
+  }
+}
+
 /// Fill a rectangle with a horizontal red→blue linear gradient in user space.
 /// Left edge should be red, right edge should be blue, midpoint between.
 /// Regression guard for the linear-gradient pipeline plumbing.

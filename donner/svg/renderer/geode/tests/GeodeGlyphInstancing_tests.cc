@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -40,6 +41,8 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
@@ -989,6 +992,195 @@ TEST_F(GeodeGlyphInstancingTest, FontFamilyChangeTakesNewGlyphIdentities) {
       << "The serif glyphs are additional identities, not the sans ones renamed.";
   EXPECT_NE(CountNonTransparentPixels(serif.bitmap), sansPixels)
       << "The serif face drew exactly the sans coverage; the font swap did not reach the glyphs.";
+}
+
+/// A linear gradient of \p stops evenly spaced stops with id `g`, in user space across the
+/// canvas.
+std::string GradientDefs(int stops) {
+  std::string defs =
+      R"svg(<defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" x2="200">)svg";
+  for (int i = 0; i < stops; ++i) {
+    defs += std::format(R"svg(<stop offset="{}" stop-color="#{:02x}{:02x}{:02x}"/>)svg",
+                        i / (stops - 1.0), (i * 67 + 13) % 256, (i * 151 + 101) % 256,
+                        (i * 29 + 200) % 256);
+  }
+  return defs + "</linearGradient></defs>";
+}
+
+/// Gradient-painted text charges the frame's stop budget as the CPU renderer does: once for the
+/// text element's own fill and stroke, then once for each run's fill and stroke, however many
+/// glyphs the run has. Each of those paints converts its stops once, so the frame converts what
+/// it charges, and every glyph draws from its run's paints. Two runs of three and two glyphs carry
+/// one 20-stop gradient in fill and stroke, so tiny-skia charges 120 stops; unbounded, and under
+/// caps that refuse the second run's stroke, the first run's stroke, and the element's stroke,
+/// Geode's charged stops and verdict equal tiny-skia's.
+TEST_F(GeodeGlyphInstancingTest, GradientTextChargesItsStopsOncePerRunLikeTinySkia) {
+  const std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" + GradientDefs(20) +
+      R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)")svg"
+      R"svg( stroke="url(#g)" stroke-width="2">Abc<tspan>de</tspan></text></svg>)svg";
+  for (const std::size_t limit : {RendererDrawBudget::kMaximumGradientStops, std::size_t{119},
+                                  std::size_t{70}, std::size_t{30}}) {
+    SCOPED_TRACE(limit);
+    SVGDocument document = parse(source);
+    SVGDocument referenceDocument = parse(source);
+    RendererTinySkia reference;
+    reference.setGradientStopBudgetForTesting(limit);
+    reference.draw(referenceDocument);
+    RendererGeode renderer(sharedDevice());
+    renderer.setGradientStopBudgetForTesting(limit);
+    const Frame frame = render(renderer, document);
+    const RendererResourceStats stats = renderer.resourceStats();
+    const RendererResourceStats referenceStats = reference.resourceStats();
+    const bool unbounded = limit == RendererDrawBudget::kMaximumGradientStops;
+    if (unbounded) {
+      ASSERT_EQ(referenceStats.gradientStops, 120u) << "Premise: tiny-skia charges six times";
+      EXPECT_GT(CountNonTransparentPixels(frame.bitmap), 0u) << "The text must render";
+      EXPECT_EQ(frame.counters.gradientStopConversions, 6u * 20u)
+          << "One conversion for each charge, none per glyph";
+      // Stop ramp lookups are bounded by the charge, not by the glyphs drawn.
+      const std::uint64_t chargedBytes =
+          stats.gradientStops * sizeof(geode::LinearGradientParams::Stop);
+      EXPECT_LE(frame.counters.gradientStopBytesHashed, chargedBytes);
+      EXPECT_LE(frame.counters.gradientStopBytesCompared, 6u * chargedBytes);
+    }
+    EXPECT_EQ(referenceStats.drawBudgetRejected, !unbounded);
+    EXPECT_EQ(stats.drawBudgetRejected, referenceStats.drawBudgetRejected);
+    EXPECT_EQ(stats.gradientStops, referenceStats.gradientStops);
+    EXPECT_LE(frame.counters.gradientStopConversions, stats.gradientStops);
+  }
+}
+
+/// A run that paints with the text element's own gradient draws from the element's resolution,
+/// charged once per text draw, and a span's own gradient is charged whether or not its run has
+/// glyphs to paint, as on the CPU renderer. Each case renders unbounded and under a cap equal to
+/// tiny-skia's charge, which admits the whole frame on both: one more charge on Geode would
+/// refuse it. The `fill="none"` span takes the element's fill today; once such a span paints
+/// nothing, the charges stay those of tiny-skia, which then charges nothing for it either.
+TEST_F(GeodeGlyphInstancingTest, TextRunsChargeTheElementPaintOnceLikeTinySkia) {
+  struct ChargeCase {
+    std::string_view label;
+    std::string_view text;
+    std::uint64_t cpuStops;
+  };
+  const std::array<ChargeCase, 3> cases = {{
+      // Element fill, then the first span's fill; the unfilled span charges nothing more.
+      {"fill_none_span",
+       R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)">)svg"
+       R"svg(Ab<tspan fill="none">cd</tspan></text>)svg",
+       2u * 20u},
+      // Element fill and stroke, both spans' fills, and the first span's stroke only.
+      {"stroke_none_span",
+       R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)")svg"
+       R"svg( stroke="url(#g)" stroke-width="2">Ab<tspan stroke="none">cd</tspan></text>)svg",
+       5u * 20u},
+      // No font has a glyph for these private-use characters, and missing glyphs add nothing to
+      // the text bounds, so they are empty: the element's fill and the span's fill are still
+      // charged, in user space, though nothing is drawn.
+      {"empty_bounds",
+       R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)">)svg"
+       R"svg(&#xE000;&#xE001;</text>)svg",
+       2u * 20u},
+  }};
+  for (const ChargeCase& chargeCase : cases) {
+    SCOPED_TRACE(chargeCase.label);
+    const std::string source =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
+        GradientDefs(20) + std::string(chargeCase.text) + "</svg>";
+    for (const std::size_t limit : {RendererDrawBudget::kMaximumGradientStops,
+                                    static_cast<std::size_t>(chargeCase.cpuStops)}) {
+      SCOPED_TRACE(limit);
+      SVGDocument document = parse(source);
+      SVGDocument referenceDocument = parse(source);
+      RendererTinySkia reference;
+      reference.setGradientStopBudgetForTesting(limit);
+      reference.draw(referenceDocument);
+      RendererGeode renderer(sharedDevice());
+      renderer.setGradientStopBudgetForTesting(limit);
+      const Frame frame = render(renderer, document);
+      const RendererResourceStats stats = renderer.resourceStats();
+      const RendererResourceStats referenceStats = reference.resourceStats();
+      ASSERT_EQ(referenceStats.gradientStops, chargeCase.cpuStops) << "Premise: tiny-skia's charge";
+      ASSERT_FALSE(referenceStats.drawBudgetRejected)
+          << "Premise: the cap admits tiny-skia's frame";
+      EXPECT_EQ(stats.drawBudgetRejected, referenceStats.drawBudgetRejected);
+      EXPECT_EQ(stats.gradientStops, referenceStats.gradientStops);
+      EXPECT_LE(frame.counters.gradientStopConversions, stats.gradientStops);
+    }
+  }
+}
+
+/// A gradient-stop refusal keeps the text drawn before it and drops every draw after it: solid
+/// text and a rect, then a rect with a 20-stop gradient under a cap of 19, then another rect. The
+/// frame must equal the unbounded rendering of the text and the first rect alone, and the charged
+/// stops and verdict must equal tiny-skia's.
+TEST_F(GeodeGlyphInstancingTest, TextBeforeAGradientStopRefusalIsKept) {
+  const std::string before =
+      R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="#d02020">Ab</text>)svg"
+      R"svg(<rect y="150" width="60" height="40" fill="#2020d0"/>)svg";
+  const auto document = [&](std::string_view body) {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
+           GradientDefs(20) + before + std::string(body) + "</svg>";
+  };
+  const std::string source =
+      document(R"svg(<rect x="100" width="40" height="200" fill="url(#g)"/>)svg"
+               R"svg(<rect x="150" width="40" height="200" fill="#208020"/>)svg");
+  SVGDocument capped = parse(source);
+  SVGDocument referenceDocument = parse(source);
+  SVGDocument prefix = parse(document(""));
+  RendererTinySkia reference;
+  reference.setGradientStopBudgetForTesting(19u);
+  reference.draw(referenceDocument);
+  RendererGeode renderer(sharedDevice());
+  renderer.setGradientStopBudgetForTesting(19u);
+  const Frame frame = render(renderer, capped);
+  EXPECT_TRUE(reference.resourceStats().drawBudgetRejected);
+  EXPECT_EQ(renderer.resourceStats().drawBudgetRejected,
+            reference.resourceStats().drawBudgetRejected);
+  EXPECT_EQ(renderer.resourceStats().gradientStops, reference.resourceStats().gradientStops);
+  RendererGeode unbounded(sharedDevice());
+  const Frame expected = render(unbounded, prefix);
+  ASSERT_GT(CountNonTransparentPixels(expected.bitmap), 0u);
+  editor::tests::CompareBitmapToBitmap(frame.bitmap, expected.bitmap, "text_before_stop_refusal",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// The glyphs of a gradient text run draw from one stop ramp lookup: the run's 200-stop gradient
+/// is hashed once, and compared with no ramp, however many glyphs the run has.
+TEST_F(GeodeGlyphInstancingTest, GradientTextRunLooksUpItsStopRampOnce) {
+  constexpr std::uint64_t kStopBytes = 200u * sizeof(geode::LinearGradientParams::Stop);
+  for (const std::size_t glyphs : {std::size_t{8}, std::size_t{64}}) {
+    SCOPED_TRACE(glyphs);
+    SVGDocument document =
+        parse(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
+              GradientDefs(200) +
+              R"svg(<text x="4" y="120" font-family="Noto Sans" font-size="4" fill="url(#g)">)svg" +
+              std::string(glyphs, 'A') + "</text></svg>");
+    RendererGeode renderer(sharedDevice());
+    const Frame frame = render(renderer, document);
+    ASSERT_GT(CountNonTransparentPixels(frame.bitmap), 0u) << "The text must render";
+    EXPECT_EQ(frame.counters.gradientStopBytesHashed, kStopBytes);
+    EXPECT_EQ(frame.counters.gradientStopBytesCompared, 0u);
+  }
+}
+
+/// Once the frame's geometry budget has refused a draw, gradient text after it is neither charged
+/// nor converted: the frame draws nothing more.
+TEST_F(GeodeGlyphInstancingTest, GradientTextAfterAGeometryRefusalConvertsNothing) {
+  SVGDocument document = parse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" + GradientDefs(20) +
+      R"svg(<rect width="40" height="40" fill="red"/><rect x="50" width="40" height="40" fill="blue"/>)svg"
+      R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)")svg"
+      R"svg( stroke="url(#g)" stroke-width="2">Abc</text></svg>)svg");
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/1u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame frame = render(renderer, document);
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected) << "Premise: the second rect";
+  EXPECT_EQ(renderer.resourceStats().gradientStops, 0u);
+  EXPECT_EQ(frame.counters.gradientStopConversions, 0u);
 }
 
 }  // namespace

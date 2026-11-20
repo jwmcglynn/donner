@@ -18,6 +18,8 @@ inline constexpr wgsl::SourceText kSlugGradientSource{
 // Uniforms
 // ============================================================================
 
+// Stops carried inline in the uniform. A gradient with more reads all of its
+// stops from `stopRamp` instead.
 const kMaxStops: u32 = 16u;
 const kGradientLinear: u32 = 0u;
 const kGradientRadial: u32 = 1u;
@@ -85,6 +87,12 @@ struct Band {
 @group(0) @binding(8) var<storage, read> vBandGrid: array<u32>;
 @group(0) @binding(9) var<storage, read> hCurveIndices: array<u32>;
 @group(0) @binding(10) var<storage, read> vCurveIndices: array<u32>;
+// Stop ramp of a gradient with more than `kMaxStops` stops. Texel rows come in
+// pairs: stop i sits in column `i % width` of pair `i / width`, with its
+// straight-alpha color in the pair's first row and its offset in the red
+// channel of the second. A gradient with fewer stops binds a placeholder that
+// is never read.
+@group(0) @binding(11) var stopRamp: texture_2d<f32>;
 
 const kNoBand: u32 = 0xFFFFFFFFu;
 
@@ -634,10 +642,49 @@ fn apply_spread(t: f32, mode: u32) -> f32 {
   return clamp(t, 0.0, 1.0);
 }
 
+fn ramp_texel(i: u32, row: u32) -> vec4f {
+  let width = textureDimensions(stopRamp).x;
+  return textureLoad(stopRamp, vec2i(i32(i % width), i32((i / width) * 2u + row)), 0);
+}
+
+fn ramp_offset(i: u32) -> f32 {
+  return ramp_texel(i, 1u).x;
+}
+
+// Same result as the inline scan in `sample_stops`, found by binary search:
+// offsets never decrease, so the first stop whose offset reaches `t` is the
+// one that scan stops at.
+fn sample_ramp_stops(t: f32, count: u32) -> vec4f {
+  if (t <= ramp_offset(0u)) {
+    return ramp_texel(0u, 0u);
+  }
+  if (t >= ramp_offset(count - 1u)) {
+    return ramp_texel(count - 1u, 0u);
+  }
+  var lo: u32 = 1u;
+  var hi: u32 = count - 1u;
+  while (lo < hi) {
+    let mid = (lo + hi) / 2u;
+    if (ramp_offset(mid) < t) {
+      lo = mid + 1u;
+    } else {
+      hi = mid;
+    }
+  }
+  let o0 = ramp_offset(lo - 1u);
+  let o1 = ramp_offset(lo);
+  let span = max(o1 - o0, 1e-6);
+  let f = (t - o0) / span;
+  return mix(ramp_texel(lo - 1u, 0u), ramp_texel(lo, 0u), f);
+}
+
 fn sample_stops(t: f32) -> vec4f {
   let count = uniforms.stopCount;
   if (count == 0u) {
     return vec4f(0.0, 0.0, 0.0, 0.0);
+  }
+  if (count > kMaxStops) {
+    return sample_ramp_stops(t, count);
   }
   let firstOffset = load_stop_offset(0u);
   if (t <= firstOffset) {

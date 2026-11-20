@@ -1224,6 +1224,20 @@ TEST_F(MetalColorMatrixTest, SlugGradientManyStops) {
       gpu::tests::slug_gradient_scene::Case::ManyStops);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
+TEST_F(MetalColorMatrixTest, SlugGradientRampStops) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_scene::Case::RampStops);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+TEST_F(MetalColorMatrixTest, SlugGradientWrappedRampStops) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_scene::Case::WrappedRampStops);
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
 TEST_F(MetalColorMatrixTest, SlugGradientEmptyStops) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),

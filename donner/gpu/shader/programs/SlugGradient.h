@@ -6,7 +6,8 @@
 
 #include "donner/gpu/shader/CompiledShader.h"
 namespace donner::gpu::shader::programs {
-/// Maximum admitted gradient stops.
+/// Most gradient stops the uniform carries inline. A gradient with more reads all of its stops
+/// from the stop ramp texture instead.
 inline constexpr uint32_t kSlugGradientMaxStops = 16;
 /// Host uniform layout for dedicated Slug gradients.
 struct alignas(16) SlugGradientParams {
@@ -23,7 +24,7 @@ struct alignas(16) SlugGradientParams {
   float radialRadius;                           //!< Outer-circle radius.
   float radialFocalRadius;                      //!< Focal-circle radius.
   uint32_t gradientKind;                        //!< Zero selects linear, one selects radial.
-  uint32_t stopCount;                           //!< Admitted stop count, at most sixteen.
+  uint32_t stopCount;                           //!< Stop count; above sixteen, read from the ramp.
   float stopColors[kSlugGradientMaxStops * 4];  //!< Straight-alpha RGBA stop colors.
   float stopOffsets[4 * 4];                     //!< Stop offsets packed four per vector.
   uint32_t hasClipPolygon;                      //!< One enables the convex clip half-planes.

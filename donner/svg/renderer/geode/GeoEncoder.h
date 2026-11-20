@@ -35,6 +35,7 @@ struct EncodedPath;
 struct GeodeResidentSlot;
 class GeodeRecordSlab;
 struct GeodeResidentGradientSlot;
+struct GeodeGradientRamp;
 
 /**
  * Optional debug observer for Slug draws that actually reach a GPU draw call.
@@ -110,13 +111,6 @@ struct LinearGradientParams {
   /// Spread mode at the edges of the gradient range.
   /// 0 = pad, 1 = reflect, 2 = repeat.
   uint32_t spreadMode = 0;
-  /// Gradient stops. Colors are in straight alpha, 0..1 per channel - the
-  /// shader interpolates in straight alpha and premultiplies at output. Offsets are in [0, 1].
-  ///
-  /// A hard cap of 16 stops is enforced inside the encoder to match the
-  /// fixed-size uniform buffer layout in `SlugGradientSource.h`. Stops beyond
-  /// the cap are silently truncated - a follow-up will move stop storage to
-  /// a texture lookup (`GeodeGradientCacheComponent`) to lift this limit.
   /// A single gradient stop: normalized offset and STRAIGHT-alpha RGBA.
   /// Not premultiplied: the resolver writes r/g/b/a each divided by 255, and
   /// both gradient shaders interpolate stops in straight alpha and
@@ -125,7 +119,12 @@ struct LinearGradientParams {
     float offset = 0.0f;                       ///< Stop offset in [0, 1].
     float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};  ///< Straight-alpha RGBA color.
   };
-  /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
+  /// Gradient stops, in order of non-decreasing offset. Colors are in straight alpha, 0..1 per
+  /// channel - the shader interpolates in straight alpha and premultiplies at output. Offsets are
+  /// in [0, 1]. Up to 16 stops travel inline in the draw's parameters; a gradient with more reads
+  /// them from a stop ramp texture, which the draws of one encoder share by stop content and a
+  /// resident draw keeps until its stops change. A draw with more than
+  /// `GeoEncoder::kMaxGradientRampStops` stops is refused.
   std::span<const Stop> stops;
 };
 
@@ -155,12 +154,26 @@ struct RadialGradientParams {
   Transform2d gradientFromPath;
   /// Spread mode. 0 = pad, 1 = reflect, 2 = repeat.
   uint32_t spreadMode = 0;
-  /// Gradient stops. Same wire format / cap as @ref LinearGradientParams -
+  /// Gradient stops. Same wire format as @ref LinearGradientParams -
   /// kept as a sibling struct so each gradient kind's C++ API reflects its
   /// natural parameter set without `std::variant`-style dispatch.
   using Stop = LinearGradientParams::Stop;
-  /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
+  /// Gradient stops; see @ref LinearGradientParams::stops.
   std::span<const Stop> stops;
+};
+
+/**
+ * The stop ramp one encoder bound for a resolved gradient, so the resolution's further draws in
+ * that encoder bind it without hashing or comparing the stops again. The caller keeps one beside
+ * each resolution, whose stops must not change while it is kept, and hands it to every draw made
+ * from that resolution. It is valid for one encoder only: a draw in another encoder looks the ramp
+ * up again and takes the cache over, so a resolution costs one lookup per encoder it draws in.
+ */
+struct GradientRampCache {
+  /// Identity of the encoder that filled the cache; 0 when empty.
+  uint64_t encoderId = 0;
+  /// The ramp that encoder bound, which its own bookkeeping also keeps alive until submission.
+  std::shared_ptr<const GeodeGradientRamp> ramp;
 };
 
 /**
@@ -184,6 +197,14 @@ struct RadialGradientParams {
  */
 class GeoEncoder {
 public:
+  /// Most stops a gradient draw may have: one stop ramp's capacity. The renderer's per-frame
+  /// gradient-stop budget is no larger, so every draw it admits fits.
+  static constexpr std::size_t kMaxGradientRampStops = 256u * 1024u;
+
+  /// Most stops a gradient may have to draw through the cross-entity scene batch, whose paint
+  /// block carries them inline; `ensureResidentSceneRecord` refuses a gradient with more.
+  static constexpr std::size_t kMaxSceneGradientStops = 16u;
+
   /**
    * Create an encoder targeting the given texture.
    *
@@ -655,9 +676,11 @@ public:
 
   /**
    * Paint carried by one cross-entity batch instance: a solid colour, or a
-   * resolved gradient whose parameters and stop ramp the encoder copies into
-   * the slot's persistent paint block. The gradient pointers are borrowed for
-   * the duration of the call only.
+   * resolved gradient whose parameters and stops the encoder copies into
+   * the slot's persistent paint block. The block holds 16 stops, so
+   * `ensureResidentSceneRecord` declines a gradient with more and the caller
+   * draws it through the gradient fill calls. The gradient pointers are
+   * borrowed for the duration of the call only.
    */
   struct ScenePaint {
     css::RGBA color = css::RGBA(
@@ -800,14 +823,15 @@ public:
    *
    * @param path The path to fill.
    * @param params Linear gradient parameters. Colors are straight alpha in
-   *   0..1 per channel; the encoder premultiplies before upload. Up to 16
-   *   stops are honored; excess are silently truncated with a one-shot
-   *   verbose warning at the call site in `RendererGeode`.
+   *   0..1 per channel; the encoder premultiplies before upload.
    * @param rule Fill rule (NonZero or EvenOdd).
    * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
+   * @param rampCache Optional stop ramp cache of the resolution \p params come from; see
+   *   @ref GradientRampCache.
    */
   void fillPathLinearGradient(const Path& path, const LinearGradientParams& params, FillRule rule,
-                              const EncodedPath* precomputedEncoded = nullptr);
+                              const EncodedPath* precomputedEncoded = nullptr,
+                              GradientRampCache* rampCache = nullptr);
 
   /**
    * Fill a path with a radial gradient.
@@ -825,9 +849,12 @@ public:
    *   focal point + radius, shared transform and stops).
    * @param rule Fill rule (NonZero or EvenOdd).
    * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
+   * @param rampCache Optional stop ramp cache of the resolution \p params come from; see
+   *   @ref GradientRampCache.
    */
   void fillPathRadialGradient(const Path& path, const RadialGradientParams& params, FillRule rule,
-                              const EncodedPath* precomputedEncoded = nullptr);
+                              const EncodedPath* precomputedEncoded = nullptr,
+                              GradientRampCache* rampCache = nullptr);
 
   /**
    * Fill a path with a linear gradient through a persistent GPU residence

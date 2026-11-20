@@ -12,7 +12,7 @@ consteval bool ValidateSlugGradientArtifact() {
   static_assert(shader.entryPoints.size() == 2);
   static_assert(shader.entryPoints[0].stage == ShaderStage::Vertex);
   static_assert(shader.entryPoints[1].stage == ShaderStage::Fragment);
-  static_assert(shader.resources.size() == 10);
+  static_assert(shader.resources.size() == 11);
   constexpr auto* uniforms = shader.resource("uniforms");
   static_assert(uniforms && uniforms->type == BindingType::UniformBuffer);
   static_assert(uniforms->minSizeBytes == sizeof(SlugGradientParams));
@@ -191,6 +191,9 @@ consteval bool ValidateSlugGradientArtifact() {
   static_assert(shader.resource("clipMaskTexture") &&
                 shader.resource("clipMaskTexture")->type ==
                     BindingType::SampledTexture2dUnfilterableFloat);
+  static_assert(shader.resource("stopRamp") != nullptr);
+  static_assert(shader.resource("stopRamp")->type ==
+                BindingType::SampledTexture2dUnfilterableFloat);
   return true;
 }
 }  // namespace donner::gpu::shader::programs

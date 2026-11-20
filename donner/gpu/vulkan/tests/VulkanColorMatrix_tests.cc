@@ -1390,6 +1390,18 @@ TEST_F(VulkanColorMatrixTest, SlugGradientManyStops) {
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
       gpu::tests::slug_gradient_scene::Case::ManyStops);
 }
+TEST_F(VulkanColorMatrixTest, SlugGradientRampStops) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_scene::Case::RampStops);
+}
+TEST_F(VulkanColorMatrixTest, SlugGradientWrappedRampStops) {
+  gpu::tests::CheckSlugGradient(
+      *device_, shader::programs::SlugGradientNativeShader(),
+      [this](const Buffer& b) { return device_->readBackBuffer(b); },
+      gpu::tests::slug_gradient_scene::Case::WrappedRampStops);
+}
 TEST_F(VulkanColorMatrixTest, SlugGradientEmptyStops) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
