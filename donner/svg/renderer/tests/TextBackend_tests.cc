@@ -1360,6 +1360,62 @@ TEST(TextBackendSimpleCapabilities, NativeSmallCapsMatchTheFullBackend) {
               Pointwise(SameGlyphAndAdvanceAs(FullTierPrecisionPx(kSize)), full.glyphs));
 }
 
+/// Byte offset of the table tagged \p tag (big-endian) in the sfnt \p bytes, if present.
+std::optional<size_t> SfntTableOffset(std::span<const uint8_t> bytes, uint32_t tag) {
+  for (size_t i = 0; bytes.size() >= 12 && i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    if (entry + 16 <= bytes.size() && ReadBe32(bytes, entry) == tag) {
+      return ReadBe32(bytes, entry + 8);
+    }
+  }
+  return std::nullopt;
+}
+
+// Both backends decide whether a face has native small caps from the default language system of
+// the GSUB script list's first script (Noto Sans: DFLT). With smcp removed there, both report no
+// feature and synthesize, though the face's latn script still lists smcp.
+TEST(TextBackendSimpleCapabilities, SmallCapsFeatureFromTheFirstScriptAgreesWithTheFullBackend) {
+  std::vector<uint8_t> bytes = ReadResvgFontBytes("NotoSans-Regular.ttf");
+  const std::optional<size_t> gsub = SfntTableOffset(bytes, 0x47535542);  // GSUB
+  ASSERT_THAT(gsub, testing::Optional(Gt(0u)));
+  const size_t scriptList = *gsub + ReadBe16(bytes, *gsub + 4);
+  ASSERT_THAT(ReadBe32(bytes, scriptList + 2), testing::Eq(0x44464C54u));  // DFLT first
+  const size_t script = scriptList + ReadBe16(bytes, scriptList + 6);
+  const size_t defaultLangSys = script + ReadBe16(bytes, script);
+  WriteBe16(&bytes, defaultLangSys + 4, 0);  // DFLT's default language system lists no features.
+
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendSimple simpleBackend(fontManager, registry);
+  TextBackendFull fullBackend(fontManager, registry);
+  const FontHandle font = fontManager.loadFontData(bytes, FontDataTrust::Trusted);
+  ASSERT_TRUE(static_cast<bool>(font));
+  EXPECT_FALSE(fullBackend.hasSmallCapsFeature(font));
+  EXPECT_FALSE(simpleBackend.hasSmallCapsFeature(font));
+
+  const auto full =
+      fullBackend.shapeRunNoKerning(font, 64.0f, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  const auto simple =
+      simpleBackend.shapeRunNoKerning(font, 64.0f, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  ASSERT_THAT(full.glyphs, ElementsAre(GlyphFontSizeScaleIs(Lt(1.0f))));
+  EXPECT_THAT(simple.glyphs,
+              Pointwise(SameGlyphAndAdvanceAs(FullTierPrecisionPx(64.0)), full.glyphs));
+}
+
+// The simple backend reads only trusted faces, so the GSUB reader never sees document-supplied
+// bytes: an untrusted load of a face with smcp reports no feature and shapes nothing.
+TEST(TextBackendSimpleCapabilities, UntrustedFaceHasNoSmallCapsFeature) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendSimple backend(fontManager, registry);
+  const FontHandle font = fontManager.loadFontData(ReadResvgFontBytes("NotoSans-Regular.ttf"),
+                                                   FontDataTrust::Untrusted);
+  ASSERT_TRUE(static_cast<bool>(font));
+  EXPECT_FALSE(backend.hasSmallCapsFeature(font));
+  EXPECT_THAT(backend.shapeRun(font, 64.0f, "a", 0, 1, false, FontVariant::SmallCaps, false).glyphs,
+              IsEmpty());
+}
+
 // Glyph outlines at a fractional size are the font's outlines scaled linearly, as the simple
 // backend computes them in floating point, and so are outlines too large to oversample.
 TEST(TextBackendFullCapabilities, FractionalSizeOutlinesKeepFontUnitPrecision) {
