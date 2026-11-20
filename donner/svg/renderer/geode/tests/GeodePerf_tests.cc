@@ -33,6 +33,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -1120,7 +1121,8 @@ TEST_F(GeodePerfTest, ManyStopGradient_SolidOrPatternPaintReleasesTheRamp) {
 /// even when the fill leaves the batch, and converts none once the budget has refused a draw.
 /// Forty rects share one 400-stop gradient: unbounded, the frame converts all 16,000 stops; under
 /// a cap of 3,000 it converts the seven draws that fit, 2,800 stops, and nothing after the
-/// eighth is refused.
+/// eighth is refused. Finding the draws' stop ramp hashes each charged stop at most once and
+/// compares it at most six times, the bound on stop lookup work per frame.
 TEST_F(GeodePerfTest, ManyStopGradient_StopConversionsStayWithinTheFrameBudget) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
@@ -1146,6 +1148,10 @@ TEST_F(GeodePerfTest, ManyStopGradient_StopConversionsStayWithinTheFrameBudget) 
     EXPECT_EQ(c.gradientStopConversions, expected);
     EXPECT_EQ(stats.gradientStops, expected);
     EXPECT_EQ(stats.drawBudgetRejected, cap < 16000u);
+    const std::uint64_t chargedBytes =
+        stats.gradientStops * sizeof(geode::LinearGradientParams::Stop);
+    EXPECT_LE(c.gradientStopBytesHashed, chargedBytes);
+    EXPECT_LE(c.gradientStopBytesCompared, 6u * chargedBytes);
   }
 }
 

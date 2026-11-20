@@ -809,6 +809,10 @@ struct ResolvedGradientPaint {
   std::optional<geode::LinearGradientParams> linear;
   /// The radial resolution, when the reference is a radial gradient.
   std::optional<ResolvedRadialGradient> radial;
+  /// The stop ramp the encoder bound for this resolution's draws, so every draw made from it in
+  /// one encoder, such as each glyph of a text run, shares one ramp lookup. Filled by the encoder
+  /// during a draw, hence mutable; reset with the resolution, whose stops it was looked up from.
+  mutable geode::GradientRampCache rampCache;
 
   /// The linear parameters, or null.
   const geode::LinearGradientParams* linearParams() const {
@@ -6088,15 +6092,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Draws \p linear over \p drawPath; its stops were charged when they were converted.
+  /// @param rampCache Stop ramp cache of the resolution \p linear comes from.
   void drawLinearGradient(const Path& drawPath, const geode::LinearGradientParams& linear,
                           FillRule rule, const geode::EncodedPath* precomputedEncoded,
-                          geode::GeodeResidentGradientSlot* gradientResidentSlot) {
+                          geode::GeodeResidentGradientSlot* gradientResidentSlot,
+                          geode::GradientRampCache* rampCache) {
     syncTransform();
     if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
       encoder->fillPathLinearGradientResident(*gradientResidentSlot, *precomputedEncoded, linear,
                                               rule, currentFrameIndex);
     } else {
-      encoder->fillPathLinearGradient(drawPath, linear, rule, precomputedEncoded);
+      encoder->fillPathLinearGradient(drawPath, linear, rule, precomputedEncoded, rampCache);
     }
   }
 
@@ -6104,13 +6110,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// zero radius collapses it to; its stops were charged when it was resolved.
   /// @param resolved The radial resolution; empty when the reference is not a
   ///   radial gradient.
+  /// @param rampCache Stop ramp cache of the resolution.
   /// @return False when there is no usable radial gradient and the caller should
   ///   paint the reference's fallback instead; true when it was drawn.
   bool drawRadialGradient(const Path& drawPath,
                           const std::optional<ResolvedRadialGradient>& resolved, FillRule rule,
                           const geode::EncodedPath* precomputedEncoded,
                           geode::GeodeResidentSlot* residentSlot,
-                          geode::GeodeResidentGradientSlot* gradientResidentSlot) {
+                          geode::GeodeResidentGradientSlot* gradientResidentSlot,
+                          geode::GradientRampCache* rampCache) {
     if (!resolved.has_value() ||
         (!resolved->gradient.has_value() && !resolved->solidFallback.has_value())) {
       return false;
@@ -6125,7 +6133,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       encoder->fillPathRadialGradientResident(*gradientResidentSlot, *precomputedEncoded,
                                               *radial.gradient, rule, currentFrameIndex);
     } else {
-      encoder->fillPathRadialGradient(drawPath, *radial.gradient, rule, precomputedEncoded);
+      encoder->fillPathRadialGradient(drawPath, *radial.gradient, rule, precomputedEncoded,
+                                      rampCache);
     }
     return true;
   }
@@ -6142,12 +6151,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return true;
     }
     if (resolved.linear.has_value()) {
-      drawLinearGradient(drawPath, *resolved.linear, rule, precomputedEncoded,
-                         gradientResidentSlot);
+      drawLinearGradient(drawPath, *resolved.linear, rule, precomputedEncoded, gradientResidentSlot,
+                         &resolved.rampCache);
       return true;
     }
     return drawRadialGradient(drawPath, resolved.radial, rule, precomputedEncoded, residentSlot,
-                              gradientResidentSlot);
+                              gradientResidentSlot, &resolved.rampCache);
   }
 
   /// Draws \p ref over \p drawPath as a linear or radial gradient: from \p preResolved when the

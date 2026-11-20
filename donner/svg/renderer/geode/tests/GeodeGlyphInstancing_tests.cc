@@ -42,6 +42,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
@@ -1037,6 +1038,11 @@ TEST_F(GeodeGlyphInstancingTest, GradientTextChargesItsStopsOncePerRunLikeTinySk
       EXPECT_GT(CountNonTransparentPixels(frame.bitmap), 0u) << "The text must render";
       EXPECT_EQ(frame.counters.gradientStopConversions, 6u * 20u)
           << "One conversion for each charge, none per glyph";
+      // Stop ramp lookups are bounded by the charge, not by the glyphs drawn.
+      const std::uint64_t chargedBytes =
+          stats.gradientStops * sizeof(geode::LinearGradientParams::Stop);
+      EXPECT_LE(frame.counters.gradientStopBytesHashed, chargedBytes);
+      EXPECT_LE(frame.counters.gradientStopBytesCompared, 6u * chargedBytes);
     }
     EXPECT_EQ(referenceStats.drawBudgetRejected, !unbounded);
     EXPECT_EQ(stats.drawBudgetRejected, referenceStats.drawBudgetRejected);
@@ -1137,6 +1143,25 @@ TEST_F(GeodeGlyphInstancingTest, TextBeforeAGradientStopRefusalIsKept) {
   ASSERT_GT(CountNonTransparentPixels(expected.bitmap), 0u);
   editor::tests::CompareBitmapToBitmap(frame.bitmap, expected.bitmap, "text_before_stop_refusal",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+/// The glyphs of a gradient text run draw from one stop ramp lookup: the run's 200-stop gradient
+/// is hashed once, and compared with no ramp, however many glyphs the run has.
+TEST_F(GeodeGlyphInstancingTest, GradientTextRunLooksUpItsStopRampOnce) {
+  constexpr std::uint64_t kStopBytes = 200u * sizeof(geode::LinearGradientParams::Stop);
+  for (const std::size_t glyphs : {std::size_t{8}, std::size_t{64}}) {
+    SCOPED_TRACE(glyphs);
+    SVGDocument document =
+        parse(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
+              GradientDefs(200) +
+              R"svg(<text x="4" y="120" font-family="Noto Sans" font-size="4" fill="url(#g)">)svg" +
+              std::string(glyphs, 'A') + "</text></svg>");
+    RendererGeode renderer(sharedDevice());
+    const Frame frame = render(renderer, document);
+    ASSERT_GT(CountNonTransparentPixels(frame.bitmap), 0u) << "The text must render";
+    EXPECT_EQ(frame.counters.gradientStopBytesHashed, kStopBytes);
+    EXPECT_EQ(frame.counters.gradientStopBytesCompared, 0u);
+  }
 }
 
 /// Once the frame's geometry budget has refused a draw, gradient text after it is neither charged

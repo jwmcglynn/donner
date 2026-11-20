@@ -76,6 +76,14 @@ struct GeodeCounters {
   /// stops only after the frame's stop budget admits them, so this never exceeds that budget's
   /// charge, and a frame the budget refused converts no more.
   uint64_t gradientStopConversions = 0;
+  /// Bytes of gradient stops the encoder hashed this frame to find the stop ramp of a gradient
+  /// with more stops than a draw carries inline. A resolved gradient's draws in one encoder share
+  /// one lookup, so this stays within one hash per charged gradient and encoder, whatever the
+  /// number of draws.
+  uint64_t gradientStopBytesHashed = 0;
+  /// Bytes of gradient stops the encoder compared with candidate stop ramps this frame, at most a
+  /// few comparisons per lookup.
+  uint64_t gradientStopBytesCompared = 0;
 
   /// `gpu::RenderPassEncoder::draw` / `drawIndexed` calls. One per
   /// submitted draw call, regardless of instance count. Used to gate

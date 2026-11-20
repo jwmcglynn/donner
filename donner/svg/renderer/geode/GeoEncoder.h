@@ -35,6 +35,7 @@ struct EncodedPath;
 struct GeodeResidentSlot;
 class GeodeRecordSlab;
 struct GeodeResidentGradientSlot;
+struct GeodeGradientRamp;
 
 /**
  * Optional debug observer for Slug draws that actually reach a GPU draw call.
@@ -159,6 +160,20 @@ struct RadialGradientParams {
   using Stop = LinearGradientParams::Stop;
   /// Gradient stops; see @ref LinearGradientParams::stops.
   std::span<const Stop> stops;
+};
+
+/**
+ * The stop ramp one encoder bound for a resolved gradient, so the resolution's further draws in
+ * that encoder bind it without hashing or comparing the stops again. The caller keeps one beside
+ * each resolution, whose stops must not change while it is kept, and hands it to every draw made
+ * from that resolution. It is valid for one encoder only: a draw in another encoder looks the ramp
+ * up again and takes the cache over, so a resolution costs one lookup per encoder it draws in.
+ */
+struct GradientRampCache {
+  /// Identity of the encoder that filled the cache; 0 when empty.
+  uint64_t encoderId = 0;
+  /// The ramp that encoder bound, which its own bookkeeping also keeps alive until submission.
+  std::shared_ptr<const GeodeGradientRamp> ramp;
 };
 
 /**
@@ -811,9 +826,12 @@ public:
    *   0..1 per channel; the encoder premultiplies before upload.
    * @param rule Fill rule (NonZero or EvenOdd).
    * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
+   * @param rampCache Optional stop ramp cache of the resolution \p params come from; see
+   *   @ref GradientRampCache.
    */
   void fillPathLinearGradient(const Path& path, const LinearGradientParams& params, FillRule rule,
-                              const EncodedPath* precomputedEncoded = nullptr);
+                              const EncodedPath* precomputedEncoded = nullptr,
+                              GradientRampCache* rampCache = nullptr);
 
   /**
    * Fill a path with a radial gradient.
@@ -831,9 +849,12 @@ public:
    *   focal point + radius, shared transform and stops).
    * @param rule Fill rule (NonZero or EvenOdd).
    * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
+   * @param rampCache Optional stop ramp cache of the resolution \p params come from; see
+   *   @ref GradientRampCache.
    */
   void fillPathRadialGradient(const Path& path, const RadialGradientParams& params, FillRule rule,
-                              const EncodedPath* precomputedEncoded = nullptr);
+                              const EncodedPath* precomputedEncoded = nullptr,
+                              GradientRampCache* rampCache = nullptr);
 
   /**
    * Fill a path with a linear gradient through a persistent GPU residence

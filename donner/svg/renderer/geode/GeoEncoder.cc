@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <iterator>
@@ -997,23 +998,22 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// @param candidate Ramp to reuse when it holds the same stops; may be null.
   std::shared_ptr<const GeodeGradientRamp> acquireGradientRamp(
       const std::shared_ptr<const GeodeGradientRamp>& candidate) {
-    std::vector<std::shared_ptr<const GeodeGradientRamp>>& bucket =
-        frameRamps[hashStops(rampStops)];
+    std::vector<std::shared_ptr<const GeodeGradientRamp>>& bucket = frameRamps[hashRampStops()];
     const size_t comparedCount = std::min(bucket.size(), kMaxRampBucketCompares);
     const auto compared = bucket.begin() + static_cast<std::ptrdiff_t>(comparedCount);
-    if (candidate != nullptr && rampHolds(*candidate, rampStops)) {
+    if (candidate != nullptr && holdsRampStops(*candidate)) {
       // The bucket also keeps the ramp alive until submission; a duplicate entry is harmless.
       if (std::find(bucket.begin(), compared, candidate) == compared) {
         bucket.push_back(candidate);
       }
       return candidate;
     }
-    const auto shared = std::find_if(
-        bucket.begin(), compared, [this](const auto& ramp) { return rampHolds(*ramp, rampStops); });
+    const auto shared = std::find_if(bucket.begin(), compared,
+                                     [this](const auto& ramp) { return holdsRampStops(*ramp); });
     if (shared != compared) {
       return *shared;
     }
-    if (compared != bucket.end() && rampHolds(*bucket.back(), rampStops)) {
+    if (compared != bucket.end() && holdsRampStops(*bucket.back())) {
       return bucket.back();
     }
     std::shared_ptr<const GeodeGradientRamp> ramp = uploadGradientRamp(rampStops);
@@ -1021,6 +1021,40 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       bucket.push_back(ramp);
     }
     return ramp;
+  }
+
+  /// The ramp for an arena draw: the one `drawRampCache` holds when this encoder filled it, with
+  /// no hashing or comparison, else `acquireGradientRamp`, remembered in `drawRampCache`.
+  std::shared_ptr<const GeodeGradientRamp> acquireDrawRamp() {
+    if (drawRampCache != nullptr && drawRampCache->encoderId == encoderId &&
+        drawRampCache->ramp->stops.size() == rampStops.size() * kStopKeyFloats) {
+      return drawRampCache->ramp;
+    }
+    std::shared_ptr<const GeodeGradientRamp> ramp = acquireGradientRamp(nullptr);
+    if (ramp != nullptr && drawRampCache != nullptr) {
+      *drawRampCache = GradientRampCache{encoderId, ramp};
+    }
+    return ramp;
+  }
+
+  /// This encoder's identity in a `GradientRampCache`; unique per encoder, never 0.
+  uint64_t encoderId = 0;
+  /// Stop ramp cache of the resolution the current arena gradient draw comes from; may be null.
+  GradientRampCache* drawRampCache = nullptr;
+
+  /// `hashStops` of `rampStops`, counted in the frame's counters.
+  uint64_t hashRampStops() const {
+    device->countGradientStopBytes(rampStops.size_bytes(), 0u);
+    return hashStops(rampStops);
+  }
+
+  /// `rampHolds` for `rampStops`, counting the bytes compared in the frame's counters.
+  bool holdsRampStops(const GeodeGradientRamp& ramp) const {
+    if (ramp.stops.size() != rampStops.size() * kStopKeyFloats) {
+      return false;
+    }
+    device->countGradientStopBytes(0u, rampStops.size_bytes());
+    return rampHolds(ramp, rampStops);
   }
 
   /// Stops of the gradient the last `build*GradientUniforms` call saw, when it has more than the
@@ -1055,7 +1089,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     // placeholder the shader never reads.
     std::shared_ptr<const GeodeGradientRamp> ramp;
     if (u.stopCount > kMaxGradientStops) {
-      ramp = acquireGradientRamp(nullptr);
+      ramp = acquireDrawRamp();
       if (ramp == nullptr) {
         return;
       }
@@ -1507,6 +1541,8 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
                           const GeodeGradientPipeline& gradientPipeline,
                           const GeodeImagePipeline& imagePipeline, const gpu::Texture& target,
                           const gpu::Extent2d& targetSize) {
+  static std::atomic<uint64_t> nextEncoderId{1};
+  impl.encoderId = nextEncoderId.fetch_add(1, std::memory_order_relaxed);
   impl.device = &device;
   impl.gpuContext = &device.gpuContext();
   impl.pipeline = &fillPipeline;
@@ -3408,7 +3444,8 @@ void GeoEncoder::Impl::publishGradientUniform(GeodeResidentGradientSlot& slot,
 }
 
 void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientParams& params,
-                                        FillRule rule, const EncodedPath* precomputedEncoded) {
+                                        FillRule rule, const EncodedPath* precomputedEncoded,
+                                        GradientRampCache* rampCache) {
   if (!drawableStopCount(params.stops.size())) {
     return;
   }
@@ -3428,11 +3465,14 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
 
   GradientUniforms u = {};
   impl_->buildLinearGradientUniforms(u, params, rule);
+  impl_->drawRampCache = rampCache;
   impl_->submitGradientArenaFallback(u, encoded);
+  impl_->drawRampCache = nullptr;
 }
 
 void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientParams& params,
-                                        FillRule rule, const EncodedPath* precomputedEncoded) {
+                                        FillRule rule, const EncodedPath* precomputedEncoded,
+                                        GradientRampCache* rampCache) {
   if (!drawableStopCount(params.stops.size())) {
     return;
   }
@@ -3456,7 +3496,9 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
 
   GradientUniforms u = {};
   impl_->buildRadialGradientUniforms(u, params, rule);
+  impl_->drawRampCache = rampCache;
   impl_->submitGradientArenaFallback(u, encoded);
+  impl_->drawRampCache = nullptr;
 }
 
 void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
