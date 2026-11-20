@@ -5647,6 +5647,10 @@ struct DrawnContentCase {
   std::string_view source;  ///< Document source.
   /// Selector of an element to promote explicitly, or null when the element gets a layer by itself.
   const char* promote;
+  /// Selector of an element to move after the unedited frames, or null.
+  const char* move = nullptr;
+  /// Promote only filtered elements by default, so a masked element stays in its static segment.
+  bool filterOnlyScope = false;
 };
 
 void PrintTo(const DrawnContentCase& value, std::ostream* os) {
@@ -5736,6 +5740,52 @@ constexpr std::string_view kPatternLeaf = R"svg(
     <rect x="8" y="8" width="20" height="20" fill="#06c"/>
   </svg>)svg";
 
+/// A rect painted with a pattern, in a static segment, directly before a translucent rect that
+/// gets a layer. The pattern content is the last entity of the segment.
+constexpr std::string_view kPatternBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="16" height="16">
+        <rect width="8" height="16" fill="#c60"/>
+      </pattern>
+    </defs>
+    <g>
+      <rect width="96" height="40" fill="url(#p)"/>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c" opacity="0.5"/>
+    </g>
+  </svg>)svg";
+
+/// A path with markers, in a static segment, directly before a translucent rect that gets a layer.
+constexpr std::string_view kMarkersBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <marker id="mk" markerUnits="userSpaceOnUse" markerWidth="24" markerHeight="24" refX="12"
+              refY="12" overflow="visible">
+        <circle cx="12" cy="12" r="10" fill="#c60"/>
+      </marker>
+    </defs>
+    <g>
+      <path d="M 20 24 L 76 24" stroke="#333" stroke-width="2" fill="none"
+            marker-start="url(#mk)" marker-end="url(#mk)"/>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c" opacity="0.5"/>
+    </g>
+  </svg>)svg";
+
+/// A masked rect directly before a rect that is promoted explicitly. With only filtered elements
+/// promoted by default, the masked rect and its mask content stay in the static segment.
+constexpr std::string_view kMaskedLeafBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+    </defs>
+    <g>
+      <rect width="96" height="48" fill="#c60" mask="url(#m)"/>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c"/>
+    </g>
+  </svg>)svg";
+
 class CompositorDrawnContentTest : public testing::TestWithParam<DrawnContentCase> {};
 
 // Mask, marker and pattern content is instantiated after the element that draws it, so it follows
@@ -5750,31 +5800,53 @@ TEST_P(CompositorDrawnContentTest, ComposedFramesMatchFreshRender) {
   const RenderViewport viewport{Vector2d(96, 96)};
 
   svg::Renderer renderer;
-  CompositorController compositor(document, renderer);
+  CompositorConfig config;
+  if (item.filterOnlyScope) {
+    config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+  }
+  CompositorController compositor(document, renderer, config);
+  const auto expectMatchesFreshRender = [&](const std::string& label) {
+    svg::Renderer referenceRenderer;
+    RendererDriver(referenceRenderer).draw(reference, viewport, Transform2d());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), referenceRenderer.takeSnapshot(),
+                                         std::string(item.name) + "_" + label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
   for (int frame = 0; frame < 3; ++frame) {
     if (frame == 1 && item.promote != nullptr) {
       const Entity target = document.querySelector(item.promote)->unsafeEntityHandle().entity();
       (void)compositor.promoteEntity(target, InteractionHint::Selection);
     }
     compositor.renderFrame(viewport);
-    svg::Renderer referenceRenderer;
-    RendererDriver(referenceRenderer).draw(reference, viewport, Transform2d());
-    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), referenceRenderer.takeSnapshot(),
-                                         std::string(item.name) + "_frame" + std::to_string(frame),
-                                         editor::tests::PixelmatchIdentityParams());
+    expectMatchesFreshRender("frame" + std::to_string(frame));
+  }
+  if (item.move != nullptr) {
+    // A moved layer must leave no copy behind in the segments around it.
+    for (int step = 1; step <= 2; ++step) {
+      for (SVGDocument* moved : {&document, &reference}) {
+        moved->querySelector(item.move)->cast<SVGGraphicsElement>().setTransform(
+            Transform2d::Translate(Vector2d(6.0 * step, 4.0 * step)));
+      }
+      compositor.renderFrame(viewport);
+      expectMatchesFreshRender("moved" + std::to_string(step));
+    }
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Content, CompositorDrawnContentTest,
-    testing::Values(DrawnContentCase{"masked_leaf_between_content", kMaskedLeafBetweenContent,
-                                     nullptr},
-                    DrawnContentCase{"masked_leaf_last", kMaskedLeafLast, nullptr},
-                    DrawnContentCase{"masked_leaf_with_masked_mask_content",
-                                     kMaskedLeafWithMaskedMaskContent, nullptr},
-                    DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
-                    DrawnContentCase{"promoted_marker_leaf", kMarkerLeaf, "#target"},
-                    DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target"}),
+    testing::Values(
+        DrawnContentCase{"masked_leaf_between_content", kMaskedLeafBetweenContent, nullptr},
+        DrawnContentCase{"masked_leaf_last", kMaskedLeafLast, nullptr},
+        DrawnContentCase{"masked_leaf_with_masked_mask_content", kMaskedLeafWithMaskedMaskContent,
+                         nullptr},
+        DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
+        DrawnContentCase{"promoted_marker_leaf", kMarkerLeaf, "#target"},
+        DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target", "#target"},
+        DrawnContentCase{"pattern_before_layer", kPatternBeforeLayer, nullptr, "#target"},
+        DrawnContentCase{"markers_before_layer", kMarkersBeforeLayer, nullptr, "#target"},
+        DrawnContentCase{"masked_leaf_before_promoted_layer", kMaskedLeafBeforeLayer, "#target",
+                         "#target", true}),
     [](const testing::TestParamInfo<DrawnContentCase>& info) {
       return std::string(info.param.name);
     });

@@ -387,7 +387,6 @@ TEST_F(ComplexityBucketerTest, ContentDrawnForAnElementIsNotBucketed) {
   EXPECT_EQ(countHints(host, HintSource::ComplexityBucket), 1u);
   EXPECT_EQ(countHints(maskContentFirst, HintSource::ComplexityBucket), 0u);
   EXPECT_EQ(countHints(maskContentLast, HintSource::ComplexityBucket), 0u);
-  EXPECT_EQ(bucketer.stats().candidatesConsidered, 1u);
 }
 
 }  // namespace donner::svg::compositor

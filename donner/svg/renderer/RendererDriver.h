@@ -274,11 +274,11 @@ public:
   void setConservativeEarlyLeafCulling(bool enabled) { earlyLeafViewportCulling_ = enabled; }
 
   /**
-   * Draw order of the last rendered instance that an instance's output depends on: its subtree
-   * and the mask, marker and pattern content drawn for it. That content is instantiated after the
-   * instance, so it can follow the last entity of the instance's own subtree in paint order. A
-   * caller that slices paint order around an instance must keep that content with it: drawn as a
-   * range of its own, it would paint as ordinary content.
+   * Draw order of the last instance among the mask, marker and pattern content drawn for an
+   * instance, or the instance's own draw order when it draws none. That content is instantiated
+   * after the instance, so it can follow the last entity of the instance's own subtree in paint
+   * order. A caller that slices paint order around an instance must keep that content with it:
+   * drawn as a range of its own, it would paint as ordinary content.
    *
    * @param registry Registry holding the rendering instances.
    * @param instance Instance to inspect.

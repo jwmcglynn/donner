@@ -22,14 +22,15 @@ struct Candidate {
 
 namespace {
 
-/// Removes the mask, marker and pattern content drawn for other elements from @p entities. That
-/// content reaches the frame only through the element that draws it, so it is never bucketed into
-/// a layer of its own.
-void EraseDrawnContent(Registry& registry, std::vector<Entity>& entities) {
+/// Removes the candidates that are mask, marker or pattern content drawn for another element.
+/// That content reaches the frame only through the element that draws it, so it is never bucketed
+/// into a layer of its own.
+void EraseDrawnContentCandidates(Registry& registry, std::vector<Candidate>& candidates) {
   const std::vector<std::pair<int, int>> drawnContent = DrawnContentDrawOrders(registry);
-  std::erase_if(entities, [&](Entity entity) {
+  std::erase_if(candidates, [&](const Candidate& candidate) {
     return InDrawOrderRanges(
-        drawnContent, registry.get<components::RenderingInstanceComponent>(entity).drawOrder);
+        drawnContent,
+        registry.get<components::RenderingInstanceComponent>(candidate.entity).drawOrder);
   });
 }
 
@@ -51,7 +52,6 @@ void ComplexityBucketer::reconcile(Registry& registry) {
     }
   }
   std::reverse(drawOrder.begin(), drawOrder.end());
-  EraseDrawnContent(registry, drawOrder);
 
   if (drawOrder.empty()) {
     // Empty document - drop any lingering hints and exit.
@@ -104,6 +104,8 @@ void ComplexityBucketer::reconcile(Registry& registry) {
     candidates.push_back(Candidate{childRoot, cost});
     ++stats_.candidatesConsidered;
   }
+
+  EraseDrawnContentCandidates(registry, candidates);
 
   // Sort: cost descending, ties broken by entity id ascending (deterministic).
   std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
