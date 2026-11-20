@@ -84,9 +84,11 @@ Regenerate this inventory with
 `//tools/resvg_parity:parity_report_tests` checks the generated block against this document.
 The lane counts below are eligibility from source. The normal Geode corpus compares text in the
 simple text tier. Rows that exceed their Geode budget only because of the references' quarter-pixel
-edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), and the rows in
-`GEODE_GATE_ALLOWLIST` disable their Geode comparison with a recorded reason; both lists are in
-`parity_report.py` and described in `README_resvg_test_suite.md`. Full-shaping rows stay
+edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), which accepts
+only partially covered pixels that are the edge row of a horizontal edge in the reference, beside an
+empty or fully covered row. The rows in `GEODE_GATE_ALLOWLIST` disable their Geode comparison with
+a recorded reason. Both lists are in `parity_report.py` and described in
+`README_resvg_test_suite.md`. Full-shaping rows stay
 capability-gated on Geode because the corpus has no Geode full-shaping wrapper; the `*_text_full`
 unit test variants run on Geode with full shaping.
 
