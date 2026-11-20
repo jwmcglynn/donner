@@ -51,12 +51,8 @@ SECRET_USES = {
      "Sign, notarize, staple and verify the extracted ZIP", None, "<run>"): {
          "MACOS_CERTIFICATE_BASE64", "MACOS_CERTIFICATE_PASSWORD", "APPLE_ID",
          "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"},
-    (".github/workflows/badges.yaml", "update-badges", "Create Lines-of-Code-Badge", None,
-     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
-    (".github/workflows/badges.yaml", "update-badges", "Create Test-Lines-of-Code-Badge", None,
-     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
-    (".github/workflows/badges.yaml", "update-badges", "Create Comments-Badge", None,
-     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
+    (".github/workflows/badges.yaml", "update-badges", "Publish badges", None, "<run>"): {
+         "GIST_SECRET"},
     (".github/workflows/coverage.yml", "upload-coverage", "Upload coverage to Codecov", None,
      "codecov/codecov-action@v7"): {"CODECOV_TOKEN"},
     (".github/workflows/editor_wasm.yml", "build", "Configure BuildBuddy remote cache", None,
@@ -165,7 +161,6 @@ REVIEWED_EXTERNAL_ACTIONS = {
     "actions/setup-node", "actions/upload-artifact", "actions/upload-pages-artifact",
     "bazel-contrib/publish-to-bcr", "bazel-contrib/setup-bazel", "codecov/codecov-action",
     "github/codeql-action/analyze", "github/codeql-action/init", "nick-fields/retry",
-    "schneegans/dynamic-badges-action",
 }
 # Setup actions with a built-in cache that saves on every event, whatever the trigger.
 SELF_SAVING_SETUP = {"actions/setup-node", "actions/setup-python", "actions/setup-java",
@@ -4823,12 +4818,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         if _secret_reads(step))
         duplicated = files[path] + "\n      - " + reviewed
         self.assertTrue(_secret_use_violations(_workflows({**files, path: duplicated})))
-        changed_id = files[path].replace("      - name: Create Lines-of-Code-Badge\n",
-                                        "      - name: Create Lines-of-Code-Badge\n"
-                                        "        id: alternate-consumer\n", 1)
+        step = "      - name: Publish badges\n"
+        changed_id = files[path].replace(step, step + "        id: alternate-consumer\n", 1)
+        self.assertNotEqual(changed_id, files[path])
         self.assertTrue(_secret_use_violations(_workflows({**files, path: changed_id})))
-        changed = files[path].replace("uses: schneegans/dynamic-badges-action@v1.9.0",
-                                    "uses: example/consumer-action@v1.0.0", 1)
+        changed = files[path].replace("        run: |\n          python3 tools/ci/badge_gist.py",
+                                      "        uses: example/consumer-action@v1.0.0\n"
+                                      "        run: |\n          python3 tools/ci/badge_gist.py", 1)
+        self.assertNotEqual(changed, files[path])
         self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
 
     def test_self_hosted_gate_cannot_be_weakened_by_boolean_context(self):

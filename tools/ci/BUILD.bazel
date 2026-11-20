@@ -422,6 +422,19 @@ py_test(
     ],
 )
 
+# Renders the README badges and writes them to their gist in one update (badges.yaml).
+py_library(
+    name = "badge_gist",
+    srcs = ["badge_gist.py"],
+)
+
+py_test(
+    name = "badge_gist_tests",
+    size = "small",
+    srcs = ["badge_gist_tests.py"],
+    deps = [":badge_gist"],
+)
+
 # Bounded waits for the shared GitHub API rate limit, used by CI steps that call the API.
 py_library(
     name = "github_rate_limit",
