@@ -1149,6 +1149,26 @@ TEST_F(GeodePerfTest, ManyStopGradient_StopConversionsStayWithinTheFrameBudget) 
   }
 }
 
+/// A gradient the fill batch resolved but did not take is drawn from that resolution, so its
+/// stops are converted once. A `<use>` repeats a rect filled with a 3-stop gradient in the same
+/// frame; the batch declines the repeat, which is then drawn directly.
+TEST_F(GeodePerfTest, BatchableGradientDrawnDirectlyConvertsItsStopsOnce) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  SVGDocument document = ParsePerfDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg"
+      R"svg(<linearGradient id="g"><stop stop-color="red"/><stop offset="0.5" stop-color="lime"/>)svg"
+      R"svg(<stop offset="1" stop-color="blue"/></linearGradient></defs>)svg"
+      R"svg(<rect id="r" x="10" y="10" width="40" height="40" fill="url(#g)"/>)svg"
+      R"svg(<use href="#r" x="50"/></svg>)svg");
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+  printCounters("Batchable gradient drawn directly", c);
+  EXPECT_EQ(renderer.resourceStats().gradientStops, 2u * 3u);
+  EXPECT_EQ(c.gradientStopConversions, 2u * 3u);
+}
+
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";

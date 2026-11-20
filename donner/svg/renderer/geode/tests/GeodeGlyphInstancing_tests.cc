@@ -40,6 +40,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
@@ -989,6 +990,79 @@ TEST_F(GeodeGlyphInstancingTest, FontFamilyChangeTakesNewGlyphIdentities) {
       << "The serif glyphs are additional identities, not the sans ones renamed.";
   EXPECT_NE(CountNonTransparentPixels(serif.bitmap), sansPixels)
       << "The serif face drew exactly the sans coverage; the font swap did not reach the glyphs.";
+}
+
+/// A linear gradient of \p stops evenly spaced stops with id `g`, in user space across the
+/// canvas.
+std::string GradientDefs(int stops) {
+  std::string defs =
+      R"svg(<defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" x2="200">)svg";
+  for (int i = 0; i < stops; ++i) {
+    defs += std::format(R"svg(<stop offset="{}" stop-color="#{:02x}{:02x}{:02x}"/>)svg",
+                        i / (stops - 1.0), (i * 67 + 13) % 256, (i * 151 + 101) % 256,
+                        (i * 29 + 200) % 256);
+  }
+  return defs + "</linearGradient></defs>";
+}
+
+/// Gradient-painted text charges the frame's stop budget as the CPU renderer does: once for the
+/// text element's own fill and stroke, then once for each run's fill and stroke, however many
+/// glyphs the run has. Each run converts its fill's stops once and its stroke's once, and every
+/// glyph draws from them. Two runs of three and two glyphs carry one 20-stop gradient in fill and
+/// stroke, so tiny-skia charges 120 stops; unbounded, and under caps that refuse the second run's
+/// stroke, the first run's stroke, and the element's stroke, Geode's charged stops and verdict
+/// equal tiny-skia's.
+TEST_F(GeodeGlyphInstancingTest, GradientTextChargesItsStopsOncePerRunLikeTinySkia) {
+  const std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
+      GradientDefs(20) +
+      R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)")svg"
+      R"svg( stroke="url(#g)" stroke-width="2">Abc<tspan>de</tspan></text></svg>)svg";
+  for (const std::size_t limit : {RendererDrawBudget::kMaximumGradientStops, std::size_t{119},
+                                  std::size_t{70}, std::size_t{30}}) {
+    SCOPED_TRACE(limit);
+    SVGDocument document = parse(source);
+    SVGDocument referenceDocument = parse(source);
+    RendererTinySkia reference;
+    reference.setGradientStopBudgetForTesting(limit);
+    reference.draw(referenceDocument);
+    RendererGeode renderer(sharedDevice());
+    renderer.setGradientStopBudgetForTesting(limit);
+    const Frame frame = render(renderer, document);
+    const RendererResourceStats stats = renderer.resourceStats();
+    const RendererResourceStats referenceStats = reference.resourceStats();
+    const bool unbounded = limit == RendererDrawBudget::kMaximumGradientStops;
+    if (unbounded) {
+      ASSERT_EQ(referenceStats.gradientStops, 120u) << "Premise: tiny-skia charges six times";
+      EXPECT_GT(CountNonTransparentPixels(frame.bitmap), 0u) << "The text must render";
+      EXPECT_EQ(frame.counters.gradientStopConversions, 2u * 2u * 20u)
+          << "One fill and one stroke conversion per run";
+    }
+    EXPECT_EQ(referenceStats.drawBudgetRejected, !unbounded);
+    EXPECT_EQ(stats.drawBudgetRejected, referenceStats.drawBudgetRejected);
+    EXPECT_EQ(stats.gradientStops, referenceStats.gradientStops);
+    EXPECT_LE(frame.counters.gradientStopConversions, stats.gradientStops);
+  }
+}
+
+/// Once the frame's geometry budget has refused a draw, gradient text after it is neither charged
+/// nor converted: the frame draws nothing more.
+TEST_F(GeodeGlyphInstancingTest, GradientTextAfterAGeometryRefusalConvertsNothing) {
+  SVGDocument document = parse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
+      GradientDefs(20) +
+      R"svg(<rect width="40" height="40" fill="red"/><rect x="50" width="40" height="40" fill="blue"/>)svg"
+      R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)")svg"
+      R"svg( stroke="url(#g)" stroke-width="2">Abc</text></svg>)svg");
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/1u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame frame = render(renderer, document);
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected) << "Premise: the second rect";
+  EXPECT_EQ(renderer.resourceStats().gradientStops, 0u);
+  EXPECT_EQ(frame.counters.gradientStopConversions, 0u);
 }
 
 }  // namespace

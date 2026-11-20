@@ -5182,6 +5182,19 @@ TEST_F(RendererGeodeTest, ClipPathInsideAnExpandedFilterLayerMatchesTinySkia) {
                              kCircleEdgeParams);
 }
 
+/// \p count evenly spaced `<stop>` elements, each a different color.
+std::string GradientStopElements(int count) {
+  std::string stops;
+  for (int i = 0; i < count; ++i) {
+    char stop[64];
+    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                  static_cast<double>(i) / (count - 1), (i * 67 + 13) % 256,
+                  (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+    stops += stop;
+  }
+  return stops;
+}
+
 /// Builds a document whose gradient has \p stopCount evenly spaced stops, each a different color,
 /// and paints it three ways: a fill, a stroke, and a fill under a clip path that covers the whole
 /// canvas. The clip path is a triangle rather than a rectangle so it renders through a coverage
@@ -5197,13 +5210,7 @@ std::string ManyStopGradientDocument(int stopCount, bool radial) {
       radial
           ? R"svg(<radialGradient id="g" gradientUnits="userSpaceOnUse" cx="40" cy="24" r="80">)svg"
           : R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="4" y1="0" x2="124" y2="0">)svg";
-  for (int i = 0; i < stopCount; ++i) {
-    char stop[64];
-    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
-                  static_cast<double>(i) / (stopCount - 1), (i * 67 + 13) % 256,
-                  (i * 151 + 101) % 256, (i * 29 + 200) % 256);
-    source += stop;
-  }
+  source += GradientStopElements(stopCount);
   source += radial ? "</radialGradient>" : "</linearGradient>";
   source +=
       R"svg(</defs><rect width="128" height="16" fill="url(#g)"/>)svg"
@@ -5281,13 +5288,7 @@ TEST_F(RendererGeodeTest, ManyStopHardEdgesMatchTinySkia) {
 /// Reflect and repeat spread with a stop ramp: the 20-stop gradient covers a quarter of the rect,
 /// so the rest of it is the ramp mirrored or repeated.
 TEST_F(RendererGeodeTest, ManyStopSpreadMethodsMatchTinySkia) {
-  std::string stops;
-  for (int i = 0; i < 20; ++i) {
-    char stop[64];
-    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
-                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
-    stops += stop;
-  }
+  const std::string stops = GradientStopElements(20);
   for (const std::string_view spread : {"reflect", "repeat"}) {
     for (const bool radial : {false, true}) {
       const std::string label =
@@ -5311,13 +5312,7 @@ TEST_F(RendererGeodeTest, ManyStopSpreadMethodsMatchTinySkia) {
 /// A gradient with too many stops to batch, drawn between two overlapping solid fills that can,
 /// keeps its place in painter order: it covers the first fill and the second covers it.
 TEST_F(RendererGeodeTest, ManyStopGradientBetweenBatchedFillsKeepsPaintOrder) {
-  std::string stops;
-  for (int i = 0; i < 20; ++i) {
-    char stop[64];
-    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
-                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
-    stops += stop;
-  }
+  const std::string stops = GradientStopElements(20);
   const std::string source = GradientTestDocument(
       R"svg(<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="32" y1="0" x2="96" y2="0">)svg" +
           stops + "</linearGradient>",
@@ -5332,26 +5327,26 @@ TEST_F(RendererGeodeTest, ManyStopGradientBetweenBatchedFillsKeepsPaintOrder) {
 /// is refused and so is the rest of the frame, on Geode as on tiny-skia: the same document under
 /// the same lowered cap renders the same pixels and the same verdict on both. The 3-stop gradient
 /// draws through the fill batch and the 20-stop linear and radial ones through the gradient
-/// pipeline, so all of them charge.
+/// pipeline, so all of them charge. The 4-stop radial gradient first is focal-degenerate, its
+/// focal circle containing the outer one: it draws nothing, but tiny-skia charges its stops before
+/// it tests the radii, so Geode charges them too.
 TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
-  std::string twentyStops;
-  for (int i = 0; i < 20; ++i) {
-    char stop[64];
-    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
-                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
-    twentyStops += stop;
-  }
+  const std::string twentyStops = GradientStopElements(20);
   const std::string source = GradientTestDocument(
+      R"svg(<radialGradient id="focal" r="0.1" fr="0.5"><stop stop-color="red"/><stop offset="0.3" stop-color="lime"/>)svg"
+      R"svg(<stop offset="0.6" stop-color="blue"/><stop offset="1" stop-color="yellow"/></radialGradient>)svg"
       R"svg(<linearGradient id="small"><stop stop-color="red"/><stop offset="0.5" stop-color="lime"/><stop offset="1" stop-color="blue"/></linearGradient>)svg"
       R"svg(<linearGradient id="a">)svg" +
           twentyStops + R"svg(</linearGradient><radialGradient id="b">)svg" + twentyStops +
           "</radialGradient>",
+      R"svg(<rect width="32" height="48" fill="url(#focal)"/>)svg"
       R"svg(<rect width="32" height="48" fill="url(#small)"/>)svg"
       R"svg(<rect x="32" width="32" height="48" fill="url(#a)"/>)svg"
       R"svg(<rect x="64" width="32" height="48" fill="url(#b)"/>)svg"
       R"svg(<rect x="96" width="32" height="48" fill="#2020d0"/>)svg");
-  // 43 admits every gradient; 42 refuses the second 20-stop one, 22 the first.
-  for (const std::size_t limit : {43u, 42u, 22u}) {
+  // 47 admits every gradient; 46 refuses the second 20-stop one, 26 the first, and 3 the
+  // focal-degenerate one.
+  for (const std::size_t limit : {47u, 46u, 26u, 3u}) {
     SCOPED_TRACE(limit);
     std::optional<SVGDocument> document;
     std::optional<SVGDocument> referenceDocument;
@@ -5366,7 +5361,7 @@ TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
     EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
     const RendererResourceStats stats = renderer.resourceStats();
     const RendererResourceStats referenceStats = reference.resourceStats();
-    EXPECT_EQ(referenceStats.drawBudgetRejected, limit < 43u);
+    EXPECT_EQ(referenceStats.drawBudgetRejected, limit < 47u);
     EXPECT_EQ(stats.drawBudgetRejected, referenceStats.drawBudgetRejected);
     EXPECT_EQ(stats.gradientStops, referenceStats.gradientStops);
     editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
@@ -5403,13 +5398,7 @@ TEST_F(RendererGeodeTest, ManyStopGradientStopEditReplacesTheResidentRamp) {
 /// tile. Under the default cap and under a cap one stop short of the document's total, Geode's
 /// charged stops and rejection verdict equal tiny-skia's.
 TEST_F(RendererGeodeTest, GradientStopBudgetInMultiPassConstructsMatchesTinySkia) {
-  std::string stops;
-  for (int i = 0; i < 20; ++i) {
-    char stop[64];
-    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
-                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
-    stops += stop;
-  }
+  const std::string stops = GradientStopElements(20);
   const std::string source = GradientTestDocument(
       R"svg(<linearGradient id="g">)svg" + stops +
           R"svg(</linearGradient>)svg"
@@ -5525,13 +5514,7 @@ TEST_F(RendererGeodeTest, KeptStopRampsStayWithinTheDocumentResidentLimit) {
 /// rendering of `before` alone, the charged stops and verdict must equal tiny-skia's, and where no
 /// text is drawn the pixels must equal tiny-skia's too.
 TEST_F(RendererGeodeTest, DrawsBeforeAGradientStopRefusalAreKept) {
-  std::string twentyStops;
-  for (int i = 0; i < 20; ++i) {
-    char stop[64];
-    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
-                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
-    twentyStops += stop;
-  }
+  const std::string twentyStops = GradientStopElements(20);
   const std::string defs =
       R"svg(<linearGradient id="big">)svg" + twentyStops +
       R"svg(</linearGradient><linearGradient id="small"><stop stop-color="red"/>)svg"
@@ -5557,6 +5540,11 @@ TEST_F(RendererGeodeTest, DrawsBeforeAGradientStopRefusalAreKept) {
     bool text = false;
     bool batchableRefused = false;
   };
+  // The `batched_gradient_before*` and `stroke_before` cases are parity rows rather than
+  // regression rows: nothing here asserts their draws were queued in a batch before the refusal,
+  // and they passed before the queued draws were kept as well. This binary is built without the
+  // text backend, so the text cases draw no glyphs; GeodeGlyphInstancing_tests covers gradient
+  // text under the stop budget.
   const std::array<OrderCase, 9> cases = {{
       {"solid_fill_before_batchable_refusal",
        R"svg(<rect width="60" height="48" fill="#d02020"/>)svg", 9u, false, true},
