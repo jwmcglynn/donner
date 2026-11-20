@@ -44,9 +44,29 @@ public:
   /// @param retainedBytes Additional retained geometry bytes.
   /// @return False if any limit is exceeded or the frame was already rejected.
   [[nodiscard]] bool reserve(std::size_t draws, std::size_t items, std::uint64_t retainedBytes) {
-    if (rejected_ || draws_ > limits_.draws || draws > limits_.draws - draws_ ||
-        items_ > limits_.items || items > limits_.items - items_ ||
-        retainedBytes_ > limits_.retainedBytes ||
+    if (rejected_) {
+      return false;
+    }
+    return reserveQueued(draws, items, retainedBytes);
+  }
+
+  /**
+   * Charge a draw that was queued before the frame was rejected, against the limits alone.
+   *
+   * A deferred draw is admitted when its batch flushes, which can come after a later draw latched
+   * the rejection. Drawn in order it would have been admitted before that draw, which consumed
+   * nothing, so only the limits decide it. A refusal here latches the rejection as \ref reserve
+   * does.
+   *
+   * @param draws Additional draw calls.
+   * @param items Additional encoded geometry items.
+   * @param retainedBytes Additional retained geometry bytes.
+   * @return False if any limit is exceeded.
+   */
+  [[nodiscard]] bool reserveQueued(std::size_t draws, std::size_t items,
+                                   std::uint64_t retainedBytes) {
+    if (draws_ > limits_.draws || draws > limits_.draws - draws_ || items_ > limits_.items ||
+        items > limits_.items - items_ || retainedBytes_ > limits_.retainedBytes ||
         retainedBytes > limits_.retainedBytes - retainedBytes_) {
       rejected_ = true;
       return false;

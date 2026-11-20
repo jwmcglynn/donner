@@ -4238,11 +4238,24 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       geometryBudget->reject();
       return false;
     }
-    return geometryBudget->reserve(logicalDraws, items * logicalDraws,
-                                   static_cast<std::uint64_t>(retainedBytes) * logicalDraws);
+    return reserveFrameGeometry(logicalDraws, items * logicalDraws,
+                                static_cast<std::uint64_t>(retainedBytes) * logicalDraws);
   }
 
-  bool canEncodeGeometry() const override { return !geometryBudget->rejected(); }
+  bool canEncodeGeometry() const override {
+    return admittingQueuedDraws || !geometryBudget->rejected();
+  }
+
+  /// Charges frame geometry. While the pending batch flushes, its draws, all queued before any
+  /// refusal latched the frame, are admitted against the limits alone: drawn in order they would
+  /// have been admitted before the refusal, as on the CPU renderer.
+  bool reserveFrameGeometry(std::size_t draws, std::size_t items, std::uint64_t bytes) {
+    return admittingQueuedDraws ? geometryBudget->reserveQueued(draws, items, bytes)
+                                : geometryBudget->reserve(draws, items, bytes);
+  }
+
+  /// Set while `flushPendingBatch` draws the batch; see `reserveFrameGeometry`.
+  bool admittingQueuedDraws = false;
 
   /// A resident instance retains its record for the frame, not a copy of the geometry, which the
   /// document's resident budget already holds.
@@ -4254,7 +4267,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (encoded.empty()) {
       return true;
     }
-    return geometryBudget->reserve(1u, encoded.geometryItemCount(), sizeof(geode::InstanceRecord));
+    return reserveFrameGeometry(1u, encoded.geometryItemCount(), sizeof(geode::InstanceRecord));
   }
 
   void releaseResidentInstance(const geode::EncodedPath& encoded) override {
@@ -5215,6 +5228,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const Transform2d savedDeviceFromLocalTransform = deviceFromLocalTransform;
     PendingBatch batch = std::move(*pendingBatch);
     pendingBatch.reset();
+    // Nothing is queued once the frame is rejected (see `tryAppendOrStartBatch`), so every draw
+    // here came before any refusal and is admitted as it would have been then.
+    struct QueuedAdmission {
+      bool& flag;
+      bool previous;
+      ~QueuedAdmission() { flag = previous; }
+    } queuedAdmission{admittingQueuedDraws, std::exchange(admittingQueuedDraws, true)};
 
     if (batch.mode == PendingBatch::Mode::Scene) {
       // Ordered batch: one draw over the consecutive record-slab
@@ -5376,11 +5396,30 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   ///   worth it for a run of repeated `<use>` draws, which is what it exists
   ///   for; it is not worth it for a draw that also has a stroked outline,
   ///   whose element is going to open an ordered batch anyway.
+  /// Whether the pending batch is a single draw of another slot under the clip state
+  /// \p clipVersion, which a scene batch can take as its first instance.
+  bool pendingSingletonConvertible(std::uint64_t clipVersion,
+                                   const geode::GeodeResidentSlot* residentSlot) const {
+    return pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity &&
+           pendingBatch->deviceFromLocalTransforms.size() == 1 &&
+           pendingBatch->sameEntityClipVersion == clipVersion &&
+           pendingBatch->residentSlot != residentSlot;
+  }
+
+  /// Queue a draw into the pending batch, or report that it must be drawn directly.
+  ///
+  /// Once the frame's geometry has been refused nothing more is queued: the pending batch, every
+  /// draw of which came before the refusal, is drawn, and the caller's direct draw is refused, so
+  /// a later refusal never drops an earlier draw.
   bool tryAppendOrStartBatch(Registry* sourceRegistry, Entity sourceEntity, const Path& path,
                              const geode::GeoEncoder::ScenePaint& paint, FillRule rule,
                              const geode::EncodedPath* encoded,
                              geode::GeodeResidentSlot* residentSlot,
                              bool allowInstancedAppend = true) {
+    if (geometryBudget->rejected()) {
+      flushPendingBatch();
+      return false;
+    }
     // The record-sourced paint fields are the only place a gradient can live
     // in a batch, so a gradient draw is offered to the ordered path and
     // nothing else: the instanced same-entity path and the size-1 singleton
@@ -5430,11 +5469,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // index than a draw that already has one and split the pair.
     const bool havePendingSceneBatch =
         pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene;
-    const bool haveConvertibleSingleton = pendingBatch.has_value() &&
-                                          pendingBatch->mode == PendingBatch::Mode::SameEntity &&
-                                          pendingBatch->deviceFromLocalTransforms.size() == 1 &&
-                                          pendingBatch->sameEntityClipVersion == clipVersion &&
-                                          pendingBatch->residentSlot != residentSlot;
+    const bool haveConvertibleSingleton = pendingSingletonConvertible(clipVersion, residentSlot);
     const bool wantsRecord = gradientPaint || havePendingSceneBatch || haveConvertibleSingleton;
 
     // `kEnableSceneBatching` is the compile-time gate for ordered

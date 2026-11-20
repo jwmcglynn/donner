@@ -5518,6 +5518,143 @@ TEST_F(RendererGeodeTest, KeptStopRampsStayWithinTheDocumentResidentLimit) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// A draw the frame's gradient-stop budget refuses keeps every draw before it, whatever queued
+/// it, and drops every draw after it, as on the CPU renderer. Each case renders a document whose
+/// refused gradient, 20 stops or a batchable 10, sits after `before` and before `after`, under a
+/// cap that admits the stops of `before` only. The Geode frame must equal Geode's unbounded
+/// rendering of `before` alone, the charged stops and verdict must equal tiny-skia's, and where no
+/// text is drawn the pixels must equal tiny-skia's too.
+TEST_F(RendererGeodeTest, DrawsBeforeAGradientStopRefusalAreKept) {
+  std::string twentyStops;
+  for (int i = 0; i < 20; ++i) {
+    char stop[64];
+    std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
+                  i / 19.0, (i * 67 + 13) % 256, (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+    twentyStops += stop;
+  }
+  const std::string defs =
+      R"svg(<linearGradient id="big">)svg" + twentyStops +
+      R"svg(</linearGradient><linearGradient id="small"><stop stop-color="red"/>)svg"
+      R"svg(<stop offset="1" stop-color="blue"/></linearGradient>)svg"
+      R"svg(<linearGradient id="ten"><stop stop-color="red"/><stop offset="0.1" stop-color="lime"/>)svg"
+      R"svg(<stop offset="0.2" stop-color="blue"/><stop offset="0.3" stop-color="yellow"/>)svg"
+      R"svg(<stop offset="0.4" stop-color="cyan"/><stop offset="0.5" stop-color="magenta"/>)svg"
+      R"svg(<stop offset="0.6" stop-color="black"/><stop offset="0.7" stop-color="white"/>)svg"
+      R"svg(<stop offset="0.8" stop-color="gray"/><stop offset="1" stop-color="orange"/>)svg"
+      R"svg(</linearGradient>)svg";
+  // A 20-stop gradient is refused on the ordinary emit path; a 10-stop one, which can batch, is
+  // refused while the batch resolves it, before any pending draw is flushed.
+  constexpr std::string_view kRefusedSmall =
+      R"svg(<rect x="64" width="32" height="48" fill="url(#ten)"/>)svg";
+  constexpr std::string_view kRefused =
+      R"svg(<rect x="64" width="32" height="48" fill="url(#big)"/>)svg";
+  constexpr std::string_view kAfter =
+      R"svg(<rect x="100" width="28" height="48" fill="#208020"/>)svg";
+  struct OrderCase {
+    std::string_view label;
+    std::string_view before;
+    std::size_t cap;
+    bool text = false;
+    bool batchableRefused = false;
+  };
+  const std::array<OrderCase, 9> cases = {{
+      {"solid_fill_before_batchable_refusal",
+       R"svg(<rect width="60" height="48" fill="#d02020"/>)svg", 9u, false, true},
+      {"batched_gradient_before_batchable_refusal",
+       R"svg(<rect width="30" height="48" fill="url(#small)"/><rect x="30" width="30" height="48" fill="#d02020"/>)svg",
+       11u, false, true},
+      {"solid_fill_before", R"svg(<rect width="60" height="48" fill="#d02020"/>)svg", 19u},
+      {"batched_gradient_before",
+       R"svg(<rect width="30" height="48" fill="url(#small)"/><rect x="30" width="30" height="48" fill="#d02020"/>)svg",
+       21u},
+      {"stroke_before",
+       R"svg(<path d="M4,24 H56" stroke="#d02020" stroke-width="16" fill="none"/>)svg", 19u},
+      {"text_before", R"svg(<text x="4" y="32" font-size="24" fill="#d02020">Ab</text>)svg", 19u,
+       true},
+      {"layer_before",
+       R"svg(<g opacity="0.5"><rect width="60" height="48" fill="#d02020"/></g>)svg", 19u},
+      {"refused_first", "", 19u},
+      {"solid_and_text_before",
+       R"svg(<rect width="20" height="48" fill="#2020d0"/><text x="22" y="32" font-size="24" fill="#d02020">A</text>)svg",
+       19u, true},
+  }};
+  for (const OrderCase& orderCase : cases) {
+    SCOPED_TRACE(orderCase.label);
+    const std::string source = GradientTestDocument(
+        defs, std::string(orderCase.before) +
+                  std::string(orderCase.batchableRefused ? kRefusedSmall : kRefused) +
+                  std::string(kAfter));
+    const std::string prefix = GradientTestDocument(defs, orderCase.before);
+
+    std::optional<SVGDocument> document;
+    std::optional<SVGDocument> referenceDocument;
+    std::optional<SVGDocument> prefixDocument;
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, referenceDocument));
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(prefix, prefixDocument));
+
+    RendererTinySkia reference;
+    reference.setGradientStopBudgetForTesting(orderCase.cap);
+    reference.draw(*referenceDocument);
+    RendererGeode renderer;
+    renderer.setGradientStopBudgetForTesting(orderCase.cap);
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+    const RendererResourceStats stats = renderer.resourceStats();
+    const RendererResourceStats referenceStats = reference.resourceStats();
+    EXPECT_TRUE(referenceStats.drawBudgetRejected);
+    EXPECT_EQ(stats.drawBudgetRejected, referenceStats.drawBudgetRejected);
+    EXPECT_EQ(stats.gradientStops, referenceStats.gradientStops);
+
+    const RendererBitmap actual = renderer.takeSnapshot();
+    RendererGeode unbounded;
+    unbounded.draw(*prefixDocument);
+    editor::tests::CompareBitmapToBitmap(actual, unbounded.takeSnapshot(),
+                                         "stop_refusal_keeps_" + std::string(orderCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
+    if (!orderCase.text) {
+      editor::tests::CompareBitmapToBitmap(
+          actual, reference.takeSnapshot(),
+          "stop_refusal_matches_cpu_" + std::string(orderCase.label),
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+/// A draw the frame's geometry budget refuses keeps the draws before it too: a solid rect, then a
+/// path with more encoded items than the lowered frame limit leaves, then another rect. The frame
+/// must equal the unbounded rendering of the first rect alone.
+TEST_F(RendererGeodeTest, DrawsBeforeAGeometryRefusalAreKept) {
+  std::string wave = "M0,24";
+  for (int i = 1; i <= 120; ++i) {
+    wave += " Q" + std::to_string(i - 0.5) + "," + std::to_string(i % 2 == 0 ? 4 : 44) + " " +
+            std::to_string(i) + ",24";
+  }
+  const std::string before = R"svg(<rect width="60" height="48" fill="#d02020"/>)svg";
+  const std::string source = GradientTestDocument(
+      "",
+      before + R"svg(<path d=")svg" + wave +
+          R"svg( V48 H0 Z" fill="#2020d0"/><rect x="100" width="28" height="48" fill="#208020"/>)svg");
+  std::optional<SVGDocument> document;
+  std::optional<SVGDocument> prefixDocument;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+  ASSERT_NO_FATAL_FAILURE(
+      ParseDocumentWithoutWarnings(GradientTestDocument("", before), prefixDocument));
+  RendererGeode renderer;
+  renderer.setGeometryBudgetForTesting(geode::GeodeFrameGeometryBudget::kMaximumDraws, 64u,
+                                       geode::GeodeFrameGeometryBudget::kMaximumRetainedBytes,
+                                       geode::GeodeDocumentGeometryBudget::kMaximumCacheBytes,
+                                       geode::GeodeDocumentGeometryBudget::kMaximumResidentBytes);
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected) << "Premise: the wave is refused";
+  RendererGeode unbounded;
+  unbounded.draw(*prefixDocument);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), unbounded.takeSnapshot(),
+                                       "geometry_refusal_keeps_earlier_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// Every surface the renderer opens while an expanded filter layer is active has the layer's
 /// extent: a group opacity layer, a mix-blend-mode layer and its backdrop, a mask and its content,
 /// a nested filter, and a clip mask, including one opened while drawing a mask's content.
