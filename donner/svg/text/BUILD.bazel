@@ -83,6 +83,8 @@ donner_cc_library(
     }),
     visibility = ["//visibility:public"],
     deps = ["//donner/base:packaged_resource"],
+    # Compiles with the private text tier macros DONNER_TEXT_ENABLED and DONNER_TEXT_FULL.
+    variant_neutral = False,
 )
 
 donner_cc_test(
@@ -145,6 +147,8 @@ donner_cc_library(
         "//donner/svg/resources:font_manager",
         "@stb//:truetype",
     ],
+    # Compiles with the private text tier macros DONNER_TEXT_ENABLED and DONNER_TEXT_FULL.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -218,6 +222,8 @@ donner_cc_library(
         "//donner/svg/components/text:text_system",
         "//donner/svg/resources:font_manager",
     ],
+    # Compiles with the private text tier macros DONNER_TEXT_ENABLED and DONNER_TEXT_FULL.
+    variant_neutral = False,
 )
 
 configured_dependency_audit_test(
@@ -261,6 +267,8 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg/resources:font_manager",
     ],
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_test(

@@ -15,4 +15,6 @@ donner_cc_library(
         "//donner/svg/components",
         "//donner/svg/components/style:components",
     ],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
 )

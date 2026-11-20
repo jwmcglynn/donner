@@ -270,6 +270,8 @@ donner_cc_library(
         "//donner/svg/text:text_tier",
         "@com_google_gtest//:gtest",
     ],
+    # Compatible only in the wgpu reference configuration, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -305,6 +307,8 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
     ],
+    # Sees the text-only placed text geometry headers through its deps only in the text tiers.
+    variant_neutral = False,
 )
 
 # Same image-comparison source and golden rules as the native fixture, but with only the explicit
@@ -339,6 +343,8 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
     ],
+    # Compatible only in the wgpu reference configuration, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 donner_cc_test(
@@ -1681,6 +1687,8 @@ donner_cc_library(
     ],
     # The translation unit registers GoogleTest cases through static initializers.
     alwayslink = True,
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 [donner_cc_test(
@@ -2095,6 +2103,8 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@picosha2",
     ],
+    # Sees the text-only placed text geometry headers through its deps only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_binary(
@@ -2247,6 +2257,8 @@ donner_cc_library(
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
     ],
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_test(
@@ -2365,6 +2377,8 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -2380,6 +2394,8 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
 )
 
 # Retained render-tree updates: every frame of a DOM edit sequence must match the full rebuild of

@@ -108,4 +108,6 @@ donner_cc_library(
     # discards AnimationSystem.o and the reference goes undefined. lld tolerates this via
     # iterative archive resolution; gold does not. Force the object in via whole-archive.
     alwayslink = True,
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )

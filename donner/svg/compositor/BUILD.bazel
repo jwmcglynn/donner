@@ -98,6 +98,8 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_interface",
     ],
+    # Sees the text-only placed text geometry headers through its deps only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_test(

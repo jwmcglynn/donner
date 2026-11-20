@@ -146,6 +146,8 @@ donner_cc_library(
         "//donner/svg/parser",
         "@com_google_gtest//:gtest",
     ],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -160,4 +162,6 @@ donner_cc_library(
         "//donner/svg/components/resources:resource_manager_context",
         "@com_google_gtest//:gtest",
     ],
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )

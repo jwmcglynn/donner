@@ -146,6 +146,8 @@ donner_cc_library(
         "//donner/svg/resources:font_catalog_types",
         "//donner/svg/resources:font_manager",
     ],
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -168,6 +170,8 @@ donner_cc_library(
         "//donner/svg/components/text:text_invalidation",
         "//donner/svg/graph",
     ],
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_library(

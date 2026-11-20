@@ -209,6 +209,7 @@ donner_cc_library(
 
 svg_core_audit_text_dependencies_test(
     name = "svg_core_audit_text_dependencies_test",
+    compiled_core = ":_svg_element_impl_neutral_compile",
     core = ":svg_element_impl",
 )
 

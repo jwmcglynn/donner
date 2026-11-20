@@ -3,6 +3,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+load("//build_defs:variant_settings.bzl", "variant_transition")
 
 _TEXT = "//donner/svg/renderer:text"
 _FULL = "//donner/svg/renderer:text_full"
@@ -14,7 +15,7 @@ def _tiers_impl(_settings, _attr):
         "full": {_TEXT: True, _FULL: True},
     }
 
-_tiers = transition(implementation = _tiers_impl, inputs = [], outputs = [_TEXT, _FULL])
+_tiers = variant_transition(implementation = _tiers_impl, inputs = [], outputs = [_TEXT, _FULL])
 
 _Compiles = provider(fields = ["actions", "inputs"])
 
@@ -88,14 +89,17 @@ _compile_inputs_test = unittest.make(
     },
 )
 
-def svg_core_audit_text_dependencies_test(name, core):
+def svg_core_audit_text_dependencies_test(name, core, compiled_core):
     """Checks the element compile actions and implementation dependency boundary in each tier.
 
     Args:
       name: Name of the cross-tier test. Dependency audits prefix it with their tier.
-      core: The C++ target that compiles the common SVG element sources.
+      core: The C++ target that provides the common SVG element implementations.
+      compiled_core: The target that compiles their sources in every configuration. For a
+        variant_neutral library that is its neutral compile, since the library itself may link
+        objects compiled elsewhere.
     """
-    _compile_inputs_test(name = name, core = core, size = "small")
+    _compile_inputs_test(name = name, core = compiled_core, size = "small")
 
     # Stable declaration targets are allowed. The linked system implementations
     # belong to the public facade, even if they happen to expose identical flags.
