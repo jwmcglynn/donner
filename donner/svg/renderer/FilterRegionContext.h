@@ -317,6 +317,97 @@ inline const components::FilterNode* FilterFirstInputNode(const components::Filt
   return &graph.nodes[index - 1];
 }
 
+/// Whether \p node is a Gaussian blur or drop shadow. @param node Filter node.
+inline bool IsBlurFilterNode(const components::FilterNode& node) {
+  return std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
+         std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
+}
+
+/// Whether \p node may run on the transformed path's local raster: a blur, drop shadow, offset or
+/// merge without a primitive subregion that reads SourceGraphic, SourceAlpha or earlier results.
+/// @param node Filter node.
+inline bool IsTransformedBlurPathNode(const components::FilterNode& node) {
+  using namespace components;
+  const bool admitted = IsBlurFilterNode(node) ||
+                        std::holds_alternative<filter_primitive::Offset>(node.primitive) ||
+                        std::holds_alternative<filter_primitive::Merge>(node.primitive);
+  if (!admitted || node.hasExplicitRegion() || node.hasAnimatedRegion()) {
+    return false;
+  }
+  return std::none_of(node.inputs.begin(), node.inputs.end(), [](const FilterInput& input) {
+    const auto* standard = std::get_if<FilterStandardInput>(&input.value);
+    return standard && *standard != FilterStandardInput::SourceGraphic &&
+           *standard != FilterStandardInput::SourceAlpha;
+  });
+}
+
+/**
+ * Whether \p graph may run on the transformed path's local raster, whose axes are the filter's
+ * user axes scaled to device resolution, so a blur keeps its user-space shape under rotation or
+ * skew. Eligible graphs use user-space primitive units, contain at least one blur, and are built
+ * only from nodes \ref IsTransformedBlurPathNode admits.
+ *
+ * @param graph Filter graph.
+ */
+inline bool IsEligibleForTransformedBlurPath(const components::FilterGraph& graph) {
+  return !graph.nodes.empty() && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
+         std::all_of(graph.nodes.begin(), graph.nodes.end(), IsTransformedBlurPathNode) &&
+         std::any_of(graph.nodes.begin(), graph.nodes.end(), IsBlurFilterNode);
+}
+
+/// Whether any blur or drop shadow of \p graph has unequal X and Y deviations. @param graph Graph.
+inline bool GraphHasAnisotropicBlur(const components::FilterGraph& graph) {
+  using namespace components;
+  const auto anisotropic = [](const auto& blur) {
+    return !NearEquals(blur.stdDeviationX, blur.stdDeviationY, 1e-6);
+  };
+  for (const FilterNode& node : graph.nodes) {
+    if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive);
+        blur && anisotropic(*blur)) {
+      return true;
+    }
+    if (const auto* shadow = std::get_if<filter_primitive::DropShadow>(&node.primitive);
+        shadow && anisotropic(*shadow)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether an eligible graph must use the local raster: always under skew, and under rotation when
+ * a blur is anisotropic, since a device-axis blur cannot reproduce either shape.
+ *
+ * @param graph Filter graph.
+ * @param deviceFromFilter Filter user space to device pixels.
+ */
+inline bool ShouldUseTransformedBlurPath(const components::FilterGraph& graph,
+                                         const Transform2d& deviceFromFilter) {
+  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
+  if (!NearZero(xAxis.x * yAxis.x + xAxis.y * yAxis.y, 1e-6)) {
+    return true;
+  }
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  return hasRotation && GraphHasAnisotropicBlur(graph);
+}
+
+/// User-space padding of the local raster: 3 sigma + 1 for the largest blur deviation.
+/// @param graph Filter graph.
+inline double ComputeTransformedBlurPadding(const components::FilterGraph& graph) {
+  using namespace components;
+  double maxSigma = 0.0;
+  for (const FilterNode& node : graph.nodes) {
+    if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
+      maxSigma = std::max({maxSigma, blur->stdDeviationX, blur->stdDeviationY});
+    } else if (const auto* shadow = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
+      maxSigma = std::max({maxSigma, shadow->stdDeviationX, shadow->stdDeviationY});
+    }
+  }
+  return maxSigma * 3.0 + 1.0;
+}
+
 /// Finish a device reach: one more pixel covers rounding at the reach's edge.
 /// @param reach Accumulated device reach per axis.
 inline Vector2d FinishFilterReach(Vector2d reach) {

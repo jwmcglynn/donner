@@ -344,122 +344,6 @@ std::optional<uint32_t> checkedFilterRasterDimension(double value) {
   return static_cast<uint32_t>(std::max(1.0, std::ceil(value)));
 }
 
-// ---------------------------------------------------------------------------
-// Transformed-blur path detection (ported faithfully from
-// RendererTinySkia.cc's `isEligibleForTransformedBlurPath` /
-// `graphHasAnisotropicBlur` / `shouldUseTransformedBlurPath` /
-// `computeBlurPadding`). Keep in lockstep with tiny-skia - these decide when a
-// blur under a rotated/skewed CTM must be rasterized in filter-local space so
-// the (anisotropic) blur is oriented in the element's local axes rather than
-// device axes. tiny-skia is the parity reference for the result.
-// ---------------------------------------------------------------------------
-
-/// Eligible only for a linear chain of blur/offset primitives in user space (no
-/// named results, subregions, multi-input, OBB units, or other primitive types).
-bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
-  if (filterGraph.nodes.empty()) {
-    return false;
-  }
-  if (filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-    return false;
-  }
-
-  bool hasBlur = false;
-  for (const components::FilterNode& node : filterGraph.nodes) {
-    const bool isBlur =
-        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
-        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
-    const bool isOffset =
-        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
-    if (!isBlur && !isOffset) {
-      return false;
-    }
-    hasBlur |= isBlur;
-
-    if (node.result.has_value()) {
-      return false;  // No named result reuse.
-    }
-    if (node.hasExplicitRegion() || node.hasAnimatedRegion()) {
-      return false;  // No primitive subregions.
-    }
-    if (node.inputs.size() > 1) {
-      return false;  // Linear chain only.
-    }
-    if (node.inputs.size() == 1) {
-      const auto& input = node.inputs[0];
-      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
-        // OK
-      } else if (const auto* stdInput =
-                     std::get_if<components::FilterStandardInput>(&input.value)) {
-        if (*stdInput != components::FilterStandardInput::SourceGraphic) {
-          return false;
-        }
-      } else {
-        return false;  // Named input - not eligible.
-      }
-    }
-  }
-
-  return hasBlur;
-}
-
-/// True if any blur/drop-shadow has stdDeviationX != stdDeviationY.
-bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
-  for (const auto& node : filterGraph.nodes) {
-    bool anisotropic = false;
-    std::visit(
-        [&](const auto& prim) {
-          using T = std::decay_t<decltype(prim)>;
-          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
-            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
-          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
-            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
-          }
-        },
-        node.primitive);
-    if (anisotropic) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/// True when the CTM is skewed (always needs the local raster), or rotated with
-/// an anisotropic blur (whose orientation a device-axis blur can't reproduce).
-bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
-                                  const Transform2d& deviceFromFilter) {
-  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
-  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
-  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
-  if (!NearZero(dot, 1e-6)) {
-    return true;  // Skew (non-orthogonal axes).
-  }
-  const bool hasRotation =
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
-  if (!hasRotation) {
-    return false;
-  }
-  return graphHasAnisotropicBlur(filterGraph);
-}
-
-/// 3σ + 1 padding (in user-space units) for the maximum blur stdDeviation.
-double computeBlurPadding(const components::FilterGraph& filterGraph) {
-  double maxSigma = 0.0;
-  for (const auto& node : filterGraph.nodes) {
-    std::visit(
-        [&](const auto& prim) {
-          using T = std::decay_t<decltype(prim)>;
-          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
-            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
-          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
-            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
-          }
-        },
-        node.primitive);
-  }
-  return maxSigma * 3.0 + 1.0;
-}
-
 /// WebGPU requires bytesPerRow alignment to 256 when copying textures to
 /// buffers. Delegates to the shared helper so the renderer's map-range math
 /// can never diverge from the readback-buffer sizing in GeodeDevice: a
@@ -1366,8 +1250,8 @@ bool ShouldPlanGeodeLocalRaster(const components::FilterGraph& filterGraph,
       NearZero(deviceFromFilter.determinant(), 1e-12)) {
     return false;
   }
-  return isEligibleForTransformedBlurPath(filterGraph) &&
-         (shouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
+  return IsEligibleForTransformedBlurPath(filterGraph) &&
+         (ShouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
 }
 
 struct GeodeLocalRasterGeometry {
@@ -1389,7 +1273,7 @@ std::optional<GeodeLocalRasterGeometry> ComputeGeodeLocalRasterGeometry(
       std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
   const double scaleY =
       std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
-  const double blurPadding = computeBlurPadding(filterGraph);
+  const double blurPadding = ComputeTransformedBlurPadding(filterGraph);
   const Box2d paddedRegion(filterRegion->topLeft - Vector2d(blurPadding, blurPadding),
                            filterRegion->bottomRight + Vector2d(blurPadding, blurPadding));
   const std::optional<uint32_t> width = checkedFilterRasterDimension(paddedRegion.width() * scaleX);

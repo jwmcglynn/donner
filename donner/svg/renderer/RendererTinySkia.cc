@@ -1580,11 +1580,6 @@ std::optional<int> CheckedFilterRasterDimension(double value) {
   return std::max(1, static_cast<int>(std::ceil(value)));
 }
 
-bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph);
-bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
-                                  const Transform2d& deviceFromFilter);
-double computeBlurPadding(const components::FilterGraph& filterGraph);
-
 bool CanUseLocalFilterRaster(const components::FilterGraph& filterGraph,
                              const std::optional<Box2d>& filterRegion,
                              const Transform2d& deviceFromFilter, bool fullExecutionFits) {
@@ -1592,8 +1587,8 @@ bool CanUseLocalFilterRaster(const components::FilterGraph& filterGraph,
       NearZero(deviceFromFilter.determinant())) {
     return false;
   }
-  return isEligibleForTransformedBlurPath(filterGraph) &&
-         (shouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
+  return IsEligibleForTransformedBlurPath(filterGraph) &&
+         (ShouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
 }
 
 struct LocalFilterRasterGeometry {
@@ -1615,7 +1610,7 @@ std::optional<LocalFilterRasterGeometry> ComputeLocalFilterRasterGeometry(
       std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
   const double scaleY =
       std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
-  const double blurPadding = computeBlurPadding(filterGraph);
+  const double blurPadding = ComputeTransformedBlurPadding(filterGraph);
   const Box2d paddedRegion(filterRegion->topLeft - Vector2d(blurPadding, blurPadding),
                            filterRegion->bottomRight + Vector2d(blurPadding, blurPadding));
   const std::optional<int> width = CheckedFilterRasterDimension(paddedRegion.width() * scaleX);
@@ -1649,138 +1644,6 @@ std::optional<std::uint64_t> ComputeLocalFilterPixels(const components::FilterGr
   return pixels;
 }
 
-/**
- * Returns true if the filter graph is a linear chain of single-input blur-family primitives
- * eligible for the transformed local-raster path.
- *
- * Eligible graphs have:
- * - Only GaussianBlur, Offset, or DropShadow primitives
- * - Each node has at most one input, and that input is Previous or implicit SourceGraphic
- * - No named `result` attributes
- * - No primitive subregions (x/y/width/height unset on every node)
- * - primitiveUnits is not objectBoundingBox
- */
-bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
-  if (filterGraph.nodes.empty()) {
-    return false;
-  }
-
-  if (filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-    return false;
-  }
-
-  bool hasBlur = false;
-
-  for (std::size_t i = 0; i < filterGraph.nodes.size(); ++i) {
-    const components::FilterNode& node = filterGraph.nodes[i];
-
-    // Check primitive type: only GaussianBlur, Offset, DropShadow allowed.
-    const bool isBlur =
-        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
-        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
-    const bool isOffset =
-        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
-    if (!isBlur && !isOffset) {
-      return false;
-    }
-    hasBlur |= isBlur;
-
-    // No named result reuse.
-    if (node.result.has_value()) {
-      return false;
-    }
-
-    // No primitive subregions.
-    if (node.hasExplicitRegion() || node.hasAnimatedRegion()) {
-      return false;
-    }
-
-    // Linear chain: each node has 0 or 1 inputs, and that input is Previous or SourceGraphic
-    // (for the first node).
-    if (node.inputs.size() > 1) {
-      return false;
-    }
-
-    if (node.inputs.size() == 1) {
-      const auto& input = node.inputs[0];
-      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
-        // OK
-      } else if (const auto* stdInput =
-                     std::get_if<components::FilterStandardInput>(&input.value)) {
-        if (*stdInput != components::FilterStandardInput::SourceGraphic) {
-          return false;
-        }
-      } else {
-        // Named input - not eligible.
-        return false;
-      }
-    }
-  }
-
-  // Must have at least one blur primitive to benefit from the transformed path.
-  return hasBlur;
-}
-
-bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
-  for (const auto& node : filterGraph.nodes) {
-    bool anisotropic = false;
-    std::visit(
-        [&](const auto& prim) {
-          using T = std::decay_t<decltype(prim)>;
-          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
-            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
-          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
-            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
-          }
-        },
-        node.primitive);
-    if (anisotropic) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
-                                  const Transform2d& deviceFromFilter) {
-  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
-  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
-  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
-  const bool hasSkew = !NearZero(dot, 1e-6);
-  if (hasSkew) {
-    return true;
-  }
-
-  const bool hasRotation =
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
-  if (!hasRotation) {
-    return false;
-  }
-
-  return graphHasAnisotropicBlur(filterGraph);
-}
-
-/**
- * Computes the required blur padding in user-space units for the transformed local-raster path.
- * Returns 3σ + 1 for the maximum stdDeviation across all blur primitives.
- */
-double computeBlurPadding(const components::FilterGraph& filterGraph) {
-  double maxSigma = 0.0;
-  for (const auto& node : filterGraph.nodes) {
-    std::visit(
-        [&](const auto& prim) {
-          using T = std::decay_t<decltype(prim)>;
-          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
-            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
-          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
-            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
-          }
-        },
-        node.primitive);
-  }
-  return maxSigma * 3.0 + 1.0;
-}
 #endif  // DONNER_FILTERS_ENABLED
 
 }  // namespace

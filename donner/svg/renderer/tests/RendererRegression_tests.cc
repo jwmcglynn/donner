@@ -1184,6 +1184,35 @@ TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredW
       "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
 }
 
+// Under a skew a blur keeps its user-space shape by running on a raster aligned with the filter's
+// axes. A blur read through a named result and a merge, or of SourceAlpha, must take the same path
+// as the plain blur: merging one input reproduces it, and SourceAlpha of an opaque rect is the
+// same rect in black.
+TEST_F(RendererRegressionTests, SkewedBlurThroughMergeOrSourceAlphaMatchesThePlainBlur) {
+  const auto render = [](std::string_view primitives, std::string_view fill) {
+    const std::string body =
+        R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-40" y="0" width="140" height="64">)svg" +
+        std::string(primitives) +
+        R"svg(</filter><g transform="skewX(40)"><rect x="8" y="16" width="24" height="32" fill=")svg" +
+        std::string(fill) + R"svg(" filter="url(#f)"/></g>)svg";
+    SVGDocument document = instantiateSubtree(body, {}, Vector2i(96, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  constexpr std::string_view kBlur = R"svg(<feGaussianBlur stdDeviation="3 1"/>)svg";
+  constexpr std::string_view kBlurThroughMerge =
+      R"svg(<feGaussianBlur stdDeviation="3 1" result="b"/>
+            <feMerge><feMergeNode in="b"/></feMerge>)svg";
+  const RendererBitmap plain = render(kBlur, "seagreen");
+  ExpectVisibleBitmap(plain, "skewed_plain_blur_visible");
+  editor::tests::CompareBitmapToBitmap(render(kBlurThroughMerge, "seagreen"), plain,
+                                       "skewed_blur_through_merge",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      render(R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 1"/>)svg", "seagreen"),
+      render(kBlur, "black"), "skewed_source_alpha_blur",
+      editor::tests::PixelmatchIdentityParams());
+}
+
 /// Group layers drawn inside an feOffset filter whose region starts above and left of the canvas:
 /// an opacity group, a mix-blend-mode group and an isolation group over a backdrop, a mask, a clip
 /// path, a nested filter, and a nested filter whose own region starts further out. The filter
