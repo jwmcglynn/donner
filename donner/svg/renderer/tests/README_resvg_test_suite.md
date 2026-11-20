@@ -152,11 +152,13 @@ image, and it does not change the pixel budget. The test log reports how many pi
 accepted and their largest alpha difference; the diff image draws them in blue. A row whose Geode
 comparison passes without the rule leaves the list.
 
-The Geode corpus lane renders the simple text tier only, so the list holds the rows that need the
-rule there. Some full-shaping rows (bidirectional, Arabic and vertical text) also fail the default
-budget on Geode without the rule and pass with it, but no Geode full-shaping corpus lane exists, so
-they are not listed. Adding such a lane means measuring its rows, opting in the ones that need the rule, and
-teaching `parity_report.py` that lane's capabilities.
+The Geode corpus lane (`resvg_test_suite_geode`) renders the simple text tier only, so the list
+holds the rows that need the rule there. Some full-shaping rows (bidirectional, Arabic and vertical
+text) also fail the default budget on Geode without the rule and pass with it, but the resvg corpus
+has no Geode full-shaping wrapper, so they are not listed. The `*_text_full` unit test variants do
+run on Geode with full shaping; only the corpus lacks such a lane. Adding one means measuring its
+rows, opting in the ones that need the rule, and teaching `parity_report.py` that lane's
+capabilities.
 
 ### Geode gates {#ResvgGeodeGates}
 
@@ -172,8 +174,8 @@ rule.
 `PIXEL_BUDGET_ALLOWLIST` (1,200 px for the two `text/font-variant` rows, 400 px for
 `text/textPath/closed-path`). Those budgets are not approved for the Geode lane, and comparing
 would apply budgets in the hundreds to it. On the full shaping tier the two font-variant rows
-measure 0 px on Geode, so the gate can narrow to `closed-path` once a Geode full-shaping lane
-exists.
+measure 0 px on Geode, so the gate can narrow to `closed-path` once a Geode full-shaping corpus
+lane exists.
 
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.

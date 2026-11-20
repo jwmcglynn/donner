@@ -87,7 +87,8 @@ simple text tier. Rows that exceed their Geode budget only because of the refere
 edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), and the rows in
 `GEODE_GATE_ALLOWLIST` disable their Geode comparison with a recorded reason; both lists are in
 `parity_report.py` and described in `README_resvg_test_suite.md`. Full-shaping rows stay
-capability-gated on Geode.
+capability-gated on Geode because the corpus has no Geode full-shaping wrapper; the `*_text_full`
+unit test variants run on Geode with full shaping.
 
 <!-- BEGIN RESVG INVENTORY -->
 
