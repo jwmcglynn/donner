@@ -467,6 +467,79 @@ filegroup(
     ]),
 )
 
+# Fixtures outside tests/text/ that exercise text directly or through an embedded or linked SVG.
+_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = [
+    "tests/filters/filter-functions/color-adjust-functions-0percent.svg",
+    "tests/filters/filter-functions/color-adjust-functions-100percent.svg",
+    "tests/filters/filter-functions/color-adjust-functions-2.svg",
+    "tests/filters/filter-functions/color-adjust-functions-200percent.svg",
+    "tests/filters/filter-functions/color-adjust-functions-50percent.svg",
+    "tests/filters/filter-functions/color-adjust-functions-default-value.svg",
+    "tests/filters/filter-functions/color-adjust-functions-negative.svg",
+    "tests/masking/clipPath/clip-path-with-transform-on-text.svg",
+    "tests/masking/clipPath/clipping-with-complex-text-1.svg",
+    "tests/masking/clipPath/clipping-with-complex-text-2.svg",
+    "tests/masking/clipPath/clipping-with-complex-text-and-clip-rule.svg",
+    "tests/masking/clipPath/clipping-with-text.svg",
+    "tests/paint-servers/pattern/text-child.svg",
+    "tests/painting/context/with-text.svg",
+    "tests/painting/display/none-on-tref.svg",
+    "tests/painting/display/none-on-tspan-1.svg",
+    "tests/painting/display/none-on-tspan-2.svg",
+    "tests/painting/fill-opacity/on-text.svg",
+    "tests/painting/fill/linear-gradient-on-text.svg",
+    "tests/painting/fill/pattern-on-text.svg",
+    "tests/painting/fill/radial-gradient-on-text.svg",
+    "tests/painting/marker/marker-on-text.svg",
+    "tests/painting/marker/with-a-text-child.svg",
+    "tests/painting/paint-order/on-text.svg",
+    "tests/painting/paint-order/on-tspan.svg",
+    "tests/painting/shape-rendering/optimizeSpeed-on-text.svg",
+    "tests/painting/stroke-opacity/on-text.svg",
+    "tests/painting/stroke/linear-gradient-on-text.svg",
+    "tests/painting/stroke/pattern-on-text.svg",
+    "tests/painting/stroke/radial-gradient-on-text.svg",
+    "tests/painting/visibility/bbox-impact-3.svg",
+    "tests/painting/visibility/collapse-on-tspan.svg",
+    "tests/painting/visibility/hidden-on-tspan.svg",
+    "tests/structure/a/inside-text.svg",
+    "tests/structure/a/inside-tspan.svg",
+    "tests/structure/a/on-text.svg",
+    "tests/structure/a/on-tspan.svg",
+    "tests/structure/defs/style-inheritance-on-text.svg",
+    "tests/structure/image/embedded-svg-with-text.svg",
+    "tests/structure/svg/mixed-namespaces.svg",
+    "tests/structure/svg/not-UTF-8-encoding.svg",
+    "tests/structure/systemLanguage/on-tspan.svg",
+    "tests/structure/transform-origin/on-text-path.svg",
+    "tests/structure/transform-origin/on-text.svg",
+    "tests/structure/use/xlink-to-an-external-file.svg",
+]
+
+_TEXT_CASE_PATTERNS = [
+    "tests/text/**/*.svg",
+    "tests/text/**/*.png",
+] + _TEXT_CASES_OUTSIDE_TEXT_DIRECTORY + [
+    path[:-4] + ".png"
+    for path in _TEXT_CASES_OUTSIDE_TEXT_DIRECTORY
+]
+
+filegroup(
+    name = "tests_with_text",
+    srcs = glob(_TEXT_CASE_PATTERNS),
+)
+
+filegroup(
+    name = "tests_without_text",
+    srcs = glob(
+        [
+            "tests/**/*.svg",
+            "tests/**/*.png",
+        ],
+        exclude = _TEXT_CASE_PATTERNS,
+    ),
+)
+
 filegroup(
     name = "resources",
     srcs = glob(
