@@ -7,7 +7,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cctype>
 #include <cstdint>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <regex>
@@ -34,16 +36,19 @@ using svg::compositor::InteractionHint;
 struct HeldFrame {
   double x = 0.0;                     //!< Crown face translation the frame renders.
   BrowserOwnerRoundTrips roundTrips;  //!< Round trips the frame makes today.
+  /// Deferred calls held after the frame's last round trip, sent by the frame-end flush.
+  std::size_t trailingDeferredCalls = 0;
 };
 
 /// The recorded baseline. A change that lowers these updates them; one that raises them must
 /// explain why. Ownership, loss and completion queries are absent: the browser side publishes
 /// that state, so a held frame reads it without a round trip. Buffer writes, bind group
-/// construction and destruction are absent too: they ride along with the next round trip.
+/// construction and destruction are absent too: they ride along with the next round trip, and the
+/// 19 still held after a frame's last round trip go in one more batch when the worker parks.
 constexpr HeldFrame kHeldFrames[] = {
-    {12.0, {.resourceCreation = 45, .resourceSharing = 2, .commandBatch = 5, .queueSubmit = 3}},
-    {24.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 5, .queueSubmit = 3}},
-    {36.0, {.resourceCreation = 35, .resourceSharing = 2, .commandBatch = 5, .queueSubmit = 3}},
+    {12.0, {.resourceCreation = 45, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    {24.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    {36.0, {.resourceCreation = 35, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {
@@ -87,6 +92,11 @@ TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseli
     ASSERT_EQ(after.fastPathFrames - before.fastPathFrames, 1u)
         << "the held move must be a fast-path frame for its round trips to be the fast path's";
     ASSERT_FALSE(context.device->isDeviceLost());
+    // Calls still held after the frame's last round trip go in one round trip of their own when
+    // the worker parks, rather than waiting for the next frame.
+    std::cout << "held move x=" << frame.x
+              << " trailing deferred calls=" << context.trailingDeferredCalls() << "\n";
+    EXPECT_EQ(context.trailingDeferredCalls(), frame.trailingDeferredCalls);
     EXPECT_EQ(roundTrips, frame.roundTrips);
   }
 }
@@ -94,21 +104,25 @@ TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseli
 /// How the browser bridge dispatches one of its methods, read from its source.
 struct BridgeDispatch {
   std::string kind = "Other";  //!< `BrowserGpuOperationKind` its round trip counts as.
-  bool deferred = false;       //!< Whether it defers the call to the thread's next round trip.
-  bool recorded = false;       //!< Whether it records into, or sends, the command batch.
+  /// The `BrowserDeferredOperation` it defers, or empty for none.
+  std::string deferredAs;
+  bool recorded = false;  //!< Whether it records into, or sends, the command batch.
 };
 
-/// Each status-returning method of the browser bridge and how its body dispatches.
+/// Each member function of the browser bridge, of any return type, and how its body dispatches.
 std::map<std::string, BridgeDispatch> ReadBridgeDispatch(const std::string& source) {
   std::map<std::string, BridgeDispatch> methods;
-  const std::regex method(R"(\nBridgeStatus EmscriptenBrowserBridge::(\w+)\()");
+  const std::regex method(R"(\n[^\n(]* ?EmscriptenBrowserBridge::(\w+)\()");
   const std::regex kind(R"(BrowserGpuOperationKind::(\w+))");
+  const std::regex deferredAs(R"(deferCall\(\s*BrowserDeferredOperation::(\w+))");
   for (std::sregex_iterator it(source.begin(), source.end(), method), end; it != end; ++it) {
     const std::size_t bodyStart = static_cast<std::size_t>(it->position(0));
     const std::size_t bodyEnd = source.find("\n}\n", bodyStart);
     const std::string body = source.substr(bodyStart, bodyEnd - bodyStart);
     BridgeDispatch dispatch;
-    dispatch.deferred = body.find("deferCall(") != std::string::npos;
+    if (std::smatch match; std::regex_search(body, match, deferredAs)) {
+      dispatch.deferredAs = match[1];
+    }
     if (std::smatch match; std::regex_search(body, match, kind)) {
       dispatch.kind = match[1];
     }
@@ -130,22 +144,35 @@ TEST(BrowserOwnerRoundTripTest, CountModelMatchesTheBrowserBridgesDispatch) {
   std::map<std::string, BridgeDispatch> methods = ReadBridgeDispatch(source.contents);
   ASSERT_GT(methods.size(), 30u) << "the bridge source no longer reads as expected";
 
+  // The bridge's own list of deferred operations names the method that defers each, and the
+  // count reads deferral from that list, so the two cannot disagree on which calls are held.
+  methods.erase("deferCall");
   for (const geode::tests::BrowserOperationModel& model : geode::tests::BrowserOperationModels()) {
     SCOPED_TRACE(std::string(model.operation));
     const auto found = methods.find(std::string(model.operation));
     ASSERT_NE(found, methods.end()) << "the bridge has no such method";
-    EXPECT_EQ(found->second.deferred, model.deferred);
-    if (!model.deferred) {
+    if (model.deferred) {
+      std::string enumerator(model.operation);
+      enumerator[0] = static_cast<char>(std::toupper(enumerator[0]));
+      EXPECT_EQ(found->second.deferredAs, enumerator) << "defers as its own operation";
+    } else {
+      EXPECT_EQ(found->second.deferredAs, "");
       EXPECT_EQ(found->second.kind, model.kind);
     }
     methods.erase(found);
   }
   for (const auto& [name, dispatch] : methods) {
     SCOPED_TRACE(name);
+    EXPECT_EQ(dispatch.deferredAs, "") << "a deferred operation the count does not model";
     if (dispatch.recorded) {
       continue;
     }
-    EXPECT_FALSE(dispatch.deferred) << "a deferred operation the count does not model";
+    // Query kinds are counted from the fake bridge's own query counts, not from recorded lines;
+    // starting publication is one such query, made once when a device is created.
+    if (dispatch.kind == "OwnershipQuery" || dispatch.kind == "DeviceLossQuery" ||
+        dispatch.kind == "CompletionQuery") {
+      continue;
+    }
     EXPECT_EQ(dispatch.kind, "Other") << "a direct operation the count would misfile as Other";
   }
 }

@@ -5,104 +5,222 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include "donner/gpu/browser/tests/FakeOwnerChannel.h"
 
 namespace donner::gpu::browser {
 namespace {
 
 using testing::ElementsAre;
 
-/// Runs a round trip's callable at once, as the owner does when it executes the round trip.
-const auto kRunNow = [](auto&& callback) { callback(); };
-
 /// A held call that appends \p name to \p ran and answers \p status.
-BrowserDeferredCalls::Call Recording(std::vector<std::string>& ran, const char* name,
-                                     uint64_t objectId, BridgeStatus status = BridgeStatus::Success,
-                                     std::atomic<uint32_t>* sink = nullptr) {
-  return BrowserDeferredCalls::Call{name, objectId,
-                                    [&ran, name, status] {
-                                      ran.emplace_back(name);
-                                      return status;
-                                    },
-                                    sink};
+std::function<BridgeStatus()> Recording(std::vector<std::string>& ran, std::string name,
+                                        BridgeStatus status = BridgeStatus::Success) {
+  return [&ran, name = std::move(name), status] {
+    ran.push_back(name);
+    return status;
+  };
 }
 
 TEST(BrowserDeferredCalls, HeldCallsRunBeforeTheRoundTripThatCarriesThemInCallOrder) {
-  BrowserDeferredCalls deferred;
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  const auto origin = std::make_shared<BrowserDeferredOrigin>();
   std::vector<std::string> ran;
-  EXPECT_FALSE(deferred.add(Recording(ran, "writeBuffer", 1)));
-  EXPECT_FALSE(deferred.add(Recording(ran, "createBindGroup", 2)));
-  EXPECT_FALSE(deferred.add(Recording(ran, "destroyObject", 3)));
+  deferred.defer(origin, BrowserDeferredOperation::WriteBuffer, 1, Recording(ran, "write"));
+  deferred.defer(origin, BrowserDeferredOperation::CreateBindGroup, 2, Recording(ran, "group"));
+  deferred.defer(origin, BrowserDeferredOperation::DestroyObject, 3, Recording(ran, "destroy"));
+  EXPECT_TRUE(ran.empty()) << "held calls wait for a round trip";
+  EXPECT_EQ(channel.roundTrips(), 0u);
 
-  int roundTrips = 0;
-  const auto dispatch = [&](auto&& callback) {
-    ++roundTrips;
-    callback();
-  };
-  deferred.runAfter([&] { ran.emplace_back("submitCommandBuffers"); }, dispatch);
-  EXPECT_THAT(
-      ran, ElementsAre("writeBuffer", "createBindGroup", "destroyObject", "submitCommandBuffers"))
+  deferred.run([&] { ran.emplace_back("submit"); }, 10);
+  EXPECT_THAT(ran, ElementsAre("write", "group", "destroy", "submit"))
       << "a direct call runs after every call deferred before it";
-  EXPECT_EQ(roundTrips, 1) << "the held calls ride in the direct call's own round trip";
+  EXPECT_EQ(channel.roundTrips(), 1u) << "the held calls ride in the direct call's round trip";
+  EXPECT_EQ(channel.lastKind(), 10u);
   EXPECT_TRUE(deferred.empty());
 
-  deferred.runAfter([&] { ran.emplace_back("createTexture"); }, dispatch);
-  EXPECT_THAT(ran.back(), "createTexture");
-  EXPECT_EQ(ran.size(), 5u) << "a carried call runs once";
+  deferred.run([&] { ran.emplace_back("create"); }, 4);
+  EXPECT_THAT(ran, ElementsAre("write", "group", "destroy", "submit", "create"));
+  EXPECT_EQ(channel.roundTrips(), 2u);
 }
 
-TEST(BrowserDeferredCalls, EachKindsRefusalReachesTheDeviceThatMadeIt) {
-  for (const char* kind :
-       {"writeBuffer", "createBindGroup", "createBindGroupLayout", "destroyObject"}) {
-    SCOPED_TRACE(kind);
-    BrowserDeferredCalls deferred;
-    std::vector<std::string> ran;
-    std::atomic<uint32_t> refusingDevice{0};
-    std::atomic<uint32_t> otherDevice{0};
-    deferred.add(Recording(ran, "writeBuffer", 10, BridgeStatus::Success, &otherDevice));
-    deferred.add(Recording(ran, kind, 11, BridgeStatus::UnknownObject, &refusingDevice));
-    deferred.add(Recording(ran, "destroyObject", 12, BridgeStatus::Success, &otherDevice));
+TEST(BrowserDeferredCalls, WhereCallsDoNotCrossThreadsTheyRunAtOnce) {
+  FakeOwnerChannel channel;
+  channel.crosses = false;
+  BrowserDeferredCalls deferred(channel);
+  const auto origin = std::make_shared<BrowserDeferredOrigin>();
+  std::vector<std::string> ran;
+  EXPECT_EQ(deferred.defer(origin, BrowserDeferredOperation::WriteBuffer, 1,
+                           Recording(ran, "write", BridgeStatus::UnknownObject)),
+            BridgeStatus::UnknownObject)
+      << "on the owner, or without one, the call answers for itself";
+  EXPECT_THAT(ran, ElementsAre("write"));
+  EXPECT_TRUE(deferred.empty());
+  EXPECT_EQ(channel.roundTrips(), 0u);
+}
 
-    const BrowserDeferredCalls::Refusal refusal = deferred.runAfter([] {}, kRunNow);
-    EXPECT_EQ(ran.size(), 3u) << "a refusal does not stop the calls after it";
-    EXPECT_EQ(refusingDevice.load(), static_cast<uint32_t>(BridgeStatus::UnknownObject));
-    EXPECT_EQ(otherDevice.load(), static_cast<uint32_t>(BridgeStatus::Success))
-        << "no other device is charged with the refusal";
-    EXPECT_STREQ(refusal.operation, kind);
-    EXPECT_EQ(refusal.objectId, 11u) << "the diagnostic names the refused call's own object";
-    EXPECT_EQ(refusal.status, BridgeStatus::UnknownObject);
-    EXPECT_EQ(refusal.count, 1u);
+TEST(BrowserDeferredCalls, AFlushOfAnEmptyQueueMakesNoRoundTrip) {
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  deferred.flush();
+  EXPECT_EQ(channel.roundTrips(), 0u);
+  std::vector<std::string> ran;
+  deferred.defer(std::make_shared<BrowserDeferredOrigin>(), BrowserDeferredOperation::DestroyObject,
+                 1, Recording(ran, "destroy"));
+  deferred.flush();
+  EXPECT_THAT(ran, ElementsAre("destroy"));
+  EXPECT_EQ(channel.roundTrips(), 1u);
+  EXPECT_EQ(channel.lastKind(), BrowserDeferredCalls::kCommandBatchKind);
+}
+
+TEST(BrowserDeferredCalls, WriteAndBindGroupRefusalsMarkOnlyTheirOwnDevice) {
+  for (const BrowserDeferredOperation kind :
+       {BrowserDeferredOperation::WriteBuffer, BrowserDeferredOperation::CreateBindGroup,
+        BrowserDeferredOperation::CreateBindGroupLayout}) {
+    SCOPED_TRACE(std::string(BrowserDeferredOperationName(kind)));
+    FakeOwnerChannel channel;
+    BrowserDeferredCalls deferred(channel);
+    const auto refusing = std::make_shared<BrowserDeferredOrigin>();
+    const auto other = std::make_shared<BrowserDeferredOrigin>();
+    std::vector<std::string> ran;
+    deferred.defer(other, BrowserDeferredOperation::WriteBuffer, 10, Recording(ran, "a"));
+    deferred.defer(refusing, kind, 11, Recording(ran, "b", BridgeStatus::UnknownObject));
+    deferred.defer(other, BrowserDeferredOperation::DestroyObject, 12, Recording(ran, "c"));
+
+    const BrowserDeferredCalls::Report report = deferred.flush();
+    EXPECT_THAT(ran, ElementsAre("a", "b", "c")) << "a refusal does not stop the calls after it";
+    EXPECT_EQ(refusing->refusal.load(), static_cast<uint32_t>(BridgeStatus::UnknownObject));
+    EXPECT_EQ(other->refusal.load(), 0u) << "no other device is charged with the refusal";
+    EXPECT_EQ(report.operation, kind);
+    EXPECT_EQ(report.objectId, 11u) << "the diagnostic names the refused call's own object";
+    EXPECT_EQ(report.status, BridgeStatus::UnknownObject);
+    EXPECT_EQ(report.refused, 1u);
+  }
+}
+
+TEST(BrowserDeferredCalls, DestroyRefusalsAreCountedForDiagnosticsOnly) {
+  for (const BridgeStatus status :
+       {BridgeStatus::UnknownObject, BridgeStatus::WrongObjectKind, BridgeStatus::Failed}) {
+    FakeOwnerChannel channel;
+    BrowserDeferredCalls deferred(channel);
+    const auto origin = std::make_shared<BrowserDeferredOrigin>();
+    std::vector<std::string> ran;
+    deferred.defer(origin, BrowserDeferredOperation::DestroyObject, 5,
+                   Recording(ran, "destroy", status));
+    bool submitted = false;
+    const BrowserDeferredCalls::Report report =
+        deferred.run([&] { submitted = true; }, 10, origin.get());
+    EXPECT_EQ(origin->refusal.load(), 0u) << "a refused release does not make the device lost";
+    EXPECT_EQ(origin->destroyRefusals.load(), 1u);
+    EXPECT_EQ(report.refused, 1u);
+    EXPECT_TRUE(submitted) << "a refused release does not stop the device's own call";
+    EXPECT_FALSE(report.carriedCallSkipped);
   }
 }
 
 TEST(BrowserDeferredCalls, ADevicesFirstRefusalIsKept) {
-  BrowserDeferredCalls deferred;
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  const auto origin = std::make_shared<BrowserDeferredOrigin>();
   std::vector<std::string> ran;
-  std::atomic<uint32_t> device{0};
-  deferred.add(Recording(ran, "createBindGroup", 1, BridgeStatus::WrongObjectKind, &device));
-  deferred.add(Recording(ran, "writeBuffer", 2, BridgeStatus::DeviceLost, &device));
-  const BrowserDeferredCalls::Refusal refusal = deferred.runAfter([] {}, kRunNow);
-  EXPECT_EQ(device.load(), static_cast<uint32_t>(BridgeStatus::WrongObjectKind));
-  EXPECT_EQ(refusal.count, 2u);
+  deferred.defer(origin, BrowserDeferredOperation::CreateBindGroup, 1,
+                 Recording(ran, "group", BridgeStatus::WrongObjectKind));
+  deferred.defer(origin, BrowserDeferredOperation::WriteBuffer, 2,
+                 Recording(ran, "write", BridgeStatus::DeviceLost));
+  const BrowserDeferredCalls::Report report = deferred.flush();
+  EXPECT_EQ(origin->refusal.load(), static_cast<uint32_t>(BridgeStatus::WrongObjectKind));
+  EXPECT_EQ(report.refused, 2u);
+}
+
+TEST(BrowserDeferredCalls, ADevicesOwnCallDoesNotRunOverAWriteRefusedInTheSameTrip) {
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  const auto submitting = std::make_shared<BrowserDeferredOrigin>();
+  const auto other = std::make_shared<BrowserDeferredOrigin>();
+  std::vector<std::string> ran;
+  deferred.defer(submitting, BrowserDeferredOperation::WriteBuffer, 1,
+                 Recording(ran, "write", BridgeStatus::Failed));
+  BrowserDeferredCalls::Report report =
+      deferred.run([&] { ran.emplace_back("submit"); }, 10, submitting.get());
+  EXPECT_THAT(ran, ElementsAre("write")) << "the submission would run over stale contents";
+  EXPECT_TRUE(report.carriedCallSkipped);
+
+  // Another device's refusal does not stop this device's call.
+  ran.clear();
+  deferred.defer(other, BrowserDeferredOperation::WriteBuffer, 2,
+                 Recording(ran, "other write", BridgeStatus::Failed));
+  report = deferred.run([&] { ran.emplace_back("submit"); }, 10, submitting.get());
+  EXPECT_THAT(ran, ElementsAre("other write", "submit"));
+  EXPECT_FALSE(report.carriedCallSkipped);
 }
 
 TEST(BrowserDeferredCalls, MustBeSentOnceEitherBoundIsReached) {
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  const auto origin = std::make_shared<BrowserDeferredOrigin>();
   std::vector<std::string> ran;
-  BrowserDeferredCalls byCount;
   for (std::size_t held = 1; held < BrowserDeferredCalls::kMaxCalls; ++held) {
-    ASSERT_FALSE(byCount.add(Recording(ran, "destroyObject", held))) << held;
+    deferred.defer(origin, BrowserDeferredOperation::DestroyObject, held, Recording(ran, "d"));
   }
-  EXPECT_TRUE(byCount.add(Recording(ran, "destroyObject", 0)));
-  EXPECT_EQ(byCount.size(), BrowserDeferredCalls::kMaxCalls);
+  EXPECT_EQ(channel.roundTrips(), 0u);
+  deferred.defer(origin, BrowserDeferredOperation::DestroyObject, 0, Recording(ran, "d"));
+  EXPECT_EQ(channel.roundTrips(), 1u) << "the call bound sends the held calls on their own";
+  EXPECT_EQ(ran.size(), BrowserDeferredCalls::kMaxCalls);
+  EXPECT_TRUE(deferred.empty());
 
-  BrowserDeferredCalls byBytes;
-  EXPECT_FALSE(byBytes.add(Recording(ran, "writeBuffer", 1), BrowserDeferredCalls::kMaxBytes - 1));
-  EXPECT_TRUE(byBytes.add(Recording(ran, "writeBuffer", 2), 1));
-  EXPECT_EQ(byBytes.bytes(), BrowserDeferredCalls::kMaxBytes);
-  byBytes.runAfter([] {}, kRunNow);
-  EXPECT_EQ(byBytes.bytes(), 0u) << "sending the held calls releases their payload";
-  EXPECT_FALSE(byBytes.add(Recording(ran, "writeBuffer", 3), BrowserDeferredCalls::kMaxBytes - 1));
+  deferred.defer(origin, BrowserDeferredOperation::WriteBuffer, 1, Recording(ran, "w"),
+                 BrowserDeferredCalls::kMaxBytes - 1);
+  EXPECT_EQ(deferred.bytes(), BrowserDeferredCalls::kMaxBytes - 1);
+  EXPECT_EQ(channel.roundTrips(), 1u);
+  deferred.defer(origin, BrowserDeferredOperation::WriteBuffer, 2, Recording(ran, "w"), 1);
+  EXPECT_EQ(channel.roundTrips(), 2u) << "the byte bound sends the held calls on their own";
+  EXPECT_EQ(deferred.bytes(), 0u) << "sending releases the payload";
+}
+
+TEST(BrowserDeferredCalls, AWriteAtTheByteBoundIsSentDirectlyWithoutACopy) {
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  const auto origin = std::make_shared<BrowserDeferredOrigin>();
+  std::vector<std::string> ran;
+  deferred.defer(origin, BrowserDeferredOperation::DestroyObject, 1, Recording(ran, "destroy"));
+  bool copyRan = false;
+  const BridgeStatus status = deferred.defer(
+      origin, BrowserDeferredOperation::WriteBuffer, 2,
+      [&] {
+        copyRan = true;
+        return BridgeStatus::Success;
+      },
+      BrowserDeferredCalls::kMaxBytes, Recording(ran, "direct write", BridgeStatus::Failed));
+  EXPECT_EQ(status, BridgeStatus::Failed) << "a write sent directly answers for itself";
+  EXPECT_FALSE(copyRan) << "the borrowed bytes are written, not a copy";
+  EXPECT_THAT(ran, ElementsAre("destroy", "direct write"))
+      << "it still runs after the calls held before it";
+  EXPECT_EQ(channel.roundTrips(), 1u);
+  EXPECT_TRUE(deferred.empty());
+}
+
+TEST(BrowserDeferredCalls, TheQueueKeepsItsCapacityAcrossRoundTrips) {
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  const auto origin = std::make_shared<BrowserDeferredOrigin>();
+  std::vector<std::string> ran;
+  for (int round = 0; round < 3; ++round) {
+    for (uint64_t id = 0; id < 64; ++id) {
+      deferred.defer(origin, BrowserDeferredOperation::DestroyObject, id, Recording(ran, "d"));
+    }
+    deferred.flush();
+  }
+  const std::size_t settled = deferred.capacity();
+  EXPECT_GE(settled, 64u) << "the held calls' storage is kept after sending them";
+  for (uint64_t id = 0; id < 64; ++id) {
+    deferred.defer(origin, BrowserDeferredOperation::DestroyObject, id, Recording(ran, "d"));
+  }
+  EXPECT_EQ(deferred.capacity(), settled) << "a frame of the same size reallocates nothing";
 }
 
 TEST(BrowserDeferredCalls, AHeldWriteOwnsACopyOfItsBytes) {
@@ -119,6 +237,79 @@ TEST(BrowserDeferredCalls, AHeldWriteOwnsACopyOfItsBytes) {
   caller.shrink_to_fit();
   EXPECT_EQ(write(), BridgeStatus::Success);
   EXPECT_THAT(written, ElementsAre(1, 2, 3, 4));
+}
+
+TEST(BrowserDeferredCalls, CallsOfAReleasedDeviceDoNotRunAndKeepTheirOriginAlive) {
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  auto origin = std::make_shared<BrowserDeferredOrigin>();
+  const std::weak_ptr<BrowserDeferredOrigin> watched = origin;
+  std::vector<std::string> ran;
+  deferred.defer(origin, BrowserDeferredOperation::WriteBuffer, 1,
+                 Recording(ran, "write", BridgeStatus::UnknownObject));
+  deferred.defer(origin, BrowserDeferredOperation::DestroyObject, 2, Recording(ran, "destroy"));
+  // The bridge releases its logical device and goes away while the calls are still held.
+  origin->live.store(false);
+  origin.reset();
+  EXPECT_FALSE(watched.expired()) << "the held calls keep what they report to";
+
+  const BrowserDeferredCalls::Report report = deferred.flush();
+  EXPECT_TRUE(ran.empty()) << "nothing runs against a released logical device";
+  EXPECT_EQ(report.skipped, 2u);
+  EXPECT_EQ(report.refused, 0u);
+  EXPECT_TRUE(watched.expired()) << "and nothing is kept once they are gone";
+}
+
+/// One thread's queue, as the browser bridge keeps one per thread.
+BrowserDeferredCalls& ThreadQueue(FakeOwnerChannel& channel) {
+  thread_local BrowserDeferredCalls queue(channel);
+  return queue;
+}
+
+TEST(BrowserDeferredCalls, ADeviceTornDownOnAnotherThreadSkipsTheCallsItLeftHeld) {
+  FakeOwnerChannel channel;
+  auto origin = std::make_shared<BrowserDeferredOrigin>();
+  std::atomic<int> ran{0};
+  std::atomic<bool> held{false};
+  std::atomic<bool> tornDown{false};
+  std::thread owning([&] {
+    BrowserDeferredCalls& queue = ThreadQueue(channel);
+    queue.defer(origin, BrowserDeferredOperation::WriteBuffer, 1, [&] {
+      ++ran;
+      return BridgeStatus::Success;
+    });
+    held = true;
+    while (!tornDown) {
+      std::this_thread::yield();
+    }
+    queue.flush();
+  });
+  while (!held) {
+    std::this_thread::yield();
+  }
+  // Teardown on this thread: release first, then let the bridge's reference go.
+  origin->live.store(false);
+  origin.reset();
+  tornDown = true;
+  owning.join();
+  EXPECT_EQ(ran.load(), 0);
+}
+
+TEST(BrowserDeferredCalls, ThreadExitSendsTheCallsOfLiveDevicesAndDropsReleasedOnes) {
+  FakeOwnerChannel channel;
+  const auto live = std::make_shared<BrowserDeferredOrigin>();
+  const auto released = std::make_shared<BrowserDeferredOrigin>();
+  released->live.store(false);
+  std::vector<std::string> ran;
+  std::thread exiting([&] {
+    BrowserDeferredCalls& queue = ThreadQueue(channel);
+    queue.defer(live, BrowserDeferredOperation::DestroyObject, 1, Recording(ran, "live destroy"));
+    queue.defer(released, BrowserDeferredOperation::DestroyObject, 2,
+                Recording(ran, "released destroy"));
+  });
+  exiting.join();
+  EXPECT_THAT(ran, ElementsAre("live destroy")) << "a held release is not leaked at thread exit";
+  EXPECT_EQ(channel.roundTrips(), 1u);
 }
 
 }  // namespace

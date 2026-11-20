@@ -12,6 +12,7 @@
 #include <emscripten/threading.h>
 
 #include "donner/gpu/browser/BrowserGpuOwner.h"
+#include "donner/gpu/browser/EmscriptenBrowserBridge.h"
 #endif
 
 #include "donner/base/MemoryAttribution.h"
@@ -1350,6 +1351,11 @@ void AsyncRenderer::workerLoop() {
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
 
   while (true) {
+#ifdef __EMSCRIPTEN__
+    // The worker may park below. Calls it deferred to the GPU owner, such as releases and writes
+    // after a frame's last submission, go now rather than with whatever round trip comes next.
+    gpu::browser::FlushBrowserDeferredCallsOnThisThread();
+#endif
     PublishRasterWorkPhase(RasterWorkPhase::IdleMaintenance);
     RenderResult::WorkerTimingBreakdown workerTiming;
     std::optional<RenderRequest> requestStorage;

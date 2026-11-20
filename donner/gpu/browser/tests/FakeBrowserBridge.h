@@ -345,12 +345,9 @@ public:
     return true;
   }
 
-  /// Reports that the browser refused a call this logical device deferred, as the owner round trip
-  /// that ran it does. @param status The refusal.
-  void reportDeferredRefusal(BridgeStatus status) {
-    uint32_t none = static_cast<uint32_t>(BridgeStatus::Success);
-    publishedStateStorage().deferredRefusal.compare_exchange_strong(
-        none, static_cast<uint32_t>(status), std::memory_order_release, std::memory_order_relaxed);
+  /// The origin this bridge's deferred calls would report to, for driving a deferred-call queue.
+  [[nodiscard]] std::shared_ptr<BrowserDeferredOrigin> deferredOriginForTesting() const {
+    return deferredOriginHandle();
   }
 
   /// Reports the submissions through \p serial finished, as the browser's completion callback

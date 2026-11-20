@@ -16,7 +16,9 @@
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/browser/BrowserDeferredCalls.h"
 #include "donner/gpu/browser/tests/FakeBrowserBridge.h"
+#include "donner/gpu/browser/tests/FakeOwnerChannel.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/RecordingDeviceObserver.h"
 
@@ -2774,11 +2776,13 @@ TEST(BrowserDevicePublishedState, ABridgeThatDoesNotPublishKeepsAskingTheBrowser
   EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsTrue());
 }
 
-// A call this device deferred that the browser refused surfaces at the device's next operation of
-// any kind, as a loss, and to every device sharing the loss condition, rather than being dropped.
+// A write or bind group construction this device deferred that the browser refused surfaces at the
+// device's next operation of any kind, as a loss, and to every device sharing the loss condition,
+// rather than being dropped.
 TEST(BrowserDeviceDeferredRefusal, TheNextOperationFailsClosedAndDeclaresTheLoss) {
-  const auto refused =
-      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("refused a call this device"));
+  const auto refused = IsGpuErrorWithMessage(
+      GpuErrorType::InvalidState,
+      HasSubstr("the browser refused a write or bind group construction this device deferred"));
   for (const auto& [name, next] :
        std::vector<std::pair<std::string, std::function<Status(BrowserDevice&, Buffer&)>>>{
            {"writeBuffer",
@@ -2802,7 +2806,12 @@ TEST(BrowserDeviceDeferredRefusal, TheNextOperationFailsClosedAndDeclaresTheLoss
     Result<Buffer> buffer = device.result()->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
     ASSERT_THAT(buffer, HasResult());
 
-    raw->reportDeferredRefusal(BridgeStatus::UnknownObject);
+    // The browser refuses a write this device deferred, in the round trip that carries it.
+    FakeOwnerChannel channel;
+    BrowserDeferredCalls deferred(channel);
+    deferred.defer(raw->deferredOriginForTesting(), BrowserDeferredOperation::WriteBuffer, 1,
+                   [] { return BridgeStatus::UnknownObject; });
+    deferred.flush();
     const size_t callsBefore = raw->calls->size();
     EXPECT_THAT(next(*device.result(), buffer.result()), refused);
     EXPECT_EQ(raw->calls->size(), callsBefore) << "nothing reaches the browser after the refusal";
@@ -2814,7 +2823,7 @@ TEST(BrowserDeviceDeferredRefusal, TheNextOperationFailsClosedAndDeclaresTheLoss
 TEST(BrowserDeviceDeferredRefusal, AnUnrefusedDeviceIsUnaffected) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
-  EXPECT_EQ(fixture.bridge->publishedState().deferredRefusal.load(), 0u);
+  EXPECT_EQ(fixture.bridge->deferredOrigin().refusal.load(), 0u);
   EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
   EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsFalse());
 }

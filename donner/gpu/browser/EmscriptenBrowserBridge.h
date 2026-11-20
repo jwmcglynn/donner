@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "donner/gpu/browser/BrowserBridge.h"
+#include "donner/gpu/browser/BrowserDeferredCalls.h"
 
 namespace donner::gpu::browser {
 
@@ -62,6 +63,7 @@ public:
   RcString deviceLostReason() const override;
   uint64_t completedSerial() const override;
   bool beginPublishingState() override;
+  void flushDeferredCalls() override;
   uint32_t maxTextureDimension2D() const override;
 
   const void* sharedDeviceIdentity() const override;
@@ -150,8 +152,9 @@ private:
   };
   /// Defers a call whose answer the caller does not wait for to this thread's next owner round
   /// trip; see \ref BrowserDeferredCalls. A refusal is stored into this bridge's published state.
-  BridgeStatus deferCall(const char* operation, BrowserObjectId objectId,
-                         std::function<BridgeStatus()> execute, std::size_t payloadBytes = 0);
+  BridgeStatus deferCall(BrowserDeferredOperation operation, BrowserObjectId objectId,
+                         std::function<BridgeStatus()> execute, std::size_t payloadBytes = 0,
+                         const std::function<BridgeStatus()>& direct = {});
   BridgeStatus queueCommand(const char* operation, std::function<BridgeStatus()> command);
   BridgeStatus flushCommands();
   std::vector<PendingCommand> pendingCommands_;
@@ -178,5 +181,9 @@ private:
   /// browser already made, not state of this bridge's own.
   mutable std::map<BrowserObjectId, MappedRange> mappings_;
 };
+
+/// Sends every browser call the calling thread has deferred to the GPU owner now, if any are held,
+/// so they do not wait for its next round trip. A thread calls it before it parks.
+void FlushBrowserDeferredCallsOnThisThread();
 
 }  // namespace donner::gpu::browser

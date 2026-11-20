@@ -331,7 +331,7 @@ BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge,
 
 BridgeStatus BrowserDevice::deferredRefusal() const {
   return static_cast<BridgeStatus>(
-      bridge_->publishedState().deferredRefusal.load(std::memory_order_acquire));
+      bridge_->deferredOrigin().refusal.load(std::memory_order_acquire));
 }
 
 Status BrowserDevice::checkDeferredRefusal(std::string_view operation) const {
@@ -341,8 +341,8 @@ Status BrowserDevice::checkDeferredRefusal(std::string_view operation) const {
   }
   recordBrowserLoss();
   return Err(GpuErrorType::InvalidState,
-             std::format("{}: the browser device was lost: it refused a call this device "
-                         "deferred ({})",
+             std::format("{}: the browser refused a write or bind group construction this "
+                         "device deferred (status {}), so the device is treated as lost",
                          operation, static_cast<unsigned int>(refused)));
 }
 

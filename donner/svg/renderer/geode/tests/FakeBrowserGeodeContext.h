@@ -54,7 +54,7 @@ struct BrowserOwnerRoundTrips {
 struct BrowserOperationModel {
   std::string_view operation;  //!< Bridge method, and leading word of its recorded line.
   std::string_view kind;       //!< `BrowserGpuOperationKind` enumerator its round trip counts as.
-  bool deferred = false;       //!< Whether the bridge defers it to the thread's next round trip.
+  bool deferred = false;       //!< Whether it is in the bridge's own deferred-operation list.
 };
 
 /// Every operation the count models; any other operation outside recording counts as Other.
@@ -79,14 +79,20 @@ public:
   /// The Geode context, or null when it could not be opened.
   std::shared_ptr<GeodeDevice> device;
 
-  /// The round trips made since \ref Open or the previous call, and starts a new span.
+  /// The round trips made since \ref Open or the previous call, as one frame that ends with the
+  /// worker's flush of the calls it still holds, and starts a new span.
   BrowserOwnerRoundTrips takeRoundTrips();
+
+  /// Deferred calls the last span still held after its last round trip, which the frame-end flush
+  /// sent. @return The count.
+  [[nodiscard]] std::size_t trailingDeferredCalls() const { return trailingDeferredCalls_; }
 
 private:
   std::shared_ptr<std::vector<std::string>> calls_ = std::make_shared<std::vector<std::string>>();
   std::shared_ptr<gpu::browser::FakeBrowserBridge::QueryCounts> queries_ =
       std::make_shared<gpu::browser::FakeBrowserBridge::QueryCounts>();
   std::size_t consumedCalls_ = 0;
+  std::size_t trailingDeferredCalls_ = 0;
   gpu::browser::FakeBrowserBridge::QueryCounts consumedQueries_;
 };
 

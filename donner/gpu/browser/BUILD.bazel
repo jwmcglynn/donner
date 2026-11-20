@@ -102,6 +102,7 @@ donner_cc_test(
     srcs = [
         "tests/BrowserBindGroupConstruction_tests.cc",
         "tests/BrowserDeferredCalls_tests.cc",
+        "tests/FakeOwnerChannel.h",
         "tests/BrowserDevice_tests.cc",
         "tests/BrowserGpuTaskQueue_tests.cc",
         "tests/BrowserObjectTable_tests.cc",

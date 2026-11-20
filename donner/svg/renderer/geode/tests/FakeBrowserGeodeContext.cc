@@ -48,6 +48,16 @@ private:
   std::shared_ptr<gpu::DeviceLostState> lostState_;
 };
 
+/// Whether the browser bridge defers \p operation, from the bridge's own list.
+constexpr bool IsDeferredOperation(std::string_view operation) {
+  for (const std::string_view deferred : gpu::browser::kBrowserDeferredOperationNames) {
+    if (deferred == operation) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// How the browser bridge dispatches one operation outside command recording.
 struct OperationKind {
   std::string_view operation;               //!< Leading word of the recorded line.
@@ -55,30 +65,30 @@ struct OperationKind {
   BrowserOperationModel model;              //!< The kind and dispatch the bridge uses.
 };
 
-#define DONNER_OPERATION(name, counter, kindName, deferred) \
-  {                                                         \
-    name, &BrowserOwnerRoundTrips::counter, {               \
-      name, kindName, deferred                              \
-    }                                                       \
+#define DONNER_OPERATION(name, counter, kindName) \
+  {                                               \
+    name, &BrowserOwnerRoundTrips::counter, {     \
+      name, kindName, IsDeferredOperation(name)   \
+    }                                             \
   }
 
 constexpr OperationKind kOperationKinds[] = {
-    DONNER_OPERATION("createBuffer", resourceCreation, "ResourceCreation", false),
-    DONNER_OPERATION("createTexture", resourceCreation, "ResourceCreation", false),
-    DONNER_OPERATION("createTextureView", resourceCreation, "ResourceCreation", false),
-    DONNER_OPERATION("createSampler", resourceCreation, "ResourceCreation", false),
-    DONNER_OPERATION("createShaderModule", resourceCreation, "ResourceCreation", false),
-    DONNER_OPERATION("createBindGroup", bindGroupConstruction, "BindGroupConstruction", true),
-    DONNER_OPERATION("createBindGroupLayout", bindGroupConstruction, "BindGroupConstruction", true),
-    DONNER_OPERATION("createPipelineLayout", pipelineConstruction, "PipelineConstruction", false),
-    DONNER_OPERATION("createRenderPipeline", pipelineConstruction, "PipelineConstruction", false),
-    DONNER_OPERATION("createComputePipeline", pipelineConstruction, "PipelineConstruction", false),
-    DONNER_OPERATION("destroyObject", resourceDestruction, "ResourceDestruction", true),
-    DONNER_OPERATION("writeBuffer", bufferWrite, "BufferWrite", true),
-    DONNER_OPERATION("writeTexture", textureWrite, "TextureWrite", false),
-    DONNER_OPERATION("shareTexture", resourceSharing, "ResourceSharing", false),
-    DONNER_OPERATION("registerSharedTexture", resourceSharing, "ResourceSharing", false),
-    DONNER_OPERATION("submitCommandBuffers", queueSubmit, "QueueSubmit", false),
+    DONNER_OPERATION("createBuffer", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createTexture", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createTextureView", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createSampler", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createShaderModule", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createBindGroup", bindGroupConstruction, "BindGroupConstruction"),
+    DONNER_OPERATION("createBindGroupLayout", bindGroupConstruction, "BindGroupConstruction"),
+    DONNER_OPERATION("createPipelineLayout", pipelineConstruction, "PipelineConstruction"),
+    DONNER_OPERATION("createRenderPipeline", pipelineConstruction, "PipelineConstruction"),
+    DONNER_OPERATION("createComputePipeline", pipelineConstruction, "PipelineConstruction"),
+    DONNER_OPERATION("destroyObject", resourceDestruction, "ResourceDestruction"),
+    DONNER_OPERATION("writeBuffer", bufferWrite, "BufferWrite"),
+    DONNER_OPERATION("writeTexture", textureWrite, "TextureWrite"),
+    DONNER_OPERATION("shareTexture", resourceSharing, "ResourceSharing"),
+    DONNER_OPERATION("registerSharedTexture", resourceSharing, "ResourceSharing"),
+    DONNER_OPERATION("submitCommandBuffers", queueSubmit, "QueueSubmit"),
 };
 
 #undef DONNER_OPERATION
@@ -132,6 +142,18 @@ public:
     ++(counts_.*(entry != nullptr ? entry->kind : &BrowserOwnerRoundTrips::other));
   }
 
+  /// Ends the frame as the worker does before it parks: deferred calls still held are sent in a
+  /// round trip of their own. @return How many were held after the frame's last round trip.
+  std::size_t endFrame() {
+    const std::size_t trailing = deferredCalls_;
+    if (trailing != 0) {
+      ++counts_.commandBatch;
+      deferredCalls_ = 0;
+      deferredBytes_ = 0;
+    }
+    return trailing;
+  }
+
   [[nodiscard]] const BrowserOwnerRoundTrips& counts() const { return counts_; }
 
 private:
@@ -165,12 +187,14 @@ private:
   std::size_t deferredBytes_ = 0;
 };
 
-/// Counts the round trips the recorded \p calls make.
-BrowserOwnerRoundTrips CountCalls(std::span<const std::string> calls) {
+/// Counts the round trips the recorded \p calls make as one frame, ending with the worker's flush.
+/// @param calls Recorded calls. @param trailing Receives the calls held after the last round trip.
+BrowserOwnerRoundTrips CountFrame(std::span<const std::string> calls, std::size_t& trailing) {
   RoundTripCounter counter;
   for (const std::string& line : calls) {
     counter.add(line);
   }
+  trailing = counter.endFrame();
   return counter.counts();
 }
 
@@ -220,8 +244,8 @@ FakeBrowserGeodeContext FakeBrowserGeodeContext::Open() {
 }
 
 BrowserOwnerRoundTrips FakeBrowserGeodeContext::takeRoundTrips() {
-  BrowserOwnerRoundTrips counts =
-      CountCalls(std::span<const std::string>(*calls_).subspan(consumedCalls_));
+  BrowserOwnerRoundTrips counts = CountFrame(
+      std::span<const std::string>(*calls_).subspan(consumedCalls_), trailingDeferredCalls_);
   counts.ownershipQuery = queries_->deviceStatus - consumedQueries_.deviceStatus;
   counts.deviceLossQuery = queries_->deviceLoss - consumedQueries_.deviceLoss;
   counts.completionQuery = queries_->completedSerial - consumedQueries_.completedSerial;
