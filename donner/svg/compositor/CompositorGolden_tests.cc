@@ -5572,6 +5572,45 @@ constexpr std::string_view kClippedHost = R"svg(
     <rect width="96" height="48" fill="#c60" clip-path="url(#clip)"
           transform="translate(0 48)"/>)svg";
 
+/// A luminance mask whose only content is a `<use>` of `#target`.
+constexpr std::string_view kMaskOfTarget = R"svg(
+      <mask id="copy" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <use href="#target"/>
+      </mask>)svg";
+
+/// A rect in the lower half of the canvas masked by `#copy`.
+constexpr std::string_view kMaskedHost = R"svg(
+    <rect width="96" height="48" fill="#c60" mask="url(#copy)"
+          transform="translate(0 48)"/>)svg";
+
+/// A mask whose content is masked by a mask that draws `#target` through a `<use>`.
+constexpr std::string_view kMaskInsideMaskOfTarget = R"svg(
+      <mask id="inner" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <use href="#target"/>
+      </mask>
+      <mask id="copy" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="white" mask="url(#inner)"/>
+      </mask>)svg";
+
+/// A mask whose content is a `<use>` of the group that holds `#target`.
+constexpr std::string_view kMaskOfTargetGroup = R"svg(
+      <mask id="copy" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <use href="#group"/>
+      </mask>)svg";
+
+/// A mask whose content is a `<use>` of another `<use>` of `#target`.
+constexpr std::string_view kMaskOfTargetUseChain = R"svg(
+      <use id="link" href="#target"/>
+      <mask id="copy" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <use href="#link"/>
+      </mask>)svg";
+
+/// A mask whose content is `#maskChild` itself, with no `<use>`.
+constexpr std::string_view kMaskOfOwnChild = R"svg(
+      <mask id="copy" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle id="maskChild" cx="60" cy="24" r="14" fill="white"/>
+      </mask>)svg";
+
 /// A clip path that draws `#target` through a `<use>` in a clip path it applies to itself.
 constexpr std::string_view kClipWithOwnClipOfTarget = R"svg(
       <clipPath id="inner"><use href="#target"/></clipPath>
@@ -5732,6 +5771,43 @@ INSTANTIATE_TEST_SUITE_P(
                                 TargetInLayerDocument(kClipOfOwnChild, kClippedHost, ""),
                                 [](SVGDocument& d, int step) {
                                   TranslateElement(d, "#child", Vector2d(-8.0 * step, 0));
+                                },
+                                false, false},
+        ReferenceTargetEditCase{
+            "mask_use_target_moved", TargetInLayerDocument(kMaskOfTarget, "", kMaskedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{
+            "mask_use_target_dragged", TargetInLayerDocument(kMaskOfTarget, "", kMaskedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(8.0 * step, 4.0)); }, true,
+            false},
+        ReferenceTargetEditCase{
+            "mask_use_css_host_before_layer",
+            TargetInLayerDocument(kMaskOfTarget,
+                                  R"svg(<rect width="96" height="48" fill="#c60"
+                                    style="mask: url(#copy)" transform="translate(0 48)"/>)svg",
+                                  ""),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{
+            "mask_inside_mask_use_target_moved",
+            TargetInLayerDocument(kMaskInsideMaskOfTarget, "", kMaskedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{
+            "mask_use_of_group_child_moved",
+            TargetInLayerDocument(kMaskOfTargetGroup, "", kMaskedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{
+            "mask_use_chain_target_moved",
+            TargetInLayerDocument(kMaskOfTargetUseChain, "", kMaskedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{"mask_direct_child_moved",
+                                TargetInLayerDocument(kMaskOfOwnChild, kMaskedHost, ""),
+                                [](SVGDocument& d, int step) {
+                                  TranslateElement(d, "#maskChild", Vector2d(8.0 * step, 0));
                                 },
                                 false, false},
         // Guard: already matched a fresh render before clip paths and masks were followed.
