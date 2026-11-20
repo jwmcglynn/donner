@@ -86,11 +86,12 @@ The lane counts below are eligibility from source. The normal Geode corpus compa
 simple text tier. Rows that exceed their Geode budget only because of the references' quarter-pixel
 edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), which accepts
 only partially covered pixels whose upper or lower neighbor in the reference is empty or fully
-covered, and neither of which has the pixel's alpha. The rows in `GEODE_GATE_ALLOWLIST` disable
-their Geode comparison with a recorded reason. Both lists are in `parity_report.py` and described
-in `README_resvg_test_suite.md`. Full-shaping rows stay capability-gated on Geode because the
-corpus has no Geode full-shaping wrapper; the `*_text_full` unit test variants run on Geode with
-full shaping.
+covered, and neither of which has the pixel's alpha. A row whose custom golden is a Donner software
+rendering, recorded as quarter-pixel quantized in the golden README, may opt in the same way. The
+rows in `GEODE_GATE_ALLOWLIST` disable their Geode comparison with a recorded reason. Both lists
+are in `parity_report.py` and described in `README_resvg_test_suite.md`. Full-shaping rows stay
+capability-gated on Geode because the corpus has no Geode full-shaping wrapper; the `*_text_full`
+unit test variants run on Geode with full shaping.
 
 <!-- BEGIN RESVG INVENTORY -->
 

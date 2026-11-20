@@ -541,11 +541,13 @@ std::optional<RendererBackendFeature> missingRequiredFeature(RendererBackend bac
 }
 
 /// True when \p params opt the comparison in \p mode into the quarter-pixel edge coverage rule:
-/// only the Geode comparison against the row's vendored reference, never a custom golden, which
-/// is not a quarter-pixel quantized resvg rendering.
+/// only the Geode comparison against the row's vendored reference or its shared golden, never a
+/// Geode golden, which is not quarter-pixel quantized. In the resvg suite a shared golden must be
+/// recorded as a Donner software rendering, which is quantized like the references
+/// (`quarter_pixel_edge_violations` in tools/resvg_parity/parity_report.py).
 bool acceptsQuarterPixelEdgeCoverage(const ImageComparisonParams& params, ComparisonMode mode) {
   return params.geodeQuarterPixelEdgeCoverage && mode == ComparisonMode::GeodeGolden &&
-         params.overrideGoldenFilename.empty() && params.geodeOverrideGoldenFilename.empty();
+         params.geodeOverrideGoldenFilename.empty();
 }
 
 /// Reports the pixels the quarter-pixel edge coverage rule accepted, if any.

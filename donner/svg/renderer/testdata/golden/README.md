@@ -1403,6 +1403,39 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
 
 PNG SHA-256: `871da8f754631be06f0c5dd6d81ac07b4ca10287845f67ecc29f3796a131a718`.
 
+## Quarter-pixel quantized goldens
+
+The goldens below are Donner software renderer (TinySkia) renderings. That renderer samples
+coverage on four sub-scanlines per pixel, as resvg does, so a horizontal edge lands on a
+quarter-pixel row and its edge pixel stores 64, 128 or 192 of 255. The Geode comparison of a row
+that compares against one of them may opt into the quarter-pixel edge coverage rule
+(`README_resvg_test_suite.md` in `donner/svg/renderer/tests`); `parity_report.py` reads this table
+and rejects an opted-in row whose golden is not listed here, so a Firefox, area-averaged or Geode
+golden cannot use the rule.
+
+The measurement takes the pixels where the golden and Geode's rendering differ and that both cover
+partially, that are the partially covered row of a horizontal edge in the golden (the pixel above
+or below is empty or fully covered, and neither has its alpha), outside runs of 40 or more pixels
+of one alpha (the crosshair and guide lines). It counts how many of the golden's alphas, and of
+Geode's, are a multiple of 64. On the vendored references of five opted-in rows
+(`text/alignment-baseline/hanging`, `text/text-anchor/inheritance-1`,
+`text/text-decoration/line-through`, `text/tspan/xml-space-1`, `text/writing-mode/rl`) the share is
+0.43 to 0.63, and on Geode's renderings 0.002 to 0.008: an edge pixel of a slanted or curved edge
+is not quantized, a horizontal one is. Geode counts are on Metal.
+
+| Golden | Renderer | Quantized share (golden / Geode) | Geode pixels counted without and with the rule | PNG SHA-256 |
+| --- | --- | --- | --- | --- |
+| `donner-coordinates-list.png` | Donner software renderer | 0.55 / 0.005 of 608 | 392 / 0 | `f036660ed5d2f21cbbedbbba1f04c8aa94f31cc33958a3dd63e5cf13bb52f5bb` |
+| `resvg-hanging-on-vertical.png` | Donner software renderer | 0.66 / 0.003 of 1,186 | 415 / 12 | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
+
+The other custom goldens of rows whose Geode comparison is gated are not quantized:
+`firefox-stroke-linear-gradient-on-text.png` and `firefox-stroke-radial-gradient-on-text.png`
+(0.27 / 0.014 of 1,552), `donner-named-value.png`, whose frame is an exact 8x8 area average
+(0.10 / 0.039 of 1,088), and `donner-textPath-with-filter.png`, whose glyph edges are blurred
+(0.011 / 0.015 of 2,581). `donner-tspan-with-filter.png` is a Donner software rendering, but its
+Geode difference lies on the crosshair beside the partially covered blurred text, which the rule
+counts, so its row does not opt in.
+
 ## Registered golden digests
 
 Every golden that `donner/svg/renderer/tests/resvg_test_suite.cc` compares against is listed here

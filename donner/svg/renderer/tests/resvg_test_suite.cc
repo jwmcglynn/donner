@@ -130,14 +130,28 @@ ImageComparisonParams GeodeTranslucentEdgeColorGate(ImageComparisonParams params
       "19)");
 }
 
-/// \p params, with the Geode comparison disabled: the row compares against a custom golden, which
-/// the quarter-pixel edge coverage rule does not apply to, and Geode's edge coverage differs from
-/// it by more than the pixel budget.
-ImageComparisonParams GeodeCustomGoldenGate(ImageComparisonParams params) {
+/// \p params, with the Geode comparison disabled: the row compares against a custom golden that is
+/// not quarter-pixel quantized (a browser rendering, or one whose frame is an exact area average),
+/// so the quarter-pixel edge coverage rule does not apply, and Geode's edge coverage differs from it
+/// by more than the pixel budget.
+ImageComparisonParams GeodeUnquantizedGoldenGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Harness mismatch: Geode's edge coverage differs from this custom golden beyond the pixel "
-      "budget; the quarter-pixel edge coverage rule applies only to vendored resvg references");
+      "Harness mismatch: this custom golden is not quarter-pixel quantized, so the edge coverage "
+      "rule does not apply, and Geode's exact edge coverage differs from it beyond the pixel "
+      "budget");
+}
+
+/// \p params, with the Geode comparison disabled: the row blurs text and compares against a Donner
+/// software rendering. The golden's quarter-pixel quantized edges, the glyph edges and the
+/// crosshair under the blurred text, lie beside partially covered rows there, which the
+/// quarter-pixel edge coverage rule counts.
+ImageComparisonParams GeodeBlurredEdgeGate(ImageComparisonParams params) {
+  return params.disableBackend(
+      RendererBackend::Geode,
+      "Harness mismatch: the golden's quantized edges lie beside partially covered rows under the "
+      "blur, which the edge coverage rule counts (602 px on tspan, all on the crosshair's two "
+      "rows; 267 px on textPath, on the blurred glyph edges)");
 }
 
 /// \p params, with the Geode comparison disabled: the row's CPU comparison has a pixel budget above
@@ -857,13 +871,13 @@ INSTANTIATE_TEST_SUITE_P(
                 // SVG uses glyph cells for a text element's object bounding box. The
                 // vendored images use ink extents; the Firefox references use glyph cells.
                 {"linear-gradient-on-text.svg",
-                 GeodeCustomGoldenGate(
+                 GeodeUnquantizedGoldenGate(
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "firefox-stroke-linear-gradient-on-text.png")
                          .withReason("Reference disagreement: paint mapped by glyph ink extents")
                          .requireFeature(RendererBackendFeature::Text, "text rendering"))},
                 {"radial-gradient-on-text.svg",
-                 GeodeCustomGoldenGate(
+                 GeodeUnquantizedGoldenGate(
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "firefox-stroke-radial-gradient-on-text.png")
                          .withReason("Reference disagreement: paint mapped by glyph ink extents")
@@ -1145,12 +1159,12 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::UndefinedBehavior("reference is the resvg UB marker image")},
 
                     {"hanging-on-vertical.svg",
-                     GeodeCustomGoldenGate(
-                         Params::WithGoldenOverride(
-                             "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png")
-                             .withReason("Reference disagreement: the PNG advances upright glyphs "
-                                         "1.39 em, not the 1 em vmtx advance CSS Writing Modes 3 "
-                                         "5.1.1 requires (golden README)"))},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png")
+                         .withReason("Reference disagreement: the PNG advances upright glyphs "
+                                     "1.39 em, not the 1 em vmtx advance CSS Writing Modes 3 "
+                                     "5.1.1 requires (golden README)")
+                         .withGeodeQuarterPixelEdgeCoverage()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1289,7 +1303,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Reference disagreement: Donner follows the CSS Fonts 4 "
                                  "absolute-size table; the PNG steps by 1.2 as CSS 2 did")},
                 {"named-value.svg",
-                 GeodeCustomGoldenGate(
+                 GeodeUnquantizedGoldenGate(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/donner-named-value.png")
                          .withReason("Reference disagreement: Donner follows the CSS Fonts 4 "
@@ -1512,11 +1526,11 @@ INSTANTIATE_TEST_SUITE_P(
                     // The vendored PNG is opaque and resvg v0.49.0 anchors the y-only chunk
                     // differently; testdata/golden/README.md has the evidence.
                     {"coordinates-list.svg",
-                     GeodeCustomGoldenGate(
-                         Params::WithGoldenOverride(
-                             "donner/svg/renderer/testdata/golden/donner-coordinates-list.png")
-                             .withReason("Harness mismatch: opaque reference background; under 4x4 "
-                                         "supersampled coverage the glyphs match it (#1185)"))},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/donner-coordinates-list.png")
+                         .withReason("Harness mismatch: opaque reference background; under 4x4 "
+                                     "supersampled coverage the glyphs match it (#1185)")
+                         .withGeodeQuarterPixelEdgeCoverage()},
                     {"on-tspan-with-arabic.svg",
                      Params()
                          .requireFeature(RendererBackendFeature::TextFull)
@@ -1668,7 +1682,7 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::UndefinedBehavior("baseline-shift + rotate")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-filter.svg",
-                 GeodeCustomGoldenGate(HeavyGlyphReferenceGolden(
+                 GeodeBlurredEdgeGate(HeavyGlyphReferenceGolden(
                      "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png"))},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
@@ -1744,7 +1758,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
                     // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                     {"with-filter.svg",
-                     GeodeCustomGoldenGate(HeavyGlyphReferenceGolden(
+                     GeodeBlurredEdgeGate(HeavyGlyphReferenceGolden(
                          "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png"))},
                 })),
             ValuesIn(ActiveComparisonModes())),
