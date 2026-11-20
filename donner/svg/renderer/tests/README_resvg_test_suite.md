@@ -137,9 +137,9 @@ rendering) cannot opt in: that image is not quarter-pixel quantized.
 For an opted-in row, the Geode comparison also accepts a pixel pixelmatch counts when:
 
 - both images cover it partially (alpha strictly between 0 and 255 in each);
-- in the reference it is the partially covered row of a horizontal edge: the pixel directly above
-  or below it is empty or fully covered (a pixel outside the image does not count), and neither of
-  those two pixels has its alpha;
+- in the reference, the pixel directly above or below it is empty or fully covered (a pixel
+  outside the image does not count), and neither the pixel above nor the pixel below has its
+  alpha;
 - the two alphas differ by at most 33 levels (`svg_suite::kQuarterPixelEdgeCoverageMaxAlphaDelta`);
   and
 - pixelmatch, at the row's threshold and background, finds no difference between the two straight
@@ -147,12 +147,20 @@ For an opted-in row, the Geode comparison also accepts a pixel pixelmatch counts
   applies to a pixel of that smaller coverage, so at very low alpha a color difference can fall
   under the threshold.
 
-The edge condition follows the mechanism: a quantized edge row lies between a shape's inside and
-outside, so one of its vertical neighbors is empty or fully covered and differs from it. A coverage
-or opacity difference across a uniform partially covered region, such as translucent text or a
-translucent fill, is therefore counted: there the pixels above and below share the pixel's alpha or
-are themselves partially covered. Across the 172 opted-in rows the condition keeps 50,850 of the
-51,771 pixels the rule accepted without it on Metal, and every row still passes its unchanged
+The vertical-neighbor condition follows the mechanism: a quantized edge row lies between a shape's
+inside and outside, so a pixel above or below it is empty or fully covered and differs from it. The
+condition is not limited to horizontal edges. It still accepts:
+
+- a feature one row tall, at any opacity;
+- each row of a two-row band whose rows differ in alpha and each border an empty or fully covered
+  row, such as the references' crosshair;
+- the single partial pixel in a column of a shallow slanted or curved edge;
+- thin horizontal strokes of translucent text (`text/tspan/with-opacity` keeps 218 accepted pixels).
+
+It rejects a uniform partially covered region two or more rows tall, the first row of a translucent
+shape directly below an opaque one, pure vertical edges, and the interior of a vertical alpha
+gradient. Across the 172 opted-in rows the condition keeps 50,850 of the 51,771 pixels the rule
+accepted without it on Metal (50,848 on software Vulkan), and every row still passes its unchanged
 budget.
 
 The rule is part of the canonical comparison

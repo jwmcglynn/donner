@@ -284,9 +284,9 @@ struct ImageComparisonParams {
    *
    * For a row whose vendored resvg reference samples coverage on four sub-scanlines per pixel, so
    * its horizontal edges sit on quarter-pixel boundaries while Geode renders exact coverage. The
-   * comparison then accepts an edge pixel that both images cover partially, that is the partially
-   * covered row of a horizontal edge in the reference (the pixel above or below it is empty or
-   * fully covered, and neither shares its alpha), whose alphas differ by at most
+   * comparison then accepts an edge pixel that both images cover partially, whose upper or lower
+   * neighbor in the reference is empty or fully covered (and neither the pixel above nor the pixel
+   * below has its alpha), whose alphas differ by at most
    * `svg_suite::kQuarterPixelEdgeCoverageMaxAlphaDelta` and whose colors match when both carry the
    * smaller alpha (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage`).
    * Other comparison modes, and a comparison against a custom golden, are unaffected.

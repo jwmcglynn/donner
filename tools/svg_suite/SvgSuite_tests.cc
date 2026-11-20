@@ -423,6 +423,31 @@ TEST(ImageCompareEdgeCoverageTest, CountsPixelsWithoutAnEmptyOrFullyCoveredRowAb
               Eq(EdgeCoverageOutcome{0, 5, 31, ""}));
 }
 
+TEST(ImageCompareEdgeCoverageTest, CountsTopRowAndOneRowImagesWithoutAnEmptyOrFullyCoveredRow) {
+  // A top-row line above a partially covered surround: the row above it is outside the image.
+  EXPECT_THAT(
+      Compare(RowsImage({{0, 0, 0, 128}, {0, 0, 0, 32}, {0, 0, 0, 32}}),
+              RowsImage({{0, 0, 0, 159}, {0, 0, 0, 32}, {0, 0, 0, 32}}), EdgeCoverageOptions()),
+      Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
+  // A one-pixel-tall image has no pixel above or below any pixel.
+  EXPECT_THAT(
+      Compare(RowsImage({{0, 0, 0, 128}}), RowsImage({{0, 0, 0, 159}}), EdgeCoverageOptions()),
+      Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
+}
+
+// The rule evaluates its vertical-neighbor condition on the expected image, which must be the
+// quantized reference: with the crosshair's images swapped, the counted row lies below a row of its
+// own alpha in the expected image and is counted.
+TEST(ImageCompareEdgeCoverageTest, EvaluatesTheNeighborConditionOnTheExpectedImage) {
+  const Image reference =
+      RowsImage({kEmpty, kEmpty, {0, 0, 0, 128}, {0, 0, 0, 192}, kEmpty, kEmpty});
+  const Image exact = RowsImage({kEmpty, kEmpty, {0, 0, 0, 159}, {0, 0, 0, 159}, kEmpty, kEmpty});
+  EXPECT_THAT(Compare(reference, exact, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 5, 33, ""}));
+  EXPECT_THAT(Compare(exact, reference, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
+}
+
 TEST(ImageCompareEdgeCoverageTest, CountsPixelsWhoseRowAboveOrBelowSharesTheirAlpha) {
   // A two-row band of one alpha over the empty background: each row is beside an empty row, but
   // also beside a row of its own alpha, so it is a uniform region rather than an edge row.

@@ -2194,9 +2194,10 @@ def _edge_coverage_policy(case: dict[str, object]) -> dict[str, object] | None:
     return {
         "classification": "reference-edge-quantization",
         "disposition": (
-            "Accept Geode edge pixels that both images cover partially, that are the partially "
-            "covered row of a horizontal edge in the reference, whose alphas differ by at most 33 "
-            "levels and whose colors match when both carry the smaller alpha."
+            "Accept Geode edge pixels that both images cover partially, whose upper or lower "
+            "neighbor in the reference is empty or fully covered and neither of which has their "
+            "alpha, whose alphas differ by at most 33 levels and whose colors match when both "
+            "carry the smaller alpha."
         ),
         "evidence": [
             REGISTRATION_SOURCE.as_posix(),
