@@ -722,6 +722,55 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual([policy["classification"] for policy in report["cases"][0]["policies"]],
                          ["reference-edge-quantization"])
 
+    def test_geode_gate_allowlist_rejects_unlisted_cpu_unexplained_and_stale_gates(self) -> None:
+        for name in ("listed.svg", "new.svg", "cpu.svg", "silent.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"listed.svg", Params().disableBackend(RendererBackend::Geode, "Bug: listed")},'
+                '{"new.svg", Params().disableBackend(RendererBackend::Geode, "Bug: new")},'
+                '{"cpu.svg", Params().disableBackend(RendererBackend::TinySkia, "no CPU")},'
+                '{"silent.svg", Params().disableBackend(RendererBackend::Geode)}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        violations = parity_report.geode_gate_violations(report, {
+            "painting/fill/listed.svg", "painting/fill/cpu.svg", "painting/fill/silent.svg",
+            "painting/fill/fixed.svg",
+        })
+
+        self.assertEqual(violations, sorted([
+            "painting/fill/new.svg: not in GEODE_GATE_ALLOWLIST; " + parity_report.GEODE_GATE_RULE,
+            "painting/fill/cpu.svg: disables ['tiny-skia']; " + parity_report.GEODE_GATE_RULE,
+            "painting/fill/silent.svg: disables the Geode comparison without a reason",
+            "painting/fill/fixed.svg: stale GEODE_GATE_ALLOWLIST entry; the row no longer disables "
+            "its Geode comparison, so remove it",
+        ]))
+
+    def test_gate_helper_around_another_helper_expands_both(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        source = textwrap.dedent(
+            """
+            ImageComparisonParams Golden(std::string_view path) {
+              return Params::WithGoldenOverride(path, kDefaultThreshold, "Reference disagreement");
+            }
+            ImageComparisonParams Gate(ImageComparisonParams params) {
+              return params.disableBackend(RendererBackend::Geode, "Bug: gated");
+            }
+            """
+        ) + _registration("PaintingFill", '"painting/fill", {{"a.svg", Gate(Golden("g.png"))}}')
+
+        case = parity_report.build_report(source, self.fixture.tests_root)["cases"][0]
+
+        self.assertEqual(case["disabled_backends"], ["geode"])
+        self.assertIn("shared_golden", case["exception_types"])
+        self.assertEqual(parity_report._geode_disable_reason(case["raw_params_expression"]),
+                         "Bug: gated")
+
     def test_goldens_must_be_listed_in_the_digest_table_with_their_digest(self) -> None:
         golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
         (golden_root / "geode").mkdir(parents=True)
@@ -1056,8 +1105,8 @@ class ParityReportTests(unittest.TestCase):
             self.assertEqual(setting["threshold"], 0.1)
             self.assertEqual(setting["canvas_size"], [800, 600])
             self.assertTrue(setting["include_antialiasing"])
-        self.assertEqual(text["lanes"]["geode"]["configured_state"], "capability-gated")
-        self.assertEqual(text["lanes"]["geode"]["missing_features"], ["text"])
+        self.assertEqual(text["lanes"]["geode"]["configured_state"], "compare")
+        self.assertEqual(text["lanes"]["geode"]["missing_features"], [])
         self.assertEqual(text["lanes"]["geode"]["observed"], "unobserved")
 
     def test_google_test_receipt_distinguishes_pass_failure_suppression_and_unobserved(self) -> None:
@@ -1094,8 +1143,11 @@ class ParityReportTests(unittest.TestCase):
 
     def test_unknown_or_duplicate_executions_cannot_be_reported_as_passes(self) -> None:
         self.fixture.add_case("text/sample/a.svg")
+        # The Geode lane renders simple text only, so a full-shaping requirement gates it.
         report = parity_report.build_report(
-            _registration("TextSample", '"text/sample"'), self.fixture.tests_root
+            _registration("TextSample", '"text/sample", {{"a.svg", Params().requireFeature('
+                          'RendererBackendFeature::TextFull, "full text shaping")}}'),
+            self.fixture.tests_root,
         )
         report["source"]["revision"] = "a" * 40
         receipt = self.fixture.root / "shard.xml"
@@ -1218,6 +1270,14 @@ class ParityReportTests(unittest.TestCase):
                  "corpus canvas rule differs"),
                 ("test.params.enableCanvasSizeFromReference();", "",
                  "corpus canvas rule differs"),
+            ],
+            "RendererTestBackendGeode.cc": [
+                ("#ifdef DONNER_TEXT_ENABLED\n    case RendererBackendFeature::Text: return true;",
+                 "#ifdef DONNER_TEXT_FULL\n    case RendererBackendFeature::Text: return true;",
+                 "Geode capability Text differs"),
+                ("    case RendererBackendFeature::FilterEffects: return true;",
+                 "    case RendererBackendFeature::FilterEffects: return false;",
+                 "Geode capability FilterEffects differs"),
             ],
             "ImageComparisonTestFixture.cc": [
                 ("mode == ComparisonMode::GeodeGolden &&\n",
@@ -1835,6 +1895,9 @@ class RealTreeParityReportTests(unittest.TestCase):
             "QUARTER_PIXEL_EDGE_ALLOWLIST equals the rows whose Geode comparison accepts "
             "quarter-pixel edge coverage differences":
                 parity_report.quarter_pixel_edge_violations(report),
+            "GEODE_GATE_ALLOWLIST equals the rows that disable their Geode comparison, each with a "
+            "reason":
+                parity_report.geode_gate_violations(report),
             "Every registered golden needs a golden README table row with its SHA-256":
                 parity_report.golden_documentation_violations(report, repo_root),
             "Every case's canvas comes from a readable reference PNG or an explicit "

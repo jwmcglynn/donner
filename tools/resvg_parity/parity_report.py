@@ -298,11 +298,24 @@ def parse_params_helpers(source: str) -> ParamsHelpers:
 
 
 def _expand_params_helpers(expression: str, helpers: ParamsHelpers) -> str:
-    """Replace a leading call to a params helper with the expression it returns.
+    """Replace leading calls to params helpers with the expressions they return.
 
     The report classifies a case by the factories and builder calls in its params expression, so a
     helper that hides them is substituted with its arguments before any check reads the expression.
+    A helper whose argument is another helper call, such as a gate around a golden helper, expands
+    again; helper bodies cannot call helpers, so each pass removes one level.
     """
+
+    for _ in range(len(helpers) + 1):
+        expanded = _expand_leading_params_helper(expression, helpers)
+        if expanded == expression:
+            return expression
+        expression = expanded
+    raise ParityReportError(f"params helpers nest too deeply: {expression[:60]!r}")
+
+
+def _expand_leading_params_helper(expression: str, helpers: ParamsHelpers) -> str:
+    """Replace one leading call to a params helper with the expression it returns."""
 
     match = re.match(r"([A-Za-z_]\w*)\s*\(", expression)
     if match is None or match.group(1) not in helpers:
@@ -798,11 +811,10 @@ def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[
 
 
 # The normal Bazel corpus wrappers select these backend/text combinations.
-# Text and TextFull are deliberately false in GeodeSupportsFeature for this harness.
 CORPUS_LANES = {
     "default_text": ("tiny-golden", frozenset({"text", "filter-effects", "ascii-snapshot"})),
     "max": ("tiny-golden", frozenset({"text", "text-full", "filter-effects", "ascii-snapshot"})),
-    "geode": ("geode-golden", frozenset({"filter-effects", "ascii-snapshot"})),
+    "geode": ("geode-golden", frozenset({"text", "filter-effects", "ascii-snapshot"})),
 }
 DEFAULT_THRESHOLD = 0.02
 DEFAULT_MAX_PIXELS = 100
@@ -1628,6 +1640,178 @@ def skip_ratchet_violations(
 # That it only shrinks is a review rule: a new entry needs maintainer approval in the pull request
 # that adds it, and a row whose Geode comparison passes without the rule leaves it.
 QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
+    "painting/visibility/collapse-on-tspan.svg",
+    "painting/visibility/hidden-on-tspan.svg",
+    "text/alignment-baseline/alphabetic.svg",
+    "text/alignment-baseline/auto.svg",
+    "text/alignment-baseline/before-edge.svg",
+    "text/alignment-baseline/central.svg",
+    "text/alignment-baseline/hanging-and-baseline-shift-eq-20-on-tspan.svg",
+    "text/alignment-baseline/hanging-on-tspan.svg",
+    "text/alignment-baseline/hanging-with-underline.svg",
+    "text/alignment-baseline/hanging.svg",
+    "text/alignment-baseline/inherit.svg",
+    "text/alignment-baseline/mathematical.svg",
+    "text/alignment-baseline/middle-on-textPath.svg",
+    "text/alignment-baseline/middle.svg",
+    "text/alignment-baseline/text-before-edge.svg",
+    "text/baseline-shift/-10.svg",
+    "text/baseline-shift/-50percent.svg",
+    "text/baseline-shift/0.svg",
+    "text/baseline-shift/10.svg",
+    "text/baseline-shift/2mm.svg",
+    "text/baseline-shift/50percent.svg",
+    "text/baseline-shift/baseline.svg",
+    "text/baseline-shift/deeply-nested-super.svg",
+    "text/baseline-shift/inheritance-1.svg",
+    "text/baseline-shift/inheritance-2.svg",
+    "text/baseline-shift/inheritance-3.svg",
+    "text/baseline-shift/inheritance-4.svg",
+    "text/baseline-shift/inheritance-5.svg",
+    "text/baseline-shift/invalid-value.svg",
+    "text/baseline-shift/mixed-nested.svg",
+    "text/baseline-shift/nested-length.svg",
+    "text/baseline-shift/nested-super.svg",
+    "text/baseline-shift/sub.svg",
+    "text/baseline-shift/super.svg",
+    "text/baseline-shift/with-rotate.svg",
+    "text/dominant-baseline/alignment-baseline-and-baseline-shift-on-tspans.svg",
+    "text/dominant-baseline/alignment-baseline=baseline-on-tspan.svg",
+    "text/dominant-baseline/alphabetic.svg",
+    "text/dominant-baseline/auto.svg",
+    "text/dominant-baseline/central.svg",
+    "text/dominant-baseline/complex.svg",
+    "text/dominant-baseline/different-alignment-baseline-on-tspan.svg",
+    "text/dominant-baseline/dummy-tspan.svg",
+    "text/dominant-baseline/equal-alignment-baseline-on-tspan.svg",
+    "text/dominant-baseline/ideographic.svg",
+    "text/dominant-baseline/inherit.svg",
+    "text/dominant-baseline/mathematical.svg",
+    "text/dominant-baseline/middle.svg",
+    "text/dominant-baseline/nested.svg",
+    "text/dominant-baseline/no-change.svg",
+    "text/dominant-baseline/sequential.svg",
+    "text/dominant-baseline/text-after-edge.svg",
+    "text/dominant-baseline/text-before-edge.svg",
+    "text/font-kerning/as-property.svg",
+    "text/font-kerning/none.svg",
+    "text/lengthAdjust/spacingAndGlyphs.svg",
+    "text/letter-spacing/-3.svg",
+    "text/letter-spacing/0.svg",
+    "text/letter-spacing/1mm.svg",
+    "text/letter-spacing/3.svg",
+    "text/letter-spacing/5percent.svg",
+    "text/letter-spacing/mixed-spacing.svg",
+    "text/letter-spacing/normal.svg",
+    "text/text-anchor/end-on-text.svg",
+    "text/text-anchor/end-with-letter-spacing.svg",
+    "text/text-anchor/inheritance-1.svg",
+    "text/text-anchor/inheritance-2.svg",
+    "text/text-anchor/inheritance-3.svg",
+    "text/text-anchor/invalid-value-on-text.svg",
+    "text/text-anchor/middle-on-text.svg",
+    "text/text-anchor/on-the-first-tspan.svg",
+    "text/text-anchor/on-tspan.svg",
+    "text/text-anchor/start-on-text.svg",
+    "text/text-anchor/text-anchor-not-on-text-chunk.svg",
+    "text/text-decoration/all-types-nested.svg",
+    "text/text-decoration/line-through.svg",
+    "text/text-decoration/outside-the-text-element.svg",
+    "text/text-decoration/overline.svg",
+    "text/text-decoration/style-resolving-1.svg",
+    "text/text-decoration/style-resolving-2.svg",
+    "text/text-decoration/style-resolving-3.svg",
+    "text/text-decoration/style-resolving-4.svg",
+    "text/text-decoration/underline-with-dy-list-1.svg",
+    "text/text-decoration/underline-with-rotate-list-3.svg",
+    "text/text-decoration/underline-with-rotate-list-4.svg",
+    "text/text-decoration/underline-with-y-list.svg",
+    "text/text-decoration/underline.svg",
+    "text/text-rendering/geometricPrecision.svg",
+    "text/text-rendering/on-tspan.svg",
+    "text/text-rendering/optimizeLegibility.svg",
+    "text/text-rendering/optimizeSpeed.svg",
+    "text/text-rendering/with-underline.svg",
+    "text/text/dx-and-dy-instead-of-x-and-y.svg",
+    "text/text/dx-and-dy-with-less-values-than-characters.svg",
+    "text/text/dx-and-dy-with-more-values-than-characters.svg",
+    "text/text/dx-and-dy-with-multiple-values.svg",
+    "text/text/em-and-ex-coordinates.svg",
+    "text/text/escaped-text-1.svg",
+    "text/text/escaped-text-2.svg",
+    "text/text/escaped-text-3.svg",
+    "text/text/escaped-text-4.svg",
+    "text/text/mm-coordinates.svg",
+    "text/text/nested.svg",
+    "text/text/no-coordinates.svg",
+    "text/text/percent-value-on-dx-and-dy.svg",
+    "text/text/percent-value-on-x-and-y.svg",
+    "text/text/rotate-with-an-invalid-angle.svg",
+    "text/text/rotate-with-less-values-than-characters.svg",
+    "text/text/rotate-with-more-values-than-characters.svg",
+    "text/text/rotate-with-multiple-values-underline-and-pattern.svg",
+    "text/text/rotate-with-multiple-values.svg",
+    "text/text/rotate.svg",
+    "text/text/simple-case.svg",
+    "text/text/transform.svg",
+    "text/text/x-and-y-with-dx-and-dy-lists.svg",
+    "text/text/x-and-y-with-dx-and-dy.svg",
+    "text/text/x-and-y-with-less-values-than-characters.svg",
+    "text/text/x-and-y-with-more-values-than-characters.svg",
+    "text/text/x-and-y-with-multiple-values-and-tspan.svg",
+    "text/text/x-and-y-with-multiple-values.svg",
+    "text/text/xml-space.svg",
+    "text/textLength/150-on-parent.svg",
+    "text/textLength/150-on-tspan.svg",
+    "text/textLength/150.svg",
+    "text/textLength/40mm.svg",
+    "text/textLength/75percent.svg",
+    "text/textLength/inherit.svg",
+    "text/textLength/negative.svg",
+    "text/textLength/on-a-single-tspan.svg",
+    "text/textLength/on-text-and-tspan.svg",
+    "text/tref/link-to-a-non-SVG-element.svg",
+    "text/tref/nested.svg",
+    "text/tspan/mixed-font-size.svg",
+    "text/tspan/mixed-xml-space-1.svg",
+    "text/tspan/mixed-xml-space-2.svg",
+    "text/tspan/mixed-xml-space-3.svg",
+    "text/tspan/mixed.svg",
+    "text/tspan/multiple-coordinates.svg",
+    "text/tspan/nested.svg",
+    "text/tspan/only-with-y.svg",
+    "text/tspan/outside-the-text.svg",
+    "text/tspan/pseudo-multi-line.svg",
+    "text/tspan/rotate-and-display-none.svg",
+    "text/tspan/rotate-on-child.svg",
+    "text/tspan/sequential.svg",
+    "text/tspan/style-override.svg",
+    "text/tspan/text-shaping-across-multiple-tspan-1.svg",
+    "text/tspan/text-shaping-across-multiple-tspan-2.svg",
+    "text/tspan/transform.svg",
+    "text/tspan/tspan-bbox-1.svg",
+    "text/tspan/with-clip-path.svg",
+    "text/tspan/with-dy.svg",
+    "text/tspan/with-opacity.svg",
+    "text/tspan/with-x-and-y.svg",
+    "text/tspan/without-attributes.svg",
+    "text/tspan/xml-space-1.svg",
+    "text/tspan/xml-space-2.svg",
+    "text/word-spacing/-5.svg",
+    "text/word-spacing/0.svg",
+    "text/word-spacing/10.svg",
+    "text/word-spacing/2mm.svg",
+    "text/word-spacing/5percent.svg",
+    "text/word-spacing/normal.svg",
+    "text/writing-mode/horizontal-tb.svg",
+    "text/writing-mode/invalid-value.svg",
+    "text/writing-mode/lr-tb.svg",
+    "text/writing-mode/lr.svg",
+    "text/writing-mode/on-tspan.svg",
+    "text/writing-mode/rl-tb.svg",
+    "text/writing-mode/rl.svg",
+    "text/writing-mode/vertical-lr.svg",
+    "text/writing-mode/vertical-rl.svg",
 })
 
 QUARTER_PIXEL_EDGE_RULE = (
@@ -1680,6 +1864,75 @@ def quarter_pixel_edge_violations(
         f"{path}: stale QUARTER_PIXEL_EDGE_ALLOWLIST entry; the row no longer opts into the "
         "quarter-pixel edge coverage rule, so remove it"
         for path in sorted(allowed - set(opted_in))
+    ]
+    return sorted(violations)
+
+
+# Every active row that disables its Geode comparison (`disableBackend(RendererBackend::Geode,
+# reason)`). A row joins only when its Geode comparison fails for a recorded reason that the
+# quarter-pixel edge coverage rule does not cover; the reason names the cause.
+# //tools/resvg_parity:parity_report_tests enforces in CI that this list equals the Geode-gated
+# rows. That it only shrinks is a review rule: a new entry needs maintainer approval in the pull
+# request that adds it.
+GEODE_GATE_ALLOWLIST: frozenset[str] = frozenset({
+    "painting/marker/with-a-text-child.svg",
+    "painting/stroke/linear-gradient-on-text.svg",
+    "painting/stroke/radial-gradient-on-text.svg",
+    "text/alignment-baseline/hanging-on-vertical.svg",
+    "text/alignment-baseline/two-textPath-with-middle-on-first.svg",
+    "text/font-size/named-value.svg",
+    "text/font-variant/inherit.svg",
+    "text/font-variant/small-caps.svg",
+    "text/text-anchor/coordinates-list.svg",
+    "text/text-decoration/tspan-decoration.svg",
+    "text/text-decoration/underline-with-dy-list-2.svg",
+    "text/textPath/closed-path.svg",
+    "text/textPath/m-L-Z-path.svg",
+    "text/textPath/with-filter.svg",
+    "text/tspan/with-filter.svg",
+    "text/tspan/with-mask.svg",
+})
+
+GEODE_GATE_RULE = (
+    "a row may disable only its Geode comparison, with a reason, and needs maintainer approval to "
+    "join GEODE_GATE_ALLOWLIST (donner/svg/renderer/tests/README_resvg_test_suite.md)"
+)
+
+
+def _geode_disable_reason(expression: str) -> str | None:
+    for _, _, arguments in _iter_named_calls(expression, {"disableBackend"}):
+        if len(arguments) >= 2 and "Geode" in arguments[0]:
+            return _parse_cpp_string_expression(arguments[1]) or None
+    return None
+
+
+def geode_gate_violations(
+    report: dict[str, object], allowlist: Iterable[str] = GEODE_GATE_ALLOWLIST
+) -> list[str]:
+    """Return backend disables that break GEODE_GATE_ALLOWLIST.
+
+    Only the Geode comparison may be disabled, each with a reason; every such row must be listed,
+    and a listed row must still disable it.
+    """
+
+    allowed = set(allowlist)
+    gated: set[str] = set()
+    violations: list[str] = []
+    for case in report["cases"]:  # type: ignore[union-attr]
+        if case["registration"] != "active" or not case["disabled_backends"]:
+            continue
+        path = str(case["path"])
+        gated.add(path)
+        if case["disabled_backends"] != ["geode"]:
+            violations.append(f"{path}: disables {case['disabled_backends']}; {GEODE_GATE_RULE}")
+        elif not _geode_disable_reason(str(case["raw_params_expression"])):
+            violations.append(f"{path}: disables the Geode comparison without a reason")
+        if path not in allowed:
+            violations.append(f"{path}: not in GEODE_GATE_ALLOWLIST; {GEODE_GATE_RULE}")
+    violations += [
+        f"{path}: stale GEODE_GATE_ALLOWLIST entry; the row no longer disables its Geode "
+        "comparison, so remove it"
+        for path in sorted(allowed - gated)
     ]
     return sorted(violations)
 
@@ -2048,7 +2301,8 @@ def _check_catalog_case(case: dict[str, object]) -> None:
         _check_dash_seam(case)
     if case["primary_state"] == "render-only" and not case["render_only_kind"]:
         raise ParityReportError(f"{path}: render-only case needs a named policy")
-    if case["disabled_backends"]:
+    if case["disabled_backends"] and (case["disabled_backends"] != ["geode"]
+                                      or path not in GEODE_GATE_ALLOWLIST):
         raise ParityReportError(f"{path}: unexplained explicit backend disable")
     if case["primary_state"] != "compare" and not case["reason"]:
         raise ParityReportError(f"{path}: exceptional state needs a source reason")
@@ -2395,32 +2649,46 @@ def _backend_function(source: str, name: str) -> str:
     return source[start:_find_matching(source, start, "{", "}")]
 
 
-def _check_geode_capabilities(source: str) -> None:
-    body = _backend_function(source, "GeodeSupportsFeature")
-    features = re.findall(r"case RendererBackendFeature::(\w+):\s*return (true|false);", body)
-    if {name for name, _ in features} != set(_FEATURE_NAMES) or len(features) != len(_FEATURE_NAMES):
-        raise ParityReportError("Geode capability implementation differs from parity report")
-    enabled = {_FEATURE_NAMES[name] for name, value in features if value == "true"}
-    if enabled != CORPUS_LANES["geode"][1]:
-        raise ParityReportError("Geode capability values differ from parity report")
+_BUILD_FEATURE_MACROS = {"Text": "DONNER_TEXT_ENABLED", "TextFull": "DONNER_TEXT_FULL",
+                         "FilterEffects": "DONNER_FILTERS_ENABLED"}
 
 
-def _check_tiny_capabilities(source: str) -> None:
-    body = _backend_function(source, "TinySkiaSupportsFeature")
+def _check_capabilities(
+    source: str, function: str, backend: str, always: set[str], build_gated: set[str]
+) -> None:
+    """Check that `function` returns true for `always` and follows the build for `build_gated`.
+
+    A build-gated feature returns true under its Bazel feature macro and false otherwise, so the
+    corpus wrapper's text and filter flags select it.
+    """
+
+    body = _backend_function(source, function)
     leaves = set(re.findall(r"case RendererBackendFeature::(\w+):", body))
-    if leaves != set(_FEATURE_NAMES) or not re.search(
-        r"case RendererBackendFeature::AsciiSnapshot:\s*return true;", body
-    ):
-        raise ParityReportError("TinySkia capability implementation differs from parity report")
-    macros = {"DONNER_TEXT_ENABLED": "Text", "DONNER_TEXT_FULL": "TextFull",
-              "DONNER_FILTERS_ENABLED": "FilterEffects"}
-    for macro, feature in macros.items():
+    if leaves != set(_FEATURE_NAMES) or leaves != always | build_gated:
+        raise ParityReportError(f"{backend} capability implementation differs from parity report")
+    for feature in sorted(always):
+        if not re.search(rf"case RendererBackendFeature::{feature}:\s*return true;", body):
+            raise ParityReportError(f"{backend} capability {feature} differs from parity report")
+    for feature in sorted(build_gated):
+        macro = _BUILD_FEATURE_MACROS[feature]
         gate = (
             rf"#ifdef\s+{macro}\s+case RendererBackendFeature::{feature}:\s*return true;"
             rf"\s+#else\s+case RendererBackendFeature::{feature}:\s*return false;\s+#endif"
         )
         if not re.search(gate, body):
-            raise ParityReportError(f"TinySkia capability {feature} differs from parity report")
+            raise ParityReportError(f"{backend} capability {feature} differs from parity report")
+
+
+def _check_geode_capabilities(source: str) -> None:
+    _check_capabilities(source, "GeodeSupportsFeature", "Geode",
+                        always={"FilterEffects", "AsciiSnapshot"},
+                        build_gated={"Text", "TextFull"})
+
+
+def _check_tiny_capabilities(source: str) -> None:
+    _check_capabilities(source, "TinySkiaSupportsFeature", "TinySkia",
+                        always={"AsciiSnapshot"},
+                        build_gated={"Text", "TextFull", "FilterEffects"})
 
 
 def _check_corpus_wrappers(source: str) -> None:

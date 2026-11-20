@@ -76,6 +76,9 @@ The same test also enforces these registration rules, each against a list in `pa
   [Quarter-pixel edge coverage on Geode](#ResvgQuarterPixelEdgeCoverage)). An opted-in row that is
   not listed fails, as does one whose Geode lane does not compare, compares against a custom
   golden, or counts anti-aliased pixels; an entry whose row no longer opts in is stale and fails.
+- `GEODE_GATE_ALLOWLIST` equals the set of active rows that disable their Geode comparison (see
+  [Geode gates](#ResvgGeodeGates)). A row that disables another backend, disables Geode without a
+  reason, or is not listed fails; an entry whose row no longer disables Geode is stale and fails.
 
 `//tools/resvg_parity:parity_report_tests` enforces in CI that each list matches the registry.
 That the lists only shrink is a review rule: a new entry, or a larger value, needs maintainer
@@ -121,12 +124,15 @@ as 64 * k (255 when all four are). Donner's CPU renderer samples the same way an
 edges. Geode computes exact coverage and stores round(255 * f) for the true coverage f, which is
 within 1/8 of k/4, so the two differ by up to 31.875 + 0.25 * k + 0.5 levels: 33 at k = 3. An edge
 row covered 0.625 px, as on the references' 1.25 px crosshair, is 192 in the reference and 159 on
-Geode.
+Geode. On text, whose glyph, decoration and crosshair edges are mostly such pixels, that difference
+alone can exceed the default 100-pixel budget.
 
 A row whose Geode comparison against its vendored resvg reference exceeds its budget only because
-of that difference can opt in with `Params().withGeodeQuarterPixelEdgeCoverage()` and must be listed
-in `QUARTER_PIXEL_EDGE_ALLOWLIST`. Pixels the rule does not accept still count against the row's
-unchanged budget. A row that compares against a custom golden cannot opt in.
+of that difference opts in with `QuarterPixelEdgeReference()` (or
+`.withGeodeQuarterPixelEdgeCoverage()` chained onto its other params) in `resvg_test_suite.cc` and
+is listed in `QUARTER_PIXEL_EDGE_ALLOWLIST`. Pixels the rule does not accept still count against
+the row's unchanged budget. A row that compares against a custom golden (a Donner or browser
+rendering) cannot opt in: that image is not quarter-pixel quantized.
 
 For an opted-in row, the Geode comparison also accepts a pixel pixelmatch counts when:
 
@@ -145,6 +151,29 @@ to a comparison against a custom golden, or to a pixel that is fully covered or 
 image, and it does not change the pixel budget. The test log reports how many pixels it
 accepted and their largest alpha difference; the diff image draws them in blue. A row whose Geode
 comparison passes without the rule leaves the list.
+
+The Geode corpus lane renders the simple text tier only, so the list holds the rows that need the
+rule there. Some full-shaping rows (bidirectional, Arabic and vertical text) also fail the default
+budget on Geode without the rule and pass with it, but no Geode full-shaping corpus lane exists, so
+they are not listed. Adding such a lane means measuring its rows, opting in the ones that need the rule, and
+teaching `parity_report.py` that lane's capabilities.
+
+### Geode gates {#ResvgGeodeGates}
+
+A row whose Geode comparison fails for a cause the edge coverage rule does not cover disables its
+Geode comparison with `disableBackend(RendererBackend::Geode, reason)` and is listed in
+`GEODE_GATE_ALLOWLIST`; its CPU comparisons are unchanged. The reason names the measured cause, and
+`resvg_test_suite.cc` keeps one helper per cause (for example `GeodeCustomGoldenGate`) so the
+reason is written once. `//tools/resvg_parity:parity_report_tests` enforces in CI that the list
+matches the gated rows and that no other backend is disabled; that the list only shrinks is a review
+rule.
+
+`GeodeCpuAllowanceGate` covers rows whose CPU comparison has a budget above the default in
+`PIXEL_BUDGET_ALLOWLIST` (1,200 px for the two `text/font-variant` rows, 400 px for
+`text/textPath/closed-path`). Those budgets are not approved for the Geode lane, and comparing
+would apply budgets in the hundreds to it. On the full shaping tier the two font-variant rows
+measure 0 px on Geode, so the gate can narrow to `closed-path` once a Geode full-shaping lane
+exists.
 
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.
