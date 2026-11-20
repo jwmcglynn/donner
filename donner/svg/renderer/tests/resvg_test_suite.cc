@@ -109,25 +109,30 @@ ImageComparisonParams QuarterPixelEdgeReference() {
 }
 
 /// \p params, with the Geode comparison disabled: Geode's edge coverage differs from the reference
-/// at fully covered pixels, where a stroke or decoration edge lies over an opaque fill, which the
-/// quarter-pixel edge coverage rule does not cover.
+/// on stroke and decoration edges over fills, mostly at composite pixels the quarter-pixel edge
+/// coverage rule refuses, and part of the difference exceeds what quarter-pixel quantization
+/// allows, so quantization alone is not shown to explain it.
 ImageComparisonParams GeodeOpaqueEdgeCoverageGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Reference disagreement: quarter-pixel edge coverage differs at fully covered pixels (an "
-      "edge over opaque fill), outside the quarter-pixel edge coverage rule");
+      "Unresolved: with the edge coverage rule Geode counts 117 px (marker text child), 162 "
+      "(tspan-decoration) and 136 (underline-with-dy-list-2), mostly composite pixels on stroke "
+      "and decoration edges over fills; 16, 80 and 1 of them differ by more than quarter-pixel "
+      "quantization allows");
 }
 
 /// \p params, with the Geode comparison disabled: an edge lies under a translucent layer, so the
 /// reference's quarter-pixel edge coverage changes the composite's straight color, and the layer
 /// covers the rows beside the edge partially, which the quarter-pixel edge coverage rule counts.
+/// Part of the difference exceeds what quantization allows, so it is not shown to be the only
+/// cause.
 ImageComparisonParams GeodeTranslucentEdgeColorGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Reference disagreement: the crosshair's quarter-pixel edge coverage under the half-"
-      "transparent masked text changes the composite color and lies beside partially covered "
-      "rows (109 of the 120 px Geode counts with the edge coverage rule, against a CPU count of "
-      "19)");
+      "Unresolved: the crosshair's quarter-pixel edge coverage under the half-transparent masked "
+      "text changes the composite color and lies beside partially covered rows (109 of the 120 "
+      "px Geode counts with the edge coverage rule, against a CPU count of 19), but 42 of the 120 "
+      "differ by more than quarter-pixel quantization allows");
 }
 
 /// \p params, with the Geode comparison disabled: the row compares against a custom golden that is
