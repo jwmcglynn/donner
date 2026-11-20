@@ -347,12 +347,14 @@ jobs:
           retention-days: 14
 
       - name: Stage immutable Geode deployment candidate
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         id: stage-candidate
         env:
           PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}
         run: python3 tools/ci/editor_wasm_stage.py candidate
 
       - name: Upload Geode deployment candidate
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         id: upload-candidate
         uses: actions/upload-artifact@v7
         with:
@@ -362,6 +364,7 @@ jobs:
           retention-days: 90
 
       - name: Record deployment candidate digest
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         env:
           ARTIFACT_DIGEST: ${{ steps.upload-candidate.outputs.artifact-digest }}
         run: python3 tools/ci/editor_wasm_stage.py record-digest

@@ -2441,8 +2441,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("needs.hosted-selection.outputs.mode != 'unaffected'", build)
         self.assertIn("github.event_name != 'pull_request' ||", build)
         for step in ("Snapshot the browser-tested release files", "Prove the package's resolved module graph",
-                     "Stage package for handoff", "Upload Geode package artifact"):
-            self.assertIn("if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''", _step_body(workflow, step))
+                     "Stage package for handoff", "Upload Geode package artifact",
+                     "Stage immutable Geode deployment candidate", "Upload Geode deployment candidate",
+                     "Record deployment candidate digest"):
+            with self.subTest(step=step):
+                step_body = _step_body(workflow, step)
+                self.assertEqual(re.findall(r"(?m)^        if: (.*)$", step_body),
+                                 ["env.HOSTED_EDITOR_BROWSER_TARGETS == ''"])
 
     def test_downloaded_tools_are_verified_before_extraction(self):
         badges = ".github/workflows/badges.yaml"
