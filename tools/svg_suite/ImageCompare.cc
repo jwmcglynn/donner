@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -158,6 +159,23 @@ bool OnHorizontalEdge(ImageView image, size_t column, size_t row) {
   return besideEmptyOrFull;
 }
 
+/// The alpha difference at \p column, \p row when the coverage and edge conditions of
+/// ComparisonOptions::acceptQuarterPixelEdgeCoverage hold there, which leaves only the color
+/// condition; std::nullopt otherwise. \p expected and \p actual share a stride.
+std::optional<int> EdgeCoverageAlphaDelta(ImageView expected, ImageView actual, size_t column,
+                                          size_t row) {
+  const size_t pos = (row * expected.strideInPixels + column) * 4;
+  const uint8_t expectedAlpha = expected.data[pos + 3];
+  const uint8_t actualAlpha = actual.data[pos + 3];
+  const int alphaDelta = std::abs(static_cast<int>(expectedAlpha) - static_cast<int>(actualAlpha));
+  if (!PartiallyCovered(expectedAlpha) || !PartiallyCovered(actualAlpha) ||
+      alphaDelta > kQuarterPixelEdgeCoverageMaxAlphaDelta ||
+      !OnHorizontalEdge(expected, column, row)) {
+    return std::nullopt;
+  }
+  return alphaDelta;
+}
+
 struct EdgeCoverage {
   int pixels = 0;
   int maxAlphaDelta = 0;
@@ -177,19 +195,18 @@ EdgeCoverage AcceptQuarterPixelEdgeCoverage(ImageView expected, ImageView actual
   for (size_t row = 0; row < static_cast<size_t>(diff.height); ++row) {
     for (size_t column = 0; column < static_cast<size_t>(diff.width); ++column) {
       const size_t pos = (row * diff.strideInPixels + column) * 4;
-      const uint8_t expectedAlpha = expected.data[pos + 3];
-      const uint8_t actualAlpha = actual.data[pos + 3];
-      const int alphaDelta =
-          std::abs(static_cast<int>(expectedAlpha) - static_cast<int>(actualAlpha));
-      if (!IsCounted(diff.data, pos, policy.diffColor) || !PartiallyCovered(expectedAlpha) ||
-          !PartiallyCovered(actualAlpha) || alphaDelta > kQuarterPixelEdgeCoverageMaxAlphaDelta ||
-          !OnHorizontalEdge(expected, column, row)) {
+      if (!IsCounted(diff.data, pos, policy.diffColor)) {
+        continue;
+      }
+      const std::optional<int> alphaDelta = EdgeCoverageAlphaDelta(expected, actual, column, row);
+      if (!alphaDelta) {
         continue;
       }
       std::copy_n(expected.data.begin() + pos, 3, sharedExpected.begin() + pos);
       std::copy_n(actual.data.begin() + pos, 3, sharedActual.begin() + pos);
-      sharedExpected[pos + 3] = sharedActual[pos + 3] = std::min(expectedAlpha, actualAlpha);
-      candidates.emplace_back(pos, alphaDelta);
+      sharedExpected[pos + 3] = sharedActual[pos + 3] =
+          std::min(expected.data[pos + 3], actual.data[pos + 3]);
+      candidates.emplace_back(pos, *alphaDelta);
     }
   }
   EdgeCoverage accepted;
