@@ -65,11 +65,16 @@ def _candidate_keys_from_label(label):
 
     return depset(keys)
 
+# Both C++ dependency edges link code into the product; `implementation_deps` only hides headers
+# and defines from dependents, so it must not hide licenses.
+_LICENSE_KEY_DEP_ATTRS = ["deps", "implementation_deps"]
+
 def _collect_license_keys_aspect_impl(target, ctx):
     transitive = []
-    for dep in getattr(ctx.rule.attr, "deps", []):
-        if _CollectedLicenseKeysInfo in dep:
-            transitive.append(dep[_CollectedLicenseKeysInfo].keys)
+    for attr in _LICENSE_KEY_DEP_ATTRS:
+        for dep in getattr(ctx.rule.attr, attr, []):
+            if _CollectedLicenseKeysInfo in dep:
+                transitive.append(dep[_CollectedLicenseKeysInfo].keys)
 
     return [ _CollectedLicenseKeysInfo(keys = depset(
         transitive = [_candidate_keys_from_label(target.label)] + transitive,
@@ -77,7 +82,7 @@ def _collect_license_keys_aspect_impl(target, ctx):
 
 _collect_license_keys_aspect = aspect(
     implementation = _collect_license_keys_aspect_impl,
-    attr_aspects = ["deps"],
+    attr_aspects = _LICENSE_KEY_DEP_ATTRS,
 )
 
 def _fallback_package_name(label):
