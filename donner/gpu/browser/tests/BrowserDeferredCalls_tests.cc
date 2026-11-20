@@ -78,10 +78,11 @@ TEST(BrowserDeferredCalls, AFlushOfAnEmptyQueueMakesNoRoundTrip) {
   EXPECT_EQ(channel.lastKind(), BrowserDeferredCalls::kCommandBatchKind);
 }
 
-TEST(BrowserDeferredCalls, WriteAndBindGroupRefusalsMarkOnlyTheirOwnDevice) {
+TEST(BrowserDeferredCalls, WriteViewAndBindGroupRefusalsMarkOnlyTheirOwnDevice) {
   for (const BrowserDeferredOperation kind :
        {BrowserDeferredOperation::WriteBuffer, BrowserDeferredOperation::CreateBindGroup,
-        BrowserDeferredOperation::CreateBindGroupLayout}) {
+        BrowserDeferredOperation::CreateBindGroupLayout,
+        BrowserDeferredOperation::CreateTextureView}) {
     SCOPED_TRACE(std::string(BrowserDeferredOperationName(kind)));
     FakeOwnerChannel channel;
     BrowserDeferredCalls deferred(channel);

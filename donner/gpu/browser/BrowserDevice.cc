@@ -341,8 +341,8 @@ Status BrowserDevice::checkDeferredRefusal(std::string_view operation) const {
   }
   recordBrowserLoss();
   return Err(GpuErrorType::InvalidState,
-             std::format("{}: the browser refused a write or bind group construction this "
-                         "device deferred (status {}), so the device is treated as lost",
+             std::format("{}: the browser refused a write, view or bind group construction "
+                         "this device deferred (status {}), so the device is treated as lost",
                          operation, static_cast<unsigned int>(refused)));
 }
 
@@ -1383,8 +1383,8 @@ Status BrowserDevice::onSubmit(uint64_t submissionSerial,
 }
 
 Status BrowserDevice::submissionStatus(BridgeStatus status, std::string_view operation) const {
-  // A command batch or submission is refused when a write or bind group this device deferred was
-  // refused in the same round trip; that refusal is the loss to declare.
+  // A command batch or submission is refused when a write, view or bind group this device deferred
+  // was refused in the same round trip; that refusal is the loss to declare.
   if (status != BridgeStatus::Success && deferredRefusal() != BridgeStatus::Success) {
     return checkDeferredRefusal(operation);
   }

@@ -261,8 +261,8 @@ struct BrowserPublishedState {
 struct BrowserDeferredOrigin {
   /// False once the bridge has begun releasing its logical device; its held calls then do not run.
   std::atomic<bool> live{true};
-  /// Status, as a \ref BridgeStatus value, of the first held write or bind group construction the
-  /// browser refused; Success while none has been. Permanent: the device treats it as a loss.
+  /// Status, as a \ref BridgeStatus value, of the first held write, view or bind group construction
+  /// the browser refused; Success while none has been. Permanent: the device treats it as a loss.
   std::atomic<uint32_t> refusal{0};
   /// Held destructions the browser refused. Diagnostic only: releases were never checked, and a
   /// refused release cannot leave the device unusable.

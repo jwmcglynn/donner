@@ -226,7 +226,7 @@ OwnerChannel& Channel() {
 
 /// Calls this thread has deferred since its last owner round trip. At thread exit its destructor
 /// drops what is still held without a round trip, and marks a refusal on each live device whose
-/// write or bind group construction it dropped, so that device fails closed if used again.
+/// write, view or bind group construction it dropped, so that device fails closed if used again.
 thread_local BrowserDeferredCalls tDeferredCalls(Channel());
 
 /// Prints what a round trip's held calls reported, after the owner callback: owner callbacks must
@@ -640,9 +640,18 @@ BridgeStatus EmscriptenBrowserBridge::createTexture(BrowserObjectId id, uint32_t
 
 BridgeStatus EmscriptenBrowserBridge::createTextureView(BrowserObjectId id,
                                                         BrowserObjectId textureId) {
-  return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_create_texture_view, BrowserGpuOperationKind::ResourceCreation>(
-          logicalDevice_, id, textureId));
+  // A view's identifier is minted here and the runtime has already resolved its texture, so
+  // nothing the caller does next waits on the browser's answer. Held calls run in call order, so
+  // the view is built after its texture's creation and before the texture's release.
+  const unsigned int device = logicalDevice_;
+  return deferCall(
+      BrowserDeferredOperation::CreateTextureView, id,
+      [&] { return StatusFromBrowser(donner_gpu_create_texture_view(device, id, textureId)); },
+      [&] {
+        return BrowserDeferredCalls::HeldCall([device, id, textureId] {
+          return StatusFromBrowser(donner_gpu_create_texture_view(device, id, textureId));
+        });
+      });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createSampler(BrowserObjectId id, uint32_t magFilterCode,
@@ -879,8 +888,8 @@ BridgeStatus EmscriptenBrowserBridge::flushCommands() {
       },
       BrowserGpuOperationKind::CommandBatch, &deferredOrigin());
   if (!ran) {
-    // A write or bind group this device deferred was refused in this trip; its commands would run
-    // over stale or missing objects, so none of them did.
+    // A write, view or bind group this device deferred was refused in this trip; its commands would
+    // run over stale or missing objects, so none of them did.
     return BridgeStatus::DeviceLost;
   }
   if (failedOperation != nullptr) {
@@ -1058,8 +1067,8 @@ BridgeStatus EmscriptenBrowserBridge::submitCommandBuffers(uint64_t submissionSe
                                                    static_cast<double>(submissionSerial));
       },
       BrowserGpuOperationKind::QueueSubmit, &deferredOrigin());
-  // A write or bind group this device deferred was refused in this trip, so the submission would
-  // run over stale or missing contents; it was not made.
+  // A write, view or bind group this device deferred was refused in this trip, so the submission
+  // would run over stale or missing contents; it was not made.
   return ran ? StatusFromBrowser(status) : BridgeStatus::DeviceLost;
 }
 

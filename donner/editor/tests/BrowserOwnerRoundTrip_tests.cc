@@ -42,13 +42,14 @@ struct HeldFrame {
 
 /// The recorded baseline. A change that lowers these updates them; one that raises them must
 /// explain why. Ownership, loss and completion queries are absent: the browser side publishes
-/// that state, so a held frame reads it without a round trip. Buffer writes, bind group
-/// construction and destruction are absent too: they ride along with the next round trip, and the
-/// 19 still held after a frame's last round trip go in one more batch when the worker parks.
+/// that state, so a held frame reads it without a round trip. Buffer writes, texture view and bind
+/// group construction and destruction are absent too: they ride along with the next round trip, and
+/// those still held after a frame's last round trip go in one more batch when the worker parks.
+/// What creation remains is textures and buffers: a held frame recreates its two frame targets.
 constexpr HeldFrame kHeldFrames[] = {
-    {12.0, {.resourceCreation = 45, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
-    {24.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
-    {36.0, {.resourceCreation = 35, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    {12.0, {.resourceCreation = 11, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    {24.0, {.resourceCreation = 2, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    {36.0, {.resourceCreation = 2, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {

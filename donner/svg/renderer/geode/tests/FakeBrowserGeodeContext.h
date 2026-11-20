@@ -22,7 +22,8 @@ namespace donner::geode::tests {
  * In the browser, every bridge call from a thread other than the canvas owner is one blocking
  * round trip to the owner, except two. Command recording: all commands between
  * `beginCommandBuffer` and `endCommandBuffer` travel as one batch, split every 1024 commands.
- * Deferred calls (buffer writes, bind group and layout construction, object destruction): they
+ * Deferred calls (buffer writes, texture view, bind group and layout construction, object
+ * destruction): they
  * travel with the thread's next round trip, or on their own as a command batch once 256 calls or
  * 256 KiB of payload are waiting. Pipeline descriptors are counted once each here although the
  * browser sends them in several calls.

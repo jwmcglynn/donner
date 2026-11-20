@@ -25,11 +25,13 @@ enum class BrowserDeferredOperation : uint8_t {
   CreateBindGroup,        //!< `createBindGroup`.
   CreateBindGroupLayout,  //!< `createBindGroupLayout`.
   DestroyObject,          //!< `destroyObject`.
+  CreateTextureView,      //!< `createTextureView`.
 };
 
 /// Bridge method name of each \ref BrowserDeferredOperation, in enumerator order.
-inline constexpr std::array<std::string_view, 4> kBrowserDeferredOperationNames = {
-    "writeBuffer", "createBindGroup", "createBindGroupLayout", "destroyObject"};
+inline constexpr std::array<std::string_view, 5> kBrowserDeferredOperationNames = {
+    "writeBuffer", "createBindGroup", "createBindGroupLayout", "destroyObject",
+    "createTextureView"};
 
 /// Bridge method name of \p operation. @param operation Deferred operation.
 constexpr std::string_view BrowserDeferredOperationName(BrowserDeferredOperation operation) {
@@ -73,7 +75,7 @@ public:
  *   The copy is made only when the call is held, never for a call that runs at once.
  * - **Liveness:** a held call whose device has begun releasing does not run; its copies are freed
  *   with the queue.
- * - **Refusals:** a refused write or bind group construction is stored into its own device's
+ * - **Refusals:** a refused write, view or bind group construction is stored into its own device's
  *   origin, which that device reads as a loss. A refused destruction is counted there for
  *   diagnostics only. A round trip whose own call belongs to a device with a call refused in the
  *   same trip does not run that call, so a submission cannot go ahead over a write that failed.
@@ -127,8 +129,8 @@ public:
   ~BrowserDeferredCalls() {
     dropReleased();
     for (const Call& call : calls_) {
-      // A dropped write or bind group leaves its device's browser state behind what the device
-      // believes, so the device fails closed if it is used again. A dropped release does not.
+      // A dropped write, view or bind group leaves browser state behind what its device believes,
+      // so the device fails closed if it is used again. A dropped release does not.
       if (call.operation != BrowserDeferredOperation::DestroyObject) {
         uint32_t none = static_cast<uint32_t>(BridgeStatus::Success);
         call.origin->refusal.compare_exchange_strong(

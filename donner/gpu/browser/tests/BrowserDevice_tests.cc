@@ -2776,13 +2776,14 @@ TEST(BrowserDevicePublishedState, ABridgeThatDoesNotPublishKeepsAskingTheBrowser
   EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsTrue());
 }
 
-// A write or bind group construction this device deferred that the browser refused surfaces at the
-// device's next operation of any kind, as a loss, and to every device sharing the loss condition,
-// rather than being dropped.
+// A write, view or bind group construction this device deferred that the browser refused surfaces
+// at the device's next operation of any kind, as a loss, and to every device sharing the loss
+// condition, rather than being dropped.
 TEST(BrowserDeviceDeferredRefusal, TheNextOperationFailsClosedAndDeclaresTheLoss) {
   const auto refused = IsGpuErrorWithMessage(
       GpuErrorType::InvalidState,
-      HasSubstr("the browser refused a write or bind group construction this device deferred"));
+      HasSubstr(
+          "the browser refused a write, view or bind group construction this device deferred"));
   for (const auto& [name, next] :
        std::vector<std::pair<std::string, std::function<Status(BrowserDevice&, Buffer&)>>>{
            {"writeBuffer",
@@ -2847,7 +2848,7 @@ TEST(BrowserDeviceDeferredRefusal, ASubmissionSkippedForARefusalInItsOwnTripDecl
   raw->failStatus = BridgeStatus::DeviceLost;
   EXPECT_THAT(device.result()->submit(RecordClearPass(*device.result(), view.result())),
               IsGpuErrorWithMessage(GpuErrorType::InvalidState,
-                                    HasSubstr("refused a write or bind group construction")));
+                                    HasSubstr("refused a write, view or bind group construction")));
   EXPECT_THAT(lostState->lost.load(), testing::IsTrue()) << "the shared loss is declared there";
 }
 
@@ -2878,7 +2879,7 @@ TEST(BrowserDeviceDeferredRefusal, ACommandSkippedForARefusalInItsBatchDeclaresT
   raw->failStatus = BridgeStatus::DeviceLost;
   EXPECT_THAT(device.result()->submit(RecordClearPass(*device.result(), view.result())),
               IsGpuErrorWithMessage(GpuErrorType::InvalidState,
-                                    HasSubstr("refused a write or bind group construction")));
+                                    HasSubstr("refused a write, view or bind group construction")));
   EXPECT_THAT(lostState->lost.load(), testing::IsTrue()) << "the shared loss is declared there";
 }
 
