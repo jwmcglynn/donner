@@ -4739,7 +4739,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         text_engine_detail::computeLocalFromBitmapGlyph(glyph, bitmap) * deviceFromLocalTransform;
     const Box2d bitmapRect(Vector2d::Zero(), Vector2d(bitmap.width, bitmap.height));
     encoder->setTransform(deviceFromBitmap);
-    // Bitmap glyphs resample with the kernel an image with `image-rendering: auto` uses.
+    // No specification governs resampling a glyph strike: `image-rendering` applies to images,
+    // not glyphs. Strikes use the kernel of an `<image>` with the default `image-rendering:
+    // auto`, as the software renderer does.
     encoder->drawPremultipliedImage(
         ImageResource{std::move(bitmap.rgbaPixels), bitmap.width, bitmap.height}, bitmapRect,
         opacity, ImageRendering::Auto);
