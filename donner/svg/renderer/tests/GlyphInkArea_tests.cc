@@ -326,6 +326,12 @@ std::optional<double> ExactTextArea(std::span<const uint8_t> fontData, std::stri
 // Opaque glyphs cover each pixel by the fraction of its area inside the outline, so the summed
 // coverage equals the outline's area. A renderer whose glyph edges sit outside or inside the
 // outline changes the sum by about the offset times the outline's perimeter.
+//
+// The exact area sums the glyphs while the rendered ink is their union, so the glyphs must not
+// overlap. Their bounding boxes cannot show that: kerning tucks the `e` under the arm of the `T`.
+// The test assumes the outlines are apart: the `T` bar starts 635 units above the baseline where
+// the `e` ends at 546, and at their unkerned advances the `e`, `x` and `t` boxes are 69 and 34
+// units apart.
 TEST(GlyphInkAreaTest, RenderedInkEqualsExactOutlineArea) {
   const std::vector<uint8_t> fontData =
       ReadFile(Runfiles::instance().Rlocation(std::string(kFontFile)));

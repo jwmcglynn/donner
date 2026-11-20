@@ -1058,7 +1058,7 @@ references rather than in Donner:
 - Exact area against rendered ink. The closed-form area of the quadratic `glyf` contours of
   "Text" at 160 px per em is 10,219.92 px^2. Donner's opaque rendering of it holds 10,221.52 px^2
   of ink with simple text and 10,222.79 with full text on the software renderer, and 10,220.36 and
-  10,219.24 on Geode (software Vulkan), all within 0.03%.
+  10,219.24 on Geode with both Metal and software Vulkan, all within 0.03%.
 - Stem widths against font units. The stem of Noto Sans `T` is 90 units and its bar 79, 14.40 and
   12.64 px at this size. In the vendored unfiltered `text/tspan/with-clip-path` reference, which
   draws the same "Text" from the same snapshot, they measure 14.93 and 13.20 px: 0.265 and 0.28 px
@@ -1069,9 +1069,12 @@ references rather than in Donner:
   68 pixels; 0.1 px leaves 1,341 and 3,477. In the `tspan` reference the total alpha exceeds
   Donner's by 550 px^2, 5.4% of the glyphs' area.
 
-The resvg v0.50.0 references of both rows are different renderings that Donner does not match at
-default settings (12,713 and 9,168 pixels on simple text), and the suite's results.csv records resvg
-failing both rows. The full text tier matches both goldens with no differing pixel at default
+The resvg v0.50.0 references do not apply the filter: `tspan/with-filter.png` is byte-identical to
+the plain "Text" reference of `tspan/with-clip-path`, `tspan/with-mask` and other rows, and
+`textPath/with-filter.png` to `textPath/two-paths.png`. Donner differs from them by 12,713 and
+9,168 pixels on simple text. The suite's results.csv records Chrome and Safari passing the vendored
+PNGs of both rows and Firefox and resvg failing them; those are visual grades, which cannot see a
+0.25 px edge offset. The full text tier matches both goldens with no differing pixel at default
 settings; Geode does not run `text/` rows.
 
 Independent evidence: `GlyphInkAreaTest.RenderedInkEqualsExactOutlineArea`

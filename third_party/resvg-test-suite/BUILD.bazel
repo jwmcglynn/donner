@@ -378,7 +378,7 @@ texel nearest its center, where the snapshot's samples a different grid. Filter 
 in sRGB (Filter Effects 1, section 5), so grayscale() of seagreen gives 115, the interior of
 upstream's url-and-grayscale reference; the snapshot's interior is 122, the result for linearRGB
 values. Donner matches upstream's three references at default parameters on both CPU text tiers
-(0, 0 and 37 pixels) and on Geode with software Vulkan (3, 3 and 34 pixels).
+(0, 0 and 37 pixels) and on Geode with Metal and with software Vulkan (3, 3 and 34 pixels).
 
   tests/filters/filter/with-subregion-3.png
   tests/painting/image-rendering/on-feImage.png

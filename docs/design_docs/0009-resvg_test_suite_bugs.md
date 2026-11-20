@@ -8,8 +8,10 @@ golden's provenance and SHA-256.
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
 golden is _not_ the right thing to compare against, the test pins
 `Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-<name>.png")`
-so it compares against a Donner-blessed golden instead. This doc is the catalog
-of every such override and the reason it exists.
+so it compares against a Donner-blessed golden instead. This doc describes the main override
+groups and their reasons; the registrations in
+`donner/svg/renderer/tests/resvg_test_suite.cc` and the golden README's "Registered golden
+digests" table are the complete lists.
 
 An override is justified when the vendored reference is not the right thing to compare against:
 
@@ -80,6 +82,8 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
+| text/tspan                 | with-filter                           | Reference disagreement: the reference draws glyph edges 0.25 to 0.3 px outside the outline |
+| text/textPath              | with-filter                           | Reference disagreement: the reference draws glyph edges 0.25 to 0.3 px outside the outline |
 
 `painting/stroke/{linear,radial}-gradient-on-text` compare against independently captured
 Firefox renderings at the suite's default comparison settings. The vendored images map the
@@ -245,9 +249,9 @@ The golden README records the evidence and, where known, the regeneration comman
 
 ## Golden files
 
-Every `resvg-*.png` and `donner-*.png` in `golden/` is referenced by an override above, except
-`resvg-tspan-with-relative-position.png`, which `TextPathGeode_tests.cc` compares Geode's
-text-on-path rendering with. The
+The golden README's "Registered golden digests" table lists every golden a resvg suite row
+compares against. `resvg-tspan-with-relative-position.png` is the one `resvg-*.png` or
+`donner-*.png` in `golden/` that no row uses; `TextPathGeode_tests.cc` compares Geode's text-on-path rendering with it. The
 `text/font-size` tests other than `named-value{,-without-a-parent}` compare against the upstream
 references.
 
