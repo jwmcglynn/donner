@@ -6654,7 +6654,8 @@ SVGDocument BitmapGlyphDocument(std::string_view body) {
  * font reports for that glyph. The placement is composed here, independently of the renderers:
  * the glyph origin comes from the text layout, and the strike's bearings and scale from the font,
  * so each image is `translate(origin) rotate(r) translate(-origin)` applied after
- * `translate(origin.x + bearingX, origin.y - bearingY) scale(strikeScale)`.
+ * `translate(origin.x + bearingX, origin.y - bearingY) scale(strikeScale)`, resampled as an image
+ * with `image-rendering: auto` is.
  */
 std::vector<std::string> BitmapGlyphImages(std::string_view body) {
   SVGDocument document = BitmapGlyphDocument(body);
@@ -6686,7 +6687,7 @@ std::vector<std::string> BitmapGlyphImages(std::string_view body) {
           bitmap->rgbaPixels, bitmap->width, bitmap->height);
       std::ostringstream image;
       image << std::setprecision(17) << "<image width='" << bitmap->width << "' height='"
-            << bitmap->height << "' preserveAspectRatio='none' image-rendering='smooth' "
+            << bitmap->height << "' preserveAspectRatio='none' image-rendering='auto' "
             << "transform='translate(" << glyph.xPosition << " " << glyph.yPosition << ") rotate("
             << glyph.rotateDegrees << ") translate(" << -glyph.xPosition << " " << -glyph.yPosition
             << ") translate(" << glyph.xPosition + bitmap->bearingX << " "
@@ -6759,7 +6760,8 @@ TEST_F(RendererRegressionTests, BitmapGlyphUnderSpanOpacityMatchesSoftwareRender
 
 // Color emoji in the vendored Noto Color Emoji are bitmap strikes. Each scene renders the emoji
 // text and, on the same renderer, the same strikes drawn as `<image>` elements placed from the
-// font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside.
+// font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside. Both the
+// active renderer and the software renderer must draw them identically.
 TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
   struct Scene {
     std::string_view label;
@@ -6820,6 +6822,10 @@ TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
     editor::tests::CompareBitmapToBitmap(actual, RenderTextOpacityCase(scene.reference(images)),
                                          "bitmap_glyph_" + std::string(scene.label),
                                          editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(
+        RenderBitmapGlyphScene(scene.text, RendererBackend::TinySkia),
+        RenderBitmapGlyphScene(scene.reference(images), RendererBackend::TinySkia),
+        "bitmap_glyph_cpu_" + std::string(scene.label), editor::tests::PixelmatchIdentityParams());
     const std::string withoutEmoji = scene.reference({});
     for (const RendererBackend backend : {ActiveRendererBackend(), RendererBackend::TinySkia}) {
       SCOPED_TRACE(RendererBackendName(backend));

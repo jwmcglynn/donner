@@ -3729,8 +3729,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
           const Transform2d deviceFromBitmap =
               ComputeDeviceFromBitmapGlyph(glyph, *bitmap, deviceFromLocalTransform_);
-          tiny_skia::PixmapPaint paint =
-              makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
+          // Bitmap glyphs resample with the kernel an image with `image-rendering: auto` uses.
+          tiny_skia::PixmapPaint paint = makePixmapPaint(
+              currentPixmap(), FilterQualityForImageRendering(ImageRendering::Auto));
           paint.opacity = NarrowToFloat(spanOpacity);
           paint.blendMode = tiny_skia::BlendMode::SourceOver;
 
