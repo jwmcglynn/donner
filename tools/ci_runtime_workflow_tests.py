@@ -159,6 +159,13 @@ def _run_bodies(text):
     return bodies
 
 
+def _action_input_defaults(text):
+    """The default values of a composite action's inputs, which its steps may run as scripts."""
+    inputs = text.split("\ninputs:\n", 1)[1] if "\ninputs:\n" in text else ""
+    inputs = re.split(r"^\S", inputs, maxsplit=1, flags=re.MULTILINE)[0]
+    return re.findall(r"^    default: *(.*)$", inputs, re.MULTILINE)
+
+
 def _phases_testing_the_selection():
     """(lane, phase, actions, test actions) of each lane phase that tests the planner's selection
     or a subset of it."""
@@ -804,6 +811,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                   for path in arm.split("|")]
         self.assertEqual(sorted(listed), sorted(WORKFLOW_LOGIC_SCRIPTS))
         lane_table = _repository_text("tools/ci/lanes.py")
+        # The workflow with the composite actions it uses, whose steps run in its jobs.
+        workflow = self.main_text + "".join(
+            _repository_text(".github/actions/%s/action.yml" % name) for name in
+            sorted(set(re.findall(r"uses: \./\.github/actions/([\w-]+)$", self.main_text,
+                                  re.MULTILINE))))
         for path in WORKFLOW_LOGIC_SCRIPTS:
             with self.subTest(path=path):
                 if path == "tools/ci/lanes.py":
@@ -814,8 +826,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     # Run by its steps as `python3 <path>`.
                     self.assertIn("run: python3 %s " % path, self.main_text)
                 else:
-                    # A step body that a step or a lane phase runs, kept executable.
-                    self.assertIn(path, self.main_text + lane_table)
+                    # A step body that a step, an action input or a lane phase runs, kept
+                    # executable.
+                    self.assertIn(path, workflow + lane_table)
                     mode = Path(runfiles.Create().Rlocation("donner/" + path)).stat().st_mode
                     self.assertTrue(mode & 0o111, path)
 
@@ -845,10 +858,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
         texts = [self.main, (workflows / "pr_base_change.yml").read_text(encoding="utf-8")]
-        texts += [path.read_text(encoding="utf-8")
-                  for path in sorted((workflows.parent / "actions").glob("*/action.y*ml"))]
-        invoked = {path for text in texts for body in _run_bodies(text)
-                   for path in _SCRIPT_PATH.findall(body)}
+        actions = [path.read_text(encoding="utf-8")
+                   for path in sorted((workflows.parent / "actions").glob("*/action.y*ml"))]
+        commands = [body for text in texts + actions for body in _run_bodies(text)]
+        # An action may run a script named by an input, so a caller can pass its own checkout's.
+        commands += [value for text in actions for value in _action_input_defaults(text)]
+        invoked = {path for command in commands for path in _SCRIPT_PATH.findall(command)}
         # And every script a lane phase runs, which the entry point and its table name.
         invoked |= {path for source in ("tools/ci/lane.py", "tools/ci/lanes.py")
                     for path in _SCRIPT_PATH.findall(_repository_text(source))}
@@ -864,6 +879,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(_run_bodies("      - run: tools/a.sh\n        run: |\n          # x\n"
                                      "          tools/b.sh\n      - name: c\n"),
                          ["tools/a.sh", "          tools/b.sh"])
+        self.assertEqual(_action_input_defaults(
+            "name: a\ninputs:\n  script:\n    default: tools/a.sh\nruns:\n  using: composite\n"
+            "  steps:\n    - with:\n        default: tools/b.sh\n"), ["tools/a.sh"])
 
     def _run_script(self, text, args, env=None, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1245,6 +1263,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         start = job.index("          should_fallback=false\n")
         end = job.index('          work_dir="$(mktemp -d)"', start)
         script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        # The main workflow's planner; the hosted Editor Wasm mode is pinned by
+        # //tools/ci:determine_targets_tests.
+        script += "selection=standard\n"
         # A full selection still hashes the revision once, so a change that breaks the hashing
         # fails its own pull request; //tools/ci:determine_targets_tests runs the real call.
         script += 'generate_hashes() { echo "self_check=hashed" >> "$GITHUB_OUTPUT"; }\n'
@@ -1265,6 +1286,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             ("build_defs/rules.bzl", full),
             ("build_defs/check_banned_patterns.py", "incremental=true\n"),
             (".github/workflows/pr_base_change.yml", full),
+            # The composite action that pins bazel-diff.
+            (".github/actions/prepare-bazel-diff/action.yml", full),
             (".github/workflows/lint.yml", "incremental=true\n"),
         ):
             with self.subTest(changed_files=changed_files):
@@ -1938,7 +1961,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("graph_test ", build)
         self.assertEqual(1, self._lane_function("graph_test").count("bazelisk test"))
         self.assertNotIn("bazelisk fetch", build)
-        self.assertIn('"${graph_roots[@]}" "$budget_suite"', build)
+        self.assertRegex(build, r' "\$\{graph_roots\[@\]\}"$')
+        # The complete graph includes the budget suite; only a proved browser subset replaces it,
+        # as //tools/ci:editor_wasm_lane_tests pins.
+        self.assertIn('\ngraph_roots+=("$budget_suite")\n', self.editor_wasm_lane)
         self.assertIn("//tools/ci:hosted_editor_wasm_graph", self.editor_wasm_lane)
 
     def test_hosted_graph_requires_both_browser_bridge_link_roots(self):

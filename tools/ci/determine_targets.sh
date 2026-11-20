@@ -331,9 +331,9 @@ determine() {
       return
     fi
     # A full selection skips the graph diff, so without this a change to an input of the
-    # hashing itself (these scripts, this workflow, which pins bazel-diff, or Bazel's version,
-    # configuration, modules and rules) would first fail on main. Hash this revision once, fail
-    # on error, and discard the hashes. It costs one query of the graph.
+    # hashing itself (these scripts, this workflow, the action that pins bazel-diff, or Bazel's
+    # version, configuration, modules and rules) would first fail on main. Hash this revision
+    # once, fail on error, and discard the hashes. It costs one query of the graph.
     echo "Checking that bazel-diff can hash this revision."
     self_check="$(mktemp)"
     if ! generate_hashes "$PWD" "$self_check"; then
