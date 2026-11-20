@@ -795,6 +795,25 @@ struct ResolvedRadialGradient {
   std::optional<css::RGBA> solidFallback;
 };
 
+/// The single color a zero-radius radial gradient paints, the last stop's, after its stops are
+/// charged to the frame. Empty when \p charge refuses them.
+ResolvedRadialGradient ZeroRadiusRadialFill(
+    const components::ComputedGradientComponent& computedGradient, const css::RGBA currentColor,
+    float opacity, GradientStopCharge& charge) {
+  ResolvedRadialGradient out;
+  if (!charge.admit(computedGradient.stops.size())) {
+    return out;
+  }
+  const auto& lastStop = computedGradient.stops.back();
+  const css::RGBA base = lastStop.color.resolve(currentColor, opacity);
+  // Multiply in stop-opacity per SVG2 (stop-color * stop-opacity) and then
+  // the overall paint opacity factor that `buildGradientStops` also honors.
+  const double stopOpacity = std::clamp<double>(lastStop.opacity, 0.0, 1.0);
+  out.solidFallback =
+      css::RGBA(base.r, base.g, base.b, static_cast<uint8_t>(std::round(base.a * stopOpacity)));
+  return out;
+}
+
 /// Same shape as @ref resolveLinearGradientParams, but for radial gradients.
 /// Returns `nullopt` if the referenced entity isn't a radial gradient. If it
 /// IS a radial gradient but is degenerate (zero outer radius), returns a
@@ -837,7 +856,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
       resolveGradientCoord(radial->fr, frame->coordBounds, frame->numbersArePercent);
   // Negative radii are invalid, unlike the valid zero-radius last-stop case below.
   // Validate both before either degeneracy rule so r=0 cannot hide an invalid fr.
-  if (radius < 0.0 || focalRadius < 0.0) {
+  if (std::min(radius, focalRadius) < 0.0) {
     return ResolvedRadialGradient{};
   }
   // SVG2: a radius of zero collapses the gradient to a single point. Match
@@ -845,18 +864,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   // stop in the gradient - this keeps elements visible for valid degenerate
   // radial gradients (e.g., `r="0"` with a single visible color).
   if (radius == 0.0) {
-    ResolvedRadialGradient out;
-    if (!charge.admit(computedGradient->stops.size())) {
-      return out;
-    }
-    const auto& lastStop = computedGradient->stops.back();
-    const css::RGBA base = lastStop.color.resolve(currentColor, opacity);
-    // Multiply in stop-opacity per SVG2 (stop-color * stop-opacity) and then
-    // the overall paint opacity factor that `buildGradientStops` also honors.
-    const double stopOpacity = std::clamp<double>(lastStop.opacity, 0.0, 1.0);
-    out.solidFallback =
-        css::RGBA(base.r, base.g, base.b, static_cast<uint8_t>(std::round(base.a * stopOpacity)));
-    return out;
+    return ZeroRadiusRadialFill(*computedGradient, currentColor, opacity, charge);
   }
 
   const Vector2d center =
