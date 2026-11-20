@@ -1009,10 +1009,10 @@ std::string GradientDefs(int stops) {
 /// Gradient-painted text charges the frame's stop budget as the CPU renderer does: once for the
 /// text element's own fill and stroke, then once for each run's fill and stroke, however many
 /// glyphs the run has. Each of those paints converts its stops once, so the frame converts what
-/// it charges, and every glyph draws from its run's paints. Two runs of three and two glyphs carry one 20-stop gradient in fill and
-/// stroke, so tiny-skia charges 120 stops; unbounded, and under caps that refuse the second run's
-/// stroke, the first run's stroke, and the element's stroke, Geode's charged stops and verdict
-/// equal tiny-skia's.
+/// it charges, and every glyph draws from its run's paints. Two runs of three and two glyphs carry
+/// one 20-stop gradient in fill and stroke, so tiny-skia charges 120 stops; unbounded, and under
+/// caps that refuse the second run's stroke, the first run's stroke, and the element's stroke,
+/// Geode's charged stops and verdict equal tiny-skia's.
 TEST_F(GeodeGlyphInstancingTest, GradientTextChargesItsStopsOncePerRunLikeTinySkia) {
   const std::string source =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" + GradientDefs(20) +
