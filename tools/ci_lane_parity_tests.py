@@ -738,14 +738,10 @@ def _context(scenario):
             return []
         if name == "github.event.deleted":
             return False
-        if name in STEP_OUTPUTS:
-            return STEP_OUTPUTS[name][0]
-        if name in REPOSITORY_VARIABLES:
-            return REPOSITORY_VARIABLES[name][0]
-        if name in SHADOW_LANE_CONTEXT:
-            return SHADOW_LANE_CONTEXT[name][0]
-        if name in HOSTED_EDITOR_SELECTION_CONTEXT:
-            return HOSTED_EDITOR_SELECTION_CONTEXT[name][0]
+        for reviewed in (STEP_OUTPUTS, REPOSITORY_VARIABLES, SHADOW_LANE_CONTEXT,
+                         HOSTED_EDITOR_SELECTION_CONTEXT):
+            if name in reviewed:
+                return reviewed[name][0]
         # An output that is not modelled above can decide which checks run, so it fails the
         # test until it is reviewed and listed.
         raise ValueError("unmodelled context %s" % name)
