@@ -248,7 +248,8 @@ class DetermineTest(_ScriptTest):
         configs = _queries(**{_HOSTED_ROOT_QUERY: (roots, 0)})
         browser = _HOSTED_BROWSERS[4]
         cases = [
-            (browser, ["hosted_editor_mode=browser_subset", f"hosted_editor_browser_targets={browser}"]),
+            (browser, ["hosted_editor_mode=browser_subset",
+                       f"hosted_editor_browser_targets={browser}"]),
             (_HOSTED_PACKAGE, ["hosted_editor_mode=full"]),
             ("//donner/native:only", ["hosted_editor_mode=unaffected"]),
         ]

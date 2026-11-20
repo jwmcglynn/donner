@@ -44,7 +44,8 @@ class HostedEvidenceTest(unittest.TestCase):
         first, other = sorted(HOSTED)[:2]
         event = json.dumps(self.event(first))
         stage([event], self.root, self.destination, subset={first})
-        self.assertEqual([p.read_text() for p in self.destination.glob("*/case-count.txt")], ["3\n"])
+        counts = [p.read_text() for p in self.destination.glob("*/case-count.txt")]
+        self.assertEqual(counts, ["3\n"])
         with self.assertRaisesRegex(ValueError, "Missing hosted browser evidence"):
             stage([], self.root, self.destination, subset={first})
         with self.assertRaisesRegex(ValueError, "Unexpected hosted browser result"):

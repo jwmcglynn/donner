@@ -2440,9 +2440,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("needs.hosted-selection.result != 'success' ||", build)
         self.assertIn("needs.hosted-selection.outputs.mode != 'unaffected'", build)
         self.assertIn("github.event_name != 'pull_request' ||", build)
-        for step in ("Snapshot the browser-tested release files", "Prove the package's resolved module graph",
+        for step in ("Snapshot the browser-tested release files",
+                     "Prove the package's resolved module graph",
                      "Stage package for handoff", "Upload Geode package artifact",
-                     "Stage immutable Geode deployment candidate", "Upload Geode deployment candidate",
+                     "Stage immutable Geode deployment candidate",
+                     "Upload Geode deployment candidate",
                      "Record deployment candidate digest"):
             with self.subTest(step=step):
                 step_body = _step_body(workflow, step)

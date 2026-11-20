@@ -132,7 +132,8 @@ class EditorWasmLaneTest(unittest.TestCase):
 
     def test_browser_subset_fetch_and_test_only_the_selected_test(self):
         selected = "//donner/editor/wasm/tests:hosted_firefox_composited_invariants_test"
-        validation = ["python3", "tools/ci/hosted_editor_selection.py", "--validate-browser-targets"]
+        validation = ["python3", "tools/ci/hosted_editor_selection.py",
+                      "--validate-browser-targets"]
         for command in ("prefetch", "build"):
             with self.subTest(command=command):
                 result, calls = self._run(command, browser_targets=selected)
