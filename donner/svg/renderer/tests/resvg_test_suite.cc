@@ -403,7 +403,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"complex-transform.svg",
                      Params::WithThreshold(0.09f, kDefaultMismatchedPixels,
-                                           "Skewed blur edges mix colors differently")},
+                                           "Reference snaps the skewed offset to whole pixels")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
