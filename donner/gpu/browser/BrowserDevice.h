@@ -3,6 +3,7 @@
 /// \c donner::gpu::browser::BrowserDevice - the browser backend of the Donner GPU runtime.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -186,6 +187,10 @@ public:
   /// accessor; a nonzero count is a caller error, not a device state.
   uint64_t nestedWaitRefusalsForTest() const { return nestedWaitRefusals_; }
 
+  /// Shortest time between the browser calls that ask for completion progress, the same interval
+  /// the browser side itself coalesces those requests over.
+  static constexpr std::chrono::milliseconds kCompletionProgressInterval{8};
+
 protected:
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) override;
@@ -268,6 +273,23 @@ private:
 
   /// Publishes an observed browser loss to all devices sharing its loss condition.
   void recordBrowserLoss() const;
+
+  /// Ownership and loss together, from the state the browser side publishes once it does, and
+  /// from a browser call before that. @return As \ref BrowserBridge::deviceStatus.
+  BridgeStatus queryDeviceStatus() const;
+
+  /// Whether the browser has reported the device lost, read the same way.
+  bool queryDeviceLost() const;
+
+  /**
+   * The most recent submission the browser has reported finished, read the same way.
+   *
+   * A browser can hold a completion until another queue operation, which only the browser call
+   * requests. While submitted work is still unfinished, that call is therefore still made, at most
+   * once per \ref kCompletionProgressInterval; in between, and whenever nothing is pending, the
+   * published serial answers.
+   */
+  uint64_t queryCompletedSerial() const;
 
   /**
    * Fails closed unless this device can still be used from here: not lost, and called from the
@@ -477,6 +499,12 @@ private:
 
   /// True while this device has handed the thread to the browser and not yet taken it back.
   bool yielding_ = false;
+
+  /// Whether the browser side publishes this device's state into the bridge's published state.
+  bool publishing_ = false;
+
+  /// When this device last asked the browser for completion progress.
+  mutable std::chrono::steady_clock::time_point lastCompletionProgressRequest_{};
 
   /// Waits refused because they were entered while this device was already yielding.
   uint64_t nestedWaitRefusals_ = 0;

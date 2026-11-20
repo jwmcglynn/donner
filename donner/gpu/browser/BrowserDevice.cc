@@ -326,10 +326,47 @@ BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge,
                                        : std::make_shared<DeviceLostState>()),
       sharedDeviceIdentity_(bridge_->sharedDeviceIdentity()) {
   adoptLostState(sharedLoss_);
+  publishing_ = bridge_->beginPublishingState();
+}
+
+BridgeStatus BrowserDevice::queryDeviceStatus() const {
+  if (publishing_) {
+    switch (bridge_->publishedState().status.load(std::memory_order_acquire)) {
+      case BrowserPublishedState::kLive: return BridgeStatus::Success;
+      case BrowserPublishedState::kLost: return BridgeStatus::DeviceLost;
+      default: break;
+    }
+  }
+  return bridge_->deviceStatus();
+}
+
+bool BrowserDevice::queryDeviceLost() const {
+  if (publishing_) {
+    const uint32_t status = bridge_->publishedState().status.load(std::memory_order_acquire);
+    if (status != BrowserPublishedState::kUnpublished) {
+      return status == BrowserPublishedState::kLost;
+    }
+  }
+  return bridge_->isDeviceLost();
+}
+
+uint64_t BrowserDevice::queryCompletedSerial() const {
+  if (publishing_ && bridge_->publishedState().status.load(std::memory_order_acquire) !=
+                         BrowserPublishedState::kUnpublished) {
+    const uint64_t published =
+        bridge_->publishedState().completedSerial.load(std::memory_order_acquire);
+    const auto now = std::chrono::steady_clock::now();
+    if (published >= lastSubmittedSerial() ||
+        now - lastCompletionProgressRequest_ < kCompletionProgressInterval) {
+      return published;
+    }
+    lastCompletionProgressRequest_ = now;
+  }
+  return bridge_->completedSerial();
 }
 
 bool BrowserDevice::observeBrowserLoss() const {
-  if (!bridge_->isDeviceLost()) {
+  if (!queryDeviceLost()) {
     return false;
   }
   recordBrowserLoss();
@@ -372,7 +409,7 @@ BrowserDevice::~BrowserDevice() {
 }
 
 uint64_t BrowserDevice::completedSerial() const {
-  return bridge_->completedSerial();
+  return queryCompletedSerial();
 }
 
 bool BrowserDevice::isDeviceLost() const {
@@ -405,7 +442,7 @@ bool BrowserDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
     if (observeBrowserLoss()) {
       return false;
     }
-    if (bridge_->completedSerial() >= serial) {
+    if (queryCompletedSerial() >= serial) {
       return true;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
@@ -443,7 +480,7 @@ Status BrowserDevice::checkUsable(std::string_view operation) const {
   if (Status status = checkCallingThread(operation); status.hasError()) {
     return status;
   }
-  const BridgeStatus status = bridge_->deviceStatus();
+  const BridgeStatus status = queryDeviceStatus();
   if (status == BridgeStatus::NotOwner) {
     return Err(GpuErrorType::InvalidState,
                std::format("{}: the browser device belongs to another worker", operation));

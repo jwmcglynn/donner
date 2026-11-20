@@ -894,3 +894,52 @@ test("queue writes enforce ownership and loss without a prior status query", asy
     assert.equal(textureWrites, 1);
   }
 });
+
+// Published state: the runtime device reads liveness and its completed serial from words the
+// library stores to, so they must never run ahead of what the browser has reported.
+test("published state follows completion and loss and stops at release", async () => {
+  const bridge = loadLibrary();
+  const status = bridge.reserve(8);
+  const serial = bridge.reserve(8);
+  assert.equal(
+    bridge.entryPoints.donner_gpu_publish_state(kFirst, status, serial),
+    0,
+    "a device that is not open publishes nothing",
+  );
+  await beginReady(bridge, kFirst);
+  assert.equal(bridge.entryPoints.donner_gpu_publish_state(kFirst, status + 2, serial), 0);
+  assert.equal(bridge.entryPoints.donner_gpu_publish_state(kFirst, status, serial + 4), 0);
+  assert.equal(bridge.entryPoints.donner_gpu_publish_state(kFirst, status, serial), 1);
+  assert.equal(bridge.read(status), bridge.state.kPublishedLive);
+  assert.equal(bridge.read64(serial), 0n);
+
+  let complete;
+  bridge.device.queue.onSubmittedWorkDone = () => new Promise((resolve) => complete = resolve);
+  submitPending(bridge, kFirst, 42);
+  assert.equal(bridge.read64(serial), 0n, "a submission is not its completion");
+  complete();
+  await drain();
+  assert.equal(bridge.read64(serial), 42n);
+
+  bridge.lose({ reason: "destroyed", message: "test loss" });
+  await drain();
+  assert.equal(bridge.read(status), bridge.state.kPublishedLost);
+});
+
+test("a completion after release stores nothing into the released words", async () => {
+  const bridge = loadLibrary();
+  await beginReady(bridge, kFirst);
+  await beginReady(bridge, kSecond);
+  const status = bridge.reserve(8);
+  const serial = bridge.reserve(8);
+  assert.equal(bridge.entryPoints.donner_gpu_publish_state(kFirst, status, serial), 1);
+  let complete;
+  bridge.device.queue.onSubmittedWorkDone = () => new Promise((resolve) => complete = resolve);
+  submitPending(bridge, kFirst, 7);
+  bridge.entryPoints.donner_gpu_release_device(kFirst);
+  complete();
+  bridge.lose({ reason: "destroyed", message: "test loss" });
+  await drain();
+  assert.equal(bridge.read64(serial), 0n, "the runtime may already have reused the released words");
+  assert.equal(bridge.read(status), bridge.state.kPublishedLive);
+});

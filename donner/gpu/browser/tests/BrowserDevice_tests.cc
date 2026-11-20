@@ -2573,4 +2573,117 @@ TEST(BrowserDeviceSharing, RefusesARegistrationFromAThreadThatDoesNotOwnTheDevic
   EXPECT_THAT(consumer.bridge->objectCount(), 0u);
 }
 
+/// Builds a device over a ready fake bridge that publishes its state, as the browser side does.
+BrowserFixture MakePublishingDevice() {
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  bridge->publishes = true;
+  FakeBrowserBridge* raw = bridge.get();
+  Result<std::unique_ptr<BrowserDevice>> device =
+      BrowserDeviceRequest::Begin(std::move(bridge)).take();
+  EXPECT_THAT(device, HasResult());
+  if (device.hasError()) {
+    return BrowserFixture{};
+  }
+  return BrowserFixture{raw, std::move(device).result()};
+}
+
+/// Every query the fake bridge has answered, as one count.
+uint64_t BrowserQueries(const FakeBrowserBridge& bridge) {
+  return bridge.queries->deviceStatus + bridge.queries->deviceLoss +
+         bridge.queries->completedSerial;
+}
+
+TEST(BrowserDevicePublishedState, AnswersOwnershipLossAndIdleCompletionWithoutBrowserCalls) {
+  BrowserFixture fixture = MakePublishingDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  const uint64_t before = BrowserQueries(*fixture.bridge);
+
+  EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
+  EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsFalse());
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_THAT(fixture.device->waitForSerial(0, 10.0), testing::IsTrue());
+
+  EXPECT_EQ(BrowserQueries(*fixture.bridge), before)
+      << "a published live device with nothing pending needs no browser query";
+}
+
+TEST(BrowserDevicePublishedState, CompletionNeverRunsAheadOfWhatTheBrowserReported) {
+  BrowserFixture fixture = MakePublishingDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  Result<Texture> target =
+      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
+  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
+  ASSERT_EQ(fixture.device->lastSubmittedSerial(), 2u);
+
+  // The browser has finished nothing yet, so the device reports nothing finished.
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  fixture.bridge->completeThrough(1);
+  EXPECT_THAT(fixture.device->completedSerial(), 1u);
+  EXPECT_THAT(fixture.device->waitForSerial(1, 10.0), testing::IsTrue());
+  fixture.bridge->completeThrough(2);
+  EXPECT_THAT(fixture.device->completedSerial(), 2u);
+}
+
+TEST(BrowserDevicePublishedState, PendingWorkStillAsksTheBrowserForProgressAtABoundedRate) {
+  BrowserFixture fixture = MakePublishingDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  Result<Texture> target =
+      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
+
+  // A browser may hold a completion until another queue operation, which only its completion
+  // query requests, so unfinished work keeps asking, but not on every poll.
+  const uint64_t before = fixture.bridge->queries->completedSerial;
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 1);
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 1)
+      << "a second poll inside the progress interval reads the published serial";
+  std::this_thread::sleep_for(BrowserDevice::kCompletionProgressInterval * 2);
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 2);
+}
+
+TEST(BrowserDevicePublishedState, PublishedLossFailsEveryOperationClosed) {
+  auto lostState = std::make_shared<DeviceLostState>();
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  bridge->publishes = true;
+  FakeBrowserBridge* raw = bridge.get();
+  Result<std::unique_ptr<BrowserDevice>> device =
+      BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+  ASSERT_THAT(device, HasResult());
+
+  raw->reportLoss(RcString("the browser reset the adapter"));
+  EXPECT_THAT(device.result()->createBuffer(SimpleBuffer(BufferUsage::Vertex)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("was lost")));
+  EXPECT_THAT(device.result()->isDeviceLost(), testing::IsTrue());
+  EXPECT_THAT(lostState->lost.load(), testing::IsTrue());
+  EXPECT_THAT(device.result()->waitForSerial(1, 3600.0), testing::IsFalse());
+  EXPECT_THAT(raw->yieldCount, 0u);
+}
+
+TEST(BrowserDevicePublishedState, ABridgeThatDoesNotPublishKeepsAskingTheBrowser) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  const FakeBrowserBridge::QueryCounts before = *fixture.bridge->queries;
+  EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
+  EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsFalse());
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_GT(fixture.bridge->queries->deviceStatus, before.deviceStatus);
+  EXPECT_GT(fixture.bridge->queries->deviceLoss, before.deviceLoss);
+  EXPECT_GT(fixture.bridge->queries->completedSerial, before.completedSerial);
+  // Without publication, a loss the browser records is seen on the next query.
+  fixture.bridge->lost = true;
+  EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsTrue());
+}
+
 }  // namespace donner::gpu::browser

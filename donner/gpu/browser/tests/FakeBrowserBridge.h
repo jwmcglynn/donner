@@ -220,6 +220,10 @@ public:
   /// Whether an accepted submission completes at once, raising \ref completed to its serial, as
   /// on a browser whose queue keeps up.
   bool completeOnSubmit = false;
+  /// Whether \ref beginPublishingState accepts, so the device reads published state. A test that
+  /// sets \ref completed or \ref lost directly leaves this off; one that turns it on changes them
+  /// through \ref completeThrough and \ref reportLoss, which publish as the browser side does.
+  bool publishes = false;
 
   /// Reads that change no browser state. Each is one synchronous browser call, as an accepted call
   /// in \ref calls is, but they are counted rather than recorded line by line.
@@ -330,6 +334,29 @@ public:
       return BridgeStatus::NotOwner;
     }
     return lost || gpuDevice->lost ? BridgeStatus::DeviceLost : BridgeStatus::Success;
+  }
+
+  bool beginPublishingState() override {
+    if (!publishes || requestState != BrowserDeviceRequestState::Ready || !owned) {
+      return false;
+    }
+    publishing_ = true;
+    publish();
+    return true;
+  }
+
+  /// Reports the submissions through \p serial finished, as the browser's completion callback
+  /// does. @param serial Most recent finished submission.
+  void completeThrough(uint64_t serial) {
+    completed = std::max(completed, serial);
+    publish();
+  }
+
+  /// Reports the device lost, as the browser's loss callback does. @param reason Loss reason.
+  void reportLoss(RcString reason) {
+    lost = true;
+    lostReason = std::move(reason);
+    publish();
   }
 
   bool isDeviceLost() const override {
@@ -781,7 +808,7 @@ public:
       finishedCommandBuffers_ = 0;
       recordingSerial_ = 0;
       if (completeOnSubmit) {
-        completed = std::max(completed, submissionSerial);
+        completeThrough(submissionSerial);
       }
     }
     return status;
@@ -958,6 +985,20 @@ public:
   }
 
 private:
+  /// Stores the current completion and liveness once publishing, completion first.
+  void publish() {
+    if (!publishing_) {
+      return;
+    }
+    BrowserPublishedState& state = publishedStateStorage();
+    state.completedSerial.store(completed, std::memory_order_seq_cst);
+    state.status.store(
+        lost || gpuDevice->lost ? BrowserPublishedState::kLost : BrowserPublishedState::kLive,
+        std::memory_order_seq_cst);
+  }
+
+  bool publishing_ = false;
+
   /// A mapping the browser has been asked for.
   struct Mapping {
     MapSliceState state = MapSliceState::Pending;  //!< What a wait slice reports.

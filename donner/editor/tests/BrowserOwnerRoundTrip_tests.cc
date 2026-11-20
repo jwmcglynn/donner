@@ -34,12 +34,11 @@ struct HeldFrame {
 };
 
 /// The recorded baseline. A change that lowers these updates them; one that raises them must
-/// explain why.
+/// explain why. Ownership, loss and completion queries are absent: the browser side publishes
+/// that state, so a held frame reads it without a round trip.
 constexpr HeldFrame kHeldFrames[] = {
     {12.0,
-     {.ownershipQuery = 95,
-      .completionQuery = 86,
-      .resourceCreation = 45,
+     {.resourceCreation = 45,
       .resourceDestruction = 72,
       .bufferWrite = 44,
       .resourceSharing = 2,
@@ -47,9 +46,7 @@ constexpr HeldFrame kHeldFrames[] = {
       .queueSubmit = 3,
       .bindGroupConstruction = 45}},
     {24.0,
-     {.ownershipQuery = 74,
-      .completionQuery = 82,
-      .resourceCreation = 36,
+     {.resourceCreation = 36,
       .resourceDestruction = 68,
       .bufferWrite = 53,
       .resourceSharing = 2,
@@ -57,9 +54,7 @@ constexpr HeldFrame kHeldFrames[] = {
       .queueSubmit = 3,
       .bindGroupConstruction = 33}},
     {36.0,
-     {.ownershipQuery = 70,
-      .completionQuery = 78,
-      .resourceCreation = 35,
+     {.resourceCreation = 35,
       .resourceDestruction = 64,
       .bufferWrite = 55,
       .resourceSharing = 2,
