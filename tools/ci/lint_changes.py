@@ -184,6 +184,8 @@ def relationship_commands(paths):
     if any(fuzz_input(p) for p in paths):
         yield "Check fuzzer soak coverage", [py, "tools/ci/fuzz_lane_coverage.py"]
     yield from gpu_commands(paths)
+    if any(p.endswith(".bzl") or p == "build_defs/check_variant_transitions.py" for p in paths):
+        yield "Check variant transitions", [sys.executable, "build_defs/check_variant_transitions.py"]
 
 
 def gpu_commands(paths):

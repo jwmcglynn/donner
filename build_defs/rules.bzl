@@ -9,6 +9,8 @@ load("//build_defs:wasm_profiles.bzl", "WASM_OPTION_INPUTS", "WASM_OPTION_OUTPUT
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:performance.bzl", "native_speed_copts")
+load("//build_defs:variant_neutral.bzl", "variant_neutral_srcs")
+load("//build_defs:variant_settings.bzl", "variant_transition")
 load(
     "//tools/format:clang_format_check.bzl",
     "clang_format_check",
@@ -165,7 +167,7 @@ def _renderer_backend_transition_impl(settings, attr):
         "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
     }
 
-_renderer_backend_transition = transition(
+_renderer_backend_transition = variant_transition(
     implementation = _renderer_backend_transition_impl,
     inputs = [
         "//build_defs:disable_backend_test_transition",
@@ -407,7 +409,7 @@ def _multi_transition_impl(settings, attr):
         "//donner/svg/renderer/geode:enable_geode": settings["//donner/svg/renderer/geode:enable_geode"] if preserve_backend else backend == "geode",
     }
 
-_multi_transition = transition(
+_multi_transition = variant_transition(
     implementation = _multi_transition_impl,
     inputs = [
         "//build_defs:disable_backend_test_transition",
@@ -858,7 +860,7 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
         **kwargs
     )
 
-def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, **kwargs):
+def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, variant_neutral = False, **kwargs):
     """
     Create a cc_library with donner-specific defaults.
 
@@ -869,6 +871,9 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
       copts: List of copts.
       tags: List of tags.
       visibility: Visibility.
+      variant_neutral: Compile the sources once per platform rather than once per product
+        variant. Analysis fails where any variant changes what the compile sees; see
+        build_defs/variant_neutral.bzl.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
     ci_darwin_targets()
@@ -889,11 +894,23 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
             if not matcher.startswith("//experimental"):
                 fail("Invalid visibility, must be under //experimental: " + matcher)
 
+    include_prefix = "/".join(package_path)
+    library_srcs = srcs
+    if variant_neutral:
+        library_srcs = variant_neutral_srcs(
+            name = name,
+            srcs = srcs,
+            hdrs = hdrs,
+            include_prefix = include_prefix,
+            copts = copts + ["-I."],
+            **kwargs
+        )
+
     cc_library(
         name = name,
-        srcs = srcs,
+        srcs = library_srcs,
         hdrs = hdrs,
-        include_prefix = "/".join(package_path),
+        include_prefix = include_prefix,
         copts = copts + ["-I."],
         tags = tags,
         visibility = visibility,
@@ -1358,7 +1375,7 @@ def _ci_test_platform(settings, attr):
                 options[key] = [v for v in options[key] if v.split("=", 1)[0] != "DONNER_CI_XCODE_IDENTITY"] + [identity]
     return options
 
-_ci_test_transition = transition(
+_ci_test_transition = variant_transition(
     implementation = _ci_test_platform,
     inputs = _CI_PLATFORM_OPTIONS + ["//command_line_option:xcode_version"],
     outputs = _CI_PLATFORM_OPTIONS,

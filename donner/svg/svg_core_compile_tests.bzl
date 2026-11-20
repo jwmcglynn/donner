@@ -3,6 +3,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+load("//build_defs:variant_settings.bzl", "variant_transition")
 
 _TEXT = "//donner/svg/renderer:text"
 _FULL = "//donner/svg/renderer:text_full"
@@ -14,7 +15,7 @@ def _tiers_impl(_settings, _attr):
         "full": {_TEXT: True, _FULL: True},
     }
 
-_tiers = transition(implementation = _tiers_impl, inputs = [], outputs = [_TEXT, _FULL])
+_tiers = variant_transition(implementation = _tiers_impl, inputs = [], outputs = [_TEXT, _FULL])
 
 _Compiles = provider(fields = ["actions", "inputs"])
 
