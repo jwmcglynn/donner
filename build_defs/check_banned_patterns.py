@@ -9,6 +9,8 @@ but not on 64-bit Linux (where int64_t is long).
 
 Rules enforced:
   - No `long long` type: use std::int64_t / std::uint64_t / std::size_t
+  - No bare abort() in the browser GPU owner, editor worker and frame-driver sources: name the
+    site with donner::FatalAbort
   - No `std::aligned_storage`: use alignas(T) on a byte buffer
   - No `std::aligned_union`: same reason
   - No user-defined literal operators (operator"" _foo): use named helpers
@@ -54,7 +56,30 @@ class _Rule(NamedTuple):
     applicable_path_prefixes: Tuple[str, ...] = ()
 
 
+# Browser runtime code whose aborts a release WebAssembly build otherwise reports only as a bare
+# "Aborted()": the browser GPU backend and editor module packages, plus the editor sources that
+# run in the browser. The rest of donner/editor is shared with the native editor.
+_NAMED_ABORT_PATHS = (
+    "donner/editor/BrowserFileDialog.cc",
+    "donner/editor/FrameCallbackAdmission.h",
+    "donner/editor/WholeAppWorkerBridge.cc",
+    "donner/editor/main.cc",
+    "donner/editor/wasm/",
+    "donner/gpu/browser/",
+    "donner/svg/renderer/geode/GeodeBrowserRoot.cc",
+)
+
 _RULES: List[_Rule] = [
+    _Rule(
+        pattern=re.compile(r"(?<![\w.>])(?:std::)?abort\s*\(\s*\)"),
+        description="bare abort in browser runtime code",
+        remediation=(
+            "Call donner::FatalAbort(\"<unique.site>\", {{\"name\", value}}) from "
+            "donner/base/FatalAbort.h: a release WebAssembly build reports a plain abort() only "
+            "as \"Aborted()\", with no site or thread."
+        ),
+        applicable_path_prefixes=_NAMED_ABORT_PATHS,
+    ),
     _Rule(
         pattern=re.compile(r"\brequiresTextureSnapshotPresentation\s*\("),
         description="compositor depends on presentation handoff policy",

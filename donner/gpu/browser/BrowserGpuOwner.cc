@@ -9,9 +9,9 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
 
+#include "donner/base/FatalAbort.h"
 #include "donner/gpu/browser/BrowserGpuTaskQueue.h"
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
@@ -140,7 +140,7 @@ std::size_t OperationCounter(BrowserGpuOperationKind kind) {
     case BrowserGpuOperationKind::BindGroupConstruction: return kBindGroupConstruction;
     case BrowserGpuOperationKind::PipelineConstruction: return kPipelineConstruction;
   }
-  std::abort();
+  FatalAbort("gpu-owner.operation-kind", {{"kind", static_cast<std::int64_t>(kind)}});
 }
 
 std::size_t ExecuteReadyBatch() {
@@ -222,7 +222,11 @@ void WaitForRequest(OwnerRequest& request, double requestStartedMs) {
            !maximumWait.compare_exchange_weak(previous, waitedUs, std::memory_order_relaxed)) {}
     if (remainingMs <= 0.0) {
       // Returning would leave the owner's callback holding borrowed caller memory.
-      std::abort();
+      FatalAbort("gpu-owner.dispatch-deadline", {{"waitedUs", waitedUs},
+                                                 {"requested", gOwnerWaitStats[kRequested].load()},
+                                                 {"started", gOwnerWaitStats[kStarted].load()},
+                                                 {"finished", gOwnerWaitStats[kFinished].load()},
+                                                 {"stopped", gStopped.load()}});
     }
     // Recheck within one millisecond if the final store raced the preceding wake.
     const int waitResult =
@@ -304,15 +308,17 @@ void RegisterBrowserGpuOwner() {
   pthread_t expected{};
   if (gStopped.load(std::memory_order_acquire) ||
       !gOwner.compare_exchange_strong(expected, pthread_self())) {
-    std::abort();
+    FatalAbort("gpu-owner.register",
+               {{"stopped", gStopped.load()}, {"ownerRegistered", gOwner.load() != pthread_t{}}});
   }
+  SetFatalAbortThreadRole("gpu-owner");
   // Prewarm notifications before clients can hold application locks while dispatching.
   if (!gNotificationQueue) {
     gNotificationQueue = em_proxying_queue_create();
   }
   if (!gNotificationQueue ||
       !emscripten_proxy_async(gNotificationQueue, pthread_self(), [](void*) {}, nullptr)) {
-    std::abort();
+    FatalAbort("gpu-owner.notification-queue", {{"queueCreated", gNotificationQueue != nullptr}});
   }
   emscripten_proxy_execute_queue(gNotificationQueue);
   // clang-format off
@@ -427,7 +433,9 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
                           [[maybe_unused]] BrowserGpuOperationKind kind) {
 #ifdef __EMSCRIPTEN_PTHREADS__
   if (gStopped.load(std::memory_order_acquire)) {
-    std::abort();
+    FatalAbort("gpu-owner.dispatch-after-stop", {{"kind", static_cast<std::int64_t>(kind)},
+                                                 {"requested", gOwnerWaitStats[kRequested].load()},
+                                                 {"finished", gOwnerWaitStats[kFinished].load()}});
   }
   const pthread_t owner = gOwner.load(std::memory_order_acquire);
   if (owner && !pthread_equal(owner, pthread_self())) {
@@ -438,7 +446,9 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
     gOwnerWaitStats[OperationCounter(kind)].fetch_add(1, std::memory_order_relaxed);
     // The inline budget bounds repeated requests within the SDK's otherwise unbounded drain.
     if (!emscripten_proxy_async(gNotificationQueue, owner, &EnqueueRequest, &request)) {
-      std::abort();
+      FatalAbort("gpu-owner.dispatch-proxy", {{"kind", static_cast<std::int64_t>(kind)},
+                                              {"requested", gOwnerWaitStats[kRequested].load()},
+                                              {"stopped", gStopped.load()}});
     }
     WaitForRequest(request, requestStartedMs);
     return;
@@ -484,7 +494,11 @@ bool IsBrowserGpuOwnerDispatchActive() {
 void SetBrowserGpuOwnerCanvasFrameActive([[maybe_unused]] bool active) {
 #ifdef __EMSCRIPTEN_PTHREADS__
   if (!IsBrowserGpuOwnerThread() || gCanvasFrameActive == active || (active && gProcessingBatch)) {
-    std::abort();
+    FatalAbort("gpu-owner.canvas-frame", {{"isOwner", IsBrowserGpuOwnerThread()},
+                                          {"stopped", gStopped.load()},
+                                          {"active", active},
+                                          {"wasActive", gCanvasFrameActive},
+                                          {"processingBatch", gProcessingBatch}});
   }
   gCanvasFrameActive = active;
   const double nowMs = emscripten_get_now();
@@ -504,7 +518,13 @@ void StopBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
   if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gCanvasFrameActive || !gReady.empty() ||
       gOwnerWaitStats[kRequested].load() != gOwnerWaitStats[kFinished].load()) {
-    std::abort();
+    FatalAbort("gpu-owner.stop", {{"isOwner", IsBrowserGpuOwnerThread()},
+                                  {"stopped", gStopped.load()},
+                                  {"processingBatch", gProcessingBatch},
+                                  {"canvasFrameActive", gCanvasFrameActive},
+                                  {"readyEmpty", gReady.empty()},
+                                  {"requested", gOwnerWaitStats[kRequested].load()},
+                                  {"finished", gOwnerWaitStats[kFinished].load()}});
   }
   // All clients have joined and released resources before the pulse ports close.
   EM_ASM({ globalThis['__donnerCloseGpuPulse'](); });

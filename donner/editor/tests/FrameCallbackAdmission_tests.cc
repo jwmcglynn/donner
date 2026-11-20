@@ -3,7 +3,20 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <csignal>
+#include <limits>
+#include <string>
+
 namespace donner::editor {
+
+/// Places an admission at the last generation so the next start reaches the wrap site.
+class FrameCallbackAdmissionTestAccess {
+public:
+  static void setLastGeneration(FrameCallbackAdmission& admission) {
+    admission.nextGeneration_ = std::numeric_limits<uint32_t>::max();
+  }
+};
+
 namespace {
 
 TEST(FrameCallbackAdmissionTest, DiagnosticCountersPreserveGuardAndSeparateFrameOutcomes) {
@@ -172,6 +185,16 @@ TEST(EventFrameWakeTest, StaleFrameCannotReleaseOrRequeueNewGeneration) {
   EXPECT_FALSE(wake.request(newGeneration)) << "The stale frame must not release the new one";
   EXPECT_FALSE(wake.finish(newGeneration, wake.begin()));
   EXPECT_TRUE(wake.request(newGeneration));
+}
+
+TEST(FrameCallbackAdmissionTest, GenerationWrapNamesItsSiteBeforeAborting) {
+  FrameCallbackAdmission admission;
+  const uint32_t current = admission.start();
+  FrameCallbackAdmissionTestAccess::setLastGeneration(admission);
+  EXPECT_EXIT(admission.start(), testing::KilledBySignal(SIGABRT),
+              "donner-fatal. Aborted at site=frame-admission.generation-wrap "
+              "thread=native-thread current=" +
+                  std::to_string(current));
 }
 
 }  // namespace

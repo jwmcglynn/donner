@@ -191,6 +191,7 @@ cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = _EDITOR_WASM_BINARY_DEPS + [
+        "//donner/base:fatal_abort",
         "//donner/base:packaged_resource",
         "//donner/editor:editor_build_info",
         "//donner/editor:notice",
