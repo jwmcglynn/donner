@@ -866,7 +866,7 @@ ResolvedRadialGradient ZeroRadiusRadialFill(
 /// frame's budget admits its \p stops. Negative radii are invalid, unlike the valid zero-radius
 /// last-stop case, so both are validated before either degeneracy rule and r=0 cannot hide an
 /// invalid fr. The stops are charged before either degeneracy rule too, as on the CPU renderer, so
-/// a zero-radius or focal-degenerate gradient is charged like any other.
+/// a zero-radius gradient, or one whose circles coincide, is charged like any other.
 bool AdmitRadialGradient(double radius, double focalRadius, std::size_t stops,
                          GradientStopCharge& charge) {
   if (radius < 0.0 || focalRadius < 0.0) {

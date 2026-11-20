@@ -5327,13 +5327,13 @@ TEST_F(RendererGeodeTest, ManyStopGradientBetweenBatchedFillsKeepsPaintOrder) {
 /// is refused and so is the rest of the frame, on Geode as on tiny-skia: the same document under
 /// the same lowered cap renders the same pixels and the same verdict on both. The 3-stop gradient
 /// draws through the fill batch and the 20-stop linear and radial ones through the gradient
-/// pipeline, so all of them charge. The 4-stop radial gradient first is focal-degenerate, its
-/// focal circle containing the outer one: it draws nothing, but tiny-skia charges its stops before
-/// it tests the radii, so Geode charges them too.
+/// pipeline, so all of them charge. The 4-stop radial gradient first has identical start and end
+/// circles: it draws nothing, but tiny-skia charges its stops before it tests the circles, so Geode
+/// charges them too.
 TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
   const std::string twentyStops = GradientStopElements(20);
   const std::string source = GradientTestDocument(
-      R"svg(<radialGradient id="focal" r="0.1" fr="0.5"><stop stop-color="red"/><stop offset="0.3" stop-color="lime"/>)svg"
+      R"svg(<radialGradient id="focal" r="0.5" fr="0.5"><stop stop-color="red"/><stop offset="0.3" stop-color="lime"/>)svg"
       R"svg(<stop offset="0.6" stop-color="blue"/><stop offset="1" stop-color="yellow"/></radialGradient>)svg"
       R"svg(<linearGradient id="small"><stop stop-color="red"/><stop offset="0.5" stop-color="lime"/><stop offset="1" stop-color="blue"/></linearGradient>)svg"
       R"svg(<linearGradient id="a">)svg" +
@@ -5345,7 +5345,7 @@ TEST_F(RendererGeodeTest, GradientStopBudgetRefusesLikeTinySkia) {
       R"svg(<rect x="64" width="32" height="48" fill="url(#b)"/>)svg"
       R"svg(<rect x="96" width="32" height="48" fill="#2020d0"/>)svg");
   // 47 admits every gradient; 46 refuses the second 20-stop one, 26 the first, and 3 the
-  // focal-degenerate one.
+  // one with identical circles.
   for (const std::size_t limit : {47u, 46u, 26u, 3u}) {
     SCOPED_TRACE(limit);
     std::optional<SVGDocument> document;
