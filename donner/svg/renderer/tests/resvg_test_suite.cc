@@ -137,8 +137,8 @@ ImageComparisonParams GeodeTranslucentEdgeColorGate(ImageComparisonParams params
 
 /// \p params, with the Geode comparison disabled: the row compares against a custom golden that is
 /// not quarter-pixel quantized (a browser rendering, or one whose frame is an exact area average),
-/// so the quarter-pixel edge coverage rule does not apply, and Geode's edge coverage differs from it
-/// by more than the pixel budget.
+/// so the quarter-pixel edge coverage rule does not apply, and Geode's edge coverage differs from
+/// it by more than the pixel budget.
 ImageComparisonParams GeodeUnquantizedGoldenGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
