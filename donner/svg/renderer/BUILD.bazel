@@ -516,6 +516,8 @@ donner_cc_library(
         "//donner/svg",
         "//donner/svg/renderer/geode:geode_device",
     ],
+    # Compatible only with Geode enabled, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -537,6 +539,8 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_gpu_wait",
     ],
+    # Compatible only with Geode enabled, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 no_rust_dependency_audit_test(

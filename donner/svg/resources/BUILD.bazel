@@ -144,6 +144,8 @@ donner_cc_library(
         "//donner/svg/renderer:text_full_enabled": ["//donner/base/fonts:woff2_parser"],
         "//conditions:default": [],
     }),
+    # Sees DONNER_TEXT_WOFF2_ENABLED and the WOFF2 headers through its deps in the full text tier.
+    variant_neutral = False,
 )
 
 packaged_resources(

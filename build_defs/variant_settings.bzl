@@ -23,6 +23,29 @@ VARIANT_SETTINGS = {
     "//donner/svg/renderer/geode:enable_geode": False,
 }
 
+# Packages, with their subpackages, whose donner_cc_library targets compile in place by default
+# because they build only in some product variants: compiled in the neutral configuration, their
+# dependencies are incompatible, which would make the library incompatible in every variant and
+# skip it silently. A library elsewhere opts out with `variant_neutral = False`.
+VARIANT_DEPENDENT_PACKAGES = {
+    "donner/editor": "The editor builds only in the full text tier.",
+    "donner/svg/renderer/geode": "The Geode backend builds only with Geode enabled.",
+}
+
+def variant_neutral_default(package):
+    """Whether donner_cc_library in `package` shares its compile unless it says otherwise.
+
+    Args:
+      package: The package name.
+
+    Returns:
+      False under a VARIANT_DEPENDENT_PACKAGES entry, True elsewhere.
+    """
+    for prefix in VARIANT_DEPENDENT_PACKAGES:
+        if package == prefix or package.startswith(prefix + "/"):
+            return False
+    return True
+
 # Options that select the platform a variant runs on. Libraries keep them, apart from the Darwin
 # canonicalization below.
 PLATFORM_OPTIONS = [

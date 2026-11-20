@@ -208,6 +208,8 @@ donner_cc_library(
         "//third_party:freetype",
         "@harfbuzz",
     ],
+    # Sees DONNER_TEXT_WOFF2_ENABLED and the WOFF2 headers through its deps in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_test(

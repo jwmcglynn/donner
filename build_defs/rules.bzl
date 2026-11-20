@@ -10,7 +10,7 @@ load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:performance.bzl", "native_speed_copts")
 load("//build_defs:variant_neutral.bzl", "variant_neutral_srcs")
-load("//build_defs:variant_settings.bzl", "variant_transition")
+load("//build_defs:variant_settings.bzl", "variant_neutral_default", "variant_transition")
 load(
     "//tools/format:clang_format_check.bzl",
     "clang_format_check",
@@ -860,7 +860,7 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
         **kwargs
     )
 
-def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, variant_neutral = True, **kwargs):
+def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, variant_neutral = None, **kwargs):
     """
     Create a cc_library with donner-specific defaults.
 
@@ -872,7 +872,8 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
       tags: List of tags.
       visibility: Visibility.
       variant_neutral: Compile the sources once per platform rather than once per product
-        variant (see build_defs/variant_neutral.bzl). On by default; a library with generated or
+        variant (see build_defs/variant_neutral.bzl). Unset, it is on except in the packages of
+        VARIANT_DEPENDENT_PACKAGES in build_defs/variant_settings.bzl. A library with generated or
         selected sources, or with no sources to compile, compiles in place. Analysis fails if a
         product variant changes what the compile sees; such a library sets
         `variant_neutral = False` with a comment naming the variant it depends on.
@@ -898,6 +899,8 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
 
     include_prefix = "/".join(package_path)
     library_srcs = srcs
+    if variant_neutral == None:
+        variant_neutral = variant_neutral_default(native.package_name())
     if variant_neutral:
         library_srcs = variant_neutral_srcs(
             name = name,

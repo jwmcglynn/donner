@@ -279,6 +279,8 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
         "@com_google_gtest//:gtest",
     ],
+    # Compatible only in the wgpu reference configuration, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -348,6 +350,8 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
     ],
+    # Compatible only in the wgpu reference configuration, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 donner_cc_test(
@@ -1680,6 +1684,8 @@ donner_cc_library(
     ],
     # The translation unit registers GoogleTest cases through static initializers.
     alwayslink = True,
+    # Sees DONNER_TEXT_WOFF2_ENABLED and the WOFF2 headers through its deps in the full text tier.
+    variant_neutral = False,
 )
 
 [donner_cc_test(
@@ -2245,6 +2251,8 @@ donner_cc_library(
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
     ],
+    # Sees DONNER_TEXT_WOFF2_ENABLED and the WOFF2 headers through its deps in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_test(
