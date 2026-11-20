@@ -31,17 +31,18 @@ comparison uses a 0.02 color threshold and allows 100 mismatched pixels.
 
 | Fixture | Current reference | Simple / full at current settings | Independent resvg v0.49.0 at 300×300, default settings | Independent resvg v0.49.0 at 500×500, default settings |
 | --- | --- | ---: | ---: | ---: |
-| `closed-path` | Vendored resvg snapshot, default color threshold and 400-pixel limit | 381 / 373 | 147 / 148 | 265 / 263 |
+| `closed-path` | resvg v0.50.0 release reference (300x300), default color threshold and 150-pixel CPU limit | 147 / 148 | 147 / 148 | 265 / 263 |
 | `side=right` | Vendored resvg snapshot, 0.05 color threshold and 100-pixel limit | 63 / 64 | 2,245 / 2,250 | 7,387 / 7,398 |
 | `dy-with-tiny-coordinates` | resvg 0.47.0 | 70 / 71 | 100 / 102 | — |
 | `tspan-with-absolute-position` | Committed legacy golden | 25 / 30 | 135 / 138 | 183 / 179 |
 | `with-underline` | Committed legacy golden | 1 / 3 | 295 / 301 | 182 / 182 |
 
-The vendored `closed-path` reference differs by 381 / 373 pixels at the default color threshold,
-inside the existing 400-pixel limit on both macOS and Linux aarch64. The previous 0.1 color
-threshold yielded 291 / 286 in the macOS measurements. At 0.02, 307 / 300 mismatches are
-within one pixel of a glyph boundary and 73 / 72 lie on the gray guide alone. The remaining black
-pixel at (275, 97) has alpha 255 in Donner and 191 in the reference.
+The `closed-path` row compares against the resvg v0.50.0 release reference, which replaced a
+snapshot that placed glyph midpoints at the uniform Bezier parameter of each segment
+(`third_party/resvg-test-suite/BUILD.bazel` records the measurements). The release reference
+inverts arc length to within 0.5 user units, which leaves its glyphs up to 0.82 px from their
+arc-length positions at 300x300; the remaining 147 / 148 pixels lie along glyph boundaries, so the
+CPU comparisons keep a 150-pixel limit. Geode differs by 78 pixels and compares at the default.
 SVG 2 limits a single closed subpath to one circuit.
 `RendererPublicApiTest.ClosedTextPathAbsoluteXOutsideCircuitHasNoInk` compares placement on a
 closed segment against an ordinary positioned glyph and tests the two out-of-circuit directions

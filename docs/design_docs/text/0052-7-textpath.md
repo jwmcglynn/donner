@@ -104,7 +104,7 @@ settings on the canvas each case takes from its reference. Their provenance is i
 
 | Test | Setting | Reason |
 |------|---------|--------|
-| closed-path | 400 px at the default threshold | Glyph-boundary and gray guide coverage |
+| closed-path | 150 px CPU at the default threshold, default on Geode | The release reference inverts arc length to within 0.5 user units |
 | dy-with-tiny-coordinates | golden, default settings | resvg 0.47.0 reference (golden README) |
 | method=stretch | golden | The snapshot depicts align placement. The Donner golden guards glyph warping. |
 | mixed-children-1, mixed-children-2, very-long-text | golden | SVG 2 continues text at the path end point. |

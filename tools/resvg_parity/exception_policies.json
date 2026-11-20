@@ -973,7 +973,6 @@
     {
       "id": "path-boundary-coverage",
       "paths": [
-        "text/textPath/closed-path.svg",
         "text/textPath/side=right.svg"
       ],
       "kinds": [
@@ -988,17 +987,27 @@
       "removal_criteria": "Remove the allowance when an independently placed reference passes unchanged at ordinary limits.",
       "reference_provenance": "Adjacent archive with a different glyph-boundary and gray-guide coverage model.",
       "max_threshold": 0.05,
-      "max_pixels": 400,
-      "bounds_by_fixture": {
-        "text/textPath/closed-path.svg": [
-          0.02,
-          400
-        ],
-        "text/textPath/side=right.svg": [
-          0.05,
-          100
-        ]
-      }
+      "max_pixels": 100
+    },
+    {
+      "id": "text-path-arc-length-precision",
+      "paths": [
+        "text/textPath/closed-path.svg"
+      ],
+      "kinds": [
+        "geode_threshold",
+        "threshold"
+      ],
+      "classification": "reference-precision",
+      "disposition": "Retain the smallest measured CPU allowance for the reference's arc-length inversion tolerance.",
+      "evidence": [
+        "donner/svg/renderer/tests/resvg_test_suite.cc",
+        "third_party/resvg-test-suite/BUILD.bazel"
+      ],
+      "removal_criteria": "Remove the allowance when a reference that places glyph midpoints at their exact distance along the path passes on both CPU text tiers.",
+      "reference_provenance": "resvg v0.50.0 release reference; glyph midpoints come from an arc-length inversion accurate to 0.5 user units.",
+      "max_threshold": 0.02,
+      "max_pixels": 150
     },
     {
       "id": "path-legacy-resvg",

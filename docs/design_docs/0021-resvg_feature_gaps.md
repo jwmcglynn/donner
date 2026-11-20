@@ -106,7 +106,7 @@ unit test variants run on Geode with full shaping.
 | --- | ---: | ---: | ---: | ---: |
 | `default_text` | 1,554 | 98 | 26 | 1 |
 | `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,538 | 98 | 26 | 1 |
+| `geode` | 1,541 | 98 | 26 | 1 |
 
 <!-- END RESVG INVENTORY -->
 

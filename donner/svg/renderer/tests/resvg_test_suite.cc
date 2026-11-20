@@ -118,18 +118,6 @@ ImageComparisonParams GeodeOpaqueEdgeCoverageGate(ImageComparisonParams params) 
       "edge over opaque fill), outside the quarter-pixel edge coverage rule");
 }
 
-/// \p params, with the Geode comparison disabled: per-glyph ink centroids on these textPath rows
-/// differ from the reference by up to about 1 px on both renderers, which agree with each other
-/// within 0.17 px; the CPU comparison passes just within the budget and the Geode comparison does
-/// not. Which placement is right is not established.
-ImageComparisonParams GeodeTextPathPlacementGate(ImageComparisonParams params) {
-  return params.disableBackend(
-      RendererBackend::Geode,
-      "Unresolved: textPath glyph centroids differ from the reference by up to 1.19 px "
-      "(m-L-Z-path) and 1.00 px (two-textPath-with-middle-on-first) on both renderers, which "
-      "agree within 0.17 px; the CPU comparisons count 100 and 98 of 100 px, Geode 107 and 226");
-}
-
 /// \p params, with the Geode comparison disabled: an edge lies under a translucent layer, so the
 /// reference's quarter-pixel edge coverage changes the composite's straight color, which the
 /// quarter-pixel edge coverage rule's color condition counts.
@@ -157,9 +145,8 @@ ImageComparisonParams GeodeCustomGoldenGate(ImageComparisonParams params) {
 ImageComparisonParams GeodeCpuAllowanceGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Harness mismatch: the CPU budgets (1200 px for font-variant, 400 px for "
-      "textPath/closed-path) are not approved for Geode, and comparing would apply budgets in the "
-      "hundreds to it; Geode differs by 1108 px and 354 px");
+      "Harness mismatch: the 1200 px CPU budget for font-variant is not approved for Geode, and "
+      "comparing would apply a budget in the hundreds to it; Geode differs by 1108 px");
 }
 
 /// Params for a drop-shadow() row compared against the Donner golden at \p path for \p reason
@@ -1133,7 +1120,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/alignment-baseline",
                 {
-                    {"two-textPath-with-middle-on-first.svg", GeodeTextPathPlacementGate(Params())},
                     {"alphabetic.svg", QuarterPixelEdgeReference()},
                     {"auto.svg", QuarterPixelEdgeReference()},
                     {"before-edge.svg", QuarterPixelEdgeReference()},
@@ -1144,7 +1130,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"hanging.svg", QuarterPixelEdgeReference()},
                     {"inherit.svg", QuarterPixelEdgeReference()},
                     {"mathematical.svg", QuarterPixelEdgeReference()},
-                    {"middle-on-textPath.svg", QuarterPixelEdgeReference()},
                     {"middle.svg", QuarterPixelEdgeReference()},
                     {"text-before-edge.svg", QuarterPixelEdgeReference()},
                     // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
@@ -1614,7 +1599,6 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/textPath",
             {
-                {"m-L-Z-path.svg", GeodeTextPathPlacementGate(Params())},
                 // Both draw the same picture. The vendored PNGs are opaque and resvg v0.49.0
                 // ignores the `path` attribute; testdata/golden/README.md has the evidence.
                 {"with-path-and-xlink-href.svg",
@@ -1627,9 +1611,14 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/donner-textPath-with-path.png")
                      .withReason("Reference disagreement: SVG 2 textPath path attribute, which "
                                  "resvg v0.49.0 ignores; the vendored PNG is opaque (#1175)")},
+                // resvg inverts arc length to within 0.5 user units here, which leaves the
+                // reference's glyphs up to 0.82 px from their arc-length positions; Geode measures
+                // 78 px and keeps the default.
                 {"closed-path.svg",
-                 GeodeCpuAllowanceGate(WithMaxPixels(
-                     400, "Reference coverage along the glyph boundaries and gray guide"))},
+                 WithMaxPixels(150,
+                               "Reference precision: glyphs placed by inverting arc length to "
+                               "within 0.5 user units")
+                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
                 {"complex.svg",
                  Params::UndefinedBehavior("reference is the resvg UB marker image; vertical text "
                                            "on a circular path")},

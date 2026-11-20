@@ -1496,7 +1496,7 @@ PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
     "painting/marker/with-an-image-child.svg": {"geode": 500},
     "text/font-variant/inherit.svg": {"default_text": 1200},
     "text/font-variant/small-caps.svg": {"default_text": 1200},
-    "text/textPath/closed-path.svg": {"default_text": 400, "max": 400},
+    "text/textPath/closed-path.svg": {"default_text": 150, "max": 150},
 }
 
 THRESHOLD_RATCHET_LIMIT = 0.05
@@ -1652,7 +1652,6 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/alignment-baseline/hanging.svg",
     "text/alignment-baseline/inherit.svg",
     "text/alignment-baseline/mathematical.svg",
-    "text/alignment-baseline/middle-on-textPath.svg",
     "text/alignment-baseline/middle.svg",
     "text/alignment-baseline/text-before-edge.svg",
     "text/baseline-shift/-10.svg",
@@ -1879,15 +1878,12 @@ GEODE_GATE_ALLOWLIST: frozenset[str] = frozenset({
     "painting/stroke/linear-gradient-on-text.svg",
     "painting/stroke/radial-gradient-on-text.svg",
     "text/alignment-baseline/hanging-on-vertical.svg",
-    "text/alignment-baseline/two-textPath-with-middle-on-first.svg",
     "text/font-size/named-value.svg",
     "text/font-variant/inherit.svg",
     "text/font-variant/small-caps.svg",
     "text/text-anchor/coordinates-list.svg",
     "text/text-decoration/tspan-decoration.svg",
     "text/text-decoration/underline-with-dy-list-2.svg",
-    "text/textPath/closed-path.svg",
-    "text/textPath/m-L-Z-path.svg",
     "text/textPath/with-filter.svg",
     "text/tspan/with-filter.svg",
     "text/tspan/with-mask.svg",

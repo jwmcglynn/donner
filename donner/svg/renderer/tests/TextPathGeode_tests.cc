@@ -19,7 +19,7 @@ protected:
                                    Runfiles::instance().Rlocation("third_party/resvg-test-suite/"));
     ImageComparisonParams params =
         ImageComparisonParams::WithThreshold(kDefaultThreshold, maxMismatchedPixels);
-    params.setCanvasSize(500, 500);
+    params.enableCanvasSizeFromReference();
     const std::string golden = Runfiles::instance().Rlocation(goldenPath);
     renderAndCompare(document, source, golden.c_str(), params, ComparisonMode::GeodeGolden);
   }
