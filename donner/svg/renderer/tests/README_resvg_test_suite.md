@@ -171,11 +171,10 @@ matches the gated rows and that no other backend is disabled; that the list only
 rule.
 
 `GeodeCpuAllowanceGate` covers rows whose CPU comparison has a budget above the default in
-`PIXEL_BUDGET_ALLOWLIST` (1,200 px for the two `text/font-variant` rows, 400 px for
-`text/textPath/closed-path`). Those budgets are not approved for the Geode lane, and comparing
-would apply budgets in the hundreds to it. On the full shaping tier the two font-variant rows
-measure 0 px on Geode, so the gate can narrow to `closed-path` once a Geode full-shaping corpus
-lane exists.
+`PIXEL_BUDGET_ALLOWLIST` (1,200 px for the two `text/font-variant` rows). That budget is not
+approved for the Geode lane, and comparing would apply a budget in the hundreds to it. On the full
+shaping tier the two font-variant rows measure 0 px on Geode, so the gate can go once a Geode
+full-shaping corpus lane exists.
 
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.
