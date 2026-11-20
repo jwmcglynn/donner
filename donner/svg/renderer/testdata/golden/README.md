@@ -1,9 +1,10 @@
 # Text path reference images
 
 The two references below are generated independently with resvg 0.47.0, using the
-unchanged vendored SVG inputs and only the corpus `NotoSans-Regular.ttf` font.
-They replace references that predate the current relative-position layout. Donner
-output is never used to generate these references.
+vendored SVG inputs and only the corpus `NotoSans-Regular.ttf` font. Donner output is never
+used to generate these references. The resvg suite compares `dy-with-tiny-coordinates` with
+its reference instead of the vendored PNG, which predates the current dy layout on a path, and
+`TextPathGeode_tests.cc` compares Geode's text-on-path rendering of both fixtures with them.
 
 Font SHA-256: `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9`.
 
@@ -19,9 +20,8 @@ resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/Not
 resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf --width 500 third_party/resvg-test-suite/tests/text/textPath/dy-with-tiny-coordinates.svg donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png
 ```
 
-Both compare at the ordinary 100-pixel budget. `dy-with-tiny-coordinates` sets a 0.24 font size
-under `scale(100)`; its former 1100-pixel allowance covered full-tier advances rounded to 1/64
-pixel of that tiny face, which the full tier no longer does.
+The resvg suite compares `dy-with-tiny-coordinates`, which sets a 0.24 font size under
+`scale(100)`, at the ordinary 100-pixel budget on both CPU text tiers.
 
 ## Retained textPath reference comparisons
 
@@ -34,7 +34,6 @@ comparison uses a 0.02 color threshold and allows 100 mismatched pixels.
 | `closed-path` | Vendored resvg snapshot, default color threshold and 400-pixel limit | 381 / 373 | 147 / 148 | 265 / 263 |
 | `side=right` | Vendored resvg snapshot, 0.05 color threshold and 100-pixel limit | 63 / 64 | 2,245 / 2,250 | 7,387 / 7,398 |
 | `dy-with-tiny-coordinates` | resvg 0.47.0 | 70 / 71 | 100 / 102 | — |
-| `tspan-with-relative-position` | resvg 0.47.0 | 54 / 54 | — | — |
 | `tspan-with-absolute-position` | Committed legacy golden | 25 / 30 | 135 / 138 | 183 / 179 |
 | `with-underline` | Committed legacy golden | 1 / 3 | 295 / 301 | 182 / 182 |
 
@@ -336,43 +335,13 @@ opaque interior. Rendering the original input with resvg 0.49.0 also extends
 the clip past the expected edge. Chrome 158 and Firefox 157 agree with the
 explicit construction. At 800×800 the fixture’s 0.5-unit crosshair spans two
 whole pixels, so fractional crosshair sampling does not mask filter regressions.
+Both tests compare the original SVG inputs at the default threshold and count limit.
 
 From this directory, reproduce the shared 800×800 PNG with:
 
 ```sh
 resvg --width 800 --height 800 half-box-blur.svg resvg-half-box-blur.png
 ```
-
-For `filters/filter/with-subregion-3.svg`, the first blur is clipped at x=135
-on the original 500×500 canvas. The second blur places the half-alpha crossing
-at x=135 on the interior scanline y=100 in Chrome, Firefox and resvg 0.49.0.
-The historical PNG crosses at x=133.32. `firefox-double-subregion-blur.png`
-comes from Firefox 157.0 at 500×500. To reproduce it, give the original root
-SVG explicit width and height of 500, decode it as an SVG image, draw it at
-(0,0) at its intrinsic size on a transparent 500×500 sRGB HTML canvas, and
-export that canvas as PNG. All three tests compare the original SVG inputs
-at the default threshold and count limit.
-
-## Nearest-neighbor sampling for `on-feImage`
-
-The `painting/image-rendering/on-feImage.svg` fixture embeds a 64 × 64 PNG and asks for
-`image-rendering="optimizeSpeed"`. Its 500 × 500 vendored reference uses a different sampling
-grid. The reference introduced in [#1767](https://github.com/jwmcglynn/donner/pull/1767)
-samples the embedded PNG independently at destination pixel centers.
-
-To reconstruct `resvg-on-feImage.png`, start with the vendored `on-feImage.png` and decode the
-PNG in the SVG's data URL. The default filter region expands the 120-unit square by 10% on
-each side. At 2.5 device pixels per unit it occupies the 360 × 360 square starting at (70, 70).
-For each integer destination coordinate `70 <= x, y < 430`, copy the embedded RGBA texel at
-`floor((x - 70 + 0.5) * 64 / 360)`, `floor((y - 70 + 0.5) * 64 / 360)`. Keep the vendored
-pixels outside that square, including the frame.
-
-| SHA-256 input or result | Digest |
-| --- | --- |
-| Vendored SVG | `2f08caa2e27c3f5911bc14328e63cd9564d79e7e9840b765c36110c403e3d773` |
-| Vendored PNG | `94be9637ef48a9996c6d223fdc0187e6df98a0bff125d0f9709601067bb5f5b4` |
-| Reconstructed pixels, row-major RGBA8 | `c7dadd180384db409d6ad349be742cd02a7eef087d7be74e48ae9998d167ca9e` |
-| Committed golden PNG | `e94b02b863268c3579d36929691e9a8cfb5c389976fe459f00d2f3aa122a4154` |
 
 ## Large-coordinate curves at 8x
 
@@ -549,12 +518,10 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   '--gtest_filter=*TextFontSize*named_value_without_a_parent'
 ```
 
-## Inline text decoration and malformed lists
+## Inline text decoration
 
-The inline cases compare at 800×800. The half-unit crosshair covers two whole pixels at
-this size. The original SVGs exercise a valid space-separated decoration list and reject
-comma-separated and concatenated forms. The malformed inputs render identical undecorated
-text in resvg v0.49.0 and share one reference.
+The `all-types-inline` case compares at 800×800. The half-unit crosshair covers two whole
+pixels at this size.
 
 The literal multiline scene uses Noto Sans Regular's 2.4-unit underline and strike
 thickness at 48 units. HarfBuzz gives the run an advance of 92.16 units. The underline
@@ -571,15 +538,11 @@ corpus=third_party/resvg-test-suite
 golden=donner/svg/renderer/testdata/golden
 resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" --width 800 --height 800 \
   "$golden/all-types-inline-bands.svg" "$golden/resvg-all-types-inline-bands.png"
-resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" --width 800 --height 800 \
-  "$corpus/tests/text/text-decoration/all-types-inline-comma-separated.svg" \
-  "$golden/resvg-all-types-inline-no-decoration.png"
 ```
 
 | Reference | SHA-256 |
 | --- | --- |
 | resvg-all-types-inline-bands.png | 4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911 |
-| resvg-all-types-inline-no-decoration.png | 2550df9e39e1e949b633b924c98995203e5bc5c134bfb9537cf8a9868e2082f7 |
 
 The nested-span test compares its 500×500 archived reference at a 0.09 color threshold.
 The underline takes its yellow fill and green stroke from the declaring child span.
@@ -997,20 +960,6 @@ Geode differs from the golden by 0 pixels.
 Independent evidence: `FilterReferenceStages.InvalidReferenceDisablesEntireChain` (including
 `opacity(0.25) url(#missing) invert(1)`) and `InvalidReferenceLeavesGroupChildrenVisible`.
 
-### `filters/filter-functions/url-and-grayscale`
-
-`donner-url-and-grayscale.png` (500x500). The chain is a blur from a `filter` element followed by
-`grayscale()`. Filter Effects 1, section 5, says that `color-interpolation-filters` has no effect
-on filter functions, which "must operate in the sRGB color space". grayscale() of seagreen in sRGB
-is 0.2126 x 46 + 0.7152 x 139 + 0.0722 x 87 = 115.47, and the golden's interior is 115. The
-vendored PNG's interior is 122, the result of applying the function to linearRGB values. The
-suite's results.csv records Chrome and Firefox as passing that PNG and Safari as failing it; a
-visual grade cannot tell 115 from 122, and the specification text decides the row. Geode differs
-from the golden by 0 pixels.
-
-Independent evidence: `RendererRegressionTests.CssFilterContractMixedUrlGrayscaleUsesSrgb`
-requires `url(#identity) grayscale()` over seagreen to equal a solid rgb(115 115 115) rect.
-
 ### `masking/clipPath/circle-shorthand-with-stroke-box` and `circle-shorthand-with-view-box`
 
 `donner-circle-shorthand-with-stroke-box.png` and `donner-circle-shorthand-with-view-box.png`
@@ -1097,7 +1046,6 @@ requires upright text on a straight path to match the vmtx placement.
 | --- | --- |
 | `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` |
 | `donner-one-invalid-url-in-list.png` | `383d16d1523001752ac353ce8875e1b900a1efa3561eb95fab9fb1d7a0ad598a` |
-| `donner-url-and-grayscale.png` | `934860bcb56d1f714c9aa5137ff13c52280258c9b9c5bf91ced54ed974db60b6` |
 | `donner-circle-shorthand-with-stroke-box.png` | `5bddc6ef292d0970c3571dead6e4d6a7b9588329d86183c633a7632f9915c3a3` |
 | `donner-circle-shorthand-with-view-box.png` | `bc60330d7e98ea0a01d40667ba2802d78b9a89e297d555431cffb11ac2fef1c3` |
 | `donner-no-size.png` | `d999792b03ca8bb92b6bf440e030ea9f2b1ff803c0bd1567e34ebf45844c9d2a` |
@@ -1337,14 +1285,8 @@ python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
 
 ## Goldens without recorded provenance
 
-The renderer and the regeneration command of these two goldens are not recorded.
+The renderer and the regeneration command of this golden are not recorded.
 
-- `resvg-indirect.png` (`text/text-decoration/indirect`): provenance not recorded. It was first
-  committed in `0c5402b1d` under a numbered corpus name, with a source comment saying the vendored
-  PNG has a phantom green stroke, and kept its bytes through the rename in `4aef2b23c`. The
-  vendored `indirect.png` outlines the glyphs and the underline in green, while the SVG paints
-  no green: 2,269 of its pixels are exactly opaque RGBA (0, 128, 0, 255), and 7,309 have any
-  alpha with a green channel above both red and blue. This golden has none by either count.
 - `geode/filters_feGaussianBlur_complex-transform.png` (`filters/feGaussianBlur/complex-transform`,
   Geode only): provenance not recorded. It was added in `eb1cd0fcb` as a per-backend Geode golden.
   The registration's reason records the measured coverage evidence; the renderer build and the
@@ -1384,9 +1326,7 @@ regenerates or adds a golden.
 | `donner-pattern-self-recursive.png` | `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17` | Donner renderings of recursive pattern references |
 | `donner-textPath-with-path.png` | `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7` | `text/textPath/with-path` and `with-path-and-xlink-href` |
 | `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` | Donner renderings of disputed rows |
-| `donner-url-and-grayscale.png` | `934860bcb56d1f714c9aa5137ff13c52280258c9b9c5bf91ced54ed974db60b6` | Donner renderings of disputed rows |
 | `donner-xlink-to-an-external-file.png` | `400dc754087e84efd15a428ad9671bcc34f808eccd147cb59231bd4bcba41565` | Donner renderings of disputed rows |
-| `firefox-double-subregion-blur.png` | `49abff60095a6ebdddfb20edb4a7d842dd7a8efba295c6cf0a625a8764d451d9` | Gaussian blur primitive subregions |
 | `firefox-stroke-linear-gradient-on-text.png` | `24b2bc34651ec46cdee7e49450e832916b1f0666bbb5cd20e3b543f93f55fdd4` | Gradient strokes on text |
 | `firefox-stroke-radial-gradient-on-text.png` | `40695b1c5ff590b5367bd645e62dedb9855d4a3a8a7c1bafed16f424fb73dfd1` | Gradient strokes on text |
 | `geode/donner-color-adjust-functions-0percent.png` | `ac9f02f71d8c116e36cdb476bf5d0702c863691c6db223f558052e73ebadff41` | Color-adjust filter references |
@@ -1395,8 +1335,7 @@ regenerates or adds a golden.
 | `geode/donner-color-adjust-functions-50percent.png` | `d17790f2c6ee6d19c152cc42f932ca44740f6076eb34a49248fb21ac9fdfa3bc` | Color-adjust filter references |
 | `geode/donner-color-adjust-functions-negative.png` | `21ac65ab93ac649542f122e75ea04b88db85a9abb11970da46729b14301014d8` | Color-adjust filter references |
 | `geode/filters_feGaussianBlur_complex-transform.png` | `78e9339f1048417698d6b517036590937fb86a3a04f50a070ac7c557d4ef29d2` | Provenance not recorded; see Goldens without recorded provenance |
-| `resvg-all-types-inline-bands.png` | `4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911` | Inline text decoration and malformed lists |
-| `resvg-all-types-inline-no-decoration.png` | `2550df9e39e1e949b633b924c98995203e5bc5c134bfb9537cf8a9868e2082f7` | Inline text decoration and malformed lists |
+| `resvg-all-types-inline-bands.png` | `4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911` | Inline text decoration |
 | `resvg-complex-graphemes-and-coordinates-list.png` | `0c37edfeafdd94c8a9b8414f1c5794fee897b933a0dbd6a3e1ad8087bcba6b83` | Cyrillic combining mark position |
 | `resvg-complex-transform.png` | `6621a9e1494d58d650380f1683ddf75ec790bcda3aab84ffd990cee73fd3343a` | `filters/feSpotLight/complex-transform` |
 | `resvg-compound-emojis-and-coordinates-list.png` | `9fef8a7afaf51ff396e4a776da3ec65f72f1b3a5c3ed59e55bd4b10d5ca2061f` | Emoji positioning reference |
@@ -1406,18 +1345,15 @@ regenerates or adds a golden.
 | `resvg-font-size-adjust-simple-case.png` | `7493132a5ca79910e11d3ece3c025cab71a14360162feb6e1e550df1c2762abb` | Donner-rendered font-size-adjust reference |
 | `resvg-half-box-blur.png` | `0832ea8ff38488e742fcabc57b5ab408fb6ae85f852a310cda57674e7192a130` | Gaussian blur primitive subregions |
 | `resvg-hanging-on-vertical.png` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` | Donner-rendered references |
-| `resvg-indirect.png` | `d0650c15a05856bb424850f3340ee59d1592d58648a120f4922a51962cb0a963` | Provenance not recorded; see Goldens without recorded provenance |
 | `resvg-japanese-with-tb.png` | `f750e889461dea59c46ceb3945aac85f06ff5baa312ad7fb5b9300dc5e291812` | Donner-rendered references |
 | `resvg-method=stretch.png` | `ba6c92599b34f0327da5a06536fa4b2f36d8487b83cab4138caa6be03f0e7626` | Donner-rendered textPath/method=stretch reference |
 | `resvg-mixed-children-1.png` | `2ea922a8be96b59e9ed1950eae3bfcda2368710c80a8a6d4a24eb5db6d92a054` | Donner-rendered textPath continuation references |
 | `resvg-mixed-children-2.png` | `15bb577cfdb17641732110e9ba2c3da36ec24b1761ee972d2e5881676fbd61a0` | Donner-rendered textPath/mixed-children-2 reference |
 | `resvg-mixed-languages-with-tb.png` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` | Donner-rendered references |
 | `resvg-nested-rectangles.png` | `ce5bdadc7ee47341ac56618873b538017f97ad32532f228f0915536590b715bf` | Explicit tile geometry for nested and skewed patterns |
-| `resvg-on-feImage.png` | `e94b02b863268c3579d36929691e9a8cfb5c389976fe459f00d2f3aa122a4154` | Nearest-neighbor sampling for `on-feImage` |
 | `resvg-skewed-text-tiles.png` | `11804d5374ecb1b2777cae2540d0493764f47b9117e4bd9e837bb65651f6f477` | Explicit tile geometry for nested and skewed patterns |
 | `resvg-tb-and-punctuation.png` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` | Donner-rendered references |
 | `resvg-tspan-with-absolute-position.png` | `754eba7cfe125e9ae873187015247f89d7e9f5e8614f604a0ef7880c8c03eaa7` | Legacy PNGs (renderer and generation command not recorded) |
-| `resvg-tspan-with-relative-position.png` | `fda4f9409e5b1cd52b3368157eca7ff5af20b438c68eb82b0e263b0cb33b8e83` | Text path reference images |
 | `resvg-very-long-text.png` | `6392266f206470a9459514291d4b7b811f3a0b9d406c7fc2d81fdb3ded914021` | Donner-rendered textPath continuation references |
 | `resvg-with-underline.png` | `3ff550f2200e10a348a24a74aef99196e867fbd4a9249c7c109ea85aca982af2` | Legacy PNGs (renderer and generation command not recorded) |
 | `resvg-xlink-filter-bounds.png` | `9ebb7922a3da396ec9a892db7850c929acf2f1af071c7a0db672e38be1ad18e9` | Filter input clipping and a narrower primitive subregion |
