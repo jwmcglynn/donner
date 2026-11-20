@@ -1,17 +1,17 @@
 {
   "tree": {
-    "lines": 5077,
-    "comment_lines": 536,
-    "multiline_runs": 64,
+    "lines": 5058,
+    "comment_lines": 537,
+    "multiline_runs": 65,
     "longest_run": 194,
     "run_expressions": 12,
     "longest_if": 369
   },
   "files": {
     ".github/workflows/badges.yaml": {
-      "lines": 75,
-      "comment_lines": 1,
-      "multiline_runs": 2,
+      "lines": 56,
+      "comment_lines": 2,
+      "multiline_runs": 3,
       "longest_run": 8,
       "run_expressions": 0,
       "longest_if": 0
