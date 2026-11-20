@@ -70,8 +70,8 @@ def _checked_text(kind: str, text: str) -> str:
     text = text.strip()
     if not text:
         raise BadgeError(f"badge {kind} is empty")
-    if any(ord(char) < 0x20 for char in text):
-        raise BadgeError(f"badge {kind} contains a control character")
+    if not text.isprintable():
+        raise BadgeError(f"badge {kind} contains a non-printable character")
     return text
 
 
@@ -149,7 +149,7 @@ def gist_url(gist_id: str) -> str:
 def build_request(gist_id: str, token: str, files: Mapping[str, str]) -> urllib.request.Request:
     """The single PATCH request that writes all of `files` to the gist."""
     url = gist_url(gist_id)
-    if not token or any(char.isspace() for char in token):
+    if not (token and token.isascii() and token.isprintable()) or " " in token:
         raise BadgeError(f"{TOKEN_ENV} is missing or malformed")
     return urllib.request.Request(
         url, data=request_body(files), method="PATCH",
@@ -167,6 +167,7 @@ def send(request: urllib.request.Request, opener: Opener = _default_opener) -> i
         with opener(request, TIMEOUT_SECONDS) as response:
             status = response.status
     except urllib.error.HTTPError as error:
+        error.close()
         raise BadgeError(f"gist update failed: HTTP {error.code} {error.reason}") from None
     except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
         raise BadgeError(f"gist update failed: {type(error).__name__}") from None

@@ -39,16 +39,33 @@ class RecordingOpener:
     """Records every request instead of sending it, and answers `status` or raises `error`."""
 
     def __init__(self, status=200, error=None):
-        self.status, self.error, self.requests = status, error, []
+        self.status, self.error, self.requests, self.timeouts = status, error, [], []
 
     def __call__(self, request, timeout):
         self.requests.append(request)
+        self.timeouts.append(timeout)
         if self.error is not None:
             raise self.error
         return _Response(self.status)
 
 
 WARNING = "::warning title=Badge update failed::"
+# The Comments badge: a 70px label segment and a 48px message segment.
+COMMENTS_GOLDEN = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="118" height="20" role="img" aria-'
+    'label="Comments: 21.5%"><title>Comments: 21.5%</title><linearGradient id="s" x2='
+    '"0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset'
+    '="1" stop-opacity=".1"/></linearGradient><clipPath id="r"><rect width="118" heig'
+    'ht="20" rx="3" fill="#fff"/></clipPath><g clip-path="url(#r)"><rect width="70" h'
+    'eight="20" fill="#555"/><rect x="70" width="48" height="20" fill="#97ca00"/><rec'
+    't width="118" height="20" fill="url(#s)"/></g><g fill="#fff" text-anchor="middle'
+    '" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricP'
+    'recision" font-size="11"><text aria-hidden="true" x="35" y="15" fill="#010101" f'
+    'ill-opacity=".3" textLength="60">Comments</text><text x="35" y="14" textLength="'
+    '60">Comments</text><text aria-hidden="true" x="94" y="15" fill="#010101" fill-op'
+    'acity=".3" textLength="38">21.5%</text><text x="94" y="14" textLength="38">21.5%'
+    '</text></g></svg>\n'
+)
 
 
 def _run(argv, opener=None, environ=None):
@@ -95,6 +112,7 @@ class BadgeGistTest(unittest.TestCase):
         self.assertEqual(0, code, stdout)
         self.assertNotIn("::warning", stdout)
         self.assertEqual(1, len(opener.requests), "badges must be written in one gist update")
+        self.assertEqual([badge_gist.TIMEOUT_SECONDS], opener.timeouts)
         request = opener.requests[0]
         self.assertEqual(("PATCH", "https://api.github.com/gists/" + GIST_ID),
                          (request.get_method(), request.full_url))
@@ -141,15 +159,18 @@ class BadgeGistTest(unittest.TestCase):
         self.assertLess(width("12"), width("12.5%"))
         self.assertLess(badge_gist.text_width("i"), badge_gist.text_width("W"))
 
-    def test_render_is_deterministic(self):
-        self.assertEqual(badge_gist.render_files(WORKFLOW_BADGES),
-                         badge_gist.render_files(WORKFLOW_BADGES))
+    def test_render_matches_the_pinned_badge(self):
+        self.assertEqual(COMMENTS_GOLDEN, badge_gist.render_badge("Comments", "  21.5%", "green"))
 
     def test_rejects_invalid_badges_without_sending(self):
         cases = {
             "unknown color": ([("loc.svg", "Lines", "1", "brightgreen")], "unknown badge color"),
             "empty message": ([("loc.svg", "Lines", "  ", "blue")], "message is empty"),
-            "control character": ([("loc.svg", "Lines", "1\n2", "blue")], "control character"),
+            "newline": ([("loc.svg", "Lines", "1\n2", "blue")], "non-printable character"),
+            "delete": ([("loc.svg", "Lines", "1\x7f", "blue")], "non-printable character"),
+            "C1 control": ([("loc.svg", "L\x85x", "1", "blue")], "non-printable character"),
+            "lone surrogate": ([("loc.svg", "Lines", "1\ud800", "blue")],
+                               "non-printable character"),
             "duplicate file": ([("loc.svg", "A", "1", "blue")] * 2, "duplicate badge file"),
             "path file name": ([("../loc.svg", "A", "1", "blue")], "invalid badge file name"),
         }
@@ -165,6 +186,9 @@ class BadgeGistTest(unittest.TestCase):
     def test_rejects_a_missing_token_or_invalid_gist_id_without_sending(self):
         for case, argv, environ, expected in (
             ("missing token", _argv(), {}, "GIST_TOKEN is missing"),
+            ("non-ASCII token", _argv(), {"GIST_TOKEN": "tok\u00e9n"}, "GIST_TOKEN is missing"),
+            ("non-Latin-1 token", _argv(), {"GIST_TOKEN": "tok\u4e2d"}, "GIST_TOKEN is missing"),
+            ("spaced token", _argv(), {"GIST_TOKEN": "tok en"}, "GIST_TOKEN is missing"),
             ("path gist id", ["--gist-id", "../user", "--badge", *WORKFLOW_BADGES[0]],
              None, "invalid gist ID"),
         ):
@@ -188,12 +212,14 @@ class BadgeGistTest(unittest.TestCase):
         self.assertNotIn(TOKEN.encode(), request.data)
 
     def test_http_errors_fail_with_status_and_reason_but_not_the_token(self):
+        response_body = io.BytesIO(TOKEN.encode())
         refused = urllib.error.HTTPError(
             "https://api.github.com/gists/" + GIST_ID, 409, "Conflict",
-            {"Authorization": "Bearer " + TOKEN}, io.BytesIO(TOKEN.encode()))
+            {"Authorization": "Bearer " + TOKEN}, response_body)
         for case, opener, expected in (
             ("conflict", RecordingOpener(error=refused), "HTTP 409 Conflict"),
             ("unreachable", RecordingOpener(error=urllib.error.URLError(TOKEN)), "URLError"),
+            # urlopen raises HTTPError for non-2xx; this pins the defensive status check.
             ("unexpected status", RecordingOpener(status=304), "HTTP 304"),
         ):
             with self.subTest(case=case):
@@ -202,6 +228,7 @@ class BadgeGistTest(unittest.TestCase):
                 self.assertEqual(WARNING + "gist update failed: " + expected + "\n", stdout)
                 self.assertNotIn(TOKEN, stdout)
                 self.assertNotIn("Authorization", stdout)
+        self.assertTrue(response_body.closed, "the refused response must be closed")
 
     def test_warning_annotation_is_one_escaped_line(self):
         self.assertEqual(WARNING + "HTTP 409 Conflict", badge_gist.warning_annotation(
