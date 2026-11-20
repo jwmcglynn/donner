@@ -136,6 +136,28 @@ bool PartiallyCovered(uint8_t alpha) {
   return alpha > 0 && alpha < 255;
 }
 
+/// True when the pixel at \p column, \p row of \p image is the partially covered row of a
+/// horizontal edge: the pixel directly above or below it is empty or fully covered, and neither of
+/// those two pixels has its alpha. Pixels outside the image do not count as empty.
+bool OnHorizontalEdge(ImageView image, size_t column, size_t row) {
+  const auto alphaAt = [&](size_t y) {
+    return image.data[(y * image.strideInPixels + column) * 4 + 3];
+  };
+  const uint8_t alpha = alphaAt(row);
+  bool besideEmptyOrFull = false;
+  for (const bool above : {true, false}) {
+    if (above ? row == 0 : row + 1 >= static_cast<size_t>(image.height)) {
+      continue;
+    }
+    const uint8_t neighbor = alphaAt(above ? row - 1 : row + 1);
+    if (neighbor == alpha) {
+      return false;
+    }
+    besideEmptyOrFull = besideEmptyOrFull || !PartiallyCovered(neighbor);
+  }
+  return besideEmptyOrFull;
+}
+
 struct EdgeCoverage {
   int pixels = 0;
   int maxAlphaDelta = 0;
@@ -160,7 +182,8 @@ EdgeCoverage AcceptQuarterPixelEdgeCoverage(ImageView expected, ImageView actual
       const int alphaDelta =
           std::abs(static_cast<int>(expectedAlpha) - static_cast<int>(actualAlpha));
       if (!IsCounted(diff.data, pos, policy.diffColor) || !PartiallyCovered(expectedAlpha) ||
-          !PartiallyCovered(actualAlpha) || alphaDelta > kQuarterPixelEdgeCoverageMaxAlphaDelta) {
+          !PartiallyCovered(actualAlpha) || alphaDelta > kQuarterPixelEdgeCoverageMaxAlphaDelta ||
+          !OnHorizontalEdge(expected, column, row)) {
         continue;
       }
       std::copy_n(expected.data.begin() + pos, 3, sharedExpected.begin() + pos);

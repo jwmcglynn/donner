@@ -288,6 +288,20 @@ struct EdgeCoverageOutcome {
 
 using Rgba = std::array<uint8_t, 4>;
 
+constexpr Rgba kEmpty = {0, 0, 0, 0};
+constexpr Rgba kOpaqueBlack = {0, 0, 0, 255};
+
+/// A 5-pixel wide image whose rows are each one color, top to bottom.
+Image RowsImage(const std::vector<Rgba>& rows) {
+  Image image{5, static_cast<int>(rows.size()), 5, {}};
+  for (const Rgba& row : rows) {
+    for (int i = 0; i < 5; ++i) {
+      image.data.insert(image.data.end(), row.begin(), row.end());
+    }
+  }
+  return image;
+}
+
 /// A 3x3 image of one color. Every pixel has eight identical neighbors or touches the border with
 /// identical neighbors, so pixelmatch never classifies a difference in it as anti-aliasing.
 Image UniformImage(Rgba pixel) {
@@ -305,52 +319,124 @@ ComparisonOptions EdgeCoverageOptions(double threshold = 0.0) {
           .acceptQuarterPixelEdgeCoverage = true};
 }
 
-EdgeCoverageOutcome CompareUniform(Rgba expected, Rgba actual, const ComparisonOptions& options) {
-  const Image expectedImage = UniformImage(expected);
-  const Image actualImage = UniformImage(actual);
-  const ComparisonResult result = CompareImages(View(expectedImage), View(actualImage), options);
+EdgeCoverageOutcome Compare(const Image& expected, const Image& actual,
+                            const ComparisonOptions& options) {
+  const ComparisonResult result = CompareImages(View(expected), View(actual), options);
   return {result.mismatchedPixels, result.edgeCoveragePixels, result.maxEdgeCoverageAlphaDelta,
           result.error};
+}
+
+/// Compares two 5x5 images that draw a one-pixel line, \p expected and \p actual, across row 2
+/// over \p surround. The line is darker or lighter than every pixel around it in each image, so
+/// pixelmatch does not classify its 5 pixels as anti-aliasing, and in the expected image it is the
+/// partially covered row of a horizontal edge whenever \p surround is empty or fully covered.
+EdgeCoverageOutcome CompareLine(Rgba expected, Rgba actual, const ComparisonOptions& options,
+                                Rgba surround = kEmpty) {
+  return Compare(RowsImage({surround, surround, expected, surround, surround}),
+                 RowsImage({surround, surround, actual, surround, surround}), options);
+}
+
+EdgeCoverageOutcome CompareUniform(Rgba expected, Rgba actual, const ComparisonOptions& options) {
+  return Compare(UniformImage(expected), UniformImage(actual), options);
 }
 
 TEST(ImageCompareEdgeCoverageTest, IsOffByDefault) {
   const ComparisonOptions defaults{
       .threshold = 0.0, .maxMismatchedPixels = 0, .includeAntiAliasing = false};
   EXPECT_THAT(defaults.acceptQuarterPixelEdgeCoverage, Eq(false));
-  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, 159}, defaults),
-              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 128}, {0, 0, 0, 159}, defaults),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
 }
 
-TEST(ImageCompareEdgeCoverageTest, AcceptsPartialCoverageDifferencesUpToTheBound) {
+TEST(ImageCompareEdgeCoverageTest, AcceptsEdgeCoverageDifferencesUpToTheBound) {
   for (const int delta : {1, 32, kQuarterPixelEdgeCoverageMaxAlphaDelta}) {
     SCOPED_TRACE(testing::Message() << "alpha delta " << delta);
     const auto actualAlpha = static_cast<uint8_t>(128 + delta);
-    EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, actualAlpha}, EdgeCoverageOptions()),
-                Eq(EdgeCoverageOutcome{0, 9, delta, ""}));
-    EXPECT_THAT(CompareUniform({0, 0, 0, actualAlpha}, {0, 0, 0, 128}, EdgeCoverageOptions()),
-                Eq(EdgeCoverageOutcome{0, 9, delta, ""}));
+    EXPECT_THAT(CompareLine({0, 0, 0, 128}, {0, 0, 0, actualAlpha}, EdgeCoverageOptions()),
+                Eq(EdgeCoverageOutcome{0, 5, delta, ""}));
+    EXPECT_THAT(CompareLine({0, 0, 0, actualAlpha}, {0, 0, 0, 128}, EdgeCoverageOptions()),
+                Eq(EdgeCoverageOutcome{0, 5, delta, ""}));
   }
   // A colored edge near both ends of the alpha range.
-  EXPECT_THAT(CompareUniform({40, 90, 200, 1}, {40, 90, 200, 34}, EdgeCoverageOptions()),
-              Eq(EdgeCoverageOutcome{0, 9, 33, ""}));
-  EXPECT_THAT(CompareUniform({40, 90, 200, 254}, {40, 90, 200, 221}, EdgeCoverageOptions()),
-              Eq(EdgeCoverageOutcome{0, 9, 33, ""}));
-  // The crosshair case: three quarter rows stored as 192 against an exact 0.625 coverage.
-  EXPECT_THAT(CompareUniform({0, 0, 0, 192}, {0, 0, 0, 159}, EdgeCoverageOptions()),
-              Eq(EdgeCoverageOutcome{0, 9, 33, ""}));
+  EXPECT_THAT(CompareLine({40, 90, 200, 1}, {40, 90, 200, 34}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 5, 33, ""}));
+  EXPECT_THAT(CompareLine({40, 90, 200, 254}, {40, 90, 200, 221}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 5, 33, ""}));
   // At the suite's default threshold pixelmatch counts only some of these pixels, depending on
   // their checkerboard background; the rule accepts every one it counts.
   const EdgeCoverageOutcome atDefaultThreshold =
-      CompareUniform({40, 90, 200, 254}, {40, 90, 200, 222}, EdgeCoverageOptions(0.02));
+      CompareLine({40, 90, 200, 254}, {40, 90, 200, 222}, EdgeCoverageOptions(0.02));
   EXPECT_THAT(atDefaultThreshold.mismatchedPixels, Eq(std::optional<int>(0)));
   EXPECT_THAT(atDefaultThreshold.edgeCoveragePixels, testing::Gt(0));
 }
 
+// The references' 1.25 px crosshair: its two edge rows store two and three quarter rows, 128 and
+// 192, where exact coverage is 0.625 on each, 159. Pixelmatch classifies the upper row as
+// anti-aliasing and counts the lower one, which lies above the empty background.
+TEST(ImageCompareEdgeCoverageTest, AcceptsTheCrosshairEdgeRow) {
+  const Image expected =
+      RowsImage({kEmpty, kEmpty, {0, 0, 0, 128}, {0, 0, 0, 192}, kEmpty, kEmpty});
+  const Image actual = RowsImage({kEmpty, kEmpty, {0, 0, 0, 159}, {0, 0, 0, 159}, kEmpty, kEmpty});
+  EXPECT_THAT(Compare(expected, actual, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 5, 33, ""}));
+}
+
+TEST(ImageCompareEdgeCoverageTest, AcceptsAnEdgeBesideAFullyCoveredRow) {
+  // A gap in an opaque fill: the line row is less covered than the rows around it.
+  EXPECT_THAT(CompareLine({0, 0, 0, 192}, {0, 0, 0, 159}, EdgeCoverageOptions(), kOpaqueBlack),
+              Eq(EdgeCoverageOutcome{0, 5, 33, ""}));
+  // The empty or fully covered neighbor may be either the pixel above or the one below.
+  const Image expected = RowsImage({kEmpty, kEmpty, {0, 0, 0, 192}, {0, 0, 0, 128}, {0, 0, 0, 64}});
+  const Image actual = RowsImage({kEmpty, kEmpty, {0, 0, 0, 159}, {0, 0, 0, 128}, {0, 0, 0, 64}});
+  EXPECT_THAT(Compare(expected, actual, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 5, 33, ""}));
+}
+
+// A coverage or opacity difference across a uniform partially covered region is not edge
+// quantization: every pixel's neighbors share its alpha.
+TEST(ImageCompareEdgeCoverageTest, CountsDifferencesAcrossAUniformPartiallyCoveredRegion) {
+  for (const auto& [expected, actual] : std::vector<std::pair<Rgba, Rgba>>{
+           {{0, 0, 0, 128}, {0, 0, 0, 159}},
+           {{0, 0, 0, 159}, {0, 0, 0, 128}},
+           {{0, 0, 0, 192}, {0, 0, 0, 159}},
+           {{40, 90, 200, 254}, {40, 90, 200, 221}},
+       }) {
+    SCOPED_TRACE(testing::Message() << "alphas " << static_cast<int>(expected[3]) << ", "
+                                    << static_cast<int>(actual[3]));
+    EXPECT_THAT(CompareUniform(expected, actual, EdgeCoverageOptions()),
+                Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  }
+}
+
+TEST(ImageCompareEdgeCoverageTest, CountsPixelsWithoutAnEmptyOrFullyCoveredRowAboveOrBelow) {
+  // The same line over a partially covered surround.
+  EXPECT_THAT(CompareLine({0, 0, 0, 192}, {0, 0, 0, 159}, EdgeCoverageOptions(), {0, 0, 0, 32}),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
+  // Only the image border is beyond the pixel: outside the image does not count as empty.
+  const Image expected = RowsImage({{0, 0, 0, 32}, {0, 0, 0, 32}, {0, 0, 0, 128}});
+  const Image actual = RowsImage({{0, 0, 0, 32}, {0, 0, 0, 32}, {0, 0, 0, 159}});
+  EXPECT_THAT(Compare(expected, actual, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
+  // The same pixels are accepted when the row above them is empty.
+  EXPECT_THAT(Compare(RowsImage({kEmpty, kEmpty, {0, 0, 0, 128}}),
+                      RowsImage({kEmpty, kEmpty, {0, 0, 0, 159}}), EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{0, 5, 31, ""}));
+}
+
+TEST(ImageCompareEdgeCoverageTest, CountsPixelsWhoseRowAboveOrBelowSharesTheirAlpha) {
+  // A two-row band of one alpha over the empty background: each row is beside an empty row, but
+  // also beside a row of its own alpha, so it is a uniform region rather than an edge row.
+  const Image expected = RowsImage({kEmpty, {0, 0, 0, 192}, {0, 0, 0, 192}, kEmpty, kEmpty});
+  const Image actual = RowsImage({kEmpty, {0, 0, 0, 159}, {0, 0, 0, 159}, kEmpty, kEmpty});
+  EXPECT_THAT(Compare(expected, actual, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{10, 0, 0, ""}));
+}
+
 TEST(ImageCompareEdgeCoverageTest, CountsCoverageDifferencesAboveTheBound) {
-  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, 162}, EdgeCoverageOptions()),
-              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
-  EXPECT_THAT(CompareUniform({0, 0, 0, 200}, {0, 0, 0, 100}, EdgeCoverageOptions()),
-              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 128}, {0, 0, 0, 162}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 200}, {0, 0, 0, 100}, EdgeCoverageOptions()),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
 }
 
 TEST(ImageCompareEdgeCoverageTest, CountsPixelsFullyCoveredOrEmptyInEitherImage) {
@@ -362,58 +448,61 @@ TEST(ImageCompareEdgeCoverageTest, CountsPixelsFullyCoveredOrEmptyInEitherImage)
        }) {
     SCOPED_TRACE(testing::Message() << "alphas " << static_cast<int>(expected[3]) << ", "
                                     << static_cast<int>(actual[3]));
-    EXPECT_THAT(CompareUniform(expected, actual, EdgeCoverageOptions()),
-                Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+    EXPECT_THAT(CompareLine(expected, actual, EdgeCoverageOptions()),
+                Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
   }
 }
 
 TEST(ImageCompareEdgeCoverageTest, CountsColorDifferencesAtEdgePixels) {
   // Same coverage, different color.
-  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {255, 0, 0, 128}, EdgeCoverageOptions(0.02)),
-              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 128}, {255, 0, 0, 128}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
   // A coverage difference within the bound that also carries a color difference.
-  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 255, 150}, EdgeCoverageOptions(0.02)),
-              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
-  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {70, 70, 70, 150}, EdgeCoverageOptions(0.02)),
-              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 128}, {0, 0, 255, 150}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 128}, {70, 70, 70, 150}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
 }
 
 // Deliberate: the color condition runs at the smaller alpha, at pixelmatch's sensitivity for that
 // coverage, so a black-to-white difference at alpha 2 is accepted while the same colors at alpha
 // 100 are counted.
 TEST(ImageCompareEdgeCoverageTest, ComparesColorAtTheSmallerAlpha) {
-  EXPECT_THAT(CompareUniform({0, 0, 0, 2}, {255, 255, 255, 30}, EdgeCoverageOptions(0.02)),
-              Eq(EdgeCoverageOutcome{0, 9, 28, ""}));
-  EXPECT_THAT(CompareUniform({0, 0, 0, 100}, {255, 255, 255, 128}, EdgeCoverageOptions(0.02)),
-              Eq(EdgeCoverageOutcome{9, 0, 0, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 2}, {255, 255, 255, 30}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{0, 5, 28, ""}));
+  EXPECT_THAT(CompareLine({0, 0, 0, 100}, {255, 255, 255, 128}, EdgeCoverageOptions(0.02)),
+              Eq(EdgeCoverageOutcome{5, 0, 0, ""}));
 }
 
 TEST(ImageCompareEdgeCoverageTest, AcceptsOnlyQualifyingPixelsAndMarksThemInTheDiff) {
-  Image expected = UniformImage({0, 0, 0, 128});
-  Image actual = UniformImage({0, 0, 0, 150});
-  // The center pixel differs by more than the bound; the other eight stay within it.
-  actual.data[4 * 4 + 3] = 200;
+  // Two lines over the empty background: the upper one differs within the bound, the lower one by
+  // more than it.
+  const Image expected = RowsImage({kEmpty, {0, 0, 0, 128}, kEmpty, {0, 0, 0, 128}, kEmpty});
+  const Image actual = RowsImage({kEmpty, {0, 0, 0, 150}, kEmpty, {0, 0, 0, 200}, kEmpty});
   const ComparisonResult result =
       CompareImages(View(expected), View(actual), EdgeCoverageOptions());
   EXPECT_THAT((EdgeCoverageOutcome{result.mismatchedPixels, result.edgeCoveragePixels,
                                    result.maxEdgeCoverageAlphaDelta, result.error}),
-              Eq(EdgeCoverageOutcome{1, 8, 22, ""}));
+              Eq(EdgeCoverageOutcome{5, 5, 22, ""}));
   EXPECT_THAT(result.passed, Eq(false));
   ASSERT_TRUE(result.diff.has_value());
-  std::vector<Rgba> diffPixels;
-  for (size_t pos = 0; pos < result.diff->data.size(); pos += 4) {
-    diffPixels.push_back({result.diff->data[pos], result.diff->data[pos + 1],
-                          result.diff->data[pos + 2], result.diff->data[pos + 3]});
-  }
-  std::vector<Rgba> expectedDiff(9, kEdgeCoverageDiffColor);
-  expectedDiff[4] = {255, 0, 0, 255};
-  EXPECT_THAT(diffPixels, Eq(expectedDiff));
+  const auto diffRow = [&](int row) {
+    std::vector<Rgba> pixels;
+    for (size_t pos = static_cast<size_t>(row) * 5 * 4; pos < static_cast<size_t>(row + 1) * 5 * 4;
+         pos += 4) {
+      pixels.push_back({result.diff->data[pos], result.diff->data[pos + 1],
+                        result.diff->data[pos + 2], result.diff->data[pos + 3]});
+    }
+    return pixels;
+  };
+  EXPECT_THAT(diffRow(1), Eq(std::vector<Rgba>(5, kEdgeCoverageDiffColor)));
+  EXPECT_THAT(diffRow(3), Eq(std::vector<Rgba>(5, Rgba{255, 0, 0, 255})));
 }
 
 TEST(ImageCompareEdgeCoverageTest, RequiresAntiAliasingDetection) {
   ComparisonOptions options = EdgeCoverageOptions();
   options.includeAntiAliasing = true;
-  EXPECT_THAT(CompareUniform({0, 0, 0, 128}, {0, 0, 0, 150}, options).error, HasSubstr("options"));
+  EXPECT_THAT(CompareLine({0, 0, 0, 128}, {0, 0, 0, 150}, options).error, HasSubstr("options"));
 }
 
 TEST_F(SvgSuiteTest, PngRoundTripAndMalformedInput) {

@@ -65,6 +65,9 @@ struct ComparisonOptions {
    *
    * A pixel pixelmatch counts is accepted instead when all of these hold:
    * - both images cover it partially (alpha strictly between 0 and 255 in each);
+   * - in the expected image it is the partially covered row of a horizontal edge: the pixel
+   *   directly above or below it is empty or fully covered (a pixel outside the image does not
+   *   count), and neither of those two pixels has its alpha;
    * - the alphas differ by at most \ref kQuarterPixelEdgeCoverageMaxAlphaDelta;
    * - the colors agree at the coverage the two pixels share: pixelmatch, at the same threshold and
    *   background, finds no difference between the two straight colors when both carry the smaller
@@ -76,6 +79,12 @@ struct ComparisonOptions {
    * very low alpha a color difference can fall under the threshold and the pixel is accepted.
    * Blending at the smaller alpha also scales the 8-bit rounding of a straight color stored for a
    * low-alpha pixel down to about one level.
+   *
+   * The edge condition keeps the rule to the pixels quantization moves: a quarter-pixel quantized
+   * edge row sits between the shape's inside and outside, so one of its vertical neighbors is
+   * empty or fully covered and differs from it. It rejects a coverage or opacity difference across
+   * a uniform partially covered region, where the pixels above and below share the pixel's alpha
+   * or are themselves partially covered.
    */
   bool acceptQuarterPixelEdgeCoverage = false;
 };
