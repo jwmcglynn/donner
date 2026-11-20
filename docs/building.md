@@ -601,6 +601,9 @@ runs the Linux tests, and builds and tests the Darwin selection when enabled. Fi
 binaries still compile through build-only targets. The two Vulkan display tests use the
 coordinator's Xvfb. The venue check requires remote execution for other uncached tests.
 The deterministic soak joins every run, and affected WebGPU changes select the reference suite.
+A coordinator that adds Linux runtime library search paths can set `DONNER_CI_LINUX_RUNTIME_LINK_DIRS`
+to the ordered, colon-separated directories. The Darwin transition removes the matching `-L` and
+`-Wl,-rpath` pairs from its target links while preserving other linker options.
 
 The invocation also runs a kernel probe and C++ test on each platform. Geode editor coverage,
 the pinned archive preflight, and affected headed or headless browser tests run under the Darwin

@@ -1342,7 +1342,12 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
 # Match the native macOS lane so Apple genrules and test tools resolve on the worker.
 _CI_DARWIN_PATH = "PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 _CI_ACTION_ENVS = ["//command_line_option:action_env", "//command_line_option:host_action_env"]
+_LINUX_RUNTIME_LINK_DIRS = "//build_defs:linux_ci_runtime_link_dirs"
+_LINK_OPTIONS = "//command_line_option:linkopt"
+
 _CI_PLATFORM_OPTIONS = [
+    _LINUX_RUNTIME_LINK_DIRS,
+    _LINK_OPTIONS,
     "//command_line_option:platforms",
     "//command_line_option:host_platform",
     "//command_line_option:extra_execution_platforms",
@@ -1352,6 +1357,20 @@ _CI_PLATFORM_OPTIONS = [
     "//donner/svg/renderer:renderer_backend",
     "//donner/svg/renderer/geode:enable_geode",
 ] + _CI_ACTION_ENVS
+
+def darwin_ci_link_options(options, directories):
+    """Omit the Linux coordinator's declared runtime link options from a Darwin target."""
+    # Remove only the complete block supplied by the coordinator. Per-target
+    # options, standalone search paths, and later user overrides stay in order.
+    if not directories:
+        return options
+    block = []
+    for directory in directories.split(":"):
+        block.extend(["-L" + directory, "-Wl,-rpath," + directory])
+    for start in range(len(options) - len(block) + 1):
+        if options[start:start + len(block)] == block:
+            return options[:start] + options[start + len(block):]
+    return options
 
 def _ci_test_platform(settings, attr):
     options = dict(settings)
@@ -1365,6 +1384,10 @@ def _ci_test_platform(settings, attr):
     if attr.metal_validation:
         options["//build_defs:metal_shader_validation"] = "on"
     if attr.darwin:
+        options[_LINK_OPTIONS] = darwin_ci_link_options(settings[_LINK_OPTIONS], settings[_LINUX_RUNTIME_LINK_DIRS])
+
+        # A nested Darwin transition must not consume a second, caller-supplied block.
+        options[_LINUX_RUNTIME_LINK_DIRS] = ""
         darwin = str(Label("//tools/ci:remote_macos_aarch64"))
         options["//command_line_option:host_platform"] = darwin
         # Toolchains such as rules_js package their execution-platform runtime into the test.

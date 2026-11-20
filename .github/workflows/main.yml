@@ -424,7 +424,7 @@ jobs:
           if [[ "$RUN_METAL" == true ]]; then
             suites+=(//tools/ci:unified_metal_{full_validation,preflight,offline_compiler,native})
           fi
-          options=()
+          options=("--//build_defs:linux_ci_runtime_link_dirs=${DONNER_CI_LINUX_RUNTIME_LINK_DIRS:-}")
           ordinary="$RUNNER_TEMP/darwin-targets.txt"
           linux="$RUNNER_TEMP/linux-targets.txt"
           : > "$ordinary"
