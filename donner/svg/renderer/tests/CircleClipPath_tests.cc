@@ -12,6 +12,7 @@
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -306,8 +307,8 @@ TEST(CircleClipPath, HiddenTextRetainsStrokeReferenceGeometry) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(CircleClipPath, CurvedStretchWorkRefusalSuppressesWholeCircleClip) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = instantiateSubtree(
       R"svg(<defs><path id="curve" d="M8 44 C8 4 56 4 56 44"/></defs>
         <g clip-path="circle() stroke-box">
@@ -330,7 +331,6 @@ TEST(CircleClipPath, CurvedStretchWorkRefusalSuppressesWholeCircleClip) {
                                        editor::tests::PixelmatchIdentityParams());
   EXPECT_THAT(family->securityStats().textPathMeasurementWorkRejected, testing::IsTrue());
 }
-#endif
 
 TEST(CircleClipPath, UseHostSuppliesShadowGeometry) {
   const auto actual = RenderCircleScene(
@@ -353,7 +353,6 @@ TEST(CircleClipPath, StyledUsesKeepOccurrenceGeometryAndFontMetrics) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-#ifdef DONNER_TEXT_ENABLED
 void ExpectVisibleRedText(const RendererBitmap& bitmap) {
   EXPECT_GT(test::CountPixelsWhere(
                 bitmap, [](const auto& pixel) { return pixel[0] > pixel[1] && pixel[3] > 0; }),
@@ -361,6 +360,7 @@ void ExpectVisibleRedText(const RendererBitmap& bitmap) {
 }
 
 TEST(CircleClipPath, TextUseLargeCircleKeepsVisibleText) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view kDefinitions = "<defs><text id='text' y='30'>Hello</text></defs>";
   const auto expected = RenderCircleScene(std::string(kDefinitions) +
                                           "<use href='#text' x='4' font-size='18' fill='red'/>");
@@ -383,6 +383,7 @@ TEST(CircleClipPath, TextUseLargeCircleKeepsVisibleText) {
 }
 
 TEST(CircleClipPath, TextUsesKeepStyledReferenceBoxes) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view kSpans = "<tspan font-size='125%' stroke-width='0.15em'>A</tspan>";
   for (const std::string_view box : {"fill-box", "stroke-box"}) {
     SCOPED_TRACE(box);
@@ -414,6 +415,7 @@ TEST(CircleClipPath, TextUsesKeepStyledReferenceBoxes) {
 }
 
 TEST(CircleClipPath, GroupCircleIncludesTransformedTextUseStroke) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view kText = "<text y='30'><tspan>A</tspan></text>";
   const auto actual = RenderCircleScene(
       "<defs><g id='source'>" + std::string(kText) +
@@ -430,7 +432,6 @@ TEST(CircleClipPath, GroupCircleIncludesTransformedTextUseStroke) {
   editor::tests::CompareBitmapToBitmap(actual, expected, "circle_group_shadow_text_stroke",
                                        editor::tests::PixelmatchIdentityParams());
 }
-#endif
 
 TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
   const auto actual = RenderCircleScene(
@@ -441,8 +442,8 @@ TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(CircleClipPath, TransformedTextSpanKeepsTextRootReferenceCoordinates) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto circleFor = [](std::string_view transform) {
     SVGDocument document = instantiateSubtree(
         "<text x='8' y='28' transform='translate(3 4)' font-size='20'>"
@@ -467,7 +468,6 @@ TEST(CircleClipPath, TransformedTextSpanKeepsTextRootReferenceCoordinates) {
   EXPECT_THAT(transformed.bounds(), BoxEq(ordinary.bounds().topLeft - Vector2d(6, 2),
                                           ordinary.bounds().bottomRight - Vector2d(6, 2)));
 }
-#endif
 
 TEST(CircleClipPath, StrokeBoxUsesStrokeShapeInsteadOfMiterEnvelope) {
   ExpectCircleReference(

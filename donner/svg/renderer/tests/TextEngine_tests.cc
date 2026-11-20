@@ -32,6 +32,7 @@
 #include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextLayoutParams.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 
@@ -3394,7 +3395,6 @@ TEST(TextEngineTest, OverflowWrapBoundsContextAndFragmentWorkForManyLigatures) {
                                 std::to_string(probe.shapedBytesForTesting()));
 }
 
-#ifdef DONNER_TEXT_FULL
 struct NativeKanaPositioningCase {
   std::string name;
   std::string sourcePair;
@@ -3405,6 +3405,7 @@ struct NativeKanaPositioningCase {
 class FullWidthKanaNativeTest : public testing::TestWithParam<NativeKanaPositioningCase> {};
 
 TEST_P(FullWidthKanaNativeTest, PositionedMarkPreservesNativeCompositionAndSourceAddressing) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   const auto& input = GetParam();
   Registry registry;
   FontManager fonts(registry);
@@ -3460,7 +3461,6 @@ INSTANTIATE_TEST_SUITE_P(
                     NativeKanaPositioningCase{"Semivoiced", "\xef\xbe\x8a\xef\xbe\x9f",
                                               "\xe3\x83\x8f\xe3\x82\x9a", "\xe3\x83\x91"}),
     [](const testing::TestParamInfo<NativeKanaPositioningCase>& info) { return info.param.name; });
-#endif
 
 // A range shaped in context joins with its neighbors: the middle seen of three takes the same
 // medial glyph as when the whole word is shaped at once, not its isolated form.
@@ -3777,9 +3777,9 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
 }
 
 TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
-#ifndef DONNER_TEXT_FULL
-  GTEST_SKIP() << "Vertical CJK offset assertions require the full text backend.";
-#endif
+  if (!IsFullTextBuiltIn()) {
+    GTEST_SKIP() << "Vertical CJK offset assertions require the full text backend.";
+  }
 
   Registry registry;
   FontManager fontManager(registry);
@@ -3816,9 +3816,9 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
 }
 
 TEST(TextEngineTest, SupplementaryCodepointPositionsPreserveEmojiClusterShaping) {
-#ifndef DONNER_TEXT_FULL
-  GTEST_SKIP() << "Bitmap emoji shaping requires the full text backend.";
-#endif
+  if (!IsFullTextBuiltIn()) {
+    GTEST_SKIP() << "Bitmap emoji shaping requires the full text backend.";
+  }
 
   Registry registry;
   FontManager fontManager(registry);
@@ -3846,8 +3846,8 @@ TEST(TextEngineTest, SupplementaryCodepointPositionsPreserveEmojiClusterShaping)
                                                    GlyphYPositionIs(DoubleNear(130.0, 1.0))))));
 }
 
-#ifdef DONNER_TEXT_FULL
 TEST(TextEngineTest, JoinedShapingKeepsPositioningSlotsAndRelativeCarry) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   struct Case {
     const char* file;
     const char* family;
@@ -3949,7 +3949,6 @@ TEST(TextEngineTest, JoinedShapingKeepsPositioningSlotsAndRelativeCarry) {
     }
   }
 }
-#endif
 
 TEST(TextEngineTest, CombiningMarkAfterSpaceAppliesWordSpacingOnce) {
   for (bool fullBackend : {false, true}) {
@@ -4033,9 +4032,9 @@ TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
 }
 
 TEST(TextEngineTest, VerticalSidewaysCombiningMarkMatchesRotatedHorizontalGeometry) {
-#ifndef DONNER_TEXT_FULL
-  GTEST_SKIP() << "Combining-mark positioning requires the full text backend.";
-#endif
+  if (!IsFullTextBuiltIn()) {
+    GTEST_SKIP() << "Combining-mark positioning requires the full text backend.";
+  }
 
   Registry registry;
   FontManager fontManager(registry);
@@ -4071,9 +4070,9 @@ TEST(TextEngineTest, VerticalSidewaysCombiningMarkMatchesRotatedHorizontalGeomet
 }
 
 TEST(TextEngineTest, UprightLatinUsesVerticalShapingWithoutAdvancingCombiningMarks) {
-#ifndef DONNER_TEXT_FULL
-  GTEST_SKIP() << "Vertical HarfBuzz shaping requires the full text backend.";
-#endif
+  if (!IsFullTextBuiltIn()) {
+    GTEST_SKIP() << "Vertical HarfBuzz shaping requires the full text backend.";
+  }
 
   Registry registry;
   FontManager fontManager(registry);
@@ -4162,9 +4161,9 @@ TEST(TextEngineTest, SimpleUprightCombiningMarkStaysOnBaseCell) {
 }
 
 TEST(TextEngineTest, SidewaysCjkUsesHorizontalShapingMetrics) {
-#ifndef DONNER_TEXT_FULL
-  GTEST_SKIP() << "HarfBuzz shaping requires the full text backend.";
-#endif
+  if (!IsFullTextBuiltIn()) {
+    GTEST_SKIP() << "HarfBuzz shaping requires the full text backend.";
+  }
 
   Registry registry;
   FontManager fontManager(registry);
@@ -4183,9 +4182,9 @@ TEST(TextEngineTest, SidewaysCjkUsesHorizontalShapingMetrics) {
 }
 
 TEST(TextEngineTest, VerticalCrossSpanKerningMatchesUnsplitOrientation) {
-#ifndef DONNER_TEXT_FULL
-  GTEST_SKIP() << "HarfBuzz shaping requires the full text backend.";
-#endif
+  if (!IsFullTextBuiltIn()) {
+    GTEST_SKIP() << "HarfBuzz shaping requires the full text backend.";
+  }
 
   for (const TextOrientation orientation : {TextOrientation::Upright, TextOrientation::Sideways}) {
     SCOPED_TRACE(testing::PrintToString(orientation));
@@ -5464,8 +5463,8 @@ TEST(TextEngineTest, WhiteSpaceTabStopsPrecedeSvgInlineDisplacement) {
 
 namespace {
 
-#ifdef DONNER_TEXT_FULL
 TEST(TextEngineTest, RtlPreservedNewlineKeepsHebrewLinesInSourceOrder) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   Registry registry;
   FontManager fonts(registry);
   const FontHandle font = LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Mplus Hebrew");
@@ -5493,6 +5492,7 @@ TEST(TextEngineTest, RtlPreservedNewlineKeepsHebrewLinesInSourceOrder) {
 }
 
 TEST(TextEngineTest, RtlPreservedNewlineKeepsArabicFallbackLinesInSourceOrder) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   Registry registry;
   FontManager fonts(registry);
   const FontHandle primary = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Latin primary");
@@ -5521,8 +5521,6 @@ TEST(TextEngineTest, RtlPreservedNewlineKeepsArabicFallbackLinesInSourceOrder) {
   // Root Noto hhea owns the line height: (1069 + 293) / 1000 em.
   EXPECT_THAT(runs[0].glyphs[3].yPosition - runs[0].glyphs[0].yPosition, DoubleNear(27.24, 1e-5));
 }
-
-#endif
 
 }  // namespace
 

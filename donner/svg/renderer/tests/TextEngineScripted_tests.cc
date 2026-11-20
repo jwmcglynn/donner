@@ -32,6 +32,7 @@
 #include "donner/svg/text/TextBackend.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -2132,8 +2133,8 @@ TEST(TextEngineScriptedTest, VerticalTextPathPreservesInlineAdvancesAndGlyphOffs
                 GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(TextEngineScriptedTest, VerticalTextPathUsesOneBidiRunAcrossPaintSpans) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
@@ -2166,6 +2167,7 @@ TEST(TextEngineScriptedTest, VerticalTextPathUsesOneBidiRunAcrossPaintSpans) {
   }
 }
 TEST(TextEngineScriptedTest, VerticalBidiPathKeepsInitialXOnTheVisualChunk) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
@@ -2190,6 +2192,7 @@ TEST(TextEngineScriptedTest, VerticalBidiPathKeepsInitialXOnTheVisualChunk) {
 }
 
 TEST(TextEngineScriptedTest, VerticalBidiPathResolvesEachAuthoredChunkOriginOnce) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
@@ -2220,6 +2223,7 @@ TEST(TextEngineScriptedTest, VerticalBidiPathResolvesEachAuthoredChunkOriginOnce
 }
 
 TEST(TextEngineScriptedTest, VerticalBidiPathPreservesFlatContinuationAtAnAbsoluteX) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
@@ -2265,7 +2269,6 @@ TEST(TextEngineScriptedTest, VerticalBidiPathPreservesFlatContinuationAtAnAbsolu
       ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(ltr.back().glyphs[0].xPosition, 1e-6)),
                         GlyphYPositionIs(DoubleNear(ltr.back().glyphs[0].yPosition, 1e-6)))));
 }
-#endif
 
 TEST(TextEngineScriptedTest, VerticalTextPathRotatesUprightCombiningClusterOffsets) {
   Registry registry;

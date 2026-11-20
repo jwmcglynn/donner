@@ -121,7 +121,11 @@ donner_cc_library(
 donner_cc_library(
     name = "font_manager",
     srcs = ["FontManager.cc"],
-    defines = select({
+    implementation_deps = select({
+        "//donner/svg/renderer:text_full_enabled": ["//donner/base/fonts:woff2_parser"],
+        "//conditions:default": [],
+    }),
+    local_defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
         "//conditions:default": [],
     }),
@@ -140,10 +144,7 @@ donner_cc_library(
         "//donner/css:core",
         "//third_party/public-sans",
         "@stb//:truetype",
-    ] + select({
-        "//donner/svg/renderer:text_full_enabled": ["//donner/base/fonts:woff2_parser"],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 packaged_resources(
@@ -217,10 +218,6 @@ donner_cc_test(
         "//third_party/public-sans:public-sans_resource_files",
         "//third_party/roboto:Roboto-Regular.ttf",
     ],
-    defines = select({
-        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
-        "//conditions:default": [],
-    }),
     # Exercise each supported backend configuration under `bazel test //...`.
     variants = [
         "tiny",
@@ -235,6 +232,7 @@ donner_cc_test(
         "//donner/base/fonts:sfnt_utils",
         "//donner/css/parser",
         "//donner/svg/core",
+        "//donner/svg/text:text_tier_test_utils",
         "//third_party/public-sans",
         "@com_google_gtest//:gtest_main",
         "@stb//:truetype",
@@ -252,6 +250,7 @@ donner_cc_test(
     deps = [
         ":font_catalog",
         ":font_manager",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

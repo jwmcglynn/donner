@@ -14,6 +14,7 @@
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -653,8 +654,8 @@ TEST(RendererAnimationStyleBase, ScalarInheritanceUsesTheParentsFinalClampedValu
       "scalar-parent-final-clamp", editor::tests::PixelmatchIdentityParams());
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   for (const bool animatedParent : {false, true}) {
     for (const std::string_view from : {"200%", "2em"}) {
       SCOPED_TRACE(animatedParent);
@@ -684,6 +685,7 @@ TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
   }
 }
 TEST(RendererAnimationStyleBase, FontStackPreservesKeywordsPrecedenceAndCascade) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   struct Case {
     const char* name;
     const char* style;
@@ -741,6 +743,7 @@ TEST(RendererAnimationStyleBase, FontStackPreservesKeywordsPrecedenceAndCascade)
 }
 
 TEST(RendererAnimationStyleBase, SharedTextResolvesFontAnimationPerShadowParent) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = instantiateSubtree(
       "<defs><text id='label' y='30' fill='red'>H<animate attributeName='font-size' from='100%' "
       "to='2em' dur='2s'/></text></defs><use href='#label' font-size='12'/>"
@@ -773,6 +776,7 @@ TEST(RendererAnimationStyleBase, SharedTextResolvesFontAnimationPerShadowParent)
 }
 
 TEST(RendererAnimationStyleBase, AnimatedParentKeepsRelativeSpanFontsAndBaselines) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = instantiateSubtree(
       "<defs><text id='label' y='30' fill='red' text-decoration='underline'>"
       "<tspan font-size='50%' baseline-shift='0.25em'>Hi</tspan>"
@@ -792,6 +796,7 @@ TEST(RendererAnimationStyleBase, AnimatedParentKeepsRelativeSpanFontsAndBaseline
 }
 
 TEST(RendererAnimationStyleBase, ShadowBaselineKeywordsDoNotLeakBetweenInstances) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = instantiateSubtree(
       "<style>.sub .shift {baseline-shift:sub;}</style><defs><text id='label' y='30' "
       "font-size='20'><tspan class='shift'>H</tspan></text></defs>"
@@ -809,6 +814,7 @@ TEST(RendererAnimationStyleBase, ShadowBaselineKeywordsDoNotLeakBetweenInstances
 }
 
 TEST(RendererAnimationStyleBase, MissingSpanStyleKeepsTextRootBaselineFallback) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = instantiateSubtree(
       "<text id='root' y='30' font-size='20' baseline-shift='super'>"
       "<tspan id='span'>H</tspan></text>",
@@ -830,6 +836,7 @@ TEST(RendererAnimationStyleBase, MissingSpanStyleKeepsTextRootBaselineFallback) 
 }
 
 TEST(RendererAnimationStyleBase, FontOverrideKeepsTypedPriority) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = instantiateSubtree(
       "<text id='label' y='30'>H<animate attributeName='font-size' from='12' to='24' "
       "dur='2s'/></text>",
@@ -847,6 +854,7 @@ TEST(RendererAnimationStyleBase, FontOverrideKeepsTypedPriority) {
 }
 
 TEST(RendererAnimationStyleBase, ShadowFontDrawsIgnorePrewarmedLightGeometry) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = instantiateSubtree(
       "<text id='label' y='30' fill='red'>H<animate attributeName='font-size' from='100%' "
       "to='2em' dur='2s'/></text><use href='#label' y='50' font-size='12'/>"
@@ -870,6 +878,7 @@ TEST(RendererAnimationStyleBase, ShadowFontDrawsIgnorePrewarmedLightGeometry) {
 }
 
 TEST(RendererAnimationStyleBase, RepeatedFontRecipesShareOneWorkAllowance) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   std::string values = "16";
   for (int i = 1; i < 512; ++i) {
     values += ";16";
@@ -907,8 +916,6 @@ TEST(RendererAnimationStyleBase, RepeatedFontRecipesShareOneWorkAllowance) {
   EXPECT_THAT(sizes, testing::Contains(8));
   EXPECT_THAT(sizes, testing::Contains(16));
 }
-
-#endif
 
 TEST(RendererAnimationStyleBase, ToOnlyPaintKeepsStylesheetReferenceAndFallback) {
   for (const std::string_view paint : {"url('#g')", "url('#quoted\"g')", "url('#missing') red"}) {

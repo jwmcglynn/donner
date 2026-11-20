@@ -12,6 +12,7 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace donner::svg {
 
@@ -62,16 +63,8 @@ bool GeodeSupportsFeature(RendererBackendFeature feature) {
     // where that difference alone exceeds the pixel budget opt into
     // `withGeodeQuarterPixelEdgeCoverage()` in resvg_test_suite.cc.
     case RendererBackendFeature::FilterEffects: return true;
-#ifdef DONNER_TEXT_ENABLED
-    case RendererBackendFeature::Text: return true;
-#else
-    case RendererBackendFeature::Text: return false;
-#endif
-#ifdef DONNER_TEXT_FULL
-    case RendererBackendFeature::TextFull: return true;
-#else
-    case RendererBackendFeature::TextFull: return false;
-#endif
+    case RendererBackendFeature::Text: return IsTextBuiltIn();
+    case RendererBackendFeature::TextFull: return IsFullTextBuiltIn();
     case RendererBackendFeature::AsciiSnapshot: return true;
   }
 
