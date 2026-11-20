@@ -1,5 +1,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stb/stb_truetype.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -10,8 +11,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include <stb/stb_truetype.h>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/fonts/SfntUtils.h"
@@ -317,8 +316,8 @@ TEST(GlyphInkAreaTest, RenderedInkEqualsExactOutlineArea) {
   auto parsed = parser::SVGParser::ParseSVG(kScene, warnings);
   ASSERT_FALSE(parsed.hasError()) << parsed.error();
   SVGDocument document = std::move(parsed.result());
-  RegisterFontsFromDirectoryForTesting(
-      document, Runfiles::instance().Rlocation(std::string(kFontDirectory)));
+  RegisterFontsFromDirectoryForTesting(document,
+                                       Runfiles::instance().Rlocation(std::string(kFontDirectory)));
 
   const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
   ASSERT_FALSE(bitmap.empty()) << ActiveRendererBackendName() << " returned an empty snapshot";

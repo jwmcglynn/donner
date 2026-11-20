@@ -731,14 +731,14 @@ INSTANTIATE_TEST_SUITE_P(PaintingFillRule, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingImageRendering, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "painting/image-rendering",
-                {
-                    {"on-feImage.svg",
-                     Params().requireFeature(RendererBackendFeature::FilterEffects,
-                                             "filter effects")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "painting/image-rendering",
+            {
+                {"on-feImage.svg",
+                 Params().requireFeature(RendererBackendFeature::FilterEffects, "filter effects")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingIsolation, ImageComparisonTestFixture,
@@ -1502,17 +1502,16 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextTspan, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/tspan",
-            {
-                {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
-                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
-                {"with-filter.svg",
-                 HeavyGlyphReferenceGolden(
-                     "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/tspan",
+                {
+                    {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
+                    // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                    {"with-filter.svg",
+                     HeavyGlyphReferenceGolden(
+                         "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
