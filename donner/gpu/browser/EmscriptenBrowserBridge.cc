@@ -49,6 +49,7 @@ int donner_gpu_device_status(unsigned int device);
 int donner_gpu_is_device_lost(unsigned int device);
 int donner_gpu_read_lost_reason(unsigned int device, char* destination, int capacity);
 double donner_gpu_completed_serial(unsigned int device);
+int donner_gpu_publish_state(unsigned int device, unsigned int* status, uint64_t* completedSerial);
 unsigned int donner_gpu_max_texture_dimension_2d(unsigned int device);
 
 int donner_gpu_create_buffer(unsigned int device, unsigned int id, double byteSize,
@@ -473,6 +474,16 @@ bool EmscriptenBrowserBridge::isDeviceLost() const {
 
 RcString EmscriptenBrowserBridge::deviceLostReason() const {
   return ReadMessage(logicalDevice_, &CallBrowserGpu<donner_gpu_read_lost_reason>);
+}
+
+bool EmscriptenBrowserBridge::beginPublishingState() {
+  BrowserPublishedState& published = publishedStateStorage();
+  // The browser side stores through these addresses with Atomics, as plain 32- and 64-bit words.
+  static_assert(sizeof(published.status) == sizeof(unsigned int));
+  static_assert(sizeof(published.completedSerial) == sizeof(uint64_t));
+  return CallBrowserGpu<donner_gpu_publish_state, BrowserGpuOperationKind::OwnershipQuery>(
+             logicalDevice_, reinterpret_cast<unsigned int*>(&published.status),
+             reinterpret_cast<uint64_t*>(&published.completedSerial)) != 0;
 }
 
 uint64_t EmscriptenBrowserBridge::completedSerial() const {

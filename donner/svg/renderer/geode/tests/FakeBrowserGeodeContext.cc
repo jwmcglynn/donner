@@ -28,6 +28,7 @@ public:
     bridge->calls = calls_;
     bridge->queries = queries_;
     bridge->completeOnSubmit = true;
+    bridge->publishes = true;
     gpu::browser::BrowserDeviceRequest request =
         gpu::browser::BrowserDeviceRequest::Begin(std::move(bridge));
     gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> device =
