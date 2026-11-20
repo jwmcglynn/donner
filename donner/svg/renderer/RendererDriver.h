@@ -273,6 +273,19 @@ public:
   /// for bounded damage renders after their caller rules out nonlocal effects in the owner tree.
   void setConservativeEarlyLeafCulling(bool enabled) { earlyLeafViewportCulling_ = enabled; }
 
+  /**
+   * Draw order of the last instance among the mask, marker and pattern content drawn for an
+   * instance, or the instance's own draw order when it draws none. That content is instantiated
+   * after the instance, so it can follow the last entity of the instance's own subtree in paint
+   * order. A caller that slices paint order around an instance must keep that content with it:
+   * drawn as a range of its own, it would paint as ordinary content.
+   *
+   * @param registry Registry holding the rendering instances.
+   * @param instance Instance to inspect.
+   */
+  [[nodiscard]] static int LastDrawOrderOfDrawnContent(
+      Registry& registry, const components::RenderingInstanceComponent& instance);
+
   /// Controls visibility and transform handling when computing an entity range's bounds.
   struct EntityRangeBoundsOptions {
     /// Ordinary scene tiles are bounded by the current raster viewport. A selected drag tile may
