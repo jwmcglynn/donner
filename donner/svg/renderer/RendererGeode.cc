@@ -38,6 +38,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/core/Gradient.h"
@@ -757,12 +758,18 @@ bool paintReferenceIsGradient(const components::ResolvedPaintServer& server) {
   return computedGradient != nullptr && computedGradient->initialized;
 }
 
+/// True when \p server references a pattern element.
+bool paintReferenceIsPattern(const components::ResolvedPaintServer& server) {
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
+  return ref != nullptr && ref->reference.handle.all_of<components::ComputedPatternComponent>();
+}
+
 /// The solid color a text draw paints for \p server at \p opacity, or nullopt when it paints no
 /// solid color. A paint server reference paints its server rather than its fallback color wherever
 /// the text draw can paint that server: a gradient (one that cannot be drawn falls back where it is
-/// drawn), or a pattern when the driver staged a tile, as \p patternStaged says. The staged tile
-/// is always the text element's own pattern. Only a pattern reference with no staged tile paints
-/// its fallback color.
+/// drawn), or a pattern when the driver staged a tile for it, as \p patternStaged says: the tile
+/// of a span's own pattern, or the text element's. Only a pattern reference with no staged tile
+/// paints its fallback color.
 std::optional<css::RGBA> TextSolidPaint(const components::ResolvedPaintServer& server,
                                         double opacity, const css::RGBA& currentColor,
                                         bool patternStaged) {
@@ -2388,6 +2395,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   static_assert(!std::is_copy_constructible_v<PatternPaintSlot>,
                 "A copyable pattern paint slot would let a container copy its tile handle.");
 
+  /// Pattern tiles staged for the text spans of the next text draw that paint with their own
+  /// pattern, keyed by span pattern slot.
+  struct SpanPatternSlots {
+    SpanPatternSlots() = default;
+    ~SpanPatternSlots() = default;
+    /// @see PatternPaintSlot for why the copy operations are deleted rather than left implicit.
+    SpanPatternSlots(const SpanPatternSlots&) = delete;
+    SpanPatternSlots& operator=(const SpanPatternSlots&) = delete;
+    SpanPatternSlots(SpanPatternSlots&&) noexcept = default;
+    SpanPatternSlots& operator=(SpanPatternSlots&&) noexcept = default;
+
+    std::unordered_map<std::uint64_t, PatternPaintSlot> fill;    ///< Tiles of span fills.
+    std::unordered_map<std::uint64_t, PatternPaintSlot> stroke;  ///< Tiles of span strokes.
+  };
+  static_assert(!std::is_copy_constructible_v<SpanPatternSlots>,
+                "Copyable span pattern slots would let a container copy their tile handles.");
+  static_assert(std::is_nothrow_move_constructible_v<SpanPatternSlots>,
+                "Span pattern slots move with the pattern stack frame that saves them.");
+
   struct PatternStackFrame {
     PatternStackFrame() = default;
     ~PatternStackFrame() = default;
@@ -2434,23 +2460,70 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::optional<PatternPaintSlot> savedPatternFillPaint;
     /// @see savedPatternFillPaint
     std::optional<PatternPaintSlot> savedPatternStrokePaint;
+    /// @see savedPatternFillPaint
+    SpanPatternSlots savedSpanPatternPaints;
   };
   static_assert(!std::is_copy_constructible_v<PatternStackFrame>,
                 "A copyable pattern stack frame would let vector growth copy its tile handle.");
   std::vector<PatternStackFrame> patternStack;
 
-  void promotePatternTile(PatternStackFrame& frame, bool forStroke) {
+  void promotePatternTile(PatternStackFrame& frame, bool forStroke,
+                          std::optional<std::uint64_t> spanSlot) {
     PatternPaintSlot slot;
     slot.tile = std::move(frame.tileTexture);
     slot.tileDesc = frame.tileDesc;
     slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
     slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
 
-    patternFillPaint = std::move(frame.savedPatternFillPaint);
-    patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+    restoreSavedPatternPaints(frame);
+    if (spanSlot.has_value()) {
+      auto& tiles = forStroke ? spanPatternPaints.stroke : spanPatternPaints.fill;
+      if (const auto found = tiles.find(*spanSlot); found != tiles.end()) {
+        releaseTextureAtFrameEnd(std::move(found->second.tile), found->second.tileDesc);
+        tiles.erase(found);
+      }
+      tiles.emplace(*spanSlot, std::move(slot));
+      return;
+    }
     std::optional<PatternPaintSlot>& targetSlot = forStroke ? patternStrokePaint : patternFillPaint;
     releasePatternPaintSlot(targetSlot);
     targetSlot = std::move(slot);
+  }
+
+  /// Put back the pattern paints that were pending when \p frame's tile began.
+  void restoreSavedPatternPaints(PatternStackFrame& frame) {
+    patternFillPaint = std::move(frame.savedPatternFillPaint);
+    patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+    spanPatternPaints = std::move(frame.savedSpanPatternPaints);
+  }
+
+  /// Hand every tile of \p slots back to the pool and empty them.
+  void releaseSpanPatternPaints(SpanPatternSlots& slots) {
+    for (auto* tiles : {&slots.fill, &slots.stroke}) {
+      for (auto& [slot, tile] : *tiles) {
+        releaseTextureAtFrameEnd(std::move(tile.tile), tile.tileDesc);
+      }
+      tiles->clear();
+    }
+  }
+
+  /// The staged pattern tile that run \p runIndex of \p text paints with for its fill or stroke:
+  /// the tile in its span's pattern slot, or, when its span has none, the text element's own
+  /// pattern. Null when that tile was not staged.
+  const PatternPaintSlot* runPatternTile(const components::ComputedTextComponent& text,
+                                         std::size_t runIndex, bool forStroke) const {
+    const std::optional<std::uint64_t> slot =
+        runIndex < text.spans.size() ? (forStroke ? text.spans[runIndex].strokePatternSlot
+                                                  : text.spans[runIndex].fillPatternSlot)
+                                     : std::nullopt;
+    if (!slot.has_value()) {
+      const std::optional<PatternPaintSlot>& element =
+          forStroke ? patternStrokePaint : patternFillPaint;
+      return element.has_value() ? &*element : nullptr;
+    }
+    const auto& tiles = forStroke ? spanPatternPaints.stroke : spanPatternPaints.fill;
+    const auto found = tiles.find(*slot);
+    return found != tiles.end() ? &found->second : nullptr;
   }
 
   /// Hand a pattern paint's tile back to the pool and empty the slot.
@@ -2493,6 +2566,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       releaseTextureAtFrameEnd(std::move(frame.tileTexture), frame.tileDesc);
       releasePatternPaintSlot(frame.savedPatternFillPaint);
       releasePatternPaintSlot(frame.savedPatternStrokePaint);
+      releaseSpanPatternPaints(frame.savedSpanPatternPaints);
       if (index != 0) {
         // Every saved stack but the outermost belongs to an enclosing tile, which is going away
         // with it. The outermost one is the renderer's own and is settled below.
@@ -2520,6 +2594,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     patternStack.clear();
     releasePatternPaintSlot(patternFillPaint);
     releasePatternPaintSlot(patternStrokePaint);
+    releaseSpanPatternPaints(spanPatternPaints);
   }
 
   // --------------------------------------------------------------------
@@ -2945,6 +3020,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   std::optional<PatternPaintSlot> patternFillPaint;
   std::optional<PatternPaintSlot> patternStrokePaint;
+  /// Tiles of text spans' own patterns, staged for the next text draw.
+  SpanPatternSlots spanPatternPaints;
 
   /// Axis-aligned clip rectangles in target-pixel coords. Each entry
   /// corresponds to a `pushClip` with a non-empty `clipRect`. The active
@@ -6772,6 +6849,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     patternFillPaint.reset();
     patternStrokePaint.reset();
+    for (auto* tiles : {&spanPatternPaints.fill, &spanPatternPaints.stroke}) {
+      for (auto& [slot, tile] : *tiles) {
+        releaseRuntimeTexture(tile.tile);
+      }
+      tiles->clear();
+    }
   }
 
   /// Give up this renderer's render targets at teardown.
@@ -7995,8 +8078,10 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // inside the tile would otherwise pick them up as its own fill/stroke and release them).
   frame.savedPatternFillPaint = std::move(impl_->patternFillPaint);
   frame.savedPatternStrokePaint = std::move(impl_->patternStrokePaint);
+  frame.savedSpanPatternPaints = std::move(impl_->spanPatternPaints);
   impl_->patternFillPaint.reset();
   impl_->patternStrokePaint.reset();
+  impl_->spanPatternPaints = Impl::SpanPatternSlots();
   frame.tileRect = tileRect;
   frame.targetFromPattern = targetFromPattern;
   frame.tileTexture = std::move(tileTexture);
@@ -8044,7 +8129,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   return true;
 }
 
-void RendererGeode::endPatternTile(bool forStroke) {
+void RendererGeode::endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
   if (impl_->patternStack.empty()) {
     return;
@@ -8076,8 +8161,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
 
   if (impl_->frameRecordingAbandoned) {
     impl_->replaceActiveEncoder(nullptr);
-    impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
-    impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+    impl_->restoreSavedPatternPaints(frame);
     impl_->retainTextureAfterAbandonedFrame(std::move(frame.tileTexture), frame.tileDesc);
     return;
   }
@@ -8132,7 +8216,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->replaceActiveEncoder(nullptr);
   }
 
-  impl_->promotePatternTile(frame, forStroke);
+  impl_->promotePatternTile(frame, forStroke, spanSlot);
 }
 
 void RendererGeode::setPaint(const PaintParams& paint) {
@@ -8504,8 +8588,10 @@ GlyphGeometryModes ResolveGlyphGeometryModes(bool solidFill, bool gradientFill, 
 /// own its fill takes \p textFill, the text element's solid fill (already scaled by its fill
 /// opacity); a span whose own fill is none is not filled. A span's own fill is resolved at the
 /// product of its `fill-opacity` and `opacity` by \ref TextSolidPaint, with \p patternStaged
-/// saying whether the driver staged a fill pattern tile; a fill with no solid color takes
-/// \p textFill, since its server is drawn separately.
+/// saying whether the driver staged a fill pattern tile for the run. A pattern with no solid color
+/// paints none: its staged tile paints it, and with no tile and no fallback color it paints
+/// nothing. Any other fill with no solid color takes \p textFill, since its server is drawn
+/// separately.
 css::RGBA SpanFillColor(const components::ComputedTextComponent& text, std::size_t runIndex,
                         const css::RGBA& textFill, const css::RGBA& currentColor,
                         bool patternStaged) {
@@ -8518,7 +8604,7 @@ css::RGBA SpanFillColor(const components::ComputedTextComponent& text, std::size
   }
   return TextSolidPaint(span.resolvedFill, span.fillOpacity * span.opacity, currentColor,
                         patternStaged)
-      .value_or(textFill);
+      .value_or(paintReferenceIsPattern(span.resolvedFill) ? css::RGBA(0, 0, 0, 0) : textFill);
 }
 #endif  // DONNER_TEXT_ENABLED
 
@@ -8557,8 +8643,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // fills the glyph outlines with the pattern (clipped to the glyphs). We must
   // also reset the slot once below so it does not leak onto the next shape's
   // `fillResolved` -- the bug this fixes was an unfilled glyph + the staged
-  // pattern bleeding onto the following element. Per-span pattern fill is a
-  // separate gap (matching the element-level handling here).
+  // pattern bleeding onto the following element. A span's own pattern is staged
+  // in a span pattern slot instead (see `Impl::runPatternTile`).
   const bool hasPatternFill = impl_->patternFillPaint.has_value();
   const bool hasPatternStroke = impl_->patternStrokePaint.has_value();
   const css::RGBA currentColor = impl_->paint.currentColor;
@@ -8611,8 +8697,14 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       continue;
     }
 
+    // The staged tiles this run's pattern fill and stroke sample: its span's own pattern, or the
+    // text element's.
+    const Impl::PatternPaintSlot* fillTile =
+        impl_->runPatternTile(text, runIndex, /*forStroke=*/false);
+    const Impl::PatternPaintSlot* strokeTile =
+        impl_->runPatternTile(text, runIndex, /*forStroke=*/true);
     const css::RGBA spanFill =
-        SpanFillColor(text, runIndex, *defaultFill, currentColor, hasPatternFill);
+        SpanFillColor(text, runIndex, *defaultFill, currentColor, fillTile != nullptr);
     const bool hasFill = spanFill.a != 0;
 
     // Effective per-run fill paint *server*: a span's own computed fill overrides
@@ -8645,14 +8737,14 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                    ? text.spans[runIndex].fillOpacity * text.spans[runIndex].opacity
                                    : impl_->paint.fillOpacity;
 
-    // A run inherits the element-level pattern fill only when its fill server is a paint server
-    // reference that is not a gradient. The staged pattern is the text element's own; a span's own
-    // different pattern is not staged. A span whose own fill is a solid paints that solid, so a
-    // fully transparent one (`fill-opacity="0"`, `transparent`) paints nothing rather than the
-    // element's pattern. `!fillIsGradient` ensures a span's own gradient is drawn as a gradient
-    // (above) rather than the inherited pattern.
+    // A run paints a pattern fill only when its fill server is a paint server reference that is not
+    // a gradient, from the tile staged for it: its span's own pattern, or the text element's. A
+    // span whose own fill is a solid paints that solid, so a fully transparent one
+    // (`fill-opacity="0"`, `transparent`) paints nothing rather than the element's pattern.
+    // `!fillIsGradient` ensures a span's own gradient is drawn as a gradient (above) rather than a
+    // pattern.
     const bool usePatternFill =
-        hasPatternFill && !hasFill && !fillIsGradient &&
+        fillTile != nullptr && !hasFill && !fillIsGradient &&
         std::holds_alternative<components::PaintResolvedReference>(fillServer);
 
     // Resolve per-run stroke. A span's computed stroke decides how its glyphs are stroked: the
@@ -8686,7 +8778,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           strokeServer = &span.resolvedStroke;
           strokeOpacity = span.strokeOpacity * span.opacity;
           color = TextSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity,
-                                 currentColor, hasPatternStroke);
+                                 currentColor, strokeTile != nullptr);
         }
       }
       if (runHasStroke && runStrokeParams.strokeWidth > 0.0) {
@@ -8718,11 +8810,11 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
              ? paintReferenceIsGradient(*strokeServer)
              : (std::holds_alternative<components::PaintResolvedReference>(*strokeServer) &&
                 !impl_->patternStrokePaint.has_value()));
-    // Inherit the element-level pattern stroke only when the run's stroke server is a paint server
-    // reference (`strokeStyle` without `strokeColor` implies one) that is not a gradient: a span's
-    // own gradient is drawn above.
+    // Paint a pattern stroke from the run's staged tile only when its stroke server is a paint
+    // server reference (`strokeStyle` without `strokeColor` implies one) that is not a gradient: a
+    // span's own gradient is drawn above.
     const bool usePatternStroke = strokeStyle.has_value() && !strokeColor.has_value() &&
-                                  !strokeIsGradient && impl_->patternStrokePaint.has_value();
+                                  !strokeIsGradient && strokeTile != nullptr;
     const bool hasStrokePaint = strokeColor.has_value() || strokeIsGradient || usePatternStroke;
 
     // The run's gradient fill and stroke are each resolved at most once, fill first as on the CPU
@@ -8873,8 +8965,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           // is set above, so `buildPatternPaint` composes the right sample space.
           impl_->syncTransform();
           impl_->encoder->fillPathPattern(
-              placed, FillRule::NonZero,
-              impl_->buildPatternPaint(*impl_->patternFillPaint, fillOpacity), encoded);
+              placed, FillRule::NonZero, impl_->buildPatternPaint(*fillTile, fillOpacity), encoded);
         } else if (hasFill) {
           const geode::EncodedPath* encoded =
               impl_->encodeTransientGeometry(placed, FillRule::NonZero);
@@ -8893,8 +8984,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       } else if (usePatternStroke) {
         impl_->syncTransform();
         impl_->encoder->fillPathPattern(
-            stroked, strokeRule,
-            impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity), encoded);
+            stroked, strokeRule, impl_->buildPatternPaint(*strokeTile, strokeOpacity), encoded);
       } else {
         impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
       }
@@ -8980,6 +9070,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     impl_->releasePatternPaintSlot(impl_->patternFillPaint);
   }
   impl_->releasePatternPaintSlot(impl_->patternStrokePaint);
+  impl_->releaseSpanPatternPaints(impl_->spanPatternPaints);
 #else
   (void)registry;
   (void)text;

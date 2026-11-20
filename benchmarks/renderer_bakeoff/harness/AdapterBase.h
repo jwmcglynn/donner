@@ -89,7 +89,7 @@ public:
 
   [[nodiscard]] bool beginPatternTile(const Box2d& tileRect,
                                       const Transform2d& targetFromPattern) override;
-  void endPatternTile(bool forStroke) override;
+  void endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) override;
 
   void setPaint(const svg::PaintParams& paint) override;
   void drawPath(const svg::PathShape& path, const svg::StrokeParams& stroke) override;

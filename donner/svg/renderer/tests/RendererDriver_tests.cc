@@ -841,7 +841,8 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
         EXPECT_NEAR(tileRect.height(), 4.0, 1e-6);
         return true;
       });
-  EXPECT_CALL(renderer, endPatternTile(_)).WillRepeatedly([&](bool) { ++endPatternCount; });
+  EXPECT_CALL(renderer, endPatternTile(_, _))
+      .WillRepeatedly([&](bool, std::optional<std::uint64_t>) { ++endPatternCount; });
 
   EXPECT_CALL(renderer, drawPath(_, _))
       .Times(AtLeast(1))
@@ -857,6 +858,91 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
   EXPECT_EQ(beginPatternCount, endPatternCount) << "begin/end pattern tile should be paired";
   EXPECT_GE(drawPathInPattern, 1) << "Pattern content should be drawn between begin and end";
 }
+
+#ifdef DONNER_TEXT_ENABLED
+TEST_F(RendererDriverTest, TextStagesATileOnlyForASpansOwnPattern) {
+  // Text whose spans paint only the text's own paint stages no span tile and records no span
+  // pattern; a span pattern is staged once for every span that references it, as the instance's
+  // entry 0.
+  struct Case {
+    std::string_view label;
+    std::string_view content;
+    int elementTiles;
+    int spanTiles;
+  };
+  const std::array<Case, 4> cases = {{
+      {"solid", R"svg(fill="red">Te<tspan fill="blue">xt</tspan>)svg", 0, 0},
+      {"text_pattern",
+       R"svg(fill="url(#a)">T<tspan fill="url(#a)">e</tspan><tspan fill="red">x</tspan>t)svg", 1,
+       0},
+      {"span_pattern",
+       R"svg(fill="url(#a)">T<tspan fill="url(#b)">e</tspan><tspan fill="url(#b)">x</tspan>t)svg",
+       1, 1},
+      {"span_pattern_in_solid_text", R"svg(fill="red">Te<tspan stroke="url(#b)">xt</tspan>)svg", 0,
+       1},
+  }};
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.label);
+    SVGDocument document = makeDocument(std::string(R"svg(<defs>
+          <pattern id="a" width="4" height="4" patternUnits="userSpaceOnUse">
+            <rect width="2" height="2" fill="red"/></pattern>
+          <pattern id="b" width="4" height="4" patternUnits="userSpaceOnUse">
+            <rect width="2" height="2" fill="blue"/></pattern>
+        </defs><text id="text" x="2" y="20" font-size="16" )svg") +
+                                            std::string(testCase.content) + "</text>",
+                                        Vector2i(64, 32));
+    int elementTiles = 0;
+    std::vector<std::uint64_t> spanSlots;
+    std::size_t spansWithSlots = 0;
+    EXPECT_CALL(renderer, beginPatternTile(_, _)).WillRepeatedly(::testing::Return(true));
+    EXPECT_CALL(renderer, endPatternTile(_, _))
+        .WillRepeatedly([&](bool, std::optional<std::uint64_t> spanSlot) {
+          if (spanSlot.has_value()) {
+            spanSlots.push_back(*spanSlot);
+          } else {
+            ++elementTiles;
+          }
+        });
+    EXPECT_CALL(renderer, drawText(_, _, _))
+        .WillRepeatedly(
+            [&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
+              spansWithSlots += static_cast<std::size_t>(
+                  std::count_if(text.spans.begin(), text.spans.end(), [](const auto& span) {
+                    return span.fillPatternSlot.has_value() || span.strokePatternSlot.has_value();
+                  }));
+            });
+
+    driver.draw(document);
+
+    EXPECT_EQ(elementTiles, testCase.elementTiles);
+    EXPECT_THAT(spanSlots, testing::SizeIs(testCase.spanTiles));
+    const auto text = document.querySelector("#text");
+    ASSERT_TRUE(text.has_value());
+    const int textDrawOrder =
+        document.registry()
+            .get<components::RenderingInstanceComponent>(text->unsafeEntityHandle().entity())
+            .drawOrder;
+    for (const std::uint64_t slot : spanSlots) {
+      // Entry 0 of the span patterns of the text instance, in the first document drawn.
+      EXPECT_EQ(slot & 0xFFFFu, 0u);
+      EXPECT_EQ((slot >> 16) & 0xFFFFFFFFu, static_cast<std::uint32_t>(textDrawOrder));
+      EXPECT_EQ(slot >> 48, 0u);
+    }
+    std::size_t recordedSpanPatterns = 0;
+    for (auto&& [entity, instance] :
+         document.registry().view<components::RenderingInstanceComponent>().each()) {
+      recordedSpanPatterns += instance.spanPatternPaints.size();
+    }
+    EXPECT_EQ(recordedSpanPatterns, static_cast<std::size_t>(testCase.spanTiles));
+    if (testCase.spanTiles == 0) {
+      EXPECT_EQ(spansWithSlots, 0u);
+    } else {
+      EXPECT_GE(spansWithSlots, 1u);
+    }
+    ::testing::Mock::VerifyAndClearExpectations(&renderer);
+  }
+}
+#endif  // DONNER_TEXT_ENABLED
 
 TEST_F(RendererDriverTest, RejectedPatternTileSkipsContentAndEndCommand) {
   SVGDocument document = makeDocument(R"svg(
@@ -874,7 +960,7 @@ TEST_F(RendererDriverTest, RejectedPatternTileSkipsContentAndEndCommand) {
   EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, beginPatternTile(_, _)).WillOnce(::testing::Return(false));
-  EXPECT_CALL(renderer, endPatternTile(_)).Times(0);
+  EXPECT_CALL(renderer, endPatternTile(_, _)).Times(0);
   EXPECT_CALL(renderer, drawPath(_, _)).Times(1);
 
   driver.draw(document);

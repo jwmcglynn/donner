@@ -240,11 +240,12 @@ bool HasSubtreePaint(const components::ResolvedPaintServer& paint) {
 }
 
 // True when @p instance renders content instantiated after its host entity, past the end of its
-// own range: a mask, markers or a pattern tile.
+// own range: a mask, markers or a pattern tile, including a text span's own pattern tile.
 bool RendersAfterItself(const components::RenderingInstanceComponent& instance) {
   return instance.mask.has_value() || instance.markerStart.has_value() ||
          instance.markerMid.has_value() || instance.markerEnd.has_value() ||
-         HasSubtreePaint(instance.resolvedFill) || HasSubtreePaint(instance.resolvedStroke);
+         HasSubtreePaint(instance.resolvedFill) || HasSubtreePaint(instance.resolvedStroke) ||
+         !instance.spanPatternPaints.empty();
 }
 
 using EntityRun = std::pair<Entity, Entity>;

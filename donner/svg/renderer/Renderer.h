@@ -275,7 +275,7 @@ public:
    *
    * @param forStroke If true, store as stroke paint, otherwise fill paint.
    */
-  void endPatternTile(bool forStroke) override;
+  void endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) override;
 
   /**
    * Sets the active paint parameters for subsequent draw calls.

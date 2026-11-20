@@ -87,6 +87,7 @@ struct BeginPatternTileCommand {
 
 struct EndPatternTileCommand {
   bool forStroke = false;
+  std::optional<std::uint64_t> spanSlot;  ///< Text span pattern slot, or nullopt for the element.
 };
 
 struct SetPaintCommand {
@@ -642,7 +643,9 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
           [&](const BeginPatternTileCommand& value) {
             (void)renderer.beginPatternTile(value.tileRect, value.targetFromPattern);
           },
-          [&](const EndPatternTileCommand& value) { renderer.endPatternTile(value.forStroke); },
+          [&](const EndPatternTileCommand& value) {
+            renderer.endPatternTile(value.forStroke, value.spanSlot);
+          },
           [&](const SetPaintCommand& value) { renderer.setPaint(value.paint); },
           [&](const DrawPathCommand& value) {
             renderer.drawPath(PathShape{&value.path, value.fillRule}, value.stroke);
@@ -749,7 +752,7 @@ void RenderSnapshot::replay(RendererInterface& renderer) const {
       if (rejectedPatternDepth > 0) {
         --rejectedPatternDepth;
       } else {
-        renderer.endPatternTile(endPattern->forStroke);
+        renderer.endPatternTile(endPattern->forStroke, endPattern->spanSlot);
       }
       continue;
     }
@@ -860,8 +863,8 @@ bool RenderSnapshotRecorder::beginPatternTile(const Box2d& tileRect,
   return true;
 }
 
-void RenderSnapshotRecorder::endPatternTile(bool forStroke) {
-  snapshot_.impl_->commands.push_back(EndPatternTileCommand{forStroke});
+void RenderSnapshotRecorder::endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) {
+  snapshot_.impl_->commands.push_back(EndPatternTileCommand{forStroke, spanSlot});
 }
 
 void RenderSnapshotRecorder::setPaint(const PaintParams& paint) {

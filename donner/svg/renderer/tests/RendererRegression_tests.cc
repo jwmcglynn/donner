@@ -36,6 +36,8 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
+#include "donner/svg/renderer/RenderSnapshot.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/geode/GeodeNearestSampling.h"
@@ -3020,6 +3022,181 @@ TEST_F(RendererRegressionTests, TextSpanWithNoFillIsNotFilledWithTheTextPaint) {
   editor::tests::CompareBitmapToBitmap(renders.actual, renders.expected,
                                        "span_paint_" + std::string(singleCase.label),
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+/// A pattern of a tspan's own, different from every paint of \ref kTextStrokePaints.
+constexpr std::string_view kSpanOwnPattern =
+    R"svg(<pattern id="own" patternUnits="userSpaceOnUse" width="6" height="6">)svg"
+    R"svg(<rect width="6" height="3" fill="green"/></pattern>)svg";
+
+TEST_F(RendererRegressionTests, TextSpanPaintsItsOwnPattern) {
+  // A tspan whose own fill or stroke references a pattern paints that pattern, inside text painted
+  // with a solid, a gradient or a pattern. A tspan whose own fill references the text's pattern
+  // paints the text's pattern.
+  constexpr std::string_view kOwnFill = R"svg(fill="url(#own)")svg";
+  constexpr std::string_view kOwnStroke = R"svg(stroke="url(#own)")svg";
+  constexpr std::string_view kOwnStrokePath =
+      R"svg(fill="none" stroke-width="4" stroke="url(#own)")svg";
+  for (const TextStrokePaintCase& paint : kTextStrokePaints) {
+    SCOPED_TRACE(paint.label);
+    const std::string defs = std::string(paint.defs) + std::string(kSpanOwnPattern);
+    const std::string fill = R"svg(fill=")svg" + std::string(paint.paint) + "\"";
+    const std::string stroke =
+        R"svg(fill="none" stroke-width="4" stroke=")svg" + std::string(paint.paint) + "\"";
+    const std::array<SpanStrokeCase, 2> cases = {{
+        {"span_own_pattern_fill", fill, kOwnFill, "", fill, kOwnFill, false, defs,
+         /*pathPerGlyph=*/true},
+        {"span_own_pattern_stroke", stroke, kOwnStroke, "", stroke, kOwnStrokePath, false, defs},
+    }};
+    for (const SpanStrokeCase& testCase : cases) {
+      SCOPED_TRACE(testCase.label);
+      const SpanStrokeRenders renders = RenderSpanStrokeCase(testCase);
+      editor::tests::CompareBitmapToBitmap(renders.actual, renders.expected,
+                                           "span_paint_" + std::string(testCase.label),
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
+  constexpr std::string_view kPatternFill = R"svg(fill="url(#paint)")svg";
+  const std::string defs = std::string(kTextStrokePaints[2].defs) + std::string(kSpanOwnPattern);
+  const SpanStrokeCase singleCase{"span_declares_the_text_pattern",
+                                  kPatternFill,
+                                  kPatternFill,
+                                  "",
+                                  kPatternFill,
+                                  kPatternFill,
+                                  false,
+                                  defs,
+                                  /*pathPerGlyph=*/true};
+  SCOPED_TRACE(singleCase.label);
+  const SpanStrokeRenders renders = RenderSpanStrokeCase(singleCase);
+  editor::tests::CompareBitmapToBitmap(renders.actual, renders.expected,
+                                       "span_paint_" + std::string(singleCase.label),
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Definitions shared by the span pattern draw-path tests: the text's pattern, a span's own
+/// pattern, and a clip path that clips nothing.
+std::string SpanPatternDefinitions() {
+  return "<defs>" + std::string(kTextStrokePaints[2].defs) + std::string(kSpanOwnPattern) +
+         R"svg(<clipPath id="everything"><rect width="200" height="200"/></clipPath></defs>)svg";
+}
+
+/// Text filled with the text's pattern whose "xt" tspan carries \p spanAttributes.
+std::string SpanPatternText(std::string_view textAttributes, std::string_view spanAttributes) {
+  return R"svg(<text id="text" x="20" y="120" font-family="Noto Sans" font-size="60" fill="url(#paint)" )svg" +
+         std::string(textAttributes) + R"svg(>Te<tspan )svg" + std::string(spanAttributes) +
+         ">xt</tspan></text>";
+}
+
+/// Renders \p body with the fonts the text tests use.
+RendererBitmap RenderSpanPatternDocument(const std::string& body) {
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Renders \p body by capturing a render snapshot of it and replaying the snapshot.
+RendererBitmap RenderSpanPatternDocumentThroughSnapshot(const std::string& body) {
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  const std::unique_ptr<RendererInterface> renderer =
+      CreateRendererInstance(ActiveRendererBackend());
+  RendererDriver driver(*renderer);
+  const RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+  driver.draw(snapshot);
+  return renderer->takeSnapshot();
+}
+
+TEST_F(RendererRegressionTests, TextSpanOwnPatternPaintsInUseCopiesAndEffectSpans) {
+  // A `<use>` copy of the text paints the span's own pattern as the text itself does, and so does a
+  // span drawn through its own instance because it declares a clip path.
+  const std::string defs = SpanPatternDefinitions();
+  const RendererBitmap expected =
+      RenderSpanPatternDocument(defs + SpanPatternText("", R"svg(fill="url(#own)")svg"));
+  AssertVisibleFixture(expected, "span_own_pattern_visible");
+  editor::tests::CompareBitmapToBitmap(
+      RenderSpanPatternDocument(defs + "<defs>" + SpanPatternText("", R"svg(fill="url(#own)")svg") +
+                                R"svg(</defs><use href="#text"/>)svg"),
+      expected, "span_own_pattern_use_copy", editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      RenderSpanPatternDocument(
+          defs + SpanPatternText("", R"svg(fill="url(#own)" clip-path="url(#everything)")svg")),
+      expected, "span_own_pattern_effect_span", editor::tests::PixelmatchIdentityParams());
+  // A render snapshot records the span's tile in its span slot and replays it.
+  editor::tests::CompareBitmapToBitmap(RenderSpanPatternDocumentThroughSnapshot(
+                                           defs + SpanPatternText("", R"svg(fill="url(#own)")svg")),
+                                       expected, "span_own_pattern_snapshot_replay",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, TextSpanOwnPatternCycleInsideThePatternPaintsNothing) {
+  // A pattern whose content holds text with a span painted by the same pattern: inside the tile the
+  // span's pattern is already being rendered, so the span paints nothing there, as with no fill.
+  const auto document = [](std::string_view innerSpanFill) {
+    return std::string(
+               R"svg(<defs><pattern id="loop" patternUnits="userSpaceOnUse" width="50" height="50">)svg") +
+           R"svg(<text x="0" y="40" font-family="Noto Sans" font-size="40" fill="blue">A<tspan )svg" +
+           std::string(innerSpanFill) +
+           R"svg(>B</tspan></text></pattern></defs><rect width="200" height="200" fill="url(#loop)"/>)svg";
+  };
+  const RendererBitmap expected = RenderSpanPatternDocument(document(R"svg(fill="none")svg"));
+  AssertVisibleFixture(expected, "span_pattern_cycle_visible");
+  editor::tests::CompareBitmapToBitmap(
+      RenderSpanPatternDocument(document(R"svg(fill="url(#loop)")svg")), expected,
+      "span_pattern_cycle", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, TextSpanOwnPatternContentIsSkippedWithTheText) {
+  // When text whose span has a pattern of its own is not drawn, or the span's pattern has no tile,
+  // the pattern content is skipped in step with it: the shape drawn after the text paints as it
+  // does without the text, and the content never reaches the canvas. The "empty" pattern's content
+  // would cover the canvas origin if it were drawn as ordinary content. Text has no culling
+  // bounds, so it is never culled.
+  const std::string defs =
+      SpanPatternDefinitions() +
+      R"svg(<defs><pattern id="empty" patternUnits="userSpaceOnUse" width="0" height="6">)svg"
+      R"svg(<rect width="60" height="60" fill="red"/></pattern>)svg" +
+      PrimitiveLimitFilter("refused", 33) + "</defs>";
+  constexpr std::string_view kAfter =
+      R"svg(<rect x="140" y="140" width="40" height="40" fill="url(#own)"/>)svg";
+  const RendererBitmap withoutText = RenderSpanPatternDocument(defs + std::string(kAfter));
+  AssertVisibleFixture(withoutText, "span_pattern_skip_after_visible");
+  struct Case {
+    std::string_view label;
+    std::string_view textAttributes;
+  };
+  for (const Case& testCase : {Case{"hidden", R"svg(visibility="hidden")svg"},
+                               Case{"filter_hidden", R"svg(filter="url(#refused)")svg"}}) {
+    SCOPED_TRACE(testCase.label);
+    editor::tests::CompareBitmapToBitmap(
+        RenderSpanPatternDocument(
+            defs + SpanPatternText(testCase.textAttributes, R"svg(fill="url(#own)")svg") +
+            std::string(kAfter)),
+        withoutText, "span_pattern_skip_" + std::string(testCase.label),
+        editor::tests::PixelmatchIdentityParams());
+  }
+  // A span pattern with no tile area paints nothing, like a span with no fill.
+  editor::tests::CompareBitmapToBitmap(
+      RenderSpanPatternDocument(defs + SpanPatternText("", R"svg(fill="url(#empty)")svg") +
+                                std::string(kAfter)),
+      RenderSpanPatternDocument(defs + SpanPatternText("", R"svg(fill="none")svg") +
+                                std::string(kAfter)),
+      "span_pattern_skip_empty_tile", editor::tests::PixelmatchIdentityParams());
+  // Inside solid-filled text as well: with no tile and no fallback color the span paints nothing,
+  // and with a fallback color it paints that color.
+  const auto solidText = [&](std::string_view spanAttributes) {
+    return defs +
+           R"svg(<text x="20" y="120" font-family="Noto Sans" font-size="60" fill="blue">Te<tspan )svg" +
+           std::string(spanAttributes) + ">xt</tspan></text>" + std::string(kAfter);
+  };
+  editor::tests::CompareBitmapToBitmap(
+      RenderSpanPatternDocument(solidText(R"svg(fill="url(#empty)")svg")),
+      RenderSpanPatternDocument(solidText(R"svg(fill="none")svg")),
+      "span_pattern_skip_empty_tile_in_solid_text", editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      RenderSpanPatternDocument(solidText(R"svg(fill="url(#empty) green")svg")),
+      RenderSpanPatternDocument(solidText(R"svg(fill="green")svg")),
+      "span_pattern_empty_tile_fallback_in_solid_text", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, DashedTextStrokeIsChargedToTheFrameDashBudget) {

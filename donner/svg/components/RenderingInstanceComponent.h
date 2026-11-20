@@ -1,8 +1,11 @@
 #pragma once
 /// @file
 
+#include <cstddef>
+#include <cstdint>
 #include <entt/entity/helper.hpp>  // entt::to_entity (2-arg overload)
 #include <optional>
+#include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
@@ -178,6 +181,40 @@ inline bool IsProvablySamePaint(const ResolvedPaintServer& lhs, const ResolvedPa
 }
 
 /**
+ * A pattern that a text span's own fill or stroke references, other than the pattern of the
+ * instance's own fill or stroke. Before the instance draws its text, the driver renders the
+ * pattern's tile into the span pattern slot named by its index in
+ * \ref RenderingInstanceComponent::spanPatternPaints.
+ */
+struct SpanPatternPaint {
+  PaintResolvedReference reference;  //!< The pattern, with the tile content it renders.
+  bool forStroke = false;            //!< True for a span's stroke, false for its fill.
+};
+
+/// Most span patterns one instance records. A span referencing a further distinct pattern gets
+/// no slot: like a span that paints the text element's own pattern, it paints the text element's
+/// staged tile when the text has one, and otherwise paints nothing for that pattern, as for a
+/// pattern with no staged tile.
+inline constexpr std::size_t kMaxSpanPatternPaints = std::size_t{1} << 16;
+
+/**
+ * The span pattern slot of entry \p index of \ref RenderingInstanceComponent::spanPatternPaints
+ * for the instance at \p drawOrder in the document the renderer driver numbers \p document. Draw
+ * orders restart in each document's render tree, so the document number keeps slots unique to
+ * their instance among the documents one driver draws into a renderer in a frame: a tile one
+ * instance staged and never drew cannot be read by another instance's draw.
+ *
+ * @param document The driver's number for the instance's document; its low 16 bits are used.
+ * @param drawOrder The instance's draw order.
+ * @param index Index below \ref kMaxSpanPatternPaints.
+ */
+inline std::uint64_t SpanPatternSlotId(std::uint32_t document, int drawOrder, std::size_t index) {
+  return (static_cast<std::uint64_t>(document & 0xFFFFu) << 48) |
+         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(drawOrder)) << 16) |
+         static_cast<std::uint64_t>(index);
+}
+
+/**
  * An instance of the entity in the rendering tree. Each renderered entity has an instance with a
  * unique \c drawOrder, which enables this list to be sorted and traversed to render the tree.
  */
@@ -259,6 +296,13 @@ struct RenderingInstanceComponent {
    * The resolved paint server for the instance's stroke, if any.
    */
   ResolvedPaintServer resolvedStroke = PaintServer::None();
+
+  /**
+   * The distinct patterns that the text spans this instance paints reference from their own fill
+   * or stroke, other than the instance's own fill or stroke pattern. Empty for an instance that
+   * does not paint text, and for text whose spans paint only the text element's own paint.
+   */
+  std::vector<SpanPatternPaint> spanPatternPaints;
 
   /**
    * The resolved filter effect on this instance, if any.

@@ -205,6 +205,14 @@ struct ComputedTextComponent {
       return hasComputedPaint || !std::holds_alternative<PaintServer::None>(resolvedFill);
     }
 
+    /// The span pattern slot whose tile this span's own fill paints with, when its fill references
+    /// a pattern other than the text element's own (see \ref SpanPatternPaint). Set by
+    /// RendererDriver; unset when the span paints the text element's pattern, or none.
+    std::optional<std::uint64_t> fillPatternSlot;
+
+    /// @see fillPatternSlot, for the span's stroke.
+    std::optional<std::uint64_t> strokePatternSlot;
+
     /// CSS `fill-opacity` value for this span (0.0-1.0).
     double fillOpacity = 1.0;
 
@@ -421,6 +429,9 @@ struct ComputedTextComponent {
 
   // Computed spans with positioning data for rendering.
   SmallVector<TextSpan, 1> spans;
+  /// True when some span holds a \ref TextSpan::fillPatternSlot or \ref
+  /// TextSpan::strokePatternSlot, so a draw that stages no span pattern has to clear them.
+  bool spanPatternSlotsAssigned = false;
   /// One occurrence-resolved font size per authored text owner.
   std::unordered_map<entt::entity, Lengthd> textLengthOwnerFontSizes;
   /// Contiguous computed-span range covered by each authored text owner.
