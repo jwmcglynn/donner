@@ -84,6 +84,7 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
 | text/tspan                 | with-filter                           | Reference disagreement: the reference draws glyph edges 0.25 to 0.3 px outside the outline |
 | text/textPath              | with-filter                           | Reference disagreement: the reference draws glyph edges 0.25 to 0.3 px outside the outline |
+| text/text                  | emojis, compound-emojis, compound-emojis-and-coordinates-list | Reference disagreement: the vertical guide is drawn 1/8 px right of its coverage |
 
 `painting/stroke/{linear,radial}-gradient-on-text` compare against independently captured
 Firefox renderings at the suite's default comparison settings. The vendored images map the
@@ -230,13 +231,13 @@ emoji cluster placement.
 | Category  | Test                                         | Reference                                           |
 | --------- | -------------------------------------------- | --------------------------------------------------- |
 | text/text | complex-graphemes-and-coordinates-list       | Independent resvg v0.49.0 render of the equivalent precomposed glyph    |
-| text/text | compound-emojis-and-coordinates-list         | resvg v0.47.0 rendering of explicitly placed emoji clusters |
+| text/text | compound-emojis-and-coordinates-list         | Donner rendering; codepoint-indexed emoji cluster placement |
+| text/text | compound-emojis, emojis                      | Donner rendering                                    |
 
-The separate `text/text/compound-emojis` and `text/text/emojis` fixtures use
-resvg v0.49.0 references. All three emoji rows compare at a 0.07 threshold: the
-glyphs agree at the default, and the references draw the vertical crosshair guide
-1/8 px right of its exact coverage. The
-[golden README](../../donner/svg/renderer/testdata/golden/README.md#color-emoji-bitmap-sampling)
+The three emoji rows compare at default settings against Donner renderings. Their
+resvg renders match the glyphs and draw the vertical crosshair guide 1/8 px right
+of its exact coverage. The
+[golden README](../../donner/svg/renderer/testdata/golden/README.md#donner-renderings-of-the-color-emoji-rows)
 records the comparison.
 
 ### textPath overrides
