@@ -1230,6 +1230,78 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
 
 
 UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
+# Vendored files that are byte-identical to the resvg v0.50.0 release tag's
+# crates/resvg/tests/ tree, in `sha256sum` format relative to the suite root; the provenance is in
+# third_party/resvg-test-suite/BUILD.bazel.
+UPSTREAM_RELEASE_MANIFEST = Path("third_party/resvg-test-suite/resvg-v0.50.0.sha256")
+UPSTREAM_RELEASE_NOTES = Path("third_party/resvg-test-suite/BUILD.bazel")
+_MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (tests/[^\s].*)")
+
+
+def _manifest_line_violation(line: str, suite_root: Path, seen: set[str]) -> str | None:
+    match = _MANIFEST_LINE.fullmatch(line)
+    if match is None:
+        return f"malformed line {line!r}"
+    digest, relative = match.groups()
+    path = Path(relative)
+    if ".." in path.parts or "." in path.parts or relative != path.as_posix():
+        return f"{relative}: not a normalized path under tests/"
+    if relative in seen:
+        return f"{relative}: listed more than once"
+    seen.add(relative)
+    try:
+        actual = hashlib.sha256((suite_root / path).read_bytes()).hexdigest()
+    except OSError:
+        return f"{relative}: listed file is missing"
+    if actual != digest:
+        return f"{relative}: SHA-256 is {actual}, not the recorded {digest}"
+    return None
+
+
+_MANIFEST_NOTE = re.compile(
+    r"The\s+(\d+)\s+files\s+listed\s+in\s+resvg-v0\.50\.0\.sha256\s+\((\d+)\s+PNGs,\s+each\s+"
+    r"(\d+)x(\d+),\s+and\s+(\d+)\s+SVGs\)"
+)
+
+
+def upstream_release_note_violations(manifest: str, notes: str, suite_root: Path) -> list[str]:
+    """Return how the manifest disagrees with the counts and PNG size its provenance notes state.
+
+    The notes (third_party/resvg-test-suite/BUILD.bazel) say how many files the manifest lists, how
+    many are PNGs and SVGs, and the size of every PNG; this keeps that sentence true.
+    """
+
+    stated = _MANIFEST_NOTE.findall(notes)
+    if len(stated) != 1:
+        return ["the provenance notes need one sentence stating the manifest's file counts"]
+    total, pngs, width, height, svgs = (int(value) for value in stated[0])
+    paths = [match.group(2) for match in map(_MANIFEST_LINE.fullmatch, manifest.splitlines())
+             if match]
+    actual = Counter(Path(path).suffix for path in paths)
+    violations = []
+    if (len(paths), actual[".png"], actual[".svg"]) != (total, pngs, svgs):
+        violations.append(
+            f"the notes state {total} files ({pngs} PNGs, {svgs} SVGs); the manifest lists "
+            f"{len(paths)} ({actual['.png']} PNGs, {actual['.svg']} SVGs)")
+    for path in paths:
+        if path.endswith(".png") and png_dimensions(suite_root / path) != (width, height):
+            violations.append(f"{path}: not the {width}x{height} PNG the notes state")
+    return violations
+
+
+def upstream_release_manifest_violations(manifest: str, suite_root: Path) -> list[str]:
+    """Return the manifest entries whose vendored file does not have its recorded SHA-256.
+
+    The manifest records the vendored files that are byte-identical to an upstream release, so a
+    changed, renamed or missing file must update the manifest and its provenance together.
+    """
+
+    lines = manifest.splitlines()
+    if not lines:
+        return ["the manifest lists no files"]
+    seen: set[str] = set()
+    violations = (_manifest_line_violation(line, suite_root, seen) for line in lines)
+    return [violation for violation in violations if violation]
 
 # `Params::UndefinedBehavior` cases whose vendored reference is not the resvg UB marker image, each
 # mapped to its policy classification and the specification text that leaves the behavior

@@ -1238,6 +1238,61 @@ class ParityReportTests(unittest.TestCase):
         with self.assertRaisesRegex(parity_report.ParityReportError, "unresolved comparison"):
             parity_report.add_execution(report, "max", "a" * 40, receipt)
 
+    def test_upstream_release_manifest_rejects_drifted_entries(self) -> None:
+        suite = self.fixture.root / "suite"
+        (suite / "tests/a").mkdir(parents=True)
+        (suite / "tests/a/kept.png").write_bytes(b"kept")
+        (suite / "tests/a/changed.png").write_bytes(b"regenerated")
+        def digest(data: bytes) -> str:
+            return hashlib.sha256(data).hexdigest()
+
+        good = f"{digest(b'kept')}  tests/a/kept.png"
+        self.assertEqual(parity_report.upstream_release_manifest_violations(good + "\n", suite), [])
+
+        manifest = "\n".join([
+            good,
+            f"{digest(b'original')}  tests/a/changed.png",
+            f"{digest(b'gone')}  tests/a/missing.png",
+            good,
+            f"{digest(b'kept')}  tests/a/../a/kept.png",
+            f"{digest(b'kept')} tests/a/kept.png",
+            f"{digest(b'kept')}  resources/kept.png",
+        ])
+        self.assertEqual(parity_report.upstream_release_manifest_violations(manifest, suite), [
+            f"tests/a/changed.png: SHA-256 is {digest(b'regenerated')}, not the recorded "
+            + digest(b"original"),
+            "tests/a/missing.png: listed file is missing",
+            "tests/a/kept.png: listed more than once",
+            "tests/a/../a/kept.png: not a normalized path under tests/",
+            f"malformed line '{digest(b'kept')} tests/a/kept.png'",
+            f"malformed line '{digest(b'kept')}  resources/kept.png'",
+        ])
+        self.assertEqual(parity_report.upstream_release_manifest_violations("", suite),
+                         ["the manifest lists no files"])
+
+    def test_upstream_release_notes_state_the_manifest_counts(self) -> None:
+        suite = self.fixture.root / "suite"
+        (suite / "tests/a").mkdir(parents=True)
+        (suite / "tests/a/square.png").write_bytes(_png_header(300, 300))
+        (suite / "tests/a/wide.png").write_bytes(_png_header(300, 150))
+        (suite / "tests/a/case.svg").write_bytes(b"<svg/>")
+        manifest = "\n".join(f"{'0' * 64}  tests/a/{name}"
+                              for name in ("square.png", "wide.png", "case.svg"))
+        notes = ("The 3 files listed in resvg-v0.50.0.sha256 (2 PNGs, each\n"
+                 "300x300, and 1 SVGs) are byte-identical.")
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(manifest, notes, suite),
+            ["tests/a/wide.png: not the 300x300 PNG the notes state"])
+        (suite / "tests/a/wide.png").write_bytes(_png_header(300, 300))
+        self.assertEqual(parity_report.upstream_release_note_violations(manifest, notes, suite), [])
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(
+                manifest, notes.replace("2 PNGs", "3 PNGs"), suite),
+            ["the notes state 3 files (3 PNGs, 1 SVGs); the manifest lists 3 (2 PNGs, 1 SVGs)"])
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(manifest, "no counts", suite),
+            ["the provenance notes need one sentence stating the manifest's file counts"])
+
     def test_untracked_report_inputs_keep_the_checkout_revision_unbound(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         root = self.fixture.root
@@ -1582,6 +1637,18 @@ class RealTreeParityReportTests(unittest.TestCase):
             "Every case's canvas comes from a readable reference PNG or an explicit "
             "setCanvasSize(); the harness fails a comparison whose reference it cannot read":
                 parity_report.unresolved_canvas_violations(report),
+            "Every file in the resvg v0.50.0 manifest has the SHA-256 its provenance records "
+            f"({parity_report.UPSTREAM_RELEASE_MANIFEST})":
+                parity_report.upstream_release_manifest_violations(
+                    (repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST).read_text(
+                        encoding="utf-8"),
+                    repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST.parent),
+            "The provenance notes state the manifest's file counts and PNG size":
+                parity_report.upstream_release_note_violations(
+                    (repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST).read_text(
+                        encoding="utf-8"),
+                    (repo_root / parity_report.UPSTREAM_RELEASE_NOTES).read_text(encoding="utf-8"),
+                    repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST.parent),
         }
         for rule, violations in guards.items():
             with self.subTest(rule=rule):

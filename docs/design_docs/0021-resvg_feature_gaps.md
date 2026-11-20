@@ -172,7 +172,7 @@ bottom for completeness.
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | B2  | `filters/filter-functions` coverage                                     | **DONE** (33/43 files compare) | All cases execute; 10 reference qualifications have independent contract tests.                                                                                                                                           |
-| B3  | `structure/image` golden kernel-era mismatch                            |                       **DONE** | Mitchell cubic for quality `<image>` rendering and v0.49.0 raster references (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
+| B3  | `structure/image` golden kernel-era mismatch                            |                       **DONE** | Mitchell cubic for quality `<image>` rendering and upstream resvg raster references (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
@@ -368,13 +368,12 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   Display). The simple tier now reads GPOS pair kerning wrapped in Extension
   lookups, which Source Sans Pro uses exclusively; `font-list` and
   `source-sans-pro` lost their 1300-pixel simple-tier budgets.
-- **Stale references:** the generic-family PNGs, `xml-lang=ja.png` and
-  `fallback-1.png` were drawn in faces outside the vendored set or for a
-  different layout, and `letter-spacing/non-ASCII-character` named its family
-  unquoted. They were refreshed from resvg v0.49.0 (provenance in
-  `third_party/resvg-test-suite/BUILD.bazel`). The refreshed `xml-lang=ja` draws
-  all three lines in Mplus 1p, the only vendored face covering them, so it no
-  longer exercises language-specific face selection.
+- **Upstream references:** the generic-family PNGs, `xml-lang=ja.png`, `fallback-1.png` and
+  `letter-spacing/non-ASCII-character` are upstream resvg's renderings, byte-identical to the
+  resvg v0.50.0 release (provenance in `third_party/resvg-test-suite/BUILD.bazel`); they draw in
+  the vendored faces, and `non-ASCII-character` quotes its family. `xml-lang=ja` draws all three
+  lines in Mplus 1p, the only vendored face covering them, so it does not exercise
+  language-specific face selection.
 - **Weights 400 and 700 only:** the comparison fixture registers only these
   weights. The snapshot's `font-weight` references draw weights 100 to 300 with
   Noto Sans Regular and 900 with Noto Sans Bold, and Donner matches them with zero
@@ -426,9 +425,9 @@ generation:`, only when all of the following hold:
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
 
-The two mixed-font ligature fixtures compare against resvg v0.49.0 at the default settings on
-the full text tier. These fixtures exercise the Amiri font's GSUB substitution, which the
-simple tier does not implement.
+The two mixed-font ligature fixtures compare against upstream resvg's references, byte-identical
+to the resvg v0.50.0 release, at the default settings on the full text tier. These fixtures
+exercise the Amiri font's GSUB substitution, which the simple tier does not implement.
 
 Moving `nested-with-baseline` and `hanging` from a 0.1 color threshold with 100 pixels to a 0.02
 count is not tighter on both axes: the count is larger and the color threshold smaller. It is
@@ -527,7 +526,7 @@ pixels at the default threshold:
 - `optimizeSpeed`: a 2019 nearest-neighbor rendering flattened onto white, with ties toward the
   lower texel.
 
-At resvg v0.49.0 every raster-image reference is the Mitchell cubic (nearest for
+In upstream resvg's renderings every raster-image reference is the Mitchell cubic (nearest for
 `optimizeSpeed`). Donner now resamples `<image>` with `image-rendering: auto`, `optimizeQuality`
 and `high-quality` through the same cubic on TinySkia (tiny-skia `FilterQuality::Bicubic`) and
 Geode (a 16-tap cubic image-blit sampling mode), matching the kernel `feImage` already used;
@@ -537,8 +536,8 @@ mapping on both backends: `smooth` is bilinear there too, and a pure translation
 containing texel, as tiny-skia does for `<image>`. That also removed a cubic filtering pass that
 rotated `feImage` placement and nested-SVG `feImage` rasters received at one-to-one scale, which
 re-enabled `filters/feImage/with-subregion-5` and lets `filters/feImage/svg` compare directly
-against a 500x500 resvg v0.49.0 reference. The raster-image
-references were replaced by their v0.49.0 renderings, with provenance in
+against a 500x500 resvg v0.49.0 reference. The raster-image references are upstream resvg's
+renderings, byte-identical to the resvg v0.50.0 release, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
 The `embedded-svg-with-text` row is a harness mismatch and compares against a Donner rendering
@@ -583,12 +582,13 @@ renderer regression checks a fitted span against the same span with an equal `le
 
 With `spacingAndGlyphs`, a glyph's outline is stretched before its rotation, so a sideways glyph in
 vertical text stretches its own x axis and an upright glyph its y axis.
-`lengthAdjust/vertical` compares against resvg v0.49.0's 300x300 rendering. The vendored snapshot
-placed the sideways glyphs 0.28 units across the line from both Donner and resvg v0.49.0, which is
-consistent with a rendering from before the central baseline. Decorations follow the adjusted glyph
-extents; `lengthAdjust/with-underline` and `text-decoration/with-textLength-on-a-single-character`
-also compare against resvg v0.49.0, because the snapshot drew their underlines at 0.1em, twice the
-0.05em thickness in the vendored Noto Sans post table.
+`lengthAdjust/vertical` compares against upstream resvg's 300x300 rendering. The resvg-test-suite
+snapshot's reference places the sideways glyphs 0.28 units across the line from both Donner and
+resvg, which is consistent with a rendering from before the central baseline. Decorations follow
+the adjusted glyph extents; `lengthAdjust/with-underline` and
+`text-decoration/with-textLength-on-a-single-character` also compare against upstream resvg's
+references, because the snapshot's draw their underlines at 0.1em, twice the 0.05em thickness in
+the vendored Noto Sans post table.
 
 `textLength/zero` compares with a 410-pixel budget because its reference comes from a different
 rasterizer generation (see
@@ -671,7 +671,7 @@ content-placement transform.
 | structure/svg             |     0 | `structure/svg/funcIRI-with-quotes.svg` compares with ordinary budgets after the [paint URL parsing fix](../../donner/svg/properties/PropertyRegistry.cc), and `structure/svg/nested-svg-one-with-rect-and-one-with-viewBox.svg` compares with ordinary budgets after the [viewport sizing fix](../../donner/svg/components/layout/LayoutSystem.cc). |
 | structure/style           |     0 | `external-CSS` compares after CSS `@import` loading landed: imports load through the document resource loader with cycle, depth, count and byte bounds; `//donner/svg/renderer/tests:css_import_tests` covers fetches, relative resolution, limits and cascade order.                                                                                |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                     |
-| painting/image-rendering  |     0 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage) documents the `on-feImage` sampling grid. Both TinySkia and Geode compare `optimizeSpeed` against resvg v0.49.0. |
+| painting/image-rendering  |     0 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage) documents the `on-feImage` sampling grid. Both TinySkia and Geode compare `optimizeSpeed` against resvg v0.50.0. |
 | masking/clipPath          |     0 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text case compares against resvg v0.49.0 with zero differing pixels; both use the glyph-cell text box.                                                 |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                      |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                |

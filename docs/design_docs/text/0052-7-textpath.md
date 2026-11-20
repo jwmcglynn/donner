@@ -97,7 +97,9 @@ human-approved set.
 
 ### Custom goldens and thresholds
 
-Any golden or tolerance change requires explicit human approval after visual retriage. The 300x300 resvg v0.49.0 references use default comparison settings. Their provenance is in
+Any golden or tolerance change requires explicit human approval after visual retriage. The 300x300
+upstream resvg references, byte-identical to the resvg v0.50.0 release, use default comparison
+settings on the canvas each case takes from its reference. Their provenance is in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
 | Test | Setting | Reason |
