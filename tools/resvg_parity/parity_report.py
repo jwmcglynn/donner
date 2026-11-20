@@ -377,7 +377,7 @@ PARAMS_BUILDER_METHODS = {
     "withReason", "withGeodeGoldenOverride", "includeAntiAliasingDifferences",
     "enableGoldenUpdateFromEnv", "setCanvasSize", "disableBackend", "requireFeature",
     "withSimpleTextMaxPixels", "withMaxPixelsDifferent", "withGeodeMaxPixelsDifferent",
-    "onlyTextFull",
+    "onlyTextFull", "withGeodeQuarterPixelEdgeCoverage",
 }
 _PARAMS_TOKEN_RE = re.compile(r"(\.\s*)?(?<![\w:])((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(\s*[({])?")
 _STATE_FIELD_RE = re.compile(r"\b(renderOnly\w*|skip\w*)\b")
@@ -632,6 +632,7 @@ def _exception_types_from_params(
         (_contains_call(expression, {"withGeodeMaxPixelsDifferent"}), "geode_threshold"),
         (_contains_call(expression, {"WithGoldenOverride"}), "shared_golden"),
         (_contains_call(expression, {"withGeodeGoldenOverride"}), "geode_golden"),
+        (_contains_call(expression, {"withGeodeQuarterPixelEdgeCoverage"}), "geode_edge_coverage"),
         (only_text_full, "text_full_gate"),
         (has_backend_gate, "backend_gate"),
     )
@@ -775,6 +776,7 @@ def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[
         "effective_pixel_budget_cases": count_exception("threshold"),
         "geode_golden_cases": count_exception("geode_golden"),
         "geode_pixel_budget_cases": count_exception("geode_threshold"),
+        "geode_quarter_pixel_edge_cases": count_exception("geode_edge_coverage"),
         "pixel_budget_sources": pixel_budget_sources,
         "reference_generation_budget_cases": count_active(
             lambda case: case["primary_state"] == "compare"
@@ -872,6 +874,7 @@ _ARGUMENT_SETTINGS = {
 }
 _CONSTANT_SETTINGS = {
     "includeAntiAliasingDifferences": {"include_antialiasing": True},
+    "withGeodeQuarterPixelEdgeCoverage": {"geode_quarter_pixel_edge_coverage": True},
 }
 _SETTING_CALLS = {*_ARGUMENT_SETTINGS, *_CONSTANT_SETTINGS, "setCanvasSize"}
 
@@ -904,6 +907,7 @@ def _settings_from_params(expression: str) -> dict[str, object]:
         "shared_golden": None,
         "geode_golden": None,
         "include_antialiasing": False,
+        "geode_quarter_pixel_edge_coverage": False,
         # None until setCanvasSize() names one: the canvas then comes from the lane's reference.
         "canvas_size": None,
     }
@@ -976,6 +980,12 @@ def _case_lanes(case: dict[str, object], repo_root: Path) -> dict[str, object]:
             "settings": {
                 "canvas_size": _lane_canvas(case, config, reference["path"], repo_root),
                 "include_antialiasing": config["include_antialiasing"],
+                # The fixture applies the rule to the Geode comparison against the vendored
+                # resvg reference only, never against a custom golden.
+                "quarter_pixel_edge_coverage": (
+                    geode and config["geode_quarter_pixel_edge_coverage"]
+                    and not config["geode_golden"] and not config["shared_golden"]
+                ),
                 "max_pixels": _lane_budget(config, lane),
                 "threshold": config["threshold"],
                 "reference": reference,
@@ -1609,6 +1619,71 @@ def skip_ratchet_violations(
     ]
 
 
+# Every active row whose Geode comparison accepts quarter-pixel edge coverage differences
+# (`withGeodeQuarterPixelEdgeCoverage()`). Its reference samples coverage on four sub-scanlines per
+# pixel, so its horizontal edges sit on quarter-pixel boundaries, while Geode renders exact
+# coverage; a row joins only when that difference is what takes its Geode comparison over the pixel
+# budget, and pixels the rule does not accept still count against that budget.
+# //tools/resvg_parity:parity_report_tests enforces in CI that this list equals the opted-in rows.
+# That it only shrinks is a review rule: a new entry needs maintainer approval in the pull request
+# that adds it, and a row whose Geode comparison passes without the rule leaves it.
+QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
+})
+
+QUARTER_PIXEL_EDGE_RULE = (
+    "the quarter-pixel edge coverage rule applies only to the Geode comparison of a row whose "
+    "reference is quarter-pixel quantized, against that reference, with anti-aliasing detection "
+    "on; it needs maintainer approval to join QUARTER_PIXEL_EDGE_ALLOWLIST "
+    "(donner/svg/renderer/tests/README_resvg_test_suite.md)"
+)
+
+
+def _edge_coverage_lane_violation(path: str, geode: dict[str, object]) -> str | None:
+    """Return why an opted-in row's Geode lane cannot apply the edge coverage rule, if it cannot."""
+
+    if geode["configured_state"] != "compare":
+        return (f"{path}: the Geode lane does not compare, so the quarter-pixel edge coverage rule "
+                "has no effect; remove it")
+    if not geode["settings"]["quarter_pixel_edge_coverage"]:
+        return (f"{path}: the Geode lane compares against a custom golden, not the vendored "
+                "quarter-pixel quantized resvg reference; remove the quarter-pixel edge coverage "
+                "rule")
+    if geode["settings"]["include_antialiasing"]:
+        return (f"{path}: the quarter-pixel edge coverage rule needs anti-aliasing detection, "
+                "which includeAntiAliasingDifferences() turns off")
+    return None
+
+
+def quarter_pixel_edge_violations(
+    report: dict[str, object], allowlist: Iterable[str] = QUARTER_PIXEL_EDGE_ALLOWLIST
+) -> list[str]:
+    """Return rows whose quarter-pixel edge coverage opt-in breaks QUARTER_PIXEL_EDGE_ALLOWLIST.
+
+    An opted-in row must be listed, compare on the Geode lane with the rule in effect, and keep
+    anti-aliasing detection on, which the rule extends. A listed row must still opt in.
+    """
+
+    allowed = set(allowlist)
+    opted_in = {
+        str(case["path"]): case
+        for case in report["cases"]  # type: ignore[union-attr]
+        if case["registration"] == "active" and "geode_edge_coverage" in case["exception_types"]
+    }
+    violations = [
+        f"{path}: not in QUARTER_PIXEL_EDGE_ALLOWLIST; {QUARTER_PIXEL_EDGE_RULE}"
+        for path in opted_in if path not in allowed
+    ]
+    lane_violations = (_edge_coverage_lane_violation(path, case["lanes"]["geode"])
+                       for path, case in opted_in.items())
+    violations += [violation for violation in lane_violations if violation]
+    violations += [
+        f"{path}: stale QUARTER_PIXEL_EDGE_ALLOWLIST entry; the row no longer opts into the "
+        "quarter-pixel edge coverage rule, so remove it"
+        for path in sorted(allowed - set(opted_in))
+    ]
+    return sorted(violations)
+
+
 GOLDEN_ROOT = Path("donner/svg/renderer/testdata/golden")
 GOLDEN_README = GOLDEN_ROOT / "README.md"
 GOLDEN_DIGEST_HEADING = "## Registered golden digests"
@@ -1860,6 +1935,27 @@ def _capability_policy(case: dict[str, object]) -> dict[str, object] | None:
     }
 
 
+def _edge_coverage_policy(case: dict[str, object]) -> dict[str, object] | None:
+    if "geode_edge_coverage" not in case["exception_types"]:
+        return None
+    return {
+        "classification": "reference-edge-quantization",
+        "disposition": (
+            "Accept Geode edge pixels that both images cover partially, whose alphas differ by at "
+            "most 33 levels and whose colors match when both carry the smaller alpha."
+        ),
+        "evidence": [
+            REGISTRATION_SOURCE.as_posix(),
+            "tools/svg_suite/ImageCompare.h",
+            "donner/svg/renderer/tests/README_resvg_test_suite.md",
+        ],
+        "removal_criteria": (
+            "Remove the opt-in when the row's Geode comparison passes without it, or when the row "
+            "compares against a reference with exact edge coverage."
+        ),
+    }
+
+
 def _named_policies(case: dict[str, object]) -> list[dict[str, object]]:
     policies = []
     render_only = case["render_only_kind"]
@@ -1875,9 +1971,9 @@ def _named_policies(case: dict[str, object]) -> list[dict[str, object]]:
                 "its independent pixel reference, or replacing it with a supported SVG 2 fixture."
             ),
         })
-    capability = _capability_policy(case)
-    if capability:
-        policies.append(capability)
+    for policy in (_capability_policy(case), _edge_coverage_policy(case)):
+        if policy:
+            policies.append(policy)
     return policies
 
 
@@ -2015,6 +2111,7 @@ RESULT_CODE_NAMES = {0: "unknown", 1: "passed", 2: "failed", 3: "crashed"}
 # Exceptions that loosen a comparison. Gating a case to a feature tier or backend does not.
 _LOOSENING_EXCEPTIONS = {
     "threshold", "simple_text_threshold", "geode_threshold", "shared_golden", "geode_golden",
+    "geode_edge_coverage",
 }
 
 
@@ -2267,6 +2364,24 @@ def _check_reference_canvas_rule(fixture: str) -> None:
         fail()
 
 
+def _check_edge_coverage_rule(fixture: str) -> None:
+    """Check that the harness applies the edge coverage rule as the lane settings model it."""
+
+    applied = re.search(
+        r"bool acceptsQuarterPixelEdgeCoverage\(const ImageComparisonParams& params, "
+        r"ComparisonMode mode\) \{\s*"
+        r"return params\.geodeQuarterPixelEdgeCoverage && mode == ComparisonMode::GeodeGolden &&"
+        r"\s*params\.overrideGoldenFilename\.empty\(\) && "
+        r"params\.geodeOverrideGoldenFilename\.empty\(\);\s*\}",
+        fixture,
+    )
+    passed = re.search(
+        r"\.acceptQuarterPixelEdgeCoverage = acceptsQuarterPixelEdgeCoverage\(params, mode\)\}",
+        fixture)
+    if applied is None or passed is None or fixture.count("acceptQuarterPixelEdgeCoverage") != 1:
+        raise ParityReportError("C++ quarter-pixel edge coverage rule differs from parity report")
+
+
 _FEATURE_NAMES = {
     "Text": "text",
     "TextFull": "text-full",
@@ -2335,6 +2450,7 @@ def check_renderer_contract(repo_root: Path) -> None:
                               _mask_comments(read("resvg_test_suite.cc")))
     _check_reference_canvas_rule(_mask_comments(read("ImageComparisonTestFixture.cc")))
     _check_geode_capabilities(_mask_comments(read("RendererTestBackendGeode.cc")))
+    _check_edge_coverage_rule(_mask_comments(read("ImageComparisonTestFixture.cc")))
     _check_tiny_capabilities(_mask_comments(read("RendererTestBackendTinySkia.cc")))
     _check_corpus_wrappers(read("BUILD.bazel"))
 
