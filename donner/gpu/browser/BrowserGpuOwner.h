@@ -125,12 +125,15 @@ struct BrowserGpuOwnerDispatchTotals {
   /// \ref kBrowserGpuOwnerStartLatencyBucketUpperUs with a final unbounded bucket.
   std::array<std::uint32_t, kBrowserGpuOwnerStartLatencyBucketUpperUs.size() + 1>
       startLatencyBuckets{};
-  /// Saturating owner time with an active canvas frame, during which no dispatch starts, in
-  /// microseconds. Added when each canvas frame ends.
+  /// Saturating owner time with an active canvas frame, in microseconds, added when each canvas
+  /// frame ends. No inline or pulse dispatch starts then; the owner still runs requests from its
+  /// runtime wait pump when the frame blocks.
   std::uint32_t canvasFrameActiveUs = 0;
   /// Canvas frames that ended.
   std::uint32_t canvasFrames = 0;
-  /// Requests the owner received while a canvas frame was active.
+  /// Requests the owner received while a canvas frame was active. The owner receives requests
+  /// then only inside a runtime wait, whose pump runs them at once, so these add little owner
+  /// queue time.
   std::uint32_t receivedDuringCanvasFrame = 0;
 };
 

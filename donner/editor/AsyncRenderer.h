@@ -396,7 +396,8 @@ struct RenderResult {
       double canvasFrameActiveMs = 0.0;
       /// Canvas frames that ended.
       int canvasFrames = 0;
-      /// Requests the owner received while a canvas frame was active.
+      /// Requests the owner received while a canvas frame was active, which its runtime wait
+      /// pump runs at once.
       int receivedDuringCanvasFrame = 0;
     };
     /// Browser GPU owner dispatch detail for this iteration.
