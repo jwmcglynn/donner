@@ -1496,7 +1496,6 @@ PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
     "painting/marker/with-an-image-child.svg": {"geode": 500},
     "text/font-variant/inherit.svg": {"default_text": 1200},
     "text/font-variant/small-caps.svg": {"default_text": 1200},
-    "text/textPath/closed-path.svg": {"default_text": 150, "max": 150},
 }
 
 THRESHOLD_RATCHET_LIMIT = 0.05

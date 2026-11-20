@@ -174,10 +174,7 @@ rule.
 `PIXEL_BUDGET_ALLOWLIST` (1,200 px for the two `text/font-variant` rows). That budget is not
 approved for the Geode lane, and comparing would apply a budget in the hundreds to it. On the full
 shaping tier the two font-variant rows measure 0 px on Geode, so the gate can go once a Geode
-full-shaping corpus lane exists. A row whose Geode comparison passes at the default while its CPU
-comparisons need a budget keeps Geode at the default with
-`.withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)` instead of the gate, as
-`text/textPath/closed-path` does.
+full-shaping corpus lane exists.
 
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.

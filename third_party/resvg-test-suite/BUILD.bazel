@@ -67,7 +67,7 @@ result permits this difference in the underlying clip coverage.
 References from the resvg release: these tests live in the resvg repository
 (https://github.com/linebender/resvg, crates/resvg/tests/tests/). resvg is licensed
 Apache-2.0 OR MIT; these files are used under MIT, with its notice in LICENSE-resvg-MIT.
-The 124 files listed in resvg-v0.50.0.sha256 (119 PNGs, each 300x300, and 5 SVGs) are
+The 123 files listed in resvg-v0.50.0.sha256 (118 PNGs, each 300x300, and 5 SVGs) are
 byte-identical to crates/resvg/tests/<path> at the resvg v0.50.0 release tag, revision
 5bdbae64eefadc4bf0caa56dcf91702037929086, where <path> is the tests/... path the list gives.
 The tag's source archive holds them under resvg-0.50.0/crates/resvg/tests/:
@@ -277,18 +277,17 @@ The snapshot's references were last rendered in July 2020, before resvg v0.12.0 
 a path by arc length. They put each glyph midpoint at the uniform Bezier parameter of its segment,
 on lines converted to cubics with control points at 0.33 and 0.66 of the line, instead of at the
 distance along the path that SVG 2 sections 11.8.3 and 9.6 require. At 500x500, glyph ink
-centroids sit up to 1.19 px (m-L-Z-path), 1.06 px (path-with-subpaths) and 1.34 px (closed-path)
-from Donner's arc-length placement, and that model predicts each within 0.16 px. Upstream's
-references invert arc length to within 0.5 user units, which predicts their m-L-Z-path and
-closed-path glyphs within 0.18 px. Donner matches m-L-Z-path and path-with-subpaths within the
-default allowance on both CPU text tiers and on Geode; closed-path keeps a 150 px CPU budget for
-that inversion error (147 and 148 px) and compares at the default on Geode (78 px).
+centroids sit up to 1.19 px (m-L-Z-path) and 1.06 px (path-with-subpaths) from Donner's arc-length
+placement, and that model predicts each within 0.14 px. Upstream's references invert arc length to
+within 0.5 user units, which predicts their m-L-Z-path glyphs within 0.18 px. Donner matches both
+within the default allowance on both CPU text tiers and on Geode. text/textPath/closed-path, whose
+snapshot shares the cause, compares against references recorded in
+donner/svg/renderer/testdata/golden/README.md instead.
 
-  tests/text/textPath/closed-path.png
   tests/text/textPath/m-L-Z-path.png
   tests/text/textPath/path-with-subpaths.png
 
-The snapshot's references, added in 2022, draw the glyphs with 11 to 14% more ink (per-glyph
+The snapshot's references, added in 2022, draw the glyphs with 11.7 to 13.9% more ink (per-glyph
 median) than Donner, whose ink upstream's references match within 0.2%, and their glyph centroids
 sit up to 1.00 px from Donner's arc-length placement at 500x500, against 0.59 px for upstream's at
 300x300. Donner matches upstream's within the default allowance on both CPU text tiers and on

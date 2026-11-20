@@ -86,7 +86,6 @@ f0578759cc4026c0879acb669c3ab352063bdadf56d935ee1ea8b6b45a831a2f  tests/text/tex
 11d07daae21545cbd73e20d6f90de474f6325ae70b2fe6bdcbc40e1d94386b23  tests/text/text/xml-lang=ja.png
 dd816a6fa99b97b08d22498267fe50dca75878803c24b481979a76b8d298069d  tests/text/text/zalgo.png
 8ee767d6be81894a6755a24cf24fe0c0fb0fa7a20a1a064a279b24936271eac2  tests/text/textLength/zero.png
-284366764d62e3c5a25f43b30ee3b8f115761e3b03dac6f0257d44fa54d00706  tests/text/textPath/closed-path.png
 34b8bb11ac3ae999c27cf72c8f0479de50fb476c4f9a82a30cde46bdb30353c8  tests/text/textPath/link-to-rect.png
 db4303fd9771579df6e386cce3b518adebd0fdaea4af392be0488f452d09324c  tests/text/textPath/m-A-path.png
 ea0a77226440b9fffa6e7521b9490c23e72c4c36d11a316bba2c67805d1df4d8  tests/text/textPath/m-L-Z-path.png

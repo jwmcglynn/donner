@@ -241,6 +241,7 @@ records the comparison.
 
 | Category             | Test                         | Reason |
 | -------------------- | ---------------------------- | ------ |
+| text/textPath        | closed-path                  | Reference disagreement: resvg inverts arc length to within 0.5 user units; Donner golden on CPU, resvg v0.50.0 reference copy on Geode |
 | text/textPath        | dy-with-tiny-coordinates     | Reference disagreement: the vendored PNG predates resvg's current dy layout on a path; independent resvg 0.47.0 reference |
 | text/textPath        | tspan-with-absolute-position | Regression golden for absolute distance along the text path (legacy PNG, provenance not recorded) |
 | text/textPath        | with-underline               | Regression golden for the on-path underline (legacy PNG, provenance not recorded) |

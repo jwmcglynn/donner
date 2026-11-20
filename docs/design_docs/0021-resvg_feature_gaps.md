@@ -592,6 +592,12 @@ external fetch; its conflicting corpus image is skipped. The
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and a
 resource loader that records requests.
 
+`closed-path.svg` compares its CPU lanes against a Donner-rendered reference and its Geode lane
+against a copy of the resvg v0.50.0 reference: the vendored image predates resvg's arc-length
+placement, and the release reference inverts arc length to within 0.5 user units, which leaves
+its glyphs up to 0.82 px from Donner's placement (see the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md)).
+
 `mixed-children-2.svg` compares against a Donner-rendered reference: SVG 2 continues the text
 after a `textPath` from the path's end point, while the vendored image continues from the end of
 the glyphs on the path (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)).

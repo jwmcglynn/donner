@@ -995,19 +995,23 @@
         "text/textPath/closed-path.svg"
       ],
       "kinds": [
-        "geode_threshold",
-        "threshold"
+        "geode_golden",
+        "shared_golden"
       ],
-      "classification": "reference-precision",
-      "disposition": "Retain the smallest measured CPU allowance for the reference's arc-length inversion tolerance.",
+      "classification": "reference-disagreement",
+      "disposition": "Compare the CPU lanes with Donner's arc-length placement and Geode with the release reference.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "third_party/resvg-test-suite/BUILD.bazel"
+        "donner/svg/renderer/testdata/golden/README.md"
       ],
-      "removal_criteria": "Remove the allowance when a reference that places glyph midpoints at their exact distance along the path passes on both CPU text tiers.",
-      "reference_provenance": "resvg v0.50.0 release reference; glyph midpoints come from an arc-length inversion accurate to 0.5 user units.",
+      "removal_criteria": "Compare with the vendored reference when it places glyph midpoints at their exact distance along the path.",
+      "reference_provenance": "Donner TinySkia rendering for the CPU lanes; the resvg v0.50.0 release reference, which inverts arc length to within 0.5 user units, for Geode.",
       "max_threshold": 0.02,
-      "max_pixels": 150
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-closed-path.png",
+        "geode_golden": "donner/svg/renderer/testdata/golden/resvg-closed-path.png"
+      }
     },
     {
       "id": "path-legacy-resvg",

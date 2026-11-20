@@ -1611,14 +1611,19 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/donner-textPath-with-path.png")
                      .withReason("Reference disagreement: SVG 2 textPath path attribute, which "
                                  "resvg v0.49.0 ignores; the vendored PNG is opaque (#1175)")},
-                // resvg inverts arc length to within 0.5 user units here, which leaves the
-                // reference's glyphs up to 0.82 px from their arc-length positions; Geode measures
-                // 78 px and keeps the default.
+                // resvg v0.50.0 inverts arc length to within 0.5 user units, which leaves its
+                // glyphs 0.36 px mean and 0.82 px max from Donner's arc-length placement; Geode
+                // keeps that independent reference, a copy of the release PNG, within the default.
+                // The explicit canvas keeps a regenerated golden at the 300x300 it was made at.
                 {"closed-path.svg",
-                 WithMaxPixels(150,
-                               "Reference precision: glyphs placed by inverting arc length to "
-                               "within 0.5 user units")
-                     .withGeodeMaxPixelsDifferent(kDefaultMismatchedPixels)},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-textPath-closed-path.png",
+                     kDefaultThreshold,
+                     "Reference disagreement: resvg places glyph midpoints by inverting arc length "
+                     "to within 0.5 user units; SVG 2 places them at their distance along the path")
+                     .withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-closed-path.png")
+                     .setCanvasSize(300, 300)},
                 {"complex.svg",
                  Params::UndefinedBehavior("reference is the resvg UB marker image; vertical text "
                                            "on a circular path")},
