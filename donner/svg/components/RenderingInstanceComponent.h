@@ -261,6 +261,32 @@ struct RenderingInstanceComponent {
   ResolvedPaintServer resolvedStroke = PaintServer::None();
 
   /**
+   * Calls \p visit with the mask, marker and pattern content drawn for this instance. That content
+   * is instantiated once, as rendering instances of its own, after the first element that draws
+   * it, and shared by every later element that draws the same marker, mask or pattern. It reaches
+   * the frame only through the elements that draw it, never as content of its own.
+   *
+   * @param visit Called with the \ref SubtreeInfo of each content subtree.
+   */
+  template <typename Visit>
+  void forEachDrawnContent(Visit&& visit) const {
+    if (mask.has_value() && mask->subtreeInfo.has_value()) {
+      visit(*mask->subtreeInfo);
+    }
+    for (const auto* marker : {&markerStart, &markerMid, &markerEnd}) {
+      if (marker->has_value() && (*marker)->subtreeInfo.has_value()) {
+        visit(*(*marker)->subtreeInfo);
+      }
+    }
+    for (const auto* paint : {&resolvedFill, &resolvedStroke}) {
+      if (const auto* reference = std::get_if<PaintResolvedReference>(paint);
+          reference != nullptr && reference->subtreeInfo.has_value()) {
+        visit(*reference->subtreeInfo);
+      }
+    }
+  }
+
+  /**
    * The resolved filter effect on this instance, if any.
    */
   std::optional<ResolvedFilterEffect> resolvedFilter;

@@ -1022,6 +1022,22 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         break;
       }
     }
+    // Mask, marker and pattern content drawn for the layer's elements is instantiated after them,
+    // so it can follow the layer's last entity in paint order. It belongs to the layer: the next
+    // segment must start after it, or it would draw that content as ordinary content.
+    if (firstIdx < paintOrder.size() && lastIdx < paintOrder.size()) {
+      int coveredDrawOrder =
+          registry.get<components::RenderingInstanceComponent>(paintOrder[lastIdx]).drawOrder;
+      for (size_t j = firstIdx; j < paintOrder.size(); ++j) {
+        const auto& instance = registry.get<components::RenderingInstanceComponent>(paintOrder[j]);
+        if (j > lastIdx && instance.drawOrder > coveredDrawOrder) {
+          break;
+        }
+        coveredDrawOrder = std::max(
+            coveredDrawOrder, RendererDriver::LastDrawOrderOfDrawnContent(registry, instance));
+        lastIdx = std::max(lastIdx, j);
+      }
+    }
     layerRanges[i] = {firstIdx, lastIdx};
   }
 

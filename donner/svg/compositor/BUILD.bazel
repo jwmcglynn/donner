@@ -53,6 +53,7 @@ donner_perf_sensitive_cc_library(
         "CompositorController.h",
         "CompositorControllerInternal.h",
         "CompositorHintComponent.h",
+        "DrawnContent.h",
         "CompositorLayer.h",
         "ComputedLayerAssignmentComponent.h",
         "LayerResolver.h",

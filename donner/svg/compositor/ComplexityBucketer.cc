@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/compositor/DrawnContent.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 namespace donner::svg::compositor {
@@ -47,11 +49,20 @@ void ComplexityBucketer::reconcile(Registry& registry) {
   // candidate; the root would never benefit from being its own bucket.
   ++stats_.entitiesEvaluated;
 
+  const std::vector<std::pair<int, int>> drawnContent = DrawnContentDrawOrders(registry);
+
   std::vector<Candidate> candidates;
   size_t i = 1;
   while (i < drawOrder.size()) {
     const Entity childRoot = drawOrder[i];
     const auto& childInstance = registry.get<components::RenderingInstanceComponent>(childRoot);
+    // Mask, marker and pattern content reaches the frame only through the element that draws it,
+    // so it is never bucketed into a layer of its own.
+    if (InDrawOrderRanges(drawnContent, childInstance.drawOrder)) {
+      ++stats_.entitiesEvaluated;
+      ++i;
+      continue;
+    }
     const Entity subtreeEnd = childInstance.subtreeInfo.has_value()
                                   ? childInstance.subtreeInfo->lastRenderedEntity
                                   : childRoot;
