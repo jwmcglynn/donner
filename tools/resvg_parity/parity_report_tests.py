@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import struct
 import tempfile
 import textwrap
 import unittest
@@ -32,13 +33,20 @@ def _registration(suite: str, category_call: str) -> str:
     )
 
 
+def _png_header(width: int, height: int) -> bytes:
+    """Return the PNG signature and IHDR header, which is all the canvas rule reads."""
+
+    return (b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + struct.pack(">II", width, height)
+            + b"\x08\x06\x00\x00\x00")
+
+
 class Fixture:
     def __init__(self) -> None:
         self._temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary_directory.name)
         self.tests_root = self.root / parity_report.TESTS_ROOT
 
-    def add_case(self, relative: str, reference: bytes | None = None) -> None:
+    def add_case(self, relative: str, reference: bytes | None = _png_header(500, 500)) -> None:
         path = self.tests_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("<svg/>\n", encoding="utf-8")
@@ -830,7 +838,6 @@ class ParityReportTests(unittest.TestCase):
             ".includeAntiAliasingDifferences().enableGoldenUpdateFromEnv()"
         )
         for params in (chained, "WithMaxPixels(10, \"AA\")", "Params{}", "Params()",
-                       "ResvgV049Reference()",
                        "Params::WithGoldenOverride(\"g.png\", 0.1f, \"why\")", "{}"):
             with self.subTest(params=params):
                 report = parity_report.build_report(
@@ -883,14 +890,17 @@ class ParityReportTests(unittest.TestCase):
     def test_free_helpers_are_not_expanded(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         source = (
-            "ImageComparisonParams ResvgV049Reference() {\n"
-            "  return ImageComparisonParams().setCanvasSize(300, 300);\n}\n"
+            "ImageComparisonParams WithMaxPixels(int pixels, std::string_view reason) {\n"
+            "  return Params::WithGoldenOverride(\"g.png\").setCanvasSize(300, 300);\n}\n"
             + _registration("PaintingFill",
-                            '\"painting/fill\", {{\"a.svg\", ResvgV049Reference()}}')
+                            '\"painting/fill\", {{\"a.svg\", WithMaxPixels(120, \"AA\")}}')
         )
         case = parity_report.build_report(source, self.fixture.tests_root)["cases"][0]
-        self.assertEqual(case["raw_params_expression"], "ResvgV049Reference()")
-        self.assertEqual(case["exception_types"], [])
+        self.assertEqual(case["raw_params_expression"], 'WithMaxPixels(120, "AA")')
+        self.assertNotIn("shared_golden", case["exception_types"])
+        settings = case["lanes"]["max"]["settings"]
+        self.assertEqual(settings["max_pixels"], 120)
+        self.assertEqual(settings["canvas_size"], [500, 500])
 
     def test_category_default_params_helper_is_expanded(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
@@ -1105,26 +1115,183 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(report["execution_receipts"], {})
         self.assertEqual(report["cases"][0]["lanes"]["max"]["observed"], "unobserved")
 
-    def test_renderer_contract_detects_a_resvg_helper_canvas_change(self) -> None:
+    def test_renderer_contract_detects_a_canvas_rule_change(self) -> None:
         root = parity_report._default_repo_root()
         dst = self.fixture.root / parity_report.RENDERER_TEST_ROOT
         dst.mkdir(parents=True)
         for name in (
-            "BUILD.bazel", "ImageComparisonTestFixture.h", "RendererTestBackendGeode.cc",
-            "RendererTestBackendTinySkia.cc", "resvg_test_suite.cc",
+            "BUILD.bazel", "ImageComparisonTestFixture.h", "ImageComparisonTestFixture.cc",
+            "RendererTestBackendGeode.cc", "RendererTestBackendTinySkia.cc", "resvg_test_suite.cc",
         ):
             original = (root / parity_report.RENDERER_TEST_ROOT / name).read_text(encoding="utf-8")
             (dst / name).write_text(original, encoding="utf-8")
         parity_report.check_renderer_contract(self.fixture.root)
-        source = dst / "resvg_test_suite.cc"
-        original = source.read_text(encoding="utf-8")
-        self.assertIn("return ImageComparisonParams().setCanvasSize(300, 300);", original)
-        source.write_text(original.replace(
-            "return ImageComparisonParams().setCanvasSize(300, 300);",
-            "return ImageComparisonParams().setCanvasSize(400, 400);",
-        ), encoding="utf-8")
-        with self.assertRaisesRegex(parity_report.ParityReportError, "reference canvas differs"):
-            parity_report.check_renderer_contract(self.fixture.root)
+        edits = {
+            "resvg_test_suite.cc": [
+                ("test.params.setCanvasSize(500, 500);", "test.params.setCanvasSize(400, 400);",
+                 "corpus canvas rule differs"),
+                ("test.params.enableCanvasSizeFromReference();", "",
+                 "corpus canvas rule differs"),
+            ],
+            "ImageComparisonTestFixture.cc": [
+                ("static_cast<int>(std::max(width, height))",
+                 "static_cast<int>(std::min(width, height))", "reference canvas rule differs"),
+                ("kMaxDimension = 16384;", "kMaxDimension = 8192;",
+                 "reference canvas rule differs"),
+                ("CanvasSizeResult CanvasSizeFromReferenceImage(", "CanvasSizeResult Renamed(",
+                 "reference canvas rule differs"),
+                ("params, effectiveGoldenFilename, MissingGoldenCanvasFallback",
+                 "params, goldenImageFilename, MissingGoldenCanvasFallback",
+                 "reference canvas rule differs"),
+                ("\\0\\0\\0\\x0dIHDR", "\\0\\0\\0\\x0cIHDR", "reference canvas rule differs"),
+                ("width == 0 || height == 0 || ", "", "reference canvas rule differs"),
+                ("constexpr size_t kHeaderSize = 24;", "constexpr size_t kHeaderSize = 16;",
+                 "reference canvas rule differs"),
+                ('if (getenv("UPDATE_GOLDEN_IMAGES_DIR") == nullptr) {', "if (false) {",
+                 "reference canvas rule differs"),
+            ],
+        }
+        for name, replacements in edits.items():
+            source = dst / name
+            original = source.read_text(encoding="utf-8")
+            for before, after, message in replacements:
+                with self.subTest(file=name, edit=before):
+                    self.assertEqual(original.count(before), 1)
+                    source.write_text(original.replace(before, after), encoding="utf-8")
+                    with self.assertRaisesRegex(parity_report.ParityReportError, message):
+                        parity_report.check_renderer_contract(self.fixture.root)
+            source.write_text(original, encoding="utf-8")
+        parity_report.check_renderer_contract(self.fixture.root)
+
+    def test_reference_canvas_is_the_square_of_the_longer_side(self) -> None:
+        cases = {
+            "square": (_png_header(300, 300), [300, 300]),
+            "landscape": (_png_header(500, 250), [500, 500]),
+            "portrait": (_png_header(250, 400), [400, 400]),
+            "largest": (_png_header(16384, 1), [16384, 16384]),
+            "missing": (None, [None, None]),
+            "empty": (b"", [None, None]),
+            "truncated": (_png_header(300, 300)[:20], [None, None]),
+            "not a PNG": (b"GIF89a" + bytes(30), [None, None]),
+            "IHDR not first": (_png_header(300, 300).replace(b"IHDR", b"tEXt"), [None, None]),
+            "wrong IHDR length": (
+                _png_header(300, 300).replace(b"\x00\x00\x00\x0dIHDR", b"\x00\x00\x00\x0cIHDR"),
+                [None, None]),
+            "zero width": (_png_header(0, 300), [None, None]),
+            "oversized": (_png_header(16385, 300), [None, None]),
+        }
+        for label, (data, expected) in cases.items():
+            with self.subTest(label):
+                path = self.fixture.root / (label + ".png")
+                if data is not None:
+                    path.write_bytes(data)
+                self.assertEqual(parity_report.reference_canvas_size(path), expected)
+
+    def test_lane_canvas_follows_the_lane_reference(self) -> None:
+        self.fixture.add_case("painting/fill/explicit.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/golden.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/missing.svg", None)
+        self.fixture.add_case("painting/fill/render-only.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/upstream.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/wide.svg", _png_header(500, 250))
+        golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
+        golden_root.mkdir(parents=True)
+        (golden_root / "cpu.png").write_bytes(_png_header(800, 800))
+        (golden_root / "gpu.png").write_bytes(_png_header(400, 400))
+        prefix = parity_report.GOLDEN_ROOT.as_posix()
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {'
+                          '{"explicit.svg", Params().setCanvasSize(10, 20)},'
+                          f'{{"golden.svg", Params::WithGoldenOverride("{prefix}/cpu.png")'
+                          f'.withGeodeGoldenOverride("{prefix}/gpu.png", "why")}},'
+                          '{"render-only.svg", Params::UndefinedBehavior("why")}}'),
+            self.fixture.tests_root,
+        )
+        canvases = {
+            case["path"].removeprefix("painting/fill/"):
+                {lane: entry["settings"]["canvas_size"] for lane, entry in case["lanes"].items()}
+            for case in report["cases"]
+        }
+        def same(size: list[int | None]) -> dict[str, list[int | None]]:
+            return {"default_text": size, "max": size, "geode": size}
+
+        self.assertEqual(canvases, {
+            "explicit.svg": same([10, 20]),
+            "golden.svg": {"default_text": [800, 800], "max": [800, 800], "geode": [400, 400]},
+            "missing.svg": same([None, None]),
+            "render-only.svg": same([500, 500]),
+            "upstream.svg": same([300, 300]),
+            "wide.svg": same([500, 500]),
+        })
+        self.assertEqual(parity_report.unresolved_canvas_violations(report), [
+            f"painting/fill/missing.svg ({lane}): no canvas from reference "
+            "third_party/resvg-test-suite/tests/painting/fill/missing.png"
+            for lane in ("default_text", "geode", "max")
+        ])
+        report["source"]["revision"] = "a" * 40
+        receipt = self.fixture.root / "shard.xml"
+        receipt.write_text(
+            '<testsuites><testcase classname="PaintingFill/ImageComparisonTestFixture" '
+            'name="ResvgTest/missing" status="run" result="completed"/></testsuites>',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError, "unresolved comparison"):
+            parity_report.add_execution(report, "max", "a" * 40, receipt)
+
+    def test_upstream_release_manifest_rejects_drifted_entries(self) -> None:
+        suite = self.fixture.root / "suite"
+        (suite / "tests/a").mkdir(parents=True)
+        (suite / "tests/a/kept.png").write_bytes(b"kept")
+        (suite / "tests/a/changed.png").write_bytes(b"regenerated")
+        def digest(data: bytes) -> str:
+            return hashlib.sha256(data).hexdigest()
+
+        good = f"{digest(b'kept')}  tests/a/kept.png"
+        self.assertEqual(parity_report.upstream_release_manifest_violations(good + "\n", suite), [])
+
+        manifest = "\n".join([
+            good,
+            f"{digest(b'original')}  tests/a/changed.png",
+            f"{digest(b'gone')}  tests/a/missing.png",
+            good,
+            f"{digest(b'kept')}  tests/a/../a/kept.png",
+            f"{digest(b'kept')} tests/a/kept.png",
+            f"{digest(b'kept')}  resources/kept.png",
+        ])
+        self.assertEqual(parity_report.upstream_release_manifest_violations(manifest, suite), [
+            f"tests/a/changed.png: SHA-256 is {digest(b'regenerated')}, not the recorded "
+            + digest(b"original"),
+            "tests/a/missing.png: listed file is missing",
+            "tests/a/kept.png: listed more than once",
+            "tests/a/../a/kept.png: not a normalized path under tests/",
+            f"malformed line '{digest(b'kept')} tests/a/kept.png'",
+            f"malformed line '{digest(b'kept')}  resources/kept.png'",
+        ])
+        self.assertEqual(parity_report.upstream_release_manifest_violations("", suite),
+                         ["the manifest lists no files"])
+
+    def test_upstream_release_notes_state_the_manifest_counts(self) -> None:
+        suite = self.fixture.root / "suite"
+        (suite / "tests/a").mkdir(parents=True)
+        (suite / "tests/a/square.png").write_bytes(_png_header(300, 300))
+        (suite / "tests/a/wide.png").write_bytes(_png_header(300, 150))
+        (suite / "tests/a/case.svg").write_bytes(b"<svg/>")
+        manifest = "\n".join(f"{'0' * 64}  tests/a/{name}"
+                              for name in ("square.png", "wide.png", "case.svg"))
+        notes = ("The 3 files listed in resvg-v0.50.0.sha256 (2 PNGs, each\n"
+                 "300x300, and 1 SVGs) are byte-identical.")
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(manifest, notes, suite),
+            ["tests/a/wide.png: not the 300x300 PNG the notes state"])
+        (suite / "tests/a/wide.png").write_bytes(_png_header(300, 300))
+        self.assertEqual(parity_report.upstream_release_note_violations(manifest, notes, suite), [])
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(
+                manifest, notes.replace("2 PNGs", "3 PNGs"), suite),
+            ["the notes state 3 files (3 PNGs, 1 SVGs); the manifest lists 3 (2 PNGs, 1 SVGs)"])
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(manifest, "no counts", suite),
+            ["the provenance notes need one sentence stating the manifest's file counts"])
 
     def test_untracked_report_inputs_keep_the_checkout_revision_unbound(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
@@ -1467,6 +1634,21 @@ class RealTreeParityReportTests(unittest.TestCase):
                 parity_report.skip_ratchet_violations(report),
             "Every registered golden needs a golden README table row with its SHA-256":
                 parity_report.golden_documentation_violations(report, repo_root),
+            "Every case's canvas comes from a readable reference PNG or an explicit "
+            "setCanvasSize(); the harness fails a comparison whose reference it cannot read":
+                parity_report.unresolved_canvas_violations(report),
+            "Every file in the resvg v0.50.0 manifest has the SHA-256 its provenance records "
+            f"({parity_report.UPSTREAM_RELEASE_MANIFEST})":
+                parity_report.upstream_release_manifest_violations(
+                    (repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST).read_text(
+                        encoding="utf-8"),
+                    repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST.parent),
+            "The provenance notes state the manifest's file counts and PNG size":
+                parity_report.upstream_release_note_violations(
+                    (repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST).read_text(
+                        encoding="utf-8"),
+                    (repo_root / parity_report.UPSTREAM_RELEASE_NOTES).read_text(encoding="utf-8"),
+                    repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST.parent),
         }
         for rule, violations in guards.items():
             with self.subTest(rule=rule):
