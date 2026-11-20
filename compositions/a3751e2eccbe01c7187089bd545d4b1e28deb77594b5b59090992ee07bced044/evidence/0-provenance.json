@@ -1,0 +1,11 @@
+{
+  "bazel_version": "8.8.2",
+  "doxygen_version": "1.15.0 (7cca38ba5185457e6d9495bf963d4cdeacebc25a)",
+  "generated_lock_sha256": "61a35a2cbdefdb216d0b27e08d6a52f5ad5ffba4301e6ae31e5de63a2ecf3bb0",
+  "graphviz_version": "dot - graphviz version 2.43.0 (0)",
+  "pages_archive_sha256": "67283569482c8844f8055c148a50c4539aecb095c3c86d10d152da76d2eee7ba",
+  "producer_attempt": 1,
+  "producer_run_id": 44713169477,
+  "schema": 1,
+  "source_commit": "eb35474c6b7171ac0977745dd291c3a1041a3e46"
+}
