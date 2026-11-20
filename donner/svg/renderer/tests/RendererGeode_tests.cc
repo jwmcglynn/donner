@@ -5511,8 +5511,9 @@ TEST_F(RendererGeodeTest, KeptStopRampsStayWithinTheDocumentResidentLimit) {
 /// it, and drops every draw after it, as on the CPU renderer. Each case renders a document whose
 /// refused gradient, 20 stops or a batchable 10, sits after `before` and before `after`, under a
 /// cap that admits the stops of `before` only. The Geode frame must equal Geode's unbounded
-/// rendering of `before` alone, the charged stops and verdict must equal tiny-skia's, and where no
-/// text is drawn the pixels must equal tiny-skia's too.
+/// rendering of `before` alone, and the charged stops, verdict and pixels must equal tiny-skia's.
+/// Text before a refusal is covered in GeodeGlyphInstancing_tests, whose binary has the text
+/// backend this one is built without.
 TEST_F(RendererGeodeTest, DrawsBeforeAGradientStopRefusalAreKept) {
   const std::string twentyStops = GradientStopElements(20);
   const std::string defs =
@@ -5537,34 +5538,26 @@ TEST_F(RendererGeodeTest, DrawsBeforeAGradientStopRefusalAreKept) {
     std::string_view label;
     std::string_view before;
     std::size_t cap;
-    bool text = false;
     bool batchableRefused = false;
   };
   // The `batched_gradient_before*` and `stroke_before` cases are parity rows rather than
   // regression rows: nothing here asserts their draws were queued in a batch before the refusal,
-  // and they passed before the queued draws were kept as well. This binary is built without the
-  // text backend, so the text cases draw no glyphs; GeodeGlyphInstancing_tests covers gradient
-  // text under the stop budget.
-  const std::array<OrderCase, 9> cases = {{
+  // and they passed before the queued draws were kept as well.
+  const std::array<OrderCase, 7> cases = {{
       {"solid_fill_before_batchable_refusal",
-       R"svg(<rect width="60" height="48" fill="#d02020"/>)svg", 9u, false, true},
+       R"svg(<rect width="60" height="48" fill="#d02020"/>)svg", 9u, true},
       {"batched_gradient_before_batchable_refusal",
        R"svg(<rect width="30" height="48" fill="url(#small)"/><rect x="30" width="30" height="48" fill="#d02020"/>)svg",
-       11u, false, true},
+       11u, true},
       {"solid_fill_before", R"svg(<rect width="60" height="48" fill="#d02020"/>)svg", 19u},
       {"batched_gradient_before",
        R"svg(<rect width="30" height="48" fill="url(#small)"/><rect x="30" width="30" height="48" fill="#d02020"/>)svg",
        21u},
       {"stroke_before",
        R"svg(<path d="M4,24 H56" stroke="#d02020" stroke-width="16" fill="none"/>)svg", 19u},
-      {"text_before", R"svg(<text x="4" y="32" font-size="24" fill="#d02020">Ab</text>)svg", 19u,
-       true},
       {"layer_before",
        R"svg(<g opacity="0.5"><rect width="60" height="48" fill="#d02020"/></g>)svg", 19u},
       {"refused_first", "", 19u},
-      {"solid_and_text_before",
-       R"svg(<rect width="20" height="48" fill="#2020d0"/><text x="22" y="32" font-size="24" fill="#d02020">A</text>)svg",
-       19u, true},
   }};
   for (const OrderCase& orderCase : cases) {
     SCOPED_TRACE(orderCase.label);
@@ -5600,12 +5593,9 @@ TEST_F(RendererGeodeTest, DrawsBeforeAGradientStopRefusalAreKept) {
     editor::tests::CompareBitmapToBitmap(actual, unbounded.takeSnapshot(),
                                          "stop_refusal_keeps_" + std::string(orderCase.label),
                                          editor::tests::PixelmatchIdentityParams());
-    if (!orderCase.text) {
-      editor::tests::CompareBitmapToBitmap(
-          actual, reference.takeSnapshot(),
-          "stop_refusal_matches_cpu_" + std::string(orderCase.label),
-          editor::tests::PixelmatchIdentityParams());
-    }
+    editor::tests::CompareBitmapToBitmap(actual, reference.takeSnapshot(),
+                                         "stop_refusal_matches_cpu_" + std::string(orderCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 

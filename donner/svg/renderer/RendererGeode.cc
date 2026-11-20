@@ -666,9 +666,6 @@ struct GradientStopCharge {
   bool refused = false;
   /// Set when `reserve` charged the draw's stops.
   bool charged = false;
-  /// Set to charge the stops and stop there, converting none: for a paint the CPU renderer charges
-  /// that no draw paints with.
-  bool chargeOnly = false;
 
   /// Charges \p stops. @return Whether the draw may convert them.
   bool admit(std::size_t stops) {
@@ -677,7 +674,7 @@ struct GradientStopCharge {
     }
     refused = !reserve(stops);
     charged = !refused;
-    return charged && !chargeOnly;
+    return charged;
   }
 };
 
@@ -5954,7 +5951,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     out.linear = resolveLinearGradientParams(ref, geometryBounds, paint.viewBox, paint.currentColor,
                                              opacity, stops, charge);
-    if (!out.linear.has_value() && !charge.refused && !charge.charged) {
+    if (!out.linear.has_value() && !charge.refused) {
       out.radial = resolveRadialGradientParams(ref, geometryBounds, paint.viewBox,
                                                paint.currentColor, opacity, stops, charge);
     }
@@ -5983,49 +5980,65 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
 #ifdef DONNER_TEXT_ENABLED
-  /// Charges the text element's own gradient fill and stroke once per text draw, as the CPU
-  /// renderer does when it builds the element's paints, without converting their stops: each run
-  /// resolves, and charges, the paint it draws with.
+  /// The text element's own gradient fill and stroke, resolved once per text draw. The
+  /// parameters point into the stop vectors here, so the struct outlives every glyph draw of the
+  /// text element.
+  struct TextElementGradients {
+    std::vector<geode::LinearGradientParams::Stop> fillStops;
+    std::vector<geode::LinearGradientParams::Stop> strokeStops;
+    ResolvedGradientPaint fill;
+    ResolvedGradientPaint stroke;
+  };
+
+  /// Resolves the text element's own gradient fill and stroke once per text draw, charging and
+  /// converting their stops, as the CPU renderer does when it builds the element's paints. A run
+  /// that paints with the element's paint draws from these and is not charged again.
   /// @param textBounds The text element's bounds, which the gradients map against.
   /// @param stroked Whether the element's stroke has a positive width.
   /// @param patternFill Whether the driver staged a pattern for the element's fill.
-  void chargeTextElementGradients(const Box2d& textBounds, bool stroked, bool patternFill) {
-    if (!patternFill) {
-      chargeGradientStops(paint.fill, textBounds, paint.fillOpacity);
-    }
-    if (stroked && !patternStrokePaint.has_value()) {
-      chargeGradientStops(paint.stroke, textBounds, paint.strokeOpacity);
-    }
+  void resolveTextElementGradients(const Box2d& textBounds, bool stroked, bool patternFill,
+                                   TextElementGradients& out) {
+    resolvePaintGradient(!patternFill, paint.fill, textBounds, paint.fillOpacity, out.fillStops,
+                         out.fill);
+    resolvePaintGradient(stroked && !patternStrokePaint.has_value(), paint.stroke, textBounds,
+                         paint.strokeOpacity, out.strokeStops, out.stroke);
   }
 
-  /// Charges \p server's stops to the frame, when it references a gradient, converting none.
-  void chargeGradientStops(const components::ResolvedPaintServer& server, const Box2d& bounds,
-                           double opacity) {
+  /// Resolves \p server into \p out when \p enabled and it is a paint server reference, charging
+  /// its stops; leaves \p out unresolved otherwise. A reference that is not a gradient charges
+  /// nothing.
+  void resolvePaintGradient(bool enabled, const components::ResolvedPaintServer& server,
+                            const Box2d& bounds, double opacity,
+                            std::vector<geode::LinearGradientParams::Stop>& stops,
+                            ResolvedGradientPaint& out) {
     const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
-    if (ref == nullptr) {
+    if (!enabled || ref == nullptr) {
       return;
     }
     GradientStopCharge charge = gradientStopCharge();
-    charge.chargeOnly = true;
-    ResolvedGradientPaint unused;
-    resolveGradient(*ref, bounds, static_cast<float>(opacity), gradientStopScratch, charge, unused);
+    resolveGradient(*ref, bounds, static_cast<float>(opacity), stops, charge, out);
   }
 
-  /// Resolves a text run's gradient paint once against the text element's bounds, charging its
-  /// stops, for every glyph of the run to draw from. Leaves \p out unresolved when the run's
-  /// paint is not a gradient.
-  /// @param isGradient Whether the run paints \p server as a gradient.
-  /// @param stops Storage for the converted stops, which must outlive the run's draws.
-  void resolveRunGradient(bool isGradient, const components::ResolvedPaintServer& server,
-                          const Box2d& textBounds, double opacity,
-                          std::vector<geode::LinearGradientParams::Stop>& stops,
-                          ResolvedGradientPaint& out) {
-    const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
-    if (!isGradient || ref == nullptr) {
-      return;
+  /// The gradient paint a text run draws with. A run with a paint of its own resolves it once
+  /// against the text bounds, charging its stops, as the CPU renderer does for a span's paint
+  /// server reference, whether or not the run has glyphs to paint. A run that paints with the text
+  /// element's paint draws from \p elementPaint, charged once per text draw.
+  /// @param painted Whether the run paints this component at all; null is returned when not.
+  /// @param ownPaint Whether the run's paint is its span's own rather than the element's.
+  /// @param stops Storage for the run's converted stops, which must outlive the run's draws.
+  const ResolvedGradientPaint* runGradientPaint(
+      bool painted, bool ownPaint, const components::ResolvedPaintServer& server,
+      const Box2d& textBounds, double opacity,
+      std::vector<geode::LinearGradientParams::Stop>& stops, ResolvedGradientPaint& runPaint,
+      const ResolvedGradientPaint& elementPaint) {
+    if (!painted) {
+      return nullptr;
     }
-    GradientStopCharge charge = gradientStopCharge();
-    resolveGradient(*ref, textBounds, static_cast<float>(opacity), stops, charge, out);
+    if (!ownPaint) {
+      return &elementPaint;
+    }
+    resolvePaintGradient(true, server, textBounds, opacity, stops, runPaint);
+    return &runPaint;
   }
 #endif  // DONNER_TEXT_ENABLED
 
@@ -8005,7 +8018,10 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // pipeline switch at every boundary. The parameters are resolved here rather
   // than at emit time because the batcher needs them before it can decide.
   // A fill that leaves the batch draws from this same resolution, so its stops are charged and
-  // converted once.
+  // converted once. Its parameters point into `gradientStopScratch`, which the next resolution
+  // into that scratch overwrites, so `batchFill` is used only until this fill is drawn. Paints
+  // that must outlive another resolution, such as a text run's fill and stroke, resolve into stop
+  // vectors of their own instead.
   ResolvedGradientPaint batchFill;
   //
   // The state-driven reasons a gradient would be declined are cheap to test up
@@ -8327,8 +8343,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // pattern bleeding onto the following element. Per-span pattern fill is a
   // separate gap (matching the element-level handling here).
   const bool hasPatternFill = impl_->patternFillPaint.has_value();
-  impl_->chargeTextElementGradients(textBounds, params.strokeParams.strokeWidth > 0.0,
-                                    hasPatternFill);
+  Impl::TextElementGradients elementGradients;
+  impl_->resolveTextElementGradients(textBounds, params.strokeParams.strokeWidth > 0.0,
+                                     hasPatternFill, elementGradients);
 
   // Resolve a default fill colour from the text-element-level paint
   // state. Per-span fills override below when present.
@@ -8509,23 +8526,26 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                   !strokeIsGradient && impl_->patternStrokePaint.has_value();
     const bool hasStrokePaint = strokeColor.has_value() || strokeIsGradient || usePatternStroke;
 
+    // The run's gradient fill and stroke are each resolved at most once, fill first as on the CPU
+    // renderer, before the run is skipped for having nothing to paint, and every glyph of the run
+    // draws from them.
+    std::vector<geode::LinearGradientParams::Stop> runFillStops;
+    std::vector<geode::LinearGradientParams::Stop> runStrokeStops;
+    ResolvedGradientPaint runFillResolution;
+    ResolvedGradientPaint runStrokeResolution;
+    const ResolvedGradientPaint* runFillGradient =
+        impl_->runGradientPaint(true, spanOverridesFill, fillServer, textBounds, fillOpacity,
+                                runFillStops, runFillResolution, elementGradients.fill);
+    const ResolvedGradientPaint* runStrokeGradient = impl_->runGradientPaint(
+        strokeStyle.has_value(), spanOverridesStroke, *strokeServer, textBounds, strokeOpacity,
+        runStrokeStops, runStrokeResolution, elementGradients.stroke);
+
     const TextDecoration spanDecoration =
         runIndex < text.spans.size() ? text.spans[runIndex].textDecoration : params.textDecoration;
     if (!hasFill && !usePatternFill && !fillIsGradient && !hasStrokePaint &&
         spanDecoration == TextDecoration::None) {
       continue;  // Nothing to fill, stroke, or decorate.
     }
-
-    // The run's gradient fill and stroke are each resolved once against the text bounds, fill
-    // first as on the CPU renderer, and every glyph of the run draws from them.
-    std::vector<geode::LinearGradientParams::Stop> runFillStops;
-    std::vector<geode::LinearGradientParams::Stop> runStrokeStops;
-    ResolvedGradientPaint runFillGradient;
-    ResolvedGradientPaint runStrokeGradient;
-    impl_->resolveRunGradient(fillIsGradient, fillServer, textBounds, fillOpacity, runFillStops,
-                              runFillGradient);
-    impl_->resolveRunGradient(strokeIsGradient, *strokeServer, textBounds, strokeOpacity,
-                              runStrokeStops, runStrokeGradient);
 
     // A solid fill draws each glyph from shared resident geometry: the outline
     // is cached once per glyph identity and the occurrence contributes only a
@@ -8644,7 +8664,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           // (the gradient *geometry*), fill the glyph outline (the *draw* path).
           impl_->drawPaintedPathAgainst(textBoundsPath, placed, fillServer, fillOpacity,
                                         FillRule::NonZero, encoded, nullptr, nullptr,
-                                        &runFillGradient);
+                                        runFillGradient);
         } else if (usePatternFill) {
           const geode::EncodedPath* encoded =
               impl_->encodeTransientGeometry(placed, FillRule::NonZero);
@@ -8670,7 +8690,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         // Gradient stroke: resolve against the text bbox (the *original*
         // geometry, per SVG), fill the stroked outline.
         impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
-                                      strokeRule, encoded, nullptr, nullptr, &runStrokeGradient);
+                                      strokeRule, encoded, nullptr, nullptr, runStrokeGradient);
       } else if (usePatternStroke) {
         impl_->syncTransform();
         impl_->encoder->fillPathPattern(
