@@ -70,6 +70,8 @@ def answer(output, status=0):
 if tool == "git":
     with open(os.environ["CAPTURE"] + ".cwd", "a", encoding="utf-8") as cwd:
         cwd.write(os.getcwd() + "\n")
+    if args == ["rev-list", "--parents", "-1", "HEAD"]:
+        answer(config.get("ancestry", "merge0 base0 head0") + "\n")
     if args[:1] == ["merge-base"]:
         if config.get("merge_base") is None:
             answer("", 1)
@@ -284,7 +286,8 @@ class DetermineTest(_ScriptTest):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_outputs(outputs, "full_test=false", "fallback=true", "affected=",
                             "wgpu_reference_unknown=true")
-        self.assertEqual(calls, [["git", "rev-parse", "--verify", "base0^{tree}"],
+        self.assertEqual(calls, [["git", "rev-list", "--parents", "-1", "HEAD"],
+                                 ["git", "rev-parse", "--verify", "base0^{tree}"],
                                  ["git", "merge-base", "base0", "head0"],
                                  ["git", "diff", "--name-only", "fork0", "head0"]])
 
@@ -305,6 +308,41 @@ class DetermineTest(_ScriptTest):
                 self.assertEqual("affected=" + _NO_AFFECTED_TARGETS in outputs, noop)
                 self.assertEqual("fallback=true" in outputs, not noop)
                 self.assertFalse(any(row[0] in ("java", "bazelisk") for row in calls))
+
+    def test_cache_restore_and_hashes_use_the_base_of_the_tested_merge(self):
+        ancestry = "merge0 newer-base head0"
+        result, _, outputs = self.run_script("pr-meta", event=_pull_request(),
+                                             config={"ancestry": ancestry})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_outputs(outputs, "base_sha=newer-base")
+        old_cache = self.home / ".cache/bazel-diff-base-hashes/base0.json"
+        old_cache.parent.mkdir(parents=True)
+        old_cache.write_text('{"stale": 1}')
+        result, calls, outputs = self.determine(ancestry=ancestry)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("fallback=false", outputs)
+        self.assertEqual([c[-1] for c in calls if c[:3] == ["git", "worktree", "add"]],
+                         ["merge0", "newer-base"])
+        self.assertTrue(old_cache.with_name("newer-base.json").is_file())
+
+    def test_unrelated_or_unavailable_merge_does_not_narrow_the_selection(self):
+        for ancestry in ("", "merge0", "merge0 base0 other", "merge0 base0 head0 extra"):
+            with self.subTest(ancestry=ancestry):
+                result, _, outputs = self.run_script("pr-meta", event=_pull_request(),
+                                                     config={"ancestry": ancestry})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, "base_sha=")
+                result, calls, outputs = self.determine(ancestry=ancestry)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, "full_test=false", "fallback=true", "affected=",
+                                    "wgpu_reference_unknown=true")
+                self.assertFalse(any(c[0] == "java" for c in calls))
+
+    def test_direct_head_checkout_keeps_the_event_comparison_base(self):
+        result, _, outputs = self.run_script("pr-meta", event=_pull_request(),
+                                             config={"ancestry": "head0 fork0"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_outputs(outputs, "base_sha=base0")
 
     def test_a_failed_merge_base_diffs_from_the_base_tip(self):
         result, calls, _ = self.determine(changed="", merge_base=None)
@@ -563,7 +601,8 @@ class DetermineTest(_ScriptTest):
                 result, calls, outputs = self.run_script("pr-meta", event=_pull_request(), **env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assert_outputs(outputs, expected)
-                self.assertEqual(calls, [["git", "rev-parse", "--verify", "base0^{tree}"]]
+                self.assertEqual(calls, [["git", "rev-list", "--parents", "-1", "HEAD"],
+                                         ["git", "rev-parse", "--verify", "base0^{tree}"]]
                                  if name == "pull request" else [])
 
     def test_the_wgpu_reference_runs_when_any_signal_selects_it(self):
