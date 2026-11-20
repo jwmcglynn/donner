@@ -999,8 +999,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       const std::shared_ptr<const GeodeGradientRamp>& candidate) {
     std::vector<std::shared_ptr<const GeodeGradientRamp>>& bucket =
         frameRamps[hashStops(rampStops)];
-    const auto compared =
-        bucket.begin() + static_cast<std::ptrdiff_t>(std::min(bucket.size(), kMaxRampBucketCompares));
+    const size_t comparedCount = std::min(bucket.size(), kMaxRampBucketCompares);
+    const auto compared = bucket.begin() + static_cast<std::ptrdiff_t>(comparedCount);
     if (candidate != nullptr && rampHolds(*candidate, rampStops)) {
       // The bucket also keeps the ramp alive until submission; a duplicate entry is harmless.
       if (std::find(bucket.begin(), compared, candidate) == compared) {
@@ -1008,9 +1008,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       }
       return candidate;
     }
-    const auto shared = std::find_if(bucket.begin(), compared, [this](const auto& ramp) {
-      return rampHolds(*ramp, rampStops);
-    });
+    const auto shared = std::find_if(
+        bucket.begin(), compared, [this](const auto& ramp) { return rampHolds(*ramp, rampStops); });
     if (shared != compared) {
       return *shared;
     }

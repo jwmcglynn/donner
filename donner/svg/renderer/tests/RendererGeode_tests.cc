@@ -5188,8 +5188,8 @@ std::string GradientStopElements(int count) {
   for (int i = 0; i < count; ++i) {
     char stop[64];
     std::snprintf(stop, sizeof(stop), R"(<stop offset="%.6f" stop-color="#%02x%02x%02x"/>)",
-                  static_cast<double>(i) / (count - 1), (i * 67 + 13) % 256,
-                  (i * 151 + 101) % 256, (i * 29 + 200) % 256);
+                  static_cast<double>(i) / (count - 1), (i * 67 + 13) % 256, (i * 151 + 101) % 256,
+                  (i * 29 + 200) % 256);
     stops += stop;
   }
   return stops;

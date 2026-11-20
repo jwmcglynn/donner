@@ -5952,8 +5952,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       out.refused = true;
       return;
     }
-    out.linear = resolveLinearGradientParams(ref, geometryBounds, paint.viewBox,
-                                             paint.currentColor, opacity, stops, charge);
+    out.linear = resolveLinearGradientParams(ref, geometryBounds, paint.viewBox, paint.currentColor,
+                                             opacity, stops, charge);
     if (!out.linear.has_value() && !charge.refused && !charge.charged) {
       out.radial = resolveRadialGradientParams(ref, geometryBounds, paint.viewBox,
                                                paint.currentColor, opacity, stops, charge);

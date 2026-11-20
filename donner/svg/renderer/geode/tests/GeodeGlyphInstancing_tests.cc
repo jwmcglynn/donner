@@ -1014,8 +1014,7 @@ std::string GradientDefs(int stops) {
 /// equal tiny-skia's.
 TEST_F(GeodeGlyphInstancingTest, GradientTextChargesItsStopsOncePerRunLikeTinySkia) {
   const std::string source =
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
-      GradientDefs(20) +
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" + GradientDefs(20) +
       R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)")svg"
       R"svg( stroke="url(#g)" stroke-width="2">Abc<tspan>de</tspan></text></svg>)svg";
   for (const std::size_t limit : {RendererDrawBudget::kMaximumGradientStops, std::size_t{119},
@@ -1049,8 +1048,7 @@ TEST_F(GeodeGlyphInstancingTest, GradientTextChargesItsStopsOncePerRunLikeTinySk
 /// nor converted: the frame draws nothing more.
 TEST_F(GeodeGlyphInstancingTest, GradientTextAfterAGeometryRefusalConvertsNothing) {
   SVGDocument document = parse(
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" +
-      GradientDefs(20) +
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg" + GradientDefs(20) +
       R"svg(<rect width="40" height="40" fill="red"/><rect x="50" width="40" height="40" fill="blue"/>)svg"
       R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="48" fill="url(#g)")svg"
       R"svg( stroke="url(#g)" stroke-width="2">Abc</text></svg>)svg");
