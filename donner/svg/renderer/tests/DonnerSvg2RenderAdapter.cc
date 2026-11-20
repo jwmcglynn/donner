@@ -8,11 +8,8 @@
 #include <string>
 #include <string_view>
 
-#ifdef DONNER_TEXT_ENABLED
-#include "donner/base/PackagedResource.h"
-#endif
-
 #include "donner/svg/renderer/tests/SvgSuiteRender.h"
+#include "donner/svg/text/TextTier.h"
 #include "nlohmann/json.hpp"
 
 namespace donner::svg {
@@ -120,12 +117,10 @@ int runRender(const std::string& requestPath, const std::string& responsePath) {
   const std::filesystem::path resourceDir = resourceRoot.empty()
                                                 ? std::filesystem::path(inputPath).parent_path()
                                                 : std::filesystem::path(resourceRoot);
-#ifdef DONNER_TEXT_ENABLED
   std::string resourceError;
-  if (!donner::PreparePackagedResources(&resourceError)) {
+  if (!donner::svg::PrepareTextResources(&resourceError)) {
     return requestError("Packaged resources unavailable: " + resourceError);
   }
-#endif
 
   const auto rendered =
       RenderSvgSuiteCase({inputPath, resourceDir, *normalizedFontRoot, *width, *height,

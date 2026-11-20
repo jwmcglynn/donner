@@ -54,6 +54,12 @@ renderer stays the default for embedders.
 - **`DONNER_GPU_BACKEND`** accepts only `metal` or `vulkan`, and an unset or empty value selects
   the platform's backend. Any other value, including the former `wgpu`, or a backend the process
   cannot open, stops the process with an error.
+- **Text build macros are private.** `DONNER_TEXT_ENABLED`, `DONNER_TEXT_FULL` and
+  `DONNER_TEXT_WOFF2_ENABLED` are no longer defined for code that depends on Donner, in Bazel or
+  CMake, so a consumer that tests them now silently compiles its text-disabled branch. Query the
+  linked build at run time instead with `BuiltTextTier()`, `IsTextBuiltIn()`,
+  `IsFullTextBuiltIn()` and `IsWoff2BuiltIn()` from `donner/svg/text/TextTier.h`, and prepare the
+  packaged fonts with `PrepareTextResources()`, which does nothing in a build without text.
 
 ### Removed
 

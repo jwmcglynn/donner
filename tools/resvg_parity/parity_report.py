@@ -2649,8 +2649,18 @@ def _backend_function(source: str, name: str) -> str:
     return source[start:_find_matching(source, start, "{", "}")]
 
 
-_BUILD_FEATURE_MACROS = {"Text": "DONNER_TEXT_ENABLED", "TextFull": "DONNER_TEXT_FULL",
-                         "FilterEffects": "DONNER_FILTERS_ENABLED"}
+def _macro_gate(feature: str, macro: str) -> str:
+    return (rf"#ifdef\s+{macro}\s+case RendererBackendFeature::{feature}:\s*return true;"
+            rf"\s+#else\s+case RendererBackendFeature::{feature}:\s*return false;\s+#endif")
+
+
+# The one accepted form of each build-gated feature. Text follows the run-time text tier query,
+# because the text macros are private to the text libraries; filters follow their Bazel macro.
+_BUILD_FEATURE_GATES = {
+    "Text": r"case RendererBackendFeature::Text:\s*return IsTextBuiltIn\(\);",
+    "TextFull": r"case RendererBackendFeature::TextFull:\s*return IsFullTextBuiltIn\(\);",
+    "FilterEffects": _macro_gate("FilterEffects", "DONNER_FILTERS_ENABLED"),
+}
 
 
 def _check_capabilities(
@@ -2658,8 +2668,9 @@ def _check_capabilities(
 ) -> None:
     """Check that `function` returns true for `always` and follows the build for `build_gated`.
 
-    A build-gated feature returns true under its Bazel feature macro and false otherwise, so the
-    corpus wrapper's text and filter flags select it.
+    A build-gated feature follows the configuration: text features through the run-time text
+    tier query and filter effects through their Bazel feature macro, so the corpus wrapper's text
+    and filter flags select it.
     """
 
     body = _backend_function(source, function)
@@ -2670,12 +2681,7 @@ def _check_capabilities(
         if not re.search(rf"case RendererBackendFeature::{feature}:\s*return true;", body):
             raise ParityReportError(f"{backend} capability {feature} differs from parity report")
     for feature in sorted(build_gated):
-        macro = _BUILD_FEATURE_MACROS[feature]
-        gate = (
-            rf"#ifdef\s+{macro}\s+case RendererBackendFeature::{feature}:\s*return true;"
-            rf"\s+#else\s+case RendererBackendFeature::{feature}:\s*return false;\s+#endif"
-        )
-        if not re.search(gate, body):
+        if not re.search(_BUILD_FEATURE_GATES[feature], body):
             raise ParityReportError(f"{backend} capability {feature} differs from parity report")
 
 

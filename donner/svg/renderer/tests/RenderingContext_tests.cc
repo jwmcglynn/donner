@@ -38,6 +38,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/TextTier.h"
 #include "embed_resources/PublicSansFont.h"
 
 using testing::ElementsAre;
@@ -139,14 +140,13 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeBasic) {
   ctx.instantiateRenderTree(false, warningSink_);
 }
 
-// With text enabled, `ch` measurement asks for the fallback font once; the recorded miss is final.
-#ifdef DONNER_TEXT_ENABLED
-constexpr char kExpectedShapeOnlyReport[] =
-    "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0, warnings: 0, provider queries: 1$";
-#else
-constexpr char kExpectedShapeOnlyReport[] =
-    "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0, warnings: 0, provider queries: 0$";
-#endif
+/// With text built in, `ch` measurement asks for the fallback font once; the recorded miss is
+/// final.
+const char* ExpectedShapeOnlyReport() {
+  return IsTextBuiltIn()
+             ? "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0, warnings: 0, provider queries: 1$"
+             : "\\[prepare\\]\\[/prepare\\] rect width: 10\\.0, warnings: 0, provider queries: 0$";
+}
 
 TEST_F(RenderingContextTest, ShapeOnlyDocumentNeedsNoPackagedFallbackFont) {
   // A re-executed child has no borrowed resource views, so it can install its own session. Any
@@ -177,16 +177,16 @@ TEST_F(RenderingContextTest, ShapeOnlyDocumentNeedsNoPackagedFallbackFont) {
                                           warningSink_.warnings().size(), providerQueries));
         std::_Exit(0);
       },
-      testing::ExitedWithCode(0), kExpectedShapeOnlyReport);
+      testing::ExitedWithCode(0), ExpectedShapeOnlyReport());
 }
 
 TEST_F(RenderingContextTest, TextDocumentReportsMissingFallbackFontOnce) {
   constexpr std::string_view kTextSvg = R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="20">Hi</text></svg>
   )";
-#ifndef DONNER_TEXT_ENABLED
-  GTEST_SKIP() << "Text is disabled in this renderer variant";
-#endif
+  if (!IsTextBuiltIn()) {
+    GTEST_SKIP() << "Text is disabled in this renderer variant";
+  }
 
   GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_EXIT(

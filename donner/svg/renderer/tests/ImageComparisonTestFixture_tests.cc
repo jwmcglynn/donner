@@ -426,8 +426,11 @@ TEST(ImageComparisonTestFixtureTests, ResolvesSymlinkedRunfilesRootToCanonicalDo
   EXPECT_EQ(ResolveRunfilesResourceRootForTesting(runfilesRoot, canonicalDocument), runfilesRoot);
 }
 
-#ifndef DONNER_TEXT_FULL
 TEST(ImageComparisonTestFixtureTests, TextFullOnlyRunsUseDisabledGtestNameInSimpleTextBuild) {
+  if (IsFullTextBuiltIn()) {
+    GTEST_SKIP() << "Full text is built in; text-full-only cases run in this configuration";
+  }
+
   ImageComparisonParams params;
   params.onlyTextFull();
 
@@ -435,7 +438,6 @@ TEST(ImageComparisonTestFixtureTests, TextFullOnlyRunsUseDisabledGtestNameInSimp
 
   EXPECT_THAT(name, testing::StartsWith("DISABLED_"));
 }
-#endif
 
 /// A 2x2 opaque red bitmap: the side of the comparisons below that has pixels.
 RendererBitmap OpaqueRedBitmap() {

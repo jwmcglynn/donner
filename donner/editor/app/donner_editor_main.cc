@@ -17,12 +17,9 @@
 #include <iostream>
 #include <string>
 
-#ifdef DONNER_TEXT_ENABLED
-#include "donner/base/PackagedResource.h"
-#endif
-
 #include "donner/editor/app/EditorApp.h"
 #include "donner/editor/app/EditorRepl.h"
+#include "donner/svg/text/TextTier.h"
 
 int main(int argc, char* argv[]) {
   // Respect bazel's BUILD_WORKING_DIRECTORY so `bazel run` resolves
@@ -39,13 +36,11 @@ int main(int argc, char* argv[]) {
 
   // Accept a one-shot initial URL as argv[1] so the binary is scriptable:
   //   render_repl mini.svg
-#ifdef DONNER_TEXT_ENABLED
   std::string resourceError;
-  if (!donner::PreparePackagedResources(&resourceError)) {
+  if (!donner::svg::PrepareTextResources(&resourceError)) {
     std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
     return 1;
   }
-#endif
 
   donner::editor::app::RenderSession app(std::move(options));
   if (argc > 1) {

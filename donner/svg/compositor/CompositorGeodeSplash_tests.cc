@@ -24,6 +24,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg::compositor {
 namespace {
@@ -65,8 +66,8 @@ void ExpectOffArtboardPixels(const RendererBitmap& fullTile, int rows, const cha
   EXPECT_GT(changedPixels, 100) << label << " must retain source pixels above the artboard";
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(CompositorGeodeSplashTest, ConcurrentAnimationRetainsUnchangedTextInstances) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view kText =
       "<text x='8' y='30' font-size='20'>Retained animation text</text>";
   const std::string prefix = "<svg xmlns='http://www.w3.org/2000/svg' width='256' height='64'>";
@@ -130,6 +131,7 @@ TEST(CompositorGeodeSplashTest, ConcurrentAnimationRetainsUnchangedTextInstances
 }
 
 TEST(CompositorGeodeSplashTest, ConcurrentAnimationPreservesRepeatedAndOffscreenText) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view kScene = R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="128" height="96">
     <defs><text id="word" font-size="16">Twin</text></defs>
@@ -194,7 +196,6 @@ TEST(CompositorGeodeSplashTest, ConcurrentAnimationPreservesRepeatedAndOffscreen
   }
   EXPECT_FALSE(warnings.hasWarnings());
 }
-#endif  // DONNER_TEXT_ENABLED
 
 TEST(CompositorGeodeSplashTest, OffArtboardShineRetainsSourcePixelsInSelectedTile) {
   const donner::tests::RequiredRunfile source =

@@ -37,10 +37,6 @@
 #include <string_view>
 #include <vector>
 
-#ifdef DONNER_TEXT_ENABLED
-#include "donner/base/PackagedResource.h"
-#endif
-
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/css/FontFace.h"
@@ -50,6 +46,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace {
 
@@ -495,13 +492,11 @@ int main(int argc, char* argv[]) {
   std::vector<std::string> extraFiles;
   const Config cfg = parseArgs(argc, argv, extraFiles);
 
-#ifdef DONNER_TEXT_ENABLED
   std::string resourceError;
-  if (!donner::PreparePackagedResources(&resourceError)) {
+  if (!donner::svg::PrepareTextResources(&resourceError)) {
     std::fprintf(stderr, "Packaged resources unavailable: %s\n", resourceError.c_str());
     return 1;
   }
-#endif
 
   const auto workloads = BuildWorkloads(extraFiles);
 

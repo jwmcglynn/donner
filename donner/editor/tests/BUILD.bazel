@@ -1315,6 +1315,7 @@ donner_cc_binary(
     deps = [
         "//donner/base:packaged_resource",
         "//donner/editor/repro:gl_rnr_replay",
+        "//donner/svg/text:text_tier",
     ],
 )
 

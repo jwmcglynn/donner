@@ -63,6 +63,13 @@ class Fixture:
         self._temporary_directory.cleanup()
 
 
+# The compile-time form the text capabilities used before the text macros became private.
+_MACRO_GATED_TEXT = (
+    "#ifdef DONNER_TEXT_ENABLED\n    case RendererBackendFeature::Text: return true;\n#else\n"
+    "    case RendererBackendFeature::Text: return false;\n#endif"
+)
+
+
 class ParityReportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = Fixture()
@@ -1272,8 +1279,12 @@ class ParityReportTests(unittest.TestCase):
                  "corpus canvas rule differs"),
             ],
             "RendererTestBackendGeode.cc": [
-                ("#ifdef DONNER_TEXT_ENABLED\n    case RendererBackendFeature::Text: return true;",
-                 "#ifdef DONNER_TEXT_FULL\n    case RendererBackendFeature::Text: return true;",
+                ("return IsTextBuiltIn();", "return true;", "Geode capability Text differs"),
+                ("return IsFullTextBuiltIn();", "return IsTextBuiltIn();",
+                 "Geode capability TextFull differs"),
+                # The macro form no longer follows the build: the macros are private.
+                ("    case RendererBackendFeature::Text: return IsTextBuiltIn();",
+                 _MACRO_GATED_TEXT,
                  "Geode capability Text differs"),
                 ("    case RendererBackendFeature::FilterEffects: return true;",
                  "    case RendererBackendFeature::FilterEffects: return false;",
@@ -1305,6 +1316,14 @@ class ParityReportTests(unittest.TestCase):
                  "reference canvas rule differs"),
                 ('if (getenv("UPDATE_GOLDEN_IMAGES_DIR") == nullptr) {', "if (false) {",
                  "reference canvas rule differs"),
+            ],
+            "RendererTestBackendTinySkia.cc": [
+                ("return IsTextBuiltIn();", "return true;", "TinySkia capability Text differs"),
+                ("return IsFullTextBuiltIn();", "return IsTextBuiltIn();",
+                 "TinySkia capability TextFull differs"),
+                ("    case RendererBackendFeature::Text: return IsTextBuiltIn();",
+                 _MACRO_GATED_TEXT,
+                 "TinySkia capability Text differs"),
             ],
         }
         for name, replacements in edits.items():

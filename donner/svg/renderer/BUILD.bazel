@@ -147,7 +147,7 @@ donner_perf_sensitive_cc_library(
     name = "render_snapshot",
     srcs = ["RenderSnapshot.cc"],
     hdrs = ["RenderSnapshot.h"],
-    defines = select({
+    local_defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
@@ -171,7 +171,7 @@ donner_perf_sensitive_cc_library(
     name = "renderer_driver",
     srcs = ["RendererDriver.cc"],
     hdrs = ["RendererDriver.h"],
-    defines = select({
+    local_defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
@@ -394,11 +394,8 @@ donner_perf_sensitive_cc_library(
         "AnimationReferences.h",
         "RetainedRenderTreeUpdate.h",
     ],
-    defines = select({
+    local_defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }) + select({
-        ":text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
     visibility = [
@@ -524,7 +521,7 @@ donner_cc_library(
     name = "renderer_geode",
     srcs = ["RendererGeode.cc"],
     hdrs = ["RendererGeode.h"],
-    defines = select({
+    local_defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
@@ -592,13 +589,11 @@ donner_perf_sensitive_cc_library(
         "RetainedSpans.h",
     ],
     defines = select({
-        ":text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }) + select({
-        ":text_full_enabled": ["DONNER_TEXT_FULL"],
-        "//conditions:default": [],
-    }) + select({
         ":filters_enabled": ["DONNER_FILTERS_ENABLED"],
+        "//conditions:default": [],
+    }),
+    local_defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
     # The tiny-skia renderer is a pure-CPU library (no wgpu): no
@@ -665,6 +660,7 @@ donner_cc_library(
         "//donner/svg/core",
         "//donner/svg/resources:font_manager",
         "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_tier",
     ] + select({
         ":renderer_backend_geode": [":renderer_geode"],
         "//conditions:default": [":renderer_tiny_skia"],

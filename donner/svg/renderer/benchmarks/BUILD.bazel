@@ -64,6 +64,7 @@ donner_cc_binary(
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/text:text_tier",
     ],
 )
 
@@ -95,6 +96,7 @@ donner_cc_binary(
         # it only forbids a path from :renderer_geode to :renderer_tiny_skia.
         "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/text:text_tier",
     ],
 )
 

@@ -8,6 +8,7 @@
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace donner::svg {
 namespace {
@@ -176,16 +177,17 @@ TEST(RendererAnimationPathValue, InlineTextPathRetainsInterpolation) {
       document.querySelector("#t")->entityHandle().get<components::TextPathComponent>().inlinePath;
   ASSERT_THAT(path, testing::Ne(std::nullopt));
   EXPECT_THAT(path->points(), testing::ElementsAre(Vector2d(0, 16), Vector2d(32, 16)));
-#ifdef DONNER_TEXT_ENABLED
-  auto expected =
-      instantiateSubtree("<text font-size='12'><textPath path='M0 16L32 16'>H</textPath></text>",
-                         parser::SVGParser::Options(), Vector2i(32, 32));
-  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(expected).generated,
-              testing::Contains(testing::Not(testing::AnyOf(testing::Eq('.'), testing::Eq('\n')))));
-  editor::tests::CompareBitmapToBitmap(actual, RenderDocumentWithActiveBackend(expected),
-                                       "inline-text-path-interpolation",
-                                       editor::tests::PixelmatchIdentityParams());
-#endif
+  if (IsTextBuiltIn()) {
+    auto expected =
+        instantiateSubtree("<text font-size='12'><textPath path='M0 16L32 16'>H</textPath></text>",
+                           parser::SVGParser::Options(), Vector2i(32, 32));
+    EXPECT_THAT(
+        RendererTestUtils::renderToAsciiImage(expected).generated,
+        testing::Contains(testing::Not(testing::AnyOf(testing::Eq('.'), testing::Eq('\n')))));
+    editor::tests::CompareBitmapToBitmap(actual, RenderDocumentWithActiveBackend(expected),
+                                         "inline-text-path-interpolation",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(RendererAnimationPathValue, IncompatibleUpperLayerPreservesTheLowerAnimation) {

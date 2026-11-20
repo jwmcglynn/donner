@@ -105,6 +105,12 @@ cc_binary(
         "//donner/svg/renderer:text_enabled": ["-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free,_donner_prepare_resources"],
         "//conditions:default": ["-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free"],
     }),
+    # The bridge exports `donner_prepare_resources` only when text is built in, matching the
+    # exported-function list above, so the tier stays a compile-time switch local to this binary.
+    local_defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     tags = ["manual"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
     deps = [
@@ -257,6 +263,12 @@ cc_binary(
     ] + select({
         "//donner/svg/renderer:text_enabled": ["-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free,_donner_prepare_resources"],
         "//conditions:default": ["-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free"],
+    }),
+    # The bridge exports `donner_prepare_resources` only when text is built in, matching the
+    # exported-function list above, so the tier stays a compile-time switch local to this binary.
+    local_defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
     }),
     tags = ["manual"],
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,

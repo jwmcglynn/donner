@@ -1,6 +1,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
@@ -46,6 +46,20 @@ py_test(
         "//tools:lint.sh",
     ],
     deps = ["//tools:test_executable_fixtures"],
+)
+
+py_library(
+    name = "check_text_tier_defines",
+    srcs = ["check_text_tier_defines.py"],
+    visibility = ["//tools/ci:__pkg__"],
+)
+
+py_test(
+    name = "check_text_tier_defines_tests",
+    size = "small",
+    srcs = ["check_text_tier_defines_tests.py"],
+    main = "check_text_tier_defines_tests.py",
+    deps = [":check_text_tier_defines"],
 )
 
 py_test(

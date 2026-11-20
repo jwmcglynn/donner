@@ -19,6 +19,7 @@
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -168,11 +169,11 @@ TEST(RendererAnimationCoordinateContext, PatternBaseUsesStylesheetAndTypedOverri
   }
 }
 
-#ifdef DONNER_TEXT_ENABLED
 // An additive animation on text `x` serializes the underlying positions and parses them back. Under
 // a comma-decimal global locale "0.5" must not be read as the two-item list "0,5", nor "1000.5" as
 // "1.000,5".
 TEST(RendererAnimationCoordinateContext, TextPositionAnimationIgnoresGlobalLocale) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const ScopedCommaDecimalGlobalLocale commaDecimalLocale;
   for (const auto& [underlying, sum, offset] :
        {std::tuple{"0.5", "4.5", ""}, std::tuple{"1000.5", "1004.5", "-1000"}}) {
@@ -194,6 +195,7 @@ TEST(RendererAnimationCoordinateContext, TextPositionAnimationIgnoresGlobalLocal
 }
 
 TEST(RendererAnimationCoordinateContext, TextPathToOnlyUsesTypedOffset) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const std::string prefix = "<text font-size='12'><textPath id='p' path='M0 14H64'";
   const std::string suffix = ">H</textPath></text>";
   auto document =
@@ -214,7 +216,6 @@ TEST(RendererAnimationCoordinateContext, TextPathToOnlyUsesTypedOffset) {
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(restored),
       "text-path-typed-offset-restored", editor::tests::PixelmatchIdentityParams());
 }
-#endif
 
 TEST(RendererAnimationCoordinateContext, FilterPrimitiveToOnlyUsesTypedRegion) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
@@ -268,8 +269,8 @@ TEST(RendererAnimationCoordinateContext, FilterPrimitiveUsesInheritedAndSampledU
   }
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationCoordinateContext, MixedTextPathOffsetUsesFinalPathLength) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   for (const bool animatedPath : {false, true}) {
     SCOPED_TRACE(animatedPath);
     const std::string geometry =
@@ -293,7 +294,6 @@ TEST(RendererAnimationCoordinateContext, MixedTextPathOffsetUsesFinalPathLength)
         editor::tests::PixelmatchIdentityParams());
   }
 }
-#endif
 
 TEST(RendererAnimationCoordinateContext, SharedMarkerMixedLengthsUseEachReferencingViewport) {
   const std::string marker =
@@ -485,8 +485,8 @@ TEST(RendererAnimationCoordinateContext, ContextualRecipeAdmissionCountsReferenc
               testing::Ge(declaration.href->size()));
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationCoordinateContext, ShadowTextPathRecipeClearsAfterSourceRemoval) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = instantiateSubtree(
       "<defs><g id='label'><text font-size='12'><textPath path='M0 20H40'>H"
       "<animate id='offset' attributeName='startOffset' from='50%' to='0' dur='2s'/>"
@@ -511,7 +511,6 @@ TEST(RendererAnimationCoordinateContext, ShadowTextPathRecipeClearsAfterSourceRe
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(base),
       "shadow-text-offset-removed", editor::tests::PixelmatchIdentityParams());
 }
-#endif
 
 TEST(RendererAnimationCoordinateContext, BoundingBoxPrimitiveLengthsPreservePositionsAndDeltas) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {

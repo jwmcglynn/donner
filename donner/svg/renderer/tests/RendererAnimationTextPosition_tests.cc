@@ -7,6 +7,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 /// @file
 /// Text-position regressions follow https://svgwg.org/svg2-draft/text.html#TSpanAttributes.
@@ -14,7 +15,6 @@
 namespace donner::svg {
 namespace {
 
-#ifdef DONNER_TEXT_ENABLED
 SVGDocument ParseTextPosition(std::string_view source) {
   return instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(160, 48));
 }
@@ -30,6 +30,7 @@ void CompareTextPosition(SVGDocument& document, std::string_view expectedSource,
 }
 
 TEST(RendererAnimationTextPosition, LocalListAnimationRetainsAncestorFallback) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   struct Case {
     const char* name;
     const char* parent;
@@ -72,6 +73,7 @@ TEST(RendererAnimationTextPosition, LocalListAnimationRetainsAncestorFallback) {
 }
 
 TEST(RendererAnimationTextPosition, LocalRotationListRepeatsItsLastSampleAcrossDescendants) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParseTextPosition(
       "<text y='24' font-size='12'>A<tspan id='target' rotate='10 30'>B<a>C</a>D</tspan></text>"
       "<animate href='#target' attributeName='rotate' to='50 90' dur='2s'/>");
@@ -86,6 +88,7 @@ TEST(RendererAnimationTextPosition, LocalRotationListRepeatsItsLastSampleAcrossD
 }
 
 TEST(RendererAnimationTextPosition, UnanimatedLongOwnerDoesNotSuppressShortDescendantAnimation) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const std::string prefix =
       "<text y='12' font-size='10'><tspan>" + std::string(80, 'A') + "</tspan>";
   auto document = ParseTextPosition(prefix +
@@ -97,6 +100,7 @@ TEST(RendererAnimationTextPosition, UnanimatedLongOwnerDoesNotSuppressShortDesce
 }
 
 TEST(RendererAnimationTextPosition, RotationReplacesLowerValuesWhenAdditionIsRequested) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParseTextPosition(
       "<text y='24' font-size='12' rotate='0 30'>A<tspan id='target'>B</tspan></text>"
       "<animate href='#target' attributeName='rotate' from='40' to='60' dur='2s'/>"
@@ -113,6 +117,7 @@ TEST(RendererAnimationTextPosition, RotationReplacesLowerValuesWhenAdditionIsReq
 }
 
 TEST(RendererAnimationTextPosition, ParentListEditsAffectFallbackAfterAnimationRemoval) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParseTextPosition(
       "<text id='root' y='24' font-size='12' dx='0 4'>A<tspan id='target'>B</tspan></text>"
       "<animate id='animation' href='#target' attributeName='dx' to='12' dur='2s'/>");
@@ -133,6 +138,7 @@ TEST(RendererAnimationTextPosition, ParentListEditsAffectFallbackAfterAnimationR
 }
 
 TEST(RendererAnimationTextPosition, EmptyBasePaddingUsesEachLayerOperandArity) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParseTextPosition(
       "<text id='target' y='24' font-size='12'>AB</text>"
       "<animate href='#target' attributeName='dx' to='8' dur='2s'/>"
@@ -146,6 +152,7 @@ TEST(RendererAnimationTextPosition, EmptyBasePaddingUsesEachLayerOperandArity) {
 }
 
 TEST(RendererAnimationTextPosition, ToTakesPrecedenceOverAnInvalidByOperand) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParseTextPosition(
       "<text id='target' y='24' font-size='12' dx='2'>AB</text>"
       "<animate href='#target' attributeName='dx' from='2' to='6' by='invalid' dur='2s'/>");
@@ -155,6 +162,7 @@ TEST(RendererAnimationTextPosition, ToTakesPrecedenceOverAnInvalidByOperand) {
 }
 
 TEST(RendererAnimationTextPosition, LocalRelativeListsUseEachTextInstanceFont) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParseTextPosition(
       "<defs><text id='label' y='24' dx='0 7em'>A<tspan id='target' "
       "dx='1em'>B</tspan></text></defs>"
@@ -173,7 +181,6 @@ TEST(RendererAnimationTextPosition, LocalRelativeListsUseEachTextInstanceFont) {
                         "text-instance-relative-list-" + std::to_string(time));
   }
 }
-#endif
 
 }  // namespace
 }  // namespace donner::svg

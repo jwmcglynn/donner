@@ -63,6 +63,7 @@ donner_cc_binary(
         ":render_session",
         ":render_session_repl",
         "//donner/base:packaged_resource",
+        "//donner/svg/text:text_tier",
     ],
 )
 

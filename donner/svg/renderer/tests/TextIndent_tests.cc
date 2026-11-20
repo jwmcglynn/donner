@@ -34,6 +34,7 @@
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace donner::svg {
 namespace {
@@ -504,9 +505,9 @@ TEST(TextIndentTest, NativeBackwardShapingKeepsIdentityUnderExistingBaseProgress
       "Amiri-Regular.ttf");
   ASSERT_THAT(control.glyphs, SizeIs(testing::Gt(1u)));
   ASSERT_THAT(observed.glyphs, SizeIs(control.glyphs.size()));
-#ifdef DONNER_TEXT_FULL
-  EXPECT_THAT(control.glyphs.front().cluster, testing::Gt(control.glyphs.back().cluster));
-#endif
+  if (IsFullTextBuiltIn()) {
+    EXPECT_THAT(control.glyphs.front().cluster, testing::Gt(control.glyphs.back().cluster));
+  }
   for (size_t index = 0; index < control.glyphs.size(); ++index) {
     EXPECT_THAT(observed.glyphs[index].xPosition,
                 DoubleNear(control.glyphs[index].xPosition + 20, 1e-5));
@@ -600,10 +601,10 @@ TEST(TextIndentTest, OptionalLigatureChangesOnlyWhenFirstWordNeedsEmergencyCut) 
     EXPECT_EQ(secondWord[index].cluster, natural.glyphs[index].cluster + 4);
     EXPECT_THAT(secondWord[index].xAdvance, DoubleNear(natural.glyphs[index].xAdvance, 1e-5));
   }
-#ifdef DONNER_TEXT_FULL
-  ASSERT_THAT(natural.glyphs, SizeIs(1));
-  EXPECT_GT(static_cast<size_t>(secondWord - first), natural.glyphs.size());
-#endif
+  if (IsFullTextBuiltIn()) {
+    ASSERT_THAT(natural.glyphs, SizeIs(1));
+    EXPECT_GT(static_cast<size_t>(secondWord - first), natural.glyphs.size());
+  }
 }
 
 TEST(TextIndentTest, ContinuedWordUsesIndentedFirstLineForEmergencyPreflight) {
@@ -628,11 +629,11 @@ TEST(TextIndentTest, ContinuedWordUsesIndentedFirstLineForEmergencyPreflight) {
                     true, "NotoSerif-Regular.ttf");
   ASSERT_THAT(observed.glyphs, Not(IsEmpty()));
   EXPECT_THAT(observed.glyphs.front().xPosition, DoubleNear(100 + indent, 1e-5));
-#ifdef DONNER_TEXT_FULL
-  // The continuing span exposes its typographic units instead of keeping the ligature whole.
-  ASSERT_THAT(ligature.glyphs, SizeIs(1));
-  EXPECT_GT(observed.glyphs.size() - 1, ligature.glyphs.size());
-#endif
+  if (IsFullTextBuiltIn()) {
+    // The continuing span exposes its typographic units instead of keeping the ligature whole.
+    ASSERT_THAT(ligature.glyphs, SizeIs(1));
+    EXPECT_GT(observed.glyphs.size() - 1, ligature.glyphs.size());
+  }
 }
 
 void WithNativeIndentDocument(
