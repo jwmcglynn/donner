@@ -4029,7 +4029,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_fuzz_variants_are_selected_by_bazel_tags(self):
         expected = {
-            "Test fuzzers (libFuzzer via LLVM 21 toolchain)": ("fuzz-lane", "fuzz_target"),
+            "Test fuzzers (libFuzzer via LLVM toolchain)": ("fuzz-lane", "fuzz_target"),
             "Test text-full fuzzers": ("fuzz-lane-text-full", "fuzz_text_full"),
             "Test Geode render fuzzers": ("fuzz-lane-geode", "fuzz_geode"),
         }

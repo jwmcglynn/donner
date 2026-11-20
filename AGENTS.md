@@ -146,7 +146,7 @@ When creating a pull request:
    - **`tools/ci/lint_lane.sh`** - the whole Lint workflow lane: `tools/lint.sh` plus the brace-lint regression, design-doc provenance, private-detail and no-Rust-dependency checks, in CI order. Run it when the change touches anything those checks scan.
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`tools/format/clang_format.sh -i` on every modified C/C++ file** before committing. It runs the pinned clang-format 21.1.6 that the Lint lane checks the whole tree with; `bazel test //...` also checks the plain `srcs`/`hdrs` of every `donner_cc_library`/`donner_cc_test`/`donner_cc_binary` (a `{target}_format` validation). Xcode 27.1's `xcrun clang-format` matched it byte for byte when it was pinned. Other clang-format versions can differ (for example on `Foo::* member` and `struct stat s{}`).
-3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
+3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM toolchain which provides it.
 4. **Do not publish draft diffs** — agents must not open draft pull requests. Keep unfinished
    work local; once the change is coherent and reviewable, open a normal PR.
 5. **Requested early-delivery mode:** a coherent unit may be pushed and opened as a normal PR
