@@ -221,6 +221,32 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   return TransformPath(glyphPath, glyphFromLocal);
 }
 
+bool CanRenderTextRun(bool isBitmapFont, float scale) {
+  return isBitmapFont || scale != 0.0f;
+}
+
+std::optional<TextBackend::BitmapGlyph> AdmitBitmapGlyph(TextEngine& textEngine, FontHandle font,
+                                                         int glyphIndex, float scale,
+                                                         RendererTextMaterializationBudget& budget,
+                                                         bool& rejected) {
+  const auto metrics = textEngine.bitmapGlyphMetrics(font, glyphIndex, scale);
+  if (!metrics) {
+    return std::nullopt;
+  }
+  const std::size_t bytes = metrics->rgbaBytes;
+  if (bytes > std::numeric_limits<std::size_t>::max() / 2u ||
+      !budget.reserve({.uniqueOutlines = 1, .bytes = bytes * 2u})) {
+    rejected = true;
+    return std::nullopt;
+  }
+  auto bitmap = textEngine.bitmapGlyph(font, glyphIndex, scale, *metrics, bytes);
+  if (!bitmap) {
+    budget.reject();
+    rejected = true;
+  }
+  return bitmap;
+}
+
 GlyphFaceScale ResolveGlyphFace(const TextEngine& textEngine, const TextRun& run,
                                 const TextGlyph& glyph, float runScale, bool runBitmapOnly) {
   if (!glyph.font) {

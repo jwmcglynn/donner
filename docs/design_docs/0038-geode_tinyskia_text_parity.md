@@ -43,8 +43,9 @@ backends call (lib target, no backend/paint types):
   returns the placed outline `Path` for one glyph, encoding the canonical sequence:
   `glyphOutline(font, idx, scale * fontSizeScale)` → stretch on the **raw outline**
   (`Scale(stretchX, stretchY)`) → `Rotate(rotateDegrees) * Translate(x, y)`. Returns
-  empty for outline-less glyphs (bitmap-only fonts, `.notdef`), which each backend
-  skips. Both `drawText` paths call this instead of re-deriving the placement
+  empty for outline-less glyphs (bitmap-only fonts, `.notdef`). Neither backend fills
+  such a glyph's outline; both draw a bitmap-only face's glyphs from its bitmap strike.
+  Both `drawText` paths call this instead of re-deriving the placement
   transform.
 - **`transformPath(path, transform)`** (`PlacedTextGeometry.h:39`) — one shared
   definition, replacing the previously-duplicated byte-identical free function in

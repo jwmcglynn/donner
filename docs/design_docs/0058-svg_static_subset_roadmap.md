@@ -98,7 +98,8 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
         cases are active; focused renderer tests also cover paint order on text and tspans.
   - [ ] `0 N` dash round/square caps on the GPU backend.
   - [ ] Stroke-join defect (issue #663).
-  - [ ] Color/bitmap-emoji glyphs in the GPU `drawText` path.
+  - [x] Color/bitmap-emoji glyphs in the GPU `drawText` path: bitmap strikes draw as textured
+        quads through the image pipeline.
 
 ## Background
 

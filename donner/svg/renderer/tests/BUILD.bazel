@@ -448,10 +448,12 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/base/encoding:base64",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/components",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer:rendering_context",
         "//donner/svg/renderer:tiny_skia_deps",
         "//donner/svg/renderer/geode:geode_nearest_sampling",
@@ -1247,6 +1249,40 @@ donner_variant_cc_test(
             "backend": "geode",
             "text": "true",
             "text_full": "true",
+        },
+    ],
+    opens_gpu_device = True,
+)
+
+donner_cc_test(
+    name = "geode_text_budget_tests_impl",
+    srcs = [
+        "GeodeTextBudget_tests.cc",
+        "MockTextBackend.h",
+    ],
+    tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    deps = [
+        ":rgba_test_matchers",
+        "//donner/svg/components/text:components",
+        "//donner/svg/renderer:placed_text_geometry",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/parser",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_variant_cc_test(
+    name = "geode_text_budget_tests",
+    dep = ":geode_text_budget_tests_impl",
+    named_variants = [
+        {
+            "name": "basic",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "false",
         },
     ],
     opens_gpu_device = True,
