@@ -136,9 +136,9 @@ ImageComparisonParams GeodeTranslucentEdgeColorGate(ImageComparisonParams params
 }
 
 /// \p params, with the Geode comparison disabled: the row compares against a custom golden that is
-/// not quarter-pixel quantized (a browser rendering, or one whose frame is an exact area average),
-/// so the quarter-pixel edge coverage rule does not apply, and Geode's edge coverage differs from
-/// it by more than the pixel budget.
+/// not quarter-pixel quantized (its frame is an exact area average), so the quarter-pixel edge
+/// coverage rule does not apply, and Geode's edge coverage differs from it by more than the pixel
+/// budget.
 ImageComparisonParams GeodeUnquantizedGoldenGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
@@ -192,6 +192,21 @@ ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path) {
       path, kDefaultThreshold,
       "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside the outline; "
       "Donner's glyph ink equals the outline's area (GlyphInkAreaTest)");
+}
+
+/// The CPU comparison of a gradient-stroked text row uses \p firefoxPath; the Geode comparison uses
+/// \p geodePath, Geode's own rendering. Firefox, like the CPU renderer, samples stroke edges on
+/// sub-scanlines, and Geode's exact coverage is the closer of the two to the outline's area
+/// (golden README). Both path arguments refer to string literals.
+ImageComparisonParams GradientStrokeOnTextGoldens(std::string_view firefoxPath,
+                                                  std::string_view geodePath) {
+  return Params::WithGoldenOverride(firefoxPath)
+      .withReason(
+          "Reference disagreement: paint mapped by glyph ink extents; Geode compares with its own "
+          "rendering, whose exact edge coverage is closer to an area-coverage control than the "
+          "Firefox golden's sub-scanline coverage")
+      .withGeodeGoldenOverride(geodePath)
+      .requireFeature(RendererBackendFeature::Text, "text rendering");
 }
 
 /// These references preserve the vendored filter pixels. Only the independently outlined
@@ -876,17 +891,17 @@ INSTANTIATE_TEST_SUITE_P(
                 // SVG uses glyph cells for a text element's object bounding box. The
                 // vendored images use ink extents; the Firefox references use glyph cells.
                 {"linear-gradient-on-text.svg",
-                 GeodeUnquantizedGoldenGate(
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "firefox-stroke-linear-gradient-on-text.png")
-                         .withReason("Reference disagreement: paint mapped by glyph ink extents")
-                         .requireFeature(RendererBackendFeature::Text, "text rendering"))},
+                 GradientStrokeOnTextGoldens(
+                     "donner/svg/renderer/testdata/golden/"
+                     "firefox-stroke-linear-gradient-on-text.png",
+                     "donner/svg/renderer/testdata/golden/geode/"
+                     "painting_stroke_linear-gradient-on-text.png")},
                 {"radial-gradient-on-text.svg",
-                 GeodeUnquantizedGoldenGate(
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "firefox-stroke-radial-gradient-on-text.png")
-                         .withReason("Reference disagreement: paint mapped by glyph ink extents")
-                         .requireFeature(RendererBackendFeature::Text, "text rendering"))},
+                 GradientStrokeOnTextGoldens(
+                     "donner/svg/renderer/testdata/golden/"
+                     "firefox-stroke-radial-gradient-on-text.png",
+                     "donner/svg/renderer/testdata/golden/geode/"
+                     "painting_stroke_radial-gradient-on-text.png")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

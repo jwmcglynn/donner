@@ -679,23 +679,26 @@
         "painting/stroke/radial-gradient-on-text.svg"
       ],
       "kinds": [
+        "geode_golden",
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Map paint through SVG glyph cells.",
+      "disposition": "Map paint through SVG glyph cells. Geode compares with its own rendering, whose exact edge coverage is closer to an area-coverage control than the Firefox references' sub-scanline coverage.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "https://github.com/jwmcglynn/donner/pull/2354"
       ],
       "removal_criteria": "Retire the browser reference when upstream preserves glyph-cell mapping and passes at default settings.",
-      "reference_provenance": "Firefox renders qualified with the pinned Noto Sans glyph cell geometry.",
+      "reference_provenance": "Firefox renders qualified with the pinned Noto Sans glyph cell geometry; Geode goldens written by the resvg suite harness on software Vulkan.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references_by_fixture": {
         "painting/stroke/linear-gradient-on-text.svg": {
+          "geode_golden": "donner/svg/renderer/testdata/golden/geode/painting_stroke_linear-gradient-on-text.png",
           "shared_golden": "donner/svg/renderer/testdata/golden/firefox-stroke-linear-gradient-on-text.png"
         },
         "painting/stroke/radial-gradient-on-text.svg": {
+          "geode_golden": "donner/svg/renderer/testdata/golden/geode/painting_stroke_radial-gradient-on-text.png",
           "shared_golden": "donner/svg/renderer/testdata/golden/firefox-stroke-radial-gradient-on-text.png"
         }
       }

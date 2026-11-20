@@ -1893,8 +1893,6 @@ def quarter_pixel_edge_violations(
 # request that adds it.
 GEODE_GATE_ALLOWLIST: frozenset[str] = frozenset({
     "painting/marker/with-a-text-child.svg",
-    "painting/stroke/linear-gradient-on-text.svg",
-    "painting/stroke/radial-gradient-on-text.svg",
     "text/font-size/named-value.svg",
     "text/font-variant/inherit.svg",
     "text/font-variant/small-caps.svg",
