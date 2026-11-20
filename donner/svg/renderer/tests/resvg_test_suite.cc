@@ -109,15 +109,15 @@ ImageComparisonParams QuarterPixelEdgeReference() {
 }
 
 /// \p params, with the Geode comparison disabled: Geode's edge coverage differs from the reference
-/// on stroke and decoration edges over fills, mostly at composite pixels the quarter-pixel edge
-/// coverage rule refuses, and part of the difference exceeds what quarter-pixel quantization
-/// allows, so quantization alone is not shown to explain it.
-ImageComparisonParams GeodeOpaqueEdgeCoverageGate(ImageComparisonParams params) {
+/// on stroke and decoration edges, mostly at composite pixels the quarter-pixel edge coverage rule
+/// refuses, and part of the difference exceeds what quarter-pixel quantization allows, so
+/// quantization alone is not shown to explain it.
+ImageComparisonParams GeodeUnresolvedEdgeCoverageGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
       "Unresolved: with the edge coverage rule Geode counts 117 px (marker text child), 162 "
       "(tspan-decoration) and 136 (underline-with-dy-list-2), mostly composite pixels on stroke "
-      "and decoration edges over fills; 16, 80 and 1 of them differ by more than quarter-pixel "
+      "and decoration edges; 16, 80 and 1 of them differ by more than quarter-pixel "
       "quantization allows");
 }
 
@@ -147,16 +147,28 @@ ImageComparisonParams GeodeUnquantizedGoldenGate(ImageComparisonParams params) {
       "budget");
 }
 
-/// \p params, with the Geode comparison disabled: the row blurs text and compares against a Donner
-/// software rendering. The golden's quarter-pixel quantized edges, the glyph edges and the
-/// crosshair under the blurred text, lie beside partially covered rows there, which the
-/// quarter-pixel edge coverage rule counts.
-ImageComparisonParams GeodeBlurredEdgeGate(ImageComparisonParams params) {
+/// \p params, with the Geode comparison disabled: the row blurs text over the crosshair and
+/// compares against a Donner software rendering. The golden's quarter-pixel quantized crosshair
+/// rows lie beside the partially covered blurred text, which the quarter-pixel edge coverage rule
+/// counts.
+ImageComparisonParams GeodeBlurredCrosshairGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Harness mismatch: the golden's quantized edges lie beside partially covered rows under the "
-      "blur, which the edge coverage rule counts (602 px on tspan, all on the crosshair's two "
-      "rows; 267 px on textPath, on the blurred glyph edges)");
+      "Harness mismatch: the golden's quarter-pixel quantized crosshair rows lie beside the "
+      "partially covered blurred text, which the edge coverage rule counts (602 px with the rule, "
+      "all on the crosshair's two rows)");
+}
+
+/// \p params, with the Geode comparison disabled: the row blurs text on paths and compares against
+/// a Donner software rendering that is not quarter-pixel quantized there, so quantization does not
+/// explain the difference.
+ImageComparisonParams GeodeUnresolvedBlurGate(ImageComparisonParams params) {
+  return params.disableBackend(
+      RendererBackend::Geode,
+      "Unresolved: Geode counts 496 px (497 on software Vulkan) against this Donner software "
+      "rendering, which the CPU renderer matches exactly; the golden is not quarter-pixel "
+      "quantized there (share 0.011), and the pixels lie on the blurred glyph edges, the guide "
+      "paths and their overlap");
 }
 
 /// \p params, with the Geode comparison disabled: the row's CPU comparison has a pixel budget above
@@ -195,16 +207,18 @@ ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path) {
 }
 
 /// The CPU comparison of a gradient-stroked text row uses \p firefoxPath; the Geode comparison uses
-/// \p geodePath, Geode's own rendering. Firefox, like the CPU renderer, samples stroke edges on
-/// sub-scanlines, and Geode's exact coverage is the closer of the two to the outline's area
-/// (golden README). Both path arguments refer to string literals.
+/// \p geodePath, Geode's own rendering, so the Geode lane is a regression check against itself
+/// while the CPU lane keeps the independent Firefox comparison. Firefox, like the CPU renderer,
+/// samples stroke edges on sub-scanlines; Geode's coverage is closer to an area-coverage control
+/// than either (golden README). Both path arguments refer to string literals.
 ImageComparisonParams GradientStrokeOnTextGoldens(std::string_view firefoxPath,
                                                   std::string_view geodePath) {
   return Params::WithGoldenOverride(firefoxPath)
       .withReason(
           "Reference disagreement: paint mapped by glyph ink extents; Geode compares with its own "
-          "rendering, whose exact edge coverage is closer to an area-coverage control than the "
-          "Firefox golden's sub-scanline coverage")
+          "rendering, whose coverage is closer to an area-coverage control than the Firefox "
+          "golden's and the CPU renderer's (within 8 levels at 365 of 511 and 347 of 497 counted "
+          "pixels, mean 6.1, against about 18)")
       .withGeodeGoldenOverride(geodePath)
       .requireFeature(RendererBackendFeature::Text, "text rendering");
 }
@@ -839,7 +853,7 @@ INSTANTIATE_TEST_SUITE_P(
             "painting/marker",
             {
                 {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
-                {"with-a-text-child.svg", GeodeOpaqueEdgeCoverageGate(Params().requireFeature(
+                {"with-a-text-child.svg", GeodeUnresolvedEdgeCoverageGate(Params().requireFeature(
                                               RendererBackendFeature::Text, "text rendering"))},
                 // The image draws the nested SVG at 0.8x, so its 0.5035-unit black letter strokes
                 // are about 0.4 device pixels wide. Geode's analytic coverage of those strokes and
@@ -1561,7 +1575,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/text-decoration",
                 {
-                    {"underline-with-dy-list-2.svg", GeodeOpaqueEdgeCoverageGate(Params())},
+                    {"underline-with-dy-list-2.svg", GeodeUnresolvedEdgeCoverageGate(Params())},
                     {"all-types-nested.svg", QuarterPixelEdgeReference()},
                     {"line-through.svg", QuarterPixelEdgeReference()},
                     {"outside-the-text-element.svg", QuarterPixelEdgeReference()},
@@ -1580,7 +1594,7 @@ INSTANTIATE_TEST_SUITE_P(
                          .withReason("Literal bands preserve multiline decoration "
                                      "offsets and paint order")},
                     {"tspan-decoration.svg",
-                     GeodeOpaqueEdgeCoverageGate(Params::WithThreshold(
+                     GeodeUnresolvedEdgeCoverageGate(Params::WithThreshold(
                          0.09f, kDefaultMismatchedPixels,
                          "Archived nested underline and glyph coverage differ"))},
                     {"underline-with-rotate-list-4.svg",
@@ -1699,7 +1713,7 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::UndefinedBehavior("baseline-shift + rotate")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-filter.svg",
-                 GeodeBlurredEdgeGate(HeavyGlyphReferenceGolden(
+                 GeodeUnresolvedBlurGate(HeavyGlyphReferenceGolden(
                      "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png"))},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
@@ -1775,7 +1789,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
                     // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                     {"with-filter.svg",
-                     GeodeBlurredEdgeGate(HeavyGlyphReferenceGolden(
+                     GeodeBlurredCrosshairGate(HeavyGlyphReferenceGolden(
                          "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png"))},
                 })),
             ValuesIn(ActiveComparisonModes())),

@@ -683,7 +683,7 @@
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Map paint through SVG glyph cells. Geode compares with its own rendering, whose exact edge coverage is closer to an area-coverage control than the Firefox references' sub-scanline coverage.",
+      "disposition": "Map paint through SVG glyph cells. Geode compares with its own rendering as a regression check, because its coverage is closer to an area-coverage control than the Firefox references' and the CPU renderer's sub-scanline coverage; the CPU lane keeps the independent Firefox comparison.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "https://github.com/jwmcglynn/donner/pull/2354"

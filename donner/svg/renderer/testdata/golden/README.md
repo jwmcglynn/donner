@@ -379,13 +379,17 @@ differs. Firefox, like Donner's software renderer, samples coverage on sub-scanl
 of Firefox's. A thin gap that the stroke leaves open by half a pixel, for example, is 192 and 192
 in both sampled renderings and 217 and 166 on Geode.
 
-An area-coverage control decides which coverage is right. The software renderer draws each fixture
+An area-coverage control compares the two kinds of coverage. The software renderer draws each fixture
 at 4000 x 4000, and averaging each 8 x 8 block gives a coverage sampled on 32 sub-scanlines per
 output pixel instead of 4. At the pixels Geode counts, Geode's alpha is within 8 levels of the
 control at 365 of 511 (linear) and 347 of 497 (radial), with mean differences of 6.1 and 6.2
 levels. Firefox's is within 8 levels at 152 and 153, with a mean of 18.6, and the software
-renderer's at 162 and 170, with a mean of 17.8 and 17.1. So the Geode difference is the Firefox
-images' sub-scanline coverage, not a Geode defect, and comparing Geode with them is unfair.
+renderer's at 162 and 170, with a mean of 17.8 and 17.1. Geode's coverage is closer to the control
+than either sub-scanline rendering.
+
+With these goldens the Geode lane of the two rows is a regression check against Geode's own
+rendering, not an independent comparison; the CPU lane keeps the independent comparison with the
+Firefox images.
 
 The Linux renderings are the goldens. Metal's renderings differ from them in 3 (linear) and 4
 (radial) pixels, by at most 2 and 5 levels, and its comparison against them counts 0 pixels at the
@@ -542,7 +546,9 @@ commit `21c59c75`. For `donner-named-value.png`, the black frame uses independen
 from `third_party/resvg-test-suite/reference-sources/named-value-frame.svg`. The source specifies
 an explicit outer rectangle and hole at eight times the final resolution. Averaging each 8x8
 block gives the frame coverage. Every pixel outside the frame preserves its original RGBA.
-Geode does not render these text rows.
+On Geode, `named-value-without-a-parent` compares with its golden at default settings, and
+`named-value` disables its Geode comparison (`GEODE_GATE_ALLOWLIST`): its area-averaged frame is
+not quarter-pixel quantized, so the edge coverage rule does not apply to it.
 
 Each row sizes rects of `10em` under the named `font-size` keywords. The em sizes in pixels,
 measured from the rect coverage (the SVG sets `font-size="12"` on the group):
@@ -734,8 +740,10 @@ background alone counts about 235,000 pixels. No resvg v0.49.0 reference fixes t
 upstream renderings at that release draw something different (see each row). The goldens are
 Donner renderings at commit `21c59c75`, made with the software renderer and simple text at
 default settings. Full text matches them within 1 pixel (0 on `coordinates-list`, 1 on each
-`with-path` row). Geode skips these rows ("Geode backend does not support text rendering"). A self-rendered golden cannot prove itself correct, so each row
-records the independent evidence.
+`with-path` row). On Geode, `coordinates-list` compares with its golden under the quarter-pixel
+edge coverage rule (see "Quarter-pixel quantized goldens"), and the two `with-path` rows compare at
+default settings. A self-rendered golden cannot prove itself correct, so each row records the
+independent evidence.
 
 ### `text/text-anchor/coordinates-list`
 
@@ -1107,7 +1115,7 @@ document's root styles, keep the canvas transparent, and match the same text wri
 `font` shorthand is not among them, so the attribute is ignored and the text draws in the initial
 font: the initial `font-family`, `serif`, which the suite harness maps to Noto Serif, at the initial
 font size. The vendored PNG applies the attribute as SVG 1.1 did and draws bold italic Noto Sans
-at 64 units. Geode does not run `text/` rows.
+at 64 units. Geode compares this row with the golden at default settings.
 
 Independent evidence: `RendererRegressionTests.ReferenceContractFontAttributeIsIgnored` requires
 text with a `font` attribute to match the same text without it.
@@ -1120,8 +1128,7 @@ glyphs to use the font's vertical metrics, and Mplus 1p has `vhea` and `vmtx`: e
 advances 1000 units and has its vertical origin 860 units below the top of its cell. SVG 2 section
 11.8.3 (text on a path layout rules) places each glyph on the path by that vertical advance. The
 vendored PNG puts upright glyphs elsewhere; it differs from Donner by 219 pixels (simple text) and
-221 (full text). Both text tiers compare with the golden at default settings; Geode does not run
-`text/` rows.
+221 (full text). Both text tiers and Geode compare with the golden at default settings.
 
 Independent evidence: `VerticalTextPathPrecision.CurvedCjkUsesIndependentArcFrames` renders this
 path and text and requires it to match each glyph drawn as horizontal text in an independently
@@ -1162,7 +1169,7 @@ the plain "Text" reference of `tspan/with-clip-path`, `tspan/with-mask` and othe
 9,168 pixels on simple text. The suite's results.csv records Chrome and Safari passing the vendored
 PNGs of both rows and Firefox and resvg failing them; those are visual grades, which cannot see a
 0.25 px edge offset. The full text tier matches both goldens with no differing pixel at default
-settings; Geode does not run `text/` rows.
+settings. Geode disables its comparison of both rows (`GEODE_GATE_ALLOWLIST` in `parity_report.py`).
 
 Independent evidence: `GlyphInkAreaTest.RenderedInkEqualsExactOutlineArea`
 (`//donner/svg/renderer/tests:glyph_ink_area_tests`, on both renderers and both text tiers) requires
@@ -1456,8 +1463,8 @@ and rejects an opted-in row whose golden is not listed here, so a Firefox, area-
 golden cannot use the rule.
 
 The measurement takes the pixels where the golden and Geode's rendering differ and that both cover
-partially, that are the partially covered row of a horizontal edge in the golden (the pixel above
-or below is empty or fully covered, and neither has its alpha), outside runs of 40 or more pixels
+partially, that meet the rule's vertical-neighbor condition in the golden (the pixel above or
+below is empty or fully covered, and neither has its alpha), outside runs of 40 or more pixels
 of one alpha (the crosshair and guide lines). It counts how many of the golden's alphas, and of
 Geode's, are a multiple of 64. On the vendored references of five opted-in rows
 (`text/alignment-baseline/hanging`, `text/text-anchor/inheritance-1`,
