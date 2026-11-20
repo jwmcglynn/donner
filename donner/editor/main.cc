@@ -18,6 +18,7 @@
 #include "donner/editor/FrameCallbackAdmission.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/editor/wasm/BrowserGpuOwnerWait.h"
+#include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
@@ -196,8 +197,42 @@ WasmEditorLoopState::~WasmEditorLoopState() {
     EM_ASM({
       delete globalThis['__donnerExerciseGpuOwnerWait'];
       delete globalThis['__donnerGpuOwnerWaitProbeResult'];
+      delete globalThis['__donnerExerciseGpuOwnerDispatches'];
+      delete globalThis['__donnerReadGpuOwnerDispatchProbe'];
     });
   }
+}
+
+/// Starts the owner dispatch probe from the GPU owner. @param count Round trips to make.
+/// @return 1 when the producer started.
+extern "C" EMSCRIPTEN_KEEPALIVE int donner_test_gpu_owner_dispatches(uint32_t count) {
+  auto* state = gOwnerWaitProbeState;
+  if (!state || !CanRunWasmEditorFrame(state) || state->window->shouldClose() ||
+      !donner::gpu::browser::IsBrowserGpuOwnerThread()) {
+    return 0;
+  }
+  WasmFrameScope callbackScope(*state);
+  const auto device = state->window->geodeDevice();
+  if (!device) {
+    return 0;
+  }
+  return donner::editor::wasm::StartGpuOwnerDispatchProbeForTesting(
+             std::shared_ptr<donner::gpu::browser::BrowserDevice>(
+                 device,
+                 &static_cast<donner::gpu::browser::BrowserDevice&>(device->runtimeDevice())),
+             count)
+             ? 1
+             : 0;
+}
+
+/// @return Round trips the dispatch probe finished.
+extern "C" EMSCRIPTEN_KEEPALIVE uint32_t donner_test_gpu_owner_dispatches_completed() {
+  return donner::editor::wasm::ReadGpuOwnerDispatchProbeForTesting().completed;
+}
+
+/// @return 1 while the dispatch probe's producer still holds the device.
+extern "C" EMSCRIPTEN_KEEPALIVE int donner_test_gpu_owner_dispatches_running() {
+  return donner::editor::wasm::ReadGpuOwnerDispatchProbeForTesting().running ? 1 : 0;
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE int donner_test_gpu_owner_libc_wait() {
@@ -215,8 +250,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE int donner_test_gpu_owner_libc_wait() {
   if (!device) {
     return 0;
   }
+  // Every runtime device of the browser editor is a browser device: its Geode root opens only
+  // browser devices.
   const auto result = donner::editor::wasm::ExerciseGpuOwnerLibcWaitForTesting(
-      std::shared_ptr<donner::gpu::Device>(device, &device->runtimeDevice()));
+      std::shared_ptr<donner::gpu::browser::BrowserDevice>(
+          device, &static_cast<donner::gpu::browser::BrowserDevice&>(device->runtimeDevice())));
   // clang-format off
   EM_ASM({
     globalThis['__donnerGpuOwnerWaitProbeResult'] = ({
@@ -246,6 +284,12 @@ void InstallGpuOwnerWaitProbeForTesting(WasmEditorLoopState& state) {
   // clang-format off
   EM_ASM({
     globalThis['__donnerExerciseGpuOwnerWait'] = () => _donner_test_gpu_owner_libc_wait();
+    globalThis['__donnerExerciseGpuOwnerDispatches'] =
+        (count) => Boolean(_donner_test_gpu_owner_dispatches(count >>> 0));
+    globalThis['__donnerReadGpuOwnerDispatchProbe'] = () => ({
+      'completed': _donner_test_gpu_owner_dispatches_completed() >>> 0,
+      'running': Boolean(_donner_test_gpu_owner_dispatches_running()),
+    });
   });
   // clang-format on
 }

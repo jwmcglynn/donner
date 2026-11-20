@@ -1461,8 +1461,14 @@ struct FilterGraphExecution {
   bool loadTile(const FilterTilePlan& plan, gpu::Origin2d origin, TileCopy source,
                 OptionalTileCopy backdropCopy);
   FilterTexture inputFor(const svg::components::FilterNode& node, size_t index) const;
+  /// Clears \p input outside \p region. A \p transformed clip keeps pixels whose centers map
+  /// inside \p region; otherwise it keeps every device pixel \p region touches, the extent of a
+  /// primitive subregion.
   FilterTexture clip(FilterTexture input, const Box2d& region, bool transformed,
                      bool resolve = false);
+  /// Clears the graph's \p output outside the filter region and resolves it to RGBA8. The region
+  /// keeps pixels whose centers lie inside it under every transform.
+  FilterTexture clipOutputToFilterRegion(FilterTexture output);
   void record(const svg::components::FilterNode& node, const Box2d& subregion, FilterTexture output,
               size_t nodeIndex);
   void findLastNamedUses();
@@ -1924,6 +1930,20 @@ FilterTexture FilterGraphExecution::clip(FilterTexture input, const Box2d& regio
                                    std::ceil(pixelAABB.bottomRight.y) - tileOrigin.y, resolve);
 }
 
+FilterTexture FilterGraphExecution::clipOutputToFilterRegion(FilterTexture output) {
+  if (!axisAligned) {
+    return clip(output, coordinates.filterRegion, /*transformed=*/true, /*resolve=*/true);
+  }
+  // Whole-pixel bounds make the shader's pixel-center test keep exactly the centered pixels.
+  const Box2d pixelAABB = coordinates.deviceFromFilter.transformBox(coordinates.filterRegion);
+  return engine.applySubregionClip(
+      arena, output, Transform2d(),
+      svg::FirstPixelCenterAtOrBeyond(pixelAABB.topLeft.x) - tileOrigin.x,
+      svg::FirstPixelCenterAtOrBeyond(pixelAABB.topLeft.y) - tileOrigin.y,
+      svg::FirstPixelCenterAtOrBeyond(pixelAABB.bottomRight.x) - tileOrigin.x,
+      svg::FirstPixelCenterAtOrBeyond(pixelAABB.bottomRight.y) - tileOrigin.y, /*resolve=*/true);
+}
+
 void FilterGraphExecution::findLastNamedUses() {
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     for (const svg::components::FilterInput& input : graph.nodes[index].inputs) {
@@ -2127,13 +2147,12 @@ FilterTexture FilterGraphExecution::runNodes() {
     }
     record(node, primitive.subregion, output, index);
     if (primitive.finalResolve) {
-      return clip(currentBuffer, coordinates.filterRegion, false, true);
+      return clipOutputToFilterRegion(currentBuffer);
     }
   }
   const FilterTexture srgb =
       engine.applyColorSpaceConversion(arena, currentBuffer, /*srgbToLinear=*/false);
-  return srgb ? clip(srgb, coordinates.filterRegion, !axisAligned, /*resolve=*/true)
-              : FilterTexture();
+  return srgb ? clipOutputToFilterRegion(srgb) : FilterTexture();
 }
 
 FilterTexture FilterNodeExecution::run() {
@@ -2368,13 +2387,15 @@ FilterTexture FilterNodeExecution::apply(const fp::Tile&) {
   if (source.width() <= 0.0 || source.height() <= 0.0) {
     return engine.applyTile(arena, input, 0, 0, 0, 0);
   }
+  // The tile is the block of whole pixels the input's subregion touches, so it repeats exactly the
+  // pixels that subregion kept.
   const Box2d pixels = coordinates.deviceFromFilter.transformBox(source);
   constexpr int32_t kMaximumExtent = svg::components::kMaximumFilterPixelOffset;
-  return engine.applyTile(arena, input,
-                          boundedFloorInt32(pixels.topLeft.x, -kMaximumExtent, kMaximumExtent),
-                          boundedFloorInt32(pixels.topLeft.y, -kMaximumExtent, kMaximumExtent),
-                          boundedCeilInt32(pixels.width(), 0, kMaximumExtent),
-                          boundedCeilInt32(pixels.height(), 0, kMaximumExtent));
+  const int32_t left = boundedFloorInt32(pixels.topLeft.x, -kMaximumExtent, kMaximumExtent);
+  const int32_t top = boundedFloorInt32(pixels.topLeft.y, -kMaximumExtent, kMaximumExtent);
+  const int32_t right = boundedCeilInt32(pixels.bottomRight.x, left, left + kMaximumExtent);
+  const int32_t bottom = boundedCeilInt32(pixels.bottomRight.y, top, top + kMaximumExtent);
+  return engine.applyTile(arena, input, left, top, right - left, bottom - top);
 }
 
 namespace {

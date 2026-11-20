@@ -3,7 +3,9 @@
 /// \c donner::gpu::browser::BrowserDevice - the browser backend of the Donner GPU runtime.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <thread>
@@ -186,6 +188,26 @@ public:
   /// accessor; a nonzero count is a caller error, not a device state.
   uint64_t nestedWaitRefusalsForTest() const { return nestedWaitRefusals_; }
 
+  /// Shortest time between the browser calls that ask for completion progress, the same interval
+  /// the browser side itself coalesces those requests over.
+  static constexpr std::chrono::milliseconds kCompletionProgressInterval{8};
+
+  /// Clock the completion-progress interval is measured on.
+  using ProgressClock = std::chrono::steady_clock;
+
+  /// Replaces the clock the completion-progress interval is measured on, so a test can step time.
+  /// @param now Returns the current time; must stay valid for the device's life.
+  void setProgressClockForTesting(ProgressClock::time_point (*now)()) { progressClock_ = now; }
+
+  /**
+   * Asks the browser for the completed serial with a synchronous call, ignoring published state.
+   * The owner-wait probe uses it from a second thread to prove a real owner round trip runs while
+   * the owner is blocked. @return The serial the browser reports.
+   */
+  [[nodiscard]] uint64_t completedSerialFromBrowserForTesting() const {
+    return bridge_->completedSerial();
+  }
+
 protected:
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) override;
@@ -268,6 +290,23 @@ private:
 
   /// Publishes an observed browser loss to all devices sharing its loss condition.
   void recordBrowserLoss() const;
+
+  /// Ownership and loss together, from the state the browser side publishes once it does, and
+  /// from a browser call before that. @return As \ref BrowserBridge::deviceStatus.
+  BridgeStatus queryDeviceStatus() const;
+
+  /// Whether the browser has reported the device lost, read the same way.
+  bool queryDeviceLost() const;
+
+  /**
+   * The most recent submission the browser has reported finished, read the same way.
+   *
+   * A browser can hold a completion until another queue operation, which only the browser call
+   * requests. While submitted work is still unfinished, that call is therefore still made, at most
+   * once per \ref kCompletionProgressInterval; in between, and whenever nothing is pending, the
+   * published serial answers.
+   */
+  uint64_t queryCompletedSerial() const;
 
   /**
    * Fails closed unless this device can still be used from here: not lost, and called from the
@@ -477,6 +516,20 @@ private:
 
   /// True while this device has handed the thread to the browser and not yet taken it back.
   bool yielding_ = false;
+
+  /// Whether the browser side publishes this device's state into the bridge's published state.
+  bool publishing_ = false;
+
+  /// Clock the completion-progress interval is measured on.
+  ProgressClock::time_point (*progressClock_)() = &ProgressClock::now;
+
+  /// \ref lastCompletionProgressTicks_ before this device has asked for completion progress.
+  static constexpr ProgressClock::rep kNeverAskedForProgress =
+      std::numeric_limits<ProgressClock::rep>::min();
+
+  /// When this device last asked the browser for completion progress, in \ref ProgressClock
+  /// ticks. Atomic because completion can be read from another thread than the owning one.
+  mutable std::atomic<ProgressClock::rep> lastCompletionProgressTicks_{kNeverAskedForProgress};
 
   /// Waits refused because they were entered while this device was already yielding.
   uint64_t nestedWaitRefusals_ = 0;

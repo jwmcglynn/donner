@@ -60,6 +60,7 @@ public:
   bool isDeviceLost() const override;
   RcString deviceLostReason() const override;
   uint64_t completedSerial() const override;
+  bool beginPublishingState() override;
   uint32_t maxTextureDimension2D() const override;
 
   const void* sharedDeviceIdentity() const override;

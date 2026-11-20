@@ -1,5 +1,7 @@
 #include "donner/css/parser/details/Tokenizer.h"
 
+#include <iterator>
+
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
 #include "donner/base/parser/LengthParser.h"

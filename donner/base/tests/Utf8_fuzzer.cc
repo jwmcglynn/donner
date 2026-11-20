@@ -1,3 +1,4 @@
+#include <iterator>
 #include <string>
 
 #include "donner/base/Utf8.h"

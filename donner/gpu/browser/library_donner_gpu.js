@@ -44,7 +44,7 @@
  */
 
 var LibraryDonnerGpu = {
-  $DonnerGpu__deps: ["$UTF8ToString", "$stringToUTF8", "$lengthBytesUTF8"],
+  $DonnerGpu__deps: ["$UTF8ToString", "$stringToUTF8", "$lengthBytesUTF8", "$HEAPU64"],
   $DonnerGpu: {
     // Protocol codes, assigned by BrowserWireCodes.h rather than by the underlying values of the
     // C++ enumerators. donner_gpu_check_protocol compares the whole table below against the one
@@ -322,6 +322,24 @@ var LibraryDonnerGpu = {
       return record === undefined ? null : record;
     },
 
+    // Stores `record`'s liveness and completed serial where its runtime device reads them, once it
+    // has asked for that. Each store follows the change it reports, in the same task, so a reader
+    // never sees a completion or liveness this side has not reached.
+    publish: function(record) {
+      var published = record.published;
+      if (!published) {
+        return;
+      }
+      Atomics.store(HEAPU64, published.serial, BigInt(record.completedSerial));
+      Atomics.store(
+        HEAPU32,
+        published.status,
+        DonnerGpu.lost ? DonnerGpu.kPublishedLost : DonnerGpu.kPublishedLive,
+      );
+    },
+    kPublishedLive: 1,
+    kPublishedLost: 2,
+
     // A pending completion can need another queue operation before the browser delivers it.
     // Coalesce progress across logical devices, without recording another frame or callback.
     requestCompletionProgress: function(record) {
@@ -369,6 +387,7 @@ var LibraryDonnerGpu = {
         pass: null,
         attachments: null,
         pending: null, // Descriptor being built by a sequence of item calls.
+        published: null, // Heap word indices the runtime reads its state from, once it asks.
       };
       DonnerGpu.logical.set(handle, record);
       return record;
@@ -382,6 +401,8 @@ var LibraryDonnerGpu = {
       if (record === null) {
         return;
       }
+      // The runtime frees the published state once this returns, so nothing may store to it later.
+      record.published = null;
       record.objects.forEach(function(entry) {
         DonnerGpu.releaseProducerHold(entry);
       });
@@ -551,6 +572,7 @@ var LibraryDonnerGpu = {
         if (DonnerGpu.device === device) {
           DonnerGpu.lost = true;
           DonnerGpu.lostReason = String(info.reason) + ": " + String(info.message);
+          DonnerGpu.logical.forEach(DonnerGpu.publish);
           // The browser's free-text message stays in lostReason, which the runtime reports; the
           // trace line carries only the reason token, so no message can read as a failure pattern.
           DonnerGpu.traceGuarded(function() {
@@ -1306,6 +1328,22 @@ var LibraryDonnerGpu = {
     var record = DonnerGpu.logicalFor(handle);
     DonnerGpu.requestCompletionProgress(record);
     return record === null ? 0 : record.completedSerial;
+  },
+
+  // Starts publishing `handle`'s liveness and completed serial to the 32-bit word at `status` and
+  // the 64-bit word at `completedSerial`, which its runtime device owns until it releases the
+  // logical device. Refused, with nothing stored, for a device that is not this worker's or not
+  // ready, so the runtime keeps asking.
+  donner_gpu_publish_state__deps: ["$DonnerGpu"],
+  donner_gpu_publish_state: function(handle, status, completedSerial) {
+    var record = DonnerGpu.logicalFor(handle);
+    if (record === null || DonnerGpu.device === null || (status & 3) !== 0
+        || (completedSerial & 7) !== 0) {
+      return 0;
+    }
+    record.published = { status: status >>> 2, serial: completedSerial >>> 3 };
+    DonnerGpu.publish(record);
+    return 1;
   },
 
   donner_gpu_max_texture_dimension_2d__deps: ["$DonnerGpu"],
@@ -2371,6 +2409,7 @@ var LibraryDonnerGpu = {
         // this logical device's serial: each numbers its submissions on its own.
         if (submissionSerial > record.completedSerial) {
           record.completedSerial = submissionSerial;
+          DonnerGpu.publish(record);
         }
       });
     });

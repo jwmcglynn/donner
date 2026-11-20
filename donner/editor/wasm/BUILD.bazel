@@ -35,6 +35,7 @@ _EDITOR_WASM_BINARY_DEPS = [
     "//donner/editor:editor_splash",
     "//donner/editor:pinch_zoom_policy",
     "//donner/editor/gui:editor_window",
+    "//donner/gpu/browser:browser_device",
     "//donner/gpu/browser:emscripten_browser_bridge",
 ]
 

@@ -483,6 +483,17 @@ inline bool IsFiniteBox(const Box2d& box) {
          std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y);
 }
 
+/// The first device pixel index whose center lies at or beyond the continuous \p edge.
+///
+/// The filter region keeps a pixel of the filter's output when the pixel's center lies inside the
+/// half-open region rectangle, the rule the per-pixel test applies under a rotating transform, so
+/// an axis-aligned region keeps pixels `[FirstPixelCenterAtOrBeyond(left),
+/// FirstPixelCenterAtOrBeyond(right))` along each axis. Axis-aligned primitive subregions instead
+/// keep every pixel they touch; under a rotating transform both renderers test pixel centers.
+inline double FirstPixelCenterAtOrBeyond(double edge) {
+  return std::ceil(edge - 0.5);
+}
+
 /// The overlap of \p a and \p b, or `std::nullopt` when they share no area.
 inline std::optional<Box2d> IntersectFilterBoxes(const Box2d& a, const Box2d& b) {
   const Vector2d topLeft(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y));

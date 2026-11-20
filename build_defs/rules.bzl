@@ -112,7 +112,7 @@ def fuzzer_linkopts():
     return select({
         "//build_defs:llvm_latest_macos": [
             "-fsanitize=fuzzer-no-link",
-            llvm_lib + "/clang/21/lib/darwin/libclang_rt.fuzzer_osx.a",
+            llvm_lib + "/clang/23/lib/darwin/libclang_rt.fuzzer_osx.a",
             # Use the platform C++ runtime; bundled LLVM archives target a newer macOS.
         ],
         "//conditions:default": ["-fsanitize=fuzzer"],

@@ -14,6 +14,7 @@
 #include <limits>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 
 extern "C" int __real_emscripten_futex_wait(volatile void* address, uint32_t value,
@@ -28,7 +29,7 @@ struct OwnerWaitProbe {
   double ownerDeadline = 0.0;
   uint64_t serial = 0;
   bool producerIsGpuOwner = false;
-  std::shared_ptr<donner::gpu::Device> device;
+  std::shared_ptr<donner::gpu::browser::BrowserDevice> device;
 };
 
 // Only the owner accesses this anchor. Retain it on failure even if abort throws in JavaScript;
@@ -116,7 +117,8 @@ void* RunOwnerWaitProbeProducer(void* context) {
   if (request->producerIsGpuOwner) {
     std::abort();
   }
-  request->serial = request->device->completedSerial();
+  // A real browser call, not the published serial, so this round trip has to run on the owner.
+  request->serial = request->device->completedSerialFromBrowserForTesting();
   request->complete.store(1, std::memory_order_release);
   emscripten_futex_wake(&request->complete, 1);
   return nullptr;
@@ -140,12 +142,67 @@ double JoinOwnerWaitProbe(pthread_t producer, OwnerWaitProbe& request, double de
   }
 }
 
+struct OwnerDispatchProbe {
+  std::shared_ptr<donner::gpu::browser::BrowserDevice> device;
+  uint32_t count = 0;
+};
+
+std::atomic<uint32_t> gDispatchProbeCompleted{0};
+std::atomic<bool> gDispatchProbeRunning{false};
+
+void* RunOwnerDispatchProbeProducer(void* context) {
+  std::unique_ptr<OwnerDispatchProbe> run(static_cast<OwnerDispatchProbe*>(context));
+  if (donner::gpu::browser::IsBrowserGpuOwnerThread()) {
+    std::abort();
+  }
+  for (uint32_t i = 0; i < run->count; ++i) {
+    // A real browser call, not the published serial: each one is a synchronous owner round trip.
+    (void)run->device->completedSerialFromBrowserForTesting();
+    gDispatchProbeCompleted.fetch_add(1, std::memory_order_release);
+  }
+  // Release the device before reporting the run finished.
+  run.reset();
+  gDispatchProbeRunning.store(false, std::memory_order_release);
+  return nullptr;
+}
+
 }  // namespace
 
 namespace donner::editor::wasm {
 
+bool StartGpuOwnerDispatchProbeForTesting(
+    const std::shared_ptr<gpu::browser::BrowserDevice>& device, uint32_t count) {
+  if (!device || count == 0) {
+    return false;
+  }
+  bool idle = false;
+  if (!gDispatchProbeRunning.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
+    return false;
+  }
+  gDispatchProbeCompleted.store(0, std::memory_order_release);
+  auto run = std::make_unique<OwnerDispatchProbe>(OwnerDispatchProbe{device, count});
+  pthread_attr_t attributes;
+  pthread_attr_init(&attributes);
+  pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+  pthread_t producer;
+  const int created =
+      pthread_create(&producer, &attributes, RunOwnerDispatchProbeProducer, run.get());
+  pthread_attr_destroy(&attributes);
+  if (created != 0) {
+    gDispatchProbeRunning.store(false, std::memory_order_release);
+    return false;
+  }
+  run.release();
+  return true;
+}
+
+OwnerDispatchProbeProgress ReadGpuOwnerDispatchProbeForTesting() {
+  const bool running = gDispatchProbeRunning.load(std::memory_order_acquire);
+  return {gDispatchProbeCompleted.load(std::memory_order_acquire), running};
+}
+
 OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(
-    const std::shared_ptr<gpu::Device>& device) {
+    const std::shared_ptr<gpu::browser::BrowserDevice>& device) {
   if (!device || !gpu::browser::IsBrowserGpuOwnerThread() ||
       gpu::browser::IsBrowserGpuOwnerDispatchActive() || gOwnerWaitProbe) {
     std::abort();

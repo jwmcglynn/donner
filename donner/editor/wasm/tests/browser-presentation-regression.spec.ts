@@ -1033,7 +1033,8 @@ async function readPressSelectionState(
 
 async function openEditor(
   page: Page,
-  testControl: false | "overlay" | "eyedropper" | "eyedropper-owner-wait" = false,
+  testControl: false | "overlay" | "eyedropper" | "eyedropper-owner-wait" | "owner-wait-probe" =
+    false,
   failureReadback = false,
   frameDriver: false | "proxied-main-raf" = false,
 ): Promise<string[]> {
@@ -1055,14 +1056,14 @@ async function openEditor(
 
   const editorUrl = new URL(kBaseUrl);
   if (frameDriver) editorUrl.searchParams.set("frameDriver", frameDriver);
-  if (testControl) {
+  if (testControl && testControl !== "owner-wait-probe") {
     editorUrl.searchParams.set(
       "testControl",
       testControl === "eyedropper-owner-wait" ? "eyedropper" : testControl,
     );
-    if (testControl === "eyedropper-owner-wait") {
-      editorUrl.searchParams.set("gpuOwnerWaitProbe", "1");
-    }
+  }
+  if (testControl === "eyedropper-owner-wait" || testControl === "owner-wait-probe") {
+    editorUrl.searchParams.set("gpuOwnerWaitProbe", "1");
   }
   if (testControl === "overlay") {
     editorUrl.searchParams.set("wgpuReadbackStats", "1");
@@ -3412,7 +3413,10 @@ test("proxied animation frames keep at most one outstanding callback", async ({ 
 });
 
 test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) => {
-  const failures = await openEditor(page);
+  // The editor's own press makes too few owner round trips to exhaust the 32-call inline epoch,
+  // so a producer adds a fixed count that cannot finish without delayed pulses being delivered.
+  const kOwnerRoundTrips = 96;
+  const failures = await openEditor(page, "owner-wait-probe");
   const { captureClip, blueRect } = await openBasicShapes(page);
   const press = {
     x: captureClip.x + (blueRect.minX + blueRect.maxX) / 2,
@@ -3468,11 +3472,36 @@ test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) 
   let probe: { sent: number; delivered: number } | null = null;
   try {
     await page.mouse.down();
-    await expect.poll(() => readPressSelectionState(page), {
-      message: "selection prewarm must progress without one pulse delay per GPU request",
+    const producerStarted = await boundFailureDiagnostic(
+      owner.evaluate((count) => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerExerciseGpuOwnerDispatches?: (count: number) => boolean;
+        };
+        return scope.__donnerExerciseGpuOwnerDispatches?.(count) ?? false;
+      }, kOwnerRoundTrips),
+      1000,
+    );
+    if (!producerStarted) throw new Error("GPU owner dispatch producer did not start");
+    const readOwnerRoundTrips = () =>
+      owner.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerReadGpuOwnerDispatchProbe?: () => { completed: number; running: boolean };
+        };
+        return scope.__donnerReadGpuOwnerDispatchProbe?.() ?? null;
+      });
+    await expect.poll(async () => ({
+      ...(await readPressSelectionState(page)),
+      ownerRoundTrips: await readOwnerRoundTrips(),
+    }), {
+      message: "selection prewarm and owner round trips must progress without one pulse delay " +
+        "per GPU request",
       timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
-    }).toEqual({ completedResults: beforeResults + 1, selectedCount: 1 });
+    }).toEqual({
+      completedResults: beforeResults + 1,
+      selectedCount: 1,
+      ownerRoundTrips: { completed: kOwnerRoundTrips, running: false },
+    });
   } finally {
     after = await readGpuOwnerDispatchStats(page);
     probe = await boundFailureDiagnostic(

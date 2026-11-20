@@ -856,11 +856,9 @@ jobs:
     # manifest that names its owner; the exceptions are printed on every run. Untrusted pull
     # requests and main pushes run main's hosted lanes themselves, so this runs when the
     # self-hosted Linux lane replaced hosted Linux; when hosted macOS ran (the ci:hosted-macos
-    # label or a disabled mixed graph), the macOS lane needs no counterparts. It runs no build:
-    # it reads receipts on a self-hosted Linux runner, so a trusted pull request gains no hosted
-    # job. Hosted main also retains browser and Geode build event files for consistent
-    # reporting across the different execution venues.
-    runs-on: [self-hosted, linux, arm64]
+    # label or a disabled mixed graph), the macOS lane needs no counterparts.
+    # Receipt verification only reads the artifacts uploaded by this workflow run.
+    runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets, linux, linux-self-hosted]
     if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     timeout-minutes: 10
@@ -869,6 +867,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          sparse-checkout: |
+            tools/ci_coverage_contract.py
+            tools/ci/coverage_contract.json
+          sparse-checkout-cone-mode: false
 
       - name: Download coverage receipts
         uses: actions/download-artifact@v8

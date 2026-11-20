@@ -62,7 +62,7 @@ Why `--config=asan-fuzzer` (defined in `.bazelrc`) is mandatory on macOS: Apple 
 `libclang_rt.fuzzer_osx.a`, so fuzz targets are marked `@platforms//:incompatible` off Linux
 unless `//build_defs:fuzzers_enabled` is set (`fuzzer_compatible_with()` in
 `build_defs/rules.bzl`). `asan-fuzzer` implies `--config=asan` → `--config=latest_llvm` →
-`--//build_defs:llvm_latest=1`, which activates the hermetic LLVM 21 toolchain that carries the
+`--//build_defs:llvm_latest=1`, which activates the hermetic LLVM toolchain that carries the
 fuzzer runtime.
 
 **Failure mode this prevents:** plain `bazel test //...` on macOS SILENTLY skips every fuzz

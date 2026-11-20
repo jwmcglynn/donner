@@ -48,6 +48,9 @@ constexpr std::size_t kTotalInlineUs = 20;
 constexpr std::size_t kMaximumInlineCallbackUs = 21;
 constexpr std::size_t kMaximumInlineEpochCalls = 22;
 constexpr std::size_t kPulses = 23;
+// Requests a pulse ran, which happens only when inline execution refused them. Every request
+// the owner receives outside its wait pump is first offered inline, so this stays zero while the
+// inline budget, renewed by each pulse, is never exhausted.
 constexpr std::size_t kPulseDispatches = 24;
 constexpr std::size_t kResourceCreation = 25;
 constexpr std::size_t kResourceDestruction = 26;
