@@ -307,7 +307,7 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
     ],
-    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    # Sees the text-only placed text geometry headers through its deps only in the text tiers.
     variant_neutral = False,
 )
 
@@ -1687,7 +1687,7 @@ donner_cc_library(
     ],
     # The translation unit registers GoogleTest cases through static initializers.
     alwayslink = True,
-    # Sees DONNER_TEXT_WOFF2_ENABLED and the WOFF2 headers through its deps in the full text tier.
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
     variant_neutral = False,
 )
 
@@ -2103,7 +2103,7 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@picosha2",
     ],
-    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    # Sees the text-only placed text geometry headers through its deps only in the text tiers.
     variant_neutral = False,
 )
 
@@ -2257,7 +2257,7 @@ donner_cc_library(
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
     ],
-    # Sees DONNER_TEXT_WOFF2_ENABLED and the WOFF2 headers through its deps in the full text tier.
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
     variant_neutral = False,
 )
 
@@ -2377,7 +2377,7 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
-    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
     variant_neutral = False,
 )
 
@@ -2394,7 +2394,7 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
-    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
     variant_neutral = False,
 )
 

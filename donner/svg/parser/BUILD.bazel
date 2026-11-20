@@ -15,7 +15,7 @@ donner_cc_library(
         "//donner/base/xml",
         "//donner/svg:svg_core",
     ],
-    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
     variant_neutral = False,
 )
 
@@ -74,7 +74,7 @@ donner_cc_library(
         "//donner/svg/components:components_core",
         "//donner/svg/components/filter:components",
     ],
-    # Sees DONNER_TEXT_ENABLED through its deps in the text tiers.
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
     variant_neutral = False,
 )
 

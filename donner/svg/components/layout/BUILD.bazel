@@ -51,7 +51,7 @@ donner_cc_library(
         "//donner/svg/components/style:style_system",
         "//donner/svg/properties:property_parsing",
     ],
-    # Sees DONNER_TEXT_WOFF2_ENABLED and the WOFF2 headers through its deps in the full text tier.
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
     variant_neutral = False,
 )
 

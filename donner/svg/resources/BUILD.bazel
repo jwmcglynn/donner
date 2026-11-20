@@ -145,6 +145,8 @@ donner_cc_library(
         "//third_party/public-sans",
         "@stb//:truetype",
     ],
+    # Compiles with DONNER_TEXT_WOFF2_ENABLED and the WOFF2 parser headers in the full text tier.
+    variant_neutral = False,
 )
 
 packaged_resources(
