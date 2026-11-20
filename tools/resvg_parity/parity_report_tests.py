@@ -8,15 +8,21 @@ from __future__ import annotations
 
 from collections import Counter
 
+import base64
+import gzip
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import re
 import struct
 import tempfile
 import textwrap
 import unittest
+from urllib.parse import unquote, unquote_to_bytes, urlsplit
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 import parity_report
 
@@ -1467,7 +1473,60 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual([row["path"] for row in head_to_head["gap"]], ["painting/fill/b.svg"])
 
 
+def _svg_contains_text(data: bytes, source: Path, resources: Path,
+                       visited: frozenset[Path]) -> bool:
+    if data.startswith(b"\x1f\x8b"):
+        data = gzip.decompress(data)
+    root = ET.fromstring(data)
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] in ("text", "tspan", "tref", "textPath"):
+            return True
+        for key, value in element.attrib.items():
+            if key.rsplit("}", 1)[-1] != "href":
+                continue
+            url = urlsplit(value)
+            if url.scheme == "data":
+                header, _, payload = value.partition(",")
+                mime = header[5:].split(";", 1)[0]
+                if mime not in ("image/svg+xml", ""):
+                    continue
+                decoded = unquote_to_bytes(payload)
+                if ";base64" in header:
+                    decoded = base64.b64decode(decoded)
+                if decoded.lstrip().startswith(b"<") or decoded.startswith(b"\x1f\x8b"):
+                    if _svg_contains_text(decoded, source, resources, visited):
+                        return True
+            elif not url.scheme and not url.netloc and url.path:
+                relative = unquote(url.path)
+                linked = source.parent / relative
+                # Keep runfile symlinks: resolving them would escape the test's logical tree.
+                linked = Path(os.path.normpath(linked))
+                if (linked.is_relative_to(resources) and linked.suffix in (".svg", ".svgz")
+                        and linked not in visited and linked.is_file()):
+                    if _svg_contains_text(linked.read_bytes(), linked, resources, visited | {linked}):
+                        return True
+    return False
+
+
 class RealTreeParityReportTests(unittest.TestCase):
+    def test_max_text_fixture_list_matches_direct_and_linked_svg_text(self) -> None:
+        root = parity_report._default_repo_root() / parity_report.TESTS_ROOT
+        build = (root.parent / "BUILD.bazel").read_text(encoding="utf-8")
+        extras = re.search(r"_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = \[(.*?)\]", build, re.S)
+        self.assertIsNotNone(extras)
+        declared = re.findall(r'"([^"]+)"', extras.group(1))
+        self.assertEqual(declared, sorted(set(declared)))
+        expected = {
+            path.relative_to(root.parent).as_posix()
+            for path in root.rglob("*.svg")
+            if path.relative_to(root).parts[0] != "text"
+            and _svg_contains_text(path.read_bytes(), path, root.parent, frozenset({path}))
+        }
+        self.assertEqual(set(declared), expected)
+        self.assertIn("tests/structure/image/embedded-svg-with-text.svg", expected)
+        self.assertIn("tests/structure/use/xlink-to-an-external-file.svg", expected)
+        self.assertNotIn("tests/structure/image/embedded-png.svg", expected)
+
     def test_exception_catalog_and_feature_gap_doc_match_live_registrations(self) -> None:
         root = parity_report._default_repo_root()
         self.assertTrue((root / parity_report.EXCEPTION_POLICIES).is_file())

@@ -477,6 +477,23 @@ class DetermineTest(_ScriptTest):
         self.assertFalse([query for query in self.queried(calls)
                           if 'attr("tags", "launches-browser", set(' in query])
 
+    def test_affected_resvg_uses_default_for_all_cases_and_max_for_text(self):
+        prefix = "//donner/svg/renderer/tests:resvg_test_suite_"
+        default, max_nontext, max_text = (prefix + suffix for suffix in
+                                       ("default_text", "max_nontext", "max_text"))
+        selections = (
+            ([default, max_nontext], [default]),
+            ([default, max_nontext, max_text], [default, max_text]),
+            ([max_nontext], [max_nontext]),
+        )
+        for labels, expected in selections:
+            with self.subTest(labels=labels):
+                result, _, outputs = self.determine(affected="\n".join(labels))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=false",
+                                    "metal_affected=false", "browser_affected=true",
+                                    "fallback=false", "affected=" + " ".join(expected))
+
     def test_an_affected_set_publishes_the_selection_and_lane_hints(self):
         affected = "//a:b\n" + _REFERENCE + "\n//a:manual\n@npm//:pkg+x\n"
         result, calls, outputs = self.determine(

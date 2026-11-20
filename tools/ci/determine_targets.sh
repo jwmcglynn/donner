@@ -490,6 +490,19 @@ PYTHON
     exit 0
   fi
 
+  # The default-text and Geode wrappers keep all resvg cases. The scoped max wrapper
+  # covers the full shaping tier's text cases in affected PRs. Omit the nontext
+  # duplicate only when the default wrapper is in the exact selection. Wildcard
+  # fallback and full-graph CI still run both max partitions.
+  local max_nontext="//donner/svg/renderer/tests:resvg_test_suite_max_nontext"
+  local default_resvg="//donner/svg/renderer/tests:resvg_test_suite_default_text"
+  if [[ " $affected " == *" $max_nontext "* && " $affected " == *" $default_resvg "* ]]; then
+    affected=" ${affected} "
+    affected="${affected/ $max_nontext / }"
+    affected="${affected# }"
+    affected="${affected% }"
+  fi
+
   # Dependency manifests feed every browser test: add them all to the selection, so
   # each browser partition sees the changed dependency inputs. Fail closed: if they
   # cannot be listed, fall back to //....

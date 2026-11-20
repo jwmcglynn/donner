@@ -1581,17 +1581,26 @@ donner_cc_test(
     ],
 )
 
-donner_cc_test(
-    name = "resvg_test_suite_impl",
-    size = "large",
-    srcs = [
-        "resvg_test_suite.cc",
+donner_cc_library(
+    name = "resvg_test_suite_registration",
+    testonly = True,
+    srcs = ["resvg_test_suite.cc"],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
     ],
+    # The translation unit registers GoogleTest cases through static initializers.
+    alwayslink = True,
+)
+
+[donner_cc_test(
+    name = name,
+    size = "large",
     data = [
         "//donner/svg/renderer/testdata",
         "//third_party/resvg-test-suite:fonts",
         "//third_party/resvg-test-suite:resources",
-        "//third_party/resvg-test-suite:tests",
+        corpus,
     ],
     # The Geode variant runs every resvg case through software Vulkan (Mesa
     # lavapipe) on the GPU-less CI runners. The first Geode render in a shard
@@ -1610,11 +1619,14 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":image_comparison_test_fixture",
-        "//donner/base:base_test_utils",
+        ":resvg_test_suite_registration",
         "//donner/base:gtest_timeout_main",
     ],
-)
+) for name, corpus in [
+    ("resvg_test_suite_impl", "//third_party/resvg-test-suite:tests"),
+    ("resvg_test_suite_max_text_impl", "//third_party/resvg-test-suite:tests_with_text"),
+    ("resvg_test_suite_max_nontext_impl", "//third_party/resvg-test-suite:tests_without_text"),
+]]
 
 donner_variant_cc_test(
     name = "resvg_test_suite",
@@ -1633,9 +1645,9 @@ donner_variant_cc_test(
     # is killed in 15 min instead of running out the 3600 s "enormous"
     # default. 900 s still comfortably fits every legitimate run.
     #
-    # Product tiers (run on every PR):
-    #   default_text - tiny-skia, filters, simple text (donner default)
-    #   max          - tiny-skia, filters, full text   (donner-max)
+    # The default tier is the normal all-cases CPU reference. The complete
+    # max wrapper is explicit; wildcard runs cover it through the disjoint
+    # full-shaping partitions below.
     #
     # The "tiny" tier (no filters, no text) is not included here because
     # the resvg test suite exercises filters and text — it would need
@@ -1653,6 +1665,7 @@ donner_variant_cc_test(
         },
         {
             "name": "max",
+            "tags": ["manual"],
             "backend": "tiny_skia",
             "text": "true",
             "text_full": "true",
@@ -1697,6 +1710,23 @@ donner_variant_cc_test(
     # per variant turn that into parallel ~35 s RE actions.
     shard_count = 8,
 )
+
+# Full-graph CI exercises both disjoint sets in the full shaping tier. The affected
+# planner omits the nontext half when the default tier covers those cases.
+[donner_multi_transitioned_test(
+    name = "resvg_test_suite_max_" + partition,
+    size = "enormous",
+    timeout = "long",
+    testonly = True,
+    dep = ":resvg_test_suite_max_" + partition + "_impl",
+    renderer_backend = "tiny_skia",
+    shard_count = 8,
+    text = "true",
+    text_full = "true",
+) for partition in [
+    "text",
+    "nontext",
+]]
 
 # An explicit Linux-only comparison lane that renders the production Geode context through the
 # test-only wgpu-native reference. It compiles the same resvg registrations and image-comparison
