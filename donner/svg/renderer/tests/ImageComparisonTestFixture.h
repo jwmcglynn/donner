@@ -18,6 +18,7 @@
 #include "donner/svg/renderer/TerminalImageViewer.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace donner::svg {
 
@@ -92,7 +93,8 @@ struct ImageComparisonParams {
   /// Maximum number of pixels that can exceed the threshold.
   int maxMismatchedPixels = kDefaultMismatchedPixels;
   /// Override for maxMismatchedPixels when running without HarfBuzz text shaping
-  /// (DONNER_TEXT_FULL not defined). -1 means use maxMismatchedPixels for all configs.
+  /// (\ref BuiltTextTier is not \ref TextTier::Full). -1 means use maxMismatchedPixels for all
+  /// configs.
   int simpleTextMaxMismatchedPixels = -1;
   /// Override for maxMismatchedPixels when rendering with Geode. -1 means use
   /// the active text-config maxMismatchedPixels budget.
@@ -347,7 +349,8 @@ struct ImageComparisonParams {
   /**
    * @brief Sets a separate maxMismatchedPixels for simple text (without HarfBuzz shaping).
    *
-   * When DONNER_TEXT_FULL is not defined, this value is used instead of maxMismatchedPixels.
+   * When \ref BuiltTextTier is not \ref TextTier::Full, this value is used instead of
+   * maxMismatchedPixels.
    * This allows tests that require text shaping (combining marks, ligatures, etc.) to have
    * a looser threshold for simple text while keeping a strict threshold for HarfBuzz.
    *
@@ -401,12 +404,9 @@ struct ImageComparisonParams {
    * @return Max mismatched pixels for the active configuration.
    */
   int effectiveMaxMismatchedPixels(ComparisonMode mode = ComparisonMode::TinyGolden) const {
-#ifdef DONNER_TEXT_FULL
-    const int textConfigMaxMismatchedPixels = maxMismatchedPixels;
-#else
     const int textConfigMaxMismatchedPixels =
-        simpleTextMaxMismatchedPixels >= 0 ? simpleTextMaxMismatchedPixels : maxMismatchedPixels;
-#endif
+        !IsFullTextBuiltIn() && simpleTextMaxMismatchedPixels >= 0 ? simpleTextMaxMismatchedPixels
+                                                                   : maxMismatchedPixels;
     if (BackendForMode(mode) == RendererBackend::Geode && geodeMaxMismatchedPixels >= 0) {
       return geodeMaxMismatchedPixels;
     }
@@ -421,12 +421,7 @@ struct ImageComparisonParams {
     if (skip) {
       return true;
     }
-#ifndef DONNER_TEXT_FULL
-    if (skipSimpleText) {
-      return true;
-    }
-#endif
-    return false;
+    return skipSimpleText && !IsFullTextBuiltIn();
   }
 
   /// True if the case renders without a pixel comparison, which only \ref UndefinedBehavior and

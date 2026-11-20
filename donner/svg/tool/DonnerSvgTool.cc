@@ -46,6 +46,7 @@
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
+#include "donner/svg/text/TextTier.h"
 #include "donner/svg/tool/DonnerSvgToolUtils.h"
 
 namespace donner::svg {
@@ -433,13 +434,11 @@ std::optional<std::string> ReadInputWithPackagedResources(const CliOptions& opti
     err << "Failed to read input SVG: " << EscapeTerminalText(options.inputFile) << "\n";
     return std::nullopt;
   }
-#ifdef DONNER_TEXT_ENABLED
   std::string resourceError;
-  if (!donner::PreparePackagedResources(&resourceError)) {
+  if (!donner::svg::PrepareTextResources(&resourceError)) {
     err << "Failed to load packaged resources: " << resourceError << "\n";
     return std::nullopt;
   }
-#endif
   return fileData;
 }
 

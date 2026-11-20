@@ -23,6 +23,7 @@
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 using testing::Eq;
 using testing::Ne;
@@ -1170,7 +1171,6 @@ TEST(SVGTextElementPublicApiTests, RtlChunkInLtrParagraphContinuesRightward) {
       << "EF continues at CD's right edge";
 }
 
-#ifdef DONNER_TEXT_ENABLED
 MATCHER(IsInIncreasingOrder, "is in increasing order") {
   return std::is_sorted(arg.begin(), arg.end());
 }
@@ -1190,6 +1190,7 @@ std::vector<double> CharacterCenters(SVGDocument& document, long count) {
 // `unicode-bidi` on a `tspan` places bidi controls around its content, as the CSS Writing Modes
 // table defines; `direction` picks each control's direction.
 TEST(SVGTextElementPublicApiTests, TspanUnicodeBidiEnclosesItsContentInControls) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Returns the centers of the six characters of "ab" + "cd" (the tspan) + "ef".
   const auto layOut = [](std::string_view textAttributes, std::string_view tspanAttributes) {
     SVGDocument document = instantiateSubtree(
@@ -1229,6 +1230,7 @@ TEST(SVGTextElementPublicApiTests, TspanUnicodeBidiEnclosesItsContentInControls)
 // `unicode-bidi: plaintext` on a `tspan` isolates its content with a direction detected from its
 // first strong character (FSI ... PDI), where `isolate` uses the element's `direction`.
 TEST(SVGTextElementPublicApiTests, PlaintextTspanIsolatesWithItsDetectedDirection) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto layOut = [](std::string_view unicodeBidi) {
     SVGDocument document = instantiateSubtree(
         std::string(R"-(<svg viewBox="0 0 300 40"><text id="t" x="20" y="20" )-") +
@@ -1246,6 +1248,7 @@ TEST(SVGTextElementPublicApiTests, PlaintextTspanIsolatesWithItsDetectedDirectio
 // Embeddings nested past the UAX #9 maximum depth of 125 overflow: the innermost override no
 // longer opens a level, while the same override at a shallow depth still reverses its letters.
 TEST(SVGTextElementPublicApiTests, OverrideNestedPastTheMaximumDepthIsIgnored) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto layOut = [](int depth) {
     std::string markup = R"-(<svg viewBox="0 0 300 40"><text id="t" x="20" y="20" )-"
                          R"-(font-family="fallback-font" font-size="12px">)-";
@@ -1269,6 +1272,7 @@ TEST(SVGTextElementPublicApiTests, OverrideNestedPastTheMaximumDepthIsIgnored) {
 // An element whose override spans an absolute position closes its controls at the end of one
 // paragraph and reopens them in the next, so both chunks run right to left.
 TEST(SVGTextElementPublicApiTests, TspanOverrideReopensAcrossChunks) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = instantiateSubtree(R"-(<svg viewBox="0 0 300 40"><text id="t" x="20"
     y="20" font-family="fallback-font" font-size="12px"><tspan direction="rtl"
     unicode-bidi="bidi-override" x="20 120">abc</tspan></text></svg>)-");
@@ -1280,6 +1284,7 @@ TEST(SVGTextElementPublicApiTests, TspanOverrideReopensAcrossChunks) {
 // `unicode-bidi: plaintext` on the `<text>` element takes each paragraph's base direction from
 // its first strong character instead of `direction`.
 TEST(SVGTextElementPublicApiTests, PlaintextDetectsTheParagraphBaseDirection) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Returns the start positions of `b` and of the period in "ab.".
   const auto layOut = [](std::string_view attributes) {
     SVGDocument document = instantiateSubtree(
@@ -1309,6 +1314,7 @@ TEST(SVGTextElementPublicApiTests, PlaintextDetectsTheParagraphBaseDirection) {
 // follow each paragraph's detected direction, as CSS resolves `start` and `end` against the
 // paragraph's direction, not the `direction` property.
 TEST(SVGTextElementPublicApiTests, PlaintextAnchorsAndContinuesInTheDetectedDirection) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   {
     // Both paragraphs detect left to right despite `direction="rtl"`: "ab" starts at x and "cd",
     // a chunk without an absolute x, continues rightward from its right edge.
@@ -1362,6 +1368,7 @@ SVGDocument LayOutPlaintext(std::string_view attributes, std::string_view conten
 // With no strong character, UAX #9 rule P3 gives a plaintext paragraph level 0, left to right,
 // whatever `direction` says: the neutral text starts at x as a left-to-right chunk does.
 TEST(SVGTextElementPublicApiTests, PlaintextWithoutStrongCharactersIsLeftToRight) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument plaintext = LayOutPlaintext(R"(direction="rtl")", "!?");
   const auto [left, right] = HorizontalSpan(plaintext, 0, 2);
   ASSERT_THAT(right - left, testing::Gt(1.0)) << "the characters have advances";
@@ -1377,6 +1384,7 @@ TEST(SVGTextElementPublicApiTests, PlaintextWithoutStrongCharactersIsLeftToRight
 // the detected start: the left edge of a right-to-left paragraph, the right edge of a
 // left-to-right one, whatever `direction` says.
 TEST(SVGTextElementPublicApiTests, PlaintextMiddleAndEndAnchorsFollowTheDetectedDirection) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   {
     SVGDocument document = LayOutPlaintext(R"(text-anchor="end")", "&#x5d0;&#x5d1;");
     const auto [left, right] = HorizontalSpan(document, 0, 2);
@@ -1400,6 +1408,7 @@ TEST(SVGTextElementPublicApiTests, PlaintextMiddleAndEndAnchorsFollowTheDetected
 // direction. Donner leaves the pen where the previous paragraph's direction ends it and starts
 // the next chunk there at its own start edge, so the two chunks share that edge.
 TEST(SVGTextElementPublicApiTests, PlaintextChunksOfOppositeDirectionsShareAnEdge) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   {
     // "ab" ends at its right edge; the Hebrew chunk starts there with its right edge.
     SVGDocument document = LayOutPlaintext("", R"(ab<tspan y="40">&#x5d0;&#x5d1;</tspan>)");
@@ -1417,7 +1426,6 @@ TEST(SVGTextElementPublicApiTests, PlaintextChunksOfOppositeDirectionsShareAnEdg
     EXPECT_THAT(latin.first, testing::DoubleNear(hebrew.first, 1e-6));
   }
 }
-#endif
 
 // `unicode-bidi` is not inherited: an override on the `<text>` element reverses its letters, while
 // the same override on an enclosing group leaves the text's normal reordering alone.
@@ -1433,13 +1441,13 @@ TEST(SVGTextElementPublicApiTests, BidiOverrideAppliesOnlyToTheTextElementItself
 
   // Normal rtl reordering keeps the Latin word in order: `b` stays right of `a`.
   EXPECT_THAT(letterOrder(R"(direction="rtl")", ""), testing::Gt(0.0));
-#ifdef DONNER_TEXT_ENABLED
-  // The override on the text element runs every letter right to left.
-  EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="bidi-override")"),
-              testing::Lt(0.0));
-  EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="isolate-override")"),
-              testing::Lt(0.0));
-#endif
+  if (IsTextBuiltIn()) {
+    // The override on the text element runs every letter right to left.
+    EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="bidi-override")"),
+                testing::Lt(0.0));
+    EXPECT_THAT(letterOrder(R"(direction="rtl")", R"(unicode-bidi="isolate-override")"),
+                testing::Lt(0.0));
+  }
   // On the group it does not reach the text.
   EXPECT_THAT(letterOrder(R"(direction="rtl" unicode-bidi="bidi-override")", ""), testing::Gt(0.0));
   // A left-to-right override leaves left-to-right text unchanged.

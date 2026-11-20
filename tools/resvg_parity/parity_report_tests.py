@@ -1156,6 +1156,11 @@ class ParityReportTests(unittest.TestCase):
                 ('if (getenv("UPDATE_GOLDEN_IMAGES_DIR") == nullptr) {', "if (false) {",
                  "reference canvas rule differs"),
             ],
+            "RendererTestBackendTinySkia.cc": [
+                ("return IsTextBuiltIn();", "return true;", "TinySkia capability Text differs"),
+                ("return IsFullTextBuiltIn();", "return IsTextBuiltIn();",
+                 "TinySkia capability TextFull differs"),
+            ],
         }
         for name, replacements in edits.items():
             source = dst / name

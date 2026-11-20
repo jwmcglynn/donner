@@ -41,10 +41,6 @@
 #include <mach/mach.h>
 #endif
 
-#ifdef DONNER_TEXT_ENABLED
-#include "donner/base/PackagedResource.h"
-#endif
-
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -54,6 +50,7 @@
 #include "donner/svg/renderer/benchmarks/AllocationTracker.h"
 #include "donner/svg/renderer/benchmarks/ProcStatusParser.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace {
 
@@ -394,13 +391,11 @@ int main(int argc, char* argv[]) {
     return 2;
   }
 
-#ifdef DONNER_TEXT_ENABLED
   std::string resourceError;
-  if (!donner::PreparePackagedResources(&resourceError)) {
+  if (!donner::svg::PrepareTextResources(&resourceError)) {
     std::fprintf(stderr, "Packaged resources unavailable: %s\n", resourceError.c_str());
     return 1;
   }
-#endif
 
   // One-time setup, measured separately: Geode initializes a GPU device;
   // TinySkia constructs its renderer (no GPU). Setup does not recur per frame.

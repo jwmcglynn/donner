@@ -263,12 +263,7 @@ bool suppressVerboseFailureOutputForLlm() {
 }
 
 bool shouldSkipForUnsupportedTextConfig(const ImageComparisonParams& params) {
-#ifndef DONNER_TEXT_FULL
-  if (params.skipSimpleText) {
-    return true;
-  }
-#endif
-  return false;
+  return params.skipSimpleText && !IsFullTextBuiltIn();
 }
 
 void printVerboseFailureOutputOverrideHint() {

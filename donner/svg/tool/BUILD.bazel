@@ -91,6 +91,7 @@ donner_cc_library(
         # :donner_svg_excludes_geode_audit below.
         "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer:terminal_image_viewer",
+        "//donner/svg/text:text_tier",
     ],
 )
 
@@ -119,6 +120,7 @@ donner_cc_test(
         ":donner_svg_tool_lib",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer/tests:gif_test_decoder",
+        "//donner/svg/text:text_tier",
         "@com_google_gtest//:gtest_main",
     ],
 )

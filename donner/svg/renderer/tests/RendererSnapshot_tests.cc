@@ -16,15 +16,14 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
-#include "donner/svg/tests/ParserTestUtils.h"
-#ifdef DONNER_TEXT_ENABLED
-#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
+#include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 #include "embed_resources/PublicSansFont.h"
 #include "embed_resources/RobotoFont.h"
-#endif
 
 using ::testing::_;
 using ::testing::AtLeast;
@@ -348,8 +347,8 @@ TEST(RendererSnapshotTests, ImageSourceEntityIsClearedBeforeReplay) {
       << "a replayed drawImage must not carry a handle into the live document registry";
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   using components::DocumentResourceFamilyBudget;
   using components::TextDecorationData;
   using components::TextDecorationOrigin;
@@ -385,6 +384,7 @@ TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
 }
 
 TEST(RendererSnapshotTests, DecorationMetadataReplaysConcurrentlyWithoutSourceBudget) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto sourceFamily = std::make_shared<components::DocumentResourceFamilyBudget>();
   RenderSnapshot snapshot;
   {
@@ -420,6 +420,7 @@ TEST(RendererSnapshotTests, DecorationMetadataReplaysConcurrentlyWithoutSourceBu
 }
 
 TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   ::testing::NiceMock<MockRendererInterface> renderer;
   RendererDriver driver(renderer);
   RenderSnapshot snapshot;
@@ -462,6 +463,7 @@ TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
 }
 
 TEST(RendererSnapshotTests, PreparedFontsFromDistinctSourceRegistriesKeepSeparateReplayDomains) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   ::testing::NiceMock<MockRendererInterface> renderer;
   RenderSnapshot snapshot;
   {
@@ -523,6 +525,7 @@ TEST(RendererSnapshotTests, PreparedFontsFromDistinctSourceRegistriesKeepSeparat
 }
 
 TEST(RendererSnapshotTests, PreparedFallbackGlyphFontsUseFontsFromReplayRegistry) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   ::testing::NiceMock<MockRendererInterface> renderer;
   RenderSnapshot snapshot;
   {
@@ -572,6 +575,7 @@ TEST(RendererSnapshotTests, PreparedFallbackGlyphFontsUseFontsFromReplayRegistry
 }
 
 TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsBytes) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   ::testing::NiceMock<MockRendererInterface> renderer;
   RenderSnapshot snapshot;
   {
@@ -624,7 +628,6 @@ TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsB
   snapshot.replay(renderer);
   EXPECT_EQ(drawCount, 2u);
 }
-#endif  // DONNER_TEXT_ENABLED
 
 TEST(RendererSnapshotTests, FeImageFragmentReferencesAreClearedBeforeReplay) {
   SVGDocument document = MakeDocument(R"svg(
@@ -663,8 +666,8 @@ TEST(RendererSnapshotTests, FeImageFragmentReferencesAreClearedBeforeReplay) {
   EXPECT_FALSE(image->svgSubDocument);
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererSnapshotTests, TextPaintReferencesAreSnapshotOwned) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = MakeDocument(R"svg(
     <defs>
       <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
@@ -707,7 +710,6 @@ TEST(RendererSnapshotTests, TextPaintReferencesAreSnapshotOwned) {
   EXPECT_NE(ref.reference.handle.registry(), &document.registry());
   EXPECT_NE(ref.reference.handle.try_get<components::ComputedGradientComponent>(), nullptr);
 }
-#endif
 
 }  // namespace
 }  // namespace donner::svg

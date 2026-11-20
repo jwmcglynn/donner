@@ -24,6 +24,7 @@
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/resources/FontMetadata.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 #include "embed_resources/PublicSansFont.h"
 
 using testing::Eq;
@@ -805,12 +806,12 @@ TEST(FontManagerTest, CffWorkExhaustionRejectsMislabeledCompressedFontsBeforeDec
   EXPECT_FALSE(static_cast<bool>(manager.loadFontData(mislabeledWoff)));
   EXPECT_FALSE(static_cast<bool>(manager.loadFontData(std::vector<uint8_t>(mislabeledWoff))));
 
-#ifdef DONNER_TEXT_WOFF2_ENABLED
-  const std::vector<uint8_t> mislabeledWoff2 =
-      WithCompressedFlavor(readFile("donner/base/fonts/testdata/valid-001.woff2"), 0x00010000);
-  ASSERT_FALSE(mislabeledWoff2.empty());
-  EXPECT_FALSE(static_cast<bool>(manager.loadFontData(mislabeledWoff2)));
-#endif
+  if (IsWoff2BuiltIn()) {
+    const std::vector<uint8_t> mislabeledWoff2 =
+        WithCompressedFlavor(readFile("donner/base/fonts/testdata/valid-001.woff2"), 0x00010000);
+    ASSERT_FALSE(mislabeledWoff2.empty());
+    EXPECT_FALSE(static_cast<bool>(manager.loadFontData(mislabeledWoff2)));
+  }
 
   EXPECT_EQ(FontManagerTestAccess::CompressedFontDecompressionAttempts(manager), 0u);
 
@@ -1758,8 +1759,8 @@ TEST(FontManagerTest, DefaultProviderAdoptedByNewInstances) {
   EXPECT_EQ(FontManager::DefaultFontProvider(), nullptr);
 }
 
-#ifdef DONNER_TEXT_WOFF2_ENABLED
 TEST(FontManagerTest, LoadWoff2Data) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   Registry registry;
   FontManager mgr(registry);
 
@@ -1770,7 +1771,6 @@ TEST(FontManagerTest, LoadWoff2Data) {
   EXPECT_TRUE(static_cast<bool>(handle));
   EXPECT_FALSE(mgr.fontData(handle).empty());
 }
-#endif
 
 TEST(FontManagerTest, RegisteredFamilyAvailabilityNeverConsultsTheProvider) {
   Registry registry;

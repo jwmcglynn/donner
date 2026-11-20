@@ -80,15 +80,13 @@ donner_cc_library(
     name = "woff2_parser",
     srcs = ["Woff2Parser.cc"],
     hdrs = ["Woff2Parser.h"],
+    implementation_deps = ["@woff2//:woff2_decode"],
     target_compatible_with = select({
         "//donner/svg/renderer:text_full_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = donner_internal_visibility(),
-    deps = [
-        "//donner/base",
-        "@woff2//:woff2_decode",
-    ],
+    deps = ["//donner/base"],
 )
 
 donner_cc_test(

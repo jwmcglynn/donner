@@ -53,6 +53,7 @@
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/resources/UrlLoader.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -2601,7 +2602,6 @@ TEST(RendererPublicApiTest, DriverSnapshotCaptureWithoutWarningSinkKeepsStderrCl
   (void)snapshot;
 }
 
-#ifdef DONNER_TEXT_ENABLED
 struct PostPathSceneResult {
   RendererBitmap bitmap;
   long characters = 0;
@@ -2684,6 +2684,7 @@ PostPathSceneResult RenderPostPathScene(std::string_view markup, std::size_t tai
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorOpenEndpointMatchesExplicitTail) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual =
       RenderPostPathScene("<textPath href='#p'>M</textPath><tspan fill='blue'>M</tspan>", 1);
   const auto expected = RenderPostPathScene(
@@ -2698,6 +2699,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorOpenEndpointMatchesExplicitTail) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorExplicitXYRemainsIndependent) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p'>M</textPath><tspan x='40' y='30' fill='blue'>M</tspan>", 1);
   const auto expected = RenderPostPathScene(
@@ -2711,6 +2713,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorExplicitXYRemainsIndependent) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorXOnlyMatchesOrdinaryAxis) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto ordinary = RenderPostPathScene("M<tspan x='40'>M</tspan>", 1);
   ASSERT_EQ(ordinary.characters, 2);
   EXPECT_THAT(ordinary.positions[1], testing::Eq(Vector2d(40.0, 0.0)));
@@ -2725,6 +2728,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorXOnlyMatchesOrdinaryAxis) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorYOnlyMatchesOrdinaryAxis) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto ordinary = RenderPostPathScene("M<tspan y='30'>M</tspan>", 1);
   ASSERT_EQ(ordinary.characters, 2);
   ASSERT_THAT(ordinary.positions[1].x, Gt(0.0));
@@ -2742,6 +2746,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorYOnlyMatchesOrdinaryAxis) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorRelativeTailUsesOneNominalTranslation) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto ordinary = RenderPostPathScene("<tspan dx='7 2' dy='9 3'>MM</tspan>", 1);
   ASSERT_EQ(ordinary.characters, 2);
   const Vector2d separation = ordinary.positions[1] - ordinary.positions[0];
@@ -2761,6 +2766,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorRelativeTailUsesOneNominalTranslat
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorDistinctPathOwnerDoesNotInheritOffset) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p' startOffset='17'><tspan dy='5'>M</tspan></textPath>"
       "<textPath path='M200 80H300' fill='blue'>M</textPath>",
@@ -2776,6 +2782,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorDistinctPathOwnerDoesNotInheritOff
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorAllOffPathUsesEndpoint) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p' startOffset='200'>M</textPath><tspan fill='blue'>M</tspan>", 1);
   const auto expected = RenderPostPathScene(
@@ -2789,6 +2796,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorAllOffPathUsesEndpoint) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorEmptyTagRetainsOrdinaryPosition) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene("<textPath href='#p'/><tspan fill='blue'>M</tspan>", 0);
   const auto expected = RenderPostPathScene("<tspan fill='blue'>M</tspan>", 0);
   ASSERT_EQ(actual.characters, 1);
@@ -2798,6 +2806,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorEmptyTagRetainsOrdinaryPosition) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorNonemptyHiddenTextUsesEndpoint) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p' visibility='hidden'>M</textPath><tspan fill='blue'>M</tspan>", 1);
   const auto expected = RenderPostPathScene(
@@ -2811,6 +2820,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorNonemptyHiddenTextUsesEndpoint) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorChildZeroProducerHasNoPaintWithExplicitTail) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p' font-size='0'>M</textPath>"
       "<tspan x='100' y='50' font-size='16' fill='blue'>M</tspan>",
@@ -2826,6 +2836,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorChildZeroProducerHasNoPaintWithExp
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorRootZeroProducerRetainsAddressableCharacter) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p'>M</textPath><tspan x='100' y='50' font-size='16' fill='blue'>M</tspan>",
       1, "M0 50H100", {}, {}, 0.0);
@@ -2840,6 +2851,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorRootZeroProducerRetainsAddressable
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorRootZeroCursorRequiresProducerPremises) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p'>M</textPath><tspan font-size='16' fill='blue'>M</tspan>", 1, "M0 50H100",
       {}, {}, 0.0);
@@ -2854,6 +2866,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorRootZeroCursorRequiresProducerPrem
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorReferencedOwnTransformExcludesOriginalAncestor) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view attributes = "transform='matrix(0 2 -1 0 70 5)'";
   constexpr std::string_view ancestor = "transform='translate(100 100)'";
   const auto actual =
@@ -2870,6 +2883,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorReferencedOwnTransformExcludesOrig
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorClosedSingleLoopOffsetUsesEquivalentEndpoint) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderPostPathScene(
       "<textPath href='#p' startOffset='30'>M</textPath><tspan fill='blue'>M</tspan>", 1,
       "M20 60H100V100H20Z");
@@ -2883,6 +2897,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorClosedSingleLoopOffsetUsesEquivale
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorWhitespaceCannotInventOriginHit) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><text
         id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="40" y="80">A<tspan
@@ -2922,6 +2937,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorWhitespaceCannotInventOriginHit) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorHiddenLogicalMetricsPreserveNoPaint) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument visible = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text
         id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="100"
@@ -2976,6 +2992,7 @@ SVGDocument MakeTextPathPairFontProbe(bool kerning = true) {
 }
 
 TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument probe = MakeTextPathPairFontProbe();
   const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
   ASSERT_EQ(pairedText.getNumberOfChars(), 2);
@@ -3007,6 +3024,7 @@ TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
 }
 
 TEST(RendererPublicApiTest, TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto loader = std::make_unique<ExternalUseResourceLoader>("unused");
   const ExternalUseResourceLoader* observedLoader = loader.get();
   SVGDocument::Settings settings;
@@ -3039,6 +3057,7 @@ TEST(RendererPublicApiTest, TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank)
 }
 
 TEST(RendererPublicApiTest, TextPathStretchCurvedGeometryDiffersFromAlign) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto glyphPaths = [](std::string_view method) {
     SVGDocument document = ParseDocument(
         "<svg xmlns='http://www.w3.org/2000/svg' width='224' height='128' "
@@ -3066,6 +3085,7 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedGeometryDiffersFromAlign) {
 }
 
 TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto compare = [](std::string_view route, std::string_view ordinaryAttributes,
                           std::string_view label) {
     SVGDocument stretched = ParseDocument(
@@ -3088,6 +3108,7 @@ TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotated
 }
 
 TEST(RendererPublicApiTest, TextPathStretchCurvedLowercaseEProducesGlyphGeometry) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="224" height="128"
         font-family="Public Sans" font-size="36">
@@ -3106,6 +3127,7 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedLowercaseEProducesGlyphGeometry
 }
 
 TEST(RendererPublicApiTest, TextPathPairYOnlySpanMatchesUnsplitPixels) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument probe = MakeTextPathPairFontProbe();
   const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
   ASSERT_EQ(pairedText.getNumberOfChars(), 2);
@@ -3138,6 +3160,7 @@ TEST(RendererPublicApiTest, TextPathPairYOnlySpanMatchesUnsplitPixels) {
 }
 
 TEST(RendererPublicApiTest, TextPathPairEmptySpanMatchesUnsplitPixels) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument probe = MakeTextPathPairFontProbe();
   const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
   ASSERT_EQ(pairedText.getNumberOfChars(), 2);
@@ -3170,6 +3193,7 @@ TEST(RendererPublicApiTest, TextPathPairEmptySpanMatchesUnsplitPixels) {
 }
 
 TEST(RendererPublicApiTest, TextPathPairNoKerningMatchesUnsplitPixels) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument probe = MakeTextPathPairFontProbe(false);
   const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
   ASSERT_EQ(pairedText.getNumberOfChars(), 2);
@@ -3202,6 +3226,7 @@ TEST(RendererPublicApiTest, TextPathPairNoKerningMatchesUnsplitPixels) {
 }
 
 TEST(RendererPublicApiTest, TextPathPairSeparateOwnersDoNotShareKerning) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument sharedText = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
         font-family="Public Sans" font-size="64" style="font-kerning:normal">
@@ -3224,6 +3249,7 @@ TEST(RendererPublicApiTest, TextPathPairSeparateOwnersDoNotShareKerning) {
 }
 
 TEST(RendererPublicApiTest, PostTextPathCursorClosedChunkUsesFirstAnchorAcrossStyleSpan) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto reference = RenderPostPathScene(
       "<textPath href='#p'>M<tspan text-anchor='start' fill='blue'>M</tspan></textPath>"
       "<tspan x='200' y='60' fill='green'>M</tspan>",
@@ -3246,6 +3272,7 @@ TEST(RendererPublicApiTest, PostTextPathCursorClosedChunkUsesFirstAnchorAcrossSt
 }
 
 TEST(RendererPublicApiTest, ClosedTextPathAbsoluteXOutsideCircuitHasNoInk) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view path = "M20 30H45V55H20Z";
   const auto visible = RenderPostPathScene(
       "<textPath id='owner' href='#p'><tspan id='first'>A</tspan>"
@@ -3292,6 +3319,7 @@ TEST(RendererPublicApiTest, ClosedTextPathAbsoluteXOutsideCircuitHasNoInk) {
 }
 
 TEST(RendererPublicApiTest, ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
         <use href="external.svg#label" fill="green" font-size="24"/>
@@ -3472,6 +3500,7 @@ constexpr std::string_view kHostFaceResource =
 // Lending fonts works in every text tier: where the tier cannot load the host's face, the text
 // falls back exactly as the same content does in-document.
 TEST(RendererPublicApiTest, ExternalUseHostFontFaceMatchesInlineInEveryTier) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderExternalUse(HostFaceUseHost(HostFaceStyle()), kHostFaceResource);
   const RendererBitmap expected = HostFaceInline(HostFaceStyle());
   ASSERT_THAT(expected.pixels, testing::Contains(Gt(0)));
@@ -3482,6 +3511,7 @@ TEST(RendererPublicApiTest, ExternalUseHostFontFaceMatchesInlineInEveryTier) {
 // One referenced document shared by two hosts that lend different faces under the same `<use>`
 // style restyles for each host in turn, rather than reusing what it laid out for the other.
 TEST(RendererPublicApiTest, SharedExternalTextRestylesWhenTheLentFontsChange) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SharedDocuments shared({{"external.svg", std::string(kHostFaceResource)}});
   SVGDocument first = shared.parse(HostFaceUseHost(HostFaceStyle("Yellowtail-Regular.ttf")));
   SVGDocument second = shared.parse(HostFaceUseHost(HostFaceStyle("NotoSerif-Regular.ttf")));
@@ -3506,6 +3536,7 @@ TEST(RendererPublicApiTest, SharedExternalTextRestylesWhenTheLentFontsChange) {
 // builds its overlay once a frame, and a second frame neither restyles nor lays the text out again
 // nor rebuilds the lent face set.
 TEST(RendererPublicApiTest, ManyOccurrencesOfOneHostKeepTheLendingFastPath) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr int kUses = 2000;
   std::string source =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle();
@@ -3538,6 +3569,7 @@ TEST(RendererPublicApiTest, ManyOccurrencesOfOneHostKeepTheLendingFastPath) {
 // A bounds query between frames measures external text with the host's fonts as they are then,
 // not the overlay the last frame built: here the host's face is edited after a frame.
 TEST(RendererPublicApiTest, BoundsQueryAfterAFrameBuildsTheHostsCurrentFonts) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SharedDocuments shared({{"external.svg", std::string(kHostFaceResource)}});
   SVGDocument document = shared.parse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
@@ -3569,6 +3601,7 @@ TEST(RendererPublicApiTest, BoundsQueryAfterAFrameBuildsTheHostsCurrentFonts) {
 
 // An occurrence the frame's external work allowance refuses lends nothing and builds nothing.
 TEST(RendererPublicApiTest, RefusedExternalOccurrenceLendsNoFonts) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   std::string resource = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
       <g id="label"><text x="4" y="28">Map</text>)svg";
   for (int i = 0; i < 64; ++i) {
@@ -3594,10 +3627,10 @@ TEST(RendererPublicApiTest, RefusedExternalOccurrenceLendsNoFonts) {
 
 // The faces below arrive as untrusted `data:` URLs, which only the full text tier loads; the
 // simple tier renders them with the fallback, so these comparisons cannot tell host fonts apart.
-#ifdef DONNER_TEXT_FULL
 // Hosts lending different faces to one shared referenced document each draw their own face, in
 // any order, and never the face another host lent before them.
 TEST(RendererPublicApiTest, SharedExternalTextDrawsEachHostsFontFace) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   SharedDocuments shared({{"external.svg", std::string(kHostFaceResource)}});
   const std::string yellowtail = HostFaceStyle("Yellowtail-Regular.ttf");
   const std::string serif = HostFaceStyle("NotoSerif-Regular.ttf");
@@ -3619,6 +3652,7 @@ TEST(RendererPublicApiTest, SharedExternalTextDrawsEachHostsFontFace) {
 
 // Editing the host's `@font-face` source changes the face its occurrences lend.
 TEST(RendererPublicApiTest, ExternalTextFollowsAnEditedHostFontFace) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   SharedDocuments shared({{"external.svg", std::string(kHostFaceResource)}});
   SVGDocument host = shared.parse(HostFaceUseHost(
       R"(<style id="faces">)" + HostFaceRule("Yellowtail-Regular.ttf") + "</style>"));
@@ -3636,6 +3670,7 @@ TEST(RendererPublicApiTest, ExternalTextFollowsAnEditedHostFontFace) {
 // A referenced document that references another passes on the fonts its own host lent it: two
 // outer hosts lending different faces through the same middle and leaf documents each draw theirs.
 TEST(RendererPublicApiTest, NestedExternalTextDrawsTheOuterHostsFontFace) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   SharedDocuments shared({
       {"middle.svg",
        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
@@ -3714,6 +3749,7 @@ constexpr std::string_view kOutsideText =
 // Text in a pattern outside the referenced fragment is laid out again for each host's fonts, and
 // for the document's own fonts when it is drawn alone.
 TEST(RendererPublicApiTest, PatternTextOutsideTheFragmentFollowsEachHost) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   ExpectOutsideTextFollowsEachHost(
       "outside_pattern_text",
       R"svg(<pattern id="p" patternUnits="userSpaceOnUse" width="96" height="40">)svg" +
@@ -3723,6 +3759,7 @@ TEST(RendererPublicApiTest, PatternTextOutsideTheFragmentFollowsEachHost) {
 
 // The same for text in a marker.
 TEST(RendererPublicApiTest, MarkerTextOutsideTheFragmentFollowsEachHost) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   ExpectOutsideTextFollowsEachHost(
       "outside_marker_text",
       R"svg(<marker id="m" markerUnits="userSpaceOnUse" markerWidth="96" markerHeight="40"
@@ -3733,6 +3770,7 @@ TEST(RendererPublicApiTest, MarkerTextOutsideTheFragmentFollowsEachHost) {
 
 // The same for text in a clip path.
 TEST(RendererPublicApiTest, ClipPathTextOutsideTheFragmentFollowsEachHost) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   ExpectOutsideTextFollowsEachHost(
       "outside_clip_text", R"svg(<clipPath id="c">)svg" + std::string(kOutsideText) + "</clipPath>",
       R"svg(<rect id="tile" width="96" height="40" fill="green" clip-path="url(#c)"/>)svg");
@@ -3741,6 +3779,7 @@ TEST(RendererPublicApiTest, ClipPathTextOutsideTheFragmentFollowsEachHost) {
 // In one frame, an occurrence of a document lends it the host's fonts and an `<image>` of the same
 // document does not, whichever is drawn first.
 TEST(RendererPublicApiTest, UseAndImageOfOneDocumentInOneFrameKeepTheirOwnFonts) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   constexpr std::string_view kResource =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
         <text id="label" x="4" y="28" fill="green" font-size="24" font-family="HostFace">Map</text>
@@ -3769,6 +3808,7 @@ TEST(RendererPublicApiTest, UseAndImageOfOneDocumentInOneFrameKeepTheirOwnFonts)
 // whether the text inherits the family from the referencing `<use>` or names it itself. The
 // referenced document declares no faces, so without the host's faces both fall back.
 TEST(RendererPublicApiTest, ExternalUseTextResolvesHostFontFace) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   const std::string inheritedHost =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">)svg" + HostFaceStyle() +
       R"svg(<use href="external.svg#label" fill="green" font-size="24" font-family="HostFace"/>
@@ -3809,6 +3849,7 @@ TEST(RendererPublicApiTest, ExternalUseTextResolvesHostFontFace) {
 // The referenced document's own `@font-face` rule for a family outranks the host's rule for it, the
 // same precedence its own rules have over a font provider.
 TEST(RendererPublicApiTest, ExternalUseTextPrefersReferencedDocumentFontFace) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   const std::string ownStyle = "<style>@font-face { font-family: HostFace; src: url(" +
                                HermeticFontDataUrl("NotoSerif-Regular.ttf") + "); }</style>";
   const std::string host =
@@ -3831,6 +3872,7 @@ TEST(RendererPublicApiTest, ExternalUseTextPrefersReferencedDocumentFontFace) {
 // Host fonts are lent only for an occurrence of an external `<use>`: the same document drawn as an
 // `<image>` of the host, and drawn on its own after the occurrence, resolves only its own fonts.
 TEST(RendererPublicApiTest, ExternalSvgImageAndStandaloneDrawDoNotSeeHostFontFace) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   constexpr std::string_view kResource =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="40">
         <text id="label" x="4" y="28" fill="green" font-size="24" font-family="HostFace">Map</text>
@@ -3858,9 +3900,9 @@ TEST(RendererPublicApiTest, ExternalSvgImageAndStandaloneDrawDoNotSeeHostFontFac
                                        "external_standalone_after_occurrence",
                                        editor::tests::PixelmatchIdentityParams());
 }
-#endif  // DONNER_TEXT_FULL
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
         <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
@@ -3887,6 +3929,7 @@ TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildI
 }
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanHostGradientIgnoresCollidingChildId) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
         <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
@@ -3915,6 +3958,7 @@ TEST(RendererPublicApiTest, ExternalUseTextSpanHostGradientIgnoresCollidingChild
 }
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanExplicitChildGradientWins) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
         <defs><linearGradient id="paint"><stop stop-color="red"/></linearGradient></defs>
@@ -3939,6 +3983,7 @@ TEST(RendererPublicApiTest, ExternalUseTextSpanExplicitChildGradientWins) {
 }
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostStrokeAndDecorationGradient) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
         <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
@@ -3968,6 +4013,7 @@ TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostStrokeAndDecorationGr
 }
 
 TEST(RendererPublicApiTest, ExternalUseRelativeTextLayoutRestoresAcrossHostsAndFrames) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view resource =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="80" font-size="40" fill="green">
         <text id="label" x="0" y="70" font-size="150%">M</text>
@@ -4007,7 +4053,6 @@ TEST(RendererPublicApiTest, ExternalUseRelativeTextLayoutRestoresAcrossHostsAndF
                                        editor::tests::PixelmatchIdentityParams());
   EXPECT_EQ(child.source(), resource);
 }
-#endif
 
 TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
   RendererSurfaceBudget byteBudget;
@@ -4308,8 +4353,8 @@ std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1
 /// Magnifies 100,000 times about the canvas center.
 constexpr std::string_view kMagnify = R"svg(transform="translate(50 50) scale(100000)")svg";
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeMaterialization) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument limitedDocument = ParseDocument(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20">
            <text x="2" y="14">A</text><text x="24" y="14">A</text>
@@ -4341,6 +4386,7 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
 }
 
 TEST(RendererTinySkiaSecurityTest, TextReservesAStrokeDrawCallOnlyWhenStroked) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   RendererTinySkia renderer;
   SVGDocument filled = ParseDocument(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20">
@@ -4365,6 +4411,7 @@ TEST(RendererTinySkiaSecurityTest, TextReservesAStrokeDrawCallOnlyWhenStroked) {
 }
 
 TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionIsChargedBeforeTheChunkIsKept) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Each glyph's expanded stroke is charged to the text budget as it is made, so a chunk whose
   // expansions pass the budget is rejected before they are all kept.
   constexpr std::string_view kHead =
@@ -4401,6 +4448,7 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionIsChargedBeforeTheChunkIsK
 }
 
 TEST(RendererTinySkiaSecurityTest, TextStrokeChunkStopsAtTheFrameStrokeOutput) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // One chunk of 200 stroked "O"s, all drawn at one place (letter-spacing cancels the 0.741 em
   // advance of the bundled font's "O"), each fitting the per-stroke limit, together pass a
   // lowered frame stroke-output total; the chunk's stroke is rejected there, before the text
@@ -4427,6 +4475,7 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeChunkStopsAtTheFrameStrokeOutput) {
 }
 
 TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionsOfSeparateTextsShareTheBudget) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Each stroked text alone fits the lowered text budget; the second one's expansion does not fit
   // beside the first's, so the frame is rejected.
   constexpr std::string_view kText =
@@ -4455,6 +4504,7 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeExpansionsOfSeparateTextsShareTheBu
 }
 
 TEST(RendererTinySkiaSecurityTest, TextStrokeIsNotExpandedForGlyphsOutsideTheCanvas) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // A chunk whose glyph strokes cannot reach the canvas is not expanded: starting a second chunk
   // far off the canvas charges only the visible chunk's expansion.
   const auto expansionPoints = [](std::string_view glyphs) {
@@ -4476,6 +4526,7 @@ TEST(RendererTinySkiaSecurityTest, TextStrokeIsNotExpandedForGlyphsOutsideTheCan
 }
 
 TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr std::string_view kChild =
       "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' "
       "font-family='Public Sans' font-size='12'>"
@@ -4504,10 +4555,12 @@ TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
 /// A renderer that could not read its frame back returns an empty snapshot, which covers no pixel
 /// of any region; a region that must stay uncovered would otherwise accept it.
 TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   EXPECT_NONFATAL_FAILURE(CoveredPixels(RendererBitmap{}, 0, 0, 1, 1), "empty 0x0 snapshot");
 }
 
 TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyphGeometry) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument word = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
         font-family="Public Sans" font-size="44" font-kerning="none">
@@ -4553,6 +4606,7 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyp
 }
 
 TEST(RendererPublicApiTest, TextPathStretchAcrossSharpCornerMatchesCachedOutline) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"
         font-family="Public Sans" font-size="32">
@@ -4580,6 +4634,7 @@ TEST(RendererPublicApiTest, TextPathStretchAcrossSharpCornerMatchesCachedOutline
 }
 
 TEST(RendererPublicApiTest, TextPathMeasurementWorkResetsAcrossTopLevelFrames) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
         font-family="Public Sans" font-size="24">
@@ -4606,6 +4661,7 @@ TEST(RendererPublicApiTest, TextPathMeasurementWorkResetsAcrossTopLevelFrames) {
 }
 
 TEST(RendererPublicApiTest, TextPathGeometryQueryRecoversAfterPriorWorkExhaustion) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
         font-family="Public Sans" font-size="24">
@@ -4635,6 +4691,7 @@ TEST(RendererPublicApiTest, TextPathGeometryQueryRecoversAfterPriorWorkExhaustio
 }
 
 TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
         font-family="Public Sans" font-size="24">
@@ -4697,6 +4754,7 @@ std::string ManyDistinctGlyphsDocument() {
 }
 
 TEST(RendererPublicApiTest, TextPastOneThousandTwentyFourDistinctGlyphsStillDraws) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(ManyDistinctGlyphsDocument());
   Renderer renderer;
   renderer.draw(document);
@@ -4732,6 +4790,7 @@ std::string TenPagesOfTextDocument() {
 }
 
 TEST(RendererPublicApiTest, TenPagesOfTextFitTheTextBudget) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(TenPagesOfTextDocument());
   Renderer renderer;
   renderer.draw(document);
@@ -4754,6 +4813,7 @@ TEST(RendererPublicApiTest, TenPagesOfTextFitTheTextBudget) {
 }
 
 TEST(RendererPublicApiTest, GlyphCapIsConfigurableAndSharedWithOffscreenInstances) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = ParseDocument(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="90" height="30">
            <text x="2" y="20" font-size="20">A</text>
@@ -4796,6 +4856,7 @@ std::string StrokedGlyphs(std::string_view transform, int count = 1) {
 
 // Dashed text uses the frame's dash accounting on both the expanded and hairline paths.
 TEST(RendererPublicApiTest, DashedTextAccountsForBothStrokePaths) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   for (const std::string_view width : {"3", "0.5"}) {
     SCOPED_TRACE(width);
     SVGDocument document = HundredSquareDocument(
@@ -4815,12 +4876,14 @@ TEST(RendererPublicApiTest, DashedTextAccountsForBothStrokePaths) {
 }
 
 TEST(RendererTinySkiaSecurityTest, GlyphStrokeExpansionStopsAtTheOutputLimit) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // One stroked glyph magnified 100,000 times, where its wide stroke band covers the left side of
   // the "O", fits the default limits and stops expanding one point below its outline.
   ExpectTinyStrokeLimitIsExact(StrokedGlyphs(kMagnify), TinyStrokeLimit::StrokeOutputPoints);
 }
 
 TEST(RendererTinySkiaSecurityTest, GlyphStrokesStopAfterTheFirstPassesTheOutputLimit) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Four stroked "O"s magnified 100,000 times under a limit one point below the first one's
   // outline: the first rejects the draw, and no later glyph is stroked.
   const std::size_t points =
@@ -4834,6 +4897,7 @@ TEST(RendererTinySkiaSecurityTest, GlyphStrokesStopAfterTheFirstPassesTheOutputL
 }
 
 TEST(RendererTinySkiaSecurityTest, DottedDecorationStrokeStopsAtTheOutputLimit) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // A dotted underline is a row of circles of cubics. Under preserved spaces, which have no
   // outlines of their own, and magnified 100,000 times, its stroke is the only one, and the limit
   // holds for it exactly.
@@ -4844,13 +4908,14 @@ TEST(RendererTinySkiaSecurityTest, DottedDecorationStrokeStopsAtTheOutputLimit) 
       TinyStrokeLimit::StrokeOutputPoints);
 }
 
-#else
 TEST(RendererPublicApiTest, GlyphCapIsZeroWithoutText) {
+  if (IsTextBuiltIn()) {
+    GTEST_SKIP() << "Text is built into this configuration (" << BuiltTextTier() << ")";
+  }
   Renderer renderer;
   renderer.setMaximumGlyphs(5);
   EXPECT_EQ(renderer.maximumGlyphs(), 0u) << "A build without text must report no glyph cap.";
 }
-#endif
 
 /// Path data of a circle of four cubics, radius 40 around (40, 0), so it passes through the origin.
 constexpr std::string_view kCubicCircleData =

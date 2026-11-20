@@ -24,6 +24,7 @@
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -335,7 +336,6 @@ TEST_F(FontSynthesisStyleTest, ExistingDocumentFaceWithoutSynthesisKeepsItsGeome
   EXPECT_THAT(observe("document").outline.points(), ElementsAreArray(original.outline.points()));
 }
 
-#ifdef DONNER_TEXT_FULL
 // The full tier emboldens a synthesized bold face by 3% of the text size, however finely the face
 // is sized to keep a fractional size's precision; the simple tier synthesizes no bold. FreeType
 // applies the strength on the 26.6 grid of the face, which is sized at the whole multiple
@@ -344,6 +344,7 @@ TEST_F(FontSynthesisStyleTest, ExistingDocumentFaceWithoutSynthesisKeepsItsGeome
 // and moves one side of a straight stem by twice that half. The stem therefore widens by the
 // strength less under 2 grid units, a range derived from the grid rather than a tolerance.
 TEST_F(FontSynthesisStyleTest, SyntheticBoldStrengthIsAFractionOfTheTextSize) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   constexpr float kTextSizePx = 64.3f;  // The font-size of #stem and #bold-stem.
   const double multiple = std::clamp(std::floor(2048.0 / kTextSizePx), 1.0, 16.0);
   const double gridUnitPx = 1.0 / (64.0 * multiple);
@@ -356,7 +357,6 @@ TEST_F(FontSynthesisStyleTest, SyntheticBoldStrengthIsAFractionOfTheTextSize) {
   EXPECT_THAT(boldBounds.width() - regularBounds.width(),
               testing::AllOf(testing::Le(strengthPx), testing::Gt(strengthPx - 2.0 * gridUnitPx)));
 }
-#endif
 
 }  // namespace
 }  // namespace donner::svg

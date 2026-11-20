@@ -571,6 +571,7 @@ def _target_value_map() -> Dict[str, Dict[str, Set[str]]]:
         "copts": {},
         "native_optimization_level": {},
         "defines": {},
+        "local_defines": {},
         "includes": {},
         "tags": {},
     }
@@ -684,8 +685,12 @@ def _record_cpp_attrs(target: CMakeTarget, info: ConfiguredTargetInfo, config_na
             raise ValueError(f"Unsupported native optimization level for {info.label}: {speed}")
         _record_values(target, "native_optimization_level", [speed], config_name)
 
-    _record_values(target, "deps", map(_normalize_dep_label, _list_attr(info.attrs, "deps")), config_name)
-    for attr in ("defines", "includes", "tags"):
+    # CMake links implementation deps like ordinary deps; Bazel only keeps their headers and
+    # defines out of dependents' compile commands.
+    for attr in ("deps", "implementation_deps"):
+        _record_values(target, "deps", map(_normalize_dep_label, _list_attr(info.attrs, attr)),
+                       config_name)
+    for attr in ("defines", "local_defines", "includes", "tags"):
         _record_values(target, attr, _list_attr(info.attrs, attr), config_name)
 
 
@@ -1471,6 +1476,8 @@ class _TargetEmission:
     cond_includes: List[Tuple[str, str]]
     defines: List[str]
     cond_defines: List[Tuple[str, str]]
+    local_defines: List[str]
+    cond_local_defines: List[Tuple[str, str]]
     condition: Optional[str]
     scope: str
     option_scope: str
@@ -1499,6 +1506,7 @@ def _prepare_emission(target: CMakeTarget, pkg: str) -> _TargetEmission:
     copts, cond_copts = _values_for_target(target, "copts")
     includes, cond_includes = _values_for_target(target, "includes")
     defines, cond_defines = _values_for_target(target, "defines")
+    local_defines, cond_local_defines = _values_for_target(target, "local_defines")
     # If a target has conditional sources but no fixed sources, it
     # must be created as a concrete (STATIC) library rather than
     # INTERFACE, so that target_sources(PRIVATE ...) works.
@@ -1521,6 +1529,8 @@ def _prepare_emission(target: CMakeTarget, pkg: str) -> _TargetEmission:
         cond_includes=cond_includes,
         defines=defines,
         cond_defines=cond_defines,
+        local_defines=local_defines,
+        cond_local_defines=cond_local_defines,
         condition=_condition_for_target(target),
         scope=_scope_for_target(target.kind, has_concrete_sources),
         option_scope=_compile_option_scope(target.kind, has_concrete_sources),
@@ -1694,6 +1704,20 @@ def _emit_target_defines(f, e: _TargetEmission) -> None:
             f,
             define_condition,
             f"target_compile_definitions({e.cmake_name} {define_scope} {define})\n",
+        )
+    # Bazel `local_defines` reach only the target's own sources, which is CMake's PRIVATE scope.
+    if e.option_scope != "PRIVATE":
+        return
+    if e.local_defines:
+        f.write(
+            f"target_compile_definitions({e.cmake_name} PRIVATE "
+            f"{' '.join(e.local_defines)})\n"
+        )
+    for define, define_condition in e.cond_local_defines:
+        _write_guarded_line(
+            f,
+            define_condition,
+            f"target_compile_definitions({e.cmake_name} PRIVATE {define})\n",
         )
 
 

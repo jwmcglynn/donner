@@ -49,7 +49,7 @@ cc_library(
         "BoundsGeometry.cc",
         "ShapeSystem.cc",
     ],
-    defines = select({
+    local_defines = select({
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),

@@ -2297,13 +2297,17 @@ def _check_tiny_capabilities(source: str) -> None:
         r"case RendererBackendFeature::AsciiSnapshot:\s*return true;", body
     ):
         raise ParityReportError("TinySkia capability implementation differs from parity report")
-    macros = {"DONNER_TEXT_ENABLED": "Text", "DONNER_TEXT_FULL": "TextFull",
-              "DONNER_FILTERS_ENABLED": "FilterEffects"}
-    for macro, feature in macros.items():
-        gate = (
-            rf"#ifdef\s+{macro}\s+case RendererBackendFeature::{feature}:\s*return true;"
-            rf"\s+#else\s+case RendererBackendFeature::{feature}:\s*return false;\s+#endif"
-        )
+    # Filters follow a compile-time macro; the text features follow the run-time text tier query.
+    gates = {
+        "FilterEffects": (
+            r"#ifdef\s+DONNER_FILTERS_ENABLED\s+case RendererBackendFeature::FilterEffects:\s*"
+            r"return true;\s+#else\s+case RendererBackendFeature::FilterEffects:\s*return false;"
+            r"\s+#endif"
+        ),
+        "Text": r"case RendererBackendFeature::Text:\s*return IsTextBuiltIn\(\);",
+        "TextFull": r"case RendererBackendFeature::TextFull:\s*return IsFullTextBuiltIn\(\);",
+    }
+    for feature, gate in gates.items():
         if not re.search(gate, body):
             raise ParityReportError(f"TinySkia capability {feature} differs from parity report")
 

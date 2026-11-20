@@ -20,6 +20,7 @@
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 using ::testing::_;
 using ::testing::AllOf;
@@ -378,8 +379,8 @@ TEST_F(CompositorControllerTest, ConcurrentFlatDrawCancelsBetweenEntitiesAndRedr
   EXPECT_TRUE(compositor.hasPendingFirstFrameWarmup());
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST_F(CompositorControllerTest, ConcurrentLastLayerRemovalPreservesLiveTextIdentity) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = makeDocument(R"svg(
     <defs><filter id="blur"><feGaussianBlur stdDeviation="1"/></filter></defs>
     <g id="group" filter="url(#blur)"><rect width="10" height="10"/></g>
@@ -408,8 +409,6 @@ TEST_F(CompositorControllerTest, ConcurrentLastLayerRemovalPreservesLiveTextIden
   EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup())
       << "The post-prepare empty-layer branch does not rediscover layers";
 }
-
-#endif  // DONNER_TEXT_ENABLED
 
 TEST_F(CompositorControllerTest, PromoteEntitySucceeds) {
   SVGDocument document = makeDocument(R"svg(

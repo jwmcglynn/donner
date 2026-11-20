@@ -17,11 +17,9 @@ donner_cc_library(
 donner_cc_library(
     name = "bidi_paragraph",
     srcs = ["BidiParagraph.cc"],
+    implementation_deps = ["@sheenbidi"],
     visibility = ["//donner/svg:__subpackages__"],
-    deps = [
-        ":bidi_types",
-        "@sheenbidi",
-    ],
+    deps = [":bidi_types"],
 )
 
 donner_cc_library(
@@ -131,7 +129,11 @@ donner_cc_library(
     name = "text_backend_simple",
     srcs = ["TextBackendSimple.cc"],
     hdrs = ["TextBackendSimple.h"],
-    defines = select({
+    implementation_deps = select({
+        "//donner/svg/renderer:text_enabled": [":bidi_paragraph"],
+        "//conditions:default": [],
+    }),
+    local_defines = select({
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
@@ -142,10 +144,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg/resources:font_manager",
         "@stb//:truetype",
-    ] + select({
-        "//donner/svg/renderer:text_enabled": [":bidi_paragraph"],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 donner_cc_library(
@@ -177,7 +176,17 @@ donner_cc_library(
         "TextPathWarp.h",
         "TextTransform.h",
     ],
-    defines = select({
+    # The full backend and the bidi algorithm are implementation details of TextEngine.cc; keeping
+    # them out of the public compilation context stops their include paths and defines from
+    # reaching every library that depends on the text engine.
+    implementation_deps = select({
+        "//donner/svg/renderer:text_enabled": [":bidi_paragraph"],
+        "//conditions:default": [],
+    }) + select({
+        "//donner/svg/renderer:text_full_enabled": [":text_backend_full"],
+        "//conditions:default": [],
+    }),
+    local_defines = select({
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }) + select({
@@ -208,13 +217,7 @@ donner_cc_library(
         "//donner/svg/components/text:text_invalidation",
         "//donner/svg/components/text:text_system",
         "//donner/svg/resources:font_manager",
-    ] + select({
-        "//donner/svg/renderer:text_enabled": [":bidi_paragraph"],
-        "//conditions:default": [],
-    }) + select({
-        "//donner/svg/renderer:text_full_enabled": [":text_backend_full"],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 configured_dependency_audit_test(
@@ -244,6 +247,10 @@ donner_cc_library(
         "BitmapGlyphUtils.h",
         "TextBackendFull.h",
     ],
+    implementation_deps = [
+        "//third_party:freetype",
+        "@harfbuzz",
+    ],
     target_compatible_with = select({
         "//donner/svg/renderer:text_full_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -253,8 +260,6 @@ donner_cc_library(
         ":text_backend",
         "//donner/base",
         "//donner/svg/resources:font_manager",
-        "//third_party:freetype",
-        "@harfbuzz",
     ],
 )
 
@@ -297,7 +302,7 @@ donner_cc_fuzzer(
     name = "font_decoder_fuzzer",
     srcs = ["tests/FontDecoder_fuzzer.cc"],
     corpus = ":font_decoder_fuzzer_corpus",
-    defines = select({
+    local_defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
@@ -355,6 +360,7 @@ donner_cc_test(
     deps = [
         ":text_backend",
         ":text_backend_simple",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

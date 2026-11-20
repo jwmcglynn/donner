@@ -7,11 +7,8 @@
 #include <string>
 #include <string_view>
 
-#ifdef DONNER_TEXT_ENABLED
-#include "donner/base/PackagedResource.h"
-#endif
-
 #include "donner/base/StringUtils.h"
+#include "donner/svg/text/TextTier.h"
 #include "nlohmann/json.hpp"
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
@@ -244,13 +241,11 @@ int main() {
     std::filesystem::current_path(bwd);
   }
 
-#ifdef DONNER_TEXT_ENABLED
   std::string resourceError;
-  if (!donner::PreparePackagedResources(&resourceError)) {
+  if (!donner::svg::PrepareTextResources(&resourceError)) {
     std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
     return 1;
   }
-#endif
 
   donner::editor::mcp::EditorControlSession session;
 
