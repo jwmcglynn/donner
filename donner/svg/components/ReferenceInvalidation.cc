@@ -120,7 +120,9 @@ bool ClipOrMaskHoldsUse(Registry& registry) {
  * tree mutation, an `id` change, an in-document `href` retarget) takes that rebuild.
  */
 struct UseCopyRelation {
-  uint64_t fullRebuilds = 0;  //!< \ref RenderTreeState::Counters::fullRebuilds when built.
+  /// \ref RenderTreeState::Counters::fullRebuilds when built. Not a sufficient key alone: a scoped
+  /// restore of the render-tree state (such as the font preflight) rolls the counter back.
+  uint64_t fullRebuilds = 0;
   std::unordered_map<Entity, std::vector<Entity>> copies;  //!< Target to its `<use>` copies.
 };
 
@@ -154,6 +156,8 @@ const std::unordered_map<Entity, std::vector<Entity>>& CurrentUseCopies(Registry
   auto* state = registry.ctx().find<RenderTreeState>();
   const uint64_t fullRebuilds = state != nullptr ? state->counters.fullRebuilds : 0;
   auto* cached = registry.ctx().find<UseCopyRelation>();
+  // The pending-rebuild checks are load-bearing: a scoped restore of the render-tree state can roll
+  // `fullRebuilds` back to the value this cache was built at.
   if (cached != nullptr && state != nullptr && !structureChanged && !state->needsFullRebuild &&
       !state->needsFullStyleRecompute && cached->fullRebuilds == fullRebuilds) {
     return cached->copies;
