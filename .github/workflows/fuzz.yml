@@ -23,7 +23,7 @@ env:
 # Pull requests retain deterministic corpus replay through the normal Bazel test suite. The
 # sanitizer-backed mutation lane runs after merge or on demand so it does not delay PR signal.
 #
-# macOS uses the LLVM 21 toolchain (--config=asan-fuzzer activates
+# macOS uses the LLVM toolchain (--config=asan-fuzzer activates
 # --config=latest_llvm) because Apple Clang lacks libclang_rt.fuzzer_osx.a.
 # Linux fuzzers also run here so scheduled mutation covers both supported host toolchains.
 #
@@ -73,7 +73,7 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
-      - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
+      - name: Test fuzzers (libFuzzer via LLVM toolchain)
         run: python3 tools/ci/fuzz_lane.py fuzz-lane //...
 
       - name: Test text-full fuzzers
@@ -115,7 +115,7 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
-      - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
+      - name: Test fuzzers (libFuzzer via LLVM toolchain)
         run: python3 tools/ci/fuzz_lane.py fuzz-lane //...
 
       - name: Test text-full fuzzers

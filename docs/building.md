@@ -339,7 +339,7 @@ Changes to indexes, manifests or build definitions also run the corresponding co
 checks. To reproduce the CI selection locally, run `tools/ci/lint_lane.sh --changed <base-sha>`.
 
 **Linux remote execution.** Every Bazel build and test step of the hosted `linux` job except the
-linker canary selects the declared LLVM 21 toolchain with libc++ and the Linux sysroot
+linker canary selects the declared LLVM toolchain with libc++ and the Linux sysroot
 (`--config=latest_llvm`), on main and on every pull request, so a pull request without the cloud
 credential builds what main builds.
 Remote execution changes only where those actions run. The writer step opts in with
