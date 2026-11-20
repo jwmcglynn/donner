@@ -5766,14 +5766,14 @@ TEST_P(CompositorDrawnContentTest, ComposedFramesMatchFreshRender) {
 
 INSTANTIATE_TEST_SUITE_P(
     Content, CompositorDrawnContentTest,
-    testing::Values(
-        DrawnContentCase{"masked_leaf_between_content", kMaskedLeafBetweenContent, nullptr},
-        DrawnContentCase{"masked_leaf_last", kMaskedLeafLast, nullptr},
-        DrawnContentCase{"masked_leaf_with_masked_mask_content", kMaskedLeafWithMaskedMaskContent,
-                         nullptr},
-        DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
-        DrawnContentCase{"translucent_marker_leaf", kTranslucentMarkerLeaf, nullptr},
-        DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target"}),
+    testing::Values(DrawnContentCase{"masked_leaf_between_content", kMaskedLeafBetweenContent,
+                                     nullptr},
+                    DrawnContentCase{"masked_leaf_last", kMaskedLeafLast, nullptr},
+                    DrawnContentCase{"masked_leaf_with_masked_mask_content",
+                                     kMaskedLeafWithMaskedMaskContent, nullptr},
+                    DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
+                    DrawnContentCase{"translucent_marker_leaf", kTranslucentMarkerLeaf, nullptr},
+                    DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target"}),
     [](const testing::TestParamInfo<DrawnContentCase>& info) {
       return std::string(info.param.name);
     });

@@ -28,8 +28,8 @@ namespace donner::svg::compositor {
   for (auto entity : view) {
     view.get<components::RenderingInstanceComponent>(entity).forEachDrawnContent(
         [&](const components::SubtreeInfo& content) {
-          const auto* first = registry.try_get<components::RenderingInstanceComponent>(
-              content.firstRenderedEntity);
+          const auto* first =
+              registry.try_get<components::RenderingInstanceComponent>(content.firstRenderedEntity);
           const auto* last =
               registry.try_get<components::RenderingInstanceComponent>(content.lastRenderedEntity);
           if (first != nullptr && last != nullptr) {
