@@ -685,6 +685,16 @@ public:
     }
   }
 
+  /// Record gradient stop bytes hashed and compared in the attached frame counters.
+  /// @param hashed Stop bytes hashed to find a stop ramp.
+  /// @param compared Stop bytes compared with a candidate stop ramp.
+  void countGradientStopBytes(uint64_t hashed, uint64_t compared) const {
+    if (counters_) {
+      counters_->gradientStopBytesHashed += hashed;
+      counters_->gradientStopBytesCompared += compared;
+    }
+  }
+
   /// Record one path encoding in the attached frame counters.
   void countPathEncode() const {
     if (counters_) {

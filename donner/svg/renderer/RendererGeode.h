@@ -592,6 +592,10 @@ public:
   /// Lower the outline points joined into one text stroke shape (65536) for tests; never raises it.
   void setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints);
 
+  /// Lower the gradient stops one frame may draw (the CPU renderer's per-frame cap) for boundary
+  /// tests; never raises it.
+  void setGradientStopBudgetForTesting(std::size_t maximumStops);
+
   /// Shrink the aggregate frame-surface budget for boundary tests.
   void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes);
 

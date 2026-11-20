@@ -29,22 +29,40 @@ enum class Case {
   ClipMask,
   ClipPolygon,
   EvenOdd,
-  DeclaredRange
+  DeclaredRange,
+  /// One stop more than the uniform carries inline, so every stop comes from the stop ramp.
+  RampStops,
+  /// Enough stops that the ramp wraps onto a second pair of rows.
+  WrappedRampStops
 };
 struct Stop {
   float offset;
   std::array<float, 4> color;
 };
+/// True for the cases whose stops alternate between distant colors.
+inline bool HasManyStops(Case testCase) {
+  return testCase == Case::ManyStops || testCase == Case::RampStops ||
+         testCase == Case::WrappedRampStops;
+}
+inline uint32_t StopCount(Case testCase) {
+  switch (testCase) {
+    case Case::ManyStops: return 16u;
+    case Case::RampStops: return 17u;
+    case Case::WrappedRampStops: return 1500u;
+    case Case::SingleStop: return 1u;
+    default: return 2u;
+  }
+}
 inline std::vector<Stop> Stops(Case testCase) {
   if (testCase == Case::EmptyStops) {
     return {};
   }
-  const uint32_t count = testCase == Case::ManyStops ? 16u : testCase == Case::SingleStop ? 1u : 2u;
+  const uint32_t count = StopCount(testCase);
   std::vector<Stop> result;
   for (uint32_t i = 0; i < count; ++i) {
     const float t = count > 1 ? float(i) / float(count - 1) : 0.0f;
     const float alpha = testCase == Case::TransparentStops ? 0.25f + 0.5f * t : 1.0f;
-    const float channel = testCase == Case::ManyStops ? float((i * 37) % 160) : 64.0f * t;
+    const float channel = HasManyStops(testCase) ? float((i * 37) % 160) : 64.0f * t;
     result.push_back(
         {t, {(32 + channel) / 255, (64 + channel) / 255, (96 + channel) / 255, alpha}});
   }
@@ -85,7 +103,7 @@ inline void ConfigureRadial(shader::programs::SlugGradientParams& p, Case testCa
 }
 inline void ConfigurePaint(shader::programs::SlugGradientParams& p, Case testCase) {
   p.row0[0] = p.row1[1] = 1;
-  p.endGrad[0] = testCase == Case::ManyStops ? 6.0f : 8.0f;
+  p.endGrad[0] = HasManyStops(testCase) ? 6.0f : 8.0f;
   if (testCase == Case::Reflect || testCase == Case::Repeat) {
     p.spreadMode = testCase == Case::Reflect ? 1u : 2u;
     p.endGrad[0] = 2;
@@ -117,11 +135,33 @@ inline shader::programs::SlugGradientParams Parameters(Case testCase) {
   std::copy(planes.begin(), planes.end(), p.clipPolygonPlanes);
   const auto stops = Stops(testCase);
   p.stopCount = static_cast<uint32_t>(stops.size());
+  if (stops.size() > shader::programs::kSlugGradientMaxStops) {
+    return p;  // The shader reads every stop from the ramp; see `RampTexels`.
+  }
   for (size_t i = 0; i < stops.size(); ++i) {
     p.stopOffsets[i] = stops[i].offset;
     std::copy(stops[i].color.begin(), stops[i].color.end(), p.stopColors + i * 4);
   }
   return p;
+}
+/// Width in texels of the stop ramp `RampTexels` lays out for \p stopCount stops: whole
+/// 256-byte rows, at most 1024 texels.
+inline uint32_t RampWidth(size_t stopCount) {
+  return static_cast<uint32_t>(std::min<size_t>(1024, (stopCount + 15) / 16 * 16));
+}
+/// RGBA32Float texels of the stop ramp the gradient shader reads when a gradient has more stops
+/// than its uniform carries: stop i in column `i % width` of row pair `i / width`, its color in
+/// the pair's first row and its offset in the red channel of the second.
+inline std::vector<float> RampTexels(const std::vector<Stop>& stops, uint32_t width,
+                                     uint32_t height) {
+  std::vector<float> texels(size_t(width) * height * 4);
+  for (size_t i = 0; i < stops.size(); ++i) {
+    const size_t colorRow = i / width * 2, column = i % width;
+    std::copy(stops[i].color.begin(), stops[i].color.end(),
+              texels.begin() + (colorRow * width + column) * 4);
+    texels[((colorRow + 1) * width + column) * 4] = stops[i].offset;
+  }
+  return texels;
 }
 inline uint8_t ClipValue(uint32_t x, uint32_t y) {
   constexpr std::array<uint8_t, 4> values{0, 85, 170, 255};
@@ -303,6 +343,33 @@ void CheckSlugGradient(DeviceType& device, const shader::CompiledShaderView& sha
   ASSERT_NE(shader.resource("clipMaskTexture"), nullptr);
   entries.push_back(
       {shader.resource("clipMaskTexture")->binding, TextureViewBinding{clipView.result()}});
+  // A gradient with more stops than the uniform carries reads them all from the ramp; any other
+  // binds the clip texture in its place, which the shader never reads.
+  const auto stops = Stops(testCase);
+  std::optional<Texture> ramp;
+  std::optional<TextureView> rampView;
+  if (stops.size() > shader::programs::kSlugGradientMaxStops) {
+    const uint32_t width = RampWidth(stops.size());
+    const auto height = static_cast<uint32_t>((stops.size() + width - 1) / width * 2);
+    auto created = device.createTexture({"stop ramp",
+                                         {width, height},
+                                         TextureFormat::RGBA32Float,
+                                         TextureUsage::Sampled | TextureUsage::CopyDst});
+    ASSERT_THAT(created, HasResult());
+    ramp = std::move(created).result();
+    const std::vector<float> texels = RampTexels(stops, width, height);
+    ASSERT_THAT(
+        device.writeTexture(
+            *ramp, {reinterpret_cast<const uint8_t*>(texels.data()), texels.size() * sizeof(float)},
+            {0, width * 16, height}, {width, height}),
+        IsOk());
+    auto view = device.createTextureView(*ramp, {"stop ramp"});
+    ASSERT_THAT(view, HasResult());
+    rampView = std::move(view).result();
+  }
+  ASSERT_NE(shader.resource("stopRamp"), nullptr);
+  entries.push_back({shader.resource("stopRamp")->binding,
+                     TextureViewBinding{rampView ? *rampView : clipView.result()}});
   auto bindGroup = device.createBindGroup({"Slug gradient", layout.result(), entries});
   ASSERT_THAT(bindGroup, HasResult());
   auto readback = device.createBuffer(

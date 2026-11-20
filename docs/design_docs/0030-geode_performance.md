@@ -730,9 +730,6 @@ required to hit the per-frame goals here.
   attribute frame cost to specific draws.
 - [ ] Cross-process native shader artifact reuse if startup profiling warrants it.
 - [ ] Glyph-level path cache once text is a measured hotspot in a real editor workload.
-- [ ] Investigate whether `populateSharedGradientUniforms` can move
-  gradient stops to a texture (freeing the >16-stop cap in
-  `slug_gradient.wgsl:28`).
 
 ## Appendix - measured steady-state cost profile
 

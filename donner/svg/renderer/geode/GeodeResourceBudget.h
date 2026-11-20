@@ -44,9 +44,29 @@ public:
   /// @param retainedBytes Additional retained geometry bytes.
   /// @return False if any limit is exceeded or the frame was already rejected.
   [[nodiscard]] bool reserve(std::size_t draws, std::size_t items, std::uint64_t retainedBytes) {
-    if (rejected_ || draws_ > limits_.draws || draws > limits_.draws - draws_ ||
-        items_ > limits_.items || items > limits_.items - items_ ||
-        retainedBytes_ > limits_.retainedBytes ||
+    if (rejected_) {
+      return false;
+    }
+    return reserveQueued(draws, items, retainedBytes);
+  }
+
+  /**
+   * Charge a draw that was queued before the frame was rejected, against the limits alone.
+   *
+   * A deferred draw is admitted when its batch flushes, which can come after a later draw latched
+   * the rejection. Drawn in order it would have been admitted before that draw, which consumed
+   * nothing, so only the limits decide it. A refusal here latches the rejection as \ref reserve
+   * does.
+   *
+   * @param draws Additional draw calls.
+   * @param items Additional encoded geometry items.
+   * @param retainedBytes Additional retained geometry bytes.
+   * @return False if any limit is exceeded.
+   */
+  [[nodiscard]] bool reserveQueued(std::size_t draws, std::size_t items,
+                                   std::uint64_t retainedBytes) {
+    if (draws_ > limits_.draws || draws > limits_.draws - draws_ || items_ > limits_.items ||
+        items > limits_.items - items_ || retainedBytes_ > limits_.retainedBytes ||
         retainedBytes > limits_.retainedBytes - retainedBytes_) {
       rejected_ = true;
       return false;
@@ -186,6 +206,30 @@ public:
     releaseFamily(released);
   }
 
+  /**
+   * Charges \p bytes of a gradient stop ramp kept across frames, its texture and its stop key,
+   * as GPU residence under the same limit and refusal rules as \ref reserveResidentBytes, and
+   * counts them in \ref rampBytes.
+   *
+   * @param bytes Bytes to charge.
+   * @return Whether they were charged.
+   */
+  [[nodiscard]] bool reserveRampBytes(std::uint64_t bytes) {
+    if (!reserveResidentBytes(bytes)) {
+      return false;
+    }
+    rampBytes_ += bytes;
+    return true;
+  }
+
+  /// Release up to \p bytes of kept gradient stop ramps from the resident charge.
+  /// @param bytes Ramp bytes to release.
+  void releaseRampBytes(std::uint64_t bytes) {
+    const std::uint64_t released = std::min(bytes, rampBytes_);
+    rampBytes_ -= released;
+    releaseResidentBytes(released);
+  }
+
   /// Tighten cache and resident limits for a test; production limits cannot be raised.
   /// @param limits Requested upper bounds for both document charges.
   void setLimitsForTesting(Limits limits) {
@@ -197,6 +241,8 @@ public:
   [[nodiscard]] std::uint64_t cacheBytes() const { return cacheBytes_; }
   /// GPU resident geometry, record, and uniform buffer bytes currently charged to this document.
   [[nodiscard]] std::uint64_t residentBytes() const { return residentBytes_; }
+  /// Bytes of gradient stop ramps kept across frames, a part of \ref residentBytes.
+  [[nodiscard]] std::uint64_t rampBytes() const { return rampBytes_; }
   /// Whether a cache or resident request has ever been refused.
   [[nodiscard]] bool rejected() const { return cacheRejected_ || residentRejected_; }
 
@@ -223,6 +269,7 @@ private:
   std::uint64_t residentBytes_ = 0;
   bool cacheRejected_ = false;
   bool residentRejected_ = false;
+  std::uint64_t rampBytes_ = 0;
 };
 
 /** Movable ownership of one cached geometry reservation. */
