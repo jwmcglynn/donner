@@ -884,26 +884,23 @@ INSTANTIATE_TEST_SUITE_P(PaintingShapeRendering, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingStroke, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/stroke",
-            {
-                // SVG uses glyph cells for a text element's object bounding box. The
-                // vendored images use ink extents; the Firefox references use glyph cells.
-                {"linear-gradient-on-text.svg",
-                 GradientStrokeOnTextGoldens(
-                     "donner/svg/renderer/testdata/golden/"
-                     "firefox-stroke-linear-gradient-on-text.png",
-                     "donner/svg/renderer/testdata/golden/geode/"
-                     "painting_stroke_linear-gradient-on-text.png")},
-                {"radial-gradient-on-text.svg",
-                 GradientStrokeOnTextGoldens(
-                     "donner/svg/renderer/testdata/golden/"
-                     "firefox-stroke-radial-gradient-on-text.png",
-                     "donner/svg/renderer/testdata/golden/geode/"
-                     "painting_stroke_radial-gradient-on-text.png")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "painting/stroke",
+                {
+                    // SVG uses glyph cells for a text element's object bounding box. The
+                    // vendored images use ink extents; the Firefox references use glyph cells.
+                    {"linear-gradient-on-text.svg",
+                     GradientStrokeOnTextGoldens("donner/svg/renderer/testdata/golden/"
+                                                 "firefox-stroke-linear-gradient-on-text.png",
+                                                 "donner/svg/renderer/testdata/golden/geode/"
+                                                 "painting_stroke_linear-gradient-on-text.png")},
+                    {"radial-gradient-on-text.svg",
+                     GradientStrokeOnTextGoldens("donner/svg/renderer/testdata/golden/"
+                                                 "firefox-stroke-radial-gradient-on-text.png",
+                                                 "donner/svg/renderer/testdata/golden/geode/"
+                                                 "painting_stroke_radial-gradient-on-text.png")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
