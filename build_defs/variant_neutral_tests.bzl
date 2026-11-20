@@ -180,6 +180,12 @@ def variant_neutral_test_suite(name):
     _tier_variable(name = "_variant_neutral_tier_variable", value = _tier_select("2", "1"), **common)
 
     _fixture(name = "_variant_neutral_clean")
+
+    # A library that is only compatible in the full text tier still shares its compile there.
+    _fixture(
+        name = "_variant_neutral_tier_compatible",
+        target_compatible_with = _tier_select([], ["@platforms//:incompatible"]),
+    )
     _fixture(name = "_variant_neutral_dep_define", deps = [":_variant_neutral_define_reader"])
     _fixture(name = "_variant_neutral_dep_header", deps = [":_variant_neutral_header_reader"])
     _fixture(name = "_variant_neutral_generated", deps = [":_variant_neutral_generated_header_reader"])
@@ -203,6 +209,7 @@ def variant_neutral_test_suite(name):
         "variant_neutral_compiles_in_place_without_flag_test": (_compiles_in_place_test, "clean"),
         "variant_neutral_accepts_unused_select_test": (_links_neutral_objects_geode_test, "dep_define"),
         "variant_neutral_accepts_unused_make_variable_test": (_links_neutral_objects_geode_test, "make_variable"),
+        "variant_neutral_keeps_variant_compatibility_test": (_links_neutral_objects_test, "tier_compatible"),
     }
 
     # Real libraries: donner_cc_library shares by default, and the flag turns sharing off.

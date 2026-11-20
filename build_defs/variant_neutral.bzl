@@ -343,7 +343,14 @@ def _classify(srcs):
             return None
     return struct(compiled = compiled, headers = headers) if compiled else None
 
-def variant_neutral_srcs(name, srcs, hdrs = [], copts = [], testonly = None, target_compatible_with = None, **kwargs):
+def variant_neutral_srcs(
+        name,
+        srcs,
+        hdrs = [],
+        copts = [],
+        testonly = None,
+        target_compatible_with = None,  # @unused
+        **kwargs):
     """Declares the neutral compile of a library and returns the `srcs` for the library itself.
 
     The returned value compiles `srcs` in place unless `//build_defs:share_variant_neutral_compiles`
@@ -358,7 +365,10 @@ def variant_neutral_srcs(name, srcs, hdrs = [], copts = [], testonly = None, tar
       hdrs: The library's headers.
       copts: The library's compile options.
       testonly: The library's testonly value.
-      target_compatible_with: The library's compatibility constraints.
+      target_compatible_with: The library's compatibility constraints. They stay on the library,
+        in the consumer's configuration, and are not applied to the neutral compile: constraints
+        that follow a product variant would make the neutral compile, and through it the library,
+        incompatible in every variant. The comparison catches such a library instead.
       **kwargs: The library's other cc_library attributes. Those that affect compilation are
         applied to the neutral compile and compared.
 
@@ -378,7 +388,6 @@ def variant_neutral_srcs(name, srcs, hdrs = [], copts = [], testonly = None, tar
     }
     common = {
         "tags": ["manual"],
-        "target_compatible_with": target_compatible_with,
         "testonly": testonly,
         "visibility": ["//visibility:private"],
     }
