@@ -258,7 +258,7 @@ INSTANTIATE_TEST_SUITE_P(
                          "The covered area of the rotated rect agrees with a 16x scan "
                          "control to <0.3 px in total. Coverage along its edges differs, "
                          "and the directional stdDeviation=\"12 0\" blur widens that into a "
-                         "thin band (263 px on Metal, 248 on software Vulkan at the default "
+                         "thin band (262 px on Metal, 247 on software Vulkan at the default "
                          "threshold). TinySkia differs by 99 px from the vendored reference.")},
                     {"huge-stdDeviation.svg",
                      Params::UndefinedBehavior(

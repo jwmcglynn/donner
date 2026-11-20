@@ -879,6 +879,221 @@ TEST_F(RendererRegressionTests, FilterFractionalOffsetsTranslateBySubpixels) {
   }
 }
 
+/// Whether device pixel \p p, which covers `[p, p + 1)`, overlaps the continuous span `[lo, hi)`.
+bool PixelTouchesSpan(int p, double lo, double hi) {
+  return p + 1 > lo && p < hi;
+}
+
+/// Whether the center of device pixel \p p lies in the half-open continuous span `[lo, hi)`.
+bool PixelCenterInSpan(int p, double lo, double hi) {
+  return p + 0.5 >= lo && p + 0.5 < hi;
+}
+
+/// Whether device pixel \p p overlaps the device rectangle \p box.
+bool PixelTouches(Vector2i p, const Box2d& box) {
+  return PixelTouchesSpan(p.x, box.topLeft.x, box.bottomRight.x) &&
+         PixelTouchesSpan(p.y, box.topLeft.y, box.bottomRight.y);
+}
+
+/// Whether the center of device pixel \p p lies inside the half-open device rectangle \p box.
+bool PixelCenterIn(Vector2i p, const Box2d& box) {
+  return PixelCenterInSpan(p.x, box.topLeft.x, box.bottomRight.x) &&
+         PixelCenterInSpan(p.y, box.topLeft.y, box.bottomRight.y);
+}
+
+/// The half-open range of whole pixels along one axis that overlap `[lo, hi)`, found by testing
+/// each pixel of `[0, limit)` rather than by rounding the edges.
+std::pair<int, int> TouchedPixelRange(double lo, double hi, int limit) {
+  int first = limit;
+  int last = -1;
+  for (int p = 0; p < limit; ++p) {
+    if (PixelTouchesSpan(p, lo, hi)) {
+      first = std::min(first, p);
+      last = std::max(last, p);
+    }
+  }
+  return {first, last + 1};
+}
+
+/// Opaque colors of the expected filter results.
+enum class FlatColor { Transparent, Blue, Red };
+
+/// A \p size bitmap holding the color \p colorAt returns for each device pixel.
+RendererBitmap FlatColorBitmap(Vector2i size, const std::function<FlatColor(Vector2i)>& colorAt) {
+  RendererBitmap bitmap;
+  bitmap.dimensions = size;
+  bitmap.rowBytes = static_cast<std::size_t>(size.x) * 4;
+  bitmap.alphaType = AlphaType::Unpremultiplied;
+  bitmap.pixels.assign(bitmap.rowBytes * size.y, 0);
+  for (int y = 0; y < size.y; ++y) {
+    for (int x = 0; x < size.x; ++x) {
+      const FlatColor color = colorAt(Vector2i(x, y));
+      if (color == FlatColor::Transparent) {
+        continue;
+      }
+      uint8_t* pixel = bitmap.pixels.data() + y * bitmap.rowBytes + x * 4;
+      pixel[0] = color == FlatColor::Red ? 255 : 0;
+      pixel[2] = color == FlatColor::Blue ? 255 : 0;
+      pixel[3] = 255;
+    }
+  }
+  return bitmap;
+}
+
+/// One filter whose region or primitive subregion edges fall between device pixel centers.
+struct FractionalEdgeCase {
+  std::string label;       //!< Label for the comparison outputs.
+  double scale = 1.0;      //!< Uniform user-to-device scale of the filtered element.
+  Box2d region;            //!< Filter region, in user units.
+  std::string primitives;  //!< Filter primitive markup.
+  std::string source;      //!< Filtered element markup, open for the `filter` attribute.
+  std::function<FlatColor(Vector2i)> expected;  //!< Expected color of each device pixel.
+};
+
+/// Formats \p value for an SVG attribute.
+std::string SvgNumber(double value) {
+  std::ostringstream out;
+  out << value;
+  return out.str();
+}
+
+/// `x`, `y`, `width` and `height` attributes for \p box.
+std::string SvgBoxAttributes(const Box2d& box) {
+  return " x=\"" + SvgNumber(box.topLeft.x) + "\" y=\"" + SvgNumber(box.topLeft.y) + "\" width=\"" +
+         SvgNumber(box.width()) + "\" height=\"" + SvgNumber(box.height()) + "\"";
+}
+
+/// \p box scaled by \p scale, mapping user units to device pixels.
+Box2d ScaledBox(const Box2d& box, double scale) {
+  return Box2d(box.topLeft * scale, box.bottomRight * scale);
+}
+
+/// An feFlood with a fractional default subregion (the filter region), offset by whole device
+/// pixels: the flood keeps every pixel the region touches, the offset keeps its input's subregion,
+/// and the output keeps the pixels whose centers lie inside the region.
+FractionalEdgeCase FloodOffsetCase(std::string label, double scale, const Box2d& region,
+                                   Vector2i deviceShift) {
+  const Box2d device = ScaledBox(region, scale);
+  return {std::move(label),
+          scale,
+          region,
+          R"svg(<feFlood flood-color="blue"/><feOffset dx=")svg" +
+              SvgNumber(deviceShift.x / scale) + "\" dy=\"" + SvgNumber(deviceShift.y / scale) +
+              "\"/>",
+          R"svg(<rect x="-10" y="-10" width="100" height="100" fill="red")svg",
+          [device, deviceShift](Vector2i p) {
+            return PixelTouches(p - deviceShift, device) && PixelTouches(p, device) &&
+                           PixelCenterIn(p, device)
+                       ? FlatColor::Blue
+                       : FlatColor::Transparent;
+          }};
+}
+
+/// feTile of a fractional input subregion cut from a source whose blue part ends at the whole
+/// device column \p sourceRight: the tile is the block of pixels the subregion touches.
+FractionalEdgeCase TileCase(std::string label, double scale, const Box2d& subregion,
+                            int sourceRight) {
+  const Box2d device = ScaledBox(subregion, scale);
+  const std::pair<int, int> columns = TouchedPixelRange(device.topLeft.x, device.bottomRight.x, 40);
+  const std::pair<int, int> rows = TouchedPixelRange(device.topLeft.y, device.bottomRight.y, 40);
+  const auto wrap = [](int p, int origin, int period) {
+    return origin + ((p - origin) % period + period) % period;
+  };
+  return {std::move(label),
+          scale,
+          Box2d(Vector2d::Zero(), Vector2d(40, 40) / scale),
+          "<feOffset" + SvgBoxAttributes(subregion) + R"svg( result="t"/><feTile in="t"/>)svg",
+          R"svg(<rect x="0" y="0" width=")svg" + SvgNumber(sourceRight / scale) +
+              R"svg(" height="100" fill="blue")svg",
+          [columns, rows, wrap, sourceRight](Vector2i p) {
+            return wrap(p.x, columns.first, columns.second - columns.first) < sourceRight &&
+                           wrap(p.y, rows.first, rows.second - rows.first) < 40
+                       ? FlatColor::Blue
+                       : FlatColor::Transparent;
+          }};
+}
+
+/// An feDropShadow ending the graph with its default subregion, the filter region: a red source
+/// that ends at device column 20 over its blue shadow, offset by (1, -1). The source is cut to the
+/// pixels the region touches, and the output keeps the pixels whose centers lie inside it.
+FractionalEdgeCase DropShadowCase(std::string label, const Box2d& region) {
+  const auto source = [region](Vector2i p) { return p.x < 20 && PixelTouches(p, region); };
+  return {std::move(label),
+          1.0,
+          region,
+          R"svg(<feDropShadow dx="1" dy="-1" stdDeviation="0" flood-color="blue"/>)svg",
+          R"svg(<rect x="0" y="0" width="20" height="100" fill="red")svg",
+          [region, source](Vector2i p) {
+            if (!PixelTouches(p, region) || !PixelCenterIn(p, region)) {
+              return FlatColor::Transparent;
+            }
+            if (source(p)) {
+              return FlatColor::Red;
+            }
+            return source(p + Vector2i(-1, 1)) ? FlatColor::Blue : FlatColor::Transparent;
+          }};
+}
+
+/// Filters whose region or primitive subregion edges fall between device pixel centers, including
+/// at exactly half a pixel, at a negative origin, and under a scale that makes whole user edges
+/// fractional. A primitive's result keeps every pixel its axis-aligned subregion touches, and the
+/// filter's output keeps the pixels whose centers lie inside the filter region; the expected
+/// images apply those two rules pixel by pixel. Geode builds also compare against the CPU renderer.
+TEST_F(RendererRegressionTests, FilterRegionAndSubregionFractionalEdgesSelectDevicePixels) {
+  constexpr Vector2i kSize(40, 40);
+  std::vector<FractionalEdgeCase> cases;
+  for (const double fraction : {0.25, 0.5, 0.75}) {
+    const std::string suffix = std::to_string(static_cast<int>(fraction * 100));
+    const Box2d region(Vector2d(4 + fraction, 6 + fraction),
+                       Vector2d(30 + fraction, 28 + fraction));
+    cases.push_back(FloodOffsetCase("filter_region_edges_" + suffix, 1.0, region, {1, -1}));
+
+    const Box2d subregion(Vector2d(8 + fraction, 10 + fraction),
+                          Vector2d(24 + fraction, 22 + fraction));
+    cases.push_back(
+        {"primitive_subregion_edges_" + suffix, 1.0, Box2d(Vector2d::Zero(), Vector2d(40, 40)),
+         R"svg(<feFlood flood-color="blue")svg" + SvgBoxAttributes(subregion) +
+             R"svg(/><feOffset dx="-2" dy="2"/>)svg",
+         R"svg(<rect x="0" y="0" width="40" height="40" fill="red")svg", [subregion](Vector2i p) {
+           return PixelTouches(p + Vector2i(2, -2), subregion) && PixelTouches(p, subregion)
+                      ? FlatColor::Blue
+                      : FlatColor::Transparent;
+         }});
+
+    cases.push_back(TileCase("tile_period_" + suffix, 1.0,
+                             Box2d::FromXYWH(8 + fraction, 10 + fraction, 4, 4), 10));
+    cases.push_back(DropShadowCase("drop_shadow_final_" + suffix, region));
+  }
+  cases.push_back(FloodOffsetCase("negative_region_origin", 1.0,
+                                  Box2d(Vector2d(-0.75, -0.25), Vector2d(20.25, 20.75)), {1, 1}));
+  // Device region (4.5, 7.5) to (27, 27) and a whole three-pixel device shift.
+  cases.push_back(FloodOffsetCase("scaled_region_edges", 1.5,
+                                  Box2d(Vector2d(3, 5), Vector2d(18, 18)), {3, -3}));
+  // Device subregion (8.75, 10) to (13.125, 14.375), whose touched block is 6 pixels wide.
+  cases.push_back(TileCase("scaled_tile_period", 2.5, Box2d::FromXYWH(3.5, 4, 1.75, 1.75), 10));
+
+  const auto render = [&](RendererBackend backend, const FractionalEdgeCase& edgeCase) {
+    const std::string svg = R"svg(<g transform="scale()svg" + SvgNumber(edgeCase.scale) +
+                            R"svg()"><filter id="f" filterUnits="userSpaceOnUse")svg" +
+                            SvgBoxAttributes(edgeCase.region) + ">" + edgeCase.primitives +
+                            "</filter>" + edgeCase.source + R"svg( filter="url(#f)"/></g>)svg";
+    SVGDocument document = instantiateSubtree(svg, {}, kSize);
+    return RenderDocumentWithBackend(document, backend);
+  };
+  for (const FractionalEdgeCase& edgeCase : cases) {
+    SCOPED_TRACE(edgeCase.label);
+    editor::tests::CompareBitmapToBitmap(render(ActiveRendererBackend(), edgeCase),
+                                         FlatColorBitmap(kSize, edgeCase.expected), edgeCase.label,
+                                         editor::tests::PixelmatchIdentityParams());
+    if (IsRendererBackendAvailable(RendererBackend::Geode) &&
+        IsRendererBackendAvailable(RendererBackend::TinySkia)) {
+      editor::tests::CompareBitmapToBitmap(
+          render(RendererBackend::Geode, edgeCase), render(RendererBackend::TinySkia, edgeCase),
+          edgeCase.label + "_geode_vs_tiny_skia", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractUrlChainsMatchEquivalentPrimitiveGraphs) {
   const auto render = [](std::string_view definitions, std::string_view filter) {
     SVGDocument document = instantiateSubtree(
