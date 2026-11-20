@@ -3031,8 +3031,7 @@ constexpr std::string_view kSpanOwnPattern =
 
 TEST_F(RendererRegressionTests, TextSpanPaintsItsOwnPattern) {
   // A tspan whose own fill or stroke references a pattern paints that pattern, inside text painted
-  // with a solid, a gradient or a pattern. A tspan whose own fill references the text's pattern
-  // paints the text's pattern.
+  // with a solid, a gradient or a pattern.
   constexpr std::string_view kOwnFill = R"svg(fill="url(#own)")svg";
   constexpr std::string_view kOwnStroke = R"svg(stroke="url(#own)")svg";
   constexpr std::string_view kOwnStrokePath =
@@ -3056,22 +3055,35 @@ TEST_F(RendererRegressionTests, TextSpanPaintsItsOwnPattern) {
                                            editor::tests::PixelmatchIdentityParams());
     }
   }
+  // Inside pattern-painted text, a span that declares the text's own pattern paints it, and a span
+  // whose own fill or stroke is a gradient paints that gradient.
   constexpr std::string_view kPatternFill = R"svg(fill="url(#paint)")svg";
-  const std::string defs = std::string(kTextStrokePaints[2].defs) + std::string(kSpanOwnPattern);
-  const SpanStrokeCase singleCase{"span_declares_the_text_pattern",
-                                  kPatternFill,
-                                  kPatternFill,
-                                  "",
-                                  kPatternFill,
-                                  kPatternFill,
-                                  false,
-                                  defs,
-                                  /*pathPerGlyph=*/true};
-  SCOPED_TRACE(singleCase.label);
-  const SpanStrokeRenders renders = RenderSpanStrokeCase(singleCase);
-  editor::tests::CompareBitmapToBitmap(renders.actual, renders.expected,
-                                       "span_paint_" + std::string(singleCase.label),
-                                       editor::tests::PixelmatchIdentityParams());
+  constexpr std::string_view kPatternStroke =
+      R"svg(fill="none" stroke-width="4" stroke="url(#paint)")svg";
+  constexpr std::string_view kOwnGradientFill = R"svg(fill="url(#ownGradient)")svg";
+  constexpr std::string_view kOwnGradientStroke = R"svg(stroke="url(#ownGradient)")svg";
+  constexpr std::string_view kOwnGradientStrokePath =
+      R"svg(fill="none" stroke-width="4" stroke="url(#ownGradient)")svg";
+  const std::string defs =
+      std::string(kTextStrokePaints[2].defs) +
+      R"svg(<linearGradient id="ownGradient" gradientUnits="userSpaceOnUse" x1="20" x2="180">)svg"
+      R"svg(<stop offset="0" stop-color="green"/><stop offset="1" stop-color="orange"/>)svg"
+      R"svg(</linearGradient>)svg";
+  const std::array<SpanStrokeCase, 3> patternTextCases = {{
+      {"span_declares_the_text_pattern", kPatternFill, kPatternFill, "", kPatternFill, kPatternFill,
+       false, defs, /*pathPerGlyph=*/true},
+      {"span_own_gradient_fill_in_pattern_text", kPatternFill, kOwnGradientFill, "", kPatternFill,
+       kOwnGradientFill, false, defs, /*pathPerGlyph=*/true},
+      {"span_own_gradient_stroke_in_pattern_text", kPatternStroke, kOwnGradientStroke, "",
+       kPatternStroke, kOwnGradientStrokePath, false, defs},
+  }};
+  for (const SpanStrokeCase& testCase : patternTextCases) {
+    SCOPED_TRACE(testCase.label);
+    const SpanStrokeRenders renders = RenderSpanStrokeCase(testCase);
+    editor::tests::CompareBitmapToBitmap(renders.actual, renders.expected,
+                                         "span_paint_" + std::string(testCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 /// Definitions shared by the span pattern draw-path tests: the text's pattern, a span's own
