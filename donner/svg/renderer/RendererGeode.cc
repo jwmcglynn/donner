@@ -756,6 +756,27 @@ bool paintReferenceIsGradient(const components::ResolvedPaintServer& server) {
   const auto* computedGradient = handle.try_get<components::ComputedGradientComponent>();
   return computedGradient != nullptr && computedGradient->initialized;
 }
+
+/// The solid color a text draw paints for \p server at \p opacity, or nullopt when it paints no
+/// solid color. A paint server reference paints its server rather than its fallback color wherever
+/// the text draw can paint that server: a gradient (one that cannot be drawn falls back where it is
+/// drawn), or a pattern when the driver staged a tile, as \p patternStaged says. The staged tile
+/// is always the text element's own pattern. Only a pattern reference with no staged tile paints
+/// its fallback color.
+std::optional<css::RGBA> TextSolidPaint(const components::ResolvedPaintServer& server,
+                                        double opacity, const css::RGBA& currentColor,
+                                        bool patternStaged) {
+  const float alpha = static_cast<float>(opacity);
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
+    return solid->color.resolve(currentColor, alpha);
+  }
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
+  if (ref == nullptr || !ref->fallback.has_value() || patternStaged ||
+      paintReferenceIsGradient(server)) {
+    return std::nullopt;
+  }
+  return ref->fallback->resolve(currentColor, alpha);
+}
 #endif  // DONNER_TEXT_ENABLED
 
 /// Attempt to resolve a `PaintResolvedReference` into a concrete linear-gradient
@@ -3672,17 +3693,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool warnedGradient = false;
   bool warnedText = false;
 
-  /// Resolve the current fill/stroke paint's fallback to a solid RGBA color
-  /// when the referenced paint server can't instantiate. Returns nullopt for
-  /// None and for paint-server references without a fallback.
-  std::optional<css::RGBA> resolveSolidFill() {
-    return resolveSolidPaint(paint.fill, paint.fillOpacity);
-  }
-
-  std::optional<css::RGBA> resolveSolidStroke() {
-    return resolveSolidPaint(paint.stroke, paint.strokeOpacity);
-  }
-
+  /// The solid color of \p server at \p effectiveOpacity: a solid's color, or a paint server
+  /// reference's fallback color. Returns nullopt for None and for a reference without a fallback.
   std::optional<css::RGBA> resolveSolidPaint(const components::ResolvedPaintServer& server,
                                              double effectiveOpacity) {
     if (std::holds_alternative<PaintServer::None>(server)) {
@@ -8371,20 +8383,21 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // pattern bleeding onto the following element. Per-span pattern fill is a
   // separate gap (matching the element-level handling here).
   const bool hasPatternFill = impl_->patternFillPaint.has_value();
+  const bool hasPatternStroke = impl_->patternStrokePaint.has_value();
+  const css::RGBA currentColor = impl_->paint.currentColor;
   Impl::TextElementGradients elementGradients;
   impl_->resolveTextElementGradients(textBounds, params.strokeParams.strokeWidth > 0.0,
                                      hasPatternFill, elementGradients);
 
   // Resolve a default fill colour from the text-element-level paint
   // state. Per-span fills override below when present.
-  std::optional<css::RGBA> defaultFill = impl_->resolveSolidFill();
+  std::optional<css::RGBA> defaultFill =
+      TextSolidPaint(impl_->paint.fill, impl_->paint.fillOpacity, currentColor, hasPatternFill);
   if (!defaultFill.has_value()) {
     // No solid fill and no fallback -- text is effectively invisible.
     // Still walk through in case a per-span fill kicks in.
     defaultFill = css::RGBA(0, 0, 0, 0);
   }
-
-  const css::RGBA currentColor = impl_->paint.currentColor;
 
   // The element-level fill is already scaled by the top-level
   // `setPaint` call, but per-span fill overrides need their own
@@ -8394,14 +8407,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       return *defaultFill;
     }
     const auto& span = text.spans[runIndex];
-    const float opacityScale = static_cast<float>(span.fillOpacity * span.opacity);
-    if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
-      return solid->color.resolve(currentColor, opacityScale);
-    }
-    if (const auto* ref = std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
-      if (ref->fallback.has_value()) {
-        return ref->fallback->resolve(currentColor, opacityScale);
-      }
+    if (const std::optional<css::RGBA> color = TextSolidPaint(
+            span.resolvedFill, span.fillOpacity * span.opacity, currentColor, hasPatternFill)) {
+      return *color;
     }
     return *defaultFill;
   };
@@ -8499,7 +8507,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     bool spanOverridesStroke = false;
     {
       StrokeParams runStrokeParams = params.strokeParams;
-      std::optional<css::RGBA> color = impl_->resolveSolidStroke();
+      std::optional<css::RGBA> color = TextSolidPaint(
+          impl_->paint.stroke, impl_->paint.strokeOpacity, currentColor, hasPatternStroke);
       bool runHasStroke = true;
       if (runIndex < text.spans.size()) {
         const auto& span = text.spans[runIndex];
@@ -8515,7 +8524,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           spanOverridesStroke = true;
           strokeServer = &span.resolvedStroke;
           strokeOpacity = span.strokeOpacity * span.opacity;
-          color = impl_->resolveSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity);
+          color = TextSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity,
+                                 currentColor, hasPatternStroke);
         }
       }
       if (runHasStroke && runStrokeParams.strokeWidth > 0.0) {
