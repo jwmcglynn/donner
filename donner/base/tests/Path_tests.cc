@@ -1616,6 +1616,50 @@ bool StrokeContains(const Path& path, const Vector2d& query) {
   return rayCastWinding(path, query) != 0;
 }
 
+/// Chord error of the round stroke pieces that share one circle.
+struct RoundChordError {
+  double maximum = 0.0;  //!< Largest distance from a chord midpoint to the circle.
+  int chords = 0;        //!< Number of chords measured.
+};
+
+/// Measures every outline edge that is a chord of the circle of \p radius around \p center: both
+/// endpoints lie on the circle and the midpoint lies in its outer quarter. Strip edges that pass
+/// through the center as diameters or radii are excluded, and a chord's error is its sagitta.
+RoundChordError MeasureRoundChordError(const Path& outline, const Vector2d& center, double radius) {
+  RoundChordError result;
+  const auto onCircle = [&](const Vector2d& point) {
+    return std::abs((point - center).length() - radius) <= radius * 1e-9;
+  };
+  const auto measure = [&](const Vector2d& from, const Vector2d& to) {
+    const double midpointDistance = ((from + to) * 0.5 - center).length();
+    if (onCircle(from) && onCircle(to) && midpointDistance > radius * 0.75) {
+      result.maximum = std::max(result.maximum, radius - midpointDistance);
+      ++result.chords;
+    }
+  };
+  const auto& points = outline.points();
+  Vector2d current;
+  Vector2d subpathStart;
+  for (const Path::Command& command : outline.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo: current = subpathStart = points[command.pointIndex]; break;
+      case Path::Verb::LineTo:
+        measure(current, points[command.pointIndex]);
+        current = points[command.pointIndex];
+        break;
+      case Path::Verb::ClosePath:
+        measure(current, subpathStart);
+        current = subpathStart;
+        break;
+      case Path::Verb::QuadTo:
+      case Path::Verb::CurveTo:
+        ADD_FAILURE() << "Stroke outlines contain only line segments";
+        break;
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 TEST(Path, StrokeToFillRoundCap) {
@@ -3655,6 +3699,55 @@ TEST(Path, StrokeToFillIndexesLargePolylineBeforeExtractingManyDashes) {
   EXPECT_GT(result.verbCount(), kSegments);
 }
 
+TEST(Path, StrokeToFillRoundPiecesHonorFlattenTolerance) {
+  // Round caps, joins and dots are arcs, so their chords must stay within the same flatten
+  // tolerance as flattened curves. Renderers shrink the tolerance as the view zooms in; a piece
+  // subdivided by its width alone shows straight chords once magnified.
+  struct Case {
+    const char* name;
+    Path centerline;
+    StrokeStyle style;
+    Vector2d center;
+  };
+  const StrokeStyle capStyle{.width = 2.0, .cap = LineCap::Round};
+  const StrokeStyle joinStyle{.width = 2.0, .cap = LineCap::Butt, .join = LineJoin::Round};
+  const Case cases[] = {
+      {"cap", PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build(), capStyle, {0, 0}},
+      {"join",
+       PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).build(),
+       joinStyle,
+       {10, 0}},
+      {"reversal join",
+       PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build(),
+       joinStyle,
+       {10, 0}},
+      {"near-reversal join",
+       PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 1e-11}).build(),
+       joinStyle,
+       {10, 0}},
+      {"dot", PathBuilder().moveTo({5, 5}).lineTo({5, 5}).build(), capStyle, {5, 5}},
+  };
+  for (const Case& c : cases) {
+    for (const double tolerance : {0.25, 1e-2, 1e-4}) {
+      SCOPED_TRACE(testing::Message() << c.name << " tolerance=" << tolerance);
+      const RoundChordError error = MeasureRoundChordError(
+          c.centerline.strokeToFill(c.style, tolerance), c.center, c.style.width * 0.5);
+      EXPECT_THAT(error.chords, testing::Gt(0));
+      EXPECT_THAT(error.maximum, testing::Le(tolerance));
+    }
+  }
+
+  // At the default tolerance a radius this large needs more chords than the width-based density
+  // provides, which stops growing at 4096 steps.
+  constexpr double kHugeRadius = 4.0e7;
+  const RoundChordError huge = MeasureRoundChordError(
+      PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build().strokeToFill(
+          {.width = 2.0 * kHugeRadius, .cap = LineCap::Round}, kFlattenTolerance),
+      {0, 0}, kHugeRadius);
+  EXPECT_THAT(huge.chords, testing::Gt(0));
+  EXPECT_THAT(huge.maximum, testing::Le(kFlattenTolerance));
+}
+
 TEST(Path, StrokeToFillRoundSubdivisionStopsAtCoordinatePrecision) {
   // Adjacent doubles at 2^60 are 256 apart, so a half turn of radius 2^14 spans only
   // 64 * pi coordinate spacings and gets 202 chords rather than the 4096-step cap that its
@@ -3726,7 +3819,7 @@ TEST(Path, StrokeToFillExtremeQuadraticKeepsVisibleCap) {
   // A scheduled-fuzzing input: every flattened vertex after the first has a y coordinate near
   // 1e91 or beyond, where adjacent doubles are far wider than the 1.2e64 half width, so each
   // round join collapses onto a horizontal segment through its vertex and contributes nothing.
-  // Tessellating those joins at their requested 4096 steps timed out the fuzzer; at coordinate
+  // Tessellating those joins at the per-piece step ceiling timed out the fuzzer; at coordinate
   // precision they need only the minimum, and the start cap at the origin and the strips remain.
   const Path path = PathBuilder()
                         .moveTo({0.0, 0.0})
@@ -3759,11 +3852,11 @@ TEST(Path, StrokeToFillHugeRoundStrokeHasBoundedSubdivision) {
   const Path filled = line.strokeToFill(style, kFlattenTolerance);
 
   EXPECT_FALSE(filled.empty());
-  EXPECT_LE(filled.verbCount(), 2u * 4096u + 16u);
+  EXPECT_LE(filled.verbCount(), 2u * 16384u + 16u);
 }
 
 TEST(Path, StrokeToFillAggregateRoundDashGeometryIsBounded) {
-  // Each zero-length round dash is a full 4096-point circle at this width,
+  // Each zero-length round dash is a full 16384-point circle at this width,
   // and its corner products still fit a double, so the dashes are emitted
   // until the aggregate point budget stops the pattern.
   const Path line = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();

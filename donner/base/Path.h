@@ -515,8 +515,8 @@ public:
    * be consumed with \ref FillRule::NonZero.
    *
    * @param style Stroke parameters (width, cap, join, miter limit, dash pattern).
-   * @param flattenTolerance Tolerance for curve flattening, in this path's
-   *   coordinate space.
+   * @param flattenTolerance Tolerance for approximating curves, round caps, round joins and
+   *   zero-length round dots with line segments, in this path's coordinate space.
    *
    * @return A new Path representing the filled outline of the stroke. Returns an empty Path when
    *   this path is empty, when the stroke width or \p flattenTolerance is not a positive finite
