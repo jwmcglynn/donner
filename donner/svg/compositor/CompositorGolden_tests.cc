@@ -5773,7 +5773,6 @@ INSTANTIATE_TEST_SUITE_P(
                                   TranslateElement(d, "#child", Vector2d(-8.0 * step, 0));
                                 },
                                 false, false},
-        // Guard: already matched a fresh render before clip paths and masks were followed.
         ReferenceTargetEditCase{
             "mask_use_target_moved", TargetInLayerDocument(kMaskOfTarget, "", kMaskedHost),
             [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
@@ -5811,6 +5810,7 @@ INSTANTIATE_TEST_SUITE_P(
                                   TranslateElement(d, "#maskChild", Vector2d(8.0 * step, 0));
                                 },
                                 false, false},
+        // Guard: already matched a fresh render before clip paths and masks were followed.
         ReferenceTargetEditCase{
             "pattern_use_target_moved",
             TargetInLayerDocument(kPatternAndMarkerOfTarget, "",
