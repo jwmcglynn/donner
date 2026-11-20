@@ -14,6 +14,7 @@
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 #include "donner/base/Transform.h"
@@ -257,6 +258,186 @@ TEST(ReferenceInvalidationTest, CleanDocumentStaysClean) {
   InvalidateReferenceDependents(document.unsafeRegistry());
 
   EXPECT_TRUE(document.unsafeRegistry().view<DirtyFlagsComponent>().empty());
+}
+
+constexpr std::string_view kClipAndMaskHosts = R"svg(
+  <defs>
+    <clipPath id="clip"><use href="#target"/></clipPath>
+    <mask id="copy" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+      <use href="#target"/>
+    </mask>
+    <clipPath id="other"><rect width="10" height="10"/></clipPath>
+    <clipPath id="own"><rect id="ownChild" width="40" height="40"/></clipPath>
+  </defs>
+  <g id="holder"><circle id="target" cx="20" cy="20" r="8" fill="white"/></g>
+  <rect id="free" x="70" y="4" width="10" height="10"/>
+  <rect id="clipped" y="40" width="30" height="20" clip-path="url(#clip)"/>
+  <rect id="cssClipped" x="32" y="40" width="30" height="20" style="clip-path: url(#clip)"/>
+  <rect id="masked" x="64" y="40" width="30" height="20" mask="url(#copy)"/>
+  <rect id="cssMasked" y="62" width="30" height="20" style="mask: url(#copy)"/>
+  <rect id="otherClipped" x="32" y="62" width="30" height="20" clip-path="url(#other)"/>
+  <rect id="ownClipped" x="64" y="62" width="30" height="20" clip-path="url(#own)"/>)svg";
+
+constexpr std::initializer_list<const char*> kHostsOfTarget = {"#clipped", "#cssClipped", "#masked",
+                                                               "#cssMasked"};
+
+TEST(ReferenceInvalidationTest, UseTargetEditRedrawsEveryElementClippedOrMaskedByACopy) {
+  for (const auto& [label, edit] :
+       std::initializer_list<std::pair<const char*, void (*)(SVGDocument&)>>{
+           {"move", [](SVGDocument& d) { Translate(d, "#target", Vector2d(6, 0)); }},
+           {"resize", [](SVGDocument& d) { d.querySelector("#target")->setAttribute("r", "12"); }},
+       }) {
+    SCOPED_TRACE(label);
+    SVGDocument document = DrawnDocument(kClipAndMaskHosts);
+    edit(document);
+    InvalidateReferenceDependents(document.unsafeRegistry());
+
+    for (const char* host : kHostsOfTarget) {
+      EXPECT_THAT(DirtyFlagsOf(document, host),
+                  Optional(HasDirtyFlags(DirtyFlagsComponent::ReferencedContent |
+                                         DirtyFlagsComponent::RenderInstance)))
+          << host;
+    }
+    EXPECT_THAT(DirtyFlagsOf(document, "#otherClipped"), Eq(std::nullopt));
+    EXPECT_THAT(DirtyFlagsOf(document, "#ownClipped"), Eq(std::nullopt));
+  }
+}
+
+// A clip path whose own child moves, with no `<use>`, redraws what it clips.
+TEST(ReferenceInvalidationTest, ClipPathChildEditRedrawsTheClippedElement) {
+  SVGDocument document = DrawnDocument(kClipAndMaskHosts);
+
+  Translate(document, "#ownChild", Vector2d(6, 0));
+  InvalidateReferenceDependents(document.unsafeRegistry());
+
+  EXPECT_THAT(DirtyFlagsOf(document, "#ownClipped"),
+              Optional(HasDirtyFlags(DirtyFlagsComponent::ReferencedContent)));
+  EXPECT_THAT(DirtyFlagsOf(document, "#clipped"), Eq(std::nullopt));
+}
+
+// A `<use>` copy is placed by the `<use>`, so moving the copied element's ancestor, editing an
+// unrelated element, or moving the copied element of a `<use>` that no clip path or mask holds
+// leaves every clipped and masked element alone.
+TEST(ReferenceInvalidationTest, EditsThatLeaveTheClipAndMaskContentMarkNoHost) {
+  for (const auto& [label, body, edit] :
+       std::initializer_list<std::tuple<const char*, std::string_view, void (*)(SVGDocument&)>>{
+           {"ancestor transform", kClipAndMaskHosts,
+            [](SVGDocument& d) { Translate(d, "#holder", Vector2d(0, 20)); }},
+           {"unrelated element", kClipAndMaskHosts,
+            [](SVGDocument& d) { Translate(d, "#free", Vector2d(0, 6)); }},
+           {"use outside clip and mask", R"svg(
+              <defs><clipPath id="clip"><rect width="40" height="40"/></clipPath></defs>
+              <circle id="target" cx="20" cy="20" r="8"/>
+              <use href="#target" x="40"/>
+              <rect id="clipped" y="40" width="30" height="20" clip-path="url(#clip)"/>)svg",
+            [](SVGDocument& d) { Translate(d, "#target", Vector2d(6, 0)); }},
+       }) {
+    SCOPED_TRACE(label);
+    SVGDocument document = DrawnDocument(body);
+    edit(document);
+    InvalidateReferenceDependents(document.unsafeRegistry());
+    for (const char* host : kHostsOfTarget) {
+      if (document.querySelector(host).has_value()) {
+        EXPECT_THAT(DirtyFlagsOf(document, host), Eq(std::nullopt)) << host;
+      }
+    }
+  }
+}
+
+// The copy reaches the clipped or masked element through a clip path that clips itself, a clip
+// path child that is clipped, a mask inside a mask, a `<use>` of the copied element's group and a
+// chain of `<use>` copies.
+TEST(ReferenceInvalidationTest, NestedClipAndMaskReferencesRedrawTheHost) {
+  SVGDocument document = DrawnDocument(R"svg(
+    <defs>
+      <clipPath id="inner"><use href="#target"/></clipPath>
+      <clipPath id="ownClip" clip-path="url(#inner)"><rect width="96" height="96"/></clipPath>
+      <clipPath id="childClip"><rect width="96" height="96" clip-path="url(#inner)"/></clipPath>
+      <mask id="innerMask" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <use href="#target"/>
+      </mask>
+      <mask id="outerMask" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="white" mask="url(#innerMask)"/>
+      </mask>
+      <mask id="groupMask" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <use href="#group"/>
+      </mask>
+      <use id="link" href="#target"/>
+      <mask id="chainMask" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <use href="#link"/>
+      </mask>
+    </defs>
+    <g id="group"><circle id="target" cx="20" cy="20" r="8" fill="white"/></g>
+    <rect id="ownClipHost" y="40" width="30" height="20" clip-path="url(#ownClip)"/>
+    <rect id="childClipHost" x="32" y="40" width="30" height="20" clip-path="url(#childClip)"/>
+    <rect id="maskInMaskHost" x="64" y="40" width="30" height="20" mask="url(#outerMask)"/>
+    <rect id="groupCopyHost" y="62" width="30" height="20" mask="url(#groupMask)"/>
+    <rect id="chainHost" x="32" y="62" width="30" height="20" mask="url(#chainMask)"/>)svg");
+
+  Translate(document, "#target", Vector2d(6, 0));
+  InvalidateReferenceDependents(document.unsafeRegistry());
+
+  for (const char* host :
+       {"#ownClipHost", "#childClipHost", "#maskInMaskHost", "#groupCopyHost", "#chainHost"}) {
+    EXPECT_THAT(DirtyFlagsOf(document, host),
+                Optional(HasDirtyFlags(DirtyFlagsComponent::ReferencedContent)))
+        << host;
+  }
+}
+
+/// \p length clip paths, each clipped by the previous one; the first holds `<use href="#a">`, and
+/// when \p cycle is set it is clipped by the last. `#host` is clipped by the last.
+std::string ClipPathChain(int length, bool cycle) {
+  std::string defs =
+      "<defs><clipPath id='c0'" +
+      std::string(cycle ? " clip-path='url(#c" + std::to_string(length - 1) + ")'" : "") +
+      "><use href='#a'/></clipPath>";
+  for (int i = 1; i < length; ++i) {
+    defs += "<clipPath id='c" + std::to_string(i) + "' clip-path='url(#c" + std::to_string(i - 1) +
+            ")'><rect width='96' height='96'/></clipPath>";
+  }
+  return defs + "</defs><rect id='a' width='10' height='10' fill='red'/>" +
+         "<rect id='host' y='40' width='30' height='20' clip-path='url(#c" +
+         std::to_string(length - 1) + ")'/>";
+}
+
+/// A chain of \p length `<use>` copies, each copying the previous one, the first copying a group
+/// that holds `#a`. When \p cycle is set, the group also holds a copy of the last one. A mask
+/// draws the last copy, and `#host` is masked by it.
+std::string UseChain(int length, bool cycle) {
+  std::string defs =
+      "<defs><g id='u0'><rect id='a' width='10' height='10' fill='white'/>" +
+      std::string(cycle ? "<use href='#u" + std::to_string(length - 1) + "'/>" : "") + "</g>";
+  for (int i = 1; i < length; ++i) {
+    defs += "<use id='u" + std::to_string(i) + "' href='#u" + std::to_string(i - 1) + "'/>";
+  }
+  return defs + "<mask id='m' maskUnits='userSpaceOnUse' x='0' y='0' width='96' height='96'>" +
+         "<use href='#u" + std::to_string(length - 1) + "'/></mask></defs>" +
+         "<rect id='host' y='40' width='30' height='20' mask='url(#m)'/>";
+}
+
+// Each chain is walked once per edit, so the walk stays linear in its length; parsing and drawing
+// the documents dominate the time these cases take.
+TEST(ReferenceInvalidationTest, LongAndCyclicClipPathChainsReachTheHost) {
+  for (const bool cycle : {false, true}) {
+    SCOPED_TRACE(cycle ? "cycle" : "chain");
+    SVGDocument document = DrawnDocument(ClipPathChain(1000, cycle));
+    Translate(document, "#a", Vector2d(6, 0));
+    InvalidateReferenceDependents(document.unsafeRegistry());
+    EXPECT_THAT(DirtyFlagsOf(document, "#host"),
+                Optional(HasDirtyFlags(DirtyFlagsComponent::ReferencedContent)));
+  }
+}
+
+TEST(ReferenceInvalidationTest, LongAndCyclicUseChainsReachTheHost) {
+  for (const bool cycle : {false, true}) {
+    SCOPED_TRACE(cycle ? "cycle" : "chain");
+    SVGDocument document = DrawnDocument(UseChain(1000, cycle));
+    Translate(document, "#a", Vector2d(6, 0));
+    InvalidateReferenceDependents(document.unsafeRegistry());
+    EXPECT_THAT(DirtyFlagsOf(document, "#host"),
+                Optional(HasDirtyFlags(DirtyFlagsComponent::ReferencedContent)));
+  }
 }
 
 /// Preparation counters after drawing \p document with \p renderer.
