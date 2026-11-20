@@ -224,8 +224,9 @@ OwnerChannel& Channel() {
   return *channel;
 }
 
-/// Calls this thread has deferred since its last owner round trip. Its destructor sends what is
-/// still held, unless the device that made it was released.
+/// Calls this thread has deferred since its last owner round trip. At thread exit its destructor
+/// drops what is still held without a round trip, and marks a refusal on each live device whose
+/// write or bind group construction it dropped, so that device fails closed if used again.
 thread_local BrowserDeferredCalls tDeferredCalls(Channel());
 
 /// Prints what a round trip's held calls reported, after the owner callback: owner callbacks must
