@@ -282,6 +282,97 @@ std::vector<uint8_t> GposTable(const std::vector<std::vector<uint8_t>>& lookups)
   return table;
 }
 
+/// GSUB 1.0 table with one script ('latn') whose default language system lists one 'smcp' feature
+/// that applies every one of @p lookups, in order.
+std::vector<uint8_t> GsubSmcpTable(const std::vector<std::vector<uint8_t>>& lookups) {
+  std::vector<uint8_t> table;
+  const size_t featureList = 30;
+  const size_t lookupList = featureList + 12 + 2 * lookups.size();
+  AppendBE16(&table, 1);   // Major version.
+  AppendBE16(&table, 0);   // Minor version.
+  AppendBE16(&table, 10);  // ScriptList offset.
+  AppendBE16(&table, static_cast<uint16_t>(featureList));
+  AppendBE16(&table, static_cast<uint16_t>(lookupList));
+  AppendBE16(&table, 1);  // ScriptList: one script.
+  table.insert(table.end(), {'l', 'a', 't', 'n'});
+  AppendBE16(&table, 8);       // Script offset.
+  AppendBE16(&table, 4);       // Script: default LangSys offset.
+  AppendBE16(&table, 0);       // langSysCount.
+  AppendBE16(&table, 0);       // LangSys: lookupOrderOffset.
+  AppendBE16(&table, 0xFFFF);  // No required feature.
+  AppendBE16(&table, 1);       // featureIndexCount.
+  AppendBE16(&table, 0);       // featureIndices[0].
+  AppendBE16(&table, 1);       // FeatureList: one feature.
+  table.insert(table.end(), {'s', 'm', 'c', 'p'});
+  AppendBE16(&table, 8);  // Feature offset.
+  AppendBE16(&table, 0);  // Feature: no params.
+  AppendBE16(&table, static_cast<uint16_t>(lookups.size()));
+  for (size_t i = 0; i < lookups.size(); ++i) {
+    AppendBE16(&table, static_cast<uint16_t>(i));
+  }
+  AppendBE16(&table, static_cast<uint16_t>(lookups.size()));
+  size_t lookupOffset = 2 + 2 * lookups.size();
+  for (const auto& lookup : lookups) {
+    AppendBE16(&table, static_cast<uint16_t>(lookupOffset));
+    lookupOffset += lookup.size();
+  }
+  for (const auto& lookup : lookups) {
+    table.insert(table.end(), lookup.begin(), lookup.end());
+  }
+  return table;
+}
+
+/// SingleSubst format 1 adding @p delta to glyphs @p first..@p last (a format-2 coverage range).
+std::vector<uint8_t> SingleSubstDelta(uint16_t first, uint16_t last, int16_t delta) {
+  std::vector<uint8_t> subtable;
+  AppendBE16(&subtable, 1);  // SingleSubst format 1.
+  AppendBE16(&subtable, 6);  // Coverage offset.
+  AppendBE16(&subtable, static_cast<uint16_t>(delta));
+  AppendBE16(&subtable, 2);  // Coverage format 2.
+  AppendBE16(&subtable, 1);  // rangeCount.
+  AppendBE16(&subtable, first);
+  AppendBE16(&subtable, last);
+  AppendBE16(&subtable, 0);  // startCoverageIndex.
+  return subtable;
+}
+
+/// SingleSubst format 2 replacing @p glyph with @p substitute (a format-1 coverage).
+std::vector<uint8_t> SingleSubstGlyph(uint16_t glyph, uint16_t substitute) {
+  std::vector<uint8_t> subtable;
+  AppendBE16(&subtable, 2);  // SingleSubst format 2.
+  AppendBE16(&subtable, 8);  // Coverage offset.
+  AppendBE16(&subtable, 1);  // glyphCount.
+  AppendBE16(&subtable, substitute);
+  AppendBE16(&subtable, 1);  // Coverage format 1.
+  AppendBE16(&subtable, 1);  // glyphCount.
+  AppendBE16(&subtable, glyph);
+  return subtable;
+}
+
+/// GSUB extension (lookup type 7) lookup wrapping one single substitution subtable.
+std::vector<uint8_t> GsubExtensionLookup(const std::vector<uint8_t>& wrapped) {
+  std::vector<uint8_t> extension;
+  AppendBE16(&extension, 1);  // ExtensionSubst format 1.
+  AppendBE16(&extension, 1);  // extensionLookupType: single substitution.
+  AppendBE32(&extension, 8);  // Offset to the wrapped subtable.
+  extension.insert(extension.end(), wrapped.begin(), wrapped.end());
+  return GposLookup(7, extension);
+}
+
+/// A minimal TrueType font with glyphs 1='A', 2='V' and 3='a' and the given GSUB table.
+std::vector<uint8_t> MakeGsubTestFont(std::vector<uint8_t> gsub) {
+  return MakeSfnt({
+      {"GSUB", std::move(gsub)},
+      {"cmap", CmapTable({{'A', 'A', 1}, {'V', 'V', 2}, {'a', 'a', 3}})},
+      {"glyf", QuadGlyphData()},
+      {"head", HeadTable(1000)},
+      {"hhea", HheaTable(800, -200, 100, 4)},
+      {"hmtx", HmtxTable({400, 500, 600, 700})},
+      {"loca", LocaTable()},
+      {"maxp", MaxpTable(4)},
+  });
+}
+
 std::vector<uint8_t> Os2Table(uint16_t version) {
   std::vector<uint8_t> table(90, 0);
   WriteBE16(&table, 0, version);
@@ -688,6 +779,42 @@ TEST_F(TextBackendSimpleTest, SmallCapsSynthesisUppercasesAndScalesLowercase) {
                                          AllOf(GlyphIndexIs(2), GlyphFontSizeScaleIs(FloatEq(1.0f)),
                                                GlyphXAdvanceIs(DoubleNear(60.0, 1e-4)),
                                                GlyphXKernIs(DoubleNear(-10.0, 1e-4)))));
+}
+
+// A face with an smcp feature draws its small-cap glyph at full size instead of a scaled capital.
+// The substitution here sits inside an extension lookup and covers a glyph range.
+TEST_F(TextBackendSimpleTest, NativeSmallCapsApplyTheSmcpSubstitution) {
+  const FontHandle font =
+      loadFont(MakeGsubTestFont(GsubSmcpTable({GsubExtensionLookup(SingleSubstDelta(3, 3, -1))})));
+  EXPECT_TRUE(backend_.hasSmallCapsFeature(font));
+
+  const auto shaped =
+      backend_.shapeRun(font, 100.0f, "aA", 0, 2, false, FontVariant::SmallCaps, false);
+  EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphIndexIs(2), GlyphFontSizeScaleIs(FloatEq(1.0f)),
+                                               GlyphXAdvanceIs(DoubleNear(60.0, 1e-4))),
+                                         AllOf(GlyphIndexIs(1), GlyphFontSizeScaleIs(FloatEq(1.0f)),
+                                               GlyphXAdvanceIs(DoubleNear(50.0, 1e-4)))));
+}
+
+// Each smcp lookup applies to the previous lookup's output, in lookup-list order.
+TEST_F(TextBackendSimpleTest, NativeSmallCapsChainLookupsInOrder) {
+  const FontHandle font = loadFont(MakeGsubTestFont(GsubSmcpTable(
+      {GposLookup(1, SingleSubstGlyph(3, 1)), GposLookup(1, SingleSubstGlyph(1, 2))})));
+
+  const auto shaped =
+      backend_.shapeRun(font, 100.0f, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  EXPECT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(2)));
+}
+
+// A substitute past the face's glyphs is ignored rather than read out of range.
+TEST_F(TextBackendSimpleTest, NativeSmallCapsIgnoreAnOutOfRangeSubstitute) {
+  const FontHandle font =
+      loadFont(MakeGsubTestFont(GsubSmcpTable({GposLookup(1, SingleSubstGlyph(3, 999))})));
+
+  const auto shaped =
+      backend_.shapeRun(font, 100.0f, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphIndexIs(3), GlyphFontSizeScaleIs(FloatEq(1.0f)),
+                                               GlyphXAdvanceIs(DoubleNear(70.0, 1e-4)))));
 }
 
 std::vector<uint8_t> MakeBracketFontData() {

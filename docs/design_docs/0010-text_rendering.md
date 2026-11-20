@@ -110,7 +110,8 @@ or unit tests.
 - [x] `font-weight` — numeric 100-900, bold/normal keyword matching
 - [x] `font-style` — normal, italic, oblique matching
 - [x] `font-stretch` — normal through ultra-expanded matching
-- [x] `font-variant` — normal, small-caps (synthesized in base tier, native smcp in full tier)
+- [x] `font-variant` - normal, small-caps (native smcp single substitutions in both tiers;
+  synthesized when the face has no smcp)
 - [ ] `font-variant` extended values — small-caps only; no `all-small-caps`, `petite-caps`,
   `all-petite-caps`, `unicase`, `titling-caps`
 - [ ] `font` shorthand — not parsed; individual properties only

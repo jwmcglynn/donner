@@ -2,10 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "donner/base/Utf8.h"
 #include "donner/svg/text/BidiParagraph.h"
@@ -71,6 +74,224 @@ bool HasIntrinsicItalicStyle(const FontManager& fontManager, FontHandle font) {
   }
   return false;
 }
+
+/// Bounds-checked big-endian reads within one SFNT table.
+class SfntTableReader {
+public:
+  explicit SfntTableReader(std::span<const uint8_t> table) : table_(table) {}
+
+  /// Reads the 16-bit value at \p offset, or nullopt past the end of the table.
+  std::optional<uint16_t> u16(size_t offset) const {
+    if (offset > table_.size() || table_.size() - offset < 2) {
+      return std::nullopt;
+    }
+    return static_cast<uint16_t>((static_cast<uint16_t>(table_[offset]) << 8) | table_[offset + 1]);
+  }
+
+  /// Reads the 32-bit value at \p offset, or nullopt past the end of the table.
+  std::optional<uint32_t> u32(size_t offset) const {
+    const auto high = u16(offset);
+    const auto low = u16(offset + 2);
+    if (!high || !low) {
+      return std::nullopt;
+    }
+    return (static_cast<uint32_t>(*high) << 16) | *low;
+  }
+
+  /// Returns true if the four bytes at \p offset spell \p tag.
+  bool hasTag(size_t offset, std::string_view tag) const {
+    return offset <= table_.size() && table_.size() - offset >= 4 &&
+           std::equal(tag.begin(), tag.end(), table_.begin() + static_cast<ptrdiff_t>(offset));
+  }
+
+private:
+  std::span<const uint8_t> table_;
+};
+
+/**
+ * The face's native small-cap glyphs: the single substitutions of its GSUB `smcp` feature, which
+ * the full backend applies through HarfBuzz.
+ *
+ * The lookups are those the feature lists in the default language system of any script, applied
+ * in lookup-list order, as HarfBuzz applies them. Only single substitution subtables are read
+ * (lookup type 1, also inside an extension, type 7), the kind `smcp` uses.
+ */
+class SimpleSmallCapsSubstitution {
+public:
+  /// Reads the `smcp` lookups of \p font; the result is empty if the face has none.
+  static SimpleSmallCapsSubstitution Read(const FontManager& manager, FontHandle font) {
+    SimpleSmallCapsSubstitution result;
+    const auto gsub = manager.sfntTable(font, "GSUB");
+    if (!gsub) {
+      return result;
+    }
+    result.gsub_ = *gsub;
+    const SfntTableReader reader(*gsub);
+    const auto lookupList = reader.u16(8);
+    if (!lookupList) {
+      return result;
+    }
+    const uint16_t lookupCount = reader.u16(*lookupList).value_or(0);
+    for (const uint16_t index : SmcpLookupIndices(reader)) {
+      const auto lookupOffset = reader.u16(*lookupList + 2 + size_t{index} * 2);
+      if (index >= lookupCount || !lookupOffset) {
+        continue;
+      }
+      std::vector<size_t> subtables =
+          SingleSubstitutionSubtables(reader, size_t{*lookupList} + *lookupOffset);
+      if (!subtables.empty()) {
+        result.lookups_.push_back(std::move(subtables));
+      }
+    }
+    return result;
+  }
+
+  /// Returns true if the face has no native small caps.
+  bool empty() const { return lookups_.empty(); }
+
+  /// Returns the small-cap glyph for \p glyph, which is \p glyph itself where no lookup covers it.
+  int substitute(int glyph) const {
+    const SfntTableReader reader(gsub_);
+    for (const auto& subtables : lookups_) {
+      for (const size_t subtable : subtables) {
+        const auto coverage = reader.u16(subtable + 2);
+        const auto coverageIndex =
+            coverage ? CoverageIndex(reader, subtable + *coverage, glyph) : std::nullopt;
+        if (!coverageIndex) {
+          continue;
+        }
+        const auto format = reader.u16(subtable);
+        if (format == 1) {
+          // deltaGlyphID is added modulo 65536.
+          glyph = static_cast<uint16_t>(glyph + reader.u16(subtable + 4).value_or(0));
+        } else if (format == 2 && *coverageIndex < reader.u16(subtable + 4).value_or(0)) {
+          glyph = reader.u16(subtable + 6 + *coverageIndex * 2).value_or(glyph);
+        }
+        // Within a lookup, only the first subtable that covers the glyph applies.
+        break;
+      }
+    }
+    return glyph;
+  }
+
+private:
+  /// Returns the sorted, distinct lookup indices of the `smcp` features that the default language
+  /// system of any script lists.
+  static std::vector<uint16_t> SmcpLookupIndices(const SfntTableReader& reader) {
+    std::vector<uint16_t> indices;
+    const auto scriptList = reader.u16(4);
+    const auto featureList = reader.u16(6);
+    if (!scriptList || !featureList) {
+      return indices;
+    }
+    const uint16_t scriptCount = reader.u16(*scriptList).value_or(0);
+    for (size_t script = 0; script < scriptCount; ++script) {
+      const size_t scriptTable =
+          size_t{*scriptList} + reader.u16(*scriptList + 6 + script * 6).value_or(0);
+      const uint16_t defaultLangSys = reader.u16(scriptTable).value_or(0);
+      if (defaultLangSys != 0) {
+        AppendSmcpLookups(reader, *featureList, scriptTable + defaultLangSys, indices);
+      }
+    }
+    std::sort(indices.begin(), indices.end());
+    indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+    return indices;
+  }
+
+  /// Appends the lookup indices of the `smcp` features the language system at \p langSys lists.
+  static void AppendSmcpLookups(const SfntTableReader& reader, size_t featureList, size_t langSys,
+                                std::vector<uint16_t>& indices) {
+    const uint16_t featureCount = reader.u16(langSys + 4).value_or(0);
+    for (size_t i = 0; i < featureCount; ++i) {
+      const auto featureIndex = reader.u16(langSys + 6 + i * 2);
+      const size_t record = featureList + 2 + size_t{featureIndex.value_or(0)} * 6;
+      const auto featureOffset = reader.u16(record + 4);
+      if (!featureIndex || !featureOffset || !reader.hasTag(record, "smcp")) {
+        continue;
+      }
+      const size_t feature = featureList + *featureOffset;
+      const uint16_t lookupCount = reader.u16(feature + 2).value_or(0);
+      for (size_t lookup = 0; lookup < lookupCount; ++lookup) {
+        if (const auto index = reader.u16(feature + 4 + lookup * 2)) {
+          indices.push_back(*index);
+        }
+      }
+    }
+  }
+
+  /// Returns the single substitution subtables of the lookup at \p lookup, resolving extension
+  /// subtables; any other lookup type has none.
+  static std::vector<size_t> SingleSubstitutionSubtables(const SfntTableReader& reader,
+                                                         size_t lookup) {
+    std::vector<size_t> subtables;
+    const auto type = reader.u16(lookup);
+    if (type != 1 && type != 7) {
+      return subtables;
+    }
+    const uint16_t subtableCount = reader.u16(lookup + 4).value_or(0);
+    for (size_t i = 0; i < subtableCount; ++i) {
+      const auto subtableOffset = reader.u16(lookup + 6 + i * 2);
+      if (!subtableOffset) {
+        continue;
+      }
+      const size_t subtable = lookup + *subtableOffset;
+      if (type == 1) {
+        subtables.push_back(subtable);
+      } else if (const auto extension = reader.u32(subtable + 4);
+                 extension && reader.u16(subtable + 2) == 1) {
+        subtables.push_back(subtable + *extension);
+      }
+    }
+    return subtables;
+  }
+
+  /// Returns the coverage index of \p glyph in the coverage table at \p coverage.
+  static std::optional<size_t> CoverageIndex(const SfntTableReader& reader, size_t coverage,
+                                             int glyph) {
+    const auto format = reader.u16(coverage);
+    const uint16_t count = reader.u16(coverage + 2).value_or(0);
+    // Glyph arrays and ranges are sorted, so search them by bisection.
+    size_t low = 0;
+    size_t high = count;
+    while (low < high) {
+      const size_t middle = low + (high - low) / 2;
+      int first = 0;
+      int last = 0;
+      size_t firstIndex = middle;
+      if (format == 1) {
+        const auto value = reader.u16(coverage + 4 + middle * 2);
+        if (!value) {
+          return std::nullopt;
+        }
+        first = last = *value;
+      } else if (format == 2) {
+        const size_t range = coverage + 4 + middle * 6;
+        const auto start = reader.u16(range);
+        const auto end = reader.u16(range + 2);
+        const auto startIndex = reader.u16(range + 4);
+        if (!start || !end || !startIndex) {
+          return std::nullopt;
+        }
+        first = *start;
+        last = *end;
+        firstIndex = *startIndex;
+      } else {
+        return std::nullopt;
+      }
+      if (glyph < first) {
+        high = middle;
+      } else if (glyph > last) {
+        low = middle + 1;
+      } else {
+        return firstIndex + static_cast<size_t>(glyph - first);
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::span<const uint8_t> gsub_;
+  std::vector<std::vector<size_t>> lookups_;  //!< Single substitution subtables of each lookup.
+};
 
 /// Cached stb_truetype parse state attached to a font entity.
 struct StbFontComponent {
@@ -304,8 +525,9 @@ bool TextBackendSimple::isCursive(uint32_t /*codepoint*/) const {
   return false;
 }
 
-bool TextBackendSimple::hasSmallCapsFeature(FontHandle /*font*/) const {
-  return false;
+bool TextBackendSimple::hasSmallCapsFeature(FontHandle font) const {
+  return getFontInfo(font) != nullptr &&
+         !SimpleSmallCapsSubstitution::Read(fontManager_, font).empty();
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendSimple::bitmapGlyph(FontHandle /*font*/,
@@ -613,15 +835,23 @@ struct SimpleShapingMetrics {
   FontVariant variant;
   bool kerning;
   SimpleVerticalMetrics verticalMetrics;
+  SimpleSmallCapsSubstitution smallCaps;
 
   TextBackend::ShapedGlyph glyph(SimpleScalar scalar, int previousGlyph,
                                  const TextBackend::ShapedGlyph* uprightBase) const {
-    const bool smallCap =
-        variant == FontVariant::SmallCaps && scalar.codepoint >= 'a' && scalar.codepoint <= 'z';
+    const bool nativeSmallCaps = variant == FontVariant::SmallCaps && !smallCaps.empty();
+    // Without native small caps, lowercase ASCII is synthesized as scaled capitals.
+    const bool smallCap = variant == FontVariant::SmallCaps && !nativeSmallCaps &&
+                          scalar.codepoint >= 'a' && scalar.codepoint <= 'z';
     if (smallCap) {
       scalar.codepoint = scalar.codepoint - 'a' + 'A';
     }
-    const int index = stbtt_FindGlyphIndex(info, static_cast<int>(scalar.codepoint));
+    int index = stbtt_FindGlyphIndex(info, static_cast<int>(scalar.codepoint));
+    if (nativeSmallCaps) {
+      // stb_truetype does not range-check glyph metrics, so a substitute past the face is ignored.
+      const int substitute = smallCaps.substitute(index);
+      index = substitute < info->numGlyphs ? substitute : index;
+    }
     int advanceWidth = 0;
     int lsb = 0;
     stbtt_GetGlyphHMetrics(info, index, &advanceWidth, &lsb);
@@ -688,7 +918,9 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
       textOrientation,
       fontVariant,
       enableKerning,
-      isVertical ? SimpleVerticalMetrics::Read(fontManager_, font, info) : SimpleVerticalMetrics{}};
+      isVertical ? SimpleVerticalMetrics::Read(fontManager_, font, info) : SimpleVerticalMetrics{},
+      fontVariant == FontVariant::SmallCaps ? SimpleSmallCapsSubstitution::Read(fontManager_, font)
+                                            : SimpleSmallCapsSubstitution{}};
   SimpleScalarSequence sequence(spanText, byteOffset, byteLength, backward);
   ShapedRun result;
   result.backward = backward;

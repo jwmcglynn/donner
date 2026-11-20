@@ -44,7 +44,7 @@ struct SubSuperMetrics {
  * and font metrics.
  *
  * Implementations:
- * - TextBackendSimple: stb_truetype (no GSUB/GPOS, no bitmap glyphs)
+ * - TextBackendSimple: stb_truetype (no GSUB/GPOS beyond native small caps, no bitmap glyphs)
  * - TextBackendFull: HarfBuzz + FreeType (full OpenType shaping)
  */
 class TextBackend {
