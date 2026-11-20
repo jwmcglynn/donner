@@ -142,9 +142,64 @@ double JoinOwnerWaitProbe(pthread_t producer, OwnerWaitProbe& request, double de
   }
 }
 
+struct OwnerDispatchProbe {
+  std::shared_ptr<donner::gpu::browser::BrowserDevice> device;
+  uint32_t count = 0;
+};
+
+std::atomic<uint32_t> gDispatchProbeCompleted{0};
+std::atomic<bool> gDispatchProbeRunning{false};
+
+void* RunOwnerDispatchProbeProducer(void* context) {
+  std::unique_ptr<OwnerDispatchProbe> run(static_cast<OwnerDispatchProbe*>(context));
+  if (donner::gpu::browser::IsBrowserGpuOwnerThread()) {
+    std::abort();
+  }
+  for (uint32_t i = 0; i < run->count; ++i) {
+    // A real browser call, not the published serial: each one is a synchronous owner round trip.
+    (void)run->device->completedSerialFromBrowserForTesting();
+    gDispatchProbeCompleted.fetch_add(1, std::memory_order_release);
+  }
+  // Release the device before reporting the run finished.
+  run.reset();
+  gDispatchProbeRunning.store(false, std::memory_order_release);
+  return nullptr;
+}
+
 }  // namespace
 
 namespace donner::editor::wasm {
+
+bool StartGpuOwnerDispatchProbeForTesting(
+    const std::shared_ptr<gpu::browser::BrowserDevice>& device, uint32_t count) {
+  if (!device || count == 0) {
+    return false;
+  }
+  bool idle = false;
+  if (!gDispatchProbeRunning.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
+    return false;
+  }
+  gDispatchProbeCompleted.store(0, std::memory_order_release);
+  auto run = std::make_unique<OwnerDispatchProbe>(OwnerDispatchProbe{device, count});
+  pthread_attr_t attributes;
+  pthread_attr_init(&attributes);
+  pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+  pthread_t producer;
+  const int created =
+      pthread_create(&producer, &attributes, RunOwnerDispatchProbeProducer, run.get());
+  pthread_attr_destroy(&attributes);
+  if (created != 0) {
+    gDispatchProbeRunning.store(false, std::memory_order_release);
+    return false;
+  }
+  run.release();
+  return true;
+}
+
+OwnerDispatchProbeProgress ReadGpuOwnerDispatchProbeForTesting() {
+  const bool running = gDispatchProbeRunning.load(std::memory_order_acquire);
+  return {gDispatchProbeCompleted.load(std::memory_order_acquire), running};
+}
 
 OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(
     const std::shared_ptr<gpu::browser::BrowserDevice>& device) {
