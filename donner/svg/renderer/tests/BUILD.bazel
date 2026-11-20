@@ -448,12 +448,14 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/base/encoding:base64",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/components",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:render_snapshot",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer:rendering_context",
         "//donner/svg/renderer:tiny_skia_deps",
         "//donner/svg/renderer/geode:geode_nearest_sampling",
@@ -1255,6 +1257,40 @@ donner_variant_cc_test(
 )
 
 donner_cc_test(
+    name = "geode_text_budget_tests_impl",
+    srcs = [
+        "GeodeTextBudget_tests.cc",
+        "MockTextBackend.h",
+    ],
+    tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    deps = [
+        ":rgba_test_matchers",
+        "//donner/svg/components/text:components",
+        "//donner/svg/renderer:placed_text_geometry",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/parser",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_variant_cc_test(
+    name = "geode_text_budget_tests",
+    dep = ":geode_text_budget_tests_impl",
+    named_variants = [
+        {
+            "name": "basic",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "false",
+        },
+    ],
+    opens_gpu_device = True,
+)
+
+donner_cc_test(
     name = "vertical_text_geode_tests_impl",
     srcs = ["VerticalTextGeode_tests.cc"],
     data = ["//third_party/resvg-test-suite:fonts"],
@@ -1273,6 +1309,55 @@ donner_cc_test(
 donner_variant_cc_test(
     name = "vertical_text_geode_tests",
     dep = ":vertical_text_geode_tests_impl",
+    named_variants = [
+        {
+            "name": "tiny_basic",
+            "backend": "tiny_skia",
+            "text": "true",
+            "text_full": "false",
+        },
+        {
+            "name": "tiny_full",
+            "backend": "tiny_skia",
+            "text": "true",
+            "text_full": "true",
+        },
+        {
+            "name": "geode_basic",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "false",
+        },
+        {
+            "name": "geode_full",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "true",
+        },
+    ],
+    opens_gpu_device = True,
+)
+
+donner_cc_test(
+    name = "glyph_ink_area_tests_impl",
+    srcs = ["GlyphInkArea_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    tags = ["manual"],
+    deps = [
+        ":image_comparison_test_fixture",
+        ":renderer_test_backend",
+        "//donner/base:base_test_utils",
+        "//donner/base/fonts:sfnt_utils",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+        "@stb//:truetype",
+    ],
+)
+
+# Each renderer and text tier rasterizes the glyph outlines of its own text backend.
+donner_variant_cc_test(
+    name = "glyph_ink_area_tests",
+    dep = ":glyph_ink_area_tests_impl",
     named_variants = [
         {
             "name": "tiny_basic",
@@ -1583,17 +1668,26 @@ donner_cc_test(
     ],
 )
 
-donner_cc_test(
-    name = "resvg_test_suite_impl",
-    size = "large",
-    srcs = [
-        "resvg_test_suite.cc",
+donner_cc_library(
+    name = "resvg_test_suite_registration",
+    testonly = True,
+    srcs = ["resvg_test_suite.cc"],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
     ],
+    # The translation unit registers GoogleTest cases through static initializers.
+    alwayslink = True,
+)
+
+[donner_cc_test(
+    name = name,
+    size = "large",
     data = [
         "//donner/svg/renderer/testdata",
         "//third_party/resvg-test-suite:fonts",
         "//third_party/resvg-test-suite:resources",
-        "//third_party/resvg-test-suite:tests",
+        corpus,
     ],
     # The Geode variant runs every resvg case through software Vulkan (Mesa
     # lavapipe) on the GPU-less CI runners. The first Geode render in a shard
@@ -1612,11 +1706,14 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":image_comparison_test_fixture",
-        "//donner/base:base_test_utils",
+        ":resvg_test_suite_registration",
         "//donner/base:gtest_timeout_main",
     ],
-)
+) for name, corpus in [
+    ("resvg_test_suite_impl", "//third_party/resvg-test-suite:tests"),
+    ("resvg_test_suite_max_text_impl", "//third_party/resvg-test-suite:tests_with_text"),
+    ("resvg_test_suite_max_nontext_impl", "//third_party/resvg-test-suite:tests_without_text"),
+]]
 
 donner_variant_cc_test(
     name = "resvg_test_suite",
@@ -1635,9 +1732,9 @@ donner_variant_cc_test(
     # is killed in 15 min instead of running out the 3600 s "enormous"
     # default. 900 s still comfortably fits every legitimate run.
     #
-    # Product tiers (run on every PR):
-    #   default_text - tiny-skia, filters, simple text (donner default)
-    #   max          - tiny-skia, filters, full text   (donner-max)
+    # The default tier is the normal all-cases CPU reference. The complete
+    # max wrapper is explicit; wildcard runs cover it through the disjoint
+    # full-shaping partitions below.
     #
     # The "tiny" tier (no filters, no text) is not included here because
     # the resvg test suite exercises filters and text — it would need
@@ -1655,6 +1752,7 @@ donner_variant_cc_test(
         },
         {
             "name": "max",
+            "tags": ["manual"],
             "backend": "tiny_skia",
             "text": "true",
             "text_full": "true",
@@ -1699,6 +1797,23 @@ donner_variant_cc_test(
     # per variant turn that into parallel ~35 s RE actions.
     shard_count = 8,
 )
+
+# Full-graph CI exercises both disjoint sets in the full shaping tier. The affected
+# planner omits the nontext half when the default tier covers those cases.
+[donner_multi_transitioned_test(
+    name = "resvg_test_suite_max_" + partition,
+    size = "enormous",
+    timeout = "long",
+    testonly = True,
+    dep = ":resvg_test_suite_max_" + partition + "_impl",
+    renderer_backend = "tiny_skia",
+    shard_count = 8,
+    text = "true",
+    text_full = "true",
+) for partition in [
+    "text",
+    "nontext",
+]]
 
 # An explicit Linux-only comparison lane that renders the production Geode context through the
 # test-only wgpu-native reference. It compiles the same resvg registrations and image-comparison

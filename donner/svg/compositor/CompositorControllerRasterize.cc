@@ -233,19 +233,13 @@ bool OwnerTileGeometryUnchanged(const CompositorLayer& layer, const LayerRasterG
          geometry.canvasOffset == layer.canvasOffset();
 }
 
-// True when a paint renders instantiated content of its own, such as a pattern tile.
-bool HasSubtreePaint(const components::ResolvedPaintServer& paint) {
-  const auto* reference = std::get_if<components::PaintResolvedReference>(&paint);
-  return reference != nullptr && reference->subtreeInfo.has_value();
-}
-
 // True when @p instance renders content instantiated after its host entity, past the end of its
-// own range: a mask, markers or a pattern tile, including a text span's own pattern tile.
+// own range: a mask, markers, or pattern tiles, including a text span's own pattern tiles.
 bool RendersAfterItself(const components::RenderingInstanceComponent& instance) {
-  return instance.mask.has_value() || instance.markerStart.has_value() ||
-         instance.markerMid.has_value() || instance.markerEnd.has_value() ||
-         HasSubtreePaint(instance.resolvedFill) || HasSubtreePaint(instance.resolvedStroke) ||
-         !instance.spanPatternPaints.empty();
+  bool rendersContent = instance.mask.has_value() || instance.markerStart.has_value() ||
+                        instance.markerMid.has_value() || instance.markerEnd.has_value();
+  instance.forEachDrawnContent([&](const components::SubtreeInfo&) { rendersContent = true; });
+  return rendersContent;
 }
 
 using EntityRun = std::pair<Entity, Entity>;
@@ -951,6 +945,58 @@ bool CompositorController::composeMaskedOwnerFromPieces(CompositorLayer& owner,
   return true;
 }
 
+namespace {
+
+/// A promoted layer's first and last index in paint order. Both equal the paint order's size when
+/// the layer's entities are not in it.
+struct LayerPaintRange {
+  size_t firstIdx = 0;  ///< Index of the layer's first entity.
+  size_t lastIdx = 0;   ///< Index of the last entity that belongs to the layer.
+};
+
+/// Extends @p lastIdx over the mask, marker and pattern content drawn for the entities in
+/// `[firstIdx, lastIdx]`. That content is instantiated after the element that draws it, so it can
+/// follow the layer's last entity in paint order. It belongs to the layer: the next segment must
+/// start after it, or it would draw that content as ordinary content.
+size_t LastIndexWithDrawnContent(Registry& registry, const std::vector<Entity>& paintOrder,
+                                 size_t firstIdx, size_t lastIdx) {
+  int coveredDrawOrder =
+      registry.get<components::RenderingInstanceComponent>(paintOrder[lastIdx]).drawOrder;
+  for (size_t j = firstIdx; j < paintOrder.size(); ++j) {
+    const auto& instance = registry.get<components::RenderingInstanceComponent>(paintOrder[j]);
+    if (j > lastIdx && instance.drawOrder > coveredDrawOrder) {
+      break;
+    }
+    coveredDrawOrder =
+        std::max(coveredDrawOrder, RendererDriver::LastDrawOrderOfDrawnContent(registry, instance));
+    lastIdx = std::max(lastIdx, j);
+  }
+  return lastIdx;
+}
+
+/// Finds the paint-order indices of a layer whose entity range is `[first, last]`, with the
+/// content drawn for its elements included.
+LayerPaintRange FindLayerPaintRange(Registry& registry, const std::vector<Entity>& paintOrder,
+                                    Entity first, Entity last) {
+  size_t firstIdx = paintOrder.size();
+  size_t lastIdx = paintOrder.size();
+  for (size_t j = 0; j < paintOrder.size(); ++j) {
+    if (paintOrder[j] == first) {
+      firstIdx = j;
+    }
+    if (paintOrder[j] == last) {
+      lastIdx = j;
+      break;
+    }
+  }
+  if (firstIdx < paintOrder.size() && lastIdx < paintOrder.size()) {
+    lastIdx = LastIndexWithDrawnContent(registry, paintOrder, firstIdx, lastIdx);
+  }
+  return {firstIdx, lastIdx};
+}
+
+}  // namespace
+
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport,
                                                         const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::rasterizeDirtyStaticSegmentsImpl");
@@ -1004,26 +1050,10 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
   // entity at `firstEntity` and a subtree extending to `lastEntity`
   // elsewhere in the paint order - `computeEntityRange` stashed the
   // subtree's tail on the layer at `reconcileLayers` time.
-  struct LayerPaintRange {
-    size_t firstIdx = 0;
-    size_t lastIdx = 0;
-  };
   std::vector<LayerPaintRange> layerRanges(layerCount);
   for (size_t i = 0; i < layerCount; ++i) {
-    const Entity first = layers_[i].firstEntity();
-    const Entity last = layers_[i].lastEntity();
-    size_t firstIdx = paintOrder.size();
-    size_t lastIdx = paintOrder.size();
-    for (size_t j = 0; j < paintOrder.size(); ++j) {
-      if (paintOrder[j] == first) {
-        firstIdx = j;
-      }
-      if (paintOrder[j] == last) {
-        lastIdx = j;
-        break;
-      }
-    }
-    layerRanges[i] = {firstIdx, lastIdx};
+    layerRanges[i] = FindLayerPaintRange(registry, paintOrder, layers_[i].firstEntity(),
+                                         layers_[i].lastEntity());
   }
 
   double immediateBudgetUsedMs = 0.0;

@@ -32,8 +32,9 @@ struct DirtyFlagsComponent {
     /// together with \ref Style.
     Compositing = 1 << 10,
     /// Content this element draws from another element through a reference (an `feImage`
-    /// fragment) changed. None of this element's own computed inputs changed, so its computed
-    /// components are kept and only its drawing is redone.
+    /// fragment, or the content of its clip path or mask) changed. None of this element's own
+    /// computed inputs changed, so its computed components are kept and only its drawing is
+    /// redone.
     ReferencedContent = 1 << 11,
 
     /// Compound flag: style change that may affect paint, filter, and render instance.
@@ -94,6 +95,9 @@ struct RenderTreeState {
     uint64_t shadowTreeTeardowns = 0;  //!< Shadow-tree hosts torn down by full rebuilds.
     /// External `<use>` instances re-attached in place, after a retarget or a geometry change.
     uint64_t retargetedUses = 0;
+    /// Times reference invalidation rebuilt its map from elements to the `<use>` copies that a
+    /// clip path or mask can draw.
+    uint64_t useCopyRelationBuilds = 0;
   };
 
   /// Preparation counters for this document.

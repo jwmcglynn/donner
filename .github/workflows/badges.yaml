@@ -44,32 +44,13 @@ jobs:
             echo "${key}=${value}" >> $GITHUB_ENV
           done <<< "$output"
 
-      - name: Create Lines-of-Code-Badge
-        uses: schneegans/dynamic-badges-action@v1.9.0
-        with:
-          auth: ${{ secrets.GIST_SECRET }}
-          gistID: 91f7f490a72af9c06506c8176729d218
-          filename: loc.svg
-          label: Lines of code
-          message: ${{ env.product_lines_of_code }}
-          color: lightgrey
-
-      - name: Create Test-Lines-of-Code-Badge
-        uses: schneegans/dynamic-badges-action@v1.9.0
-        with:
-          auth: ${{ secrets.GIST_SECRET }}
-          gistID: 91f7f490a72af9c06506c8176729d218
-          filename: loc-tests.svg
-          label: Lines of test code
-          message: ${{ env.test_lines_of_code }}
-          color: blue
-
-      - name: Create Comments-Badge
-        uses: schneegans/dynamic-badges-action@v1.9.0
-        with:
-          auth: ${{ secrets.GIST_SECRET }}
-          gistID: 91f7f490a72af9c06506c8176729d218
-          filename: comments.svg
-          label: Comments
-          message: ${{ env.comment_percentage }}
-          color: green
+      - name: Publish badges
+        # A failed badge publish warns and does not fail the commit's checks.
+        continue-on-error: true
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_SECRET }}
+        run: |
+          python3 tools/ci/badge_gist.py --gist-id 91f7f490a72af9c06506c8176729d218 \
+            --badge loc.svg "Lines of code" "$product_lines_of_code" lightgrey \
+            --badge loc-tests.svg "Lines of test code" "$test_lines_of_code" blue \
+            --badge comments.svg "Comments" "$comment_percentage" green

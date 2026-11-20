@@ -249,6 +249,26 @@ struct BrowserPublishedState {
   std::atomic<uint64_t> completedSerial{0};
 };
 
+/**
+ * What the calls one logical device deferred report back, and whether they may still run.
+ *
+ * Shared by the bridge and every call it deferred, so a held call can outlive the bridge: a call
+ * held on one thread while its device is torn down on another still finds this state, sees the
+ * device released, and does not run against a logical device the browser side no longer holds.
+ * Logical device handles are never reused, so a released device's calls cannot reach another's
+ * objects either way.
+ */
+struct BrowserDeferredOrigin {
+  /// False once the bridge has begun releasing its logical device; its held calls then do not run.
+  std::atomic<bool> live{true};
+  /// Status, as a \ref BridgeStatus value, of the first held write or bind group construction the
+  /// browser refused; Success while none has been. Permanent: the device treats it as a loss.
+  std::atomic<uint32_t> refusal{0};
+  /// Held destructions the browser refused. Diagnostic only: releases were never checked, and a
+  /// refused release cannot leave the device unusable.
+  std::atomic<uint32_t> destroyRefusals{0};
+};
+
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
 
@@ -316,6 +336,16 @@ public:
    *   an implementation that cannot publish keeps this default.
    */
   virtual bool beginPublishingState() { return false; }
+
+  /// Sends every call this thread deferred to the GPU owner now, if any are held. Called before
+  /// the thread parks or yields without another browser call, so held destructions and writes do
+  /// not wait for the thread's next round trip. Makes no round trip when nothing is held.
+  virtual void flushDeferredCalls() {}
+
+  /// What this logical device's deferred calls reported back. Shared with each of them.
+  [[nodiscard]] const BrowserDeferredOrigin& deferredOrigin() const UTILS_LIFETIME_BOUND {
+    return *deferredOrigin_;
+  }
 
   /// What the browser side publishes once \ref beginPublishingState has succeeded.
   [[nodiscard]] const BrowserPublishedState& publishedState() const UTILS_LIFETIME_BOUND {
@@ -614,8 +644,15 @@ protected:
   /// Storage the browser side publishes into. @return The state \ref publishedState reads.
   BrowserPublishedState& publishedStateStorage() UTILS_LIFETIME_BOUND { return published_; }
 
+  /// The shared origin each deferred call holds. @return This bridge's origin.
+  [[nodiscard]] const std::shared_ptr<BrowserDeferredOrigin>& deferredOriginHandle() const {
+    return deferredOrigin_;
+  }
+
 private:
   BrowserPublishedState published_;
+  std::shared_ptr<BrowserDeferredOrigin> deferredOrigin_ =
+      std::make_shared<BrowserDeferredOrigin>();
 };
 
 }  // namespace donner::gpu::browser

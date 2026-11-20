@@ -3754,16 +3754,26 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
     return;
   }
 
+  // Interpolation happens in premultiplied space so transparent colored texels cannot fringe.
+  drawPremultipliedImage(
+      svg::ImageResource{svg::PremultiplyRgba(image.data), image.width, image.height}, destRect,
+      opacity, imageRendering);
+}
+
+void GeoEncoder::drawPremultipliedImage(const svg::ImageResource& image, const Box2d& destRect,
+                                        double opacity, svg::ImageRendering imageRendering) {
+  if (!IsValidImageDraw(image, destRect, *impl_->device)) {
+    return;
+  }
+
   if (!impl_->ensurePassOpen()) {
     return;
   }
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
-  // Interpolation happens in premultiplied space so transparent colored texels cannot fringe.
-  const std::vector<std::uint8_t> premultiplied = svg::PremultiplyRgba(image.data);
   const gpu::Texture& texture =
       impl_->transientResources.retain(GeodeTextureEncoder::uploadRgba8Texture(
-          *impl_->gpuContext, premultiplied.data(), static_cast<uint32_t>(image.width),
+          *impl_->gpuContext, image.data.data(), static_cast<uint32_t>(image.width),
           static_cast<uint32_t>(image.height)));
   if (!texture.isValid()) {
     return;

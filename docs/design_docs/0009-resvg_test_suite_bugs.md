@@ -8,8 +8,10 @@ golden's provenance and SHA-256.
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
 golden is _not_ the right thing to compare against, the test pins
 `Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-<name>.png")`
-so it compares against a Donner-blessed golden instead. This doc is the catalog
-of every such override and the reason it exists.
+so it compares against a Donner-blessed golden instead. This doc describes the main override
+groups and their reasons; the registrations in
+`donner/svg/renderer/tests/resvg_test_suite.cc` and the golden README's "Registered golden
+digests" table are the complete lists.
 
 An override is justified when the vendored reference is not the right thing to compare against:
 
@@ -70,18 +72,18 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | filters/feSpotLight        | complex-transform                     | Reference shades before skew and attenuates the cone edge differently |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
 | filters/filter             | subregion-and-primitiveUnits=objectBoundingBox-1/-2 | Explicit half-box clip; opaque interior and exact crosshair ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
-| filters/filter             | with-subregion-3                     | Firefox reference preserves the first blur's clipped edge ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/text-decoration | all-types-inline | Literal bands preserve multiline decoration offsets and paint order |
-| text/text-decoration | all-types-inline-comma-separated, all-types-inline-no-spaces | Malformed lists preserve undecorated glyphs |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | very-long-text                        | Reference disagreement: SVG 2 continues at the path end point  |
+| text/tspan                 | with-filter                           | Reference disagreement: the reference draws glyph edges 0.25 to 0.3 px outside the outline |
+| text/textPath              | with-filter                           | Reference disagreement: the reference draws glyph edges 0.25 to 0.3 px outside the outline |
 
 `painting/stroke/{linear,radial}-gradient-on-text` compare against independently captured
 Firefox renderings at the suite's default comparison settings. The vendored images map the
@@ -178,21 +180,6 @@ requires stretch on a straight path to equal ordinary rotated text, is the indep
 check. The evidence and the regeneration command are in the
 [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
-### Allowed nearest-neighbor reference differences
-
-CSS Images permits an implementation-selected edge-preserving algorithm for
-`crisp-edges`; deprecated `optimizeSpeed` maps to that value. An alternate nearest
-sampling grid does not establish that the upstream reference violates the specification.
-
-| Category | Test | Reason |
-| --- | --- | --- |
-| painting/image-rendering | on-feImage | Nearest sampling at destination pixel centers |
-
-The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage)
-records the construction and checksums for `on-feImage`. The separate `optimizeSpeed` fixture
-compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
-pixel centers through the inverse transform to select the nearest source texel.
-
 ### Sharp pattern-tile seams (reference rasterization, not a spec violation)
 
 The specification does not say how a pattern tile is rasterized, so these are not "wrong per
@@ -250,21 +237,21 @@ resvg v0.49.0 references and a 0.10 threshold for bitmap resampling. The
 [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-emoji-bitmap-sampling)
 records the comparison.
 
-### textPath and text-decoration overrides
+### textPath overrides
 
 | Category             | Test                         | Reason |
 | -------------------- | ---------------------------- | ------ |
 | text/textPath        | dy-with-tiny-coordinates     | Reference disagreement: the vendored PNG predates resvg's current dy layout on a path; independent resvg 0.47.0 reference |
 | text/textPath        | tspan-with-absolute-position | Regression golden for absolute distance along the text path (legacy PNG, provenance not recorded) |
-| text/textPath        | tspan-with-relative-position | Reference disagreement: the vendored PNG predates resvg's current dx/dy layout on a path; independent resvg 0.47.0 reference |
 | text/textPath        | with-underline               | Regression golden for the on-path underline (legacy PNG, provenance not recorded) |
-| text/text-decoration | indirect                     | Reference disagreement: the vendored PNG outlines the glyphs and underline in green, which the SVG does not paint (legacy PNG, provenance not recorded) |
 
 The golden README records the evidence and, where known, the regeneration command for each.
 
 ## Golden files
 
-Every `resvg-*.png` and `donner-*.png` in `golden/` is referenced by an override above. The
+The golden README's "Registered golden digests" table lists every golden a resvg suite row
+compares against. `resvg-tspan-with-relative-position.png` is the one `resvg-*.png` or
+`donner-*.png` in `golden/` that no row uses; `TextPathGeode_tests.cc` compares Geode's text-on-path rendering with it. The
 `text/font-size` tests other than `named-value{,-without-a-parent}` compare against the upstream
 references.
 

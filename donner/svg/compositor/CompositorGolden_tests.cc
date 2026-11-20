@@ -5376,7 +5376,7 @@ namespace {
 struct ReferenceTargetEditCase {
   const char* name;  //!< Label for the comparison outputs.
   /// Document drawn at a 96x96 canvas. `#target` is the referenced element.
-  std::string_view source;
+  std::string source;
   /// Applies edit number `step` (1, 2) to the document.
   void (*edit)(SVGDocument& document, int step);
   /// Whether `#target` is held in an active drag while it is edited, and released afterwards.
@@ -5390,9 +5390,13 @@ void PrintTo(const ReferenceTargetEditCase& value, std::ostream* os) {
   *os << value.name;
 }
 
-void TranslateTarget(SVGDocument& document, Vector2d offset) {
-  document.querySelector("#target")->cast<SVGGraphicsElement>().setTransform(
+void TranslateElement(SVGDocument& document, const char* selector, Vector2d offset) {
+  document.querySelector(selector)->cast<SVGGraphicsElement>().setTransform(
       Transform2d::Translate(offset));
+}
+
+void TranslateTarget(SVGDocument& document, Vector2d offset) {
+  TranslateElement(document, "#target", offset);
 }
 
 // The text in the text path documents overlaps no other content: antialiased text drawn into a
@@ -5401,7 +5405,7 @@ void TranslateTarget(SVGDocument& document, Vector2d offset) {
 
 /// A `<textPath>` whose unstroked path lies in a group drawn as a layer of its own (the group is
 /// masked), with the text outside that group.
-constexpr std::string_view kTextPathInOtherLayer = R"svg(
+constexpr char kTextPathInOtherLayer[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
       <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
@@ -5417,7 +5421,7 @@ constexpr std::string_view kTextPathInOtherLayer = R"svg(
 
 /// A `<textPath>` along a rect whose geometry is in `em`, inside a masked group that sets the font
 /// size; the text is outside that group.
-constexpr std::string_view kTextPathOnFontRelativeRect = R"svg(
+constexpr char kTextPathOnFontRelativeRect[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
       <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
@@ -5433,7 +5437,7 @@ constexpr std::string_view kTextPathOnFontRelativeRect = R"svg(
 
 /// A `<textPath>` whose path a stylesheet moves when its masked parent group gains a class; the
 /// text is outside that group.
-constexpr std::string_view kTextPathMovedBySelector = R"svg(
+constexpr char kTextPathMovedBySelector[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <style>
       .shifted > #target { transform: translate(0px, 12px); }
@@ -5452,7 +5456,7 @@ constexpr std::string_view kTextPathMovedBySelector = R"svg(
   </svg>)svg";
 
 /// A `<textPath>` and its unstroked path next to each other at the top level.
-constexpr std::string_view kTextPathBesidePath = R"svg(
+constexpr char kTextPathBesidePath[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <path id="target" d="M 8 70 L 88 50" fill="none"/>
     <text font-size="13" fill="#40a"><textPath href="#target">Sloped words</textPath></text>
@@ -5460,7 +5464,7 @@ constexpr std::string_view kTextPathBesidePath = R"svg(
 
 /// An element filtered with an `feImage` of `#target`, outside the masked group that holds the
 /// target.
-constexpr std::string_view kFeImageOfOtherLayer = R"svg(
+constexpr char kFeImageOfOtherLayer[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
       <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="50">
@@ -5478,7 +5482,7 @@ constexpr std::string_view kFeImageOfOtherLayer = R"svg(
   </svg>)svg";
 
 /// \ref kFeImageOfOtherLayer with the `url()` reference as one stage of a filter list.
-constexpr std::string_view kFeImageListOfOtherLayer = R"svg(
+constexpr char kFeImageListOfOtherLayer[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
       <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="50">
@@ -5497,7 +5501,7 @@ constexpr std::string_view kFeImageListOfOtherLayer = R"svg(
 
 /// An `feImage` of a masked group that is drawn as a layer of its own; `#target` is a child of
 /// that group.
-constexpr std::string_view kFeImageOfGroup = R"svg(
+constexpr char kFeImageOfGroup[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
       <filter id="ofGroup" filterUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
@@ -5517,7 +5521,7 @@ constexpr std::string_view kFeImageOfGroup = R"svg(
 
 /// An element filtered through a filter that takes its `feImage` primitive from another filter by
 /// `href`, outside the masked group that holds `#target`.
-constexpr std::string_view kFeImageThroughFilterHref = R"svg(
+constexpr char kFeImageThroughFilterHref[] = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
       <filter id="base" filterUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
@@ -5534,6 +5538,61 @@ constexpr std::string_view kFeImageThroughFilterHref = R"svg(
     </g>
     <rect x="0" y="48" width="96" height="48" fill="#ccc" filter="url(#alias)"/>
   </svg>)svg";
+
+/**
+ * A document whose `#target` circle sits in a `#group` inside a masked group drawn as a layer of
+ * its own, with \p before drawn before that layer and \p after drawn after it.
+ *
+ * @param defs Definitions added after the layer's mask `#m`.
+ * @param before Content drawn before the layer, in its own static segment.
+ * @param after Content drawn after the layer.
+ */
+std::string TargetInLayerDocument(std::string_view defs, std::string_view before,
+                                  std::string_view after) {
+  return std::string(R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="48">
+        <rect width="96" height="48" fill="white"/>
+      </mask>)svg") +
+         std::string(defs) + "</defs>" + std::string(before) + R"svg(
+    <g id="holder" mask="url(#m)">
+      <rect x="4" y="4" width="88" height="40" fill="#ddd"/>
+      <g id="group"><circle id="target" cx="20" cy="24" r="14" fill="#8cf"/></g>
+    </g>)svg" +
+         std::string(after) + "</svg>";
+}
+
+/// A clip path whose only content is a `<use>` of `#target`.
+constexpr std::string_view kClipOfTarget = R"svg(
+      <clipPath id="clip"><use href="#target"/></clipPath>)svg";
+
+/// A rect in the lower half of the canvas clipped by `#clip`.
+constexpr std::string_view kClippedHost = R"svg(
+    <rect width="96" height="48" fill="#c60" clip-path="url(#clip)"
+          transform="translate(0 48)"/>)svg";
+
+/// A clip path that draws `#target` through a `<use>` in a clip path it applies to itself.
+constexpr std::string_view kClipWithOwnClipOfTarget = R"svg(
+      <clipPath id="inner"><use href="#target"/></clipPath>
+      <clipPath id="clip" clip-path="url(#inner)"><rect width="96" height="48"/></clipPath>)svg";
+
+/// A clip path whose child is clipped by a clip path that draws `#target` through a `<use>`.
+constexpr std::string_view kClipChildClippedByTarget = R"svg(
+      <clipPath id="inner"><use href="#target"/></clipPath>
+      <clipPath id="clip"><rect width="96" height="48" clip-path="url(#inner)"/></clipPath>)svg";
+
+/// A clip path whose content is `#child` itself, with no `<use>`.
+constexpr std::string_view kClipOfOwnChild = R"svg(
+      <clipPath id="clip"><circle id="child" cx="60" cy="24" r="14"/></clipPath>)svg";
+
+/// A pattern and a marker whose content is a `<use>` of `#target`.
+constexpr std::string_view kPatternAndMarkerOfTarget = R"svg(
+      <pattern id="pat" patternUnits="userSpaceOnUse" width="96" height="96">
+        <use href="#target"/>
+      </pattern>
+      <marker id="mk" markerUnits="userSpaceOnUse" markerWidth="96" markerHeight="48"
+              overflow="visible"><use href="#target"/></marker>)svg";
 
 }  // namespace
 
@@ -5636,8 +5695,318 @@ INSTANTIATE_TEST_SUITE_P(
         ReferenceTargetEditCase{
             "feimage_target_moved_through_filter_href", kFeImageThroughFilterHref,
             [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
-            true}),
+            true},
+        ReferenceTargetEditCase{
+            "clip_use_target_moved", TargetInLayerDocument(kClipOfTarget, "", kClippedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{
+            "clip_use_target_dragged", TargetInLayerDocument(kClipOfTarget, "", kClippedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(8.0 * step, 4.0)); }, true,
+            false},
+        ReferenceTargetEditCase{
+            "clip_use_target_resized", TargetInLayerDocument(kClipOfTarget, "", kClippedHost),
+            [](SVGDocument& d, int step) {
+              d.querySelector("#target")->setAttribute("r", step == 1 ? "20" : "9");
+            },
+            false, false},
+        ReferenceTargetEditCase{
+            "clip_use_css_host_before_layer",
+            TargetInLayerDocument(kClipOfTarget,
+                                  R"svg(<rect width="96" height="48" fill="#c60"
+                                    style="clip-path: url(#clip)" transform="translate(0 48)"/>)svg",
+                                  ""),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{
+            "clip_path_own_clip_path_use_target_moved",
+            TargetInLayerDocument(kClipWithOwnClipOfTarget, "", kClippedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{
+            "clip_child_clip_path_use_target_moved",
+            TargetInLayerDocument(kClipChildClippedByTarget, "", kClippedHost),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(10.0 * step, 0)); }, false,
+            false},
+        ReferenceTargetEditCase{"clip_direct_child_moved",
+                                TargetInLayerDocument(kClipOfOwnChild, kClippedHost, ""),
+                                [](SVGDocument& d, int step) {
+                                  TranslateElement(d, "#child", Vector2d(-8.0 * step, 0));
+                                },
+                                false, false},
+        // Guard: already matched a fresh render before clip paths and masks were followed.
+        ReferenceTargetEditCase{
+            "pattern_use_target_moved",
+            TargetInLayerDocument(kPatternAndMarkerOfTarget, "",
+                                  R"svg(<rect width="96" height="48" fill="url(#pat)"
+                                    transform="translate(0 48)"/>)svg"),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(6.0 * step, 0)); }, false,
+            false},
+        // Guard: already matched a fresh render before clip paths and masks were followed.
+        ReferenceTargetEditCase{
+            "marker_use_target_moved",
+            TargetInLayerDocument(kPatternAndMarkerOfTarget, "",
+                                  R"svg(<path d="M 0 48 L 96 48" fill="none"
+                                    marker-start="url(#mk)"/>)svg"),
+            [](SVGDocument& d, int step) { TranslateTarget(d, Vector2d(6.0 * step, 0)); }, false,
+            false},
+        // Guard: already matched a fresh render before clip paths and masks were followed.
+        ReferenceTargetEditCase{"clip_use_target_ancestor_moved",
+                                TargetInLayerDocument(kClipOfTarget, "", kClippedHost),
+                                [](SVGDocument& d, int step) {
+                                  TranslateElement(d, "#group", Vector2d(9.0 * step, 0));
+                                },
+                                false, true}),
     [](const testing::TestParamInfo<ReferenceTargetEditCase>& info) {
+      return std::string(info.param.name);
+    });
+
+/// A document with an element that draws mask, marker or pattern content.
+struct DrawnContentCase {
+  const char* name;         ///< Case name.
+  std::string_view source;  ///< Document source.
+  /// Selector of an element to promote explicitly, or null when the element gets a layer by itself.
+  const char* promote;
+  /// Selector of an element to move after the unedited frames, or null.
+  const char* move = nullptr;
+  /// Promote only filtered elements by default, so a masked element stays in its static segment.
+  bool filterOnlyScope = false;
+};
+
+void PrintTo(const DrawnContentCase& value, std::ostream* os) {
+  *os << value.name;
+}
+
+/// A masked rect with no children, between two plain rects.
+constexpr std::string_view kMaskedLeafBetweenContent = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect width="96" height="48" fill="#c60" mask="url(#m)" transform="translate(0 40)"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// A masked rect with no children as the last element of the document.
+constexpr std::string_view kMaskedLeafLast = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect width="96" height="48" fill="#c60" mask="url(#m)" transform="translate(0 40)"/>
+  </svg>)svg";
+
+/// A masked rect whose mask content is itself masked.
+constexpr std::string_view kMaskedLeafWithMaskedMaskContent = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="inner" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="white" mask="url(#inner)"/>
+      </mask>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect width="96" height="48" fill="#c60" mask="url(#m)" transform="translate(0 40)"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// A translucent rect with no children painted with a pattern, between two plain rects.
+constexpr std::string_view kTranslucentPatternLeaf = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="16" height="16">
+        <rect width="8" height="16" fill="#c60"/>
+      </pattern>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect id="target" x="8" y="40" width="80" height="40" fill="url(#p)" opacity="0.5"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// A path with markers, between two plain rects. It is opaque: a translucent layer with
+/// antialiased edges is composed from its tile with a different rounding than a flat draw.
+constexpr std::string_view kMarkerLeaf = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <marker id="mk" markerUnits="userSpaceOnUse" markerWidth="24" markerHeight="24" refX="12"
+              refY="12" overflow="visible">
+        <circle cx="12" cy="12" r="10" fill="#c60"/>
+      </marker>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <path id="target" d="M 20 60 L 76 60" stroke="#333" stroke-width="2" fill="none"
+          marker-start="url(#mk)" marker-end="url(#mk)"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// An opaque rect with no children painted with a pattern, between two plain rects.
+constexpr std::string_view kPatternLeaf = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="16" height="16">
+        <rect width="8" height="16" fill="#c60"/>
+      </pattern>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect id="target" x="8" y="40" width="80" height="40" fill="url(#p)"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// A rect painted with a pattern, in a static segment, directly before a translucent rect that
+/// gets a layer. The pattern content is the last entity of the segment.
+constexpr std::string_view kPatternBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="16" height="16">
+        <rect width="8" height="16" fill="#c60"/>
+      </pattern>
+    </defs>
+    <g>
+      <rect width="96" height="40" fill="url(#p)"/>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c" opacity="0.5"/>
+    </g>
+  </svg>)svg";
+
+/// A path with markers, in a static segment, directly before a translucent rect that gets a layer.
+constexpr std::string_view kMarkersBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <marker id="mk" markerUnits="userSpaceOnUse" markerWidth="24" markerHeight="24" refX="12"
+              refY="12" overflow="visible">
+        <circle cx="12" cy="12" r="10" fill="#c60"/>
+      </marker>
+    </defs>
+    <g>
+      <path d="M 20 24 L 76 24" stroke="#333" stroke-width="2" fill="none"
+            marker-start="url(#mk)" marker-end="url(#mk)"/>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c" opacity="0.5"/>
+    </g>
+  </svg>)svg";
+
+/// A masked rect directly before a rect that is promoted explicitly. With only filtered elements
+/// promoted by default, the masked rect and its mask content stay in the static segment.
+constexpr std::string_view kMaskedLeafBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+    </defs>
+    <g>
+      <rect width="96" height="48" fill="#c60" mask="url(#m)"/>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c"/>
+    </g>
+  </svg>)svg";
+
+/// A text whose "xt" span paints its own pattern, in a static segment, directly before a
+/// translucent rect that gets a layer. The span's pattern content is the last entity of the
+/// segment.
+constexpr std::string_view kTextSpanPatternBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+        <rect width="4" height="8" fill="#c60"/>
+      </pattern>
+    </defs>
+    <g>
+      <text x="8" y="44" font-size="40" fill="#333">Te<tspan fill="url(#p)">xt</tspan></text>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c" opacity="0.5"/>
+    </g>
+  </svg>)svg";
+
+/// A filtered text whose "xt" span paints its own pattern. The filter gives the text a layer, and
+/// the span's pattern content follows the text in paint order, so the layer must cover it. The text
+/// is not moved: a moved filtered text differs from a fresh render by a few pixels even without
+/// span paint.
+constexpr std::string_view kFilteredTextSpanPattern = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+        <rect width="4" height="8" fill="#c60"/>
+      </pattern>
+      <filter id="f">
+        <feOffset dx="0" dy="0"/>
+      </filter>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <text id="target" x="8" y="44" font-size="40" fill="#333" filter="url(#f)">Te<tspan
+        fill="url(#p)">xt</tspan></text>
+    <rect x="8" y="56" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+class CompositorDrawnContentTest : public testing::TestWithParam<DrawnContentCase> {};
+
+// Mask, marker and pattern content is instantiated after the element that draws it, so it follows
+// that element in paint order. Frames composed from tiles must draw it only through the element:
+// the first frame is drawn flat, so the later frames are the ones composed from tiles.
+TEST_P(CompositorDrawnContentTest, ComposedFramesMatchFreshRender) {
+  const DrawnContentCase& item = GetParam();
+  SVGDocument document = parseDocument(item.source);
+  SVGDocument reference = parseDocument(item.source);
+  document.setCanvasSize(96, 96);
+  reference.setCanvasSize(96, 96);
+  const RenderViewport viewport{Vector2d(96, 96)};
+
+  svg::Renderer renderer;
+  CompositorConfig config;
+  if (item.filterOnlyScope) {
+    config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+  }
+  CompositorController compositor(document, renderer, config);
+  const auto expectMatchesFreshRender = [&](const std::string& label) {
+    svg::Renderer referenceRenderer;
+    RendererDriver(referenceRenderer).draw(reference, viewport, Transform2d());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), referenceRenderer.takeSnapshot(),
+                                         std::string(item.name) + "_" + label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+  for (int frame = 0; frame < 3; ++frame) {
+    if (frame == 1 && item.promote != nullptr) {
+      const Entity target = document.querySelector(item.promote)->unsafeEntityHandle().entity();
+      (void)compositor.promoteEntity(target, InteractionHint::Selection);
+    }
+    compositor.renderFrame(viewport);
+    expectMatchesFreshRender("frame" + std::to_string(frame));
+  }
+  if (item.move != nullptr) {
+    // A moved layer must leave no copy behind in the segments around it.
+    for (int step = 1; step <= 2; ++step) {
+      for (SVGDocument* moved : {&document, &reference}) {
+        moved->querySelector(item.move)->cast<SVGGraphicsElement>().setTransform(
+            Transform2d::Translate(Vector2d(6.0 * step, 4.0 * step)));
+      }
+      compositor.renderFrame(viewport);
+      expectMatchesFreshRender("moved" + std::to_string(step));
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Content, CompositorDrawnContentTest,
+    testing::Values(
+        DrawnContentCase{"masked_leaf_between_content", kMaskedLeafBetweenContent, nullptr},
+        DrawnContentCase{"masked_leaf_last", kMaskedLeafLast, nullptr},
+        DrawnContentCase{"masked_leaf_with_masked_mask_content", kMaskedLeafWithMaskedMaskContent,
+                         nullptr},
+        DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
+        DrawnContentCase{"promoted_marker_leaf", kMarkerLeaf, "#target"},
+        DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target", "#target"},
+        DrawnContentCase{"filtered_text_span_pattern", kFilteredTextSpanPattern, nullptr},
+        DrawnContentCase{"text_span_pattern_before_layer", kTextSpanPatternBeforeLayer, nullptr,
+                         "#target"},
+        DrawnContentCase{"pattern_before_layer", kPatternBeforeLayer, nullptr, "#target"},
+        DrawnContentCase{"markers_before_layer", kMarkersBeforeLayer, nullptr, "#target"},
+        DrawnContentCase{"masked_leaf_before_promoted_layer", kMaskedLeafBeforeLayer, "#target",
+                         "#target", true}),
+    [](const testing::TestParamInfo<DrawnContentCase>& info) {
       return std::string(info.param.name);
     });
 

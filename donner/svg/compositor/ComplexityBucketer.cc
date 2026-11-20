@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/compositor/DrawnContent.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 namespace donner::svg::compositor {
@@ -15,6 +17,22 @@ struct Candidate {
   Entity entity;
   uint64_t cost;
 };
+
+}  // namespace
+
+namespace {
+
+/// Removes the candidates that are mask, marker or pattern content drawn for another element.
+/// That content reaches the frame only through the element that draws it, so it is never bucketed
+/// into a layer of its own.
+void EraseDrawnContentCandidates(Registry& registry, std::vector<Candidate>& candidates) {
+  const std::vector<std::pair<int, int>> drawnContent = DrawnContentDrawOrders(registry);
+  std::erase_if(candidates, [&](const Candidate& candidate) {
+    return InDrawOrderRanges(
+        drawnContent,
+        registry.get<components::RenderingInstanceComponent>(candidate.entity).drawOrder);
+  });
+}
 
 }  // namespace
 
@@ -86,6 +104,8 @@ void ComplexityBucketer::reconcile(Registry& registry) {
     candidates.push_back(Candidate{childRoot, cost});
     ++stats_.candidatesConsidered;
   }
+
+  EraseDrawnContentCandidates(registry, candidates);
 
   // Sort: cost descending, ties broken by entity id ascending (deterministic).
   std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
