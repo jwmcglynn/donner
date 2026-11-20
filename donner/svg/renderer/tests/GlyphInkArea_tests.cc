@@ -1,11 +1,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +14,7 @@
 #include <stb/stb_truetype.h>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/fonts/SfntUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
@@ -24,11 +26,12 @@ namespace {
 using testing::DoubleEq;
 using testing::DoubleNear;
 using testing::Gt;
+using testing::Optional;
 
 constexpr std::string_view kFontDirectory = "third_party/resvg-test-suite/fonts";
 constexpr std::string_view kFontFile = "third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf";
 constexpr std::string_view kText = "Text";
-constexpr float kFontSizePx = 160.0f;
+constexpr double kFontSizePx = 160.0;
 
 /// One opaque black run of \ref kText at \ref kFontSizePx, wholly inside a transparent canvas.
 constexpr std::string_view kScene = R"svg(
@@ -36,107 +39,278 @@ constexpr std::string_view kScene = R"svg(
     <text x="40" y="180" font-family="Noto Sans" font-size="160">Text</text>
   </svg>)svg";
 
-/// The rendered ink may differ from the exact outline area by this fraction of it.
+/// The rendered ink may differ from the exact outline area by this fraction of it: 10 px^2 here,
+/// the ink of a uniform 0.006 px offset along the 1,671 px outline. Measured deviations are at
+/// most 0.03%; drawing every edge 0.27 px outside the outline adds 4.4%.
 constexpr double kInkRelativeTolerance = 0.001;
 
-std::vector<unsigned char> ReadFile(const std::string& path) {
-  std::ifstream file(path, std::ios::binary);
-  return std::vector<unsigned char>(std::istreambuf_iterator<char>(file),
-                                    std::istreambuf_iterator<char>());
-}
+/// Bounds-checked big-endian reader over font table bytes; reads past the end yield zero and
+/// clear \ref ok.
+class ByteReader {
+public:
+  explicit ByteReader(std::span<const uint8_t> bytes, std::size_t offset = 0)
+      : bytes_(bytes), ok_(offset <= bytes.size()), pos_(ok_ ? offset : 0) {}
 
-/// Twice the signed area that the segment from (x0, y0) to (x1, y1) contributes to its contour.
-double TwiceLineArea(double x0, double y0, double x1, double y1) {
-  return x0 * y1 - x1 * y0;
-}
+  bool ok() const { return ok_; }
 
-/// Twice the signed area that a quadratic Bezier contributes to its contour: its chord's
-/// contribution plus the region between the chord and the curve, which is exactly 2/3 of the
-/// control triangle.
-double TwiceQuadraticArea(double x0, double y0, double cx, double cy, double x1, double y1) {
-  const double twiceTriangle = (cx - x0) * (y1 - y0) - (cy - y0) * (x1 - x0);
-  return TwiceLineArea(x0, y0, x1, y1) + 2.0 / 3.0 * twiceTriangle;
-}
+  uint8_t u8() { return require(1) ? bytes_[pos_++] : 0; }
 
-/// Exact area enclosed by a glyph's TrueType contours, in square font units. Noto Sans contours
-/// do not overlap, so the nonzero-filled area is the magnitude of the summed signed areas.
-/// Returns NaN when the glyph has a cubic segment, which a TrueType font does not use.
-double GlyphOutlineArea(const stbtt_fontinfo& font, int glyph) {
-  stbtt_vertex* vertices = nullptr;
-  const int count = stbtt_GetGlyphShape(&font, glyph, &vertices);
-  double twiceArea = 0.0;
-  double startX = 0.0;
-  double startY = 0.0;
+  uint16_t u16() {
+    if (!require(2)) {
+      return 0;
+    }
+    const uint16_t value = fonts::ReadBe16(bytes_.data() + pos_);
+    pos_ += 2;
+    return value;
+  }
+
+  int16_t s16() { return static_cast<int16_t>(u16()); }
+
+  uint32_t u32() {
+    if (!require(4)) {
+      return 0;
+    }
+    const uint32_t value = fonts::ReadBe32(bytes_.data() + pos_);
+    pos_ += 4;
+    return value;
+  }
+
+  void skip(std::size_t count) {
+    if (require(count)) {
+      pos_ += count;
+    }
+  }
+
+private:
+  bool require(std::size_t count) {
+    ok_ = ok_ && bytes_.size() - pos_ >= count;
+    return ok_;
+  }
+
+  std::span<const uint8_t> bytes_;
+  bool ok_;
+  std::size_t pos_;
+};
+
+/// One TrueType outline point in font units.
+struct OutlinePoint {
   double x = 0.0;
   double y = 0.0;
-  bool sawCubic = false;
-  for (int i = 0; i < count; ++i) {
-    const stbtt_vertex& v = vertices[i];
-    switch (v.type) {
-      case STBTT_vmove:
-        twiceArea += TwiceLineArea(x, y, startX, startY);
-        startX = v.x;
-        startY = v.y;
-        break;
-      case STBTT_vline: twiceArea += TwiceLineArea(x, y, v.x, v.y); break;
-      case STBTT_vcurve: twiceArea += TwiceQuadraticArea(x, y, v.cx, v.cy, v.x, v.y); break;
-      default: sawCubic = true; break;
-    }
-    x = v.x;
-    y = v.y;
+  bool onCurve = true;
+};
+
+using Contour = std::vector<OutlinePoint>;
+
+/// The tables of a TrueType font that locate and describe glyph outlines.
+struct GlyphTables {
+  std::span<const uint8_t> head;
+  std::span<const uint8_t> loca;
+  std::span<const uint8_t> glyf;
+};
+
+std::optional<GlyphTables> FindGlyphTables(std::span<const uint8_t> font) {
+  const auto head = fonts::FindSfntTable(font, "head");
+  const auto loca = fonts::FindSfntTable(font, "loca");
+  const auto glyf = fonts::FindSfntTable(font, "glyf");
+  if (!head || !loca || !glyf) {
+    return std::nullopt;
   }
-  twiceArea += TwiceLineArea(x, y, startX, startY);
-  stbtt_FreeShape(&font, vertices);
-  return sawCubic ? std::nan("") : std::abs(twiceArea) / 2.0;
+  return GlyphTables{*head, *loca, *glyf};
 }
 
-/// Sum of the coverage (alpha / 255) of every pixel, in square pixels.
-double RenderedInk(const RendererBitmap& bitmap) {
-  double ink = 0.0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      ink += row[x * 4 + 3] / 255.0;
-    }
+/// The `glyf` bytes of \p glyph, located through `loca` in the format `head` selects.
+std::optional<std::span<const uint8_t>> GlyphData(const GlyphTables& tables, int glyph) {
+  ByteReader head(tables.head, 50);
+  const bool longOffsets = head.s16() != 0;
+  ByteReader loca(tables.loca, static_cast<std::size_t>(glyph) * (longOffsets ? 4u : 2u));
+  const uint32_t start = longOffsets ? loca.u32() : 2u * loca.u16();
+  const uint32_t end = longOffsets ? loca.u32() : 2u * loca.u16();
+  if (!head.ok() || !loca.ok() || start > end || end > tables.glyf.size()) {
+    return std::nullopt;
   }
-  return ink;
+  return tables.glyf.subspan(start, end - start);
 }
 
-/// Coverage on the outermost rows and columns; nonzero means the canvas clipped some ink.
-double BorderInk(const RendererBitmap& bitmap) {
-  double ink = 0.0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      if (y == 0 || x == 0 || y + 1 == bitmap.dimensions.y || x + 1 == bitmap.dimensions.x) {
-        ink += row[x * 4 + 3] / 255.0;
+/// Reads \p count point flags, expanding the repeat flag (bit 3).
+std::vector<uint8_t> ReadFlags(ByteReader& reader, std::size_t count) {
+  std::vector<uint8_t> flags;
+  while (flags.size() < count && reader.ok()) {
+    const uint8_t flag = reader.u8();
+    flags.push_back(flag);
+    if (flag & 0x08) {
+      for (uint8_t repeat = reader.u8(); repeat > 0 && flags.size() < count; --repeat) {
+        flags.push_back(flag);
       }
     }
   }
-  return ink;
+  return flags;
 }
 
-// Opaque glyphs cover each pixel by the fraction of its area inside the outline, so the
-// rendered ink equals the outline's area. A renderer that draws glyph edges heavier or lighter
-// than the outline changes the sum by about the edge offset times the outline's perimeter.
+/// Reads one delta-encoded coordinate per flag: a byte whose sign \p sameOrPositiveBit gives when
+/// \p shortBit is set, otherwise a signed 16-bit delta unless \p sameOrPositiveBit repeats the
+/// previous value.
+std::vector<double> ReadCoordinates(ByteReader& reader, const std::vector<uint8_t>& flags,
+                                    uint8_t shortBit, uint8_t sameOrPositiveBit) {
+  std::vector<double> values;
+  double value = 0.0;
+  for (const uint8_t flag : flags) {
+    if (flag & shortBit) {
+      const double delta = reader.u8();
+      value += (flag & sameOrPositiveBit) ? delta : -delta;
+    } else if (!(flag & sameOrPositiveBit)) {
+      value += reader.s16();
+    }
+    values.push_back(value);
+  }
+  return values;
+}
+
+/// The contours of a simple glyph, or nullopt for a composite or malformed one.
+std::optional<std::vector<Contour>> ReadContours(std::span<const uint8_t> glyph) {
+  if (glyph.empty()) {
+    return std::vector<Contour>{};
+  }
+  ByteReader reader(glyph);
+  const int16_t contourCount = reader.s16();
+  if (contourCount < 0) {
+    return std::nullopt;
+  }
+  reader.skip(8);  // Bounding box.
+  std::vector<std::size_t> ends;
+  for (int16_t i = 0; i < contourCount; ++i) {
+    ends.push_back(reader.u16());
+  }
+  reader.skip(reader.u16());  // Hinting instructions.
+  const std::size_t pointCount = ends.empty() ? 0 : ends.back() + 1;
+  const std::vector<uint8_t> flags = ReadFlags(reader, pointCount);
+  const std::vector<double> xs = ReadCoordinates(reader, flags, 0x02, 0x10);
+  const std::vector<double> ys = ReadCoordinates(reader, flags, 0x04, 0x20);
+  if (!reader.ok() || flags.size() != pointCount) {
+    return std::nullopt;
+  }
+
+  std::vector<Contour> contours;
+  std::size_t start = 0;
+  for (const std::size_t end : ends) {
+    if (end < start || end >= pointCount) {
+      return std::nullopt;
+    }
+    Contour& contour = contours.emplace_back();
+    for (std::size_t i = start; i <= end; ++i) {
+      contour.push_back({xs[i], ys[i], (flags[i] & 0x01) != 0});
+    }
+    start = end + 1;
+  }
+  return contours;
+}
+
+/// \p contour with the on-curve point TrueType implies midway between consecutive off-curve
+/// points made explicit, so every off-curve point lies between two on-curve points.
+Contour WithImpliedPoints(const Contour& contour) {
+  Contour points;
+  for (std::size_t i = 0; i < contour.size(); ++i) {
+    const OutlinePoint& point = contour[i];
+    const OutlinePoint& next = contour[(i + 1) % contour.size()];
+    points.push_back(point);
+    if (!point.onCurve && !next.onCurve) {
+      points.push_back({(point.x + next.x) / 2.0, (point.y + next.y) / 2.0, true});
+    }
+  }
+  return points;
+}
+
+/// Twice the signed area that the segment from \p from to \p to contributes to its contour.
+double TwiceLineArea(const OutlinePoint& from, const OutlinePoint& to) {
+  return from.x * to.y - to.x * from.y;
+}
+
+/// Twice the signed area that a quadratic Bezier contributes to its contour: its chord's share
+/// plus the region between the chord and the curve, which is exactly 2/3 of the control triangle.
+double TwiceQuadraticArea(const OutlinePoint& from, const OutlinePoint& control,
+                          const OutlinePoint& to) {
+  const double twiceTriangle =
+      (control.x - from.x) * (to.y - from.y) - (control.y - from.y) * (to.x - from.x);
+  return TwiceLineArea(from, to) + 2.0 / 3.0 * twiceTriangle;
+}
+
+/// Twice the signed area enclosed by one TrueType contour.
+double TwiceContourArea(const Contour& contour) {
+  const Contour points = WithImpliedPoints(contour);
+  double twiceArea = 0.0;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    if (!points[i].onCurve) {
+      continue;
+    }
+    const OutlinePoint& next = points[(i + 1) % points.size()];
+    twiceArea += next.onCurve
+                     ? TwiceLineArea(points[i], next)
+                     : TwiceQuadraticArea(points[i], next, points[(i + 2) % points.size()]);
+  }
+  return twiceArea;
+}
+
+/// Exact area enclosed by a glyph's contours, in square font units, or nullopt when the glyph
+/// cannot be read. Noto Sans contours do not overlap, so the nonzero-filled area is the magnitude
+/// of the summed signed contour areas.
+std::optional<double> GlyphOutlineArea(const GlyphTables& tables, int glyph) {
+  const std::optional<std::span<const uint8_t>> data = GlyphData(tables, glyph);
+  const std::optional<std::vector<Contour>> contours =
+      data ? ReadContours(*data) : std::optional<std::vector<Contour>>();
+  if (!contours) {
+    return std::nullopt;
+  }
+  double twiceArea = 0.0;
+  for (const Contour& contour : *contours) {
+    twiceArea += TwiceContourArea(contour);
+  }
+  return twiceArea < 0.0 ? -twiceArea / 2.0 : twiceArea / 2.0;
+}
+
+std::vector<uint8_t> ReadFile(const std::string& path) {
+  std::ifstream file(path, std::ios::binary);
+  return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
+                              std::istreambuf_iterator<char>());
+}
+
+/// Coverage (alpha / 255) summed over every pixel, or over the outermost rows and columns only.
+double SummedCoverage(const RendererBitmap& bitmap, bool borderOnly) {
+  double coverage = 0.0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    const uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
+    const bool borderRow = y == 0 || y + 1 == bitmap.dimensions.y;
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      if (!borderOnly || borderRow || x == 0 || x + 1 == bitmap.dimensions.x) {
+        coverage += row[x * 4 + 3] / 255.0;
+      }
+    }
+  }
+  return coverage;
+}
+
+// Opaque glyphs cover each pixel by the fraction of its area inside the outline, so the summed
+// coverage equals the outline's area. A renderer whose glyph edges sit outside or inside the
+// outline changes the sum by about the offset times the outline's perimeter.
 TEST(GlyphInkAreaTest, RenderedInkEqualsExactOutlineArea) {
-  const std::vector<unsigned char> fontData =
+  const std::vector<uint8_t> fontData =
       ReadFile(Runfiles::instance().Rlocation(std::string(kFontFile)));
   ASSERT_THAT(fontData.size(), Gt(0u)) << kFontFile;
+  const std::optional<GlyphTables> tables = FindGlyphTables(fontData);
+  ASSERT_TRUE(tables.has_value()) << kFontFile << " lacks a head, loca or glyf table";
   stbtt_fontinfo font{};
-  ASSERT_NE(stbtt_InitFont(&font, fontData.data(), stbtt_GetFontOffsetForIndex(fontData.data(), 0)),
-            0)
-      << kFontFile;
+  ASSERT_NE(stbtt_InitFont(&font, fontData.data(), 0), 0) << kFontFile;
 
   double outlineAreaUnits = 0.0;
   for (const char ch : kText) {
     const int glyph = stbtt_FindGlyphIndex(&font, ch);
     ASSERT_NE(glyph, 0) << "no glyph for '" << ch << "'";
-    const double area = GlyphOutlineArea(font, glyph);
-    ASSERT_THAT(area, Gt(0.0)) << "glyph for '" << ch << "'";
-    outlineAreaUnits += area;
+    const std::optional<double> area = GlyphOutlineArea(*tables, glyph);
+    ASSERT_THAT(area, Optional(Gt(0.0))) << "outline of '" << ch << "'";
+    outlineAreaUnits += *area;
   }
-  const double pxPerUnit = stbtt_ScaleForMappingEmToPixels(&font, kFontSizePx);
+  ByteReader head(tables->head, 18);
+  const uint16_t unitsPerEm = head.u16();
+  ASSERT_THAT(unitsPerEm, Gt(0)) << "head table has no unitsPerEm";
+  const double pxPerUnit = kFontSizePx / unitsPerEm;
   const double exactArea = outlineAreaUnits * pxPerUnit * pxPerUnit;
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
@@ -148,9 +322,10 @@ TEST(GlyphInkAreaTest, RenderedInkEqualsExactOutlineArea) {
 
   const RendererBitmap bitmap = RenderDocumentWithActiveBackend(document);
   ASSERT_FALSE(bitmap.empty()) << ActiveRendererBackendName() << " returned an empty snapshot";
-  EXPECT_THAT(BorderInk(bitmap), DoubleEq(0.0)) << "the canvas clips the text";
+  EXPECT_THAT(SummedCoverage(bitmap, /*borderOnly=*/true), DoubleEq(0.0))
+      << "the canvas clips the text";
 
-  const double ink = RenderedInk(bitmap);
+  const double ink = SummedCoverage(bitmap, /*borderOnly=*/false);
   EXPECT_THAT(ink, DoubleNear(exactArea, exactArea * kInkRelativeTolerance))
       << ActiveRendererBackendName() << " draws \"" << kText << "\" with " << ink
       << " px^2 of ink; its outline encloses " << exactArea << " px^2 ("
