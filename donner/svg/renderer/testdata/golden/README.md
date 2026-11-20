@@ -1253,3 +1253,83 @@ in RGBA.
 python3 tools/resvg_test_suite_upgrade/color_adjust_references.py compose \
   /tmp/tinyskia-labels.png /tmp/geode-labels.png /tmp/color-adjust-references
 ```
+
+## Goldens without recorded provenance
+
+The renderer and the regeneration command of these two goldens are not recorded.
+
+- `resvg-indirect.png` (`text/text-decoration/indirect`): provenance not recorded. It was first
+  committed in `0c5402b1d` under a numbered corpus name, with a source comment saying the vendored
+  PNG has a phantom green stroke, and kept its bytes through the rename in `4aef2b23c`. The
+  vendored `indirect.png` outlines the glyphs and the underline in green, while the SVG paints
+  no green: 2,269 of its pixels are exactly opaque RGBA (0, 128, 0, 255), and 7,309 have any
+  alpha with a green channel above both red and blue. This golden has none by either count.
+- `geode/filters_feGaussianBlur_complex-transform.png` (`filters/feGaussianBlur/complex-transform`,
+  Geode only): provenance not recorded. It was added in `eb1cd0fcb` as a per-backend Geode golden.
+  The registration's reason records the measured coverage evidence; the renderer build and the
+  command that wrote the file are not recorded.
+
+## Registered golden digests
+
+Every golden that `donner/svg/renderer/tests/resvg_test_suite.cc` compares against is listed here
+with the SHA-256 of the committed file and the section that records its provenance.
+`//tools/resvg_parity:parity_report_tests` fails when a registered golden has no row in this table
+(a row in another section does not count), or when any table row in this README that names it
+carries a different digest. Update the row in the same change that
+regenerates or adds a golden.
+
+| Golden | SHA-256 | Provenance |
+| --- | --- | --- |
+| `donner-color-adjust-functions-0percent.png` | `19d961480ad25de50d2e253e7a63651161165ccb34c85dc8094e1eef6e1829b3` | Color-adjust filter references |
+| `donner-color-adjust-functions-100percent.png` | `f8a411299bd564da61e553a8d64b5f6fec46e80b807211b9ba526e42220823b6` | Color-adjust filter references |
+| `donner-color-adjust-functions-200percent.png` | `e2a347ec867dba320fff3ec1b5eb375c2a83fcf9e38a0be6357533ec2a95fdef` | Color-adjust filter references |
+| `donner-color-adjust-functions-50percent.png` | `ecd812076497b2d410aa9bb5c051f219311e5f9dce436cb0684b419ece8e48ea` | Color-adjust filter references |
+| `donner-color-adjust-functions-negative.png` | `a971169dca1c19942291233b6ed4973346a7065bbc551f756ca5e0132f6b5e40` | Color-adjust filter references |
+| `donner-complex-order-and-xlink-href.png` | `9962099aac41e77fd1d9044fd05d2c939dad0ecfdc941f98dc1b36dae9ab3750` | `filters/filter/complex-order-and-xlink-href` |
+| `donner-coordinates-list.png` | `f036660ed5d2f21cbbedbbba1f04c8aa94f31cc33958a3dd63e5cf13bb52f5bb` | `text/text-anchor/coordinates-list` |
+| `donner-drop-shadow-function-em-values.png` | `3bc724817809d4ed92c53c1b655a45f9f3a5a2a031efd4f0f99e48100abd9020` | `filters/filter-functions/drop-shadow-function*` |
+| `donner-drop-shadow-function-mm-values.png` | `044fe3cb0fe0176ab7dcbe86831dd49998e68e55d0b77143c2a4ce5a4b04aa3f` | `filters/filter-functions/drop-shadow-function*` |
+| `donner-drop-shadow-function.png` | `b5f628d66da78e36f887fedd444eeb9bcd0111b0d62a01ba79ceed9f53405c3c` | `filters/filter-functions/drop-shadow-function*` |
+| `donner-feColorMatrix-identity.png` | `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916` | `filters/feColorMatrix` identity rows |
+| `donner-mixed-vertical-underline-outline.png` | `129d7b96a7fcf32aef0a41ff74fd5dd8c62033fe9650bd4423bf96fc328db238` | Mixed vertical underline outline reference |
+| `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
+| `donner-named-value.png` | `52f758743a31018c94d2b16df37bdd4e8cf5c1b59237358a18c5f8e5f6234c12` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
+| `donner-pattern-recursive-on-child.png` | `52f05db1cdf008bd95245a6c635bf7101858f885d200f45193905332721c2d65` | Donner renderings of recursive pattern references |
+| `donner-pattern-self-recursive.png` | `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17` | Donner renderings of recursive pattern references |
+| `donner-textPath-with-path.png` | `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7` | `text/textPath/with-path` and `with-path-and-xlink-href` |
+| `donner-upright-latin-outline.png` | `33bd0044926d60bbf4bb03dd2423d599e9141e6c62a9d4ebb436e2a3d072e766` | Upright Latin outline reference |
+| `firefox-double-subregion-blur.png` | `49abff60095a6ebdddfb20edb4a7d842dd7a8efba295c6cf0a625a8764d451d9` | Gaussian blur primitive subregions |
+| `firefox-stroke-linear-gradient-on-text.png` | `24b2bc34651ec46cdee7e49450e832916b1f0666bbb5cd20e3b543f93f55fdd4` | Gradient strokes on text |
+| `firefox-stroke-radial-gradient-on-text.png` | `40695b1c5ff590b5367bd645e62dedb9855d4a3a8a7c1bafed16f424fb73dfd1` | Gradient strokes on text |
+| `geode/donner-color-adjust-functions-0percent.png` | `ac9f02f71d8c116e36cdb476bf5d0702c863691c6db223f558052e73ebadff41` | Color-adjust filter references |
+| `geode/donner-color-adjust-functions-100percent.png` | `a0801618b69a89113657590737904c73f0ea2f1f8684294ec4906e6abeabbc0a` | Color-adjust filter references |
+| `geode/donner-color-adjust-functions-200percent.png` | `7872a95c6ad4b81072f6c0dcbb3c68818add843a3762d9f15f234645293dd3cc` | Color-adjust filter references |
+| `geode/donner-color-adjust-functions-50percent.png` | `d17790f2c6ee6d19c152cc42f932ca44740f6076eb34a49248fb21ac9fdfa3bc` | Color-adjust filter references |
+| `geode/donner-color-adjust-functions-negative.png` | `21ac65ab93ac649542f122e75ea04b88db85a9abb11970da46729b14301014d8` | Color-adjust filter references |
+| `geode/filters_feGaussianBlur_complex-transform.png` | `78e9339f1048417698d6b517036590937fb86a3a04f50a070ac7c557d4ef29d2` | Provenance not recorded; see Goldens without recorded provenance |
+| `resvg-all-types-inline-bands.png` | `4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911` | Inline text decoration and malformed lists |
+| `resvg-all-types-inline-no-decoration.png` | `2550df9e39e1e949b633b924c98995203e5bc5c134bfb9537cf8a9868e2082f7` | Inline text decoration and malformed lists |
+| `resvg-complex-graphemes-and-coordinates-list.png` | `0c37edfeafdd94c8a9b8414f1c5794fee897b933a0dbd6a3e1ad8087bcba6b83` | Cyrillic combining mark position |
+| `resvg-complex-transform.png` | `6621a9e1494d58d650380f1683ddf75ec790bcda3aab84ffd990cee73fd3343a` | `filters/feSpotLight/complex-transform` |
+| `resvg-compound-emojis-and-coordinates-list.png` | `9fef8a7afaf51ff396e4a776da3ec65f72f1b3a5c3ed59e55bd4b10d5ca2061f` | Emoji positioning reference |
+| `resvg-dy-with-tiny-coordinates.png` | `518e1ba79b2d93a906aecf1d109fdb3362794b36fc2b7ac4df28cc4b80fa26a4` | Text path reference images |
+| `resvg-embedded-svg-with-text.png` | `0f0c328a6c2c99e3ff09b3e4e0c8173d0720737fcafee7c4dbfb8f316cff0bf8` | structure/image: embedded SVG with text |
+| `resvg-filter-input-and-subregion.png` | `f999add4a549c79697a68a2995f7d59b3cc2f09b69f4dfba8ae44058b7f3296f` | Filter input clipping and a narrower primitive subregion |
+| `resvg-font-size-adjust-simple-case.png` | `7493132a5ca79910e11d3ece3c025cab71a14360162feb6e1e550df1c2762abb` | Donner-rendered font-size-adjust reference |
+| `resvg-half-box-blur.png` | `0832ea8ff38488e742fcabc57b5ab408fb6ae85f852a310cda57674e7192a130` | Gaussian blur primitive subregions |
+| `resvg-hanging-on-vertical.png` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` | Donner-rendered references |
+| `resvg-indirect.png` | `d0650c15a05856bb424850f3340ee59d1592d58648a120f4922a51962cb0a963` | Provenance not recorded; see Goldens without recorded provenance |
+| `resvg-japanese-with-tb.png` | `f750e889461dea59c46ceb3945aac85f06ff5baa312ad7fb5b9300dc5e291812` | Donner-rendered references |
+| `resvg-method=stretch.png` | `ba6c92599b34f0327da5a06536fa4b2f36d8487b83cab4138caa6be03f0e7626` | Donner-rendered textPath/method=stretch reference |
+| `resvg-mixed-children-1.png` | `2ea922a8be96b59e9ed1950eae3bfcda2368710c80a8a6d4a24eb5db6d92a054` | Donner-rendered textPath continuation references |
+| `resvg-mixed-children-2.png` | `15bb577cfdb17641732110e9ba2c3da36ec24b1761ee972d2e5881676fbd61a0` | Donner-rendered textPath/mixed-children-2 reference |
+| `resvg-mixed-languages-with-tb.png` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` | Donner-rendered references |
+| `resvg-nested-rectangles.png` | `ce5bdadc7ee47341ac56618873b538017f97ad32532f228f0915536590b715bf` | Explicit tile geometry for nested and skewed patterns |
+| `resvg-on-feImage.png` | `e94b02b863268c3579d36929691e9a8cfb5c389976fe459f00d2f3aa122a4154` | Nearest-neighbor sampling for `on-feImage` |
+| `resvg-skewed-text-tiles.png` | `11804d5374ecb1b2777cae2540d0493764f47b9117e4bd9e837bb65651f6f477` | Explicit tile geometry for nested and skewed patterns |
+| `resvg-tb-and-punctuation.png` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` | Donner-rendered references |
+| `resvg-tspan-with-absolute-position.png` | `754eba7cfe125e9ae873187015247f89d7e9f5e8614f604a0ef7880c8c03eaa7` | Legacy PNGs (renderer and generation command not recorded) |
+| `resvg-tspan-with-relative-position.png` | `fda4f9409e5b1cd52b3368157eca7ff5af20b438c68eb82b0e263b0cb33b8e83` | Text path reference images |
+| `resvg-very-long-text.png` | `6392266f206470a9459514291d4b7b811f3a0b9d406c7fc2d81fdb3ded914021` | Donner-rendered textPath continuation references |
+| `resvg-with-underline.png` | `3ff550f2200e10a348a24a74aef99196e867fbd4a9249c7c109ea85aca982af2` | Legacy PNGs (renderer and generation command not recorded) |
+| `resvg-xlink-filter-bounds.png` | `9ebb7922a3da396ec9a892db7850c929acf2f1af071c7a0db672e38be1ad18e9` | Filter input clipping and a narrower primitive subregion |

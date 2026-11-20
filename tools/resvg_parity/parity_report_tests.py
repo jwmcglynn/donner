@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -454,6 +455,250 @@ class ParityReportTests(unittest.TestCase):
                 "deprecated-in-svg2 case uses it",
             ],
         )
+
+    def test_golden_overrides_need_a_reason(self) -> None:
+        for name in ("bare.svg", "geode.svg", "reasoned.svg", "builder.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"bare.svg", Params::WithGoldenOverride("a.png")},'
+                '{"geode.svg", Params().withGeodeGoldenOverride("g.png")},'
+                '{"reasoned.svg", Params::WithGoldenOverride("a.png", 0.02f, "why")},'
+                '{"builder.svg", Params().withGeodeGoldenOverride("g.png", "why")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(
+            parity_report.golden_reason_violations(report),
+            [
+                "painting/fill/bare.svg: golden override has no reason; record why the vendored "
+                "reference is replaced",
+                "painting/fill/geode.svg: golden override has no reason; record why the vendored "
+                "reference is replaced",
+            ],
+        )
+
+    def test_explicit_capability_gate_needs_a_source_reason(self) -> None:
+        # The arabic row once had a hard-coded exemption; it must fail like any other row.
+        for category, filename in (("text/sample", "gated.svg"),
+                                   ("text/text-anchor", "on-tspan-with-arabic.svg")):
+            fixture = Fixture()
+            self.addCleanup(fixture.close)
+            fixture.add_case(f"{category}/{filename}")
+            report = parity_report.build_report(
+                _registration(
+                    "TextGated",
+                    f'"{category}", {{'
+                    f'{{"{filename}", Params().requireFeature(RendererBackendFeature::TextFull)}}}}',
+                ),
+                fixture.tests_root,
+            )
+
+            with self.subTest(path=f"{category}/{filename}"), self.assertRaisesRegex(
+                parity_report.ParityReportError,
+                f"{category}/{filename}: explicit capability gate needs a source reason",
+            ):
+                parity_report.add_exception_policies(report, {"rules": []})
+
+    def _ratchet_report(self) -> dict[str, object]:
+        for name in ("new.svg", "grown.svg", "shrunk.svg", "kept.svg", "fixed.svg", "geode.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        return parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"new.svg", Params::WithThreshold(0.08f, 150, "new")},'
+                '{"grown.svg", Params::WithThreshold(0.2f, 300, "grown")},'
+                '{"shrunk.svg", Params::WithThreshold(0.06f, 120, "shrunk")},'
+                '{"kept.svg", Params::WithThreshold(0.1f, 200, "kept")},'
+                '{"fixed.svg", Params::WithThreshold(0.05f, 100, "fixed")},'
+                '{"geode.svg", Params().withGeodeMaxPixelsDifferent(500).withReason("geode")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+    def test_pixel_budget_ratchet_rejects_new_grown_shrunk_and_stale_entries(self) -> None:
+        report = self._ratchet_report()
+        every_lane = ("default_text", "max", "geode")
+        allowlist = {
+            "painting/fill/grown.svg": dict.fromkeys(every_lane, 250),
+            "painting/fill/shrunk.svg": dict.fromkeys(every_lane, 150),
+            "painting/fill/kept.svg": dict.fromkeys(every_lane, 200),
+            "painting/fill/fixed.svg": {"max": 400},
+            "painting/fill/geode.svg": {"geode": 500, "max": 500},
+        }
+
+        violations = parity_report.pixel_budget_ratchet_violations(report, allowlist)
+
+        def lanes(path: str, message: str) -> list[str]:
+            return [f"painting/fill/{path} ({lane}): {message}" for lane in every_lane]
+
+        self.assertEqual(violations, sorted([
+            *lanes("new.svg", "max_pixels 150 is above 100 and not in PIXEL_BUDGET_ALLOWLIST; new "
+                   "entries need maintainer approval, so fix the engine instead"),
+            *lanes("grown.svg", "max_pixels 300 is above its recorded 250 in "
+                   "PIXEL_BUDGET_ALLOWLIST, which may only shrink"),
+            *lanes("shrunk.svg", "max_pixels 120 is below its recorded 150; lower the "
+                   "PIXEL_BUDGET_ALLOWLIST entry"),
+            "painting/fill/fixed.svg (max): stale PIXEL_BUDGET_ALLOWLIST entry; the lane no "
+            "longer compares with max_pixels above 100, so remove it",
+            "painting/fill/geode.svg (max): stale PIXEL_BUDGET_ALLOWLIST entry; the lane no "
+            "longer compares with max_pixels above 100, so remove it",
+        ]))
+        self.assertEqual(parity_report.pixel_budget_ratchet_violations(report, {
+            "painting/fill/new.svg": dict.fromkeys(every_lane, 150),
+            "painting/fill/grown.svg": dict.fromkeys(every_lane, 300),
+            "painting/fill/shrunk.svg": dict.fromkeys(every_lane, 120),
+            "painting/fill/kept.svg": dict.fromkeys(every_lane, 200),
+            "painting/fill/geode.svg": {"geode": 500},
+        }), [])
+
+    def test_pixel_budget_ratchet_ignores_lanes_that_do_not_compare(self) -> None:
+        self.fixture.add_case("text/sample/full.svg")
+        report = parity_report.build_report(
+            _registration("TextSample", '"text/sample", {'
+                          '{"full.svg", WithMaxPixels(300, "text-full budget").onlyTextFull()}}'),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(
+            parity_report.pixel_budget_ratchet_violations(
+                report, {"text/sample/full.svg": {"max": 300, "geode": 300}}
+            ),
+            ["text/sample/full.svg (geode): stale PIXEL_BUDGET_ALLOWLIST entry; the lane no "
+             "longer compares with max_pixels above 100, so remove it"],
+        )
+
+    def test_threshold_ratchet_rejects_new_grown_shrunk_and_stale_entries(self) -> None:
+        report = self._ratchet_report()
+        every_lane = ("default_text", "max", "geode")
+        allowlist = {
+            "painting/fill/grown.svg": dict.fromkeys(every_lane, 0.15),
+            "painting/fill/shrunk.svg": dict.fromkeys(every_lane, 0.07),
+            "painting/fill/kept.svg": dict.fromkeys(every_lane, 0.1),
+            "painting/fill/fixed.svg": dict.fromkeys(every_lane, 0.05),
+        }
+
+        violations = parity_report.threshold_ratchet_violations(report, allowlist)
+
+        self.assertEqual(len(violations), 12, violations)
+        self.assertIn("painting/fill/new.svg (geode): threshold 0.08 is above 0.05 and not in "
+                      "THRESHOLD_ALLOWLIST; new entries need maintainer approval, so fix the engine "
+                      "instead", violations)
+        self.assertIn("painting/fill/grown.svg (max): threshold 0.2 is above its recorded 0.15 in "
+                      "THRESHOLD_ALLOWLIST, which may only shrink", violations)
+        self.assertIn("painting/fill/shrunk.svg (default_text): threshold 0.06 is below its "
+                      "recorded 0.07; lower the THRESHOLD_ALLOWLIST entry", violations)
+        self.assertIn("painting/fill/fixed.svg (max): stale THRESHOLD_ALLOWLIST entry; the lane no "
+                      "longer compares with threshold above 0.05, so remove it", violations)
+        self.assertFalse([v for v in violations if v.startswith("painting/fill/kept.svg")])
+
+    def test_skip_ratchet_rejects_new_and_stale_skips(self) -> None:
+        for name in ("listed.svg", "new.svg", "fixed.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"listed.svg", Params::Skip("Not impl: feature (#1)")},'
+                '{"new.svg", Params::Skip("Reference disagreement: the PNG is wrong")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        violations = parity_report.skip_ratchet_violations(
+            report, {"painting/fill/listed.svg", "painting/fill/fixed.svg"}
+        )
+
+        self.assertEqual(
+            violations,
+            [
+                "painting/fill/new.svg: Params::Skip is not in SKIP_ALLOWLIST; "
+                + parity_report.SKIP_RULE,
+                "painting/fill/fixed.svg: stale SKIP_ALLOWLIST entry; the case is no longer an "
+                "active skip, so remove it",
+            ],
+        )
+        self.assertIn("Donner-rendered golden", parity_report.SKIP_RULE)
+        self.assertIn("README_resvg_test_suite.md", parity_report.SKIP_RULE)
+
+    def test_goldens_must_be_listed_in_the_digest_table_with_their_digest(self) -> None:
+        golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
+        (golden_root / "geode").mkdir(parents=True)
+        files = {"listed.png": b"listed", "geode/listed.png": b"geode listed",
+                 "elsewhere.png": b"elsewhere", "stale.png": b"regenerated",
+                 "unlisted.png": b"unlisted"}
+        for name, data in files.items():
+            (golden_root / name).write_bytes(data)
+        (self.fixture.root / parity_report.GOLDEN_ROOT.parent / "escape.png").write_bytes(b"x")
+
+        def digest(name: str) -> str:
+            return hashlib.sha256(files[name]).hexdigest()
+
+        (golden_root / "README.md").write_text(
+            "Prose naming `unlisted.png` with " + digest("unlisted.png") + " is not a table row.\n\n"
+            "## Another section\n\n| Golden | SHA-256 |\n| --- | --- |\n"
+            f"| `elsewhere.png` | `{digest('elsewhere.png')}` |\n"
+            f"| `stale.png` | `{hashlib.sha256(b'original').hexdigest()}` |\n\n"
+            f"{parity_report.GOLDEN_DIGEST_HEADING}\n\n| Golden | SHA-256 |\n| --- | --- |\n"
+            f"| `listed.png` | `{digest('listed.png')}` |\n"
+            f"| `geode/listed.png` | `{digest('geode/listed.png')}` |\n"
+            f"| `stale.png` | `{digest('stale.png')}` |\n\n"
+            "## A later section\n\n"
+            f"| `unlisted.png` | `{digest('unlisted.png')}` |\n",
+            encoding="utf-8",
+        )
+        names = ("a.svg", "b.svg", "c.svg", "d.svg", "e.svg", "f.svg")
+        for name in names:
+            self.fixture.add_case(f"painting/fill/{name}")
+        prefix = parity_report.GOLDEN_ROOT.as_posix()
+        goldens = ("listed.png", "stale.png", "unlisted.png", "missing.png", "elsewhere.png",
+                   "../escape.png")
+        overrides = "".join(
+            f'{{"{name}", Params::WithGoldenOverride("{prefix}/{golden}", 0.02f, "r")'
+            + ('.withGeodeGoldenOverride("' + prefix + '/geode/listed.png")' if name == "a.svg"
+               else "")
+            + "},"
+            for name, golden in zip(names, goldens)
+        )
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {' + overrides + "}"),
+            self.fixture.tests_root,
+        )
+        readme = parity_report.GOLDEN_README
+        section = repr(parity_report.GOLDEN_DIGEST_HEADING)
+
+        self.assertEqual(
+            parity_report.golden_documentation_violations(report, self.fixture.root),
+            [
+                f"{prefix}/../escape.png: golden path is not a normalized repository path",
+                f"{prefix}/elsewhere.png: no row in the {readme} {section} table names it with "
+                "its SHA-256 " + digest("elsewhere.png"),
+                f"{prefix}/missing.png: referenced golden file is missing",
+                f"{prefix}/stale.png: a {readme} row names it without its current SHA-256 "
+                + digest("stale.png"),
+                f"{prefix}/unlisted.png: no row in the {readme} {section} table names it with "
+                "its SHA-256 " + digest("unlisted.png"),
+            ],
+        )
+
+    def test_golden_readme_needs_one_digest_section(self) -> None:
+        golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
+        golden_root.mkdir(parents=True)
+        (golden_root / "README.md").write_text("| `a.png` | `x` |\n", encoding="utf-8")
+        self.fixture.add_case("painting/fill/a.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill"'), self.fixture.tests_root
+        )
+
+        with self.assertRaisesRegex(parity_report.ParityReportError, "needs one"):
+            parity_report.golden_documentation_violations(report, self.fixture.root)
 
     def test_reference_budgets_follow_the_evidence_rule(self) -> None:
         gen = "Reference rasterizer generation: crosshair; "
@@ -1204,6 +1449,30 @@ class RealTreeParityReportTests(unittest.TestCase):
             "Params::DeprecatedInSVG2 is limited to the SVG 2 removals and deprecations listed in "
             "DEPRECATED_IN_SVG2_FEATURES:\n" + "\n".join(violations),
         )
+
+    def test_live_registrations_follow_the_ratchets_and_document_goldens(self) -> None:
+        repo_root = parity_report._default_repo_root()
+        report = parity_report.generate_report(repo_root)
+        guards = {
+            "Every golden override needs a reason (WithGoldenOverride's third argument, "
+            ".withReason or .withGeodeGoldenOverride's second argument)":
+                parity_report.golden_reason_violations(report),
+            "PIXEL_BUDGET_ALLOWLIST records every compared budget above 100 pixels at its current "
+            "value and may only shrink":
+                parity_report.pixel_budget_ratchet_violations(report),
+            "THRESHOLD_ALLOWLIST records every compared color threshold above 0.05 at its current "
+            "value and may only shrink":
+                parity_report.threshold_ratchet_violations(report),
+            "SKIP_ALLOWLIST equals the active Params::Skip rows and may only shrink":
+                parity_report.skip_ratchet_violations(report),
+            "Every registered golden needs a golden README table row with its SHA-256":
+                parity_report.golden_documentation_violations(report, repo_root),
+        }
+        for rule, violations in guards.items():
+            with self.subTest(rule=rule):
+                self.assertEqual(violations, [], rule + ":\n" + "\n".join(violations))
+        self.assertEqual(len(parity_report.SKIP_ALLOWLIST), report["summary"]["skip_cases"])
+        self.assertGreater(len(parity_report.referenced_goldens(report)), 0)
 
 
 if __name__ == "__main__":

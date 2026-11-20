@@ -7,7 +7,8 @@ of the suite policy.
 
 The triage backlog for [0022](0022-resvg_test_suite_upgrade.md)'s Milestone 2 —
 working through the tests the suite upgrade pulled in and either fixing the
-underlying gap or recording why a `Params::Skip(...)` is the correct state. Each
+underlying gap or recording the registration that fits it (a Donner-rendered golden for a
+reference disagreement, or an allowlisted `Params::Skip(...)` for an unimplemented feature). Each
 entry corresponds to one or more skips/threshold-overrides in
 [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc).
 
@@ -51,12 +52,23 @@ comparison hides every regression in its output, so it needs one of two factorie
   subject is a removed feature uses this bucket even when its reference is the UB marker.
 
 `//tools/resvg_parity:parity_report_tests` enforces both rules, and the parity report counts the
-two buckets separately. Both still render, so they keep no-crash and sanitizer coverage. Donner
-bugs and missing features, reference disagreements where Donner follows the specification,
-harness or background mismatches, and API policy differences are `Params::Skip` with a bug number
-or reason; skipped cases do not render at all. A UB marker reference does not by itself make a
-case undefined behavior: a `Not impl:` or `Deferred:` feature on a marker reference stays a skip.
-A case that passes the default comparison compares.
+two buckets separately. Both still render, so they keep no-crash and sanitizer coverage.
+
+**Reference disagreements get a golden, not a skip.** Where Donner follows the specification
+and the vendored reference does not, where the harness and the reference disagree (for example
+an opaque reference background), and where an API policy differs, the case compares against a
+Donner-rendered golden with a recorded justification: a `Params::WithGoldenOverride` reason, an
+entry in `tools/resvg_parity/exception_policies.json`, and a golden README row with the file's
+SHA-256. A skip is only for an unimplemented feature with an issue number
+(`Not impl: <feature> (#<issue>)`); skipped cases do not render at all. `SKIP_ALLOWLIST` in
+`parity_report.py` lists every active skip and may only shrink, so a new skip needs maintainer
+approval. The twelve skips it lists include reference-disagreement, harness-mismatch and
+API-policy rows, which are to be converted to goldens. Pixel budgets
+in the hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
+`PIXEL_BUDGET_ALLOWLIST` and `THRESHOLD_ALLOWLIST` record the existing budgets above 100 pixels
+and color thresholds above 0.05 at their current values and may only shrink. A UB marker
+reference does not by itself make a case undefined behavior: an unimplemented feature on a marker
+reference stays a skip. A case that passes the default comparison compares.
 
 ## Current totals
 

@@ -1,6 +1,9 @@
 # resvg-test-suite: Custom Golden Overrides
 
-**Status:** Reference (current as of 2026-08-18)
+**Status:** Reference. Catalogs resvg-test-suite cases that compare against a custom golden
+instead of their vendored PNG, the reason for each override, and the rules an override must
+meet. The [golden README](../../donner/svg/renderer/testdata/golden/README.md) records each
+golden's provenance and SHA-256.
 
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
 golden is _not_ the right thing to compare against, the test pins
@@ -8,14 +11,18 @@ golden is _not_ the right thing to compare against, the test pins
 so it compares against a Donner-blessed golden instead. This doc is the catalog
 of every such override and the reason it exists.
 
-There are two distinct reasons an override is justified:
+An override is justified when the vendored reference is not the right thing to compare against:
 
-1. **resvg's golden is wrong per spec** — Donner renders to the spec, resvg
-   doesn't. These are genuine upstream golden bugs.
-2. **Blessed minor diff** — Donner and resvg both render acceptably, but there's
-   a small, well-understood difference (sub-pixel char advance, anti-aliasing on
-   a curved baseline, a font-backend difference) where pinning a Donner golden is
-   cleaner than carrying a per-test pixel threshold.
+1. **Reference disagreement**: Donner renders to the specification and the vendored PNG does
+   not. These are genuine upstream golden bugs.
+2. **Harness mismatch or API-policy difference**: the vendored PNG was produced under different
+   harness conditions (for example an opaque background) or a different API policy.
+
+Every override records what the vendored PNG gets wrong in its reason, has an entry in
+`tools/resvg_parity/exception_policies.json`, and has a row with its SHA-256 in the golden
+README's digest table. A difference whose root cause is in Donner is fixed in the engine, not
+pinned with a golden, and a pixel budget in the hundreds is not accepted as a substitute. Some
+rows below are regression goldens whose provenance is not recorded; their reasons say so.
 
 Custom goldens live in `donner/svg/renderer/testdata/golden/`: `resvg-<test-name>.png`,
 named with the test stem, and `donner-<test-name>.png` for the Donner renderings whose evidence
@@ -177,21 +184,27 @@ records the construction and checksums for `on-feImage`. The separate `optimizeS
 compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
 pixel centers through the inverse transform to select the nearest source texel.
 
-### Exact pattern-tile seams (reference rasterization, not a spec violation)
+### Sharp pattern-tile seams (reference rasterization, not a spec violation)
 
 The specification does not say how a pattern tile is rasterized, so these are not "wrong per
-spec". On these rows Donner draws the exact coverage of each tile's stroke at the seams; the
-vendored PNGs resample a rasterized tile. Keeping the exact seams is a maintainer decision.
+spec". Donner does not draw pattern tiles analytically: both backends rasterize each tile at
+twice its device scale and sample it bilinearly. On the two self-recursive rows each tile-edge
+stroke edge falls on a half raster pixel, so that sampling reproduces the exact single-layer seam
+coverage (64, 255, 255, 64 on the pixel-aligned vertical seam). `recursive-on-child` draws two
+coincident half-stroke layers composited in the tile raster: its vertical seam reads 96 where
+either layer alone reads 64, and neither value is the true coverage of the two strokes (see the
+golden README). Content elsewhere in a tile is not reproduced exactly. The vendored PNGs resample
+a rasterized tile with a softer profile. Keeping the sharp seams is a maintainer decision.
 `testdata/golden/README.md` has the measurements, including what current Chromium and Firefox
 draw: exact coverage on pixel-aligned seams and a resampled tile on fractional ones.
 
 | Category | Test | Reason |
 | --- | --- | --- |
-| paint-servers/pattern | recursive-on-child | Exact tile-edge stroke, recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
-| paint-servers/pattern | out-of-order-referencing | Independent tile rectangles preserve the two fractional periods and clipped green strips |
-| paint-servers/pattern | text-child | Independent clipped text cells preserve glyph placement under skew |
-| paint-servers/pattern | self-recursive-on-child | Exact tile-edge stroke; the PNG resamples a raster tile |
-| paint-servers/pattern | self-recursive | Exact tile-edge stroke; the PNG resamples a raster tile |
+| paint-servers/pattern | recursive-on-child | Sharp two-layer tile-edge stroke (seam 96, see the golden README), recursive fill one level deep in both rects; the PNG resamples a raster tile and draws the second layer in rect4 only |
+| paint-servers/pattern | out-of-order-referencing | resvg 0.49.0 render of explicit tile rectangles; against the authored nested tile geometry, 832 pixels are opaque in one PNG and empty in the other |
+| paint-servers/pattern | text-child | resvg 0.49.0 render of explicit clipped text cells under skew; the PNG resamples a raster tile, spreading edges into empty cells |
+| paint-servers/pattern | self-recursive-on-child | Sharp tile-edge stroke at this alignment; the PNG resamples a raster tile |
+| paint-servers/pattern | self-recursive | Sharp tile-edge stroke at this alignment; the PNG resamples a raster tile |
 
 ### Color-adjust filter labels
 
@@ -238,23 +251,17 @@ The historical crosshair coverage accounts for 731 of 733 differing pixels. Both
 tiers compare the complete scene against an outlined control with default parameters. The
 golden README records the font metrics, browser controls, and regeneration command.
 
-### Blessed minor diffs (textPath / text-decoration)
+### textPath and text-decoration overrides
 
-The `text/textPath` family carries the bulk of the overrides: sub-pixel character
-advance and anti-aliasing differences along curved baselines, which differ between
-the simple and `text-full` backends. All are `.withReason("Minor char")` unless
-noted.
+| Category             | Test                         | Reason |
+| -------------------- | ---------------------------- | ------ |
+| text/textPath        | dy-with-tiny-coordinates     | Reference disagreement: the vendored PNG predates resvg's current dy layout on a path; independent resvg 0.47.0 reference |
+| text/textPath        | tspan-with-absolute-position | Regression golden for absolute distance along the text path (legacy PNG, provenance not recorded) |
+| text/textPath        | tspan-with-relative-position | Reference disagreement: the vendored PNG predates resvg's current dx/dy layout on a path; independent resvg 0.47.0 reference |
+| text/textPath        | with-underline               | Regression golden for the on-path underline (legacy PNG, provenance not recorded) |
+| text/text-decoration | indirect                     | Reference disagreement: the vendored PNG outlines the glyphs and underline in green, which the SVG does not paint (legacy PNG, provenance not recorded) |
 
-| Category             | Test                                     | Reason                                            |
-| -------------------- | ---------------------------------------- | ------------------------------------------------- |
-| text/textPath        | dy-with-tiny-coordinates                 | resvg 0.47.0 reference (golden README)            |
-| text/textPath        | tspan-with-absolute-position             | Minor char                                        |
-| text/textPath        | tspan-with-relative-position             | Minor char                                        |
-| text/textPath        | with-underline                           | Minor char                                        |
-| text/text-decoration | indirect                                 | (no reason string)                                |
-
-> `text-decoration/indirect` carries no `withReason`. It should either get one or migrate to a
-> per-test threshold. Tracked in [0021](0021-resvg_feature_gaps.md).
+The golden README records the evidence and, where known, the regeneration command for each.
 
 ## Golden files
 
@@ -265,7 +272,8 @@ references.
 ## Maintenance
 
 - Adding an override: place `resvg-<new-stem>.png` in
-  `donner/svg/renderer/testdata/golden/`, add `Params::WithGoldenOverride(…) .withReason("…")` in `resvg_test_suite.cc`, and add a row here. The
+  `donner/svg/renderer/testdata/golden/`, add `Params::WithGoldenOverride(…) .withReason("…")` in `resvg_test_suite.cc`,
+  add the golden's SHA-256 row to the golden README's digest table, and add a row here. The
   `golden/*.png` glob in
   [`testdata/BUILD.bazel`](../../donner/svg/renderer/testdata/BUILD.bazel) picks it
   up automatically.
