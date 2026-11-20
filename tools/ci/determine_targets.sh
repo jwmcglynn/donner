@@ -121,15 +121,17 @@ select_hosted_editor() {
   python3 "$planner/hosted_editor_selection.py" "$graph/affected.txt" "$graph/hosted-roots.txt" >> "$GITHUB_OUTPUT"
 }
 
-# Some inputs change the hosted workflow without a Bazel edge. Keep the complete
-# graph if a change might reach these or dependencies outside the loading graph.
+# Some inputs change the hosted workflow without a Bazel edge: the scripts its build job
+# runs, sources or imports. Keep the complete graph if a change might reach these or
+# dependencies outside the loading graph.
 hosted_editor_unhashed_input() {
   local path
   while IFS= read -r path; do
     case "$path" in
       .github/workflows/editor_wasm.yml|tools/ci/editor_wasm*|tools/ci/hosted_editor_selection.py|tools/run-browser-ci.sh|\
       tools/ci_check_runner_disk.sh|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|\
-      tools/ci_disk_cache.py|tools/render_notice.py|tools/release_cli/*)
+      tools/ci_disk_cache.py|tools/render_notice.py|tools/release_cli.py|tools/native_delivery.py|\
+      tools/ci/free_hosted_macos_disk.sh|tools/ci/lane.sh|tools/ci/macos_remote_shadow.py)
         return 0
         ;;
     esac

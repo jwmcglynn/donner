@@ -1,5 +1,6 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
+import ast
 import itertools
 import json
 import os
@@ -164,6 +165,47 @@ def _action_input_defaults(text):
     parts = re.split(r"^inputs:[ \t]*\n", text, maxsplit=1, flags=re.MULTILINE)
     inputs = re.split(r"^\S", parts[1], maxsplit=1, flags=re.MULTILINE)[0] if len(parts) > 1 else ""
     return re.findall(r"^ +default: *(.*)$", inputs, re.MULTILINE)
+
+
+_PYTHON_MODULE = re.compile(r"\bpython3\b[^\n|;&]*?\s-m\s+((?:tools|build_defs)(?:\.\w+)+)")
+
+
+def _script_references(text):
+    """The repository scripts, and the modules run with `python3 -m`, that commands name."""
+    text = re.sub(r"\$\{?GITHUB_WORKSPACE\}?/", "", text)
+    return (set(_SCRIPT_PATH.findall(text))
+            | {module.replace(".", "/") + ".py" for module in _PYTHON_MODULE.findall(text)})
+
+
+def _resolve_import(path, names):
+    """The file of the first of `names` found beside `path` or at the repository root."""
+    for name in names:
+        for base in (path.rsplit("/", 1)[0] + "/", ""):
+            candidate = base + name.replace(".", "/") + ".py"
+            if Path(runfiles.Create().Rlocation("donner/" + candidate)).is_file():
+                return candidate
+    raise AssertionError("%s imports %s, which is not in this test's data" % (path, names[-1]))
+
+
+def _python_imports(path):
+    """The repository modules a Python script imports.
+
+    Every import outside the standard library must resolve to a file in this test's data, so a
+    new import fails here instead of being skipped.
+    """
+    return {_resolve_import(path, names)
+            for node in ast.walk(ast.parse(_repository_text(path)))
+            for names in _import_choices(node)
+            if names[-1].split(".")[0] not in sys.stdlib_module_names}
+
+
+def _import_choices(node):
+    """For each name an import statement binds, the modules that may provide it, in order."""
+    if isinstance(node, ast.Import):
+        return [[alias.name] for alias in node.names]
+    if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+        return [[node.module + "." + alias.name, node.module] for alias in node.names]
+    return []
 
 
 def _phases_testing_the_selection():
@@ -884,6 +926,51 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "  steps:\n    - with:\n        default: tools/b.sh\n"), ["tools/a.sh"])
         self.assertEqual(_action_input_defaults("inputs:\n  script:\n    default: tools/a.sh\n"),
                          ["tools/a.sh"])
+
+    def _hosted_editor_runtime_scripts(self):
+        """Every repository script the Editor WASM workflow runs, sources or imports."""
+        actions = [_repository_text(".github/actions/%s/action.yml" % name) for name in sorted(
+            set(re.findall(r"uses: \./\.github/actions/([\w-]+)$", self.editor_wasm,
+                           re.MULTILINE)))]
+        commands = [body for text in [self.editor_wasm, *actions] for body in _run_bodies(text)]
+        commands += [value for text in actions for value in _action_input_defaults(text)]
+        pending, found = _script_references("\n".join(commands)), set()
+        while pending:
+            path = pending.pop()
+            found.add(path)
+            if path.endswith(".py"):
+                pending |= _python_imports(path)
+            else:
+                pending |= _script_references("\n".join(
+                    line for line in _repository_text(path).splitlines()
+                    if not line.lstrip().startswith("#")))
+            pending -= found
+        return found
+
+    def test_every_script_the_hosted_editor_build_runs_selects_full_hosted_coverage(self):
+        """bazel-diff cannot attribute these scripts, so the hosted planner keeps the graph."""
+        scripts = self._hosted_editor_runtime_scripts()
+        # Sourced by the lane script and imported by the evidence collector.
+        self.assertTrue({"tools/ci/lane.sh", "tools/ci/verify_unified_tests.py"} <= scripts,
+                        sorted(scripts))
+        start = self.determine_targets.index("\nhosted_editor_unhashed_input() {\n")
+        end = self.determine_targets.index("\n}\n", start) + len("\n}\n")
+        script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        script += self.determine_targets[start:end]
+        script += self._workflow_logic_function(self._selection_script())
+        start = self.determine_targets.index("\n  has_unhashed_input() {\n")
+        end = self.determine_targets.index("\n  }\n", start) + len("\n  }\n")
+        script += textwrap.dedent(self.determine_targets[start:end])
+        # A workflow-logic change selects full coverage before the hosted early return; the
+        # other two lists select the full hosted graph before any hashing.
+        script += ('for path in "$@"; do\n'
+                   '  is_workflow_logic "$path" || has_unhashed_input <<< "$path" ||'
+                   ' hosted_editor_unhashed_input <<< "$path" || echo "$path"\n'
+                   'done\n')
+        unlisted = "tools/ci/unlisted_hosted_step.sh"
+        result = self._run_script(script, [*sorted(scripts), unlisted])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(unlisted + "\n", result.stdout)
 
     def _run_script(self, text, args, env=None, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:

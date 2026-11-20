@@ -278,6 +278,21 @@ class DetermineTest(_ScriptTest):
                 self.assertNotIn("hosted_editor_mode=unaffected", outputs)
                 self.assertNotIn("hosted_editor_browser_targets=", outputs)
 
+    def test_hosted_lane_scripts_keep_full_coverage_before_hashing(self):
+        # The hosted build runs or imports these outside its Bazel graph.
+        for changed in ("tools/ci/free_hosted_macos_disk.sh", "tools/ci/lane.sh",
+                        "tools/ci/macos_remote_shadow.py", "tools/ci/verify_unified_tests.py",
+                        "tools/native_delivery.py", "tools/release_cli.py"):
+            with self.subTest(changed=changed):
+                result, calls, outputs = self.determine(mode="determine-hosted-editor",
+                                                        changed=changed + "\n")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Hosted Editor Wasm input requires full graph coverage.",
+                              result.stdout)
+                self.assertEqual([call for call in calls if call[0] == "java"], [])
+                self.assertNotIn(["git", "worktree", "add"], [call[:3] for call in calls])
+                self.assertNotIn("hosted_editor_mode=", outputs)
+
     def test_hosted_selection_keeps_full_coverage_for_infra_before_hashing(self):
         # The main workflow's planner hashes these revisions; the hosted one leaves no verdict.
         for changed in (".bazelversion\n", ".github/actions/prepare-bazel-diff/action.yml\n"):
