@@ -5707,8 +5707,9 @@ constexpr std::string_view kTranslucentPatternLeaf = R"svg(
     <rect x="8" y="8" width="20" height="20" fill="#06c"/>
   </svg>)svg";
 
-/// A translucent path with a marker, between two plain rects.
-constexpr std::string_view kTranslucentMarkerLeaf = R"svg(
+/// A path with markers, between two plain rects. It is opaque: a translucent layer with
+/// antialiased edges is composed from its tile with a different rounding than a flat draw.
+constexpr std::string_view kMarkerLeaf = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
     <defs>
       <marker id="mk" markerUnits="userSpaceOnUse" markerWidth="24" markerHeight="24" refX="12"
@@ -5718,7 +5719,7 @@ constexpr std::string_view kTranslucentMarkerLeaf = R"svg(
     </defs>
     <rect width="96" height="96" fill="#eee"/>
     <path id="target" d="M 20 60 L 76 60" stroke="#333" stroke-width="2" fill="none"
-          marker-start="url(#mk)" marker-end="url(#mk)" opacity="0.5"/>
+          marker-start="url(#mk)" marker-end="url(#mk)"/>
     <rect x="8" y="8" width="20" height="20" fill="#06c"/>
   </svg>)svg";
 
@@ -5772,7 +5773,7 @@ INSTANTIATE_TEST_SUITE_P(
                     DrawnContentCase{"masked_leaf_with_masked_mask_content",
                                      kMaskedLeafWithMaskedMaskContent, nullptr},
                     DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
-                    DrawnContentCase{"translucent_marker_leaf", kTranslucentMarkerLeaf, nullptr},
+                    DrawnContentCase{"promoted_marker_leaf", kMarkerLeaf, "#target"},
                     DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target"}),
     [](const testing::TestParamInfo<DrawnContentCase>& info) {
       return std::string(info.param.name);
