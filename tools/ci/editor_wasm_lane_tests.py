@@ -89,7 +89,8 @@ class EditorWasmLaneTest(unittest.TestCase):
         return [[str(self.snapshot) if word == "SNAPSHOT" else word.replace("=TEMP/", "=" + str(self.snapshot.parent) + "/") for word in call]
                 for call in _COMMANDS[command]]
 
-    def _run(self, *args, fail_call=0, fail_status=0, budget_mode=None, source_revision=None):
+    def _run(self, *args, fail_call=0, fail_status=0, budget_mode=None, source_revision=None,
+             browser_targets=None, event="pull_request"):
         self.capture.write_text("", encoding="utf-8")
         self.summary.write_text("", encoding="utf-8")
         env = dict(os.environ, RUNNER_TEMP=str(self.snapshot.parent), CAPTURE=str(self.capture), FAIL_CALL=str(fail_call),
@@ -101,6 +102,10 @@ class EditorWasmLaneTest(unittest.TestCase):
         env.pop("PAYLOAD_BUDGET_MODE", None)
         if budget_mode is not None:
             env["PAYLOAD_BUDGET_MODE"] = budget_mode
+        env.pop("HOSTED_EDITOR_BROWSER_TARGETS", None)
+        if browser_targets is not None:
+            env["HOSTED_EDITOR_BROWSER_TARGETS"] = browser_targets
+        env["GITHUB_EVENT_NAME"] = event
         result = subprocess.run([self.bash, str(self.repo / "tools/ci/editor_wasm_lane.sh"),
                                  *args], cwd=self.work, env=env, capture_output=True, text=True,
                                 check=False, timeout=test_timing.STALL_GUARD_SECONDS)
@@ -124,6 +129,25 @@ class EditorWasmLaneTest(unittest.TestCase):
                 self.assertEqual(result.stdout.count("::group::"), count)
                 self.assertEqual(result.stdout.count("::endgroup::"), count)
                 self.assertEqual(self.summary.read_text().count("| passed |"), count)
+
+    def test_browser_subset_fetch_and_test_only_the_selected_test(self):
+        selected = "//donner/editor/wasm/tests:hosted_firefox_composited_invariants_test"
+        validation = ["python3", "tools/ci/hosted_editor_selection.py",
+                      "--validate-browser-targets"]
+        for command in ("prefetch", "build"):
+            with self.subTest(command=command):
+                result, calls = self._run(command, browser_targets=selected)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = self._expected(command)[0][:-3] + [selected]
+                self.assertEqual(calls, [validation, expected])
+
+    def test_non_pr_cannot_narrow_the_release_graph(self):
+        selected = "//donner/editor/wasm/tests:hosted_firefox_composited_invariants_test"
+        for event in ("push", "schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                result, calls = self._run("build", browser_targets=selected, event=event)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(calls, [])
 
     def test_ci_source_revision_reaches_every_editor_package_phase(self):
         for revision in ("a" * 40, "b" * 40):

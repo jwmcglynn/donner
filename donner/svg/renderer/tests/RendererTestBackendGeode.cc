@@ -12,6 +12,7 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace donner::svg {
 
@@ -56,23 +57,14 @@ bool GeodeSupportsFeature(RendererBackendFeature feature) {
     // `GeodeFilterEngine`, so the resvg_test_suite `filters/*` categories,
     // gated by `requireFeature(FilterEffects)`, run and compare on Geode.
     //
-    // Text is implemented in `RendererGeode::drawText`
-    // -- the renderer walks `TextEngine` runs, pulls each glyph
-    // outline via `glyphOutline`, transforms it into place, and
-    // fills via the Slug fill pipeline. End users calling
-    // `RendererGeode::draw` directly get correct text rendering.
-    //
-    // The `Text` / `TextFull` feature flags still return `false`
-    // here so the resvg test suite skips the `text/*` category on Geode:
-    // Geode text currently differs from the tiny-skia reference by
-    // ~600-800 pixels on realistic text tests, well past the default
-    // 100-pixel budget. The differing pixels are frequently fully
-    // off rather than partial, so threshold widening is not justified.
-    // Keep the feature gate until the positional/coverage root cause is
-    // identified and fixed.
+    // Text follows the build's text tier, as on TinySkia. `RendererGeode::drawText` fills each
+    // glyph outline with exact coverage, while the resvg references sample coverage on four
+    // sub-scanlines per pixel and place each horizontal edge on a quarter-pixel boundary; rows
+    // where that difference alone exceeds the pixel budget opt into
+    // `withGeodeQuarterPixelEdgeCoverage()` in resvg_test_suite.cc.
     case RendererBackendFeature::FilterEffects: return true;
-    case RendererBackendFeature::Text: return false;
-    case RendererBackendFeature::TextFull: return false;
+    case RendererBackendFeature::Text: return IsTextBuiltIn();
+    case RendererBackendFeature::TextFull: return IsFullTextBuiltIn();
     case RendererBackendFeature::AsciiSnapshot: return true;
   }
 

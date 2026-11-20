@@ -82,9 +82,13 @@ a stronger pixel assertion.
 Regenerate this inventory with
 `python3 tools/resvg_parity/parity_report.py --inventory-markdown`.
 `//tools/resvg_parity:parity_report_tests` checks the generated block against this document.
-The lane counts below are eligibility from source. The normal Geode corpus does
-not enable the text capabilities, including for text-dependent fixtures outside
-the `text/` category. Focused tests exercise Geode text directly.
+The lane counts below are eligibility from source. The normal Geode corpus compares text in the
+simple text tier. Rows that exceed their Geode budget only because of the references' quarter-pixel
+edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), and the rows in
+`GEODE_GATE_ALLOWLIST` disable their Geode comparison with a recorded reason; both lists are in
+`parity_report.py` and described in `README_resvg_test_suite.md`. Full-shaping rows stay
+capability-gated on Geode because the corpus has no Geode full-shaping wrapper; the `*_text_full`
+unit test variants run on Geode with full shaping.
 
 <!-- BEGIN RESVG INVENTORY -->
 
@@ -102,7 +106,7 @@ the `text/` category. Focused tests exercise Geode text directly.
 | --- | ---: | ---: | ---: | ---: |
 | `default_text` | 1,554 | 98 | 26 | 1 |
 | `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,246 | 69 | 363 | 1 |
+| `geode` | 1,538 | 98 | 26 | 1 |
 
 <!-- END RESVG INVENTORY -->
 
@@ -773,8 +777,8 @@ conformance.
 
 The focused regression targets are `renderer_regression_tests`, `renderer_regression_tests_geode`
 and `renderer_regression_tests_text_full`. The corpus targets are `resvg_test_suite_default_text`,
-`resvg_test_suite_geode` and `resvg_test_suite_max`. The existing Geode corpus text capability gate
-still skips the text sample; the independent Geode font contract test executes directly. Render-only
+`resvg_test_suite_geode` and `resvg_test_suite_max`. The Geode corpus compares the text rows its
+simple text tier supports; the independent Geode font contract test executes directly. Render-only
 corpus execution of the UB-marker cases establishes stability, not pixel agreement with the
 historical reference.
 
@@ -808,8 +812,11 @@ Policy:
   side tables.
 - Do not maintain symptom-ledger sets such as `kEdgeFloor` or `kGenuineG2` in the
   resvg file. If an independently verified analytic Geode result differs from the shared reference,
-  attach an exact local `withGeodeGoldenOverride(...)` and current reason to that case. Never disable
-  the backend or widen a Geode-only threshold to absorb the difference.
+  attach an exact local `withGeodeGoldenOverride(...)` and current reason to that case. Never widen
+  a Geode-only threshold to absorb the difference. Disabling the Geode comparison of a row is
+  limited to `GEODE_GATE_ALLOWLIST` in `parity_report.py`: each entry records a measured cause.
+  `//tools/resvg_parity:parity_report_tests` enforces in CI that the list equals the Geode-gated
+  rows; that it only shrinks is a review rule.
 - Category-wide defaults are acceptable when the default reason applies to every file not
   explicitly overridden. `filters/enable-background` is the model: one category default
   `Params::DeprecatedInSVG2(...)`, not a per-file list, with overrides only for the cases that

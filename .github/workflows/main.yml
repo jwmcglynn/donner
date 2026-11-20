@@ -109,9 +109,6 @@ jobs:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
-    env:
-      BAZEL_DIFF_TAG: "v18.1.0"
-      BAZEL_DIFF_SHA256: "eadec6d0ca0991de78bd9e063bfed993a359ed3bc60e507818077c300b6f58e0"
     outputs:
       fallback: ${{ steps.determine.outputs.fallback }}
       affected: ${{ steps.determine.outputs.affected }}
@@ -131,39 +128,13 @@ jobs:
         shell: bash
         run: tools/ci/determine_targets.sh pr-meta
 
-      - name: Setup Java
-        if: steps.pr-meta.outputs.identical_tree != 'true'
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      - name: Setup Bazel
-        if: steps.pr-meta.outputs.identical_tree != 'true'
-        uses: bazel-contrib/setup-bazel@0.19.2
-        with:
-          bazelisk-cache: true
-          repository-cache: true
-          external-cache: true
-          cache-save: false
-
-      - name: Download bazel-diff
-        if: steps.pr-meta.outputs.identical_tree != 'true'
-        shell: bash
-        run: tools/ci/fetch_bazel_diff.sh
-
-      # Base hashes are a pure function of (bazel-diff version, base SHA), and
-      # generating them is roughly half of this job's bazel-diff wall time.
-      # PRs restore them here; pushes to main generate and save them below so
-      # the first PR against any main commit already hits warm. Caches created
-      # on main are visible to all PR branches. Only main writes this cache.
-      - name: Restore bazel-diff base hashes
+      # Only trusted main runs save base hashes. Both PR planners restore the same key.
+      - name: Prepare bazel-diff and restore base hashes
         id: base-hashes
-        if: steps.pr-meta.outputs.identical_tree != 'true' && steps.pr-meta.outputs.base_sha != ''
-        uses: actions/cache/restore@v6
+        if: steps.pr-meta.outputs.identical_tree != 'true'
+        uses: ./.github/actions/prepare-bazel-diff
         with:
-          path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
-          key: bazel-diff-base-hashes-tt-${{ env.BAZEL_DIFF_TAG }}-${{ steps.pr-meta.outputs.base_sha }}
+          base-sha: ${{ steps.pr-meta.outputs.base_sha }}
 
       - id: determine
         name: Determine affected Bazel targets

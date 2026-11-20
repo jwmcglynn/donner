@@ -6,6 +6,7 @@
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 
@@ -35,5 +36,17 @@ public:
    */
   void instantiateComputedComponent(EntityHandle handle, ParseWarningSink& warningSink);
 };
+
+/**
+ * Whether the text content of \p handle paints no glyphs. It is hidden when its parent's content
+ * is hidden, when its `display` is `none`, when its conditional processing attributes fail for
+ * \p userLanguages, or when it is a `<textPath>` without a usable path or outside a text root.
+ *
+ * @param handle Text content element.
+ * @param parentHidden Whether the content of \p handle's parent is hidden.
+ * @param userLanguages User's preferred languages, in priority order.
+ */
+bool IsTextHidden(EntityHandle handle, bool parentHidden,
+                  const std::vector<RcString>& userLanguages);
 
 }  // namespace donner::svg::components

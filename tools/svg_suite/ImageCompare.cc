@@ -10,6 +10,9 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <span>
+#include <utility>
+#include <vector>
 
 namespace donner::svg_suite {
 namespace {
@@ -117,6 +120,79 @@ void NormalizeStride(ImageView& image, size_t stride, std::vector<uint8_t>& stor
   image.strideInPixels = stride;
   image.data = storage;
 }
+
+bool ValidOptions(const ComparisonOptions& options) {
+  return std::isfinite(options.threshold) && options.threshold >= 0.0 && options.threshold <= 1.0 &&
+         options.maxMismatchedPixels >= 0 &&
+         !(options.acceptQuarterPixelEdgeCoverage && options.includeAntiAliasing);
+}
+
+bool IsCounted(std::span<const uint8_t> diff, size_t pos, const pixelmatch::Color& counted) {
+  return diff[pos] == counted.r && diff[pos + 1] == counted.g && diff[pos + 2] == counted.b &&
+         diff[pos + 3] == counted.a;
+}
+
+bool PartiallyCovered(uint8_t alpha) {
+  return alpha > 0 && alpha < 255;
+}
+
+struct EdgeCoverage {
+  int pixels = 0;
+  int maxAlphaDelta = 0;
+  bool failed = false;
+};
+
+/// Reclassifies the pixels pixelmatch counted in \p diff that
+/// ComparisonOptions::acceptQuarterPixelEdgeCoverage accepts, redrawing each in
+/// kEdgeCoverageDiffColor. \p expected and \p actual share \p diff's stride.
+EdgeCoverage AcceptQuarterPixelEdgeCoverage(ImageView expected, ImageView actual,
+                                            const pixelmatch::Options& policy, Image& diff) {
+  // Both colors at the shared alpha; every other pixel stays transparent in both, so only the
+  // candidates can differ when pixelmatch compares these buffers.
+  std::vector<uint8_t> sharedExpected(diff.data.size(), 0);
+  std::vector<uint8_t> sharedActual(diff.data.size(), 0);
+  std::vector<std::pair<size_t, int>> candidates;
+  for (size_t row = 0; row < static_cast<size_t>(diff.height); ++row) {
+    for (size_t column = 0; column < static_cast<size_t>(diff.width); ++column) {
+      const size_t pos = (row * diff.strideInPixels + column) * 4;
+      const uint8_t expectedAlpha = expected.data[pos + 3];
+      const uint8_t actualAlpha = actual.data[pos + 3];
+      const int alphaDelta =
+          std::abs(static_cast<int>(expectedAlpha) - static_cast<int>(actualAlpha));
+      if (!IsCounted(diff.data, pos, policy.diffColor) || !PartiallyCovered(expectedAlpha) ||
+          !PartiallyCovered(actualAlpha) || alphaDelta > kQuarterPixelEdgeCoverageMaxAlphaDelta) {
+        continue;
+      }
+      std::copy_n(expected.data.begin() + pos, 3, sharedExpected.begin() + pos);
+      std::copy_n(actual.data.begin() + pos, 3, sharedActual.begin() + pos);
+      sharedExpected[pos + 3] = sharedActual[pos + 3] = std::min(expectedAlpha, actualAlpha);
+      candidates.emplace_back(pos, alphaDelta);
+    }
+  }
+  EdgeCoverage accepted;
+  if (candidates.empty()) {
+    return accepted;
+  }
+
+  pixelmatch::Options colorPolicy = policy;
+  colorPolicy.includeAA = true;
+  std::vector<uint8_t> colorDiff(diff.data.size());
+  if (pixelmatch::pixelmatch(sharedExpected, sharedActual, colorDiff, diff.width, diff.height,
+                             diff.strideInPixels, colorPolicy) < 0) {
+    accepted.failed = true;
+    return accepted;
+  }
+  for (const auto& [pos, alphaDelta] : candidates) {
+    if (IsCounted(colorDiff, pos, colorPolicy.diffColor)) {
+      continue;
+    }
+    std::copy(kEdgeCoverageDiffColor.begin(), kEdgeCoverageDiffColor.end(),
+              diff.data.begin() + pos);
+    ++accepted.pixels;
+    accepted.maxAlphaDelta = std::max(accepted.maxAlphaDelta, alphaDelta);
+  }
+  return accepted;
+}
 }  // namespace
 
 std::string ValidateImage(ImageView image) {
@@ -134,8 +210,7 @@ std::string ValidateImage(ImageView image) {
 ComparisonResult CompareImages(ImageView expected, ImageView actual,
                                const ComparisonOptions& options) {
   ComparisonResult result;
-  if (!std::isfinite(options.threshold) || options.threshold < 0.0 || options.threshold > 1.0 ||
-      options.maxMismatchedPixels < 0) {
+  if (!ValidOptions(options)) {
     result.error = "invalid pixelmatch options";
     return result;
   }
@@ -159,11 +234,21 @@ ComparisonResult CompareImages(ImageView expected, ImageView actual,
   pixelmatch::Options policy;
   policy.threshold = options.threshold;
   policy.includeAA = options.includeAntiAliasing;
-  const int count = pixelmatch::pixelmatch(expected.data, actual.data, diff.data, expected.width,
-                                           expected.height, stride, policy);
+  int count = pixelmatch::pixelmatch(expected.data, actual.data, diff.data, expected.width,
+                                     expected.height, stride, policy);
   if (count < 0) {
     result.error = "pixelmatch rejected the image buffers";
     return result;
+  }
+  if (options.acceptQuarterPixelEdgeCoverage) {
+    const EdgeCoverage edges = AcceptQuarterPixelEdgeCoverage(expected, actual, policy, diff);
+    if (edges.failed) {
+      result.error = "pixelmatch rejected the edge coverage buffers";
+      return result;
+    }
+    count -= edges.pixels;
+    result.edgeCoveragePixels = edges.pixels;
+    result.maxEdgeCoverageAlphaDelta = edges.maxAlphaDelta;
   }
   result.mismatchedPixels = count;
   result.passed = count <= options.maxMismatchedPixels;

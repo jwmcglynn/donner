@@ -445,6 +445,8 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/components",
         "//donner/svg/renderer:pixel_format_utils",
+        "//donner/svg/renderer:render_snapshot",
+        "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer:rendering_context",

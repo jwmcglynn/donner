@@ -1326,11 +1326,13 @@ public:
 
   /**
    * Ends pattern tile recording and sets the resulting tiled shader as the current fill or stroke
-   * paint.
+   * paint, or stores it in a text span pattern slot.
    *
-   * @param forStroke If true, set the pattern as the stroke paint; otherwise as the fill paint.
+   * @param forStroke If true, the tile is a stroke paint; otherwise a fill paint.
+   * @param spanSlot The text span pattern slot that holds the tile for the next text draw (see
+   *   \ref components::SpanPatternPaint), or nullopt for the element's own fill or stroke paint.
    */
-  virtual void endPatternTile(bool forStroke) = 0;
+  virtual void endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) = 0;
 
   /**
    * Sets the active paint parameters used by subsequent draw calls.

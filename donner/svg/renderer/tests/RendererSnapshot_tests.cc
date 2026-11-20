@@ -303,7 +303,7 @@ TEST(RendererSnapshotTests, RejectedPatternTileSkipsRecordedContentAndEndCommand
   EXPECT_CALL(renderer, beginFrame(_)).Times(1);
   EXPECT_CALL(renderer, endFrame()).Times(1);
   EXPECT_CALL(renderer, beginPatternTile(_, _)).WillOnce(::testing::Return(false));
-  EXPECT_CALL(renderer, endPatternTile(_)).Times(0);
+  EXPECT_CALL(renderer, endPatternTile(_, _)).Times(0);
   EXPECT_CALL(renderer, drawPath(_, _)).Times(1);
 
   driver.draw(snapshot);

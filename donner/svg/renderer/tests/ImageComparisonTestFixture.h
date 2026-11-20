@@ -103,6 +103,11 @@ struct ImageComparisonParams {
   bool skipSimpleText = false;
   /// If true, count anti-aliased pixels as mismatches instead of suppressing them.
   bool includeAntiAliasing = false;
+  /// If true, the `GeodeGolden` comparison against the vendored resvg reference accepts edge
+  /// pixels whose coverage differs from that quarter-pixel quantized reference by no more than the
+  /// quantization allows (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage`). Set it
+  /// through \ref withGeodeQuarterPixelEdgeCoverage.
+  bool geodeQuarterPixelEdgeCoverage = false;
   /// If true, skip this test case.
   bool skip = false;
   /// If true, allow updating golden images via an environment variable.
@@ -273,6 +278,26 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& includeAntiAliasingDifferences() {
     includeAntiAliasing = true;
+    return *this;
+  }
+
+  /**
+   * @brief Lets the `GeodeGolden` comparison accept quarter-pixel edge coverage differences.
+   *
+   * For a row whose vendored resvg reference samples coverage on four sub-scanlines per pixel, so
+   * its horizontal edges sit on quarter-pixel boundaries while Geode renders exact coverage. The
+   * comparison then accepts an edge pixel that both images cover partially, whose alphas differ by
+   * at most `svg_suite::kQuarterPixelEdgeCoverageMaxAlphaDelta` and whose colors match when both
+   * carry the smaller alpha (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage`).
+   * Other comparison modes, and a comparison against a custom golden, are unaffected.
+   * In the resvg suite every such row must be listed in `QUARTER_PIXEL_EDGE_ALLOWLIST` in
+   * `tools/resvg_parity/parity_report.py`; `//tools/resvg_parity:parity_report_tests` checks that
+   * the list equals the opted-in rows.
+   *
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& withGeodeQuarterPixelEdgeCoverage() {
+    geodeQuarterPixelEdgeCoverage = true;
     return *this;
   }
 

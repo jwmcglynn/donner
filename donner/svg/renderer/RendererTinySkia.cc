@@ -23,6 +23,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -579,6 +580,17 @@ void StrokeTinyTextRun(tiny_skia::MutablePixmapView& pixmap,
                                    mask);
     }
   }
+}
+
+/// The paint a span keeps for its own paint server reference when no gradient, staged tile or
+/// fallback color paints it: nothing for a pattern, whose tile was not staged, otherwise
+/// \p inherited, the text element's paint.
+std::optional<tiny_skia::Paint> UnstagedReferencePaint(
+    const components::PaintResolvedReference& ref, std::optional<tiny_skia::Paint> inherited) {
+  if (ref.reference.handle.all_of<components::ComputedPatternComponent>()) {
+    return std::nullopt;
+  }
+  return inherited;
 }
 
 /// The text's fill re-applied to a span that has no resolved fill of its own, with the span's
@@ -1940,6 +1952,7 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   rejectedFilterDepth_ = 0;
   patternFillPaint_.reset();
   patternStrokePaint_.reset();
+  spanPatternTiles_ = SpanPatternTiles();
   frameCounters_ = RendererTinySkiaFrameCounters();
   // Both the counters and the listener-wiring memo describe one frame only. Dropping the memo
   // here is what bounds its lifetime to a frame, which is the property that makes comparing
@@ -2814,8 +2827,10 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   // inside the tile would otherwise pick them up as its own fill/stroke and reset them).
   frame.savedPatternFillPaint = std::move(patternFillPaint_);
   frame.savedPatternStrokePaint = std::move(patternStrokePaint_);
+  frame.savedSpanPatternTiles = std::move(spanPatternTiles_);
   patternFillPaint_.reset();
   patternStrokePaint_.reset();
+  spanPatternTiles_ = SpanPatternTiles();
 
   surfaceStack_.push_back(std::move(frame));
 
@@ -2829,7 +2844,7 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   return true;
 }
 
-void RendererTinySkia::endPatternTile(bool forStroke) {
+void RendererTinySkia::endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) {
   if (surfaceStack_.empty() || surfaceStack_.back().kind != SurfaceKind::PatternTile) {
     return;
   }
@@ -2846,8 +2861,12 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
   clipEpochStack_ = std::move(frame.savedClipEpochStack);
   patternFillPaint_ = std::move(frame.savedPatternFillPaint);
   patternStrokePaint_ = std::move(frame.savedPatternStrokePaint);
+  spanPatternTiles_ = std::move(frame.savedSpanPatternTiles);
   PatternPaintState state{std::move(frame.pixmap), frame.targetFromPattern};
-  if (forStroke) {
+  if (spanSlot.has_value()) {
+    (forStroke ? spanPatternTiles_.stroke : spanPatternTiles_.fill)
+        .insert_or_assign(*spanSlot, std::move(state));
+  } else if (forStroke) {
     patternStrokePaint_ = std::move(state);
   } else {
     patternFillPaint_ = std::move(state);
@@ -3363,6 +3382,29 @@ bool RendererTinySkia::admitPlacedGlyph(bool hasPredecodeComplexity, const Path&
                                               .bytes = *retainedBytes * 2u});
 }
 
+const RendererTinySkia::PatternPaintState* RendererTinySkia::spanPatternTile(
+    const components::ComputedTextComponent::TextSpan& span, bool forStroke) const {
+  const std::optional<std::uint64_t>& slot =
+      forStroke ? span.strokePatternSlot : span.fillPatternSlot;
+  if (!slot.has_value()) {
+    const std::optional<PatternPaintState>& element =
+        forStroke ? patternStrokePaint_ : patternFillPaint_;
+    return element.has_value() ? &*element : nullptr;
+  }
+  const auto& tiles = forStroke ? spanPatternTiles_.stroke : spanPatternTiles_.fill;
+  const auto found = tiles.find(*slot);
+  return found != tiles.end() ? &found->second : nullptr;
+}
+
+tiny_skia::Paint RendererTinySkia::patternTilePaint(const PatternPaintState& tile,
+                                                    float opacity) const {
+  tiny_skia::Paint paint = makeBasePaint(antialias_);
+  paint.shader = tiny_skia::Pattern(tile.pixmap.view(), tiny_skia::SpreadMode::Repeat,
+                                    tiny_skia::FilterQuality::Bilinear, opacity,
+                                    toTinyTransform(tile.targetFromPattern));
+  return paint;
+}
+
 std::optional<tiny_skia::Paint> RendererTinySkia::resolveSpanFillPaint(
     const components::ComputedTextComponent::TextSpan& span,
     const std::optional<tiny_skia::Paint>& textFillPaint, const Box2d& textBounds,
@@ -3388,19 +3430,13 @@ std::optional<tiny_skia::Paint> RendererTinySkia::resolveSpanFillPaint(
       paint.shader = std::move(*shader);
       return paint;
     }
-    if (patternFillPaint_.has_value()) {
-      tiny_skia::Paint paint = makeBasePaint(antialias_);
-      paint.shader =
-          tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                             tiny_skia::FilterQuality::Bilinear, opacity,
-                             toTinyTransform(patternFillPaint_->targetFromPattern));
-      return paint;
+    if (const PatternPaintState* tile = spanPatternTile(span, /*forStroke=*/false)) {
+      return patternTilePaint(*tile, opacity);
     }
     if (ref->fallback.has_value()) {
       return solidPaint(ref->fallback->resolve(currentColor, opacity));
     }
-    // Keep the inherited paint for non-gradient refs such as patterns.
-    return textFillPaint;
+    return UnstagedReferencePaint(*ref, textFillPaint);
   }
   if (span.ownsFill()) {
     // The span's computed fill is none.
@@ -3528,18 +3564,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.shader = std::move(*shader);
             spanStrokePaint = paint;
-          } else if (patternStrokePaint_.has_value()) {
-            tiny_skia::Paint paint = makeBasePaint(antialias_);
-            paint.shader = tiny_skia::Pattern(
-                patternStrokePaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                tiny_skia::FilterQuality::Bilinear, spanStrokeOpacity,
-                toTinyTransform(patternStrokePaint_->targetFromPattern));
-            spanStrokePaint = paint;
+          } else if (const PatternPaintState* tile = spanPatternTile(span, /*forStroke=*/true)) {
+            spanStrokePaint = patternTilePaint(*tile, spanStrokeOpacity);
           } else if (ref->fallback.has_value()) {
             spanStrokePaint =
                 makeSolidPaint(ref->fallback->resolve(spanCurrentColor, spanStrokeOpacity));
           } else {
-            // Keep the inherited paint for non-gradient refs such as patterns.
+            spanStrokePaint = UnstagedReferencePaint(*ref, spanStrokePaint);
           }
         } else {
           spanStrokePaint.reset();
@@ -3772,6 +3803,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   if (patternStrokePaint_.has_value()) {
     patternStrokePaint_.reset();
   }
+  spanPatternTiles_ = SpanPatternTiles();
 #else
   (void)text;
   (void)params;
