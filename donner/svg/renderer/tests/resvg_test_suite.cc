@@ -407,11 +407,6 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
                      kDefaultThreshold,
                      "Explicit half-box clip; opaque interior and exact crosshair")},
-                {"with-subregion-3.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/firefox-double-subregion-blur.png",
-                     kDefaultThreshold,
-                     "Firefox reference preserves the first blur's clipped edge")},
                 // The backdrop square and the filtered square coincide, so this row's alpha must
                 // equal in=BackgroundImage's, which compares with default parameters. Donner's two
                 // renders do share one alpha; the two references do not. This one reaches full
@@ -500,13 +495,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "reference is the resvg UB marker image; the valid "
                          "repeated filter URL has an independent equivalent-graph "
                          "comparison (#1169)")},
-                    {"url-and-grayscale.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/donner-url-and-grayscale.png",
-                         kDefaultThreshold,
-                         "Reference disagreement: the PNG's grayscale() center is 122; filter "
-                         "functions operate in sRGB, which gives 115 "
-                         "(CssFilterContractMixedUrlGrayscaleUsesSrgb)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -732,20 +720,14 @@ INSTANTIATE_TEST_SUITE_P(PaintingFillRule, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingImageRendering, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "painting/image-rendering",
-                {
-                    // Uses the deprecated `optimizeSpeed` alias, which CSS Images maps to
-                    // `crisp-edges`. The resvg golden chooses a different pixel-center grid under
-                    // the root viewport scale; this reference uses an allowed
-                    // destination-pixel-center nearest grid.
-                    {"on-feImage.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-on-feImage.png")
-                         .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
-                         .withReason("Nearest sampling at destination pixel centers")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "painting/image-rendering",
+            {
+                {"on-feImage.svg",
+                 Params().requireFeature(RendererBackendFeature::FilterEffects, "filter effects")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingIsolation, ImageComparisonTestFixture,
@@ -1090,24 +1072,10 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    TextBaselineShift, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/baseline-shift",
-                {
-                    // A 1 px text shift reaches 408 to 425 pixels; the former 0.1 color
-                    // threshold let it pass at 39.
-                    {"nested-with-baseline-1.svg",
-                     Params().withMaxPixelsDifferent(400).withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
-                         "crosshair; analytic residual 384 px, supersampled 0 px")},
-                    {"nested-with-baseline-2.svg",
-                     Params().withMaxPixelsDifferent(400).withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
-                         "crosshair; analytic residual 384 px, supersampled 0 px")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(TextBaselineShift, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("text/baseline-shift")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     TextDirection, ImageComparisonTestFixture,
@@ -1137,16 +1105,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::DeprecatedInSVG2("dominant-baseline: use-script (SVG 1.1 value, "
                                               "removed in SVG 2); the reference is the resvg UB "
                                               "marker image")},
-
-                    // A 1 px text shift reaches 344 pixels and passes, as it did under the former
-                    // 0.1 color threshold (6 pixels); a 2 px shift (562) and the alphabetic
-                    // baseline (2997) fail.
-                    {"hanging.svg",
-                     Params().withMaxPixelsDifferent(350).withReason(
-                         "Reference rasterizer generation: 4x4 supersampled coverage on the 0.5 "
-                         "unit crosshair (alpha 128/192 where Donner's analytic coverage gives "
-                         "160/160); the glyph matches; analytic residual 337 px, supersampled "
-                         "0 px")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1393,26 +1351,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/text-decoration",
                 {
-                    {"all-types-inline-comma-separated.svg",
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "resvg-all-types-inline-no-decoration.png")
-                         .withReason("Malformed decoration list leaves the text "
-                                     "undecorated")},
-                    {"all-types-inline-no-spaces.svg",
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "resvg-all-types-inline-no-decoration.png")
-                         .withReason("Adjacent keywords without spaces leave the "
-                                     "text undecorated")},
                     {"all-types-inline.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-all-types-inline-bands.png")
                          .withReason("Literal bands preserve multiline decoration "
                                      "offsets and paint order")},
-                    {"indirect.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-indirect.png")
-                         .withReason("Reference disagreement: the vendored PNG outlines the glyphs "
-                                     "and underline in green, which the SVG does not paint")},
                     {"tspan-decoration.svg",
                      Params::WithThreshold(0.09f, kDefaultMismatchedPixels,
                                            "Archived nested underline and glyph coverage differ")},
@@ -1438,12 +1381,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"arabic.svg",
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
-                    {"zero.svg",
-                     Params().withMaxPixelsDifferent(410).withReason(
-                         "SVG2 anchors compressed pen extents after textLength adjustment; "
-                         "the reference is an independent resvg 0.49.0 render with the bundled "
-                         "Noto Sans face at the original 500x500 size. The existing rasterizer "
-                         "allowance is retained.")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1504,13 +1441,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-absolute-position.png")
                      .withReason("Regression golden for absolute distance along the text path")},
-                {"tspan-with-relative-position.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png")
-                     .withReason("Reference disagreement: the vendored PNG predates resvg's "
-                                 "current dx/dy layout on a path and places the shifted spans "
-                                 "differently; independent resvg 0.47.0 reference (golden "
-                                 "README)")},
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")

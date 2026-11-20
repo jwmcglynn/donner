@@ -47,29 +47,6 @@
       }
     },
     {
-      "id": "filters/filter-functions:url-and-grayscale",
-      "paths": [
-        "filters/filter-functions/url-and-grayscale.svg"
-      ],
-      "kinds": [
-        "shared_golden"
-      ],
-      "classification": "reference-disagreement",
-      "disposition": "Compare with the sRGB grayscale() result the specification requires.",
-      "evidence": [
-        "donner/svg/renderer/testdata/golden/README.md",
-        "donner/svg/renderer/tests/RendererRegression_tests.cc",
-        "https://www.w3.org/TR/filter-effects-1/#FilterProperty"
-      ],
-      "removal_criteria": "Switch to the adjacent image when its grayscale() output is computed in sRGB.",
-      "reference_provenance": "Donner rendering; the archived image computes grayscale() in linearRGB.",
-      "max_threshold": 0.02,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/donner-url-and-grayscale.png"
-      }
-    },
-    {
       "id": "circle-clip-background",
       "paths": [
         "masking/clipPath/circle-shorthand-with-stroke-box.svg",
@@ -571,28 +548,6 @@
       }
     },
     {
-      "id": "double-blur",
-      "paths": [
-        "filters/filter/with-subregion-3.svg"
-      ],
-      "kinds": [
-        "shared_golden"
-      ],
-      "classification": "reference-disagreement",
-      "disposition": "Keep the independently checked clipped first blur.",
-      "evidence": [
-        "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/pull/2406"
-      ],
-      "removal_criteria": "Switch to the adjacent image when it preserves the first blur's clipped edge at ordinary settings.",
-      "reference_provenance": "Independent Firefox capture retaining the clipped blur edge.",
-      "max_threshold": 0.02,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/firefox-double-subregion-blur.png"
-      }
-    },
-    {
       "id": "out-of-order-referencing",
       "paths": [
         "paint-servers/pattern/out-of-order-referencing.svg"
@@ -667,28 +622,6 @@
         "paint-servers/pattern/self-recursive.svg": {
           "shared_golden": "donner/svg/renderer/testdata/golden/donner-pattern-self-recursive.png"
         }
-      }
-    },
-    {
-      "id": "nearest-feimage",
-      "paths": [
-        "painting/image-rendering/on-feImage.svg"
-      ],
-      "kinds": [
-        "shared_golden"
-      ],
-      "classification": "accepted-rasterization-difference",
-      "disposition": "Keep exact destination-pixel-center sampling.",
-      "evidence": [
-        "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/pull/2397"
-      ],
-      "removal_criteria": "Use an upstream image when it independently reproduces the selected nearest-sampling grid.",
-      "reference_provenance": "Independently computed texel map using the embedded raster.",
-      "max_threshold": 0.02,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-on-feImage.png"
       }
     },
     {
@@ -803,47 +736,6 @@
       }
     },
     {
-      "id": "text/baseline-shift-coverage",
-      "paths": [
-        "text/baseline-shift/nested-with-baseline-1.svg",
-        "text/baseline-shift/nested-with-baseline-2.svg"
-      ],
-      "kinds": [
-        "threshold"
-      ],
-      "classification": "reference-rasterization",
-      "disposition": "Keep the measured supersampling allowance with placement controls.",
-      "evidence": [
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185"
-      ],
-      "removal_criteria": "Remove when the archived crosshair is independently rebased to the same coverage or a default-limits reference is qualified.",
-      "reference_provenance": "Archived supersampled crosshair isolated with a matched-coverage control.",
-      "max_threshold": 0.02,
-      "max_pixels": 400
-    },
-    {
-      "id": "text/dominant-baseline-coverage",
-      "paths": [
-        "text/dominant-baseline/hanging.svg"
-      ],
-      "kinds": [
-        "threshold"
-      ],
-      "classification": "reference-rasterization",
-      "disposition": "Keep the measured supersampling allowance with placement controls.",
-      "evidence": [
-        "docs/design_docs/0021-resvg_feature_gaps.md",
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185"
-      ],
-      "removal_criteria": "Remove when the archived crosshair is independently rebased to the same coverage or a default-limits reference is qualified.",
-      "reference_provenance": "Archived supersampled crosshair isolated with a matched-coverage control.",
-      "max_threshold": 0.02,
-      "max_pixels": 350
-    },
-    {
       "id": "font-size-adjust",
       "paths": [
         "text/font-size-adjust/simple-case.svg"
@@ -939,30 +831,6 @@
       }
     },
     {
-      "id": "decoration-invalid-inline-syntax",
-      "paths": [
-        "text/text-decoration/all-types-inline-comma-separated.svg",
-        "text/text-decoration/all-types-inline-no-spaces.svg"
-      ],
-      "kinds": [
-        "shared_golden"
-      ],
-      "classification": "reference-rasterization",
-      "disposition": "Check malformed lists against identical undecorated glyphs with an integral crosshair.",
-      "evidence": [
-        "donner/svg/renderer/testdata/golden/README.md",
-        "https://www.w3.org/TR/SVG2/text.html#TextDecoration",
-        "https://github.com/jwmcglynn/donner/issues/1185"
-      ],
-      "removal_criteria": "Use the adjacent reference when it preserves undecorated text and passes both CPU tiers at default settings.",
-      "reference_provenance": "Official resvg v0.49.0 render at 800px with the corpus font; both malformed spellings produce identical bytes.",
-      "max_threshold": 0.02,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-all-types-inline-no-decoration.png"
-      }
-    },
-    {
       "id": "decoration-multiline-inline",
       "paths": [
         "text/text-decoration/all-types-inline.svg"
@@ -1024,29 +892,6 @@
       "reference_provenance": "The archive maps its horizontal gradient across approximately 246.5 device pixels; the current rendering spans 230.8.",
       "max_threshold": 0.03,
       "max_pixels": 100
-    },
-    {
-      "id": "decoration-artifact",
-      "paths": [
-        "text/text-decoration/indirect.svg"
-      ],
-      "kinds": [
-        "shared_golden"
-      ],
-      "classification": "reference-disagreement",
-      "disposition": "Retain the project golden while an independent clean reference is qualified at the default settings.",
-      "evidence": [
-        "docs/design_docs/0009-resvg_test_suite_bugs.md",
-        "https://github.com/jwmcglynn/donner/commit/0c5402b1d",
-        "https://github.com/jwmcglynn/donner/pull/500"
-      ],
-      "removal_criteria": "Use an independently regenerated no-green 500px reference that preserves the post-table underline rows and reconciles the diagnostic crosshair.",
-      "reference_provenance": "The original project golden was introduced in 0c5402b1d for a phantom green stroke. resvg v0.49 with the pinned font also has no green.",
-      "max_threshold": 0.02,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-indirect.png"
-      }
     },
     {
       "id": "decomposed-cyrillic",
@@ -1116,26 +961,6 @@
       "max_pixels": 100
     },
     {
-      "id": "zero-length-anchor",
-      "paths": [
-        "text/textLength/zero.svg"
-      ],
-      "kinds": [
-        "threshold"
-      ],
-      "classification": "reference-rasterization",
-      "disposition": "Keep the independently verified compressed anchoring and image allowance.",
-      "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "third_party/resvg-test-suite/BUILD.bazel",
-        "https://github.com/jwmcglynn/donner/issues/1174"
-      ],
-      "removal_criteria": "Remove the allowance after the compressed advance and crosshair agree at ordinary limits.",
-      "reference_provenance": "Independent resvg v0.49 rendering using the pinned Noto Sans face.",
-      "max_threshold": 0.02,
-      "max_pixels": 410
-    },
-    {
       "id": "path-boundary-coverage",
       "paths": [
         "text/textPath/closed-path.svg",
@@ -1168,8 +993,7 @@
     {
       "id": "path-legacy-resvg",
       "paths": [
-        "text/textPath/dy-with-tiny-coordinates.svg",
-        "text/textPath/tspan-with-relative-position.svg"
+        "text/textPath/dy-with-tiny-coordinates.svg"
       ],
       "kinds": [
         "shared_golden"
@@ -1181,15 +1005,12 @@
         "https://github.com/jwmcglynn/donner/issues/1175"
       ],
       "removal_criteria": "Remove the override when the adjacent file encodes the same independent path placement.",
-      "reference_provenance": "resvg v0.47 references with reproduction inputs recorded.",
+      "reference_provenance": "resvg v0.47 reference with reproduction inputs recorded.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references_by_fixture": {
         "text/textPath/dy-with-tiny-coordinates.svg": {
           "shared_golden": "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png"
-        },
-        "text/textPath/tspan-with-relative-position.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png"
         }
       }
     },

@@ -92,7 +92,7 @@ the `text/` category. Focused tests exercise Geode text directly.
 | --- | ---: |
 | Total | 1,679 |
 | Pixel comparisons | 1,578 |
-| Comparisons with a numeric setting or custom golden | 89 |
+| Comparisons with a numeric setting or custom golden | 78 |
 | Render-only, undefined-behavior registration | 55 |
 | Render-only, legacy feature | 43 |
 | Explicit skips | 3 |
@@ -171,11 +171,11 @@ bottom for completeness.
 
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` coverage                                     | **DONE** (33/43 files compare) | All cases execute; 10 reference qualifications have independent contract tests.                                                                                                                                           |
+| B2  | `filters/filter-functions` coverage                                     | **DONE** (34/43 files compare) | All cases execute; 9 reference qualifications have independent contract tests.                                                                                                                                            |
 | B3  | `structure/image` golden kernel-era mismatch                            |                       **DONE** | Mitchell cubic for quality `<image>` rendering and upstream resvg raster references (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
-| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
+| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares against upstream resvg's reference at default settings (see [F9](#f9-textlength--lengthadjust)).                                                 |
 | F10 | `textPath` vertical case                                                |                       **DONE** | Compares against a Donner golden at default settings (see [F10](#f10-textpath-svg2-attributes)).                                                                                                    |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
 | B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare at default settings; `font/simple-case` compares against a Donner golden (see [B7](#b7-text-reference-qualification))                 |
@@ -190,9 +190,9 @@ bottom for completeness.
 
 ### B2: `filters/filter-functions` category coverage
 
-All 43 fixtures execute. Twenty-nine retain ordinary comparisons, including `blur-function` and
-`drop-shadow-function-filter-region`; four compare against Donner goldens, and ten have explicit
-reference qualifications and independent rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
+All 43 fixtures execute. Thirty retain ordinary comparisons, including `blur-function`,
+`drop-shadow-function-filter-region` and `url-and-grayscale`; four compare against Donner goldens,
+and nine have explicit reference qualifications and independent rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
 `FilterReferenceStages`.
 
 | Assigned cases | Disposition |
@@ -201,7 +201,6 @@ reference qualifications and independent rendering assertions. Most use `CssFilt
 | Four `drop-shadow-function*` cases | Compare against Donner goldens (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)). Each reference shadow is the Donner shadow moved to a truncated offset: rendering Donner at that offset matches within the default allowance (21 to 72 pixels, against 2,513 to 6,582 at Donner's own offset). For `drop-shadow-function` and `color-last` the device offset is (10, 12.5); the reference truncates it to (10, 12), while Donner translates the shadow by the exact offset and resamples the half pixel. For `em-values` and `mm-values` the reference shadows sit at device offsets (30, 47) and (27, 37) instead of the specified (32, 48) and (28.35, 37.80), consistent with the resolved user lengths truncated to whole units before scaling and the scaled offset truncated toward zero. Color order, currentColor, em/mm resolution and alpha compare independently. |
 | `two-exact-urls`                             | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `two-urls`                                   | Compares by default. The boundary difference was Donner's: the three box passes that approximate the Gaussian discarded what the earlier passes spread past the filter raster edge, which the later passes must read back. TinySkia now runs the passes on zero-padded lines, and Geode evaluates the three passes as one cascade kernel per axis that samples the input directly, so a blur near the raster edge equals the same blur computed with room around it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `url-and-grayscale`                          | CSS functions use sRGB. An independent solid-color oracle gives 115 for the sample's encoded-channel luminance; the historical reference center is 122, consistent with linearRGB processing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `one-invalid-url-in-list`                    | An invalid URL disables the entire chain rather than preserving the prior stage. `FilterReferenceStages.InvalidReferenceDisablesEntireChain` independently covers that behavior; the row compares against a Donner golden.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 [Filter Effects](https://www.w3.org/TR/filter-effects-1/#FilterFunctions) defines function grammar,
@@ -416,38 +415,17 @@ generation:`, only when all of the following hold:
 - The budget is a per-case pixel count at the default color threshold: the largest residual
   measured on both CPU text tiers on macOS and Linux (and Geode where it runs), plus 3% rounded up
   to 5 pixels. The reason states the analytic and the supersampled residual.
-- The detection a deliberate regression gets is measured and recorded: shifting the text 1 pixel
-  exceeds the budget in every case except `hanging`, below.
+- The detection a deliberate regression gets is measured and recorded.
 
-| Case | Before | Residual (px) | 4x4 (px) | Budget | 1 px text shift |
-| --- | --- | ---: | ---: | ---: | ---: |
-| `text/textLength/zero` | skip | 396 | 0 | 410 | 433 |
-| `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
-| `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
+No registered case carries such a budget. `text/baseline-shift/nested-with-baseline-1` and `-2`,
+`text/dominant-baseline/hanging` and `text/textLength/zero` compare at default settings against
+upstream resvg's 300x300 references, which cover the 0.75-pixel crosshair with alpha 95 and 96 on
+its two columns, the analytic coverage of 0.375 each.
 
 The two mixed-font ligature fixtures compare against upstream resvg's references, byte-identical
 to the resvg v0.50.0 release, at the default settings on the full text tier. These fixtures
 exercise the Amiri font's GSUB substitution, which the simple tier does not implement.
 
-Moving `nested-with-baseline` and `hanging` from a 0.1 color threshold with 100 pixels to a 0.02
-count is not tighter on both axes: the count is larger and the color threshold smaller. It is
-justified by what each setting detects:
-
-- `nested-with-baseline`: the 1 px shift counted 22 to 39 pixels under 0.1 / 100 and passed; it
-  counts 408 to 425 under the new budget and fails.
-- `hanging`, one Devanagari glyph whose glyph-edge differences pixelmatch treats as
-  anti-aliasing:
-
-  | Regression | 0.1 / 100 | 0.02 count (budget 350) | 0.02 with anti-aliased pixels |
-  | --- | ---: | ---: | ---: |
-  | none | 0 | 337 | 940 |
-  | 1 px text shift | 6 (passes) | 344 (passes) | 1235 |
-  | 2 px text shift | 225 (fails) | 562 (fails) | 1465 |
-  | `dominant-baseline="alphabetic"` | 2714 (fails) | 2997 (fails) | not recorded |
-
-  Both settings catch the baseline change the test is about and a 2 px shift; neither catches a 1
-  px shift. Counting anti-aliased pixels would catch it (940 against 1235), but makes the budget a
-  measure of glyph-edge coverage rather than of the crosshair, so it is not used.
 
 `//tools/resvg_parity:parity_report_tests` checks the form of these reference-generation budgets. Such a
 compared case:
@@ -590,16 +568,11 @@ the adjusted glyph extents; `lengthAdjust/with-underline` and
 references, because the snapshot's draw their underlines at 0.1em, twice the 0.05em thickness in
 the vendored Noto Sans post table.
 
-`textLength/zero` compares with a 410-pixel budget because its reference comes from a different
-rasterizer generation (see
-[Reference rasterizer generation budgets](#reference-rasterizer-generation-budgets)).
-Its glyph layout matches the vendored reference, where the last glyph's advance ends at x=20. All
-396 differing pixels on both CPU tiers are the x=100 crosshair, which this PNG draws at alpha 128
-and 192, exactly what 4x4 supersampled coverage produces for its 1.25-pixel stroke, while the
-eleven sibling `textLength` references, `lengthAdjust/spacingAndGlyphs` and Donner's analytic
-coverage draw it at 160 and 160. resvg
-v0.49.0's `zero.png` is not a replacement: its glyphs sit about 17.3 units right, a 1834-pixel
-difference.
+`textLength/zero` compares at default settings against upstream resvg's 300x300 reference, which
+Donner matches within 1 pixel on both CPU text tiers. SVG 2 applies anchoring from the compressed
+pen extents after textLength adjustment, which moves this fixture's start-anchored glyphs by the
+final glyph advance (17.328 units); the resvg-test-suite snapshot's reference places them about
+17 units further left.
 
 ### F10: `textPath` SVG2 attributes
 
@@ -671,7 +644,7 @@ content-placement transform.
 | structure/svg             |     0 | `structure/svg/funcIRI-with-quotes.svg` compares with ordinary budgets after the [paint URL parsing fix](../../donner/svg/properties/PropertyRegistry.cc), and `structure/svg/nested-svg-one-with-rect-and-one-with-viewBox.svg` compares with ordinary budgets after the [viewport sizing fix](../../donner/svg/components/layout/LayoutSystem.cc). |
 | structure/style           |     0 | `external-CSS` compares after CSS `@import` loading landed: imports load through the document resource loader with cycle, depth, count and byte bounds; `//donner/svg/renderer/tests:css_import_tests` covers fetches, relative resolution, limits and cascade order.                                                                                |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                     |
-| painting/image-rendering  |     0 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage) documents the `on-feImage` sampling grid. Both TinySkia and Geode compare `optimizeSpeed` against resvg v0.50.0. |
+| painting/image-rendering  |     0 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. Both TinySkia and Geode compare `optimizeSpeed` and `on-feImage` against resvg v0.50.0; the latter samples the embedded image at destination pixel centers. |
 | masking/clipPath          |     0 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text case compares against resvg v0.49.0 with zero differing pixels; both use the glyph-cell text box.                                                 |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                      |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                |
