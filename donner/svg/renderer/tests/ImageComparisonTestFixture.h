@@ -134,6 +134,9 @@ struct ImageComparisonParams {
   bool allowTinySkia = true;
   /// If false, skip the test when the active backend is Geode.
   bool allowGeode = true;
+  /// If false, skip the test when the active backend is Geode in the simple text tier
+  /// (DONNER_TEXT_FULL not defined). Set it through \ref disableGeodeForSimpleText.
+  bool allowGeodeSimpleText = true;
   /// Bitmask of required backend features, built from \ref RendererBackendFeatureMask.
   uint32_t requiredFeatures = 0;
   /// Human-readable reason used when backend restrictions cause a skip.
@@ -356,6 +359,19 @@ struct ImageComparisonParams {
       backendRequirementReason = reason;
     }
 
+    return *this;
+  }
+
+  /**
+   * @brief Disables the Geode comparison in the simple text tier only, for a cause that tier alone
+   * has; the Geode comparison with full text shaping still runs.
+   *
+   * @param reason Human-readable skip reason.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& disableGeodeForSimpleText(std::string_view reason) {
+    allowGeodeSimpleText = false;
+    backendRequirementReason = reason;
     return *this;
   }
 

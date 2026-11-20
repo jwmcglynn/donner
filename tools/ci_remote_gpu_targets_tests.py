@@ -44,6 +44,8 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
                     "//donner/editor/tests:rnr_replay_tests_geode_ci_remote",
                 "//donner/svg/renderer/tests:resvg_test_suite_geode":
                     "//donner/svg/renderer/tests:resvg_test_suite_geode_ci_remote",
+                "//donner/svg/renderer/tests:resvg_test_suite_geode_max_text":
+                    "//donner/svg/renderer/tests:resvg_test_suite_geode_max_text_ci_remote",
             },
             REMOTE_TARGETS,
         )

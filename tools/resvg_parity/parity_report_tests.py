@@ -589,7 +589,7 @@ class ParityReportTests(unittest.TestCase):
 
         self.assertEqual(
             parity_report.pixel_budget_ratchet_violations(
-                report, {"text/sample/full.svg": {"max": 300, "geode": 300}}
+                report, {"text/sample/full.svg": {"max": 300, "geode": 300, "geode_max_text": 300}}
             ),
             ["text/sample/full.svg (geode): stale PIXEL_BUDGET_ALLOWLIST entry; the lane no "
              "longer compares with max_pixels above 100, so remove it"],
@@ -717,8 +717,8 @@ class ParityReportTests(unittest.TestCase):
             "quantized Donner software rendering; remove the quarter-pixel edge coverage rule",
             "painting/fill/aa.svg: the quarter-pixel edge coverage rule needs anti-aliasing "
             "detection, which includeAntiAliasingDifferences() turns off",
-            "painting/fill/cpu.svg: the Geode lane does not compare, so the quarter-pixel edge "
-            "coverage rule has no effect; remove it",
+            "painting/fill/cpu.svg: no Geode lane compares, so the quarter-pixel edge coverage "
+            "rule has no effect; remove it",
             "painting/fill/fixed.svg: stale QUARTER_PIXEL_EDGE_ALLOWLIST entry; the row no longer "
             "opts into the quarter-pixel edge coverage rule, so remove it",
         ]))
@@ -779,9 +779,10 @@ class ParityReportTests(unittest.TestCase):
             self.fixture.tests_root,
         )
 
+        both = parity_report.BOTH_TIERS
         violations = parity_report.geode_gate_violations(report, {
-            "painting/fill/listed.svg", "painting/fill/cpu.svg", "painting/fill/silent.svg",
-            "painting/fill/fixed.svg",
+            "painting/fill/listed.svg": both, "painting/fill/cpu.svg": both,
+            "painting/fill/silent.svg": both, "painting/fill/fixed.svg": both,
         })
 
         self.assertEqual(violations, sorted([
@@ -1150,6 +1151,77 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(text["lanes"]["geode"]["missing_features"], [])
         self.assertEqual(text["lanes"]["geode"]["observed"], "unobserved")
 
+    def test_geode_full_text_lane_runs_text_cases_with_full_shaping(self) -> None:
+        for row in ("text/sample/plain.svg", "text/sample/arabic.svg", "painting/fill/a.svg",
+                    "painting/fill/on-text.svg"):
+            self.fixture.add_case(row)
+        (self.fixture.tests_root.parent / "BUILD.bazel").write_text(
+            '_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = [\n    "tests/painting/fill/on-text.svg",\n]\n',
+            encoding="utf-8")
+        source = _registration(
+            "TextSample", '"text/sample", {{"arabic.svg", Params().onlyTextFull()'
+            '.withReason("Arabic shaping")}}') + _registration("PaintingFill", '"painting/fill"')
+        report = parity_report.build_report(source, self.fixture.tests_root)
+        by_path = {case["path"]: case for case in report["cases"]}
+
+        self.assertEqual(set(by_path["painting/fill/a.svg"]["lanes"]),
+                         {"default_text", "max", "geode"})
+        self.assertEqual(set(by_path["painting/fill/on-text.svg"]["lanes"]),
+                         {"default_text", "max", "geode", "geode_max_text"})
+        arabic = by_path["text/sample/arabic.svg"]["lanes"]
+        self.assertEqual({lane: entry["configured_state"] for lane, entry in arabic.items()}, {
+            "default_text": "capability-gated", "max": "compare", "geode": "capability-gated",
+            "geode_max_text": "compare"})
+        self.assertEqual(arabic["geode_max_text"]["text_configuration"], "full")
+        self.assertEqual(
+            parity_report._runtime_name(by_path["text/sample/arabic.svg"], "geode_max_text"),
+            ("TextSample/ImageComparisonTestFixture", "ResvgTest/arabic_GeodeGolden"))
+        self.assertEqual(
+            parity_report._runtime_name(by_path["text/sample/arabic.svg"], "geode"),
+            ("TextSample/ImageComparisonTestFixture", "ResvgTest/DISABLED_arabic_GeodeGolden"))
+        self.assertEqual(
+            {state: sum(counts.values())
+             for state, counts in report["lane_summary"]["geode_max_text"].items()},
+            {"compare": 3})
+        self.assertEqual(report["source"]["normal_lanes"]["geode_max_text"]["corpus"], "text")
+
+    def test_text_partition_needs_its_list_when_the_build_file_exists(self) -> None:
+        self.fixture.add_case("text/sample/a.svg")
+        (self.fixture.tests_root.parent / "BUILD.bazel").write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(parity_report.ParityReportError, "_TEXT_CASES_OUTSIDE"):
+            parity_report.build_report(_registration("TextSample", '"text/sample"'),
+                                       self.fixture.tests_root)
+
+    def test_simple_tier_geode_gate_compares_on_the_full_tier(self) -> None:
+        for name in ("simple.svg", "both.svg"):
+            self.fixture.add_case(f"text/sample/{name}")
+        report = parity_report.build_report(
+            _registration("TextSample", '"text/sample", {'
+                          '{"simple.svg", Params().disableGeodeForSimpleText("Bug: simple")},'
+                          '{"both.svg", Params().disableBackend(RendererBackend::Geode, "Bug")}}'),
+            self.fixture.tests_root,
+        )
+        states = {case["path"]: {lane: entry["configured_state"]
+                                 for lane, entry in case["lanes"].items()}
+                  for case in report["cases"]}
+        self.assertEqual(states["text/sample/simple.svg"], {
+            "default_text": "compare", "max": "compare", "geode": "backend-disabled",
+            "geode_max_text": "compare"})
+        self.assertEqual(states["text/sample/both.svg"]["geode_max_text"], "backend-disabled")
+        self.assertEqual(report["summary"]["backend_disabled_cases"], 2)
+
+        exact = {"text/sample/simple.svg": parity_report.SIMPLE_TIER,
+                 "text/sample/both.svg": parity_report.BOTH_TIERS}
+        self.assertEqual(parity_report.geode_gate_violations(report, exact), [])
+        swapped = {"text/sample/simple.svg": parity_report.BOTH_TIERS,
+                   "text/sample/both.svg": parity_report.SIMPLE_TIER}
+        self.assertEqual(parity_report.geode_gate_violations(report, swapped), sorted([
+            "text/sample/simple.svg: disables its Geode comparison in the simple text tier(s), but "
+            "GEODE_GATE_ALLOWLIST records full, simple; " + parity_report.GEODE_GATE_RULE,
+            "text/sample/both.svg: disables its Geode comparison in the full, simple text tier(s), "
+            "but GEODE_GATE_ALLOWLIST records simple; " + parity_report.GEODE_GATE_RULE,
+        ]))
+
     def test_google_test_receipt_distinguishes_pass_failure_suppression_and_unobserved(self) -> None:
         rows = ("a.svg", "b.svg", "c.svg", "d.svg")
         for row in rows:
@@ -1312,6 +1384,11 @@ class ParityReportTests(unittest.TestCase):
                 ("test.params.enableCanvasSizeFromReference();", "",
                  "corpus canvas rule differs"),
             ],
+            "BUILD.bazel": [
+                ('dep = ":resvg_test_suite_max_text_impl",\n    opens_gpu_device = True,',
+                 'dep = ":resvg_test_suite_impl",\n    opens_gpu_device = True,',
+                 "text corpus wrapper differs"),
+            ],
             "RendererTestBackendGeode.cc": [
                 ("return IsTextBuiltIn();", "return true;", "Geode capability Text differs"),
                 ("return IsFullTextBuiltIn();", "return IsTextBuiltIn();",
@@ -1337,6 +1414,9 @@ class ParityReportTests(unittest.TestCase):
                 (".acceptQuarterPixelEdgeCoverage = acceptsQuarterPixelEdgeCoverage(params, mode)}",
                  ".acceptQuarterPixelEdgeCoverage = true}",
                  "quarter-pixel edge coverage rule differs"),
+                ("#ifndef DONNER_TEXT_FULL\n      if (!params.allowGeodeSimpleText)",
+                 "#ifdef DONNER_TEXT_FULL\n      if (!params.allowGeodeSimpleText)",
+                 "simple-tier Geode gate differs"),
                 ("static_cast<int>(std::max(width, height))",
                  "static_cast<int>(std::min(width, height))", "reference canvas rule differs"),
                 ("kMaxDimension = 16384;", "kMaxDimension = 8192;",
@@ -1856,7 +1936,8 @@ class RealTreeParityReportTests(unittest.TestCase):
             self.assertEqual(summary[metric],
                              sum(flag in case["exception_types"] for case in cases), metric)
         self.assertEqual(summary["backend_disabled_cases"],
-                         sum(bool(case["disabled_backends"]) for case in cases))
+                         sum(bool(case["disabled_backends"] or case["simple_text_disabled_backends"])
+                             for case in cases))
 
     def test_live_head_to_head_partitions_both_engines_passes(self) -> None:
         repo_root = parity_report._default_repo_root()

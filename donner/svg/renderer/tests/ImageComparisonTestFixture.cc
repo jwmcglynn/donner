@@ -515,7 +515,13 @@ std::string escapeFilename(std::string filename) {
 bool isBackendAllowed(RendererBackend backend, const ImageComparisonParams& params) {
   switch (backend) {
     case RendererBackend::TinySkia: return params.allowTinySkia;
-    case RendererBackend::Geode: return params.allowGeode;
+    case RendererBackend::Geode:
+#ifndef DONNER_TEXT_FULL
+      if (!params.allowGeodeSimpleText) {
+        return false;
+      }
+#endif
+      return params.allowGeode;
   }
 
   return false;
