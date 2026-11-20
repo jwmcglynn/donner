@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -32,11 +33,18 @@ struct AnimationValueContext {
   bool referenceValue = false;        ///< References are discrete and non-additive.
   /// Zero accepts general values; otherwise only this many dimensionless operands are allowed.
   std::size_t maximumNumbers = 0;
+  /// Keep the first \ref maximumNumbers operands of a longer list, without reading the rest,
+  /// instead of rejecting it. Filter number lists use one more than their structural limit, so a
+  /// longer list stays over the limit and fails closed like the authored value.
+  bool keepLeadingNumbers = false;
   bool percentageNumbers =
       false;                  ///< Percentages represent fractions of one, not viewport lengths.
   bool numberPair = false;    ///< Repeat one coordinate for number-optional-number values.
   bool integerValue = false;  ///< Round interpolated numeric values to the nearest integer.
-  bool linearRgb = false;     ///< Interpolate colors in linear-light RGB when requested.
+  /// Integer values above this stay unrounded, so a value over an integer limit stays over it
+  /// instead of rounding down to the limit.
+  double maximumInteger = std::numeric_limits<double>::infinity();
+  bool linearRgb = false;  ///< Interpolate colors in linear-light RGB when requested.
   /// Map mixed-unit filter lengths to user-space pixels while keeping additive offsets origin-free.
   bool mappedLengths = false;
   bool lengthValuesAreOffsets = false;  ///< Sample operands are displacements, not positions.
@@ -52,6 +60,14 @@ struct AnimationValueContext {
 /// @param input SVG comma/space-separated lengths, with optional units.
 /// @return Parsed values, or nullopt for an empty, malformed, or excessive list.
 std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input);
+
+/// Parse an operand's length list within \p context's numeric limit.
+/// @param input SVG comma/space-separated lengths, with optional units.
+/// @param context When it keeps leading numbers, at most its maximum count of a longer list is
+///   read and returned; otherwise this is \ref ParseAnimationLengths.
+/// @return Parsed values, or nullopt for an empty, malformed, or rejected list.
+std::optional<std::vector<Lengthd>> ParseAnimationOperandLengths(
+    std::string_view input, const AnimationValueContext& context);
 
 /// Validate a source operand against the target's numeric grammar before interpolation.
 /// @param input Authored or underlying operand. @param context Target numeric restrictions.

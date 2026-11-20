@@ -53,13 +53,37 @@ std::optional<std::string> SerializeAnimationUrl(std::string_view href) {
   return result;
 }
 
-std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input) {
+namespace {
+
+/// Consume the separator after a list item: whitespace, a comma, or nothing before a signed number.
+/// @return False when \p input continues without a valid separator or ends after a comma.
+bool ConsumeLengthSeparator(std::string_view& input) {
+  const auto trimmed = StringUtils::TrimWhitespace(input);
+  const bool separated = trimmed.size() != input.size();
+  input = trimmed;
+  if (input.empty()) {
+    return true;
+  }
+  if (input.front() == ',') {
+    input = StringUtils::TrimWhitespace(input.substr(1));
+    return !input.empty();
+  }
+  return separated || input.front() == '-' || input.front() == '+';
+}
+
+/// Parse at most \p maximumCount lengths; a longer list is cut there when \p keepLeading is set,
+/// without reading the rest, and rejected otherwise.
+std::optional<std::vector<Lengthd>> ParseLengthList(std::string_view input,
+                                                    std::size_t maximumCount, bool keepLeading) {
   donner::parser::LengthParser::Options options;
   options.unitOptional = true;
   std::vector<Lengthd> values;
   input = StringUtils::TrimWhitespace(input);
   while (!input.empty()) {
-    if (values.size() >= AnimationResourceBudget::kMaximumNumbersPerValue) {
+    if (values.size() >= maximumCount) {
+      if (keepLeading) {
+        break;
+      }
       return std::nullopt;
     }
     auto parsed = donner::parser::LengthParser::Parse(input, options);
@@ -68,19 +92,23 @@ std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input
     }
     values.push_back(parsed.result().length);
     input.remove_prefix(parsed.result().consumedChars);
-    const auto trimmed = StringUtils::TrimWhitespace(input);
-    const bool separated = trimmed.size() != input.size();
-    input = trimmed;
-    if (!input.empty() && input.front() == ',') {
-      input = StringUtils::TrimWhitespace(input.substr(1));
-      if (input.empty()) {
-        return std::nullopt;
-      }
-    } else if (!input.empty() && !separated && input.front() != '-' && input.front() != '+') {
+    if (!ConsumeLengthSeparator(input)) {
       return std::nullopt;
     }
   }
   return values.empty() ? std::nullopt : std::optional(std::move(values));
+}
+
+}  // namespace
+
+std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input) {
+  return ParseLengthList(input, AnimationResourceBudget::kMaximumNumbersPerValue, false);
+}
+
+std::optional<std::vector<Lengthd>> ParseAnimationOperandLengths(
+    std::string_view input, const AnimationValueContext& context) {
+  return context.keepLeadingNumbers ? ParseLengthList(input, context.maximumNumbers, true)
+                                    : ParseAnimationLengths(input);
 }
 
 namespace {
@@ -127,7 +155,7 @@ bool ValidAnimationNumericOperand(std::string_view input, const AnimationValueCo
     return true;
   }
   input = StringUtils::TrimWhitespace(input);
-  const auto values = ParseAnimationLengths(input);
+  const auto values = ParseAnimationOperandLengths(input, context);
   return values && values->size() <= context.maximumNumbers &&
          std::all_of(values->begin(), values->end(), [&](const Lengthd& value) {
            return value.unit == Lengthd::Unit::None ||
@@ -253,8 +281,8 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
   if (context.angleValue) {
     return CombineAngles(first, second, firstWeight, secondWeight);
   }
-  auto a = ParseAnimationLengths(first);
-  auto b = ParseAnimationLengths(second);
+  auto a = ParseAnimationOperandLengths(first, context);
+  auto b = ParseAnimationOperandLengths(second, context);
   if (context.numberPair) {
     if (a && a->size() == 1) {
       a->push_back(a->front());
@@ -304,8 +332,8 @@ std::optional<double> AnimationValueDistance(std::string_view first, std::string
     }
     return std::abs(*b - *a);
   }
-  auto a = ParseAnimationLengths(first);
-  auto b = ParseAnimationLengths(second);
+  auto a = ParseAnimationOperandLengths(first, context);
+  auto b = ParseAnimationOperandLengths(second, context);
   ExpandNumberPair(a, context.numberPair);
   ExpandNumberPair(b, context.numberPair);
   if (a && b && a->size() == b->size()) {
