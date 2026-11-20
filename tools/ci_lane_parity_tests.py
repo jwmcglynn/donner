@@ -170,9 +170,9 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "4fd8e673064af5b4"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "fecd5f00f8d540fd"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "13ad7f026a1fc5ad"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "1dfa192ba9b63406"),
 }
 
 SHARED_STEP_ALLOWLIST = {

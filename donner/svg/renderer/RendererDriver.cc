@@ -931,6 +931,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
           resolveSpanPaint(style->properties->fill.get().value(), style->externalFill, false);
       span.resolvedStroke =
           resolveSpanPaint(style->properties->stroke.get().value(), style->externalStroke, true);
+      span.hasComputedPaint = true;
       span.fillOpacity = style->properties->fillOpacity.get().value();
       span.strokeOpacity = style->properties->strokeOpacity.get().value();
       ResolveSpanStroke(*style->properties, styleEntity, viewBox, strokeScale, strokeLengths, span);
@@ -1310,26 +1311,74 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
   return result;
 }
 
+/// Draw order of the last instance among the mask, marker and pattern content drawn for
+/// @p instance, or the instance's own draw order when it draws none. Content shared from an
+/// earlier element lies before the instance and does not extend the result.
+int DrawnContentLastDrawOrder(Registry& registry,
+                              const components::RenderingInstanceComponent& instance) {
+  int last = instance.drawOrder;
+  instance.forEachDrawnContent([&](const components::SubtreeInfo& content) {
+    if (const auto* contentLast =
+            registry.try_get<components::RenderingInstanceComponent>(content.lastRenderedEntity)) {
+      last = std::max(last, contentLast->drawOrder);
+    }
+  });
+  return last;
+}
+
+/// Draw order of @p entity's rendering instance, or the largest draw order when it has none.
+int DrawOrderOrLast(Registry& registry, Entity entity) {
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+  return instance != nullptr ? instance->drawOrder : std::numeric_limits<int>::max();
+}
+
+/// Whether a range draw that ends at draw order @p lastDrawOrder still has instances to draw. The
+/// range's last entity is not always visited by the caller's loop: when it is content drawn for
+/// an earlier instance, that instance consumes it, so the draw order ends the range too.
+bool RangeDrawContinues(const RenderingInstanceView& view, bool reachedLast, int lastDrawOrder) {
+  return !view.done() && !reachedLast && view.get().drawOrder <= lastDrawOrder;
+}
+
+/// Advances @p view to @p entity, or to its end when @p entity is not in it.
+void SeekToEntity(RenderingInstanceView& view, Entity entity) {
+  while (!view.done() && view.currentEntity() != entity) {
+    view.advance();
+  }
+}
+
 /// Snapshot main-pass render instances in draw order, leaving out offscreen feImage shadow
 /// instances (see \ref collectOffscreenFeImageShadowEntities). Filter preparation can reorder
 /// rendering instance storage, so traversals iterate this snapshot rather than a live view.
 ///
 /// With @p range, the snapshot starts at `range->first` (empty when it is not found) and ends at
-/// `range->second` inclusive, or at the last instance when that is never reached. Without it, the
-/// snapshot holds every instance.
+/// `range->second` inclusive, or at the last instance when that is never reached. It then keeps
+/// the mask, marker and pattern content drawn for the instances in the range: that content is
+/// instantiated after the instance that draws it, so it can follow `range->second`, and a range
+/// draw reaches it only through the instance. Without @p range, the snapshot holds every instance.
 std::vector<Entity> CollectMainEntities(
     Registry& registry, std::optional<std::pair<Entity, Entity>> range = std::nullopt) {
   const std::unordered_set<Entity> feImageShadowEntities =
       collectOffscreenFeImageShadowEntities(registry);
   std::vector<Entity> entities;
   RenderingInstanceView view(registry);
-  while (range && !view.done() && view.currentEntity() != range->first) {
-    view.advance();
+  if (range) {
+    SeekToEntity(view, range->first);
   }
   bool reachedLast = false;
-  while (!view.done() && !reachedLast) {
+  // Draw order through which the range's instances draw content. Set by the first instance, so it
+  // has a value once `range->second` is reached.
+  int contentLastDrawOrder = std::numeric_limits<int>::min();
+  while (!view.done()) {
     const Entity entity = view.currentEntity();
-    reachedLast = range && entity == range->second;
+    const components::RenderingInstanceComponent& instance = view.get();
+    if (reachedLast && instance.drawOrder > contentLastDrawOrder) {
+      break;
+    }
+    if (range) {
+      reachedLast = reachedLast || entity == range->second;
+      contentLastDrawOrder =
+          std::max(contentLastDrawOrder, DrawnContentLastDrawOrder(registry, instance));
+    }
     if (feImageShadowEntities.count(entity) == 0) {
       entities.push_back(entity);
     }
@@ -1351,20 +1400,7 @@ int SubtreeLastDrawOrder(Registry& registry,
 /// that draws the same marker, mask or pattern.
 template <typename Visit>
 void ForEachDrawnContent(const components::RenderingInstanceComponent& instance, Visit&& visit) {
-  if (instance.mask.has_value() && instance.mask->subtreeInfo.has_value()) {
-    visit(*instance.mask->subtreeInfo);
-  }
-  for (const auto* marker : {&instance.markerStart, &instance.markerMid, &instance.markerEnd}) {
-    if (marker->has_value() && (*marker)->subtreeInfo.has_value()) {
-      visit(*(*marker)->subtreeInfo);
-    }
-  }
-  for (const auto* paint : {&instance.resolvedFill, &instance.resolvedStroke}) {
-    if (const auto* reference = std::get_if<components::PaintResolvedReference>(paint);
-        reference != nullptr && reference->subtreeInfo.has_value()) {
-      visit(*reference->subtreeInfo);
-    }
-  }
+  instance.forEachDrawnContent(std::forward<Visit>(visit));
 }
 
 /// Draw order through which @p instance's output depends on rendered instances: its subtree and
@@ -3050,9 +3086,10 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   }
 
   // Traverse from first to last (inclusive).
+  const int lastDrawOrder = DrawOrderOrLast(registry, lastEntity);
   bool reachedLast = false;
   bool completed = true;
-  while (!view.done() && !reachedLast) {
+  while (RangeDrawContinues(view, reachedLast, lastDrawOrder)) {
     if (cancelled()) {
       completed = false;
       break;
@@ -3460,8 +3497,9 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(Registry& registry
     return std::nullopt;
   }
 
-  // Keep the main-paint slice identical to drawPreparedEntityRange; shadow feImage
-  // instances are rendered offscreen and must not expand an owner's bounds.
+  // Keep the main-paint slice to the range itself, as drawPreparedEntityRange draws it: content
+  // drawn for the range's instances is reached through them. Shadow feImage instances are
+  // rendered offscreen and must not expand an owner's bounds.
   std::vector<Entity> entities = CollectMainPaintRange(registry, firstEntity, lastEntity);
   RenderingInstanceView view(registry, entities);
   if (view.done() || view.currentEntity() != firstEntity) {
@@ -4221,6 +4259,11 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     popEndedSubtrees(localDeferred, entity);
   }
+}
+
+int RendererDriver::LastDrawOrderOfDrawnContent(
+    Registry& registry, const components::RenderingInstanceComponent& instance) {
+  return DrawnContentLastDrawOrder(registry, instance);
 }
 
 void RendererDriver::skipDrawnContent(RenderingInstanceView& view, Registry& registry,

@@ -1,17 +1,13 @@
 #pragma once
 /// @file
-/// Shared, backend-agnostic text geometry for `RendererInterface::drawText`.
+/// Shared, backend-agnostic text geometry and glyph admission for `RendererInterface::drawText`.
 ///
-/// `RendererTinySkia::drawText` and `RendererGeode::drawText` historically each
-/// re-derived per-glyph placement (outline → stretch → translate → rotate),
-/// which let the two copies drift. This header is
-/// the shared placement layer both backends consume so the geometry is computed
-/// once. It encodes tiny-skia's behavior verbatim (tiny-skia is the parity
-/// reference); geode converges to it.
+/// `RendererTinySkia::drawText` and `RendererGeode::drawText` both place glyphs (outline, stretch,
+/// translate, rotate), decorations and bitmap glyphs through this header, so the two renderers
+/// compute the same geometry and charge the frame text budget the same way.
 ///
-/// Pure geometry only: inputs/outputs are `donner::Path` / `Transform2d` /
-/// `TextEngine` - no backend paint types. No allocation beyond what `Path`
-/// itself does; no exceptions.
+/// Inputs and outputs are `donner::Path`, `Transform2d`, `TextEngine` and the renderer budgets; no
+/// backend paint types appear here. Bitmap glyph admission allocates the decoded glyph pixels.
 
 #include <functional>
 #include <span>
@@ -22,6 +18,7 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextTypes.h"
 
@@ -149,6 +146,31 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
  */
 Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextRun& run,
                         const TextGlyph& glyph, float scale, double warpTolerance);
+
+/// Whether a run has glyphs to draw: a bitmap-only face draws from its bitmap strikes, which need
+/// no outline scale, and any other face needs a nonzero one.
+/// @param isBitmapFont Whether the run's face has only bitmap glyphs.
+/// @param scale `scaleForPixelHeight` of the run's face at its used size.
+bool CanRenderTextRun(bool isBitmapFont, float scale);
+
+/**
+ * Charges one bitmap glyph to \p budget, at twice the RGBA bytes its metadata reports, and decodes
+ * it within those bytes.
+ *
+ * @param textEngine Engine providing bitmap glyph metadata and pixels.
+ * @param font Face that draws the glyph.
+ * @param glyphIndex Glyph within \p font.
+ * @param scale `scaleForPixelHeight` of \p font at the run's used size.
+ * @param budget Frame text budget; a failed decode latches its rejection.
+ * @param[out] rejected Set when the charge or the decode fails, after which the caller stops
+ *   drawing. Left unchanged when the glyph has no bitmap.
+ * @return The decoded premultiplied bitmap, or `std::nullopt` when the glyph has none or it was
+ *   rejected.
+ */
+std::optional<TextBackend::BitmapGlyph> AdmitBitmapGlyph(TextEngine& textEngine, FontHandle font,
+                                                         int glyphIndex, float scale,
+                                                         RendererTextMaterializationBudget& budget,
+                                                         bool& rejected);
 
 /// The face that draws one glyph, with its outline scale and whether it has only bitmap glyphs.
 struct GlyphFaceScale {

@@ -4,6 +4,7 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/gpu/browser/BrowserDeferredCalls.h"
 #include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodeRuntimeDeviceSource.h"
@@ -47,67 +48,165 @@ private:
   std::shared_ptr<gpu::DeviceLostState> lostState_;
 };
 
-/// The kind of round trip each recorded operation outside command recording makes.
+/// Whether the browser bridge defers \p operation, from the bridge's own list.
+constexpr bool IsDeferredOperation(std::string_view operation) {
+  for (const std::string_view deferred : gpu::browser::kBrowserDeferredOperationNames) {
+    if (deferred == operation) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// How the browser bridge dispatches one operation outside command recording.
 struct OperationKind {
   std::string_view operation;               //!< Leading word of the recorded line.
-  uint64_t BrowserOwnerRoundTrips::* kind;  //!< Counter it adds to.
+  uint64_t BrowserOwnerRoundTrips::* kind;  //!< Counter its own round trip adds to.
+  BrowserOperationModel model;              //!< The kind and dispatch the bridge uses.
 };
+
+#define DONNER_OPERATION(name, counter, kindName) \
+  {                                               \
+    name, &BrowserOwnerRoundTrips::counter, {     \
+      name, kindName, IsDeferredOperation(name)   \
+    }                                             \
+  }
 
 constexpr OperationKind kOperationKinds[] = {
-    {"createBuffer", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createTexture", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createTextureView", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createSampler", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createShaderModule", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createBindGroup", &BrowserOwnerRoundTrips::bindGroupConstruction},
-    {"createBindGroupLayout", &BrowserOwnerRoundTrips::bindGroupConstruction},
-    {"createPipelineLayout", &BrowserOwnerRoundTrips::pipelineConstruction},
-    {"createRenderPipeline", &BrowserOwnerRoundTrips::pipelineConstruction},
-    {"createComputePipeline", &BrowserOwnerRoundTrips::pipelineConstruction},
-    {"destroyObject", &BrowserOwnerRoundTrips::resourceDestruction},
-    {"writeBuffer", &BrowserOwnerRoundTrips::bufferWrite},
-    {"writeTexture", &BrowserOwnerRoundTrips::textureWrite},
-    {"shareTexture", &BrowserOwnerRoundTrips::resourceSharing},
-    {"registerSharedTexture", &BrowserOwnerRoundTrips::resourceSharing},
-    {"submitCommandBuffers", &BrowserOwnerRoundTrips::queueSubmit},
+    DONNER_OPERATION("createBuffer", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createTexture", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createTextureView", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createSampler", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createShaderModule", resourceCreation, "ResourceCreation"),
+    DONNER_OPERATION("createBindGroup", bindGroupConstruction, "BindGroupConstruction"),
+    DONNER_OPERATION("createBindGroupLayout", bindGroupConstruction, "BindGroupConstruction"),
+    DONNER_OPERATION("createPipelineLayout", pipelineConstruction, "PipelineConstruction"),
+    DONNER_OPERATION("createRenderPipeline", pipelineConstruction, "PipelineConstruction"),
+    DONNER_OPERATION("createComputePipeline", pipelineConstruction, "PipelineConstruction"),
+    DONNER_OPERATION("destroyObject", resourceDestruction, "ResourceDestruction"),
+    DONNER_OPERATION("writeBuffer", bufferWrite, "BufferWrite"),
+    DONNER_OPERATION("writeTexture", textureWrite, "TextureWrite"),
+    DONNER_OPERATION("shareTexture", resourceSharing, "ResourceSharing"),
+    DONNER_OPERATION("registerSharedTexture", resourceSharing, "ResourceSharing"),
+    DONNER_OPERATION("submitCommandBuffers", queueSubmit, "QueueSubmit"),
 };
 
-/// The kind of the single round trip that the call recorded as \p line makes, outside recording.
-uint64_t BrowserOwnerRoundTrips::* KindOf(std::string_view line) {
+#undef DONNER_OPERATION
+
+/// The table entry for the call recorded as \p line, or null for one dispatched as Other.
+const OperationKind* EntryFor(std::string_view line) {
   const std::string_view operation = line.substr(0, line.find(' '));
   for (const OperationKind& entry : kOperationKinds) {
     if (entry.operation == operation) {
-      return entry.kind;
+      return &entry;
     }
   }
-  return &BrowserOwnerRoundTrips::other;
+  return nullptr;
 }
 
-/// Counts the round trips the recorded \p calls make, sending each command buffer in batches.
-BrowserOwnerRoundTrips CountCalls(std::span<const std::string> calls) {
-  BrowserOwnerRoundTrips counts;
-  std::size_t recordedCommands = 0;
-  bool recording = false;
-  for (const std::string& line : calls) {
+/// Payload bytes a recorded `writeBuffer` line carries, zero for any other line.
+std::size_t PayloadBytes(std::string_view line) {
+  constexpr std::string_view kBytes = " bytes=";
+  const std::size_t at = line.rfind(kBytes);
+  if (!line.starts_with("writeBuffer") || at == std::string_view::npos) {
+    return 0;
+  }
+  std::size_t bytes = 0;
+  for (const char digit : line.substr(at + kBytes.size())) {
+    bytes = bytes * 10 + static_cast<std::size_t>(digit - '0');
+  }
+  return bytes;
+}
+
+/// Round trips of a recorded call sequence, following the bridge's dispatch: deferred calls ride
+/// along with the thread's next round trip unless they reach their bounds first.
+class RoundTripCounter {
+public:
+  void add(std::string_view line) {
+    const OperationKind* entry = EntryFor(line);
+    if (entry != nullptr && entry->model.deferred) {
+      defer(PayloadBytes(line));
+      return;
+    }
     if (line.starts_with("beginCommandBuffer")) {
-      recording = true;
-      recordedCommands = 0;
+      recording_ = true;
+      recordedCommands_ = 0;
     }
-    if (!recording) {
-      ++(counts.*KindOf(line));
-      continue;
+    if (recording_) {
+      record(line);
+      return;
     }
-    ++recordedCommands;
-    if (line.starts_with("endCommandBuffer")) {
-      // A full batch is sent as soon as it fills, and the end of the buffer sends the rest.
-      counts.commandBatch += recordedCommands / kCommandsPerBatch + 1;
-      recording = false;
+    // A direct call carries every deferred call ahead of it in its own round trip.
+    deferredCalls_ = 0;
+    deferredBytes_ = 0;
+    ++(counts_.*(entry != nullptr ? entry->kind : &BrowserOwnerRoundTrips::other));
+  }
+
+  /// Ends the frame as the worker does before it parks: deferred calls still held are sent in a
+  /// round trip of their own. @return How many were held after the frame's last round trip.
+  std::size_t endFrame() {
+    const std::size_t trailing = deferredCalls_;
+    if (trailing != 0) {
+      ++counts_.commandBatch;
+      deferredCalls_ = 0;
+      deferredBytes_ = 0;
+    }
+    return trailing;
+  }
+
+  [[nodiscard]] const BrowserOwnerRoundTrips& counts() const { return counts_; }
+
+private:
+  void defer(std::size_t bytes) {
+    ++deferredCalls_;
+    deferredBytes_ += bytes;
+    if (deferredCalls_ >= gpu::browser::BrowserDeferredCalls::kMaxCalls ||
+        deferredBytes_ >= gpu::browser::BrowserDeferredCalls::kMaxBytes) {
+      ++counts_.commandBatch;
+      deferredCalls_ = 0;
+      deferredBytes_ = 0;
     }
   }
-  return counts;
+
+  void record(std::string_view line) {
+    ++recordedCommands_;
+    if (line.starts_with("endCommandBuffer")) {
+      // A full batch is sent as soon as it fills, and the end of the buffer sends the rest; the
+      // first batch carries the deferred calls.
+      counts_.commandBatch += recordedCommands_ / kCommandsPerBatch + 1;
+      recording_ = false;
+      deferredCalls_ = 0;
+      deferredBytes_ = 0;
+    }
+  }
+
+  BrowserOwnerRoundTrips counts_;
+  bool recording_ = false;
+  std::size_t recordedCommands_ = 0;
+  std::size_t deferredCalls_ = 0;
+  std::size_t deferredBytes_ = 0;
+};
+
+/// Counts the round trips the recorded \p calls make as one frame, ending with the worker's flush.
+/// @param calls Recorded calls. @param trailing Receives the calls held after the last round trip.
+BrowserOwnerRoundTrips CountFrame(std::span<const std::string> calls, std::size_t& trailing) {
+  RoundTripCounter counter;
+  for (const std::string& line : calls) {
+    counter.add(line);
+  }
+  trailing = counter.endFrame();
+  return counter.counts();
 }
 
 }  // namespace
+
+std::vector<BrowserOperationModel> BrowserOperationModels() {
+  std::vector<BrowserOperationModel> models;
+  for (const OperationKind& entry : kOperationKinds) {
+    models.push_back(entry.model);
+  }
+  return models;
+}
 
 uint64_t BrowserOwnerRoundTrips::total() const {
   return ownershipQuery + deviceLossQuery + completionQuery + resourceCreation +
@@ -145,8 +244,8 @@ FakeBrowserGeodeContext FakeBrowserGeodeContext::Open() {
 }
 
 BrowserOwnerRoundTrips FakeBrowserGeodeContext::takeRoundTrips() {
-  BrowserOwnerRoundTrips counts =
-      CountCalls(std::span<const std::string>(*calls_).subspan(consumedCalls_));
+  BrowserOwnerRoundTrips counts = CountFrame(
+      std::span<const std::string>(*calls_).subspan(consumedCalls_), trailingDeferredCalls_);
   counts.ownershipQuery = queries_->deviceStatus - consumedQueries_.deviceStatus;
   counts.deviceLossQuery = queries_->deviceLoss - consumedQueries_.deviceLoss;
   counts.completionQuery = queries_->completedSerial - consumedQueries_.completedSerial;

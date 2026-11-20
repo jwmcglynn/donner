@@ -377,4 +377,32 @@ TEST(MandatoryHintDetectorTest, MultipleSignalsOnSameEntityProduceOneHint) {
       << "multiple qualifying signals must still produce only a single Mandatory entry";
 }
 
+TEST(MandatoryHintDetectorTest, ContentDrawnForAnElementIsNotPromoted) {
+  // A masked element whose mask content is itself masked. The mask content is a rendering
+  // instance of its own, but it reaches the frame only through the element it masks: a layer of
+  // its own would be composed onto the frame as document content.
+  Registry registry;
+  MandatoryHintDetector detector;
+
+  const Entity host = makeTreeEntity(registry, entt::null);
+  const Entity maskContentFirst = makeTreeEntity(registry, entt::null);
+  const Entity maskContentLast = makeTreeEntity(registry, entt::null);
+  int drawOrder = 0;
+  for (const Entity entity : {host, maskContentFirst, maskContentLast}) {
+    registry.emplace<RenderingInstanceComponent>(entity).drawOrder = drawOrder++;
+  }
+  components::ResolvedMask mask;
+  mask.subtreeInfo = components::SubtreeInfo{maskContentFirst, maskContentLast};
+  registry.get<RenderingInstanceComponent>(host).mask = mask;
+  registry.get<RenderingInstanceComponent>(maskContentLast).mask = components::ResolvedMask{};
+  registry.get<RenderingInstanceComponent>(maskContentFirst).isolatedLayer = true;
+
+  detector.reconcile(registry);
+
+  EXPECT_TRUE(registry.all_of<CompositorHintComponent>(host));
+  EXPECT_FALSE(registry.all_of<CompositorHintComponent>(maskContentFirst));
+  EXPECT_FALSE(registry.all_of<CompositorHintComponent>(maskContentLast));
+  EXPECT_EQ(detector.stats().hintsPublished, 1u);
+}
+
 }  // namespace donner::svg::compositor

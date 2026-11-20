@@ -1,10 +1,12 @@
 #include "donner/svg/compositor/MandatoryHintDetector.h"
 
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/compositor/DrawnContent.h"
 
 namespace donner::svg::compositor {
 
@@ -69,13 +71,20 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity, Mandatory
 void MandatoryHintDetector::reconcile(Registry& registry) {
   stats_ = {};
 
+  auto view = registry.view<components::RenderingInstanceComponent>();
+  const std::vector<std::pair<int, int>> drawnContent = DrawnContentDrawOrders(registry);
+
   // Snapshot the entities that currently qualify.
   std::unordered_set<Entity> qualifying;
-  auto view = registry.view<components::RenderingInstanceComponent>();
   for (auto entity : view) {
     ++stats_.candidatesEvaluated;
     const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
     if (!qualifies(instance, scope_)) {
+      continue;
+    }
+    // Mask, marker and pattern content reaches the frame only through the element that draws it.
+    // A layer of its own would be composed onto the frame as document content.
+    if (InDrawOrderRanges(drawnContent, instance.drawOrder)) {
       continue;
     }
     // Don't auto-promote if an ancestor's clip-path / mask / filter would be

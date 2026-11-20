@@ -586,15 +586,11 @@ def donner_variant_cc_test(
         for v in named_variants:
             target_name = "{}_{}".format(name, v["name"])
 
-            # Per-variant overrides: a variant dict may carry "args" and/or
-            # "shard_count" to override the shared kwargs for just that
-            # variant (e.g. the resvg geode variant filters out CPU-reference
-            # params and takes a higher shard count than the CPU variants).
+            # Variant-specific execution arguments, sharding, and selection tags.
             variant_kwargs = dict(kwargs)
-            if "args" in v:
-                variant_kwargs["args"] = v["args"]
-            if "shard_count" in v:
-                variant_kwargs["shard_count"] = v["shard_count"]
+            for key in ["args", "shard_count", "tags"]:
+                if key in v:
+                    variant_kwargs[key] = v[key]
 
             donner_multi_transitioned_test(
                 name = target_name,

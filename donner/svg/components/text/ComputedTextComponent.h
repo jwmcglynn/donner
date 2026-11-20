@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "donner/base/Length.h"
@@ -192,6 +193,17 @@ struct ComputedTextComponent {
     /// Resolved stroke paint for this span (solid color, gradient reference, or none).
     /// Populated by RendererDriver from sourceEntity's ComputedStyleComponent.
     ResolvedPaintServer resolvedStroke;
+
+    /// True when \ref resolvedFill and \ref resolvedStroke hold the span's computed paint, so a
+    /// fill of none means the span is not filled. A span whose paint was not resolved from a
+    /// computed style is filled with the text element's fill.
+    bool hasComputedPaint = false;
+
+    /// True when this span's own fill decides how its glyphs are filled, rather than the text
+    /// element's fill.
+    [[nodiscard]] bool ownsFill() const {
+      return hasComputedPaint || !std::holds_alternative<PaintServer::None>(resolvedFill);
+    }
 
     /// CSS `fill-opacity` value for this span (0.0-1.0).
     double fillOpacity = 1.0;

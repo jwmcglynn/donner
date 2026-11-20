@@ -329,7 +329,27 @@ BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge,
   publishing_ = bridge_->beginPublishingState();
 }
 
+BridgeStatus BrowserDevice::deferredRefusal() const {
+  return static_cast<BridgeStatus>(
+      bridge_->deferredOrigin().refusal.load(std::memory_order_acquire));
+}
+
+Status BrowserDevice::checkDeferredRefusal(std::string_view operation) const {
+  const BridgeStatus refused = deferredRefusal();
+  if (refused == BridgeStatus::Success) {
+    return OkStatus();
+  }
+  recordBrowserLoss();
+  return Err(GpuErrorType::InvalidState,
+             std::format("{}: the browser refused a write or bind group construction this "
+                         "device deferred (status {}), so the device is treated as lost",
+                         operation, static_cast<unsigned int>(refused)));
+}
+
 BridgeStatus BrowserDevice::queryDeviceStatus() const {
+  if (deferredRefusal() != BridgeStatus::Success) {
+    return BridgeStatus::DeviceLost;
+  }
   if (publishing_) {
     switch (bridge_->publishedState().status.load(std::memory_order_acquire)) {
       case BrowserPublishedState::kLive: return BridgeStatus::Success;
@@ -341,6 +361,9 @@ BridgeStatus BrowserDevice::queryDeviceStatus() const {
 }
 
 bool BrowserDevice::queryDeviceLost() const {
+  if (deferredRefusal() != BridgeStatus::Success) {
+    return true;
+  }
   if (publishing_) {
     const uint32_t status = bridge_->publishedState().status.load(std::memory_order_acquire);
     if (status != BrowserPublishedState::kUnpublished) {
@@ -487,6 +510,9 @@ Status BrowserDevice::checkCallingThread(std::string_view operation) const {
 Status BrowserDevice::checkUsable(std::string_view operation) const {
   if (Status status = checkCallingThread(operation); status.hasError()) {
     return status;
+  }
+  if (Status refused = checkDeferredRefusal(operation); refused.hasError()) {
+    return refused;
   }
   const BridgeStatus status = queryDeviceStatus();
   if (status == BridgeStatus::NotOwner) {
@@ -1089,6 +1115,9 @@ Status BrowserDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
   if (Status status = checkCallingThread(kOperation); status.hasError()) {
     return status;
   }
+  if (Status refused = checkDeferredRefusal(kOperation); refused.hasError()) {
+    return refused;
+  }
   if (isLost()) {
     return queueWriteStatus(BridgeStatus::DeviceLost, kOperation);
   }
@@ -1108,6 +1137,9 @@ Status BrowserDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t
   static constexpr std::string_view kOperation = "writeTexture";
   if (Status status = checkCallingThread(kOperation); status.hasError()) {
     return status;
+  }
+  if (Status refused = checkDeferredRefusal(kOperation); refused.hasError()) {
+    return refused;
   }
   if (isLost()) {
     return queueWriteStatus(BridgeStatus::DeviceLost, kOperation);
@@ -1319,12 +1351,16 @@ Status BrowserDevice::replayCommandBuffer(uint64_t submissionSerial, uint32_t co
   for (const Command& command : commands) {
     // A refused command leaves the browser-side recording open and unsubmitted, and the buffers
     // this submission already finished are dropped when its first buffer is recorded again, so
-    // nothing recorded before the refusal reaches the queue.
+    // nothing recorded before the refusal reaches the queue. A full command batch is sent from
+    // inside a command, so a deferred call refused in its round trip is declared here.
     if (Status status = replayCommand(command, operation); status.hasError()) {
+      if (deferredRefusal() != BridgeStatus::Success) {
+        return checkDeferredRefusal(operation);
+      }
       return status;
     }
   }
-  return StatusForBridge(bridge_->endCommandBuffer(submissionSerial), operation);
+  return submissionStatus(bridge_->endCommandBuffer(submissionSerial), operation);
 }
 
 Status BrowserDevice::onSubmit(uint64_t submissionSerial,
@@ -1343,7 +1379,16 @@ Status BrowserDevice::onSubmit(uint64_t submissionSerial,
       return status;
     }
   }
-  return StatusForBridge(bridge_->submitCommandBuffers(submissionSerial), kOperation);
+  return submissionStatus(bridge_->submitCommandBuffers(submissionSerial), kOperation);
+}
+
+Status BrowserDevice::submissionStatus(BridgeStatus status, std::string_view operation) const {
+  // A command batch or submission is refused when a write or bind group this device deferred was
+  // refused in the same round trip; that refusal is the loss to declare.
+  if (status != BridgeStatus::Success && deferredRefusal() != BridgeStatus::Success) {
+    return checkDeferredRefusal(operation);
+  }
+  return StatusForBridge(status, operation);
 }
 
 Status BrowserDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,

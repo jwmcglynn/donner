@@ -68,6 +68,7 @@
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextLayoutParams.h"
 #include "donner/svg/text/TextPathWarp.h"
 #endif
@@ -4608,6 +4609,65 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // The decoration's own fill/stroke order is the declaring element's `paint-order`.
     PaintFillAndStroke(decorationPaint.paintOrder, fillDecoration, strokeDecoration);
   }
+
+  /**
+   * Draws the glyphs of \p run whose face has only bitmap glyphs, such as color emoji. Each glyph
+   * draws its decoded strike as a textured quad through the image pipeline, placed and scaled from
+   * the strike to the glyph's size as `RendererTinySkia::drawText` places it, at the span's
+   * opacity. The pixels come from the font on the CPU and are uploaded; nothing is read back.
+   *
+   * @param textEngine Engine providing bitmap glyph metadata and pixels.
+   * @param text Text whose spans give each run's opacity.
+   * @param runIndex Index of \p run, and of its span.
+   * @param run Laid-out run.
+   * @param runScale `scaleForPixelHeight` of the run's face at its used size.
+   * @param runBitmapOnly Whether the run's face has only bitmap glyphs.
+   * @return False when the frame's text budget rejected a glyph; the text draws nothing further.
+   */
+  bool drawBitmapGlyphs(TextEngine& textEngine, const components::ComputedTextComponent& text,
+                        std::size_t runIndex, const TextRun& run, float runScale,
+                        bool runBitmapOnly) {
+    // A run of an outline face draws bitmap glyphs only for glyphs a fallback face draws.
+    if (!runBitmapOnly &&
+        std::none_of(run.glyphs.begin(), run.glyphs.end(),
+                     [](const TextGlyph& glyph) { return static_cast<bool>(glyph.font); })) {
+      return true;
+    }
+    const double opacity = runIndex < text.spans.size() ? text.spans[runIndex].opacity : 1.0;
+    for (const TextGlyph& glyph : run.glyphs) {
+      if (glyph.glyphIndex == 0) {
+        continue;  // `.notdef`, skipped as tiny-skia skips it.
+      }
+      const GlyphFaceScale face = ResolveGlyphFace(textEngine, run, glyph, runScale, runBitmapOnly);
+      if (!face.bitmapOnly) {
+        continue;
+      }
+      bool rejected = false;
+      std::optional<TextBackend::BitmapGlyph> bitmap =
+          AdmitBitmapGlyph(textEngine, face.font, glyph.glyphIndex, face.scale,
+                           *textMaterializationBudget, rejected);
+      if (rejected) {
+        return false;
+      }
+      if (bitmap.has_value()) {
+        drawBitmapGlyph(glyph, std::move(*bitmap), opacity);
+      }
+    }
+    return true;
+  }
+
+  /// Draws one decoded bitmap glyph; see \ref drawBitmapGlyphs.
+  void drawBitmapGlyph(const TextGlyph& glyph, TextBackend::BitmapGlyph bitmap, double opacity) {
+    const Transform2d deviceFromBitmap =
+        text_engine_detail::computeLocalFromBitmapGlyph(glyph, bitmap) * deviceFromLocalTransform;
+    const Box2d bitmapRect(Vector2d::Zero(), Vector2d(bitmap.width, bitmap.height));
+    encoder->setTransform(deviceFromBitmap);
+    // tiny-skia draws bitmap glyphs with bilinear filtering.
+    encoder->drawPremultipliedImage(
+        ImageResource{std::move(bitmap.rgbaPixels), bitmap.width, bitmap.height}, bitmapRect,
+        opacity, ImageRendering::Smooth);
+    encoder->setTransform(deviceFromLocalTransform);
+  }
 #endif  // DONNER_TEXT_ENABLED
 
   /// Most stroke outline points joined into one text stroke shape: far below the path encoder's
@@ -8493,11 +8553,44 @@ struct GlyphGeometryModes {
   bool placedPaths;
 };
 
+#ifdef DONNER_TEXT_ENABLED
+/// Whether a run has no fill, stroke or decoration to paint, which leaves only its bitmap glyphs.
+/// @param hasFillPaint Whether the run fills with a solid, gradient or pattern.
+/// @param hasStrokePaint Whether the run strokes its glyphs.
+/// @param decoration The run's decoration lines.
+bool RunPaintsOnlyBitmapGlyphs(bool hasFillPaint, bool hasStrokePaint, TextDecoration decoration) {
+  return !hasFillPaint && !hasStrokePaint && decoration == TextDecoration::None;
+}
+#endif  // DONNER_TEXT_ENABLED
+
 GlyphGeometryModes ResolveGlyphGeometryModes(bool solidFill, bool gradientFill, bool patternFill,
                                              bool strokePaint, bool warped) {
   return {warped, solidFill && !gradientFill && !patternFill && !warped,
           gradientFill || patternFill || strokePaint || (solidFill && warped)};
 }
+
+#ifdef DONNER_TEXT_ENABLED
+/// The solid color the glyphs of run \p runIndex of \p text fill with. A run whose span does not
+/// own its fill takes \p textFill, the text element's solid fill (already scaled by its fill
+/// opacity); a span whose own fill is none is not filled. A span's own fill is resolved at the
+/// product of its `fill-opacity` and `opacity` by \ref TextSolidPaint, with \p patternStaged
+/// saying whether the driver staged a fill pattern tile; a fill with no solid color takes
+/// \p textFill, since its server is drawn separately.
+css::RGBA SpanFillColor(const components::ComputedTextComponent& text, std::size_t runIndex,
+                        const css::RGBA& textFill, const css::RGBA& currentColor,
+                        bool patternStaged) {
+  if (runIndex >= text.spans.size() || !text.spans[runIndex].ownsFill()) {
+    return textFill;
+  }
+  const auto& span = text.spans[runIndex];
+  if (std::holds_alternative<PaintServer::None>(span.resolvedFill)) {
+    return css::RGBA(0, 0, 0, 0);
+  }
+  return TextSolidPaint(span.resolvedFill, span.fillOpacity * span.opacity, currentColor,
+                        patternStaged)
+      .value_or(textFill);
+}
+#endif  // DONNER_TEXT_ENABLED
 
 }  // namespace
 
@@ -8505,6 +8598,15 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                              const TextParams& params) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
 #ifdef DONNER_TEXT_ENABLED
+  // The element-level pattern fill and stroke slots are consumed exactly once, on every way out of
+  // this draw, so a staged pattern cannot leak onto the next shape's draw.
+  struct PatternSlotRelease {
+    Impl& impl;
+    ~PatternSlotRelease() {
+      impl.releasePatternPaintSlot(impl.patternFillPaint);
+      impl.releasePatternPaintSlot(impl.patternStrokePaint);
+    }
+  } patternSlotRelease{*impl_};
   if (!impl_->device || !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return;
   }
@@ -8530,12 +8632,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
   // Element-level pattern fill: the driver stages a `patternFillPaint` slot
   // (via renderPattern / endPatternTile) for a `<text fill="url(#pattern)">`,
-  // to be consumed by the next fill. Mirror `RendererTinySkia::drawText`, which
-  // fills the glyph outlines with the pattern (clipped to the glyphs). We must
-  // also reset the slot once below so it does not leak onto the next shape's
-  // `fillResolved` -- the bug this fixes was an unfilled glyph + the staged
-  // pattern bleeding onto the following element. Per-span pattern fill is a
-  // separate gap (matching the element-level handling here).
+  // which fills the glyph outlines with the pattern as `RendererTinySkia::drawText`
+  // does; `patternSlotRelease` consumes it. Per-span pattern fill is a separate gap
+  // (matching the element-level handling here).
   const bool hasPatternFill = impl_->patternFillPaint.has_value();
   const bool hasPatternStroke = impl_->patternStrokePaint.has_value();
   const css::RGBA currentColor = impl_->paint.currentColor;
@@ -8552,21 +8651,6 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     // Still walk through in case a per-span fill kicks in.
     defaultFill = css::RGBA(0, 0, 0, 0);
   }
-
-  // The element-level fill is already scaled by the top-level
-  // `setPaint` call, but per-span fill overrides need their own
-  // `span.fillOpacity * span.opacity` applied.
-  const auto resolveSpanFill = [&](size_t runIndex) -> css::RGBA {
-    if (runIndex >= text.spans.size()) {
-      return *defaultFill;
-    }
-    const auto& span = text.spans[runIndex];
-    if (const std::optional<css::RGBA> color = TextSolidPaint(
-            span.resolvedFill, span.fillOpacity * span.opacity, currentColor, hasPatternFill)) {
-      return *color;
-    }
-    return *defaultFill;
-  };
 
   // Snapshot the encoder's current transform so we can restore it if
   // per-glyph rotations mess with it. `fillPath` honours
@@ -8593,36 +8677,30 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const float spanFontSizePx = run.usedFontSizePx;
 
     const float scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
-    if (scale <= 0.0f) {
-      continue;
-    }
-    if (textEngine.isBitmapOnly(run.font)) {
-      // Bitmap-only (color emoji) fonts need the `GeodeTextureEncoder`
-      // path, which drawText doesn't wire up yet. Skip the run so the
-      // rest of the text still renders.
+    const bool runBitmapOnly = textEngine.isBitmapOnly(run.font);
+    if (!CanRenderTextRun(runBitmapOnly, scale)) {
       continue;
     }
 
-    const css::RGBA spanFill = resolveSpanFill(runIndex);
+    const css::RGBA spanFill =
+        SpanFillColor(text, runIndex, *defaultFill, currentColor, hasPatternFill);
     const bool hasFill = spanFill.a != 0;
 
-    // Effective per-run fill paint *server*: a span's own non-None fill overrides
+    // Effective per-run fill paint *server*: a span's own computed fill overrides
     // the element-level fill. This carries gradient refs that the solid
-    // `resolveSpanFill` collapses (it returns the inherited default for a ref) -
+    // `SpanFillColor` collapses (it returns the inherited default for a ref) -
     // `drawPaintedPathAgainst` resolves them against the text bbox below (mirrors
     // `RendererTinySkia::drawText`). Patterns are NOT routed here: the driver
     // stages a `patternFillPaint` slot for a pattern fill, so `hasPatternFill`
     // distinguishes pattern from gradient (both are `PaintResolvedReference`).
-    // A span's own non-None fill overrides the element-level fill. Track whether
+    // A span's own computed fill overrides the element-level fill. Track whether
     // the chosen server came from the span (an override) vs. was inherited from
     // the element: a span-level gradient override must beat the element pattern,
     // which the driver only staged for the element. Mirrors
     // `RendererTinySkia::drawText`, where a span ref that instantiates as a
     // gradient wins unconditionally and only falls to `patternFillPaint_` when
     // it is not a gradient.
-    const bool spanOverridesFill =
-        runIndex < text.spans.size() &&
-        !std::holds_alternative<PaintServer::None>(text.spans[runIndex].resolvedFill);
+    const bool spanOverridesFill = runIndex < text.spans.size() && text.spans[runIndex].ownsFill();
     const components::ResolvedPaintServer& fillServer =
         spanOverridesFill ? text.spans[runIndex].resolvedFill : impl_->paint.fill;
     // The fill is a gradient when (a) the span overrode with its own gradient
@@ -8734,9 +8812,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
     const TextDecoration spanDecoration =
         runIndex < text.spans.size() ? text.spans[runIndex].textDecoration : params.textDecoration;
-    if (!hasFill && !usePatternFill && !fillIsGradient && !hasStrokePaint &&
-        spanDecoration == TextDecoration::None) {
-      continue;  // Nothing to fill, stroke, or decorate.
+    if (RunPaintsOnlyBitmapGlyphs(hasFill || usePatternFill || fillIsGradient, hasStrokePaint,
+                                  spanDecoration)) {
+      // Bitmap glyphs draw without fill or stroke paint, as on the CPU renderer.
+      if (!impl_->drawBitmapGlyphs(textEngine, text, runIndex, run, scale, runBitmapOnly)) {
+        return;
+      }
+      continue;
     }
 
     // A solid fill draws each glyph from shared resident geometry: the outline
@@ -8770,11 +8852,10 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     for (const auto& glyph : runNeedsGlyphGeometry ? std::span<const TextGlyph>(run.glyphs)
                                                    : std::span<const TextGlyph>()) {
       runChunks.noteGlyph(glyph, runGlyphPaths.size());
-      // The run's face is not bitmap-only here, so only a fallback face can be.
-      const GlyphFaceScale face = ResolveGlyphFace(textEngine, run, glyph, scale, false);
+      const GlyphFaceScale face = ResolveGlyphFace(textEngine, run, glyph, scale, runBitmapOnly);
       if (!HasVectorGlyph(glyph, face)) {
-        // `.notdef` is skipped to match tiny-skia. A bitmap-only fallback face has no outline
-        // budget, so it is skipped before glyph admission like a bitmap-only run.
+        // `.notdef` is skipped to match tiny-skia. A bitmap-only face has no outline budget, so
+        // its glyphs are skipped before glyph admission; `drawBitmapGlyphs` draws them.
         continue;
       }
 
@@ -8782,7 +8863,6 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         if (!impl_->appendWarpedGlyph(
                 runGlyphPaths, fontManager, textEngine, run, glyph, face.scale,
                 geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform))) {
-          runs.clear();
           return;
         }
         continue;
@@ -8947,6 +9027,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
     drawDecorations(kDecorationLinesBeneathText);
 
+    // Bitmap glyphs paint after the decorations beneath the run and before its outlines, as in
+    // `RendererTinySkia::drawText`.
+    if (!impl_->drawBitmapGlyphs(textEngine, text, runIndex, run, scale, runBitmapOnly)) {
+      return;
+    }
+
     PaintOrder spanPaintOrder;
     if (runIndex < text.spans.size()) {
       spanPaintOrder = text.spans[runIndex].paintOrder;
@@ -8966,13 +9052,6 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     drawDecorations(TextDecoration::LineThrough);
   }
 
-  // Consume the element-level pattern fill/stroke slots exactly once. Even if no
-  // run actually used them (e.g. every glyph was .notdef), they must be released
-  // here so the staged pattern does not leak onto the next shape's draw.
-  if (hasPatternFill) {
-    impl_->releasePatternPaintSlot(impl_->patternFillPaint);
-  }
-  impl_->releasePatternPaintSlot(impl_->patternStrokePaint);
 #else
   (void)registry;
   (void)text;

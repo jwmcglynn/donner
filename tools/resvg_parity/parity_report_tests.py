@@ -8,15 +8,21 @@ from __future__ import annotations
 
 from collections import Counter
 
+import base64
+import gzip
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import re
 import struct
 import tempfile
 import textwrap
 import unittest
+from urllib.parse import unquote, unquote_to_bytes, urlsplit
 from unittest.mock import patch
+from xml.parsers import expat
 
 import parity_report
 
@@ -1467,7 +1473,111 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual([row["path"] for row in head_to_head["gap"]], ["painting/fill/b.svg"])
 
 
+_SVG_INPUT_LIMIT = 128 * 1024
+_SVG_TEXT_ELEMENTS = {"text", "tspan", "tref", "textPath"}
+
+
+def _read_svg_xml(data: bytes) -> bytes:
+    if data.startswith(b"\x1f\x8b"):
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as archive:
+            data = archive.read(_SVG_INPUT_LIMIT + 1)
+    if len(data) > _SVG_INPUT_LIMIT:
+        raise ValueError("SVG fixture exceeds the text inventory input limit")
+    return data
+
+
+def _check_svg_entity(name, is_parameter_entity, value, *_unused) -> None:
+    # The four DTD fixtures use short, literal internal entities. Reject declarations
+    # involving external fetches, parameter entities or recursive expansion.
+    if is_parameter_entity or value is None or "&" in value or len(value) > 4096:
+        raise ValueError(f"Unsupported entity in SVG fixture: {name}")
+
+
+def _svg_text_elements_and_hrefs(data: bytes) -> tuple[bool, set[str]]:
+    has_text = False
+    hrefs: set[str] = set()
+
+    def inspect_element(name, attributes):
+        nonlocal has_text
+        has_text |= name.rsplit("}", 1)[-1] in _SVG_TEXT_ELEMENTS
+        hrefs.update(value for key, value in attributes.items() if key.rsplit("}", 1)[-1] == "href")
+
+    parser = expat.ParserCreate(namespace_separator="}")
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    parser.EntityDeclHandler = _check_svg_entity
+    parser.ExternalEntityRefHandler = lambda *_unused: 0
+    parser.StartElementHandler = inspect_element
+    parser.Parse(_read_svg_xml(data), True)
+    return has_text, hrefs
+
+
+def _embedded_svg(href: str) -> bytes | None:
+    header, _, payload = href.partition(",")
+    if header[5:].split(";", 1)[0] not in ("image/svg+xml", ""):
+        return None
+    data = unquote_to_bytes(payload)
+    if ";base64" in header:
+        data = base64.b64decode(data)
+    if data.lstrip().startswith(b"<") or data.startswith(b"\x1f\x8b"):
+        return data
+    return None
+
+
+def _linked_svg(href: str, source: Path, resources: Path) -> Path | None:
+    url = urlsplit(href)
+    if url.scheme or url.netloc or not url.path:
+        return None
+    # Keep runfile symlinks: resolving them would escape the test's logical tree.
+    linked = Path(os.path.normpath(source.parent / unquote(url.path)))
+    if linked.is_relative_to(resources) and linked.suffix in (".svg", ".svgz") and linked.is_file():
+        return linked
+    return None
+
+
+def _svg_href_contains_text(href: str, source: Path, resources: Path,
+                            visited: frozenset[Path]) -> bool:
+    if href.startswith("data:"):
+        embedded = _embedded_svg(href)
+        return embedded is not None and _svg_contains_text(embedded, source, resources, visited)
+    linked = _linked_svg(href, source, resources)
+    if linked is None or linked in visited:
+        return False
+    return _svg_contains_text(linked.read_bytes(), linked, resources, visited | {linked})
+
+
+def _svg_contains_text(data: bytes, source: Path, resources: Path,
+                       visited: frozenset[Path]) -> bool:
+    has_text, hrefs = _svg_text_elements_and_hrefs(data)
+    return has_text or any(_svg_href_contains_text(href, source, resources, visited) for href in hrefs)
+
+
 class RealTreeParityReportTests(unittest.TestCase):
+    def test_text_inventory_rejects_nonliteral_xml_entities(self) -> None:
+        for entity in (b'<!ENTITY % value "text">',
+                       b'<!ENTITY value SYSTEM "https://example.invalid/text">',
+                       b'<!ENTITY value "&other;">'):
+            with self.subTest(entity=entity):
+                with self.assertRaisesRegex(ValueError, "Unsupported entity"):
+                    _svg_text_elements_and_hrefs(b"<!DOCTYPE svg [" + entity + b"]><svg/>")
+
+    def test_max_text_fixture_list_matches_direct_and_linked_svg_text(self) -> None:
+        root = parity_report._default_repo_root() / parity_report.TESTS_ROOT
+        build = (root.parent / "BUILD.bazel").read_text(encoding="utf-8")
+        extras = re.search(r"_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = \[(.*?)\]", build, re.S)
+        self.assertIsNotNone(extras)
+        declared = re.findall(r'"([^"]+)"', extras.group(1))
+        self.assertEqual(declared, sorted(set(declared)))
+        expected = {
+            path.relative_to(root.parent).as_posix()
+            for path in root.rglob("*.svg")
+            if path.relative_to(root).parts[0] != "text"
+            and _svg_contains_text(path.read_bytes(), path, root.parent, frozenset({path}))
+        }
+        self.assertEqual(set(declared), expected)
+        self.assertIn("tests/structure/image/embedded-svg-with-text.svg", expected)
+        self.assertIn("tests/structure/use/xlink-to-an-external-file.svg", expected)
+        self.assertNotIn("tests/structure/image/embedded-png.svg", expected)
+
     def test_exception_catalog_and_feature_gap_doc_match_live_registrations(self) -> None:
         root = parity_report._default_repo_root()
         self.assertTrue((root / parity_report.EXCEPTION_POLICIES).is_file())
