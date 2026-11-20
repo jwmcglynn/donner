@@ -545,6 +545,23 @@ std::optional<RendererBackendFeature> missingRequiredFeature(RendererBackend bac
   return std::nullopt;
 }
 
+/// True when \p params opt the comparison in \p mode into the quarter-pixel edge coverage rule:
+/// only the Geode comparison against the row's vendored reference, never a custom golden, which
+/// is not a quarter-pixel quantized resvg rendering.
+bool acceptsQuarterPixelEdgeCoverage(const ImageComparisonParams& params, ComparisonMode mode) {
+  return params.geodeQuarterPixelEdgeCoverage && mode == ComparisonMode::GeodeGolden &&
+         params.overrideGoldenFilename.empty() && params.geodeOverrideGoldenFilename.empty();
+}
+
+/// Reports the pixels the quarter-pixel edge coverage rule accepted, if any.
+void printEdgeCoverage(const svg_suite::ComparisonResult& comparison) {
+  if (comparison.edgeCoveragePixels != 0) {
+    std::cout << "Quarter-pixel edge coverage: " << comparison.edgeCoveragePixels
+              << " pixels accepted, max alpha delta " << comparison.maxEdgeCoverageAlphaDelta
+              << "\n";
+  }
+}
+
 std::optional<std::string> skipReasonIfUnsupported(RendererBackend backend,
                                                    const ImageComparisonParams& params) {
   if (shouldSkipForUnsupportedTextConfig(params)) {
@@ -1103,10 +1120,13 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   ASSERT_EQ(goldenImage.data.size(), snapshot.pixels.size());
 
   const int maxMismatchedPixels = params.effectiveMaxMismatchedPixels(mode);
-  auto comparison =
-      svg_suite::CompareImages({width, height, strideInPixels, goldenImage.data},
-                               {width, height, strideInPixels, snapshot.pixels},
-                               {params.threshold, maxMismatchedPixels, params.includeAntiAliasing});
+  auto comparison = svg_suite::CompareImages(
+      {width, height, strideInPixels, goldenImage.data},
+      {width, height, strideInPixels, snapshot.pixels},
+      {.threshold = params.threshold,
+       .maxMismatchedPixels = maxMismatchedPixels,
+       .includeAntiAliasing = params.includeAntiAliasing,
+       .acceptQuarterPixelEdgeCoverage = acceptsQuarterPixelEdgeCoverage(params, mode)});
   ASSERT_TRUE(comparison.error.empty()) << comparison.error;
   ASSERT_TRUE(comparison.mismatchedPixels.has_value());
   const int mismatchedPixels = *comparison.mismatchedPixels;
@@ -1187,6 +1207,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
     std::cout << "\n";
   }
+  printEdgeCoverage(comparison);
 }
 
 }  // namespace donner::svg
