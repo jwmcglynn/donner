@@ -105,6 +105,29 @@ struct RendererDriverTextFrameCache {
   std::map<std::pair<const Registry*, std::uint64_t>,
            std::shared_ptr<const FontManager::HostFontOverlay>>
       hostFonts;
+  /// The number of each document whose text this driver drew, for \ref
+  /// components::SpanPatternSlotId.
+  std::unordered_map<const Registry*, std::uint32_t> spanPatternDocuments;
+
+  /// Forget what the previous frame prepared and numbered.
+  void clearFrame() {
+    roots.clear();
+    shadowStyles.clear();
+    hostFonts.clear();
+    spanPatternDocuments.clear();
+  }
+
+  /// The first span pattern slot of \p instance in \p registry's document. An instance that
+  /// stages no span pattern gets zero without numbering its document.
+  std::uint64_t spanPatternSlotBase(const Registry& registry,
+                                    const components::RenderingInstanceComponent& instance) {
+    if (instance.spanPatternPaints.empty()) {
+      return 0;
+    }
+    const auto [found, inserted] = spanPatternDocuments.try_emplace(
+        &registry, static_cast<std::uint32_t>(spanPatternDocuments.size()));
+    return components::SpanPatternSlotId(found->second, instance.drawOrder, 0);
+  }
 
   // A pattern or marker can revisit text in the same registry with a different paint context.
   // Keep its preparations separate without evicting the caller's text between effect runs.
@@ -865,6 +888,46 @@ std::pair<Entity, const components::ComputedStyleComponent*> SpanStyleSource(
   return {styleEntity, style};
 }
 
+/// Key of a (pattern, kind of paint) pair.
+std::uint64_t SpanPatternKey(Entity pattern, bool forStroke) {
+  return (static_cast<std::uint64_t>(entt::to_integral(pattern)) << 1) |
+         static_cast<std::uint64_t>(forStroke);
+}
+
+/// The span pattern slot of the pattern \p paint references among \p slots, if any.
+std::optional<std::uint64_t> SpanPatternSlot(
+    const std::unordered_map<std::uint64_t, std::uint64_t>& slots,
+    const components::ResolvedPaintServer& paint, bool forStroke) {
+  const auto* reference = std::get_if<components::PaintResolvedReference>(&paint);
+  if (reference == nullptr) {
+    return std::nullopt;
+  }
+  const auto found = slots.find(SpanPatternKey(reference->reference.handle.entity(), forStroke));
+  return found != slots.end() ? std::optional(found->second) : std::nullopt;
+}
+
+/// Points each span of \p text whose own fill or stroke references one of \p patterns at that
+/// pattern's span slot, \p slotBase plus its index. Text whose instance stages no span pattern
+/// skips the spans, unless an earlier draw left slots that have to be cleared.
+void AssignSpanPatternSlots(components::ComputedTextComponent& text,
+                            std::span<const components::SpanPatternPaint> patterns,
+                            std::uint64_t slotBase) {
+  if (patterns.empty() && !text.spanPatternSlotsAssigned) {
+    return;
+  }
+  std::unordered_map<std::uint64_t, std::uint64_t> slots;
+  for (std::size_t index = 0; index < patterns.size(); ++index) {
+    slots.emplace(SpanPatternKey(patterns[index].reference.reference.handle.entity(),
+                                 patterns[index].forStroke),
+                  slotBase | static_cast<std::uint64_t>(index));
+  }
+  for (auto& span : text.spans) {
+    span.fillPatternSlot = SpanPatternSlot(slots, span.resolvedFill, /*forStroke=*/false);
+    span.strokePatternSlot = SpanPatternSlot(slots, span.resolvedStroke, /*forStroke=*/true);
+  }
+  text.spanPatternSlotsAssigned = !patterns.empty();
+}
+
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
 ///
@@ -881,11 +944,17 @@ std::pair<Entity, const components::ComputedStyleComponent*> SpanStyleSource(
 /// instances that carry span-level `clip-path` / `mask` / `filter`. When it does not, every span is
 /// left for this draw to paint, without those effects.
 /// An owner slice that already has layout and layer ownership may skip refreshing those fields.
+///
+/// `spanPatterns` are the span patterns the drawing instance stages from slot
+/// `spanPatternSlotBase`: each span whose own fill or stroke references one of them is pointed at
+/// its slot.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
                           EntityHandle textRootHandle,
                           const components::ResolvedPaintServer& contextFill,
                           const components::ResolvedPaintServer& contextStroke, double strokeScale,
                           bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership,
+                          std::span<const components::SpanPatternPaint> spanPatterns,
+                          std::uint64_t spanPatternSlotBase,
                           const TextStyleContext* styleContext = nullptr) {
   if (refreshLayoutAndOwnership) {
     if (auto* textEngine = registry.ctx().find<TextEngine>()) {
@@ -941,6 +1010,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     ResolveSpanDecorations(registry, styleEntity, span, viewBox, baseFm, strokeScale,
                            resolveSpanPaint);
   }
+  AssignSpanPatternSlots(text, spanPatterns, spanPatternSlotBase);
 }
 
 /// Owned tile bounds and transforms for one pattern placement.
@@ -2436,6 +2506,7 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
     if (!group.prepared) {
       group.prepared = std::make_shared<PreparedTextDraw>();
       group.prepared->elementBounds = preparedRoot.elementBounds;
+      group.text.spanPatternSlotsAssigned = text.spanPatternSlotsAssigned;
     }
     if (runIndex < text.spans.size()) {
       group.text.spans.push_back(text.spans[runIndex]);
@@ -2507,7 +2578,8 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
       textPreparationStats.spanStyleVisits += group.text.spans.size();
       resolvePerSpanStyles(registry, group.text, textRootHandle, paint.fill, paint.stroke,
                            strokeLengthScale, /*spansHaveOwnEffectInstances=*/true,
-                           /*refreshLayoutAndOwnership=*/false);
+                           /*refreshLayoutAndOwnership=*/false, instance.spanPatternPaints,
+                           textFrameCache.spanPatternSlotBase(registry, instance));
       group.stylesResolved = true;
     }
     textParams.preparedTextDraw = group.prepared;
@@ -2539,7 +2611,8 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   textPreparationStats.spanStyleVisits += text->spans.size();
   resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke, strokeLengthScale,
                        spansHaveOwnEffectInstances,
-                       /*refreshLayoutAndOwnership=*/true, styleContext);
+                       /*refreshLayoutAndOwnership=*/true, instance.spanPatternPaints,
+                       textFrameCache.spanPatternSlotBase(registry, instance), styleContext);
   renderer.drawText(registry, *text, textParams);
 }
 
@@ -2818,9 +2891,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
-  textFrameCache_->roots.clear();
-  textFrameCache_->shadowStyles.clear();
-  textFrameCache_->hostFonts.clear();
+  textFrameCache_->clearFrame();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
@@ -2867,9 +2938,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
-  textFrameCache_->roots.clear();
-  textFrameCache_->shadowStyles.clear();
-  textFrameCache_->hostFonts.clear();
+  textFrameCache_->clearFrame();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
@@ -2895,9 +2964,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
-  textFrameCache_->roots.clear();
-  textFrameCache_->shadowStyles.clear();
-  textFrameCache_->hostFonts.clear();
+  textFrameCache_->clearFrame();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
@@ -2945,9 +3012,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
-  textFrameCache_->roots.clear();
-  textFrameCache_->shadowStyles.clear();
-  textFrameCache_->hostFonts.clear();
+  textFrameCache_->clearFrame();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -2981,9 +3046,7 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
-  textFrameCache_->roots.clear();
-  textFrameCache_->shadowStyles.clear();
-  textFrameCache_->hostFonts.clear();
+  textFrameCache_->clearFrame();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -3161,27 +3224,15 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
                                  static_cast<std::uint32_t>(maskDepth));
 
-    if (const auto* fillRef =
-            std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
-      if (fillRef->subtreeInfo &&
-          fillRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
-        renderPattern(view, registry, instance, *fillRef, /*forStroke=*/false);
-      }
-    }
-    if (const auto* strokeRef =
-            std::get_if<components::PaintResolvedReference>(&instance.resolvedStroke)) {
-      if (strokeRef->subtreeInfo &&
-          strokeRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
-        renderPattern(view, registry, instance, *strokeRef, /*forStroke=*/true);
-      }
-    }
+    const bool drawsElement = instance.visible && !filterHidesElement;
+    renderPaintPatterns(view, registry, instance, drawsElement);
 
     PaintParams paint = toPaintParams(registry, instance, style);
     applyDrawTimeContextRemaps(paint, instance);
     renderer_.setPaint(paint);
 
     skipUndrawnMarkerContent(view, registry, instance, filterHidesElement, /*cullDraw=*/false);
-    if (instance.visible && !filterHidesElement) {
+    if (drawsElement) {
       if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
                                  .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
@@ -3893,26 +3944,6 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
                                  static_cast<std::uint32_t>(maskDepth));
 
-    // Render pattern subtrees before drawing so the pattern shader is available.
-    if (const auto* fillRef =
-            std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
-      if (fillRef->subtreeInfo &&
-          fillRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
-        renderPattern(view, registry, instance, *fillRef, /*forStroke=*/false);
-      }
-    }
-    if (const auto* strokeRef =
-            std::get_if<components::PaintResolvedReference>(&instance.resolvedStroke)) {
-      if (strokeRef->subtreeInfo &&
-          strokeRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
-        renderPattern(view, registry, instance, *strokeRef, /*forStroke=*/true);
-      }
-    }
-
-    PaintParams paint = toPaintParams(registry, instance, style);
-    applyDrawTimeContextRemaps(paint, instance);
-    renderer_.setPaint(paint);
-
     // Viewport + too-small culling. Safe to skip the draw when (a) we're not
     // inside a filter layer (a filter can pull pixels from outside the
     // original geometry back into view via blur / displacement, so culling
@@ -3934,9 +3965,17 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       }
     }
 
+    // Render pattern subtrees before drawing so the pattern shader is available.
+    const bool drawsElement = instance.visible && !filterHidesElement && !cullDraw;
+    renderPaintPatterns(view, registry, instance, drawsElement);
+
+    PaintParams paint = toPaintParams(registry, instance, style);
+    applyDrawTimeContextRemaps(paint, instance);
+    renderer_.setPaint(paint);
+
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     skipUndrawnMarkerContent(view, registry, instance, filterHidesElement, cullDraw);
-    if (instance.visible && !filterHidesElement && !cullDraw) {
+    if (drawsElement) {
       if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
                                  .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
@@ -4131,26 +4170,6 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     pushFilterStages(entity, static_cast<std::uint32_t>(hasIsolatedLayer) +
                                  static_cast<std::uint32_t>(maskDepth));
 
-    // Render pattern subtrees before drawing so the pattern shader is available.
-    if (const auto* fillRef =
-            std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
-      if (fillRef->subtreeInfo &&
-          fillRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
-        renderPattern(view, registry, instance, *fillRef, /*forStroke=*/false);
-      }
-    }
-    if (const auto* strokeRef =
-            std::get_if<components::PaintResolvedReference>(&instance.resolvedStroke)) {
-      if (strokeRef->subtreeInfo &&
-          strokeRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
-        renderPattern(view, registry, instance, *strokeRef, /*forStroke=*/true);
-      }
-    }
-
-    PaintParams paint = toPaintParams(registry, instance, style);
-    applyDrawTimeContextRemaps(paint, instance);
-    renderer_.setPaint(paint);
-
     // Viewport + too-small culling. Safe to skip the draw when (a) we're not
     // inside a filter layer (a filter can pull pixels from outside the
     // original geometry back into view via blur / displacement, so culling
@@ -4172,9 +4191,17 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       }
     }
 
+    // Render pattern subtrees before drawing so the pattern shader is available.
+    const bool drawsElement = instance.visible && !filterHidesElement && !cullDraw;
+    renderPaintPatterns(view, registry, instance, drawsElement);
+
+    PaintParams paint = toPaintParams(registry, instance, style);
+    applyDrawTimeContextRemaps(paint, instance);
+    renderer_.setPaint(paint);
+
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     skipUndrawnMarkerContent(view, registry, instance, filterHidesElement, cullDraw);
-    if (instance.visible && !filterHidesElement && !cullDraw) {
+    if (drawsElement) {
       if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
                                  .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
@@ -4534,8 +4561,8 @@ bool RendererDriver::isActivePatternTile(const Registry& registry, Entity patter
 
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
                                    const components::RenderingInstanceComponent& instance,
-                                   const components::PaintResolvedReference& refIn,
-                                   bool forStroke) {
+                                   const components::PaintResolvedReference& refIn, bool forStroke,
+                                   std::optional<std::uint64_t> spanSlot) {
   if (!refIn.subtreeInfo) {
     return;
   }
@@ -4609,7 +4636,43 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
   drawSurfaceSize_ = savedDrawSurfaceSize;
 
-  renderer_.endPatternTile(forStroke);
+  renderer_.endPatternTile(forStroke, spanSlot);
+}
+
+void RendererDriver::renderPaintPatterns(RenderingInstanceView& view, Registry& registry,
+                                         const components::RenderingInstanceComponent& instance,
+                                         bool drawsElement) {
+  for (const bool forStroke : {false, true}) {
+    const auto* ref = std::get_if<components::PaintResolvedReference>(
+        forStroke ? &instance.resolvedStroke : &instance.resolvedFill);
+    if (ref != nullptr && ref->subtreeInfo &&
+        ref->reference.handle.try_get<components::ComputedPatternComponent>()) {
+      renderPattern(view, registry, instance, *ref, forStroke, std::nullopt);
+    }
+  }
+  if (instance.spanPatternPaints.empty()) {
+    return;
+  }
+  const std::uint64_t slotBase = textFrameCache_->spanPatternSlotBase(registry, instance);
+  for (std::size_t slot = 0; slot < instance.spanPatternPaints.size(); ++slot) {
+    const components::SpanPatternPaint& span = instance.spanPatternPaints[slot];
+    if (drawsElement) {
+      renderPattern(view, registry, instance, span.reference, span.forStroke,
+                    slotBase | static_cast<std::uint64_t>(slot));
+    } else {
+      skipPatternContent(view, registry, instance, span.reference);
+    }
+  }
+}
+
+void RendererDriver::skipPatternContent(RenderingInstanceView& view, Registry& registry,
+                                        const components::RenderingInstanceComponent& instance,
+                                        const components::PaintResolvedReference& ref) {
+  if (ref.subtreeInfo.has_value() &&
+      registry.get<components::RenderingInstanceComponent>(ref.subtreeInfo->firstRenderedEntity)
+              .drawOrder > instance.drawOrder) {
+    skipDrawnContent(view, registry, *ref.subtreeInfo);
+  }
 }
 
 void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registry& registry,

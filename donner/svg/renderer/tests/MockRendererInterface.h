@@ -43,7 +43,8 @@ public:
   MOCK_METHOD(void, popMask, (), (override));
   MOCK_METHOD(bool, beginPatternTile, (const Box2d& tileRect, const Transform2d& targetFromPattern),
               (override));
-  MOCK_METHOD(void, endPatternTile, (bool forStroke), (override));
+  MOCK_METHOD(void, endPatternTile, (bool forStroke, std::optional<std::uint64_t> spanSlot),
+              (override));
   MOCK_METHOD(void, setPaint, (const PaintParams& paint), (override));
   MOCK_METHOD(void, drawPath, (const PathShape& path, const StrokeParams& stroke), (override));
   MOCK_METHOD(void, drawRect, (const Box2d& rect, const StrokeParams& stroke), (override));

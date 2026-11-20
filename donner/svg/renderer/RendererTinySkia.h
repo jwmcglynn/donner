@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/EcsRegistry_fwd.h"
@@ -198,8 +199,9 @@ public:
    * Ends pattern recording and stores the resulting pattern paint.
    *
    * @param forStroke If true, store as stroke paint, otherwise fill paint.
+   * @param spanSlot Text span pattern slot to store it in, or nullopt for the element's paint.
    */
-  void endPatternTile(bool forStroke) override;
+  void endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) override;
 
   /**
    * Sets the active paint parameters for subsequent draw calls.
@@ -359,6 +361,13 @@ private:
     Transform2d targetFromPattern;
   };
 
+  /// Pattern tiles staged for the text spans of the next text draw that paint with their own
+  /// pattern, keyed by span pattern slot.
+  struct SpanPatternTiles {
+    std::unordered_map<std::uint64_t, PatternPaintState> fill;    ///< Tiles of span fills.
+    std::unordered_map<std::uint64_t, PatternPaintState> stroke;  ///< Tiles of span strokes.
+  };
+
   enum class SurfaceKind {
     IsolatedLayer,
     FilterLayer,
@@ -402,6 +411,8 @@ private:
     std::optional<PatternPaintState> savedPatternFillPaint;
     /// @see savedPatternFillPaint
     std::optional<PatternPaintState> savedPatternStrokePaint;
+    /// @see savedPatternFillPaint
+    SpanPatternTiles savedSpanPatternTiles;
     /// Clip identity saved alongside `savedClipMask`, so the identity and the mask it names
     /// are restored together.
     std::uint64_t savedClipEpoch = 0;
@@ -523,6 +534,19 @@ private:
    * @param textBounds The text element's bounding box, which a span's gradient maps against.
    * @param textFillColor The text element's resolved fill color.
    */
+  /**
+   * The staged pattern tile that \p span's own fill or stroke paints with: the tile in its span
+   * pattern slot, or, when it has none, the text element's own pattern. Null when that tile was not
+   * staged.
+   *
+   * @param span The span being drawn.
+   * @param forStroke True for the span's stroke, false for its fill.
+   */
+  [[nodiscard]] const PatternPaintState* spanPatternTile(
+      const components::ComputedTextComponent::TextSpan& span, bool forStroke) const;
+  /// A paint sampling \p tile at \p opacity.
+  [[nodiscard]] tiny_skia::Paint patternTilePaint(const PatternPaintState& tile,
+                                                  float opacity) const;
   [[nodiscard]] std::optional<tiny_skia::Paint> resolveSpanFillPaint(
       const components::ComputedTextComponent::TextSpan& span,
       const std::optional<tiny_skia::Paint>& textFillPaint, const Box2d& textBounds,
@@ -614,6 +638,7 @@ private:
   std::size_t strokeOutputPointLimit_ = Path::kMaximumStrokeOutputPoints;
   std::optional<PatternPaintState> patternFillPaint_;
   std::optional<PatternPaintState> patternStrokePaint_;
+  SpanPatternTiles spanPatternTiles_;
 
   /// Staging buffer for image and bitmap payloads that have to be row-packed or premultiplied
   /// before tiny-skia can view them. Held across draws so a repeated compose reuses one

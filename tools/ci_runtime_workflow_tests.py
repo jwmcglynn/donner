@@ -1,5 +1,6 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
+import ast
 import itertools
 import json
 import os
@@ -157,6 +158,54 @@ def _run_bodies(text):
         elif value:
             bodies.append(value)
     return bodies
+
+
+def _action_input_defaults(text):
+    """The default values of a composite action's inputs, which its steps may run as scripts."""
+    parts = re.split(r"^inputs:[ \t]*\n", text, maxsplit=1, flags=re.MULTILINE)
+    inputs = re.split(r"^\S", parts[1], maxsplit=1, flags=re.MULTILINE)[0] if len(parts) > 1 else ""
+    return re.findall(r"^ +default: *(.*)$", inputs, re.MULTILINE)
+
+
+_PYTHON_MODULE = re.compile(r"\bpython3\b[^\n|;&]*?\s-m\s+((?:tools|build_defs)(?:\.\w+)+)")
+
+
+def _script_references(text):
+    """The repository scripts, and the modules run with `python3 -m`, that commands name."""
+    text = re.sub(r"\$\{?GITHUB_WORKSPACE\}?/", "", text)
+    return (set(_SCRIPT_PATH.findall(text))
+            | {module.replace(".", "/") + ".py" for module in _PYTHON_MODULE.findall(text)})
+
+
+def _resolve_import(path, names):
+    """The file of the first of `names` found beside `path` or at the repository root."""
+    for name in names:
+        for base in (path.rsplit("/", 1)[0] + "/", ""):
+            candidate = base + name.replace(".", "/") + ".py"
+            if Path(runfiles.Create().Rlocation("donner/" + candidate)).is_file():
+                return candidate
+    raise AssertionError("%s imports %s, which is not in this test's data" % (path, names[-1]))
+
+
+def _python_imports(path):
+    """The repository modules a Python script imports.
+
+    Every import outside the standard library must resolve to a file in this test's data, so a
+    new import fails here instead of being skipped.
+    """
+    return {_resolve_import(path, names)
+            for node in ast.walk(ast.parse(_repository_text(path)))
+            for names in _import_choices(node)
+            if names[-1].split(".")[0] not in sys.stdlib_module_names}
+
+
+def _import_choices(node):
+    """For each name an import statement binds, the modules that may provide it, in order."""
+    if isinstance(node, ast.Import):
+        return [[alias.name] for alias in node.names]
+    if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+        return [[node.module + "." + alias.name, node.module] for alias in node.names]
+    return []
 
 
 def _phases_testing_the_selection():
@@ -804,6 +853,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                   for path in arm.split("|")]
         self.assertEqual(sorted(listed), sorted(WORKFLOW_LOGIC_SCRIPTS))
         lane_table = _repository_text("tools/ci/lanes.py")
+        # The workflow with the composite actions it uses, whose steps run in its jobs.
+        workflow = self.main_text + "".join(
+            _repository_text(".github/actions/%s/action.yml" % name) for name in
+            sorted(set(re.findall(r"uses: \./\.github/actions/([\w-]+)$", self.main_text,
+                                  re.MULTILINE))))
         for path in WORKFLOW_LOGIC_SCRIPTS:
             with self.subTest(path=path):
                 if path == "tools/ci/lanes.py":
@@ -814,8 +868,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     # Run by its steps as `python3 <path>`.
                     self.assertIn("run: python3 %s " % path, self.main_text)
                 else:
-                    # A step body that a step or a lane phase runs, kept executable.
-                    self.assertIn(path, self.main_text + lane_table)
+                    # A step body that a step, an action input or a lane phase runs, kept
+                    # executable.
+                    self.assertIn(path, workflow + lane_table)
                     mode = Path(runfiles.Create().Rlocation("donner/" + path)).stat().st_mode
                     self.assertTrue(mode & 0o111, path)
 
@@ -845,10 +900,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
         texts = [self.main, (workflows / "pr_base_change.yml").read_text(encoding="utf-8")]
-        texts += [path.read_text(encoding="utf-8")
-                  for path in sorted((workflows.parent / "actions").glob("*/action.y*ml"))]
-        invoked = {path for text in texts for body in _run_bodies(text)
-                   for path in _SCRIPT_PATH.findall(body)}
+        actions = [path.read_text(encoding="utf-8")
+                   for path in sorted((workflows.parent / "actions").glob("*/action.y*ml"))]
+        commands = [body for text in texts + actions for body in _run_bodies(text)]
+        # An action may run a script named by an input, so a caller can pass its own checkout's.
+        commands += [value for text in actions for value in _action_input_defaults(text)]
+        invoked = {path for command in commands for path in _SCRIPT_PATH.findall(command)}
         # And every script a lane phase runs, which the entry point and its table name.
         invoked |= {path for source in ("tools/ci/lane.py", "tools/ci/lanes.py")
                     for path in _SCRIPT_PATH.findall(_repository_text(source))}
@@ -864,6 +921,56 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(_run_bodies("      - run: tools/a.sh\n        run: |\n          # x\n"
                                      "          tools/b.sh\n      - name: c\n"),
                          ["tools/a.sh", "          tools/b.sh"])
+        self.assertEqual(_action_input_defaults(
+            "name: a\ninputs:\n  script:\n    default: tools/a.sh\nruns:\n  using: composite\n"
+            "  steps:\n    - with:\n        default: tools/b.sh\n"), ["tools/a.sh"])
+        self.assertEqual(_action_input_defaults("inputs:\n  script:\n    default: tools/a.sh\n"),
+                         ["tools/a.sh"])
+
+    def _hosted_editor_runtime_scripts(self):
+        """Every repository script the Editor WASM workflow runs, sources or imports."""
+        actions = [_repository_text(".github/actions/%s/action.yml" % name) for name in sorted(
+            set(re.findall(r"uses: \./\.github/actions/([\w-]+)$", self.editor_wasm,
+                           re.MULTILINE)))]
+        commands = [body for text in [self.editor_wasm, *actions] for body in _run_bodies(text)]
+        commands += [value for text in actions for value in _action_input_defaults(text)]
+        pending, found = _script_references("\n".join(commands)), set()
+        while pending:
+            path = pending.pop()
+            found.add(path)
+            if path.endswith(".py"):
+                pending |= _python_imports(path)
+            else:
+                pending |= _script_references("\n".join(
+                    line for line in _repository_text(path).splitlines()
+                    if not line.lstrip().startswith("#")))
+            pending -= found
+        return found
+
+    def test_every_script_the_hosted_editor_build_runs_selects_full_hosted_coverage(self):
+        """bazel-diff cannot attribute these scripts, so the hosted planner keeps the graph."""
+        scripts = self._hosted_editor_runtime_scripts()
+        # Sourced by the lane script and imported by the evidence collector.
+        self.assertTrue({"tools/ci/lane.sh", "tools/ci/verify_unified_tests.py"} <= scripts,
+                        sorted(scripts))
+        start = self.determine_targets.index("\nhosted_editor_unhashed_input() {\n")
+        end = self.determine_targets.index("\n}\n", start) + len("\n}\n")
+        script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        script += self.determine_targets[start:end]
+        script += self._workflow_logic_function(self._selection_script())
+        start = self.determine_targets.index("\n  has_unhashed_input() {\n")
+        end = self.determine_targets.index("\n  }\n", start) + len("\n  }\n")
+        script += textwrap.dedent(self.determine_targets[start:end])
+        # A workflow-logic change selects full coverage before the hosted early return; the
+        # other two lists select the full hosted graph before any hashing.
+        script += ('for path in "$@"; do\n'
+                   '  is_workflow_logic "$path" || has_unhashed_input <<< "$path" ||'
+                   ' hosted_editor_unhashed_input <<< "$path" || echo "$path"\n'
+                   'done\n')
+        unlisted = "tools/ci/unlisted_hosted_step.sh"
+        result = self._run_script(script, [*sorted(scripts), unlisted])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(unlisted + "\n", result.stdout)
 
     def _run_script(self, text, args, env=None, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1245,6 +1352,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         start = job.index("          should_fallback=false\n")
         end = job.index('          work_dir="$(mktemp -d)"', start)
         script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        # The main workflow's planner; the hosted Editor Wasm mode is pinned by
+        # //tools/ci:determine_targets_tests.
+        script += "selection=standard\n"
         # A full selection still hashes the revision once, so a change that breaks the hashing
         # fails its own pull request; //tools/ci:determine_targets_tests runs the real call.
         script += 'generate_hashes() { echo "self_check=hashed" >> "$GITHUB_OUTPUT"; }\n'
@@ -1265,6 +1375,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             ("build_defs/rules.bzl", full),
             ("build_defs/check_banned_patterns.py", "incremental=true\n"),
             (".github/workflows/pr_base_change.yml", full),
+            # The composite action that pins bazel-diff.
+            (".github/actions/prepare-bazel-diff/action.yml", full),
             (".github/workflows/lint.yml", "incremental=true\n"),
         ):
             with self.subTest(changed_files=changed_files):
@@ -1938,7 +2050,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("graph_test ", build)
         self.assertEqual(1, self._lane_function("graph_test").count("bazelisk test"))
         self.assertNotIn("bazelisk fetch", build)
-        self.assertIn('"${graph_roots[@]}" "$budget_suite"', build)
+        self.assertRegex(build, r' "\$\{graph_roots\[@\]\}"$')
+        # The complete graph includes the budget suite; only a proved browser subset replaces it,
+        # as //tools/ci:editor_wasm_lane_tests pins.
+        self.assertIn('\ngraph_roots+=("$budget_suite")\n', self.editor_wasm_lane)
         self.assertIn("//tools/ci:hosted_editor_wasm_graph", self.editor_wasm_lane)
 
     def test_hosted_graph_requires_both_browser_bridge_link_roots(self):

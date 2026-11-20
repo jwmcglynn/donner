@@ -98,12 +98,73 @@ jobs:
           selfhosted_linux_runner: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           unified_re_canary: ${{ vars.UNIFIED_RE_CANARY }}
 
-  build:
-    # Release candidates come from main. Trusted PRs qualify the affected Wasm graph in CI.
-    if: github.event_name != 'pull_request' || needs.trust.outputs.unified_macos != 'true'
-    runs-on: xcode-27
+  hosted-selection:
+    # This preflight reads the PR loading graph. It receives no cache-write or
+    # deployment credentials, and no verdict can affect runner trust.
+    if: github.event_name == 'pull_request' && needs.trust.outputs.unified_macos != 'true'
     needs: trust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    continue-on-error: true
+    outputs:
+      mode: ${{ steps.determine.outcome == 'success' && steps.determine.outputs.hosted_editor_mode || 'full' }}
+      browser-targets: ${{ steps.determine.outputs.hosted_editor_browser_targets }}
+    steps:
+      - name: Checkout the tested PR merge
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind the planner to the tested merge parent
+        id: planner-ref
+        shell: bash
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          ancestry="$(git rev-list --parents -1 HEAD)"
+          read -r checkout first second extra <<< "$ancestry"
+          [[ "$checkout" == "$GITHUB_SHA" && "$first" =~ ^[0-9a-f]{40}$ && "$second" == "$PR_HEAD" && -z "$extra" ]]
+          echo "revision=$first" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the trusted planner
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.planner-ref.outputs.revision }}
+          path: hosted-planner
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          sparse-checkout: |
+            tools/ci
+            .github/actions/prepare-bazel-diff
+
+      - name: Identify the tested base for the hash cache
+        id: pr-meta
+        shell: bash
+        run: bash hosted-planner/tools/ci/determine_targets.sh pr-meta
+
+      - name: Prepare bazel-diff and restore base hashes
+        if: steps.pr-meta.outputs.identical_tree != 'true'
+        uses: ./hosted-planner/.github/actions/prepare-bazel-diff
+        with:
+          base-sha: ${{ steps.pr-meta.outputs.base_sha }}
+          fetch-script: hosted-planner/tools/ci/fetch_bazel_diff.sh
+
+      - name: Determine affected hosted Editor Wasm targets
+        id: determine
+        shell: bash
+        run: bash hosted-planner/tools/ci/determine_targets.sh determine-hosted-editor
+
+  build:
+    # The hosted fallback runs unless a successful planner proves no input changed.
+    # Main, schedule and dispatch retain the complete release-candidate graph.
+    if: ${{ !cancelled() && needs.trust.result == 'success' && (github.event_name != 'pull_request' || (needs.trust.outputs.unified_macos != 'true' && (needs.hosted-selection.result != 'success' || needs.hosted-selection.outputs.mode != 'unaffected'))) }}
+    runs-on: xcode-27
+    needs: [trust, hosted-selection]
     env:
+      HOSTED_EDITOR_BROWSER_TARGETS: ${{ github.event_name == 'pull_request' && needs.hosted-selection.result == 'success' && needs.hosted-selection.outputs.mode == 'browser_subset' && needs.hosted-selection.outputs.browser-targets || '' }}
       # Free space, in GiB, required after the caches are restored.
       MIN_FREE_DISK_GIB: "45"
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
@@ -197,18 +258,22 @@ jobs:
           python3 tools/ci/editor_wasm_evidence.py "$RUNNER_TEMP/editor-wasm-graph.bep.json" "$RUNNER_TEMP/editor-wasm-browser-evidence" "${args[@]}"
 
       - name: Snapshot the browser-tested release files
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         run: python3 tools/ci/editor_wasm_stage.py snapshot
 
       # Proves the generated MODULE.bazel.lock in error mode and snapshots it before later steps
       # can resolve more modules; the deployment candidate retains that snapshot and its digest.
       - name: Prove the package's resolved module graph
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         run: tools/ci/editor_wasm_lane.sh prove-lockfile "$RUNNER_TEMP/editor-wasm-module.lock"
 
       - name: Stage package for handoff
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         id: stage-package
         run: python3 tools/ci/editor_wasm_stage.py package
 
       - name: Upload Geode package artifact
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-package-geode-${{ github.sha }}
@@ -282,12 +347,14 @@ jobs:
           retention-days: 14
 
       - name: Stage immutable Geode deployment candidate
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         id: stage-candidate
         env:
           PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}
         run: python3 tools/ci/editor_wasm_stage.py candidate
 
       - name: Upload Geode deployment candidate
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         id: upload-candidate
         uses: actions/upload-artifact@v7
         with:
@@ -297,6 +364,7 @@ jobs:
           retention-days: 90
 
       - name: Record deployment candidate digest
+        if: env.HOSTED_EDITOR_BROWSER_TARGETS == ''
         env:
           ARTIFACT_DIGEST: ${{ steps.upload-candidate.outputs.artifact-digest }}
         run: python3 tools/ci/editor_wasm_stage.py record-digest

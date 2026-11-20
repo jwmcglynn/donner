@@ -142,7 +142,7 @@ public:
   void popMask() override;
   [[nodiscard]] bool beginPatternTile(const Box2d& tileRect,
                                       const Transform2d& targetFromPattern) override;
-  void endPatternTile(bool forStroke) override;
+  void endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) override;
   void setPaint(const PaintParams& paint) override;
   void drawPath(const PathShape& path, const StrokeParams& stroke) override;
   void drawRect(const Box2d& rect, const StrokeParams& stroke) override;

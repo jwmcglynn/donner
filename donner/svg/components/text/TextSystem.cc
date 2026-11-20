@@ -361,6 +361,8 @@ bool IsHiddenTextPath(EntityHandle handle) {
          !handle.registry()->any_of<TextRootComponent>(tree->parent());
 }
 
+}  // namespace
+
 bool IsTextHidden(EntityHandle handle, bool parentHidden,
                   const std::vector<RcString>& userLanguages) {
   if (parentHidden || IsHiddenByStyle(handle)) {
@@ -373,6 +375,8 @@ bool IsTextHidden(EntityHandle handle, bool parentHidden,
 
   return IsHiddenTextPath(handle);
 }
+
+namespace {
 
 void TrimLeadingPendingSpace(std::vector<PendingTextSpan>& pendingSpans) {
   for (PendingTextSpan& span : pendingSpans) {

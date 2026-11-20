@@ -1,0 +1,48 @@
+name: Prepare bazel-diff
+description: Prepare the pinned target comparison tool and restore the tested base hash.
+inputs:
+  base-sha:
+    description: Commit whose existing target hash cache may be restored.
+    required: false
+  fetch-script:
+    description: Script that verifies the pinned bazel-diff JAR.
+    default: tools/ci/fetch_bazel_diff.sh
+outputs:
+  cache-hit:
+    description: Whether the exact base hash cache key was restored.
+    value: ${{ steps.base-hashes.outputs.cache-hit }}
+  cache-primary-key:
+    description: The cache key for a trusted main producer.
+    value: ${{ steps.base-hashes.outputs.cache-primary-key }}
+runs:
+  using: composite
+  steps:
+    - name: Setup Java
+      uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: "25"
+
+    - name: Setup Bazel
+      uses: bazel-contrib/setup-bazel@0.19.2
+      with:
+        bazelisk-cache: true
+        repository-cache: true
+        external-cache: true
+        cache-save: false
+
+    - name: Download bazel-diff
+      shell: bash
+      env:
+        BAZEL_DIFF_TAG: "v18.1.0"
+        BAZEL_DIFF_SHA256: "eadec6d0ca0991de78bd9e063bfed993a359ed3bc60e507818077c300b6f58e0"
+        BAZEL_DIFF_FETCH_SCRIPT: ${{ inputs.fetch-script }}
+      run: bash "$BAZEL_DIFF_FETCH_SCRIPT"
+
+    - name: Restore bazel-diff base hashes
+      id: base-hashes
+      if: inputs.base-sha != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/bazel-diff-base-hashes/${{ inputs.base-sha }}.json
+        key: bazel-diff-base-hashes-tt-v18.1.0-${{ inputs.base-sha }}

@@ -233,18 +233,13 @@ bool OwnerTileGeometryUnchanged(const CompositorLayer& layer, const LayerRasterG
          geometry.canvasOffset == layer.canvasOffset();
 }
 
-// True when a paint renders instantiated content of its own, such as a pattern tile.
-bool HasSubtreePaint(const components::ResolvedPaintServer& paint) {
-  const auto* reference = std::get_if<components::PaintResolvedReference>(&paint);
-  return reference != nullptr && reference->subtreeInfo.has_value();
-}
-
 // True when @p instance renders content instantiated after its host entity, past the end of its
-// own range: a mask, markers or a pattern tile.
+// own range: a mask, markers, or pattern tiles, including a text span's own pattern tiles.
 bool RendersAfterItself(const components::RenderingInstanceComponent& instance) {
-  return instance.mask.has_value() || instance.markerStart.has_value() ||
-         instance.markerMid.has_value() || instance.markerEnd.has_value() ||
-         HasSubtreePaint(instance.resolvedFill) || HasSubtreePaint(instance.resolvedStroke);
+  bool rendersContent = instance.mask.has_value() || instance.markerStart.has_value() ||
+                        instance.markerMid.has_value() || instance.markerEnd.has_value();
+  instance.forEachDrawnContent([&](const components::SubtreeInfo&) { rendersContent = true; });
+  return rendersContent;
 }
 
 using EntityRun = std::pair<Entity, Entity>;
