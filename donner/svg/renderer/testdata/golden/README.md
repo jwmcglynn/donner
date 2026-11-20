@@ -455,8 +455,11 @@ Corpus SVG SHA-256: `e65aef72d28ca80b2ad7c3830da8e06a7a50eb685c751525e0450f3ea9c
 
 Reference PNG SHA-256: `9fef8a7afaf51ff396e4a776da3ec65f72f1b3a5c3ed59e55bd4b10d5ca2061f`.
 
-This reference qualifies the full-text CPU rendering path. Geode currently skips
-bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
+This reference qualifies the full-text CPU rendering path. Geode draws the same
+bitmap strikes through its image pipeline. The renderer regression tests compare
+Geode with the CPU renderer at the native strike size, at full and at half span
+opacity, and compare its other scenes with their strikes drawn as images on the
+same renderer.
 The native positioning regression uses an independently authored joined outline
 cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 

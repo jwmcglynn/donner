@@ -290,26 +290,14 @@ Transform2d ComputeDeviceFromBitmapGlyph(const TextGlyph& glyph,
   return text_engine_detail::computeLocalFromBitmapGlyph(glyph, bitmap) * deviceFromLocal;
 }
 
-bool CanRenderTextRun(bool isBitmapFont, float scale) {
-  return isBitmapFont || scale != 0.0f;
-}
-
-std::optional<TextBackend::BitmapGlyph> AdmitBitmapGlyph(
+/// \ref AdmitBitmapGlyph for this renderer, whose draw budget a failed admission also rejects.
+std::optional<TextBackend::BitmapGlyph> AdmitTinyBitmapGlyph(
     TextEngine& textEngine, FontHandle font, int glyphIndex, float scale,
     RendererTextMaterializationBudget& materializationBudget, RendererDrawBudget& drawBudget) {
-  const auto metrics = textEngine.bitmapGlyphMetrics(font, glyphIndex, scale);
-  if (!metrics) {
-    return std::nullopt;
-  }
-  const std::size_t bytes = metrics->rgbaBytes;
-  if (bytes > std::numeric_limits<std::size_t>::max() / 2u ||
-      !materializationBudget.reserve({.uniqueOutlines = 1, .bytes = bytes * 2u})) {
-    drawBudget.reject();
-    return std::nullopt;
-  }
-  auto bitmap = textEngine.bitmapGlyph(font, glyphIndex, scale, *metrics, bytes);
-  if (!bitmap) {
-    materializationBudget.reject();
+  bool rejected = false;
+  auto bitmap =
+      AdmitBitmapGlyph(textEngine, font, glyphIndex, scale, materializationBudget, rejected);
+  if (rejected) {
     drawBudget.reject();
   }
   return bitmap;
@@ -3671,8 +3659,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = AdmitBitmapGlyph(textEngine, face.font, glyph.glyphIndex, face.scale,
-                                       *textMaterializationBudget_, *drawBudget_);
+        auto bitmap = AdmitTinyBitmapGlyph(textEngine, face.font, glyph.glyphIndex, face.scale,
+                                           *textMaterializationBudget_, *drawBudget_);
         if (drawBudget_->rejected()) {
           return;
         }

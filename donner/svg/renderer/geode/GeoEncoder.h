@@ -522,6 +522,19 @@ public:
   void drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
                  svg::ImageRendering imageRendering);
 
+  /**
+   * Draw a raster whose RGBA8 pixels are already premultiplied, such as a decoded color glyph,
+   * exactly as \ref drawImage draws a straight-alpha image: the pixels are uploaded to a fresh
+   * GPU texture without conversion.
+   *
+   * @param image Premultiplied RGBA8 image. No-op if empty or zero-size.
+   * @param destRect Destination rectangle in local (pre-transform) space.
+   * @param opacity Overall opacity in [0, 1].
+   * @param imageRendering Resolved smooth, crisp, or two-stage pixelated sampling policy.
+   */
+  void drawPremultipliedImage(const svg::ImageResource& image, const Box2d& destRect,
+                              double opacity, svg::ImageRendering imageRendering);
+
   /// Source-compatible legacy overload. New callers pass the resolved image-rendering enum.
   void drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
                  bool pixelated) {

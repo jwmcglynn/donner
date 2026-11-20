@@ -85,6 +85,7 @@ CBDT/CBLC color bitmap emoji support via FreeType. Enabled by adding libpng to t
 via `single_version_override` patches. Key components:
 - FontManager accepts bitmap-only fonts (no glyf table)
 - TextShaper extracts BGRA bitmaps via `FT_Load_Glyph(FT_LOAD_COLOR)`
-- RendererTinySkia renders bitmaps as scaled images via `drawPixmap`
+- RendererTinySkia renders bitmaps as scaled images via `drawPixmap`; RendererGeode draws them
+  as textured quads through its image pipeline
 - UTF-16 code unit indexing for per-character coordinate lists (matching SVG DOM)
 - Low surrogate coordinate consumption for supplementary characters
