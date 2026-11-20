@@ -42,6 +42,7 @@ donner_cc_library(
         "//donner/base/parser:line_offsets",
         "//donner/base/xml/components",
     ],
+    variant_neutral = True,
 )
 
 #

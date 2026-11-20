@@ -38,6 +38,7 @@ donner_cc_library(
         "//donner/base/parser",
         "//donner/css:core",
     ],
+    variant_neutral = True,
 )
 
 donner_cc_test(

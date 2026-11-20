@@ -112,6 +112,7 @@ donner_cc_library(
         "//donner/svg/components/animation:components",
         "//donner/svg/core",
     ],
+    variant_neutral = True,
 )
 
 donner_cc_test(

@@ -49,6 +49,7 @@ donner_cc_library(
         "@entt",
     ],
     alwayslink = True,  # link-order independence (#665)
+    variant_neutral = True,
 )
 
 # Per-frame attribution of ASYNCIFY suspend cost (single-canvas presenter architecture). Lives in
