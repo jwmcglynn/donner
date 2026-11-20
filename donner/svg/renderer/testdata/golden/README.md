@@ -949,53 +949,175 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*drop_shadow_function*'
 ```
 
-## Upright Latin outline reference
+## Donner renderings of disputed rows
 
-`text/glyph-orientation-vertical/simple-case.svg` uses the SVG 2 alias
-`glyph-orientation-vertical="0"` for upright text. Donner implements that alias. Google Chrome
-158.0.8127.37 and Firefox 157 ignore it, so the browser control used `text-orientation: upright`
-with the same vendored Noto Sans face at 32 user units. Chrome's glyph centroids were within a
-device pixel of the historical PNG. Firefox used the same 43.60-user-unit advance and a higher
-synthesized origin. CSS Writing Modes leaves the origin to the user agent for faces without
-vertical metrics.
+Each golden below is a Donner rendering of the unchanged corpus file, at the size of its vendored
+reference, written by the resvg suite harness with the software (TinySkia) backend and simple text
+at default settings, from the code of the change that adds it. Every lane that runs a row compares
+it at default settings (0.02 threshold, 100 pixels): the simple and full text tiers, and Geode for
+the rows outside `text/`, whose differences are listed per row. A self-rendered golden cannot prove
+itself correct, so each row states the normative text or harness condition that decides it, what
+the vendored PNG gets wrong or was made under, and an independent contract test that does not
+read the golden or the corpus file.
 
-The Noto Sans face has no `vmtx` or `VORG`. The control starts at y=30 and adds the scaled
-`hhea` ascent (1,069/1,000 em). Each letter advances by the `OS/2` typographic height (1,362/1,000
-em), giving four baselines at 64.208, 107.792, 151.376, and 194.960. Each letter is a separate
-horizontal text element with `x="100"`, `text-anchor="middle"`, and kerning disabled.
-usvg 0.49.0 converts those four letters to outlines using the corpus font. The expected SVG
-substitutes only those outlines. The crosshairs and frame are the original vector elements.
-
-At 500 × 500 the updated renderer differs from the historical PNG by 733 pixels in each CPU
-tier. Of these, 731 are on the crosshairs. At x=120 the PNG's stroke covers three rows with alpha
-32, 255, 32, while the current render covers two with alpha 128, 192. Stable Chrome also covers
-two rows. The outlined reference gives zero differences on both tiers at the default 0.02
-threshold and 100-pixel limit. It tests the full scene, including the strokes.
-
-| Input or output | SHA-256 |
-| --- | --- |
-| Corpus SVG | `fdfb95427efee7325fcef8f2a19949486bb1ba12b3b8adacc34965d508451240` |
-| Corpus PNG | `37a4b1991f55b498519f2b8dc06ea995d2f3bb5541b3c01b728a0a45a7b8f240` |
-| corpus Noto Sans Regular | `6b04c8dd65af6b73eb4279472ed1580b29102d6496a377340e80a40cdb3b22c9` |
-| `donner-upright-latin-outline.svg` | `8fb7c58c23e1c32899dbe610171d9d91a23106fbaf41e0ba0c3071d3d6c38693` |
-| `donner-upright-latin-outline.png` | `33bd0044926d60bbf4bb03dd2423d599e9141e6c62a9d4ebb436e2a3d072e766` |
-
-The checked-in outline SVG is the input for PNG regeneration:
+To regenerate one, delete its PNG and run this from the repository root, with the filter naming
+the row (for example `*FiltersFilter*invalid_FuncIRI*`):
 
 ```sh
-bazel run //donner/svg/tool:donner-cli -- \
-  donner/svg/renderer/testdata/golden/donner-upright-latin-outline.svg \
-  --width 500 --height 500 --output donner/svg/renderer/testdata/golden/donner-upright-latin-outline.png
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*<Suite>*<case_with_underscores>*'
 ```
+
+### `filters/filter/invalid-FuncIRI`
+
+`donner-invalid-FuncIRI.png` (500x500). The rect's `filter="url(#filter1)"` names an element that
+does not exist. Filter Effects 1, section 5 (the `filter` property, `<url>` entry), says that for a
+reference to a non-existent object or to an element that is not a `filter`, "the whole filter
+chain is ignored. No filter is applied to the object." The rect therefore draws unfiltered. The
+vendored PNG hides it: the 160x160 square is fully transparent, and only the frame is drawn. The
+corpus paints the rect red, its usual failure color, yet the specification requires it to be
+visible, so the golden shows a red square. The suite's results.csv records Chrome, Firefox and
+Safari as passing the hidden-rect PNG; those are visual grades of the vendored image, and the
+Filter Effects text above decides the row. Geode differs from the golden by 0 pixels.
+
+Independent evidence: `FilterReferenceStages.InvalidReferenceDisablesEntireChain` renders a red
+rect under `url(#missing)` and four mixed chains and requires each to match the same rect drawn
+without a filter.
+
+### `filters/filter-functions/one-invalid-url-in-list`
+
+`donner-one-invalid-url-in-list.png` (500x500). The list `grayscale(0.5) url(#missing)
+opacity(0.5)` contains a reference to a missing element, so by the same Filter Effects 1 section 5
+rule ("the whole filter chain is ignored") no filter function in the list applies, and the square
+keeps its opaque seagreen (46, 139, 87). The vendored PNG applies the functions around the missing
+reference: its square is (80, 126, 100) at alpha 127. The suite's results.csv records Chrome as
+passing that PNG and Firefox and Safari as failing it; the specification text decides the row.
+Geode differs from the golden by 0 pixels.
+
+Independent evidence: `FilterReferenceStages.InvalidReferenceDisablesEntireChain` (including
+`opacity(0.25) url(#missing) invert(1)`) and `InvalidReferenceLeavesGroupChildrenVisible`.
+
+### `filters/filter-functions/url-and-grayscale`
+
+`donner-url-and-grayscale.png` (500x500). The chain is a blur from a `filter` element followed by
+`grayscale()`. Filter Effects 1, section 5, says that `color-interpolation-filters` has no effect
+on filter functions, which "must operate in the sRGB color space". grayscale() of seagreen in sRGB
+is 0.2126 x 46 + 0.7152 x 139 + 0.0722 x 87 = 115.47, and the golden's interior is 115. The
+vendored PNG's interior is 122, the result of applying the function to linearRGB values. The
+suite's results.csv records Chrome and Firefox as passing that PNG and Safari as failing it; a
+visual grade cannot tell 115 from 122, and the specification text decides the row. Geode differs
+from the golden by 0 pixels.
+
+Independent evidence: `RendererRegressionTests.CssFilterContractMixedUrlGrayscaleUsesSrgb`
+requires `url(#identity) grayscale()` over seagreen to equal a solid rgb(115 115 115) rect.
+
+### `masking/clipPath/circle-shorthand-with-stroke-box` and `circle-shorthand-with-view-box`
+
+`donner-circle-shorthand-with-stroke-box.png` and `donner-circle-shorthand-with-view-box.png`
+(500x500). Disposition: harness mismatch. Both vendored PNGs are opaque white (no pixel has alpha
+below 255), while the suite renders on a transparent canvas, so the comparisons differ by 147,190
+(`stroke-box`) and 88,392 (`view-box`) pixels, nearly all of them background. The geometry is the
+same: flattened onto white, no pixel of either golden is more than 46 levels from the vendored
+PNG. With `stroke-box`, `circle()` takes the
+closest side of the 140-unit stroke box of the 120-unit rect with a 20-unit stroke, a circle of
+radius 70 at (100, 100); with `view-box` it takes the 200-unit viewBox, radius 100. Geode differs
+from each golden by 0 pixels.
+
+Independent evidence: `CircleClipPath.DefaultAndStrokeBoxIncludeStrokeGeometry` and
+`CircleClipPath.ViewBoxUsesNearestSvgViewport` compare each clip with an explicit `<circle>` clip
+path of the expected radius.
+
+### `structure/svg/no-size`
+
+`donner-no-size.png` (500x500). Disposition: API policy. The root `svg` has no `width`, `height`
+or `viewBox`, so it has no intrinsic size (SVG 2 section 8.12), and SVG 2 leaves the initial
+viewport of such a document to its host. Donner's API gives it the caller's canvas, here the
+suite's 500x500, at one user unit per px (section 8.4): the 160-unit green square covers device
+(20, 20) to (180, 180) inside the 198-unit frame, and the rest of the canvas is transparent. The
+vendored PNG was made with a different host viewport: it shows the same artwork in a 200-unit
+viewport scaled 2.5 times, the suite's usual scale, with the origin kept (pixel 0 transparent,
+the frame from about device px 1, the square from px 50 to 450). Both follow the specification;
+they differ in the initial viewport the host supplies. The suite's results.csv records Chrome,
+Firefox, Safari and resvg as passing the PNG. Geode differs from the golden by 7 pixels.
+
+Independent evidence, which asserts Donner's API contract:
+`RendererRegressionTests.ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit` requires
+an unsized root rendered on a caller canvas to match the same rect drawn at its user-unit
+position, with transparent pixels outside it.
+
+### `structure/use/xlink-to-an-external-file`
+
+`donner-xlink-to-an-external-file.png` (500x500). Disposition: harness mismatch plus reference
+glyph rasterization. The `use` references `#text1` in `resources/simple-text.svg`, a `text`
+element whose own document sets Arial at 64 units on its root. The referenced element is cloned
+without its ancestors, so it inherits `fill="green"`, Noto Sans and 64 units from the `use`. The
+vendored PNG draws the same text but is opaque white (no pixel has alpha below 255), while the
+suite renders on a transparent canvas, so the comparison differs by 232,379 pixels, nearly all of
+them background. Flattened onto white, the golden still differs from the PNG by more than 5 levels
+on 2,117 pixels (at most 216 levels), all of them on the glyphs: the centroids of the three glyph
+clusters (`T`, `ex`, `t`) agree within 0.35 device px, but the PNG's glyph ink is about 5.6%
+heavier, consistent with stems about 0.6 device px wider. That residual is the reference's glyph
+rasterization, not glyph placement. Geode differs from the golden by 0 pixels.
+
+Independent evidence:
+`RendererPublicApiTest.ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas` requires a
+`use` of an external `text` fragment to take the host's fill and font size, ignore the external
+document's root styles, keep the canvas transparent, and match the same text written inline.
+
+### `text/font/simple-case`
+
+`donner-font-simple-case.png` (400x400, the size of the vendored PNG). The `text` sets only
+`font="bold italic 64 Noto Sans"`. SVG 2 section 6.6 lists the presentation attributes, and the
+`font` shorthand is not among them, so the attribute is ignored and the text draws in the initial
+font: the initial `font-family`, `serif`, which the suite harness maps to Noto Serif, at the initial
+font size. The vendored PNG applies the attribute as SVG 1.1 did and draws bold italic Noto Sans
+at 64 units. Geode does not run `text/` rows.
+
+Independent evidence: `RendererRegressionTests.ReferenceContractFontAttributeIsIgnored` requires
+text with a `font` attribute to match the same text without it.
+
+### `text/textPath/writing-mode=tb`
+
+`donner-textPath-writing-mode-tb.png` (300x300, the size of the vendored PNG). Upright Mplus 1p
+ideographs and kana on a curved path at 24 units. CSS Writing Modes 3 section 5.1.1 requires upright
+glyphs to use the font's vertical metrics, and Mplus 1p has `vhea` and `vmtx`: every glyph here
+advances 1000 units and has its vertical origin 860 units below the top of its cell. SVG 2 section
+11.8.3 (text on a path layout rules) places each glyph on the path by that vertical advance. The
+vendored PNG puts upright glyphs elsewhere; it differs from Donner by 219 pixels (simple text) and
+221 (full text). Both text tiers compare with the golden at default settings; Geode does not run
+`text/` rows.
+
+Independent evidence: `VerticalTextPathPrecision.CurvedCjkUsesIndependentArcFrames` renders this
+path and text and requires it to match each glyph drawn as horizontal text in an independently
+computed frame on the curve, after checking the 1000-unit advances and 860-unit origins in the
+font's tables, and `TextPathConvergence.UprightCjkUsesFontVerticalOriginsOnPathsAndInFlatText`
+requires upright text on a straight path to match the vmtx placement.
+
+| Golden | PNG SHA-256 |
+| --- | --- |
+| `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` |
+| `donner-one-invalid-url-in-list.png` | `383d16d1523001752ac353ce8875e1b900a1efa3561eb95fab9fb1d7a0ad598a` |
+| `donner-url-and-grayscale.png` | `934860bcb56d1f714c9aa5137ff13c52280258c9b9c5bf91ced54ed974db60b6` |
+| `donner-circle-shorthand-with-stroke-box.png` | `5bddc6ef292d0970c3571dead6e4d6a7b9588329d86183c633a7632f9915c3a3` |
+| `donner-circle-shorthand-with-view-box.png` | `bc60330d7e98ea0a01d40667ba2802d78b9a89e297d555431cffb11ac2fef1c3` |
+| `donner-no-size.png` | `d999792b03ca8bb92b6bf440e030ea9f2b1ff803c0bd1567e34ebf45844c9d2a` |
+| `donner-xlink-to-an-external-file.png` | `400dc754087e84efd15a428ad9671bcc34f808eccd147cb59231bd4bcba41565` |
+| `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` |
+| `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` |
 
 ## Donner-rendered references
 
-The references below are Donner renderings. Each replaces a vendored reference that encodes a
-renderer's own model where browsers measurably agree with Donner instead; a self-rendered golden
-guards against regressions but does not prove correctness, so each entry names the independent
-evidence. Each was rendered by the full text tier with the basic (TinySkia) backend from the code of
-the change that added it, regenerates byte for byte from that code with the command below, and
-compares at default parameters.
+The references below are Donner renderings of vertical text. Each replaces a vendored reference
+that does not follow CSS Writing Modes 3 section 5.1.1, which requires upright glyphs to use the
+font's vertical metrics and vertical font features ("the OpenType vert feature must be enabled").
+A self-rendered golden guards against regressions but does not prove correctness, so each entry
+names the independent evidence: the font's own tables, the contract test
+`TextPathConvergence.UprightCjkUsesFontVerticalOriginsOnPathsAndInFlatText` (upright Mplus 1p
+glyphs at their vmtx origins and 1000-unit advances, compared with horizontal text placed from
+those numbers alone), and browser measurements where they were taken. Each was rendered by the
+full text tier with the basic (TinySkia) backend from the code of the change that added it,
+regenerates byte for byte from that code with the command below, and compares at default
+parameters.
 
 To regenerate one, delete its PNG and run from the repository root (the fixture writes a missing
 golden):
@@ -1007,51 +1129,10 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 
 | Case | Why the vendored reference is not used | SVG SHA-256 | PNG SHA-256 |
 | ---- | -------------------------------------- | ----------- | ----------- |
-| `text/writing-mode/japanese-with-tb` | Upright U+65E5 and U+672C in Mplus 1p at 64 user units. Blink (OpenTypeVerticalData::GetVerticalTranslationsForGlyphs) and Gecko (gfxHarfBuzzShaper::GetGlyphVOrigin) take the upright vertical origin from VORG, then from the vmtx top side bearing over the glyph top, and only then synthesize one, and CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics. Mplus 1p has vhea and vmtx, with a vertical origin of 860 units for every glyph here; resvg ignores vmtx and centers the glyph on the hhea ascent and descent, as the vendored PNG does. Against the vendored PNG Donner's two glyphs sit 5.63 and 5.58 device px higher (5801 px differ); Chrome 156 with the font applied places them 5.83 and 5.66 px higher, within 0.25 px of Donner, so the browser measurement clearly favors Donner. Caveat: the corpus file writes font-family="Mplus 1p" unquoted, which is invalid CSS because of the 1p token, so browsers fall back to a default font, and the corpus results' browser passes for this row reflect that fallback; the Chrome measurement used a copy that differs only by quoting the family name. | `a7cc22f6a69b9cf4c4025372bbd0bf167f6d9a31c31e515db0375f30521f020f` | `f750e889461dea59c46ceb3945aac85f06ff5baa312ad7fb5b9300dc5e291812` |
-| `text/writing-mode/mixed-languages-with-tb` | Upright U+65E5 and U+672C in Mplus 1p, sideways Latin and Arabic, at 20 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics for upright glyphs; Mplus 1p has vhea and vmtx, with a vertical origin of 860 units, which Blink and Gecko take from VORG and then from vmtx, as Donner does. resvg centers upright glyphs on the hhea ascent and descent instead, and the vendored PNG sets both upright glyphs 0.35 to 0.5 device px lower than Donner. Horizontal stroke centers in device px, top to bottom, measured from renders with the corpus fonts loaded through @font-face in headless Chromium 151 and Firefox 153: U+65E5 at 45.43, 55.75 and 66.75 in Donner, 45.49, 55.58 and 66.68 in Firefox, 46.50, 56.50 and 67.74 in Chromium (on whole pixel rows) and 45.79, 56.25 and 67.25 in the vendored PNG; U+672C at 79.00 and 93.39 in Donner, 79.09 and 93.46 in Firefox, 79.09 and 93.45 in Chromium and 79.39 and 93.74 in the vendored PNG. The sideways Latin and Arabic match the vendored PNG within 0.15 px, and all 108 px that differ from it lie on the two upright glyphs. The corpus results mark Chrome, Firefox and resvg as passing and Safari as failing this row. | `3bacf63bdeb8b168a8ca061984e529b6a12d03f8cfa8c163fdbf8a1e92265544` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` |
-| `text/writing-mode/tb-and-punctuation` | Mplus 1p kana, ideographs and vertical punctuation forms at 16 user units. Blink (OpenTypeVerticalData::GetVerticalTranslationsForGlyphs) and Gecko (gfxHarfBuzzShaper::GetGlyphVOrigin) take the upright vertical origin from VORG, then from the vmtx top side bearing over the glyph top, and only then synthesize one, and CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics. Mplus 1p has vhea and vmtx, with a vertical origin of 860 units for every glyph here; resvg ignores vmtx and centers the glyph on the hhea ascent and descent, as the vendored PNG does. Donner and Chrome 156 both place the vertical comma and full stop forms (U+3001, U+3002) about 14 device px right of the vendored PNG, in the upper right of their cells, and agree within 0.4 px on all 12 ink clusters, which sit up to 1.65 px above the PNG; the punctuation forms clearly favor Donner. 228 px differ. The corpus results mark Chrome and Firefox as passing and Safari and resvg as failing this row. | `100f4e24b2fd7013e554303f71b9b63199789863e81e86f8b046f340c6e34028` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` |
-| `text/alignment-baseline/hanging-on-vertical` | alignment-baseline: hanging in vertical text. resvg does not apply alignment-baseline in vertical layout, so the vendored PNG shows the default central baseline and wider spacing. Donner and Chrome 156 both apply the hanging baseline and agree within 1.1 device px on all 7 ink clusters, which sit 1.1 to 46 px from the PNG along the column when matched in reading order (1.1 and 21.9 px for the two upright glyphs, 44 to 46 px for the five sideways letters), so the browser measurement clearly favors Donner. The upright U+65E5 and U+672C sit at Mplus 1p's vmtx origin; the sideways "Japan" is rotated onto the hanging baseline and has no vertical origin of its own. The corpus results mark Chrome and Safari as passing and Firefox and resvg as failing. The simple text tier differs from this full-tier rendering by 10 px. | `cb9c38a6b0542998f1be4ff2efbc14cd39eb656f4e29547542d65bebca6378d6` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
-
-## Mixed vertical underline outline reference
-
-`text/writing-mode/mixed-languages-with-tb-and-underline.svg` uses Amiri for Latin and joined
-Arabic, and Mplus 1p for the upright ideograph. The historical PNG differs by 1,331 pixels,
-including 929 at the underline. CSS Text Decoration leaves the underline position and
-thickness to the user agent under `auto`. Firefox 157 covers columns 210–211 on the 500 × 500
-canvas. Google Chrome 158.0.8127.37 covers 219–223 with either its fallback or the corpus Mplus
-face. The historical mask covers 204–207.
-
-The control derives the column from design-unit advances. At a font size of 20, HarfBuzz shapes
-the sideways Latin segment with its two spaces to 35.87890625 units, and the joined Arabic segment
-to 37.197265625. The CJK cell advances 20 units and takes the Mplus `vmtx` origin of 860/1,000 em.
-Centering the total 93.076171875-unit advance at y=100 puts the column start at 53.4619140625.
-The sideways runs use the alphabetic baseline at x=95.1171875 from Amiri's `hhea` ascent and
-descent (2,300 and -1,300 at 2,048 units per em). The Latin outlines start after the 600-design-unit
-leading space. The Arabic is shaped as one horizontal right-to-left word and rotated clockwise
-onto the same baseline.
-
-Amiri's `post` offset is -1,151 units and its thickness is 102 units. These give the underline
-rectangle x=83.37890625 and width 0.99609375 in the reference SVG. Its three device-pixel
-columns have alpha 141, 255, and 239. Both the underline and the outlines are vector geometry.
-usvg 0.49.0 supplies the glyph outlines from the isolated horizontal text runs, and the
-crosshairs and frame use the original SVG vectors. The full-text tier matches the entire
-control with zero differences at the default threshold and limit.
-
-| Input or output | SHA-256 |
-| --- | --- |
-| Corpus SVG | `81570913183763bb689de8434401842ededea3b6506d6ee6d11b181cb77b91f5` |
-| Corpus PNG | `2fa7d4e007f88ff94e8c7319559032b3c3d5f0a163c0a8dfee3fbc270491c01e` |
-| Amiri Regular | `f3615b08cc3d78409474c28ed7c9e0fb5cc42435e12080a385e1a4163ab46708` |
-| Mplus 1p Regular | `c6a5f15dcbce870497c580de7fa578a75eb8846d2b5603a65eb8fb69ab949892` |
-| `donner-mixed-vertical-underline-outline.svg` | `6f5a23b713f46bd9f2f3829cc21c63b5c225b0d281035dbca84bee514e0c3596` |
-| `donner-mixed-vertical-underline-outline.png` | `129d7b96a7fcf32aef0a41ff74fd5dd8c62033fe9650bd4423bf96fc328db238` |
-
-```sh
-bazel run //donner/svg/tool:donner-cli -- \
-  donner/svg/renderer/testdata/golden/donner-mixed-vertical-underline-outline.svg \
-  --width 500 --height 500 \
-  --output donner/svg/renderer/testdata/golden/donner-mixed-vertical-underline-outline.png
-```
+| `text/writing-mode/japanese-with-tb` | Upright U+65E5 and U+672C in Mplus 1p at 64 user units (160 device px per em). Mplus 1p has vhea and vmtx: both glyphs advance 1000 units, and each glyph's top side bearing plus its yMax puts the vertical origin 860 units below the top of its cell, so the ink tops belong at device y 88.92 and 241.88; Donner's glyph ink starts on rows 89 and 242. The vendored PNG sets the glyphs 5.55 and 5.70 device px lower (best-fit translation of each glyph's ink), about 35 units. That placement follows neither the font's vertical metrics nor an origin centered on the hhea ascent and descent, which at 877.5 units would put the glyphs only 2.8 px lower. Caveat: the corpus file writes font-family="Mplus 1p" unquoted, which is invalid CSS because of the 1p token, so browsers fall back to a default font, and the corpus results' browser passes for this row reflect that fallback; Chrome 156, given a copy that differs only by quoting the family name, places the glyphs within 0.25 px of Donner. | `a7cc22f6a69b9cf4c4025372bbd0bf167f6d9a31c31e515db0375f30521f020f` | `f750e889461dea59c46ceb3945aac85f06ff5baa312ad7fb5b9300dc5e291812` |
+| `text/writing-mode/mixed-languages-with-tb` | Upright U+65E5 and U+672C in Mplus 1p, sideways Latin and Arabic, at 20 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the font's vertical metrics for upright glyphs; Mplus 1p has vhea and vmtx, with a vertical origin of 860 units, which Donner uses (Blink and Gecko also take the origin from VORG and then from vmtx). The vendored PNG sets both upright glyphs 0.35 to 0.5 device px lower than Donner. Horizontal stroke centers in device px, top to bottom, measured from renders with the corpus fonts loaded through @font-face in headless Chromium 151 and Firefox 153: U+65E5 at 45.43, 55.75 and 66.75 in Donner, 45.49, 55.58 and 66.68 in Firefox, 46.50, 56.50 and 67.74 in Chromium (on whole pixel rows) and 45.79, 56.25 and 67.25 in the vendored PNG; U+672C at 79.00 and 93.39 in Donner, 79.09 and 93.46 in Firefox, 79.09 and 93.45 in Chromium and 79.39 and 93.74 in the vendored PNG. The sideways Latin and Arabic match the vendored PNG within 0.15 px, and all 108 px that differ from it lie on the two upright glyphs. The corpus results mark Chrome, Firefox and resvg as passing and Safari as failing this row. | `3bacf63bdeb8b168a8ca061984e529b6a12d03f8cfa8c163fdbf8a1e92265544` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` |
+| `text/writing-mode/tb-and-punctuation` | Mplus 1p kana, ideographs and the punctuation U+3001 and U+3002 at 16 user units on the row's 300x300 canvas. CSS Writing Modes 3 section 5.1.1 requires the vertical font features for upright typesetting, naming the OpenType vert feature, and the vertical metrics. Donner shapes vertical runs with vert enabled and draws the comma and full stop vertical forms upright, right of the column's center (ink centers at device x 157.5 and 156.9, column center x 150). The vendored PNG has no vert forms: it sets the comma sideways, its horizontal form rotated a quarter turn (its stroke runs from lower left to upper right, where the upright form runs from upper left to lower right), and both marks sit left of the center (x 142.8 and 142.7), 14.7 and 14.1 px from Donner's. Its other 10 ink clusters agree with Donner within 0.75 device px. Chrome 156 places the punctuation forms where Donner does and agrees with it within 0.4 px on all 12 ink clusters. 228 px differ. The corpus results mark Chrome and Firefox as passing and Safari and resvg as failing this row. | `100f4e24b2fd7013e554303f71b9b63199789863e81e86f8b046f340c6e34028` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` |
+| `text/alignment-baseline/hanging-on-vertical` | alignment-baseline: hanging in vertical text, upright U+65E5 and U+672C then sideways "Japan" in Mplus 1p at 24 user units (60 device px per em). The vendored PNG applies the same cross-axis hanging shift as Donner: matched in reading order, the horizontal centers of all 7 ink clusters agree within 0.65 device px. The difference is along the column. The PNG advances the upright U+65E5 by about 1.39 em (83.1 device px to U+672C), where the font's vmtx advance is 1000 units, 1 em; Donner advances 59.9 px. So U+672C sits 23.1 px and the sideways letters about 45 px further down in the PNG, while the letters' own advances agree within 0.6 px. CSS Writing Modes 3 section 5.1.1 requires the vertical metrics for upright glyphs, and the contract test above checks the 1000-unit advance. Chrome 156 also applies the hanging baseline and agrees with Donner within 1.1 device px on all 7 ink clusters. The simple text tier differs from this full-tier rendering by 10 px. | `cb9c38a6b0542998f1be4ff2efbc14cd39eb656f4e29547542d65bebca6378d6` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
 
 ## Explicit tile geometry for nested and skewed patterns
 
@@ -1280,6 +1361,8 @@ regenerates or adds a golden.
 
 | Golden | SHA-256 | Provenance |
 | --- | --- | --- |
+| `donner-circle-shorthand-with-stroke-box.png` | `5bddc6ef292d0970c3571dead6e4d6a7b9588329d86183c633a7632f9915c3a3` | Donner renderings of disputed rows |
+| `donner-circle-shorthand-with-view-box.png` | `bc60330d7e98ea0a01d40667ba2802d78b9a89e297d555431cffb11ac2fef1c3` | Donner renderings of disputed rows |
 | `donner-color-adjust-functions-0percent.png` | `19d961480ad25de50d2e253e7a63651161165ccb34c85dc8094e1eef6e1829b3` | Color-adjust filter references |
 | `donner-color-adjust-functions-100percent.png` | `f8a411299bd564da61e553a8d64b5f6fec46e80b807211b9ba526e42220823b6` | Color-adjust filter references |
 | `donner-color-adjust-functions-200percent.png` | `e2a347ec867dba320fff3ec1b5eb375c2a83fcf9e38a0be6357533ec2a95fdef` | Color-adjust filter references |
@@ -1291,13 +1374,18 @@ regenerates or adds a golden.
 | `donner-drop-shadow-function-mm-values.png` | `044fe3cb0fe0176ab7dcbe86831dd49998e68e55d0b77143c2a4ce5a4b04aa3f` | `filters/filter-functions/drop-shadow-function*` |
 | `donner-drop-shadow-function.png` | `b5f628d66da78e36f887fedd444eeb9bcd0111b0d62a01ba79ceed9f53405c3c` | `filters/filter-functions/drop-shadow-function*` |
 | `donner-feColorMatrix-identity.png` | `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916` | `filters/feColorMatrix` identity rows |
-| `donner-mixed-vertical-underline-outline.png` | `129d7b96a7fcf32aef0a41ff74fd5dd8c62033fe9650bd4423bf96fc328db238` | Mixed vertical underline outline reference |
+| `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` | Donner renderings of disputed rows |
+| `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` | Donner renderings of disputed rows |
 | `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
 | `donner-named-value.png` | `52f758743a31018c94d2b16df37bdd4e8cf5c1b59237358a18c5f8e5f6234c12` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
+| `donner-no-size.png` | `d999792b03ca8bb92b6bf440e030ea9f2b1ff803c0bd1567e34ebf45844c9d2a` | Donner renderings of disputed rows |
+| `donner-one-invalid-url-in-list.png` | `383d16d1523001752ac353ce8875e1b900a1efa3561eb95fab9fb1d7a0ad598a` | Donner renderings of disputed rows |
 | `donner-pattern-recursive-on-child.png` | `52f05db1cdf008bd95245a6c635bf7101858f885d200f45193905332721c2d65` | Donner renderings of recursive pattern references |
 | `donner-pattern-self-recursive.png` | `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17` | Donner renderings of recursive pattern references |
 | `donner-textPath-with-path.png` | `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7` | `text/textPath/with-path` and `with-path-and-xlink-href` |
-| `donner-upright-latin-outline.png` | `33bd0044926d60bbf4bb03dd2423d599e9141e6c62a9d4ebb436e2a3d072e766` | Upright Latin outline reference |
+| `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` | Donner renderings of disputed rows |
+| `donner-url-and-grayscale.png` | `934860bcb56d1f714c9aa5137ff13c52280258c9b9c5bf91ced54ed974db60b6` | Donner renderings of disputed rows |
+| `donner-xlink-to-an-external-file.png` | `400dc754087e84efd15a428ad9671bcc34f808eccd147cb59231bd4bcba41565` | Donner renderings of disputed rows |
 | `firefox-double-subregion-blur.png` | `49abff60095a6ebdddfb20edb4a7d842dd7a8efba295c6cf0a625a8764d451d9` | Gaussian blur primitive subregions |
 | `firefox-stroke-linear-gradient-on-text.png` | `24b2bc34651ec46cdee7e49450e832916b1f0666bbb5cd20e3b543f93f55fdd4` | Gradient strokes on text |
 | `firefox-stroke-radial-gradient-on-text.png` | `40695b1c5ff590b5367bd645e62dedb9855d4a3a8a7c1bafed16f424fb73dfd1` | Gradient strokes on text |

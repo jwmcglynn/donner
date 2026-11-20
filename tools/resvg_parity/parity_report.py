@@ -1157,14 +1157,34 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
 
 UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
 
-# `Params::UndefinedBehavior` cases whose vendored reference is not the resvg UB marker image. Each
-# entry must be behavior the specification leaves undefined or implementation-defined.
-SPEC_UB_ALLOWLIST = {
+# `Params::UndefinedBehavior` cases whose vendored reference is not the resvg UB marker image, each
+# mapped to its policy classification and the specification text that leaves the behavior
+# undefined or implementation-defined.
+SPEC_UB_ALLOWLIST: Mapping[str, tuple[str, str, str]] = {
     # Filter Effects defines an exact Gaussian but no bound on stdDeviation. stdDeviation=1000 is
     # 2500 device pixels; every renderer clamps it to an implementation-defined resource limit
     # (Donner: kMaximumFilterPixelRadius), so the reference records resvg's clamp, not a result
     # the specification determines. The upstream test asserts only that rendering does not crash.
-    "filters/feGaussianBlur/huge-stdDeviation.svg",
+    "filters/feGaussianBlur/huge-stdDeviation.svg": (
+        "implementation-resource-limit",
+        "https://www.w3.org/TR/filter-effects-1/#feGaussianBlurElement",
+        "Archived image records an implementation-dependent blur resource limit.",
+    ),
+    # SVG 2 aliases glyph-orientation-vertical="0" to upright text, but Noto Sans has no vertical
+    # metrics, and CSS Writing Modes 3 section 5.1.1 does not define how a user agent synthesizes
+    # them, so the glyph positions are user-agent defined.
+    "text/glyph-orientation-vertical/simple-case.svg": (
+        "user-agent-defined",
+        "https://www.w3.org/TR/css-writing-modes-3/#vertical-font-features",
+        "Archived image records one renderer's synthesized vertical metrics.",
+    ),
+    # CSS Text Decoration 3 leaves the position and thickness of an `auto` underline to the user
+    # agent, and the underline is most of the difference between renderers.
+    "text/writing-mode/mixed-languages-with-tb-and-underline.svg": (
+        "user-agent-defined",
+        "https://www.w3.org/TR/css-text-decor-3/#text-underline-position-property",
+        "Archived image records one renderer's underline position and thickness.",
+    ),
 }
 
 # Features removed from or deprecated in SVG 2 that Donner deliberately does not implement. Every
@@ -1313,7 +1333,6 @@ PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
     "text/font-variant/small-caps.svg": {"default_text": 1200},
     "text/textLength/zero.svg": {"default_text": 410, "max": 410},
     "text/textPath/closed-path.svg": {"default_text": 400, "max": 400},
-    "text/textPath/writing-mode=tb.svg": {"default_text": 250, "max": 250},
 }
 
 THRESHOLD_RATCHET_LIMIT = 0.05
@@ -1417,16 +1436,8 @@ def threshold_ratchet_violations(
 # no-crash and sanitizer coverage. This list may only shrink; a new entry needs maintainer
 # approval in the pull request that adds it.
 SKIP_ALLOWLIST = frozenset({
-    "filters/filter-functions/one-invalid-url-in-list.svg",
-    "filters/filter-functions/url-and-grayscale.svg",
-    "filters/filter/invalid-FuncIRI.svg",
-    "masking/clipPath/circle-shorthand-with-stroke-box.svg",
-    "masking/clipPath/circle-shorthand-with-view-box.svg",
     "paint-servers/radialGradient/fr=0.7.svg",
-    "structure/svg/no-size.svg",
     "structure/svg/not-UTF-8-encoding.svg",
-    "structure/use/xlink-to-an-external-file.svg",
-    "text/font/simple-case.svg",
     "text/textPath/with-filter.svg",
     "text/tspan/with-filter.svg",
 })
@@ -1667,12 +1678,8 @@ def _marker_policy(path: str) -> dict[str, object]:
     evidence = [UB_MARKER_REFERENCE.as_posix(), "docs/design_docs/0021-resvg_feature_gaps.md"]
     provenance = "Upstream UB-marker image. The marker does not classify the SVG's normative behavior."
     if path in SPEC_UB_ALLOWLIST:
-        classification = "implementation-resource-limit"
-        evidence = [
-            REGISTRATION_SOURCE.as_posix(),
-            "https://www.w3.org/TR/filter-effects-1/#feGaussianBlurElement",
-        ]
-        provenance = "Archived image records an implementation-dependent blur resource limit."
+        classification, specification, provenance = SPEC_UB_ALLOWLIST[path]
+        evidence = [REGISTRATION_SOURCE.as_posix(), specification]
     elif path in DEFINED_MARKER_CASES:
         classification, specification = DEFINED_MARKER_CASES[path]
         evidence.append(specification)
