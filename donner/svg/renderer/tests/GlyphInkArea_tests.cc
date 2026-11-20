@@ -164,6 +164,27 @@ std::vector<double> ReadCoordinates(ByteReader& reader, const std::vector<uint8_
   return values;
 }
 
+/// Splits the glyph's points into contours at the last point index of each, or returns nullopt
+/// when the indices do not increase within the \p flags.size() points.
+std::optional<std::vector<Contour>> SplitContours(const std::vector<std::size_t>& ends,
+                                                  const std::vector<uint8_t>& flags,
+                                                  const std::vector<double>& xs,
+                                                  const std::vector<double>& ys) {
+  std::vector<Contour> contours;
+  std::size_t start = 0;
+  for (const std::size_t end : ends) {
+    if (end < start || end >= flags.size()) {
+      return std::nullopt;
+    }
+    Contour& contour = contours.emplace_back();
+    for (std::size_t i = start; i <= end; ++i) {
+      contour.push_back({xs[i], ys[i], (flags[i] & 0x01) != 0});
+    }
+    start = end + 1;
+  }
+  return contours;
+}
+
 /// The contours of a simple glyph, or nullopt for a composite or malformed one.
 std::optional<std::vector<Contour>> ReadContours(std::span<const uint8_t> glyph) {
   if (glyph.empty()) {
@@ -187,20 +208,7 @@ std::optional<std::vector<Contour>> ReadContours(std::span<const uint8_t> glyph)
   if (!reader.ok() || flags.size() != pointCount) {
     return std::nullopt;
   }
-
-  std::vector<Contour> contours;
-  std::size_t start = 0;
-  for (const std::size_t end : ends) {
-    if (end < start || end >= pointCount) {
-      return std::nullopt;
-    }
-    Contour& contour = contours.emplace_back();
-    for (std::size_t i = start; i <= end; ++i) {
-      contour.push_back({xs[i], ys[i], (flags[i] & 0x01) != 0});
-    }
-    start = end + 1;
-  }
-  return contours;
+  return SplitContours(ends, flags, xs, ys);
 }
 
 /// \p contour with the on-curve point TrueType implies midway between consecutive off-curve
@@ -286,31 +294,43 @@ double SummedCoverage(const RendererBitmap& bitmap, bool borderOnly) {
   return coverage;
 }
 
+/// Exact area enclosed by the outlines of \p text's glyphs at \ref kFontSizePx, in square
+/// pixels, or nullopt when a glyph is missing or its outline cannot be read. Glyphs are found
+/// through the font's `cmap` with stb_truetype; their outlines are read from `glyf` directly,
+/// because stb_truetype rounds the on-curve points TrueType implies to whole font units.
+std::optional<double> ExactTextArea(std::span<const uint8_t> fontData, std::string_view text) {
+  const std::optional<GlyphTables> tables = FindGlyphTables(fontData);
+  stbtt_fontinfo font{};
+  if (!tables || stbtt_InitFont(&font, fontData.data(), 0) == 0) {
+    return std::nullopt;
+  }
+  double areaUnits = 0.0;
+  for (const char ch : text) {
+    const int glyph = stbtt_FindGlyphIndex(&font, ch);
+    const std::optional<double> area =
+        glyph != 0 ? GlyphOutlineArea(*tables, glyph) : std::optional<double>();
+    if (!area) {
+      return std::nullopt;
+    }
+    areaUnits += *area;
+  }
+  ByteReader head(tables->head, 18);
+  const uint16_t unitsPerEm = head.u16();
+  if (!head.ok() || unitsPerEm == 0) {
+    return std::nullopt;
+  }
+  const double pxPerUnit = kFontSizePx / unitsPerEm;
+  return areaUnits * pxPerUnit * pxPerUnit;
+}
+
 // Opaque glyphs cover each pixel by the fraction of its area inside the outline, so the summed
 // coverage equals the outline's area. A renderer whose glyph edges sit outside or inside the
 // outline changes the sum by about the offset times the outline's perimeter.
 TEST(GlyphInkAreaTest, RenderedInkEqualsExactOutlineArea) {
   const std::vector<uint8_t> fontData =
       ReadFile(Runfiles::instance().Rlocation(std::string(kFontFile)));
-  ASSERT_THAT(fontData.size(), Gt(0u)) << kFontFile;
-  const std::optional<GlyphTables> tables = FindGlyphTables(fontData);
-  ASSERT_TRUE(tables.has_value()) << kFontFile << " lacks a head, loca or glyf table";
-  stbtt_fontinfo font{};
-  ASSERT_NE(stbtt_InitFont(&font, fontData.data(), 0), 0) << kFontFile;
-
-  double outlineAreaUnits = 0.0;
-  for (const char ch : kText) {
-    const int glyph = stbtt_FindGlyphIndex(&font, ch);
-    ASSERT_NE(glyph, 0) << "no glyph for '" << ch << "'";
-    const std::optional<double> area = GlyphOutlineArea(*tables, glyph);
-    ASSERT_THAT(area, Optional(Gt(0.0))) << "outline of '" << ch << "'";
-    outlineAreaUnits += *area;
-  }
-  ByteReader head(tables->head, 18);
-  const uint16_t unitsPerEm = head.u16();
-  ASSERT_THAT(unitsPerEm, Gt(0)) << "head table has no unitsPerEm";
-  const double pxPerUnit = kFontSizePx / unitsPerEm;
-  const double exactArea = outlineAreaUnits * pxPerUnit * pxPerUnit;
+  const std::optional<double> exactArea = ExactTextArea(fontData, kText);
+  ASSERT_THAT(exactArea, Optional(Gt(0.0))) << "outlines of \"" << kText << "\" in " << kFontFile;
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(kScene, warnings);
@@ -325,10 +345,10 @@ TEST(GlyphInkAreaTest, RenderedInkEqualsExactOutlineArea) {
       << "the canvas clips the text";
 
   const double ink = SummedCoverage(bitmap, /*borderOnly=*/false);
-  EXPECT_THAT(ink, DoubleNear(exactArea, exactArea * kInkRelativeTolerance))
+  EXPECT_THAT(ink, DoubleNear(*exactArea, *exactArea * kInkRelativeTolerance))
       << ActiveRendererBackendName() << " draws \"" << kText << "\" with " << ink
-      << " px^2 of ink; its outline encloses " << exactArea << " px^2 ("
-      << 100.0 * (ink - exactArea) / exactArea << "% difference)";
+      << " px^2 of ink; its outline encloses " << *exactArea << " px^2 ("
+      << 100.0 * (ink - *exactArea) / *exactArea << "% difference)";
 }
 
 }  // namespace
