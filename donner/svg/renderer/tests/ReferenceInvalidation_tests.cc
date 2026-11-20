@@ -446,6 +446,54 @@ RenderTreeState::Counters DrawAndCount(RendererInterface& renderer, SVGDocument&
   return document.unsafeRegistry().ctx().get<RenderTreeState>().counters;
 }
 
+/// \p count clip paths, each holding a `<use>` of its own `#t<i>`, with `#h<i>` clipped by it, and
+/// an unreferenced `#free` rect beside an unreferenced rect that has no `id`.
+std::string ManyClipPathsOfUses(int count) {
+  std::string defs = "<defs>";
+  std::string body;
+  for (int i = 0; i < count; ++i) {
+    const std::string n = std::to_string(i);
+    defs += "<clipPath id='c" + n + "'><use href='#t" + n + "'/></clipPath>";
+    body += "<rect id='t" + n + "' width='4' height='4'/><rect id='h" + n +
+            "' y='40' width='4' height='4' clip-path='url(#c" + n + ")'/>";
+  }
+  return defs + "</defs>" + body +
+         "<g><rect class='anonymous' x='80' width='4' height='4'/></g>"
+         "<rect id='free' x='88' width='4' height='4'/>";
+}
+
+// The map from `<use>` targets to their copies is built only when the edit reaches an element with
+// an `id`, and kept while the document is not rebuilt as a whole, so edits that keep the retained
+// update do not walk the clip paths again.
+TEST(ReferenceInvalidationTest, UnreferencedEditsDoNotRebuildTheUseCopyRelation) {
+  SVGDocument document = instantiateSubtree(ManyClipPathsOfUses(200), {}, kCanvasSize);
+  std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+  const RenderTreeState::Counters drawn = DrawAndCount(*renderer, document);
+
+  Translate(document, ".anonymous", Vector2d(0, 6));
+  const RenderTreeState::Counters anonymous = DrawAndCount(*renderer, document);
+  EXPECT_EQ(anonymous.retainedUpdates, drawn.retainedUpdates + 1);
+  EXPECT_EQ(anonymous.useCopyRelationBuilds, drawn.useCopyRelationBuilds);
+
+  Translate(document, "#free", Vector2d(0, 6));
+  const RenderTreeState::Counters firstWithId = DrawAndCount(*renderer, document);
+  EXPECT_EQ(firstWithId.retainedUpdates, anonymous.retainedUpdates + 1);
+  EXPECT_EQ(firstWithId.useCopyRelationBuilds, anonymous.useCopyRelationBuilds + 1);
+
+  Translate(document, "#free", Vector2d(0, 12));
+  const RenderTreeState::Counters secondWithId = DrawAndCount(*renderer, document);
+  EXPECT_EQ(secondWithId.retainedUpdates, firstWithId.retainedUpdates + 1);
+  EXPECT_EQ(secondWithId.useCopyRelationBuilds, firstWithId.useCopyRelationBuilds);
+
+  Translate(document, "#t7", Vector2d(2, 0));
+  InvalidateReferenceDependents(document.unsafeRegistry());
+  EXPECT_THAT(DirtyFlagsOf(document, "#h7"),
+              Optional(HasDirtyFlags(DirtyFlagsComponent::ReferencedContent)));
+  EXPECT_THAT(DirtyFlagsOf(document, "#h8"), Eq(std::nullopt));
+  EXPECT_EQ(document.unsafeRegistry().ctx().get<RenderTreeState>().counters.useCopyRelationBuilds,
+            secondWithId.useCopyRelationBuilds);
+}
+
 /// One edit that the retained render-tree update applies.
 struct RetainedEditCase {
   const char* name;                     //!< Label for the comparison outputs.
