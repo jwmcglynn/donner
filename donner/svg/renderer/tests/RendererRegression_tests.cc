@@ -2332,10 +2332,15 @@ struct SpanStrokeCase {
   bool pathPerGlyph = false;
 };
 
-/// Renders \p testCase's text and compares it with a `<path>` of the "Te" glyph outlines and one of
-/// the "xt" outlines (or one per glyph), painted as the case states.
-void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
-  SCOPED_TRACE(testCase.label);
+/// The rendered text of a \ref SpanStrokeCase and the `<path>` rendering it must match.
+struct SpanStrokeRenders {
+  RendererBitmap actual;    ///< The text.
+  RendererBitmap expected;  ///< The glyph outline paths, painted as the case states.
+};
+
+/// Renders \p testCase's text, and a `<path>` of the "Te" glyph outlines and one of the "xt"
+/// outlines (or one per glyph), painted as the case states.
+SpanStrokeRenders RenderSpanStrokeCase(const SpanStrokeCase& testCase) {
   const std::string content = "Te<tspan " + std::string(testCase.spanAttributes) + ">xt</tspan>";
   const std::string defs =
       testCase.defs.empty() ? std::string() : "<defs>" + std::string(testCase.defs) + "</defs>";
@@ -2355,7 +2360,10 @@ void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
   const RendererBitmap actual = RenderDocumentWithBackend(textDocument, ActiveRendererBackend());
 
   const std::vector<Path> outlines = GlyphOutlines(textDocument, "#text");
-  ASSERT_THAT(outlines, testing::SizeIs(4));
+  EXPECT_THAT(outlines, testing::SizeIs(4));
+  if (outlines.size() != 4) {
+    return {actual, RendererBitmap()};
+  }
   const auto pathElements = [&](std::span<const Path> glyphs, std::string_view attributes) {
     const auto pathElement = [&](std::span<const Path> paths) {
       return "<path " + std::string(attributes) + " d=\"" + JoinedPathData(paths) + "\"/>";
@@ -2375,9 +2383,16 @@ void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
                              pathElements(allOutlines.first(2), testCase.textStroke) +
                              pathElements(allOutlines.subspan(2), testCase.spanStroke) + "</g>",
                          parser::SVGParser::Options(), Vector2i(200, 200));
-  const RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
+  RendererBitmap expected = RenderDocumentWithBackend(pathDocument, ActiveRendererBackend());
   AssertVisibleFixture(expected, "span_stroke_visible");
-  editor::tests::CompareBitmapToBitmap(actual, expected,
+  return {actual, std::move(expected)};
+}
+
+/// Compares the renders of \p testCase.
+void ExpectSpanStrokesMatchOutlinePaths(const SpanStrokeCase& testCase) {
+  SCOPED_TRACE(testCase.label);
+  const SpanStrokeRenders renders = RenderSpanStrokeCase(testCase);
+  editor::tests::CompareBitmapToBitmap(renders.actual, renders.expected,
                                        "span_stroke_" + std::string(testCase.label),
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -2516,7 +2531,11 @@ TEST_F(RendererRegressionTests, TextPaintReferenceWithFallbackPaintsTheReference
        R"svg(fill="none" stroke="red" stroke-width="4")svg"},
   }};
   for (const SpanStrokeCase& testCase : cases) {
-    ExpectSpanStrokesMatchOutlinePaths(testCase);
+    SCOPED_TRACE(testCase.label);
+    const SpanStrokeRenders renders = RenderSpanStrokeCase(testCase);
+    editor::tests::CompareBitmapToBitmap(renders.actual, renders.expected,
+                                         "span_paint_" + std::string(testCase.label),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
