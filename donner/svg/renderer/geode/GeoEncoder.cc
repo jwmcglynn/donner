@@ -983,26 +983,39 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     return ramp;
   }
 
+  /// The most ramps of one `frameRamps` bucket a draw compares its stops with, besides the
+  /// bucket's newest. Distinct stops whose hashes collide past it upload a ramp of their own, so a
+  /// crafted run of colliding gradients costs each draw a bounded number of comparisons, while
+  /// consecutive draws of one gradient, such as a text run's glyphs, still share the newest ramp.
+  static constexpr size_t kMaxRampBucketCompares = 4;
+
   /// The ramp holding `rampStops`: \p candidate when it holds them (a resident slot's ramp from
   /// an earlier frame), else one an earlier draw of this encoder bound, else a new upload. Every
-  /// draw of one gradient in this encoder therefore shares one ramp, and a resident slot keeps its
-  /// own even when an arena draw of the same stops uploaded another earlier in the frame. Null
-  /// when the upload fails.
+  /// draw of one gradient in this encoder therefore shares one ramp, short of hash collisions past
+  /// `kMaxRampBucketCompares`, and a resident slot keeps its own even when an arena draw of the
+  /// same stops uploaded another earlier in the frame. Null when the upload fails.
   /// @param candidate Ramp to reuse when it holds the same stops; may be null.
   std::shared_ptr<const GeodeGradientRamp> acquireGradientRamp(
       const std::shared_ptr<const GeodeGradientRamp>& candidate) {
     std::vector<std::shared_ptr<const GeodeGradientRamp>>& bucket =
         frameRamps[hashStops(rampStops)];
+    const auto compared =
+        bucket.begin() + static_cast<std::ptrdiff_t>(std::min(bucket.size(), kMaxRampBucketCompares));
     if (candidate != nullptr && rampHolds(*candidate, rampStops)) {
-      if (std::find(bucket.begin(), bucket.end(), candidate) == bucket.end()) {
+      // The bucket also keeps the ramp alive until submission; a duplicate entry is harmless.
+      if (std::find(bucket.begin(), compared, candidate) == compared) {
         bucket.push_back(candidate);
       }
       return candidate;
     }
-    for (const std::shared_ptr<const GeodeGradientRamp>& ramp : bucket) {
-      if (rampHolds(*ramp, rampStops)) {
-        return ramp;
-      }
+    const auto shared = std::find_if(bucket.begin(), compared, [this](const auto& ramp) {
+      return rampHolds(*ramp, rampStops);
+    });
+    if (shared != compared) {
+      return *shared;
+    }
+    if (compared != bucket.end() && rampHolds(*bucket.back(), rampStops)) {
+      return bucket.back();
     }
     std::shared_ptr<const GeodeGradientRamp> ramp = uploadGradientRamp(rampStops);
     if (ramp != nullptr) {
