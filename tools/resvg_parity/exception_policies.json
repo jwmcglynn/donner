@@ -166,16 +166,21 @@
         "text/textPath/with-filter.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
-      "classification": "accepted-rasterization-difference",
-      "disposition": "Keep the documented analytic glyph coverage difference.",
+      "classification": "reference-disagreement",
+      "disposition": "Compare against the Donner rendering whose glyph ink equals the outline area.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1178"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/GlyphInkArea_tests.cc"
       ],
-      "removal_criteria": "Enable the comparison when an independently positioned and blurred glyph reference agrees without hiding coverage loss.",
-      "reference_provenance": "Archive stores stronger coverage; blur makes the difference visible away from glyph edges."
+      "removal_criteria": "Use an adjacent reference whose glyph ink matches the outline area and that passes at default settings.",
+      "reference_provenance": "Donner CPU rendering; the vendored PNG draws glyph edges 0.25 to 0.3 px outside the outline.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png"
+      }
     },
     {
       "id": "text/tspan-filter",
@@ -183,16 +188,21 @@
         "text/tspan/with-filter.svg"
       ],
       "kinds": [
-        "skip"
+        "shared_golden"
       ],
-      "classification": "accepted-rasterization-difference",
-      "disposition": "Keep the documented analytic glyph coverage difference.",
+      "classification": "reference-disagreement",
+      "disposition": "Compare against the Donner rendering whose glyph ink equals the outline area.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1178"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/GlyphInkArea_tests.cc"
       ],
-      "removal_criteria": "Enable the comparison when an independently positioned and blurred glyph reference agrees without hiding coverage loss.",
-      "reference_provenance": "Archive stores stronger coverage; blur makes the difference visible away from glyph edges."
+      "removal_criteria": "Use an adjacent reference whose glyph ink matches the outline area and that passes at default settings.",
+      "reference_provenance": "Donner CPU rendering; the vendored PNG draws glyph edges 0.25 to 0.3 px outside the outline.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png"
+      }
     },
     {
       "id": "identity-matrix",

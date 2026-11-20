@@ -112,6 +112,17 @@ ImageComparisonParams ColorMatrixIdentityGolden() {
       "Reference disagreement: identity output; the reference stores linearRGB in 8 bits");
 }
 
+/// Params for the blurred-text rows, compared against the Donner golden at \p path (see
+/// testdata/golden/README.md): their PNGs draw every glyph edge outside the outline, and the blur
+/// spreads that extra ink into the glyph interiors, where the comparison counts it. The params keep
+/// a view of \p path, so it must be a string literal.
+ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path) {
+  return Params::WithGoldenOverride(
+      path, kDefaultThreshold,
+      "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside the outline; "
+      "Donner's glyph ink equals the outline's area (GlyphInkAreaTest)");
+}
+
 /// These references preserve the vendored filter pixels. Only the independently outlined
 /// labels use each backend's path coverage. Both path arguments refer to string literals.
 ImageComparisonParams ColorAdjustReference(std::string_view cpuPath, std::string_view geodePath) {
@@ -1447,16 +1458,10 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
-                // The filter itself is applied to the textPath now, but Donner's glyph coverage
-                // is about 5% lighter than the reference's (measured on the unfiltered
-                // text/tspan/with-clip-path case: 1140473 versus 1208567 total alpha over the
-                // glyphs). The unfiltered comparisons pass because pixelmatch excludes
-                // anti-aliased edge pixels, while a Gaussian blur spreads the missing coverage
-                // into the glyph interiors, where it is counted.
+                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-filter.svg",
-                 Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
-                              "5% lighter than the reference's, which only a blur makes visible "
-                              "away from the glyph edges")},
+                 HeavyGlyphReferenceGolden(
+                     "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png")},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
@@ -1497,20 +1502,16 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextTspan, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/tspan",
-            {
-                {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
-                // Same cause as text/textPath/with-filter.svg: the span filter applies, but
-                // Donner's glyph coverage is about 5% lighter than the reference's, which only
-                // a blur makes visible away from the glyph edges.
-                {"with-filter.svg",
-                 Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
-                              "5% lighter than the reference's, which only a blur makes visible "
-                              "away from the glyph edges")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/tspan",
+                {
+                    {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
+                    // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                    {"with-filter.svg",
+                     HeavyGlyphReferenceGolden(
+                         "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(

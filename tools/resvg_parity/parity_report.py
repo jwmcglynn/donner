@@ -1579,8 +1579,6 @@ def threshold_ratchet_violations(
 # approval in the pull request that adds it.
 SKIP_ALLOWLIST = frozenset({
     "structure/svg/not-UTF-8-encoding.svg",
-    "text/textPath/with-filter.svg",
-    "text/tspan/with-filter.svg",
 })
 
 SKIP_RULE = (

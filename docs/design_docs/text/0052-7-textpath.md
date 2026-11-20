@@ -111,16 +111,16 @@ settings on the canvas each case takes from its reference. Their provenance is i
 | side=right | threshold 0.05 | Half-turned glyph edges |
 | tspan-with-absolute-position | golden | Absolute distance along the text path |
 | with-underline | golden | Underline paint along the text path |
+| with-filter | golden, default settings | The reference draws glyph edges 0.25 to 0.3 px outside the outline |
 | writing-mode=tb | golden, default settings, 300x300 | The reference moves upright glyphs off the font's vmtx origin |
 
 For the opaque `with-path` and `with-path-and-xlink-href` cases, see the
 [fixture coverage matrix](../../spec_audit/test_coverage.md#text).
 
-### Skipped and render-only cases
+### Render-only cases
 
 | Test | Disposition |
 | --- | --- |
-| with-filter | Skip. The blur exposes a qualified glyph-coverage difference. |
 | complex | Render only. The PNG is the suite's undefined-behavior marker. |
 | with-baseline-shift-and-rotate | Render only. The interaction has no defined result in this fixture. |
 

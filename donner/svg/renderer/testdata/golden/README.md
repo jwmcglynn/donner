@@ -1042,6 +1042,43 @@ computed frame on the curve, after checking the 1000-unit advances and 860-unit 
 font's tables, and `TextPathConvergence.UprightCjkUsesFontVerticalOriginsOnPathsAndInFlatText`
 requires upright text on a straight path to match the vmtx placement.
 
+### `text/tspan/with-filter` and `text/textPath/with-filter`
+
+`donner-tspan-with-filter.png` and `donner-textPath-with-filter.png` (500x500). Each blurs text
+with `feGaussianBlur stdDeviation="4"`: "Text" in Noto Sans at 64 user units, 160 device px per
+em, and the second of two "Some long text" lines on curved paths at 24 units. SVG 2 paints text by
+filling the glyph outlines the font defines, so opaque glyphs hold exactly the area of their
+outlines in ink, and a blur keeps that ink, spread out. The vendored PNGs draw every glyph edge
+0.25 to 0.3 device px outside the outline. Pixelmatch sets aside anti-aliased edge pixels, so
+unfiltered text with that difference still compares; the blur moves the extra ink into the glyph
+interiors, where it is counted: 4,435 pixels differ from Donner's rendering on `tspan` and 7,176
+on `textPath` at default settings (simple text). Three measurements locate the difference in the
+references rather than in Donner:
+
+- Exact area against rendered ink. The closed-form area of the quadratic `glyf` contours of
+  "Text" at 160 px per em is 10,219.92 px^2. Donner's opaque rendering of it holds 10,221.52 px^2
+  of ink with simple text and 10,222.79 with full text on the software renderer, and 10,220.36 and
+  10,219.24 on Geode (software Vulkan), all within 0.03%.
+- Stem widths against font units. The stem of Noto Sans `T` is 90 units and its bar 79, 14.40 and
+  12.64 px at this size. In the vendored unfiltered `text/tspan/with-clip-path` reference, which
+  draws the same "Text" from the same snapshot, they measure 14.93 and 13.20 px: 0.265 and 0.28 px
+  more on each edge. In the resvg v0.50.0 reference of that row they are within 0.06 px of the
+  font units on each edge.
+- Thickening experiment. Stroking Donner's glyphs to move every edge outward by 0.25 to 0.35 px
+  makes `tspan` match its vendored PNG with no differing pixel, and by 0.3 px brings `textPath` to
+  68 pixels; 0.1 px leaves 1,341 and 3,477. In the `tspan` reference the total alpha exceeds
+  Donner's by 550 px^2, 5.4% of the glyphs' area.
+
+The resvg v0.50.0 references of both rows are different renderings that Donner does not match at
+default settings (12,713 and 9,168 pixels on simple text), and the suite's results.csv records resvg
+failing both rows. The full text tier matches both goldens with no differing pixel at default
+settings; Geode does not run `text/` rows.
+
+Independent evidence: `GlyphInkAreaTest.RenderedInkEqualsExactOutlineArea`
+(`//donner/svg/renderer/tests:glyph_ink_area_tests`, on both renderers and both text tiers) requires
+the ink of "Text" to equal the exact area of its outline, computed in the test from the font's
+`glyf` contours, within 0.1%.
+
 | Golden | PNG SHA-256 |
 | --- | --- |
 | `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` |
@@ -1052,6 +1089,8 @@ requires upright text on a straight path to match the vmtx placement.
 | `donner-xlink-to-an-external-file.png` | `400dc754087e84efd15a428ad9671bcc34f808eccd147cb59231bd4bcba41565` |
 | `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` |
 | `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` |
+| `donner-tspan-with-filter.png` | `d6284e60ae8acdffaf356e55252bf9334f68bfaf9f0b827da9ddcda0711fe769` |
+| `donner-textPath-with-filter.png` | `93f1635326d9c48da16ef58d4d2cfe90e74bf49ae992428510e5ad7686308a9b` |
 
 ## Donner-rendered references
 
@@ -1348,8 +1387,10 @@ regenerates or adds a golden.
 | `donner-one-invalid-url-in-list.png` | `383d16d1523001752ac353ce8875e1b900a1efa3561eb95fab9fb1d7a0ad598a` | Donner renderings of disputed rows |
 | `donner-pattern-recursive-on-child.png` | `52f05db1cdf008bd95245a6c635bf7101858f885d200f45193905332721c2d65` | Donner renderings of recursive pattern references |
 | `donner-pattern-self-recursive.png` | `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17` | Donner renderings of recursive pattern references |
+| `donner-textPath-with-filter.png` | `93f1635326d9c48da16ef58d4d2cfe90e74bf49ae992428510e5ad7686308a9b` | Donner renderings of disputed rows |
 | `donner-textPath-with-path.png` | `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7` | `text/textPath/with-path` and `with-path-and-xlink-href` |
 | `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` | Donner renderings of disputed rows |
+| `donner-tspan-with-filter.png` | `d6284e60ae8acdffaf356e55252bf9334f68bfaf9f0b827da9ddcda0711fe769` | Donner renderings of disputed rows |
 | `donner-xlink-to-an-external-file.png` | `400dc754087e84efd15a428ad9671bcc34f808eccd147cb59231bd4bcba41565` | Donner renderings of disputed rows |
 | `firefox-stroke-linear-gradient-on-text.png` | `24b2bc34651ec46cdee7e49450e832916b1f0666bbb5cd20e3b543f93f55fdd4` | Gradient strokes on text |
 | `firefox-stroke-radial-gradient-on-text.png` | `40695b1c5ff590b5367bd645e62dedb9855d4a3a8a7c1bafed16f424fb73dfd1` | Gradient strokes on text |

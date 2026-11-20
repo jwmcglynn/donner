@@ -61,8 +61,8 @@ golden with a recorded justification: a `Params::WithGoldenOverride` reason, an 
 `tools/resvg_parity/exception_policies.json`, and a golden README row with the file's SHA-256. A
 skip is only for an unimplemented feature with an issue number (`Not impl: <feature> (#<issue>)`);
 skipped cases do not render at all. `SKIP_ALLOWLIST` in `parity_report.py` lists every active skip
-and may only shrink, so a new skip needs maintainer approval. The three skips it lists are an
-unsupported input encoding and two accepted filtered-glyph differences. Pixel budgets
+and may only shrink, so a new skip needs maintainer approval. The one skip it lists is an
+unsupported input encoding. Pixel budgets
 in the hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
 `PIXEL_BUDGET_ALLOWLIST` and `THRESHOLD_ALLOWLIST` record the existing budgets above 100 pixels and
 color thresholds above 0.05 at their current values and may only shrink. A UB marker reference does
@@ -91,18 +91,18 @@ the `text/` category. Focused tests exercise Geode text directly.
 | Registered SVG fixtures | Count |
 | --- | ---: |
 | Total | 1,679 |
-| Pixel comparisons | 1,578 |
-| Comparisons with a numeric setting or custom golden | 78 |
+| Pixel comparisons | 1,580 |
+| Comparisons with a numeric setting or custom golden | 80 |
 | Render-only, undefined-behavior registration | 55 |
 | Render-only, legacy feature | 43 |
-| Explicit skips | 3 |
+| Explicit skips | 1 |
 | Fixtures in disabled categories | 0 |
 
 | Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
 | --- | ---: | ---: | ---: | ---: |
-| `default_text` | 1,552 | 98 | 26 | 3 |
-| `max` | 1,578 | 98 | 0 | 3 |
-| `geode` | 1,246 | 69 | 361 | 3 |
+| `default_text` | 1,554 | 98 | 26 | 1 |
+| `max` | 1,580 | 98 | 0 | 1 |
+| `geode` | 1,246 | 69 | 363 | 1 |
 
 <!-- END RESVG INVENTORY -->
 
@@ -595,9 +595,11 @@ the glyphs on the path (see the [golden README](../../donner/svg/renderer/testda
 Vertical layout on a path (`text/textPath/writing-mode=tb.svg`) compares at default settings
 against a Donner golden: the reference moves upright glyphs off the font's vmtx origin, which CSS
 Writing Modes 3 section 5.1.1 requires.
-`complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
-filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) is an
-accepted difference (2026-11-13). Where the reference does not use the font's vertical metrics
+`complex.svg` is undefined behavior: its reference is the resvg UB marker image.
+`textPath/with-filter.svg` and `tspan/with-filter.svg` compare at default settings against Donner
+goldens: their references draw glyph edges 0.25 to 0.3 px outside the outline, which the blur
+spreads into the glyph interiors, while Donner's glyph ink equals the outline's area
+(`GlyphInkAreaTest`; see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)). Where the reference does not use the font's vertical metrics
 and features, which CSS Writing Modes 3 section 5.1.1 requires (`writing-mode/japanese-with-tb.svg`,
 `writing-mode/mixed-languages-with-tb.svg`, `writing-mode/tb-and-punctuation.svg`,
 `alignment-baseline/hanging-on-vertical.svg`), the row compares against a Donner rendering
@@ -648,7 +650,7 @@ content-placement transform.
 | masking/clipPath          |     0 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text case compares against resvg v0.49.0 with zero differing pixels; both use the glyph-cell text box.                                                 |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                      |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                |
-| text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                                                                                                                                                                                                                   |
+| text/tspan                |     0 | tspan `clip-path`, `filter` and `mask` compare; `with-filter` compares against a Donner golden because its reference draws glyph edges outside the outline                                                                                                                                                                                           |
 | painting/stroke-dasharray |     4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note)                                                                                                                                                                                                                                                                               |
 | painting/marker           |     3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623))                                                                                                                                                                                                                                 |
 
