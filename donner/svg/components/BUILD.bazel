@@ -149,6 +149,24 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "reference_invalidation",
+    srcs = ["ReferenceInvalidation.cc"],
+    hdrs = ["ReferenceInvalidation.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":components_core",
+        ":element_type_component",
+        "//donner/base",
+        "//donner/base/xml/components",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/components/filter:filter_effect",
+        "//donner/svg/components/text:components",
+        "//donner/svg/components/text:text_invalidation",
+        "//donner/svg/graph",
+    ],
+)
+
+donner_cc_library(
     name = "components",
     visibility = [
         "//donner/css:__pkg__",

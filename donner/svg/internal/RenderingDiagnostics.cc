@@ -32,7 +32,7 @@ std::string RenderDiagnosticLabel(const Registry& registry, Entity entity) {
 
 std::vector<std::string_view> RenderDiagnosticDirtyNames(std::uint16_t flags) {
   using D = components::DirtyFlagsComponent;
-  constexpr std::array<std::pair<D::Flags, std::string_view>, 10> names{{
+  constexpr std::array<std::pair<D::Flags, std::string_view>, 11> names{{
       {D::Style, "style"},
       {D::Layout, "layout"},
       {D::Transform, "transform"},
@@ -43,6 +43,7 @@ std::vector<std::string_view> RenderDiagnosticDirtyNames(std::uint16_t flags) {
       {D::RenderInstance, "render_instance"},
       {D::ShadowTree, "shadow_tree"},
       {D::TextGeometry, "text_geometry"},
+      {D::ReferencedContent, "referenced_content"},
   }};
   std::vector<std::string_view> result;
   for (const auto& [flag, name] : names) {
