@@ -65,6 +65,58 @@ donner_cc_library(
     ],
 )
 
+# Reports the configured text tier at run time. The tier macros are local to the libraries that
+# implement text, so every other target compiles identically in each text configuration and asks
+# this library instead.
+donner_cc_library(
+    name = "text_tier",
+    srcs = ["TextTier.cc"],
+    hdrs = ["TextTier.h"],
+    local_defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }) + select({
+        # WOFF2 follows the same setting as the font manager's private define.
+        "//donner/svg/renderer:text_full_enabled": [
+            "DONNER_TEXT_FULL",
+            "DONNER_TEXT_WOFF2_ENABLED",
+        ],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+    deps = ["//donner/base:packaged_resource"],
+)
+
+donner_cc_test(
+    name = "text_tier_tests",
+    srcs = ["tests/TextTier_tests.cc"],
+    env = select({
+        "//donner/svg/renderer:text_full_enabled": {"DONNER_EXPECTED_TEXT_TIER": "Full"},
+        "//donner/svg/renderer:text_enabled": {"DONNER_EXPECTED_TEXT_TIER": "Basic"},
+        "//conditions:default": {"DONNER_EXPECTED_TEXT_TIER": "None"},
+    }),
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":text_tier",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "text_tier_test_utils",
+    testonly = 1,
+    hdrs = ["tests/TextTierTestUtils.h"],
+    visibility = ["//donner:__subpackages__"],
+    deps = [
+        ":text_tier",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_library(
     name = "text_layout_params",
     hdrs = ["TextLayoutParams.h"],
