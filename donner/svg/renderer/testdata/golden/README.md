@@ -1071,8 +1071,8 @@ references rather than in Donner:
 
 The resvg v0.50.0 references of both rows are different renderings that Donner does not match at
 default settings (12,713 and 9,168 pixels on simple text), and the suite's results.csv records resvg
-failing both rows. The full text tier differs from the goldens by {MAXT} (`tspan`) and {MAXP}
-(`textPath`) pixels; Geode does not run `text/` rows.
+failing both rows. The full text tier matches both goldens with no differing pixel at default
+settings; Geode does not run `text/` rows.
 
 Independent evidence: `GlyphInkAreaTest.RenderedInkEqualsExactOutlineArea`
 (`//donner/svg/renderer/tests:glyph_ink_area_tests`, on both renderers and both text tiers) requires
