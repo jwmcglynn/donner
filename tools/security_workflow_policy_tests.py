@@ -100,22 +100,14 @@ SELF_HOSTED_JOBS = {
     (".github/workflows/cmake.yml", "cmake-cache-producer"): "use_self_hosted_linux",
     (".github/workflows/cmake.yml", "cmake-cache-consumer"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
-    (".github/workflows/main.yml", "coverage-contract"): "use_self_hosted_linux",
 }
-# Reviewed status functions a self-hosted job puts before its trusted gate, so it runs after a
-# needed job failed or was skipped. Joined with `&&`, it still requires the whole gate.
 _LINUX_ARM = frozenset({"self-hosted", "linux", "arm64"})
 SELF_HOSTED_LABELS = {
     (".github/workflows/main.yml", "linux-self-hosted"): _LINUX_ARM,
-    (".github/workflows/main.yml", "coverage-contract"): _LINUX_ARM,
     (".github/workflows/cmake.yml", "cmake-cache-producer"): _LINUX_ARM | {"cmake-cache-producer"},
     (".github/workflows/cmake.yml", "cmake-cache-consumer"): _LINUX_ARM | {"cmake-cache-consumer"},
 }
 
-SELF_HOSTED_STATUS_PREFIX = {
-    (".github/workflows/main.yml", "coverage-contract"): "!cancelled() && ",
-    # The shadow lane runs after its run's Linux lane has finished, whether it passed or failed.
-}
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
 SELF_HOSTED_NARROWING = {
@@ -1462,9 +1454,7 @@ def _runner_violation(path, name, job):
     expected = SELF_HOSTED_LABELS.get((path, name))
     if expected and any({label.lower() for label in labels} != expected for labels in sets):
         return "%s:%s uses unapproved self-hosted capability labels" % (path, name)
-    prefix = SELF_HOSTED_GATE_PREFIX.replace(
-        "${{ ", "${{ " + SELF_HOSTED_STATUS_PREFIX.get((path, name), ""), 1)
-    gate = prefix + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
+    gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
         SELF_HOSTED_JOBS.get((path, name)), SELF_HOSTED_NARROWING.get((path, name), ""))
     needs = _job_key(job, "needs").strip("[]")
     admitted = ((path, name) in SELF_HOSTED_JOBS and gate == _job_key(job, "if")
@@ -4508,15 +4498,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
         bazel = "        bazel: ['7.x', '8.x']\n"
         self.assertEqual(1, files[bcr].count(bazel))
+        contract = _jobs(files[main])["coverage-contract"]
+        self.assertIn(hosted, contract)
         self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {
             "ungated": (main, files[main].replace(linux, linux.replace(gate + " }}", "true }}", 1), 1), ungated),
             "qualification narrowing widened": (cmake, files[cmake].replace(gate + narrowing,
                 gate + narrowing.replace(" && ", " || ", 1), 1), ungated),
             "qualification narrowing dropped": (cmake, files[cmake].replace(gate + narrowing, gate, 1), ungated),
-            "status prefix widened": (main, files[main].replace(
-                "${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push",
-                "${{ always() || needs.gatekeeper.outputs.is_duplicate_push", 1),
-                ungated),
+            "contract on self-hosted": (main, files[main].replace(contract, contract.replace(
+                hosted, "    runs-on: [self-hosted, linux, arm64]\n", 1), 1), ungated),
             "self-hosted label": (coverage, files[coverage].replace(
                 hosted, "    runs-on: [self-hosted, linux, arm64]\n", 1), ungated),
             "custom labels only": (coverage, files[coverage].replace(
@@ -4814,14 +4804,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         files = self.supply_chain_files
         path = ".github/workflows/main.yml"
         gate = "needs.gatekeeper.outputs.use_self_hosted_linux == 'true'"
-        for name in ("linux-self-hosted", "coverage-contract"):
-            for replacement in ("true || " + gate, gate + " || true"):
-                with self.subTest(job=name, replacement=replacement):
-                    job = _jobs(files[path])[name]
-                    weakened_job = job.replace(gate, replacement, 1)
-                    self.assertNotEqual(weakened_job, job)
-                    changed = files[path].replace(job, weakened_job, 1)
-                    self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
+        job = _jobs(files[path])["linux-self-hosted"]
+        for replacement in ("true || " + gate, gate + " || true"):
+            with self.subTest(replacement=replacement):
+                weakened_job = job.replace(gate, replacement, 1)
+                self.assertNotEqual(weakened_job, job)
+                changed = files[path].replace(job, weakened_job, 1)
+                self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
 
     def test_hosted_runner_prefixes_do_not_approve_custom_labels(self):
         files = self.supply_chain_files
