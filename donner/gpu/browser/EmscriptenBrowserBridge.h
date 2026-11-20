@@ -153,8 +153,9 @@ private:
   /// Defers a call whose answer the caller does not wait for to this thread's next owner round
   /// trip; see \ref BrowserDeferredCalls. A refusal is stored into this bridge's published state.
   BridgeStatus deferCall(BrowserDeferredOperation operation, BrowserObjectId objectId,
-                         std::function<BridgeStatus()> execute, std::size_t payloadBytes = 0,
-                         const std::function<BridgeStatus()>& direct = {});
+                         const BrowserDeferredCalls::HeldCall& now,
+                         const BrowserDeferredCalls::HeldCallFactory& makeHeld,
+                         std::size_t payloadBytes = 0);
   BridgeStatus queueCommand(const char* operation, std::function<BridgeStatus()> command);
   BridgeStatus flushCommands();
   std::vector<PendingCommand> pendingCommands_;

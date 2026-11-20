@@ -294,6 +294,11 @@ private:
   /// The status of the first call this device deferred that the browser refused, or Success.
   BridgeStatus deferredRefusal() const;
 
+  /// Translates a command batch or submission status, declaring the loss when the browser refused
+  /// a call this device deferred in the same round trip.
+  /// @param status Bridge status. @param operation Operation name for the error message.
+  Status submissionStatus(BridgeStatus status, std::string_view operation) const;
+
   /// Fails closed once the browser has refused a call this device deferred, declaring the loss.
   /// @param operation Operation name for the error message.
   Status checkDeferredRefusal(std::string_view operation) const;

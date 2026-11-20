@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <span>
@@ -69,17 +70,25 @@ public:
  *   either sends them on their own. A single write of \ref kMaxBytes or more is not held or copied:
  *   it runs at once, after the calls held before it.
  * - **Payload:** a held write owns a copy of its bytes until the round trip that runs it returns.
+ *   The copy is made only when the call is held, never for a call that runs at once.
  * - **Liveness:** a held call whose device has begun releasing does not run; its copies are freed
  *   with the queue.
  * - **Refusals:** a refused write or bind group construction is stored into its own device's
  *   origin, which that device reads as a loss. A refused destruction is counted there for
  *   diagnostics only. A round trip whose own call belongs to a device with a call refused in the
  *   same trip does not run that call, so a submission cannot go ahead over a write that failed.
- * - **Thread exit:** calls still held when the thread's queue is destroyed are sent then, unless
- *   their device has been released, so held destructions are not leaked until device release.
+ * - **Thread exit:** a thread flushes before it exits. Calls still held when its queue is
+ *   destroyed are dropped, never sent: a thread-exit round trip could wait on an owner that is
+ *   itself waiting for this thread to be joined. The drop is printed; a dropped destruction of a
+ *   live device then waits for that device's release, which frees all of its objects.
  */
 class BrowserDeferredCalls {
 public:
+  /// A call ready to run on the owner.
+  using HeldCall = std::function<BridgeStatus()>;
+  /// Builds the held form of a call, owning copies of what it reads.
+  using HeldCallFactory = std::function<HeldCall()>;
+
   /// One held call.
   struct Call {
     BrowserDeferredOperation operation = BrowserDeferredOperation::WriteBuffer;  //!< Its kind.
@@ -111,12 +120,15 @@ public:
   /// Builds a queue that reaches the owner through \p channel. @param channel Must outlive it.
   explicit BrowserDeferredCalls(BrowserOwnerChannel& channel) : channel_(channel) {}
 
-  /// Sends what is still held, unless its device was released. A thread's queue is destroyed at
-  /// thread exit.
+  /// Drops what is still held, without a round trip; see the class documentation. A thread's
+  /// queue is destroyed at thread exit, after the thread's last flush.
   ~BrowserDeferredCalls() {
     dropReleased();
     if (!calls_.empty()) {
-      run([] {}, kCommandBatchKind);
+      std::fprintf(stderr,
+                   "[Geode/browser/deferred] dropped calls=%zu at thread exit; their devices "
+                   "release the objects they name\n",
+                   calls_.size());
     }
   }
 
@@ -136,33 +148,43 @@ public:
   }
 
   /**
-   * Defers \p execute, or runs it now: where calls do not cross threads, and for a payload too
-   * large to hold, which runs at once after the calls held before it.
+   * Defers a call, or runs it now: where calls do not cross threads, and for a payload too large to
+   * hold, which runs at once after the calls held before it.
    * @param origin Device making the call. @param operation Its kind. @param objectId Its object.
-   * @param execute The call, owning copies of what it reads. @param payloadBytes Bytes it copies.
-   * @param direct The call over borrowed bytes, used instead of \p execute when it runs at once;
-   *   null to use \p execute.
+   * @param now The call over borrowed inputs, for when it runs at once.
+   * @param makeHeld Builds the held call over owned copies; called only when the call is held.
+   * @param payloadBytes Bytes the held call would copy.
    * @return Success once held, or the call's own status when it ran now.
    */
   BridgeStatus defer(const std::shared_ptr<BrowserDeferredOrigin>& origin,
-                     BrowserDeferredOperation operation, uint64_t objectId,
-                     std::function<BridgeStatus()> execute, std::size_t payloadBytes = 0,
-                     const std::function<BridgeStatus()>& direct = {}) {
+                     BrowserDeferredOperation operation, uint64_t objectId, const HeldCall& now,
+                     const HeldCallFactory& makeHeld, std::size_t payloadBytes = 0) {
     if (!channel_.crossesThreads()) {
-      return direct ? direct() : execute();
+      return now();
     }
     if (payloadBytes >= kMaxBytes) {
       BridgeStatus status = BridgeStatus::Success;
-      const Report report =
-          run([&] { status = direct ? direct() : execute(); }, kCommandBatchKind, origin.get());
+      const Report report = run([&] { status = now(); }, kCommandBatchKind, origin.get());
       return report.carriedCallSkipped ? BridgeStatus::DeviceLost : status;
     }
-    calls_.push_back(Call{operation, objectId, std::move(execute), origin});
+    calls_.push_back(Call{operation, objectId, makeHeld(), origin});
     bytes_ += payloadBytes;
     if (calls_.size() >= kMaxCalls || bytes_ >= kMaxBytes) {
       run([] {}, kCommandBatchKind);
     }
     return BridgeStatus::Success;
+  }
+
+  /**
+   * Defers a call that owns everything it reads, or runs it now; see the other overload.
+   * @param origin Device making the call. @param operation Its kind. @param objectId Its object.
+   * @param call The call. @param payloadBytes Bytes it holds a copy of.
+   * @return Success once held, or the call's own status when it ran now.
+   */
+  BridgeStatus defer(const std::shared_ptr<BrowserDeferredOrigin>& origin,
+                     BrowserDeferredOperation operation, uint64_t objectId, const HeldCall& call,
+                     std::size_t payloadBytes = 0) {
+    return defer(origin, operation, objectId, call, [&] { return call; }, payloadBytes);
   }
 
   /**

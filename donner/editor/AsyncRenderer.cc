@@ -613,6 +613,11 @@ void AsyncRenderer::start() {
   workerExited_.store(false, std::memory_order_release);
   thread_ = std::thread([this] {
     workerLoop();
+#ifdef __EMSCRIPTEN__
+    // Send held calls while the owner still services this thread: once it sees the worker exited
+    // it may block joining it, and a round trip from the thread's exit would then never return.
+    gpu::browser::FlushBrowserDeferredCallsOnThisThread();
+#endif
     workerExited_.store(true, std::memory_order_release);
   });
 }

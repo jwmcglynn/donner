@@ -182,23 +182,65 @@ TEST(BrowserDeferredCalls, MustBeSentOnceEitherBoundIsReached) {
   EXPECT_EQ(deferred.bytes(), 0u) << "sending releases the payload";
 }
 
+/// Defers a write whose held form counts how often it is built, as the browser bridge's write does.
+BridgeStatus DeferCountedWrite(BrowserDeferredCalls& deferred,
+                               const std::shared_ptr<BrowserDeferredOrigin>& origin,
+                               std::span<const uint8_t> data, std::vector<std::string>& ran,
+                               int& copies, BridgeStatus status = BridgeStatus::Success) {
+  return deferred.defer(
+      origin, BrowserDeferredOperation::WriteBuffer, 1,
+      [&] {
+        ran.emplace_back("write in place");
+        return status;
+      },
+      [&] {
+        ++copies;
+        return BrowserDeferredCalls::OwningWrite(data, [&ran, status](std::span<const uint8_t>) {
+          ran.emplace_back("held write");
+          return status;
+        });
+      },
+      data.size());
+}
+
+TEST(BrowserDeferredCalls, AWriteIsCopiedOnlyWhenItIsHeld) {
+  const std::vector<uint8_t> small(16, 1);
+  const auto origin = std::make_shared<BrowserDeferredOrigin>();
+  std::vector<std::string> ran;
+
+  // Where calls do not cross threads, the write runs in place and nothing is copied.
+  FakeOwnerChannel local;
+  local.crosses = false;
+  BrowserDeferredCalls direct(local);
+  int copies = 0;
+  EXPECT_EQ(DeferCountedWrite(direct, origin, small, ran, copies), BridgeStatus::Success);
+  EXPECT_EQ(copies, 0);
+  EXPECT_THAT(ran, ElementsAre("write in place"));
+
+  // A held write is copied exactly once, and runs from the copy.
+  ran.clear();
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  DeferCountedWrite(deferred, origin, small, ran, copies);
+  EXPECT_EQ(copies, 1);
+  deferred.flush();
+  EXPECT_EQ(copies, 1);
+  EXPECT_THAT(ran, ElementsAre("held write"));
+}
+
 TEST(BrowserDeferredCalls, AWriteAtTheByteBoundIsSentDirectlyWithoutACopy) {
   FakeOwnerChannel channel;
   BrowserDeferredCalls deferred(channel);
   const auto origin = std::make_shared<BrowserDeferredOrigin>();
   std::vector<std::string> ran;
   deferred.defer(origin, BrowserDeferredOperation::DestroyObject, 1, Recording(ran, "destroy"));
-  bool copyRan = false;
-  const BridgeStatus status = deferred.defer(
-      origin, BrowserDeferredOperation::WriteBuffer, 2,
-      [&] {
-        copyRan = true;
-        return BridgeStatus::Success;
-      },
-      BrowserDeferredCalls::kMaxBytes, Recording(ran, "direct write", BridgeStatus::Failed));
+  const std::vector<uint8_t> large(BrowserDeferredCalls::kMaxBytes, 2);
+  int copies = 0;
+  const BridgeStatus status =
+      DeferCountedWrite(deferred, origin, large, ran, copies, BridgeStatus::Failed);
   EXPECT_EQ(status, BridgeStatus::Failed) << "a write sent directly answers for itself";
-  EXPECT_FALSE(copyRan) << "the borrowed bytes are written, not a copy";
-  EXPECT_THAT(ran, ElementsAre("destroy", "direct write"))
+  EXPECT_EQ(copies, 0) << "the borrowed bytes are written, not a copy";
+  EXPECT_THAT(ran, ElementsAre("destroy", "write in place"))
       << "it still runs after the calls held before it";
   EXPECT_EQ(channel.roundTrips(), 1u);
   EXPECT_TRUE(deferred.empty());
@@ -295,7 +337,7 @@ TEST(BrowserDeferredCalls, ADeviceTornDownOnAnotherThreadSkipsTheCallsItLeftHeld
   EXPECT_EQ(ran.load(), 0);
 }
 
-TEST(BrowserDeferredCalls, ThreadExitSendsTheCallsOfLiveDevicesAndDropsReleasedOnes) {
+TEST(BrowserDeferredCalls, ThreadExitDropsWhatIsStillHeldWithoutARoundTrip) {
   FakeOwnerChannel channel;
   const auto live = std::make_shared<BrowserDeferredOrigin>();
   const auto released = std::make_shared<BrowserDeferredOrigin>();
@@ -303,13 +345,17 @@ TEST(BrowserDeferredCalls, ThreadExitSendsTheCallsOfLiveDevicesAndDropsReleasedO
   std::vector<std::string> ran;
   std::thread exiting([&] {
     BrowserDeferredCalls& queue = ThreadQueue(channel);
-    queue.defer(live, BrowserDeferredOperation::DestroyObject, 1, Recording(ran, "live destroy"));
-    queue.defer(released, BrowserDeferredOperation::DestroyObject, 2,
+    // A thread flushes before it exits; what it holds after that is dropped, because a round trip
+    // from thread exit could wait on an owner that is waiting to join this thread.
+    queue.defer(live, BrowserDeferredOperation::DestroyObject, 1, Recording(ran, "flushed"));
+    queue.flush();
+    queue.defer(live, BrowserDeferredOperation::DestroyObject, 2, Recording(ran, "live destroy"));
+    queue.defer(released, BrowserDeferredOperation::DestroyObject, 3,
                 Recording(ran, "released destroy"));
   });
   exiting.join();
-  EXPECT_THAT(ran, ElementsAre("live destroy")) << "a held release is not leaked at thread exit";
-  EXPECT_EQ(channel.roundTrips(), 1u);
+  EXPECT_THAT(ran, ElementsAre("flushed"));
+  EXPECT_EQ(channel.roundTrips(), 1u) << "thread exit makes no round trip";
 }
 
 }  // namespace

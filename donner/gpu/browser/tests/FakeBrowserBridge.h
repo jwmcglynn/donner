@@ -801,7 +801,14 @@ public:
     return BridgeStatus::Success;
   }
 
+  /// Run when a submission arrives, before it is checked, so a test can make something happen in
+  /// the round trip that carries it.
+  std::function<void()> beforeSubmit;
+
   BridgeStatus submitCommandBuffers(uint64_t submissionSerial) override {
+    if (beforeSubmit) {
+      beforeSubmit();
+    }
     // Every buffer of the submission must be finished and belong to this serial, and a
     // submission with no buffers names no work, as on the browser side.
     if (encoderOpen_ || recordingSerial_ != submissionSerial || finishedCommandBuffers_ == 0) {

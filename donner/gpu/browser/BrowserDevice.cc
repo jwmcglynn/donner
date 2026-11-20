@@ -1356,7 +1356,7 @@ Status BrowserDevice::replayCommandBuffer(uint64_t submissionSerial, uint32_t co
       return status;
     }
   }
-  return StatusForBridge(bridge_->endCommandBuffer(submissionSerial), operation);
+  return submissionStatus(bridge_->endCommandBuffer(submissionSerial), operation);
 }
 
 Status BrowserDevice::onSubmit(uint64_t submissionSerial,
@@ -1375,7 +1375,16 @@ Status BrowserDevice::onSubmit(uint64_t submissionSerial,
       return status;
     }
   }
-  return StatusForBridge(bridge_->submitCommandBuffers(submissionSerial), kOperation);
+  return submissionStatus(bridge_->submitCommandBuffers(submissionSerial), kOperation);
+}
+
+Status BrowserDevice::submissionStatus(BridgeStatus status, std::string_view operation) const {
+  // A command batch or submission is refused when a write or bind group this device deferred was
+  // refused in the same round trip; that refusal is the loss to declare.
+  if (status != BridgeStatus::Success && deferredRefusal() != BridgeStatus::Success) {
+    return checkDeferredRefusal(operation);
+  }
+  return StatusForBridge(status, operation);
 }
 
 Status BrowserDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,

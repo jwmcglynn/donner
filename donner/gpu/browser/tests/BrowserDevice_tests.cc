@@ -2820,6 +2820,37 @@ TEST(BrowserDeviceDeferredRefusal, TheNextOperationFailsClosedAndDeclaresTheLoss
   }
 }
 
+TEST(BrowserDeviceDeferredRefusal, ASubmissionSkippedForARefusalInItsOwnTripDeclaresTheLoss) {
+  auto lostState = std::make_shared<DeviceLostState>();
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  FakeBrowserBridge* raw = bridge.get();
+  Result<std::unique_ptr<BrowserDevice>> device =
+      BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+  ASSERT_THAT(device, HasResult());
+  Result<Texture> target =
+      device.result()->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  Result<TextureView> view =
+      device.result()->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  // The submission's own round trip carries a write of this device that the browser refuses, so
+  // the bridge does not make the submission and reports the device lost.
+  FakeOwnerChannel channel;
+  BrowserDeferredCalls deferred(channel);
+  raw->beforeSubmit = [&] {
+    deferred.defer(raw->deferredOriginForTesting(), BrowserDeferredOperation::WriteBuffer, 1,
+                   [] { return BridgeStatus::Failed; });
+    deferred.flush();
+  };
+  raw->failOperation = "submitCommandBuffers";
+  raw->failStatus = BridgeStatus::DeviceLost;
+  EXPECT_THAT(device.result()->submit(RecordClearPass(*device.result(), view.result())),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState,
+                                    HasSubstr("refused a write or bind group construction")));
+  EXPECT_THAT(lostState->lost.load(), testing::IsTrue()) << "the shared loss is declared there";
+}
+
 TEST(BrowserDeviceDeferredRefusal, AnUnrefusedDeviceIsUnaffected) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
