@@ -24,6 +24,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/encoding/Base64.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -37,6 +38,7 @@
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/geode/GeodeNearestSampling.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
@@ -6192,6 +6194,251 @@ TEST_F(RendererRegressionTests, RemovedFillPresentationAttributeInheritsAgain) {
                                        "removed_fill_inherits",
                                        editor::tests::PixelmatchIdentityParams());
 }
+
+#ifdef DONNER_TEXT_FULL
+/// Parses \p body into a 200x200 document with the hermetic test fonts.
+SVGDocument BitmapGlyphDocument(std::string_view body) {
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  return document;
+}
+
+/**
+ * One `<image>` for each bitmap glyph of the text element #emoji in \p body, drawing the strike the
+ * font reports for that glyph. The placement is composed here, independently of the renderers:
+ * the glyph origin comes from the text layout, and the strike's bearings and scale from the font,
+ * so each image is `translate(origin) rotate(r) translate(-origin)` applied after
+ * `translate(origin.x + bearingX, origin.y - bearingY) scale(strikeScale)`.
+ */
+std::vector<std::string> BitmapGlyphImages(std::string_view body) {
+  SVGDocument document = BitmapGlyphDocument(body);
+  // Rendering prepares the text engine and the layout.
+  (void)RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  auto access = document.writeAccess();
+  const auto element = document.querySelector("#emoji");
+  EXPECT_THAT(element, testing::Ne(std::nullopt));
+  if (!element) {
+    return {};
+  }
+  TextEngine& engine = document.registry().ctx().get<TextEngine>();
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(element->entityHandle());
+  std::vector<std::string> images;
+  for (const TextRun& run : geometry.runs) {
+    for (const TextGlyph& glyph : run.glyphs) {
+      const FontHandle face = glyph.font ? glyph.font : run.font;
+      if (glyph.glyphIndex == 0 || !engine.isBitmapOnly(face)) {
+        continue;
+      }
+      auto bitmap = engine.bitmapGlyph(face, glyph.glyphIndex,
+                                       engine.scaleForPixelHeight(face, run.usedFontSizePx));
+      EXPECT_THAT(bitmap, testing::Ne(std::nullopt));
+      if (!bitmap) {
+        continue;
+      }
+      UnpremultiplyRgbaInPlace(bitmap->rgbaPixels);
+      const std::vector<uint8_t> png = RendererImageIO::writeRgbaPixelsToPngMemory(
+          bitmap->rgbaPixels, bitmap->width, bitmap->height);
+      std::ostringstream image;
+      image << std::setprecision(17) << "<image width='" << bitmap->width << "' height='"
+            << bitmap->height << "' preserveAspectRatio='none' image-rendering='smooth' "
+            << "transform='translate(" << glyph.xPosition << " " << glyph.yPosition << ") rotate("
+            << glyph.rotateDegrees << ") translate(" << -glyph.xPosition << " " << -glyph.yPosition
+            << ") translate(" << glyph.xPosition + bitmap->bearingX << " "
+            << glyph.yPosition - bitmap->bearingY << ") scale(" << bitmap->scale
+            << ")' href='data:image/png;base64," << EncodeBase64Data(png) << "'/>";
+      images.push_back(image.str());
+    }
+  }
+  return images;
+}
+
+/// Renders \p body with \p backend.
+RendererBitmap RenderBitmapGlyphScene(std::string_view body, RendererBackend backend) {
+  SVGDocument document = BitmapGlyphDocument(body);
+  return RenderDocumentWithBackend(document, backend);
+}
+
+/// Removing the emoji from a scene changes far more pixels than any glyph edge could, so a scene
+/// that changes by more than this depends on its strikes.
+constexpr int kMinimumEmojiPixels = 1000;
+
+// At its native strike size and an integer origin, a bitmap glyph's texels land on whole pixels,
+// so both renderers draw it pixel for pixel.
+TEST_F(RendererRegressionTests, BitmapGlyphAtItsNativeStrikeMatchesSoftwareRenderer) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  constexpr std::string_view kScene =
+      R"svg(<text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="109">&#x1F600;</text>)svg";
+  const RendererBitmap expected = RenderBitmapGlyphScene(kScene, RendererBackend::TinySkia);
+  AssertVisibleFixture(expected, "native_strike_cpu_visible");
+  editor::tests::CompareBitmapToBitmap(RenderBitmapGlyphScene(kScene, RendererBackend::Geode),
+                                       expected, "native_strike",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A span's opacity scales the premultiplied texels of the bitmap glyphs drawn over it.
+TEST_F(RendererRegressionTests, BitmapGlyphUnderSpanOpacityMatchesSoftwareRenderer) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  constexpr std::string_view kHalfOpacity =
+      R"svg(<text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="109"><tspan opacity="0.5">&#x1F600;</tspan></text>)svg";
+  constexpr std::string_view kFullOpacity =
+      R"svg(<text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="109"><tspan>&#x1F600;</tspan></text>)svg";
+  constexpr std::string_view kWithoutEmoji =
+      R"svg(<text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="109"><tspan opacity="0.5"></tspan></text>)svg";
+  const RendererBitmap expected = RenderBitmapGlyphScene(kHalfOpacity, RendererBackend::TinySkia);
+  AssertVisibleFixture(expected, "span_opacity_cpu_visible");
+  // The renderers round the product of a texel's premultiplied color and the span opacity
+  // differently, so a premultiplied channel can differ between them by a level. The allowance is
+  // the renderer suite's default per-pixel threshold, which covers that rounding, and no pixel may
+  // exceed it.
+  editor::tests::CompareBitmapToBitmap(
+      RenderBitmapGlyphScene(kHalfOpacity, RendererBackend::Geode), expected, "span_opacity",
+      editor::tests::ApprovedPixelToleranceParams(/*threshold=*/0.02f, /*maxMismatchedPixels=*/0,
+                                                  /*includeAntiAliasing=*/true));
+  for (const RendererBackend backend : {RendererBackend::Geode, RendererBackend::TinySkia}) {
+    SCOPED_TRACE(RendererBackendName(backend));
+    const RendererBitmap halfOpacity = RenderBitmapGlyphScene(kHalfOpacity, backend);
+    EXPECT_THAT(IdentityMismatchCount(halfOpacity, RenderBitmapGlyphScene(kWithoutEmoji, backend),
+                                      "span_opacity_emoji_removed"),
+                testing::Gt(kMinimumEmojiPixels));
+    // The opacity applies: the strike at full opacity differs nearly everywhere it covers.
+    EXPECT_THAT(IdentityMismatchCount(halfOpacity, RenderBitmapGlyphScene(kFullOpacity, backend),
+                                      "span_opacity_applied"),
+                testing::Gt(kMinimumEmojiPixels));
+  }
+}
+
+// Color emoji in the vendored Noto Color Emoji are bitmap strikes. Each scene renders the emoji
+// text and, on the same renderer, the same strikes drawn as `<image>` elements placed from the
+// font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside.
+TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
+  struct Scene {
+    std::string_view label;
+    std::string text;
+    /// Builds the reference scene from the strike images, or the scene without emoji from none.
+    std::function<std::string(const std::vector<std::string>&)> reference;
+  };
+  const auto all = [](const std::vector<std::string>& images) {
+    std::string result;
+    for (const std::string& image : images) {
+      result += image;
+    }
+    return result;
+  };
+  constexpr std::string_view kClip =
+      R"svg(<clipPath id="clip"><circle cx="100" cy="100" r="60"/></clipPath>)svg";
+  // Noto Color Emoji maps the space to an empty glyph with the emoji's advance, so a run of spaces
+  // carries the decorations an emoji run of the same length carries.
+  constexpr std::string_view kDecorated =
+      R"svg(x="20" y="120" font-family="Noto Color Emoji" font-size="48" fill="#2040e0" xml:space="preserve")svg";
+  constexpr std::string_view kUnderline = R"svg( style="text-decoration:underline")svg";
+  const std::vector<Scene> scenes = {
+      {"scaled_strike",
+       R"svg(<text id="emoji" x="12" y="120" font-family="Noto Color Emoji" font-size="48">&#x1F600;&#x1F601;&#x1F602;</text>)svg",
+       all},
+      {"rotated_under_transform",
+       R"svg(<g transform="translate(15 9) scale(1.25 0.75)"><text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="40" rotate="30 -15">&#x1F600;&#x1F923;</text></g>)svg",
+       [all](const std::vector<std::string>& images) {
+         return R"svg(<g transform="translate(15 9) scale(1.25 0.75)">)svg" + all(images) + "</g>";
+       }},
+      {"clip",
+       std::string(kClip) +
+           R"svg(<text id="emoji" x="20" y="130" font-family="Noto Color Emoji" font-size="56" clip-path="url(#clip)">&#x1F600;&#x1F601;&#x1F602;</text>)svg",
+       [all, kClip](const std::vector<std::string>& images) {
+         return std::string(kClip) + R"svg(<g clip-path="url(#clip)">)svg" + all(images) + "</g>";
+       }},
+      {"decorations",
+       "<text id='emoji' " + std::string(kDecorated) + std::string(kUnderline) +
+           R"svg(><tspan style="text-decoration:line-through">&#x1F600;&#x1F601;</tspan></text>)svg",
+       [all, kDecorated, kUnderline](const std::vector<std::string>& images) {
+         // The underline paints beneath the glyphs and the line-through above them.
+         return "<text " + std::string(kDecorated) + std::string(kUnderline) +
+                "><tspan>  </tspan></text>" + all(images) + "<text " + std::string(kDecorated) +
+                R"svg(><tspan style="text-decoration:line-through">  </tspan></text>)svg";
+       }},
+      {"no_fill",
+       R"svg(<text id="emoji" x="12" y="120" font-family="Noto Color Emoji" font-size="48" fill="none">&#x1F600;&#x1F601;</text>)svg",
+       all},
+      {"transparent_span_fill",
+       R"svg(<text id="emoji" x="12" y="120" font-family="Noto Color Emoji" font-size="48" fill="#2040e0"><tspan fill="transparent">&#x1F600;&#x1F601;</tspan></text>)svg",
+       all},
+  };
+  for (const Scene& scene : scenes) {
+    SCOPED_TRACE(scene.label);
+    const std::vector<std::string> images = BitmapGlyphImages(scene.text);
+    ASSERT_THAT(images, testing::Not(testing::IsEmpty()));
+    const RendererBitmap actual = RenderTextOpacityCase(scene.text);
+    editor::tests::CompareBitmapToBitmap(actual, RenderTextOpacityCase(scene.reference(images)),
+                                         "bitmap_glyph_" + std::string(scene.label),
+                                         editor::tests::PixelmatchIdentityParams());
+    const std::string withoutEmoji = scene.reference({});
+    for (const RendererBackend backend : {ActiveRendererBackend(), RendererBackend::TinySkia}) {
+      SCOPED_TRACE(RendererBackendName(backend));
+      EXPECT_THAT(IdentityMismatchCount(RenderBitmapGlyphScene(scene.text, backend),
+                                        RenderBitmapGlyphScene(withoutEmoji, backend),
+                                        "bitmap_glyph_removed_" + std::string(scene.label)),
+                  testing::Gt(kMinimumEmojiPixels));
+    }
+  }
+}
+
+// A draw budget that the gradient's stops reject partway through a text draw stops the draw before
+// the next bitmap glyph is decoded, as it stops every other glyph.
+TEST_F(RendererRegressionTests, TinySkiaGradientRejectionStopsBitmapGlyphDecode) {
+  SVGDocument document = BitmapGlyphDocument(
+      R"svg(<linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+            <text x="12" y="120" font-family="Noto Color Emoji" font-size="48" fill="url(#g)">&#x1F600;&#x1F601;&#x1F602;</text>)svg");
+  RendererTinySkia renderer;
+  renderer.setGradientStopBudgetForTesting(1);
+  renderer.draw(document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_THAT(stats.drawBudgetRejected, testing::IsTrue());
+  EXPECT_THAT(stats.textUniqueOutlines, testing::Eq(1u));
+}
+
+// A bitmap-only fallback face draws an emoji inside a run of outline glyphs; the outline glyphs
+// keep their positions, which the reference repeats with text elements of their own.
+TEST_F(RendererRegressionTests, BitmapGlyphOfAFallbackFaceMatchesItsStrikeDrawnAsAnImage) {
+  constexpr std::string_view kScene =
+      R"svg(<text id="emoji" x="10" y="120" font-family="Noto Sans, Noto Color Emoji" font-size="40" fill="#208040">A&#x1F600;B</text>)svg";
+  const std::vector<std::string> images = BitmapGlyphImages(kScene);
+  ASSERT_THAT(images, testing::SizeIs(1));
+  double bPosition = 0.0;
+  {
+    SVGDocument document = BitmapGlyphDocument(kScene);
+    (void)RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+    auto access = document.writeAccess();
+    const auto element = document.querySelector("#emoji");
+    ASSERT_THAT(element, testing::Ne(std::nullopt));
+    const auto& geometry =
+        document.registry().ctx().get<TextEngine>().ensureComputedTextGeometryComponent(
+            element->entityHandle());
+    ASSERT_THAT(geometry.runs, testing::Not(testing::IsEmpty()));
+    ASSERT_THAT(geometry.runs.back().glyphs, testing::Not(testing::IsEmpty()));
+    bPosition = geometry.runs.back().glyphs.back().xPosition;
+  }
+  std::ostringstream outlines;
+  outlines
+      << std::setprecision(17)
+      << R"svg(<text x="10" y="120" font-family="Noto Sans" font-size="40" fill="#208040">A</text>)svg"
+      << "<text x='" << bPosition
+      << R"svg(' y="120" font-family="Noto Sans" font-size="40" fill="#208040">B</text>)svg";
+  const RendererBitmap actual = RenderTextOpacityCase(kScene);
+  editor::tests::CompareBitmapToBitmap(actual, RenderTextOpacityCase(outlines.str() + images[0]),
+                                       "bitmap_glyph_fallback_face",
+                                       editor::tests::PixelmatchIdentityParams());
+  for (const RendererBackend backend : {ActiveRendererBackend(), RendererBackend::TinySkia}) {
+    SCOPED_TRACE(RendererBackendName(backend));
+    EXPECT_THAT(IdentityMismatchCount(RenderBitmapGlyphScene(kScene, backend),
+                                      RenderBitmapGlyphScene(outlines.str(), backend),
+                                      "bitmap_glyph_removed_fallback_face"),
+                testing::Gt(500));
+  }
+}
+#endif  // DONNER_TEXT_FULL
 
 }  // namespace
 }  // namespace donner::svg
