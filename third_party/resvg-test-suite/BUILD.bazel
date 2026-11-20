@@ -370,9 +370,9 @@ spans differently. Donner matches upstream's reference within 36 pixels on both 
 
 The first blur's 50-unit primitive subregion clips its result at x=54 units, so the second blur's
 half-alpha crossing on the scanline y=100 lies at x=54.0 in upstream's reference, as in Chrome and
-Firefox; the snapshot's crosses at x=53.33. image-rendering="optimizeSpeed" selects nearest-
-neighbor sampling, and upstream's on-feImage reference samples the embedded 64x64 image at
-destination pixel centers: every pixel of the 216x216 filter region is within one level of the
+Firefox; the snapshot's crosses at x=53.33. Donner draws image-rendering="optimizeSpeed" with
+nearest-neighbor sampling, and upstream's on-feImage reference samples the embedded 64x64 image
+at destination pixel centers: every pixel of the 216x216 filter region is within one level of the
 texel nearest its center, where the snapshot's samples a different grid. Filter functions operate
 in sRGB (Filter Effects 1, section 5), so grayscale() of seagreen gives 115, the interior of
 upstream's url-and-grayscale reference; the snapshot's interior is 122, the result for linearRGB
