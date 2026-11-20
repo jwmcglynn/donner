@@ -62,17 +62,29 @@ constexpr std::size_t kBufferWriteSizeBucketStart = 34;  // Seven disjoint size 
 constexpr std::size_t kBufferWrite256 = 41;
 constexpr std::size_t kBufferWrite448 = 42;
 constexpr std::size_t kBufferWriteBytes = 43;
-std::array<std::atomic<uint32_t>, 44> gOwnerWaitStats{};
+constexpr std::size_t kDeliveryUs = 44;
+constexpr std::size_t kOwnerQueueUs = 45;
+constexpr std::size_t kExecuteUs = 46;
+constexpr std::size_t kCompletionWakeUs = 47;
+constexpr std::size_t kStartLatencyBucketStart = 48;  // Eight disjoint latency buckets.
+constexpr std::size_t kCanvasFrameActiveUs = 56;
+constexpr std::size_t kCanvasFrames = 57;
+constexpr std::size_t kReceivedDuringCanvasFrame = 58;
+std::array<std::atomic<uint32_t>, 59> gOwnerWaitStats{};
 static_assert(kBufferWriteSizeBucketStart + 7 == kBufferWrite256);
+static_assert(kStartLatencyBucketStart + kBrowserGpuOwnerStartLatencyBucketUpperUs.size() + 1 ==
+              kCanvasFrameActiveUs);
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
+thread_local uint32_t gRequestedByThisThread = 0;
 // The queue outlives SDK notification messages, including those pending at owner shutdown.
 em_proxying_queue* gNotificationQueue = nullptr;
 BrowserGpuTaskQueue gReady;
 bool gProcessingBatch = false;
 bool gPulseScheduled = false;
 bool gCanvasFrameActive = false;
+double gCanvasFrameStartedMs = 0.0;
 constexpr std::size_t kMaximumInlineCalls = 32;
 constexpr double kMaximumInlineMs = 2.0;
 std::size_t gInlineCalls = 0;
@@ -168,7 +180,31 @@ struct OwnerRequest {
   void* context;
   std::atomic<int> complete{0};
   BrowserGpuTask task;
+  // Written by the owner before `complete` is released; read by the requester after acquiring it.
+  double receivedMs = 0.0;
+  double startedMs = 0.0;
+  double finishedMs = 0.0;
 };
+
+/// Adds the elapsed time from \p fromMs to \p toMs, or nothing when the clocks disagree on order.
+void AddPhase(std::size_t index, double fromMs, double toMs) {
+  AddSaturatingCounter(index, std::max(0.0, toMs - fromMs) * 1000.0);
+}
+
+/// Splits a completed request's blocked time into delivery, owner queue, execution and wake.
+void RecordRequestPhases(const OwnerRequest& request, double requestStartedMs, double observedMs) {
+  AddPhase(kDeliveryUs, requestStartedMs, request.receivedMs);
+  AddPhase(kOwnerQueueUs, request.receivedMs, request.startedMs);
+  AddPhase(kExecuteUs, request.startedMs, request.finishedMs);
+  AddPhase(kCompletionWakeUs, request.finishedMs, observedMs);
+  const double startLatencyUs = std::max(0.0, request.startedMs - requestStartedMs) * 1000.0;
+  const auto& bounds = kBrowserGpuOwnerStartLatencyBucketUpperUs;
+  const auto bucket = static_cast<std::size_t>(
+      std::find_if(bounds.begin(), bounds.end(),
+                   [&](uint32_t bound) { return startLatencyUs <= bound; }) -
+      bounds.begin());
+  gOwnerWaitStats[kStartLatencyBucketStart + bucket].fetch_add(1, std::memory_order_relaxed);
+}
 
 void WaitForRequest(OwnerRequest& request, double requestStartedMs) {
   const double deadlineMs = emscripten_get_now() + 10000.0;
@@ -200,7 +236,9 @@ void WaitForRequest(OwnerRequest& request, double requestStartedMs) {
       gOwnerWaitStats[kWakeBeforeCompletion].fetch_add(1, std::memory_order_relaxed);
     }
   }
-  AddSaturatingCounter(kTotalDispatchWaitUs, (emscripten_get_now() - requestStartedMs) * 1000.0);
+  const double observedMs = emscripten_get_now();
+  AddSaturatingCounter(kTotalDispatchWaitUs, (observedMs - requestStartedMs) * 1000.0);
+  RecordRequestPhases(request, requestStartedMs, observedMs);
 }
 
 void Invoke(void* context) {
@@ -209,7 +247,9 @@ void Invoke(void* context) {
   if (gProcessingOwnerWait) {
     gOwnerWaitStats[kDispatchCount].fetch_add(1, std::memory_order_relaxed);
   }
+  request.startedMs = emscripten_get_now();
   request.operation(request.context);
+  request.finishedMs = emscripten_get_now();
   gOwnerWaitStats[kFinished].fetch_add(1, std::memory_order_relaxed);
   emscripten_futex_wake(&request.complete, INT_MAX);
   // This release is the callback's final access to the caller-owned request.
@@ -218,6 +258,10 @@ void Invoke(void* context) {
 
 void EnqueueRequest(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
+  request.receivedMs = emscripten_get_now();
+  if (gCanvasFrameActive) {
+    gOwnerWaitStats[kReceivedDuringCanvasFrame].fetch_add(1, std::memory_order_relaxed);
+  }
   request.task.callback = &Invoke;
   request.task.context = &request;
   const bool wasEmpty = gReady.empty();
@@ -330,9 +374,25 @@ void RegisterBrowserGpuOwner() {
         'totalBytes': Atomics.load(HEAPU32, index + 43),
         'bytesSaturated': Atomics.load(HEAPU32, index + 43) === 4294967295,
       }),
-      'timingSaturated': Atomics.load(HEAPU32, index + 10) === 4294967295 ||
-                         Atomics.load(HEAPU32, index + 11) === 4294967295 ||
-                         Atomics.load(HEAPU32, index + 20) === 4294967295,
+      'deliveryMs': Atomics.load(HEAPU32, index + 44) / 1000,
+      'ownerQueueMs': Atomics.load(HEAPU32, index + 45) / 1000,
+      'executeMs': Atomics.load(HEAPU32, index + 46) / 1000,
+      'completionWakeMs': Atomics.load(HEAPU32, index + 47) / 1000,
+      'startLatency': ({
+        'upTo50Us': Atomics.load(HEAPU32, index + 48),
+        'upTo100Us': Atomics.load(HEAPU32, index + 49),
+        'upTo250Us': Atomics.load(HEAPU32, index + 50),
+        'upTo1Ms': Atomics.load(HEAPU32, index + 51),
+        'upTo4Ms': Atomics.load(HEAPU32, index + 52),
+        'upTo16Ms': Atomics.load(HEAPU32, index + 53),
+        'upTo64Ms': Atomics.load(HEAPU32, index + 54),
+        'over64Ms': Atomics.load(HEAPU32, index + 55),
+      }),
+      'canvasFrameActiveMs': Atomics.load(HEAPU32, index + 56) / 1000,
+      'canvasFrames': Atomics.load(HEAPU32, index + 57),
+      'receivedDuringCanvasFrame': Atomics.load(HEAPU32, index + 58),
+      'timingSaturated': [10, 11, 20, 44, 45, 46, 47, 56].some(
+          (offset) => Atomics.load(HEAPU32, index + offset) === 4294967295),
     });
   }, gOwnerWaitStats.data());
   // clang-format on
@@ -371,6 +431,7 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
     const double requestStartedMs = emscripten_get_now();
     OwnerRequest request{operation, context, {}, {}};
     gOwnerWaitStats[kRequested].fetch_add(1, std::memory_order_relaxed);
+    ++gRequestedByThisThread;
     gOwnerWaitStats[OperationCounter(kind)].fetch_add(1, std::memory_order_relaxed);
     // The inline budget bounds repeated requests within the SDK's otherwise unbounded drain.
     if (!emscripten_proxy_async(gNotificationQueue, owner, &EnqueueRequest, &request)) {
@@ -423,6 +484,13 @@ void SetBrowserGpuOwnerCanvasFrameActive([[maybe_unused]] bool active) {
     std::abort();
   }
   gCanvasFrameActive = active;
+  const double nowMs = emscripten_get_now();
+  if (active) {
+    gCanvasFrameStartedMs = nowMs;
+  } else {
+    AddPhase(kCanvasFrameActiveUs, gCanvasFrameStartedMs, nowMs);
+    gOwnerWaitStats[kCanvasFrames].fetch_add(1, std::memory_order_relaxed);
+  }
   if (!active && !gReady.empty()) {
     SchedulePulse();
   }
@@ -452,11 +520,30 @@ bool UsesBrowserGpuOwner() {
 
 BrowserGpuOwnerDispatchTotals ReadBrowserGpuOwnerDispatchTotals() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  return BrowserGpuOwnerDispatchTotals{
-      .requested = gOwnerWaitStats[kRequested].load(std::memory_order_relaxed),
-      .waitSliceTimeouts = gOwnerWaitStats[kFutexTimeouts].load(std::memory_order_relaxed),
-      .dispatchWaitUs = gOwnerWaitStats[kTotalDispatchWaitUs].load(std::memory_order_relaxed),
+  const auto read = [](std::size_t index) {
+    return gOwnerWaitStats[index].load(std::memory_order_relaxed);
   };
+  BrowserGpuOwnerDispatchTotals totals{
+      .requested = read(kRequested),
+      .waitSliceTimeouts = read(kFutexTimeouts),
+      .dispatchWaitUs = read(kTotalDispatchWaitUs),
+      .requestedByCallingThread = gRequestedByThisThread,
+      .deliveryUs = read(kDeliveryUs),
+      .ownerQueueUs = read(kOwnerQueueUs),
+      .executeUs = read(kExecuteUs),
+      .completionWakeUs = read(kCompletionWakeUs),
+      .canvasFrameActiveUs = read(kCanvasFrameActiveUs),
+      .canvasFrames = read(kCanvasFrames),
+      .receivedDuringCanvasFrame = read(kReceivedDuringCanvasFrame),
+  };
+  for (std::size_t kind = 0; kind < kBrowserGpuOperationKindCount; ++kind) {
+    totals.requestedByKind[kind] =
+        read(OperationCounter(static_cast<BrowserGpuOperationKind>(kind)));
+  }
+  for (std::size_t bucket = 0; bucket < totals.startLatencyBuckets.size(); ++bucket) {
+    totals.startLatencyBuckets[bucket] = read(kStartLatencyBucketStart + bucket);
+  }
+  return totals;
 #else
   return {};
 #endif

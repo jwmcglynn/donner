@@ -1458,7 +1458,7 @@ coverage gain.
 ### Tests named by the ledgers
 
 Each implementation ledger ends with a "Tests to create" list: one item per finding that has no
-test, with the row key, the anchor, the minimal content and the expected result. There are 769 items
+test, with the row key, the anchor, the minimal content and the expected result. There are 768 items
 in all. The `conformant-untested` column counts rows where the code matches the specification and
 nothing asserts it; in [styling_properties](../spec_audit/styling_properties.md) 122 of those are
 registration cross-check rows whose tests belong to the owning ledger.
@@ -1468,7 +1468,7 @@ registration cross-check rows whose tests belong to the owning ledger.
 | [structure](../spec_audit/structure.md#tests-to-create)                                       | 29              | 20                         |
 | [shapes_paths](../spec_audit/shapes_paths.md#tests-to-create)                                 | 21              | 16                         |
 | [text_layout](../spec_audit/text_layout.md#tests-to-create)                                   | 35              | 8                          |
-| [paint_servers_markers_images](../spec_audit/paint_servers_markers_images.md#tests-to-create) | 39              | 16                         |
+| [paint_servers_markers_images](../spec_audit/paint_servers_markers_images.md#tests-to-create) | 38              | 16                         |
 | [clipping_masking](../spec_audit/clipping_masking.md#tests-to-create)                         | 23              | 2                          |
 | [filters_core](../spec_audit/filters_core.md#tests-to-create)                                 | 20              | 22                         |
 | [filters_generators_lighting](../spec_audit/filters_generators_lighting.md#tests-to-create)   | 21              | 0                          |
@@ -1482,7 +1482,7 @@ registration cross-check rows whose tests belong to the owning ledger.
 | [color_compositing](../spec_audit/color_compositing.md#tests-to-create)                       | 35              | 37                         |
 | [transforms_coordinates](../spec_audit/transforms_coordinates.md#tests-to-create)             | 32              | 29                         |
 | [xml_data_formats](../spec_audit/xml_data_formats.md#tests-to-create)                         | 62              | 5                          |
-| **Total**                                                                                     | 769             | 345                        |
+| **Total**                                                                                     | 768             | 345                        |
 
 ### Reference conflicts
 
@@ -1498,9 +1498,11 @@ needed. Details are in the coverage ledger.
 - **RC3.** `painting/fill/rgb-int-int-int.svg` marks space-separated `rgb()` as undefined. The CR's
   normative color reference is CSS Color 3; Donner accepts the modern form (`val:color/rgb()-modern`
   in [color_compositing](../spec_audit/color_compositing.md)).
-- **RC4.** `paint-servers/radialGradient/fr=0.7.svg` paints a reversed gradient where Donner paints
-  nothing (`feat:svg2/radial-start-circle-contains-end-circle` in
-  [paint_servers_markers_images](../spec_audit/paint_servers_markers_images.md)).
+- **RC4.** Resolved: `paint-servers/radialGradient/fr=0.7.svg` paints a start circle containing the
+  end circle by the canvas two-point rule that `fr` adopts, and Donner compares against it at
+  default settings (`feat:svg2/radial-start-circle-contains-end-circle` in
+  [paint_servers_markers_images](../spec_audit/paint_servers_markers_images.md)). Identical circles
+  (`fr=0.5.svg`) remain an open question (`feat:svg2/radial-coincident-circles`).
 - **RC5.** Paint server bounding boxes on text use glyph ink extents in the references and glyph
   cells in Donner (`feat:svg2/text-bbox-glyph-cells` in
   [text_layout](../spec_audit/text_layout.md)).

@@ -24,6 +24,7 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
+#include "donner/svg/components/ReferenceInvalidation.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
@@ -1882,6 +1883,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // invalidation after the prepare.
   std::vector<Entity> dirtyEntitySnapshot;
   std::vector<Entity> transformDirtyEntities;
+  components::InvalidateReferenceDependents(registry);
   {
     auto dirtyView = registry.view<components::DirtyFlagsComponent>();
     for (const Entity entity : dirtyView) {

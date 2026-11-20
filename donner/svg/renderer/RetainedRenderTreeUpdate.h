@@ -17,7 +17,9 @@ namespace donner::svg::components {
  * qualifies for one.
  *
  * A dirty set qualifies when every change only moves content (a transform write), changes how it
- * is composited (an `opacity` write) or points an external `<use>` at another external instance.
+ * is composited (an `opacity` write), points an external `<use>` at another external instance, or
+ * only requires an element to redraw content it draws through a reference (an `feImage` of a moved
+ * element).
  * None of these changes any input of the computed styles of other elements, the shadow trees, the
  * computed paths, text layout, paint servers or filter graphs, so those are kept, and the render
  * instances are rebuilt from them. Anything else, or any case where one of these changes could

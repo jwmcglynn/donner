@@ -2,7 +2,9 @@
 /// @file
 
 #include <array>
+#include <cstdint>
 #include <map>
+#include <ostream>
 #include <span>
 #include <string_view>
 
@@ -728,6 +730,34 @@ public:
    */
   void clearStyleAttributeProperties();
 
+  /// Result of \ref clearPresentationAttribute.
+  enum class PresentationAttributeClear : std::uint8_t {
+    Cleared,   //!< A declaration the attribute made was removed.
+    NotSet,    //!< The attribute writes properties here, but declared none of them.
+    NotStored  //!< The attribute's state is not stored here, such as `transform` or `cx`.
+  };
+
+  /// Prints a \ref PresentationAttributeClear by name, for test diagnostics.
+  friend std::ostream& operator<<(std::ostream& os, PresentationAttributeClear value) {
+    switch (value) {
+      case PresentationAttributeClear::Cleared: return os << "Cleared";
+      case PresentationAttributeClear::NotSet: return os << "NotSet";
+      case PresentationAttributeClear::NotStored: return os << "NotStored";
+    }
+    return os;
+  }
+
+  /**
+   * Remove the declarations a presentation attribute contributed, so the properties it writes
+   * cascade as if it were never authored: an inherited property inherits again, and a `style=""`
+   * declaration stays in effect. This covers every property the attribute writes, including the
+   * longhands of a shorthand and the target of an alias. A presentation attribute declares at
+   * specificity `0,0,0`, which only presentation attributes use in an element's local registry.
+   *
+   * @param name Presentation attribute name, such as "fill".
+   */
+  PresentationAttributeClear clearPresentationAttribute(std::string_view name);
+
   /**
    * Parse a common presentation attribute (CSS properties like fill, stroke, etc.) or `transform`.
    *
@@ -818,6 +848,10 @@ private:
   bool parseInlineResourceColor(
       const css::Declaration& declaration,
       std::array<Property<css::Color>, kResourceColorCount>& selectedColors);
+
+  /// Clear the resource color at \p index when a presentation attribute declared it, keeping an
+  /// inline `style=""` value in effect.
+  PresentationAttributeClear clearResourceColorPresentation(std::size_t index);
 
   /// Apply a resource-color presentation attribute and preserve its diagnostic.
   ParseResult<bool> parseResourceColorAttribute(std::size_t index,

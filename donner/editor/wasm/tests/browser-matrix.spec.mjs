@@ -1706,26 +1706,21 @@ test("completion checks enforce by default and report only tracked misses", asyn
   );
   assert.deepEqual(
     Object.fromEntries(
-      Object.entries(gates.kCompletionChecks).map(([check, { browser }]) => [check, browser]),
+      Object.entries(gates.kCompletionChecks).map(([check, { report }]) => [check, report]),
     ),
     {
-      coldZoomPresents: "chromium",
-      dragInputsComplete: "firefox",
-      heldDragPositions: "chromium",
-      heldMaskedDragDamagePatch: "firefox",
+      coldZoomPresents: { browsers: ["chromium"], issue: "#1675", restoreWhen: "#1675 is fixed" },
+      dragInputsComplete: { browsers: ["firefox"], issue: "#1676", restoreWhen: "#1676 is fixed" },
+      heldDragPositions: {
+        browsers: ["chromium"],
+        phases: ["geode-crown"],
+        issue: "#2106",
+        restoreWhen: "#2106 is fixed",
+      },
+      heldDragFastPathResults: undefined,
+      heldMaskedDragDamagePatch: undefined,
     },
-  );
-  assert.deepEqual(
-    Object.fromEntries(
-      Object.entries(gates.kCompletionChecks).map(([check, { phases }]) => [check, phases]),
-    ),
-    {
-      coldZoomPresents: undefined,
-      dragInputsComplete: undefined,
-      heldDragPositions: ["geode-crown"],
-      heldMaskedDragDamagePatch: ["geode-crown"],
-    },
-    "only the masked crown drag phase may report the held-position and damage patch checks",
+    "a new or wider report scope is a reviewed change to this table",
   );
   const miss = new Error("every dispatched input must complete\n\nExpected: 60");
   const run = async (mode, browserName, assertion) => {
@@ -1786,11 +1781,12 @@ test("completion checks enforce by default and report only tracked misses", asyn
     },
   ).then((result) => ({ result }), (error) => ({ error }));
   assert.equal(enforcedHeld.error, heldMiss, "an enforcing run rethrows a tracked miss");
-  for (const [browserName, phase] of [
+  const enforcedPhases = [
     ["chromium", "first-drag-193"],
     ["chromium", "second-drag-193"],
     ["firefox", "geode-crown"],
-  ]) {
+  ];
+  for (const [browserName, phase] of enforcedPhases) {
     assert.equal(
       (await runHeld(browserName, phase)).error,
       heldMiss,
@@ -1799,33 +1795,36 @@ test("completion checks enforce by default and report only tracked misses", asyn
   }
   assert.equal(gates.completionCheckTracks("dragInputsComplete", "firefox", "any-phase"), true);
   assert.equal(gates.completionCheckTracks("heldDragPositions", "chromium", "geode-crown"), true);
-  assert.equal(
-    gates.completionCheckTracks("heldMaskedDragDamagePatch", "firefox", "geode-crown", "firefox-dpr1"),
-    true,
-  );
-  for (const [browserName, project] of [["firefox", "firefox"], ["chromium", "chromium-dpr1"]]) {
-    assert.equal(
-      gates.completionCheckTracks("heldMaskedDragDamagePatch", browserName, "geode-crown", project),
-      false,
-      `${project} runs the geode-crown phase at device pixel ratio 2 and stays enforced`,
-    );
+  assert.equal(gates.completionCheckTracks("heldDragPositions", "firefox", "geode-crown"), false);
+  for (const browserName of ["chromium", "firefox"]) {
+    for (const check of ["heldDragFastPathResults", "heldMaskedDragDamagePatch"]) {
+      assert.equal(
+        gates.completionCheckTracks(check, browserName, "geode-crown"),
+        false,
+        `${check} stays enforced in ${browserName}`,
+      );
+    }
   }
   const damagePatchMiss = new Error("every held masked-child result must take the fast path");
-  const runDamagePatch = (project) =>
-    gates.runCompletionCheck("heldMaskedDragDamagePatch", () => Promise.reject(damagePatchMiss), {
-      browserName: "firefox",
-      project,
-      phase: "geode-crown",
-      detail: "8 held results, 0 slow path, 6 rasterized unpatched",
-      mode: "report",
-      log: () => {},
-    }).then((result) => ({ result }), (error) => ({ error }));
-  assert.equal((await runDamagePatch("firefox-dpr1")).result?.mode, "report");
-  assert.equal(
-    (await runDamagePatch("firefox")).error,
-    damagePatchMiss,
-    "a damage patch miss in the firefox project stays enforced in report mode",
-  );
+  for (const project of responsivenessPerfProjects()) {
+    const outcome = await gates.runCompletionCheck(
+      "heldMaskedDragDamagePatch",
+      () => Promise.reject(damagePatchMiss),
+      {
+        browserName: project.split("-")[0],
+        project,
+        phase: "geode-crown",
+        detail: "8 held results, 0 slow path, 6 rasterized unpatched",
+        mode: "report",
+        log: () => {},
+      },
+    ).then((result) => ({ result }), (error) => ({ error }));
+    assert.equal(
+      outcome.error,
+      damagePatchMiss,
+      `a damage patch miss in the ${project} project stays enforced in report mode`,
+    );
+  }
   assert.equal(
     gates.completionCheckTracks("heldDragPositions", "chromium", "first-drag-193"),
     false,
@@ -1897,15 +1896,384 @@ test("the masked drag counters are checked in candidate runs and only measured i
   );
 });
 
+test("every completion check report scope names its issue and when it is removed", async () => {
+  const gates = await import("./latency-gates.mjs");
+  for (const [check, { observes, report }] of Object.entries(gates.kCompletionChecks)) {
+    assert.ok(typeof observes === "string" && observes !== "", `${check} names what it observes`);
+    if (report === undefined) continue;
+    assert.ok(report.browsers.length > 0, `${check} must name the browsers it reports in`);
+    assert.match(report.issue, /^#\d+$/, `${check} must name the issue that tracks its misses`);
+    assert.ok(
+      typeof report.restoreWhen === "string" && report.restoreWhen.includes(report.issue),
+      `${check} must say, in terms of its issue, when enforcement returns`,
+    );
+  }
+});
+
+// Held masked-child result counters as the editor publishes them for one result.
+function maskedDragResult(completedResults, counters = {}) {
+  return {
+    completedResults,
+    countersPublished: true,
+    activeDragResult: true,
+    fastPathFrames: 0,
+    slowPathFramesWithDirty: 0,
+    noDirtyFrames: 0,
+    damagePatchTileCount: 0,
+    cachedTileCount: 0,
+    immediateTileCount: 0,
+    ...counters,
+  };
+}
+
+// A drag-start result finds nothing dirty; a held move patches the damage of its one owning tile.
+const kDragStartResult = { noDirtyFrames: 1 };
+const kFastPathMove = { fastPathFrames: 1, cachedTileCount: 1, damagePatchTileCount: 1 };
+
+test("the masked drag result shape and its fast-path progress are separate checks", async () => {
+  const gates = await import("./latency-gates.mjs");
+  const counters = await import("./masked-drag-counters.mjs");
+  const summary = (...held) => ({ countersPublished: true, held });
+  // How the spec runs both checks on the hosted job, which reports the checks' scoped misses: each
+  // outcome is "met", "reported" or "failed".
+  const check = async (held, project) => {
+    const results = summary(...held);
+    const run = (name, assertion) =>
+      gates.runCompletionCheck(name, assertion, {
+        browserName: project.split("-")[0],
+        project,
+        phase: "geode-crown",
+        detail: "",
+        mode: "report",
+        log: () => {},
+      }).then((result) => result.met ? "met" : "reported", () => "failed");
+    return {
+      shape: await run(
+        "heldMaskedDragDamagePatch",
+        () => assert.deepEqual(counters.heldMaskedDragShapeFailures(results), []),
+      ),
+      fastPath: await run(
+        "heldDragFastPathResults",
+        () => assert.ok(counters.heldFastPathResultCount(results) > 0, "no fast-path result"),
+      ),
+    };
+  };
+  const dragStart = maskedDragResult(8, kDragStartResult);
+  for (const project of responsivenessPerfProjects()) {
+    assert.deepEqual(
+      await check([dragStart], project),
+      { shape: "met", fastPath: "failed" },
+      `${project}: a drag that completes only its drag-start result while held has the shape, and `
+        + "fails the enforced fast-path result check",
+    );
+    assert.deepEqual(
+      await check([dragStart, maskedDragResult(9, kFastPathMove), maskedDragResult(10)], project),
+      { shape: "failed", fastPath: "met" },
+      `${project}: a held result that neither takes the fast path nor finds nothing dirty fails`,
+    );
+    assert.deepEqual(
+      await check([dragStart, maskedDragResult(9, kFastPathMove)], project),
+      { shape: "met", fastPath: "met" },
+      `${project}: a healthy held drag meets both`,
+    );
+    const slowPath = maskedDragResult(9, { slowPathFramesWithDirty: 1, cachedTileCount: 4 });
+    assert.deepEqual(
+      await check([dragStart, slowPath], project),
+      { shape: "failed", fastPath: "failed" },
+      `${project}: a slow-path held result fails the enforced shape check`,
+    );
+    const unpatched = maskedDragResult(9, { ...kFastPathMove, cachedTileCount: 2 });
+    assert.deepEqual(
+      await check([dragStart, unpatched], project),
+      { shape: "failed", fastPath: "met" },
+      `${project}: a held tile rasterized without a damage patch fails the enforced shape check`,
+    );
+  }
+  assert.deepEqual(
+    counters.heldMaskedDragShapeFailures(summary(
+      dragStart,
+      maskedDragResult(9, { slowPathFramesWithDirty: 1, cachedTileCount: 4 }),
+      maskedDragResult(10, { ...kFastPathMove, cachedTileCount: 2, damagePatchTileCount: 2 }),
+    )),
+    [
+      "held result 1 (completed result 9): 1 slow-path frames, neither the fast path nor a clean "
+      + "frame, 4 tiles rasterized without a damage patch",
+      "held result 2 (completed result 10): 2 damage-patched tiles",
+    ],
+  );
+  assert.deepEqual(
+    counters.heldMaskedDragShapeFailures({ countersPublished: false, held: [] }),
+    ["the candidate bundle must publish per-result counters"],
+  );
+  // The recorder reads each counter with Number(), so a counter the editor stopped publishing or
+  // renamed arrives as NaN; it fails, named, instead of passing every comparison.
+  const withoutSlowPath = maskedDragResult(9, kFastPathMove);
+  delete withoutSlowPath.slowPathFramesWithDirty;
+  assert.deepEqual(
+    counters.heldMaskedDragShapeFailures(summary(
+      dragStart,
+      withoutSlowPath,
+      maskedDragResult(10, { ...kFastPathMove, damagePatchTileCount: Number(undefined) }),
+    )),
+    [
+      "held result 1 (completed result 9): unreadable counters slowPathFramesWithDirty",
+      "held result 2 (completed result 10): unreadable counters damagePatchTileCount",
+    ],
+  );
+  // More damage-patched tiles than rasterized ones is not a clean result either.
+  assert.deepEqual(
+    counters.heldMaskedDragShapeFailures(summary(
+      maskedDragResult(9, { ...kFastPathMove, cachedTileCount: 0 }),
+    )),
+    ["held result 0 (completed result 9): -1 tiles rasterized without a damage patch"],
+  );
+});
+
+// Runs the in-page drag sampler against a scripted editor on a simulated clock. From the press
+// until its release frame the editor completes a frame every `frameEveryMs` that represents no
+// input, as the hosted Chromium runner does during the masked crown drag. It completes the release
+// frame `releaseAfterMs` after the mouse up, representing `releasePoint` (the final pointer
+// position unless set) at camera zoom `releaseZoom`, or never when `releaseAfterMs` is null.
+async function sampleScriptedDrag({
+  releaseFrameTimeoutMs,
+  releaseAfterMs,
+  frameEveryMs = 50,
+  releasePoint,
+  releaseZoom = 1.5,
+}) {
+  const { streamDragInputs } = await import("./drag-input-stream.mjs");
+  let now = 1000;
+  let nextTimer = 0;
+  const timers = [];
+  const schedule = (fn, delayMs) => {
+    timers.push({ id: ++nextTimer, atMs: now + Math.max(0, delayMs ?? 0), fn });
+    return nextTimer;
+  };
+  const page = {
+    __donnerFrameLoopStats: { renderedFrames: 1, lastFrameAtMs: now },
+    __donnerPresentationQueueStats: {
+      completedSerial: 1,
+      completedAtMs: now,
+      inputRepresented: true,
+      mouseDown: false,
+      pointerX: 0,
+      pointerY: 0,
+      viewportZoom: 1.5,
+    },
+    __donnerInteractionStats: { pointerX: 0, pointerY: 0, dragging: false, selectedCount: 1 },
+    __donnerViewportStats: { zoom: 1.5 },
+  };
+  const complete = (pointer, mouseDown, inputRepresented, viewportZoom = 1.5) => {
+    const loop = page.__donnerFrameLoopStats;
+    page.__donnerFrameLoopStats = { renderedFrames: loop.renderedFrames + 1, lastFrameAtMs: now };
+    page.__donnerPresentationQueueStats = {
+      completedSerial: page.__donnerPresentationQueueStats.completedSerial + 1,
+      completedAtMs: now,
+      inputRepresented,
+      mouseDown,
+      pointerX: pointer.x,
+      pointerY: pointer.y,
+      viewportZoom,
+    };
+  };
+  let held = false;
+  let released = false;
+  const laggingFrame = () => {
+    if (released) return;
+    complete({ x: 0, y: 0 }, held, false);
+    schedule(laggingFrame, frameEveryMs);
+  };
+  const canvas = {
+    dispatchEvent(event) {
+      const pointer = { x: event.clientX, y: event.clientY };
+      page.__donnerInteractionStats = {
+        ...page.__donnerInteractionStats,
+        pointerX: pointer.x,
+        pointerY: pointer.y,
+        dragging: event.type !== "mouseup",
+      };
+      if (event.type === "mousedown") {
+        held = true;
+        schedule(laggingFrame, frameEveryMs);
+      } else if (event.type === "mouseup") {
+        held = false;
+        if (releaseAfterMs !== null) {
+          schedule(() => {
+            released = true;
+            complete(releasePoint ?? pointer, false, true, releaseZoom);
+          }, releaseAfterMs);
+        }
+      }
+    },
+  };
+  const globals = {
+    window: page,
+    document: { querySelector: () => canvas },
+    MouseEvent: class {
+      constructor(type, init) {
+        Object.assign(this, init, { type });
+      }
+    },
+    performance: { now: () => now },
+    setTimeout: schedule,
+    requestAnimationFrame: (fn) => schedule(() => fn(now), 16),
+    cancelAnimationFrame: (id) => {
+      const index = timers.findIndex((timer) => timer.id === id);
+      if (index >= 0) timers.splice(index, 1);
+    },
+  };
+  const previous = Object.fromEntries(
+    Object.keys(globals).map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
+  );
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  }
+  try {
+    let settled = false;
+    const stream = streamDragInputs({
+      start: { x: 400, y: 300 },
+      direction: 0.25,
+      releaseFrameTimeoutMs,
+    }).finally(() => {
+      settled = true;
+    });
+    await flush();
+    while (!settled) {
+      assert.ok(timers.length > 0, "the sampler must still be waiting on a timer");
+      timers.sort((a, b) => a.atMs - b.atMs || a.id - b.id);
+      const timer = timers.shift();
+      now = timer.atMs;
+      timer.fn();
+      await flush();
+    }
+    return await stream;
+  } finally {
+    for (const [name, descriptor] of Object.entries(previous)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  }
+}
+
+test("the drag sampler observes the drag until the one release stall guard", async () => {
+  const stream = await import("./drag-input-stream.mjs");
+  const completed = (sampled) => stream.dragInputLatencies(sampled, 1).length;
+  const deadlineMs = stream.kReleaseFrameTimeoutMs;
+  // Every held frame lags behind the pointer, so only the release frame completes any input. A
+  // release frame 900 ms after the mouse up is slow but complete; a sampler that stopped observing
+  // after 500 ms read it as no input completed.
+  const late = await sampleScriptedDrag({ releaseFrameTimeoutMs: deadlineMs, releaseAfterMs: 900 });
+  assert.equal(completed(late), 60, "a slow but complete drag completes every input");
+  assert.equal(late.releaseFrame?.completedAtMs, late.releasedAtMs + 900);
+  assert.equal(late.frames.at(-1).presentation.mouseDown, false);
+  // Just inside the stall guard the release is met; just past it the sampler reports no release
+  // frame, which the spec fails as a stalled release before it reads the inputs.
+  const inside = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: deadlineMs,
+    releaseAfterMs: deadlineMs - 10,
+  });
+  assert.equal(inside.releaseFrame?.completedAtMs, inside.releasedAtMs + deadlineMs - 10);
+  assert.equal(completed(inside), 60);
+  const past = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: deadlineMs,
+    releaseAfterMs: deadlineMs + 10,
+  });
+  assert.equal(past.releaseFrame, null, "a release frame past the deadline is not the release");
+  assert.ok(past.finishedAtMs - past.releasedAtMs < deadlineMs + 10, "no wait past the deadline");
+  // A release frame at another camera than the current one does not meet the release.
+  const otherCamera = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: deadlineMs,
+    releaseAfterMs: 100,
+    releaseZoom: 1.25,
+  });
+  assert.equal(otherCamera.releaseFrame, null);
+  // The sampler stops at the release frame rather than waiting out the deadline.
+  const prompt = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: deadlineMs,
+    releaseAfterMs: 120,
+  });
+  assert.equal(completed(prompt), 60);
+  assert.ok(prompt.finishedAtMs - prompt.releasedAtMs < 200, "the sampler stops at the release");
+  // Held frames that change on every animation frame fill the stream before a late release; the
+  // release frame is still kept.
+  const busy = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: deadlineMs,
+    releaseAfterMs: 4500,
+    frameEveryMs: 16,
+  });
+  assert.equal(busy.frames.length, 257, "256 samples and the release frame");
+  assert.equal(completed(busy), 60);
+  assert.equal(
+    deadlineMs,
+    500 + 15000 + 5000,
+    "the stall guard equals the release's previous bound: sampler window, idle wait, release poll",
+  );
+});
+
+test("the drag sampler still reports inputs that never complete", async () => {
+  const stream = await import("./drag-input-stream.mjs");
+  const deadlineMs = stream.kReleaseFrameTimeoutMs;
+  const lost = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: deadlineMs,
+    releaseAfterMs: null,
+  });
+  assert.equal(lost.releaseFrame, null);
+  assert.equal(stream.dragInputLatencies(lost, 1).length, 0, "no frame completed an input");
+  const waitedMs = lost.finishedAtMs - lost.releasedAtMs;
+  assert.ok(
+    waitedMs >= deadlineMs && waitedMs < deadlineMs + 10,
+    `the sampler gives up at the release stall guard, after ${waitedMs} ms`,
+  );
+  // The editor dropped the last moves: its release frame represents the 45th of 60 positions.
+  const partial = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: deadlineMs,
+    releaseAfterMs: 100,
+    releasePoint: { x: Math.round(400 + 0.25 * 120 * 0.75), y: Math.round(300 + 0.25 * 72 * 0.75) },
+  });
+  assert.equal(partial.releaseFrame, null, "a frame at an earlier position is not the release");
+  const completed = stream.dragInputLatencies(partial, 1).length;
+  assert.ok(completed > 40 && completed < 50, `only inputs before the dropped moves: ${completed}`);
+});
+
+test("the release deadline is checked once, before the drag's completion checks", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  const release = spec.indexOf(
+    "expect(stream.releaseFrame, "
+      + "\"release must reach a current paired frame at the requested camera\")",
+  );
+  assert.ok(release >= 0, "the spec must fail a drag whose sampler saw no release frame");
+  assert.equal(spec.split("release must reach a current paired frame").length, 2);
+  assert.ok(release < spec.indexOf("\"dragInputsComplete\","), "the release is checked first");
+  const settled = spec.indexOf(
+    "the presented frame after idle must still be the release at the requested camera",
+  );
+  assert.ok(
+    settled > release && settled < spec.indexOf("\"dragInputsComplete\","),
+    "after idle the presented frame is checked once, without waiting",
+  );
+  assert.equal(
+    spec.split("kReleaseFrameTimeoutMs").length,
+    3,
+    "the deadline goes only to the sampler, so no poll restarts it",
+  );
+});
+
 test("only the tracked responsiveness checks go through the completion check helper", () => {
   const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
   assert.match(spec, /completionCheckMode\(\)/, "the mode must come from the run's environment");
   const calls = [...spec.matchAll(/completionCheck\(\s*"(\w+)"/g)];
   assert.deepEqual(
     calls.map(([, check]) => check),
-    ["heldDragPositions", "dragInputsComplete", "coldZoomPresents", "heldMaskedDragDamagePatch"],
+    [
+      "heldDragPositions",
+      "dragInputsComplete",
+      "coldZoomPresents",
+      "heldMaskedDragDamagePatch",
+      "heldDragFastPathResults",
+    ],
   );
-  const [held, drag, coldZoom, damagePatch] = calls.map(({ index }) => index);
+  const [held, drag, coldZoom, damagePatch, fastPath] = calls.map(({ index }) => index);
   const damagePatchAssertion = spec.indexOf("() => expectHeldMaskedDragDamagePatch(results)");
   assert.match(
     spec.slice(damagePatch - 60, damagePatch),
@@ -1921,14 +2289,29 @@ test("only the tracked responsiveness checks go through the completion check hel
     damagePatchAssertion > damagePatch && damagePatchAssertion - damagePatch < 300,
     "the damage patch check must run its assertion through the helper",
   );
+  const fastPathMessage = "the held drag must render a fast-path result for a move before release";
+  assert.equal(spec.split(fastPathMessage).length, 2, "the fast-path check must appear once");
+  assert.ok(
+    spec.indexOf(fastPathMessage) > fastPath && spec.indexOf(fastPathMessage) - fastPath < 300,
+    "the fast-path result check must run through the helper",
+  );
+  assert.ok(
+    spec.slice(damagePatch, fastPath).includes(".catch((error) => checkFailures.push(error));"),
+    "the fast-path result check must run even when the damage patch check misses",
+  );
   const damagePatchMessage =
     "every held masked-child result must take the fast path and only patch its owning tile";
   assert.equal(spec.split(damagePatchMessage).length, 2, "the damage patch check must appear once");
   const assertionDefinition = spec.indexOf("function expectHeldMaskedDragDamagePatch(");
   assert.ok(
     assertionDefinition >= 0 && spec.indexOf(damagePatchMessage) > assertionDefinition
-      && spec.indexOf(damagePatchMessage) - assertionDefinition < 1500,
+      && spec.indexOf(damagePatchMessage) - assertionDefinition < 300,
     "the damage patch message must belong to the helper the check runs",
+  );
+  assert.match(
+    spec.slice(assertionDefinition, assertionDefinition + 300),
+    /expect\(\s*heldMaskedDragShapeFailures\(summary\),/,
+    "the damage patch helper must assert the shared shape evaluation",
   );
   assert.equal(
     spec.split('"geode-crown"').length,

@@ -3,6 +3,7 @@
 #include <gtest/gtest-spi.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -628,6 +629,83 @@ void TrustDocumentFontFacesForTesting(SVGDocument& document) {
   trustFaces(resourceManager.fontFaces());
 }
 
+CanvasSizeResult CanvasSizeFromReferenceImage(const std::filesystem::path& referencePath) {
+  // The 8-byte signature, then the IHDR chunk: its 4-byte length 13, the type, and the big-endian
+  // 32-bit width and height.
+  constexpr std::string_view kHeaderPrefix("\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR", 16);
+  constexpr size_t kHeaderSize = 24;
+  constexpr uint32_t kMaxDimension = 16384;
+  const std::string where = "the reference image " + referencePath.string();
+
+  std::ifstream file(referencePath, std::ios::binary);
+  if (!file) {
+    return {std::nullopt, where + " is missing or cannot be opened"};
+  }
+  std::array<char, kHeaderSize> header{};
+  file.read(header.data(), header.size());
+  const auto bytesRead = static_cast<size_t>(file.gcount());
+  if (bytesRead < kHeaderSize) {
+    return {std::nullopt, where + " is " + std::to_string(bytesRead) +
+                              " bytes, shorter than a PNG signature and IHDR header"};
+  }
+  if (std::string_view(header.data(), kHeaderPrefix.size()) != kHeaderPrefix) {
+    return {std::nullopt,
+            where + " does not start with the PNG signature and a 13-byte IHDR chunk"};
+  }
+  auto bigEndian = [&header](size_t offset) {
+    uint32_t value = 0;
+    for (size_t i = 0; i < 4; ++i) {
+      value = (value << 8) | static_cast<uint8_t>(header[offset + i]);
+    }
+    return value;
+  };
+  const uint32_t width = bigEndian(16);
+  const uint32_t height = bigEndian(20);
+  if (width == 0 || height == 0 || width > kMaxDimension || height > kMaxDimension) {
+    return {std::nullopt, where + " has invalid dimensions " + std::to_string(width) + "x" +
+                              std::to_string(height)};
+  }
+  const int side = static_cast<int>(std::max(width, height));
+  return {Vector2i(side, side), {}};
+}
+
+namespace {
+
+/// While goldens are being written, a missing golden takes the case's vendored PNG's canvas.
+std::optional<std::filesystem::path> MissingGoldenCanvasFallback(
+    const std::filesystem::path& svgFilename) {
+  if (getenv("UPDATE_GOLDEN_IMAGES_DIR") == nullptr) {
+    return std::nullopt;
+  }
+  return std::filesystem::path(svgFilename).replace_extension(".png");
+}
+
+}  // namespace
+
+CanvasSizeResult ResolveComparisonCanvasSize(
+    const ImageComparisonParams& params, const std::filesystem::path& referencePath,
+    const std::optional<std::filesystem::path>& missingReferenceFallback) {
+  if (params.canvasSize || !params.canvasSizeFromReference) {
+    return {params.canvasSize, {}};
+  }
+  const bool useFallback = missingReferenceFallback && !std::filesystem::exists(referencePath);
+  CanvasSizeResult result =
+      CanvasSizeFromReferenceImage(useFallback ? *missingReferenceFallback : referencePath);
+  if (!result.error.empty()) {
+    if (useFallback) {
+      result.error = "the reference image " + referencePath.string() +
+                     " is missing, and as its fallback " + result.error;
+    }
+    result.error +=
+        ", so the canvas size cannot be taken from it. Check the WithGoldenOverride or "
+        "withGeodeGoldenOverride path for a typo and that the image is a Bazel data "
+        "dependency of the test. To write a deleted golden, run with "
+        "UPDATE_GOLDEN_IMAGES_DIR set; a case whose vendored PNG is missing too needs "
+        "an explicit setCanvasSize().";
+  }
+  return result;
+}
+
 std::optional<TerminalPreviewConfig> PreviewConfigFromEnv(const ImageComparisonParams& params) {
   if (!params.showTerminalPreview) {
     return std::nullopt;
@@ -954,13 +1032,16 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     effectiveGoldenFilename = geodeGoldenStorage.c_str();
   }
 
+  // The canvas is explicit, implied by the image this mode compares with, or the document's own.
+  const CanvasSizeResult canvas = ResolveComparisonCanvasSize(
+      params, effectiveGoldenFilename, MissingGoldenCanvasFallback(svgFilename));
+  ASSERT_TRUE(canvas.error.empty()) << canvas.error;
+  if (canvas.size) {
+    document.setCanvasSize(canvas.size->x, canvas.size->y);
+  }
+
   std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << RendererBackendName(backend)
             << "]: ";  // No endl yet, the line will be continued
-
-  // Most resvg goldens are 500x500; individual SVGs may override this.
-  if (params.canvasSize) {
-    document.setCanvasSize(params.canvasSize->x, params.canvasSize->y);
-  }
 
   const RendererBitmap snapshot = NormalizeSnapshot(RenderDocumentWithBackend(document, backend));
   ASSERT_FALSE(snapshot.empty()) << "the " << RendererBackendName(backend)

@@ -83,11 +83,13 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
     }
     applyCommonFeatureRequirements(test.params, commonRequirements);
 
-    // Canvas size matches the resvg-test-suite reference renderings. This is a
-    // base param (mode-independent), so it stays on `test.params`.
-    if (!test.params.canvasSize) {
+    // Unless the case sets one, its canvas is the one its reference image was rendered on, read
+    // from that image when the case runs. A render-only case compares with no image, so it keeps
+    // the suite's 500x500 canvas.
+    if (!test.params.canvasSize && test.params.isRenderOnly()) {
       test.params.setCanvasSize(500, 500);
     }
+    test.params.enableCanvasSizeFromReference();
 
     testPlan.emplace_back(std::move(test));
   }
@@ -117,12 +119,6 @@ ImageComparisonParams ColorAdjustReference(std::string_view cpuPath, std::string
                                     "Reference disagreement: font smoothing on labels; original "
                                     "filter pixels and per-backend coverage of usvg label outlines")
       .withGeodeGoldenOverride(geodePath);
-}
-
-/// Params for a reference replaced by its 300x300 rendering from resvg release v0.49.0; the
-/// provenance is recorded in third_party/resvg-test-suite/BUILD.bazel.
-ImageComparisonParams ResvgV049Reference() {
-  return ImageComparisonParams().setCanvasSize(300, 300);
 }
 
 }  // namespace
@@ -205,29 +201,18 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeComposite, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeConvolveMatrix, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feConvolveMatrix",
-                {
-                    {"bias=-0.5.svg", Params::UndefinedBehavior("bias=-0.5")},
-                    {"bias=0.5.svg", Params::UndefinedBehavior("bias=0.5")},
-                    {"bias=9999.svg", Params::UndefinedBehavior("bias=9999")},
-                    // The refreshed references keep the convolution output's transparency.
-                    {"edgeMode=none.svg", ResvgV049Reference()},
-                    {"edgeMode=wrap.svg", ResvgV049Reference()},
-                    {"order=4-2.svg", ResvgV049Reference()},
-                    {"order=4-4.svg", ResvgV049Reference()},
-                    {"order=4.svg", ResvgV049Reference()},
-                    {"preserveAlpha=true.svg", ResvgV049Reference()},
-                    {"targetX=0.svg", ResvgV049Reference()},
-                    {"targetX=2.svg", ResvgV049Reference()},
-                    {"unset-order.svg", ResvgV049Reference()},
-                    {"edgeMode=wrap-with-matrix-larger-than-target.svg",
-                     Params::UndefinedBehavior("wrap with oversized kernel")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeConvolveMatrix, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory(
+                                     "filters/feConvolveMatrix",
+                                     {
+                                         {"bias=-0.5.svg", Params::UndefinedBehavior("bias=-0.5")},
+                                         {"bias=0.5.svg", Params::UndefinedBehavior("bias=0.5")},
+                                         {"bias=9999.svg", Params::UndefinedBehavior("bias=9999")},
+                                         {"edgeMode=wrap-with-matrix-larger-than-target.svg",
+                                          Params::UndefinedBehavior("wrap with oversized kernel")},
+                                     })),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeDiffuseLighting, ImageComparisonTestFixture,
@@ -251,21 +236,10 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeDistantLight, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeDropShadow, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feDropShadow",
-                {
-                    // References refreshed to resvg v0.49.0; see
-                    // third_party/resvg-test-suite/BUILD.bazel.
-                    {"only-stdDeviation.svg", ResvgV049Reference()},
-                    {"with-flood-color.svg", ResvgV049Reference()},
-                    // Percentage dx/dy are invalid <number> values and fall back to the default
-                    // offset of 2, so this case renders the same as only-stdDeviation.svg.
-                    {"with-percent-offset.svg", ResvgV049Reference()},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeDropShadow, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feDropShadow")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeFlood, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("filters/feFlood")),
@@ -312,18 +286,10 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeMorphology, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/feMorphology",
-                                        {
-                                            // References refreshed to resvg v0.49.0; see
-                                            // third_party/resvg-test-suite/BUILD.bazel.
-                                            {"radius=0.5.svg", ResvgV049Reference()},
-                                            {"radius=1-10.svg", ResvgV049Reference()},
-                                            {"radius=10-1.svg", ResvgV049Reference()},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeMorphology, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feMorphology")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeOffset, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("filters/feOffset")),
@@ -342,17 +308,10 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeSpecularLighting, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feSpecularLighting",
-                {
-                    // These spot-light references use the 300x300 resvg v0.49.0 images.
-                    {"with-feSpotLight-and-specular-and-exponent.svg", ResvgV049Reference()},
-                    {"with-feSpotLight-and-specularConstant=5.svg", ResvgV049Reference()},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeSpecularLighting, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feSpecularLighting")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeSpotLight, ImageComparisonTestFixture,
@@ -380,12 +339,11 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeTurbulence, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feTurbulence",
-                {
-                    {"color-interpolation-filters=sRGB.svg", ResvgV049Reference()},
-                    {"stitchTiles=stitch.svg", Params::UndefinedBehavior("stitchTiles=stitch")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("filters/feTurbulence",
+                                        {
+                                            {"stitchTiles=stitch.svg",
+                                             Params::UndefinedBehavior("stitchTiles=stitch")},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -395,13 +353,14 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter",
             {
+                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"invalid-FuncIRI.svg",
-                 Params::Skip("Reference disagreement: PNG hides an invalid URL; Filter Effects "
-                              "ignores the chain, covered by independent visible-geometry tests "
-                              "(FilterReferenceStages_tests)")},
-                {"negative-subregion.svg", ResvgV049Reference()},
-                {"with-subregion-1.svg", ResvgV049Reference()},
-                {"with-subregion-2.svg", ResvgV049Reference()},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-invalid-FuncIRI.png",
+                     kDefaultThreshold,
+                     "Reference disagreement: the PNG hides the rect; a url() naming no element "
+                     "disables the whole filter chain, so the rect draws unfiltered "
+                     "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
                 {"everything-via-xlink-href.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-xlink-filter-bounds.png")
@@ -420,8 +379,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/donner-complex-order-and-xlink-href.png",
                      kDefaultThreshold,
                      "Reference disagreement: resvg drops blur spill at the region edge; see "
-                     "golden/README.md")
-                     .setCanvasSize(300, 300)},
+                     "golden/README.md")},
                 {"in=BackgroundAlpha-with-enable-background.svg",
                  Params::DeprecatedInSVG2("enable-background: BackgroundAlpha of an SVG 1.1 "
                                           "enable-background=new snapshot (removed in SVG 2)")},
@@ -443,14 +401,12 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
                      kDefaultThreshold,
-                     "Explicit half-box clip; opaque interior and exact crosshair")
-                     .setCanvasSize(800, 800)},
+                     "Explicit half-box clip; opaque interior and exact crosshair")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-2.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
                      kDefaultThreshold,
-                     "Explicit half-box clip; opaque interior and exact crosshair")
-                     .setCanvasSize(800, 800)},
+                     "Explicit half-box clip; opaque interior and exact crosshair")},
                 {"with-subregion-3.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/firefox-double-subregion-blur.png",
@@ -474,79 +430,85 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFilterFunctions, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "filters/filter-functions",
-            {
-                {"one-invalid-url-in-list.svg",
-                 Params::Skip("Reference disagreement: PNG applies functions around a missing "
-                              "URL; Filter Effects ignores the entire chain "
-                              "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
-                {"color-adjust-functions-0percent.svg",
-                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
-                                      "donner-color-adjust-functions-0percent.png",
-                                      "donner/svg/renderer/testdata/golden/geode/"
-                                      "donner-color-adjust-functions-0percent.png")},
-                {"color-adjust-functions-100percent.svg",
-                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
-                                      "donner-color-adjust-functions-100percent.png",
-                                      "donner/svg/renderer/testdata/golden/geode/"
-                                      "donner-color-adjust-functions-100percent.png")},
-                {"color-adjust-functions-2.svg",
-                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
-                                      "donner-color-adjust-functions-200percent.png",
-                                      "donner/svg/renderer/testdata/golden/geode/"
-                                      "donner-color-adjust-functions-200percent.png")},
-                {"color-adjust-functions-200percent.svg",
-                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
-                                      "donner-color-adjust-functions-200percent.png",
-                                      "donner/svg/renderer/testdata/golden/geode/"
-                                      "donner-color-adjust-functions-200percent.png")},
-                {"color-adjust-functions-50percent.svg",
-                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
-                                      "donner-color-adjust-functions-50percent.png",
-                                      "donner/svg/renderer/testdata/golden/geode/"
-                                      "donner-color-adjust-functions-50percent.png")},
-                {"color-adjust-functions-default-value.svg",
-                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
-                                      "donner-color-adjust-functions-100percent.png",
-                                      "donner/svg/renderer/testdata/golden/geode/"
-                                      "donner-color-adjust-functions-100percent.png")},
-                {"color-adjust-functions-negative.svg",
-                 ColorAdjustReference("donner/svg/renderer/testdata/golden/"
-                                      "donner-color-adjust-functions-negative.png",
-                                      "donner/svg/renderer/testdata/golden/geode/"
-                                      "donner-color-adjust-functions-negative.png")},
-                // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
-                {"drop-shadow-function-color-last.svg",
-                 DropShadowFunctionGolden(
-                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
-                     "Reference disagreement: resvg truncates the fractional shadow offset")},
-                {"drop-shadow-function-em-values.svg",
-                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
-                                          "donner-drop-shadow-function-em-values.png",
-                                          "Reference disagreement: the reference places the "
-                                          "shadow at truncated lengths")},
-                {"drop-shadow-function-mm-values.svg",
-                 DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
-                                          "donner-drop-shadow-function-mm-values.png",
-                                          "Reference disagreement: the reference places the "
-                                          "shadow at truncated lengths")},
-                {"drop-shadow-function.svg",
-                 DropShadowFunctionGolden(
-                     "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
-                     "Reference disagreement: resvg truncates the fractional shadow offset")},
-                {"two-exact-urls.svg",
-                 Params::UndefinedBehavior(
-                     "reference is the resvg UB marker image; the valid "
-                     "repeated filter URL has an independent equivalent-graph "
-                     "comparison (#1169)")},
-                {"url-and-grayscale.svg",
-                 Params::Skip("Reference disagreement: CSS grayscale must use sRGB (center "
-                              "115); the historical mixed-chain reference uses linearRGB-like "
-                              "center 122 (CssFilterContractMixedUrlGrayscaleUsesSrgb, #1169)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/filter-functions",
+                {
+                    // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
+                    {"one-invalid-url-in-list.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/donner-one-invalid-url-in-list.png",
+                         kDefaultThreshold,
+                         "Reference disagreement: the PNG applies the functions around a missing "
+                         "url(); a missing reference disables the whole filter chain "
+                         "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
+                    {"color-adjust-functions-0percent.svg",
+                     ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                          "donner-color-adjust-functions-0percent.png",
+                                          "donner/svg/renderer/testdata/golden/geode/"
+                                          "donner-color-adjust-functions-0percent.png")},
+                    {"color-adjust-functions-100percent.svg",
+                     ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                          "donner-color-adjust-functions-100percent.png",
+                                          "donner/svg/renderer/testdata/golden/geode/"
+                                          "donner-color-adjust-functions-100percent.png")},
+                    {"color-adjust-functions-2.svg",
+                     ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                          "donner-color-adjust-functions-200percent.png",
+                                          "donner/svg/renderer/testdata/golden/geode/"
+                                          "donner-color-adjust-functions-200percent.png")},
+                    {"color-adjust-functions-200percent.svg",
+                     ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                          "donner-color-adjust-functions-200percent.png",
+                                          "donner/svg/renderer/testdata/golden/geode/"
+                                          "donner-color-adjust-functions-200percent.png")},
+                    {"color-adjust-functions-50percent.svg",
+                     ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                          "donner-color-adjust-functions-50percent.png",
+                                          "donner/svg/renderer/testdata/golden/geode/"
+                                          "donner-color-adjust-functions-50percent.png")},
+                    {"color-adjust-functions-default-value.svg",
+                     ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                          "donner-color-adjust-functions-100percent.png",
+                                          "donner/svg/renderer/testdata/golden/geode/"
+                                          "donner-color-adjust-functions-100percent.png")},
+                    {"color-adjust-functions-negative.svg",
+                     ColorAdjustReference("donner/svg/renderer/testdata/golden/"
+                                          "donner-color-adjust-functions-negative.png",
+                                          "donner/svg/renderer/testdata/golden/geode/"
+                                          "donner-color-adjust-functions-negative.png")},
+                    // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
+                    {"drop-shadow-function-color-last.svg",
+                     DropShadowFunctionGolden(
+                         "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                         "Reference disagreement: resvg truncates the fractional shadow offset")},
+                    {"drop-shadow-function-em-values.svg",
+                     DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                              "donner-drop-shadow-function-em-values.png",
+                                              "Reference disagreement: the reference places the "
+                                              "shadow at truncated lengths")},
+                    {"drop-shadow-function-mm-values.svg",
+                     DropShadowFunctionGolden("donner/svg/renderer/testdata/golden/"
+                                              "donner-drop-shadow-function-mm-values.png",
+                                              "Reference disagreement: the reference places the "
+                                              "shadow at truncated lengths")},
+                    {"drop-shadow-function.svg",
+                     DropShadowFunctionGolden(
+                         "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
+                         "Reference disagreement: resvg truncates the fractional shadow offset")},
+                    {"two-exact-urls.svg",
+                     Params::UndefinedBehavior(
+                         "reference is the resvg UB marker image; the valid "
+                         "repeated filter URL has an independent equivalent-graph "
+                         "comparison (#1169)")},
+                    {"url-and-grayscale.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/donner-url-and-grayscale.png",
+                         kDefaultThreshold,
+                         "Reference disagreement: the PNG's grayscale() center is 122; filter "
+                         "functions operate in sRGB, which gives 115 "
+                         "(CssFilterContractMixedUrlGrayscaleUsesSrgb)")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFloodColor, ImageComparisonTestFixture,
@@ -581,36 +543,39 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "masking/clipPath",
                 {
-                    // The 300x300 resvg v0.49.0 rendering. The superseded reference mapped the clip
-                    // through the glyph ink extents of the text rather than its glyph cells.
+                    // The upstream resvg reference maps the clip through the text's glyph cells;
+                    // the snapshot's maps it through the glyph ink extents.
                     {"clip-path-with-transform-on-text.svg",
-                     ResvgV049Reference().requireFeature(RendererBackendFeature::Text,
-                                                         "text rendering")},
+                     Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"on-the-root-svg-without-size.svg",
                      Params::UndefinedBehavior("on root `<svg>` without size")},
 
+                    // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                     {"circle-shorthand-with-stroke-box.svg",
-                     Params::Skip("Harness mismatch: opaque reference background differs from "
-                                  "transparent RGBA output; independent circle stroke-box "
-                                  "contracts (CircleClipPath_tests)")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/"
+                         "donner-circle-shorthand-with-stroke-box.png",
+                         kDefaultThreshold,
+                         "Harness mismatch: the PNG is opaque white where the canvas is "
+                         "transparent (CircleClipPath.DefaultAndStrokeBoxIncludeStrokeGeometry)")},
                     {"circle-shorthand-with-view-box.svg",
-                     Params::Skip("Harness mismatch: opaque reference background differs from "
-                                  "transparent RGBA output; independent circle view-box "
-                                  "contracts (CircleClipPath_tests)")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/"
+                         "donner-circle-shorthand-with-view-box.png",
+                         kDefaultThreshold,
+                         "Harness mismatch: the PNG is opaque white where the canvas is "
+                         "transparent (CircleClipPath.ViewBoxUsesNearestSvgViewport)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     MaskingMask, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "masking/mask",
-                {
-                    {"recursive-on-child.svg", Params::UndefinedBehavior("Recursive on child")},
-                    // The 300x300 resvg v0.49.0 rendering, which upscales the masked image with
-                    // the Mitchell cubic as Donner does.
-                    {"with-image.svg", ResvgV049Reference()},
-                })),
+    Combine(ValuesIn(getTestsInCategory("masking/mask",
+                                        {
+                                            {"recursive-on-child.svg",
+                                             Params::UndefinedBehavior("Recursive on child")},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -635,29 +600,40 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-nested-rectangles.png",
                          kDefaultThreshold,
-                         "Explicit tiles preserve fractional periods and clip nested content")},
+                         "Reference disagreement: against the authored nested tile geometry, 832 "
+                         "pixels are opaque in one image and empty in the other; resvg 0.49.0 "
+                         "renders the tiles drawn explicitly")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
-                    // The references resample a rasterized tile, blurring the tile-edge strokes;
-                    // testdata/golden/README.md has the exact coverage these goldens hold.
+                    // The references resample a rasterized tile, blurring the tile-edge strokes.
+                    // Donner also rasterizes each tile, at 2x device scale, and samples it
+                    // bilinearly; at these tiles' alignment that keeps the seams sharp.
+                    // testdata/golden/README.md has the measured seam coverage.
                     {"recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-recursive-on-child.png")
-                         .withReason("Reference disagreement: exact tile-edge stroke coverage, and "
-                                     "the mutually recursive fill paints one level deep (#1185)")},
+                         .withReason("Reference disagreement: the vendored PNG blurs the tile-edge "
+                                     "strokes that Donner's 2x tile raster keeps sharp at this "
+                                     "alignment, and the mutually recursive fill paints one level "
+                                     "deep (#1185)")},
                     {"self-recursive-on-child.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-self-recursive.png")
-                         .withReason(
-                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason("Reference disagreement: the vendored PNG blurs the tile-edge "
+                                     "strokes that Donner's 2x tile raster keeps sharp at this "
+                                     "alignment (#1185)")},
                     {"self-recursive.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "donner-pattern-self-recursive.png")
-                         .withReason(
-                             "Reference disagreement: exact tile-edge stroke coverage (#1185)")},
+                         .withReason("Reference disagreement: the vendored PNG blurs the tile-edge "
+                                     "strokes that Donner's 2x tile raster keeps sharp at this "
+                                     "alignment (#1185)")},
                     {"text-child.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-skewed-text-tiles.png",
-                         kDefaultThreshold, "Text and border clipped to each tile before skewing")},
+                         kDefaultThreshold,
+                         "Reference disagreement: the vendored PNG resamples a rasterized skewed "
+                         "tile, spreading text and border edges into empty cells; resvg 0.49.0 "
+                         "renders the clipped tiles drawn explicitly")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -673,11 +649,8 @@ INSTANTIATE_TEST_SUITE_P(
                                            "invalid negative focal radius: no paint (#1186)")},
                 {"fr=0.5.svg",
                  Params::UndefinedBehavior("reference is the resvg UB marker image; coincident "
-                                           "start/end circles: transparent per SVG 2 (#1186)")},
-                {"fr=0.7.svg",
-                 Params::Skip("Reference disagreement: containing start circle is transparent per "
-                              "SVG 2; reference paints a reversed gradient "
-                              "(ReferenceContractRadialContainingStartCircleDoesNotPaint, #1186)")},
+                                           "start/end circles paint nothing today, an open "
+                                           "question in svgwg issue 648 (#1186)")},
                 {"invalid-gradientTransform.svg",
                  Params::UndefinedBehavior(
                      "reference is the resvg UB marker image; singular transform: no paint "
@@ -713,16 +686,10 @@ INSTANTIATE_TEST_SUITE_P(PaintingColor, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    PaintingContext, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("painting/context",
-                                        {
-                                            // The 300x300 resvg v0.49.0 rendering.
-                                            {"with-pattern-objectBoundingBox-in-use.svg",
-                                             ResvgV049Reference()},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(PaintingContext, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("painting/context")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingDisplay, ImageComparisonTestFixture,
@@ -777,9 +744,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "donner/svg/renderer/testdata/golden/resvg-on-feImage.png")
                          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
                          .withReason("Nearest sampling at destination pixel centers")},
-                    // The 300x300 resvg v0.49.0 rendering; the superseded reference was flattened
-                    // onto white and resolved nearest-neighbor ties toward the lower texel.
-                    {"optimizeSpeed.svg", ResvgV049Reference()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -795,8 +759,6 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "painting/marker",
             {
-                // The 300x300 resvg v0.49.0 rendering.
-                {"orient=auto-on-M-C-C-4.svg", ResvgV049Reference()},
                 {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
                 {"with-a-text-child.svg",
                  Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
@@ -807,7 +769,10 @@ INSTANTIATE_TEST_SUITE_P(
                 // 442 on macOS Metal (Apple Silicon); 449 on Linux Vulkan lavapipe, both arm64 and
                 // x86_64, in the native Geode and wgpu-native reference lanes. The same SVG at 1x
                 // and larger (structure/image/external-svg) matches at default parameters.
-                {"with-an-image-child.svg", Params().withGeodeMaxPixelsDifferent(500)},
+                {"with-an-image-child.svg",
+                 Params().withGeodeMaxPixelsDifferent(500).withReason(
+                     "Geode coverage of the 0.4 device px letter strokes in the 0.8x nested image "
+                     "differs on color-boundary pixels: 442 px on Metal, 449 px on Vulkan")},
                 {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
             })),
         ValuesIn(ActiveComparisonModes())),
@@ -917,11 +882,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/visibility",
                 {
-                    // The 300x300 resvg v0.49.0 rendering. The superseded reference mapped the clip
-                    // through the union of the two text elements' glyph ink extents (measured
-                    // 50.5..144.4 x 69.3..105.5 user units) rather than their glyph cells.
-                    {"bbox-impact-3.svg", ResvgV049Reference().requireFeature(
-                                              RendererBackendFeature::Text, "text rendering")},
+                    // The upstream resvg reference maps the clip through the two text elements'
+                    // glyph cells; the snapshot's maps it through the union of their glyph ink
+                    // extents (measured 50.5..144.4 x 69.3..105.5 user units).
+                    {"bbox-impact-3.svg",
+                     Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"collapse-on-tspan.svg",
                      Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"hidden-on-tspan.svg",
@@ -985,33 +950,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "structure/image",
                 {
-                    // Raster-image references are the 300x300 renderings from resvg v0.49.0, which
-                    // resamples `image-rendering: auto` with the Mitchell cubic as Donner does. The
-                    // superseded references mixed several historical upscalers.
-                    {"embedded-16bit-png.svg", ResvgV049Reference()},
-                    {"embedded-gif.svg", ResvgV049Reference()},
-                    {"embedded-jpeg-as-image-jpeg.svg", ResvgV049Reference()},
-                    {"embedded-jpeg-as-image-jpg.svg", ResvgV049Reference()},
-                    {"embedded-jpeg-without-mime.svg", ResvgV049Reference()},
-                    {"embedded-png.svg", ResvgV049Reference()},
-                    {"external-gif.svg", ResvgV049Reference()},
-                    {"external-jpeg.svg", ResvgV049Reference()},
-                    {"external-png.svg", ResvgV049Reference()},
-                    {"image-with-float-size-scaling.svg", ResvgV049Reference()},
-                    {"no-height-non-square.svg", ResvgV049Reference()},
-                    {"no-height.svg", ResvgV049Reference()},
-                    {"no-width-and-height.svg", ResvgV049Reference()},
-                    {"no-width.svg", ResvgV049Reference()},
-                    {"preserveAspectRatio=none.svg", ResvgV049Reference()},
-                    {"preserveAspectRatio=xMaxYMax-meet.svg", ResvgV049Reference()},
-                    {"preserveAspectRatio=xMaxYMax-slice.svg", ResvgV049Reference()},
-                    {"preserveAspectRatio=xMidYMid-meet.svg", ResvgV049Reference()},
-                    {"preserveAspectRatio=xMidYMid-slice.svg", ResvgV049Reference()},
-                    {"preserveAspectRatio=xMinYMin-meet.svg", ResvgV049Reference()},
-                    {"preserveAspectRatio=xMinYMin-slice.svg", ResvgV049Reference()},
-                    {"raster-image-and-size-with-odd-numbers.svg", ResvgV049Reference()},
-                    {"width-and-height-set-to-auto.svg", ResvgV049Reference()},
-                    {"with-transform.svg", ResvgV049Reference()},
                     {"float-size.svg", Params::UndefinedBehavior("Float size")},
                     {"no-height-on-svg.svg", Params::UndefinedBehavior("No height")},
                     {"no-width-and-height-on-svg.svg",
@@ -1067,12 +1005,16 @@ INSTANTIATE_TEST_SUITE_P(
                      "The upstream reference is the UB marker for a digit-leading XML ID")},
                 {"invalid-id-attribute-1.svg", Params::UndefinedBehavior("Invalid id attribute")},
                 {"invalid-id-attribute-2.svg", Params::UndefinedBehavior("Invalid id attribute")},
+                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"no-size.svg",
-                 Params::Skip("API policy: caller canvas preserves user units; reference "
-                              "fits content bounds without authored dimensions (#1186)")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-no-size.png", kDefaultThreshold,
+                     "API policy: an unsized root gets the caller's canvas at one user unit per "
+                     "px; the PNG shows a 200-unit viewport at 2.5x "
+                     "(ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit)")},
                 {"not-UTF-8-encoding.svg",
                  Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
-                              "and update the encoding declaration")},
+                              "and update the encoding declaration (#1182)")},
 
                 {"funcIRI-with-quotes.svg", Params{}},
                 {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
@@ -1100,27 +1042,24 @@ INSTANTIATE_TEST_SUITE_P(StructureTransform, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/transform-origin",
-                                        {
-                                            // The 300x300 resvg v0.49.0 renderings.
-                                            {"on-text-path.svg", ResvgV049Reference()},
-                                            {"on-text.svg", ResvgV049Reference()},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureTransformOrigin, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/transform-origin")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureUse, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "structure/use",
                 {
+                    // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                     {"xlink-to-an-external-file.svg",
-                     Params::Skip("Harness mismatch: the reference is opaque white where the "
-                                  "SVG canvas is transparent, and its glyph stems are 0.6 device "
-                                  "px wider; the inherited Noto Sans glyphs sit within 0.4 px of "
-                                  "it, and neither resvg nor any browser passes this row")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/donner-xlink-to-an-external-file.png",
+                         kDefaultThreshold,
+                         "Harness mismatch: the PNG is opaque white where the canvas is "
+                         "transparent; reference glyph rasterization: its glyph ink is 5.6% "
+                         "heavier (ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1144,8 +1083,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"hanging-on-vertical.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png")
-                         .withReason("Reference disagreement: resvg ignores alignment-baseline "
-                                     "in vertical text, which Chromium applies (golden README)")},
+                         .withReason("Reference disagreement: the PNG advances upright glyphs "
+                                     "1.39 em, not the 1 em vmtx advance CSS Writing Modes 3 "
+                                     "5.1.1 requires (golden README)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1213,50 +1153,34 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFont, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/font",
-                {
-                    // The 300x300 resvg v0.49.0 rendering; the superseded PNG's 4x4 supersampled
-                    // crosshair coverage differed from Donner's by 386 px.
-                    {"font-shorthand.svg", ResvgV049Reference()},
-                    // SVG 2 has no `font` presentation attribute, so the case draws the initial
-                    // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
-                    // synthesizes bold over Noto Sans Italic; Chrome, Firefox and Safari all fail
-                    // it in results.csv.
-                    {"simple-case.svg",
-                     Params::Skip("Reference disagreement: the PNG applies the `font` attribute, "
-                                  "which SVG 2 does not list as a presentation attribute (#1167, "
-                                  "#1173, #1186)")
-                         .setCanvasSize(400, 400)},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
-
-INSTANTIATE_TEST_SUITE_P(
-    TextFontFamily, ImageComparisonTestFixture,
     Combine(
         ValuesIn(getTestsInCategory(
-            "text/font-family",
+            "text/font",
             {
-                // The six generic-family references (bold-sans-serif, cursive, fantasy, monospace,
-                // sans-serif, serif) are the 300x300 renderings from resvg v0.49.0, which Donner
-                // matches. The superseded ones were drawn in faces outside this font set:
-                // sans-serif.png differed from noto-sans.png although the resvg harness maps
-                // sans-serif to Noto Sans (at v0.49.0 the two are byte-identical), and the bold
-                // glyph box was 181x67 px against Noto Sans Bold's 205x73 px. Which face each
-                // family resolves to is asserted directly in FontSelection_tests.cc.
-                {"bold-sans-serif.svg", Params().setCanvasSize(300, 300)},
-                {"cursive.svg", Params().setCanvasSize(300, 300)},
-                // An all-unknown family list resolves to the harness's default family, serif, as
-                // in resvg's harness (FontSelection.UnmatchedFamilyListUsesTheSuiteDefaultFamily).
-                {"fallback-1.svg", Params().setCanvasSize(300, 300)},
-                {"fantasy.svg", Params().setCanvasSize(300, 300)},
-                {"monospace.svg", Params().setCanvasSize(300, 300)},
-                {"sans-serif.svg", Params().setCanvasSize(300, 300)},
-                {"serif.svg", Params().setCanvasSize(300, 300)},
+                // SVG 2 has no `font` presentation attribute, so the case draws the initial
+                // font. The vendored 400x400 PNG applies the attribute as SVG 1.1 did and
+                // synthesizes bold over Noto Sans Italic. Donner-rendered golden; see
+                // donner/svg/renderer/testdata/golden/README.md.
+                {"simple-case.svg",
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-font-simple-case.png",
+                     kDefaultThreshold,
+                     "Reference disagreement: the PNG applies the `font` attribute, which SVG 2 "
+                     "does not list as a presentation attribute "
+                     "(ReferenceContractFontAttributeIsIgnored)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
+
+// The generic-family references are the upstream resvg renderings (provenance in
+// third_party/resvg-test-suite/BUILD.bazel). Which face each family resolves to is asserted
+// directly in FontSelection_tests.cc; an all-unknown family list resolves to the harness's default
+// family, serif, as in resvg's harness
+// (FontSelection.UnmatchedFamilyListUsesTheSuiteDefaultFamily).
+INSTANTIATE_TEST_SUITE_P(TextFontFamily, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("text/font-family")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontKerning, ImageComparisonTestFixture,
@@ -1349,11 +1273,14 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/glyph-orientation-vertical",
                 {
+                    // SVG 2 aliases glyph-orientation-vertical="0" to upright text, which
+                    // RendererRegressionTests.GlyphOrientationVerticalZeroDrawsUprightGlyphs
+                    // checks. Noto Sans has no vertical metrics, and CSS Writing Modes 3 leaves
+                    // their synthesis to the user agent, so the glyph positions are not defined.
                     {"simple-case.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/donner-upright-latin-outline.png")
-                         .withReason("Reference disagreement: the vendored crosshairs use "
-                                     "different stroke coverage (golden README)")},
+                     Params::UndefinedBehavior(
+                         "upright glyphs of a face without vertical metrics; CSS Writing Modes 3 "
+                         "does not define how the user agent synthesizes them")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1370,20 +1297,10 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    TextLengthAdjust, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/lengthAdjust",
-                {
-                    // Both references are resvg v0.49.0's 300x300 renderings. The superseded
-                    // vertical image sat 0.28 units across the line from Donner and resvg v0.49.0,
-                    // consistent with an older sideways baseline, and the superseded underline was
-                    // twice the font's 0.05em underline thickness.
-                    {"vertical.svg", Params().setCanvasSize(300, 300)},
-                    {"with-underline.svg", Params().setCanvasSize(300, 300)},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(TextLengthAdjust, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("text/lengthAdjust")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     TextLetterSpacing, ImageComparisonTestFixture,
@@ -1392,9 +1309,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"large-negative.svg", Params::UndefinedBehavior("negative letter-spacing")},
                     {"mixed-scripts.svg", Params().onlyTextFull().withReason("Arabic shaping")},
-                    // resvg v0.49.0 quotes the family as 'Mplus 1p'; unquoted it is invalid
-                    // and the snapshot's reference was drawn in a fallback face.
-                    {"non-ASCII-character.svg", Params().setCanvasSize(300, 300)},
                     {"on-Arabic.svg", Params()
                                           .requireFeature(RendererBackendFeature::TextFull)
                                           .withReason("Arabic text")},
@@ -1413,7 +1327,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"complex-graphemes-and-coordinates-list.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-complex-graphemes-and-coordinates-list.png")
-                         .setCanvasSize(800, 800)
                          .onlyTextFull()
                          .withReason("The composed Cyrillic cluster uses its first absolute y")},
                     {"complex-graphemes.svg",
@@ -1435,31 +1348,22 @@ INSTANTIATE_TEST_SUITE_P(
                                        .onlyTextFull()},
                     {"fill-rule=evenodd.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
-                    {"rotate-on-Arabic.svg", ResvgV049Reference().onlyTextFull().withReason(
-                                                 "Arabic text shaping requires text-full")},
+                    {"rotate-on-Arabic.svg",
+                     Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
                     {"rotate-with-multiple-values-and-complex-text.svg",
                      Params().onlyTextFull().withReason("Complex diatrics requires text-full")},
                     {"x-and-y-with-multiple-values-and-arabic-text.svg",
-                     ResvgV049Reference().onlyTextFull().withReason("Arabic text shaping")},
-                    // The reference is resvg v0.49.0's 300x300 rendering, which draws all three
-                    // lines in Mplus 1p, the only face in the test font set covering these CJK
-                    // codepoints. The superseded one used per-language faces outside the set.
-                    {"xml-lang=ja.svg", Params().setCanvasSize(300, 300)},
-                    {"zalgo.svg", ResvgV049Reference().onlyTextFull().withReason(
-                                      "Stacked combining marks need HarfBuzz")},
-                    // These three differ from their PNGs only in edge coverage: the crosshair
-                    // and glyphs in the older snapshot use a different antialiasing grid.
+                     Params().onlyTextFull().withReason("Arabic text shaping")},
+                    {"zalgo.svg",
+                     Params().onlyTextFull().withReason("Stacked combining marks need HarfBuzz")},
                     // Only the full tier applies the Amiri font's GSUB fi ligature. The SVGs
                     // swap the order of the Amiri and Noto Sans runs to test both boundaries.
                     {"ligatures-handling-in-mixed-fonts-1.svg",
-                     ResvgV049Reference().onlyTextFull().withReason(
+                     Params().onlyTextFull().withReason(
                          "Mixed-font ligature shaping requires HarfBuzz")},
                     {"ligatures-handling-in-mixed-fonts-2.svg",
-                     ResvgV049Reference().onlyTextFull().withReason(
+                     Params().onlyTextFull().withReason(
                          "Mixed-font ligature shaping requires HarfBuzz")},
-                    // The 300x300 resvg v0.49.0 rendering; the superseded PNG's supersampled
-                    // crosshair and glyph edges differed from Donner's by 397 px.
-                    {"real-text-height.svg", ResvgV049Reference()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1477,7 +1381,9 @@ INSTANTIATE_TEST_SUITE_P(
                          .withReason("Harness mismatch: opaque reference background; under 4x4 "
                                      "supersampled coverage the glyphs match it (#1185)")},
                     {"on-tspan-with-arabic.svg",
-                     Params().requireFeature(RendererBackendFeature::TextFull)},
+                     Params()
+                         .requireFeature(RendererBackendFeature::TextFull)
+                         .withReason("Arabic contextual joining requires HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1491,22 +1397,22 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-all-types-inline-no-decoration.png")
                          .withReason("Malformed decoration list leaves the text "
-                                     "undecorated")
-                         .setCanvasSize(800, 800)},
+                                     "undecorated")},
                     {"all-types-inline-no-spaces.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-all-types-inline-no-decoration.png")
                          .withReason("Adjacent keywords without spaces leave the "
-                                     "text undecorated")
-                         .setCanvasSize(800, 800)},
+                                     "text undecorated")},
                     {"all-types-inline.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-all-types-inline-bands.png")
                          .withReason("Literal bands preserve multiline decoration "
-                                     "offsets and paint order")
-                         .setCanvasSize(800, 800)},
-                    {"indirect.svg", Params::WithGoldenOverride(
-                                         "donner/svg/renderer/testdata/golden/resvg-indirect.png")},
+                                     "offsets and paint order")},
+                    {"indirect.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-indirect.png")
+                         .withReason("Reference disagreement: the vendored PNG outlines the glyphs "
+                                     "and underline in green, which the SVG does not paint")},
                     {"tspan-decoration.svg",
                      Params::WithThreshold(0.09f, kDefaultMismatchedPixels,
                                            "Archived nested underline and glyph coverage differ")},
@@ -1514,12 +1420,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithThreshold(0.03f, kDefaultMismatchedPixels,
                                            "Reference has a wider horizontal fill "
                                            "gradient across rotated glyphs")},
-
-                    {"indirect-with-multiple-colors.svg", Params().setCanvasSize(800, 800)},
-                    // The reference is resvg v0.49.0's 300x300 rendering; the
-                    // superseded underline was twice the font's 0.05em underline
-                    // thickness.
-                    {"with-textLength-on-a-single-character.svg", Params().setCanvasSize(300, 300)},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1554,8 +1454,6 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/textPath",
             {
-                // The 300x300 resvg v0.49.0 rendering; the superseded reference was opaque.
-                {"link-to-rect.svg", ResvgV049Reference()},
                 // Both draw the same picture. The vendored PNGs are opaque and resvg v0.49.0
                 // ignores the `path` attribute; testdata/golden/README.md has the evidence.
                 {"with-path-and-xlink-href.svg",
@@ -1577,9 +1475,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
-                     .withReason("resvg 0.47.0 reference (golden README)")},
-                // ResvgV049Reference() rows compare against resvg v0.49.0's 300x300 renderings.
-                {"m-A-path.svg", ResvgV049Reference()},
+                     .withReason("Reference disagreement: the vendored PNG predates resvg's "
+                                 "current dy layout on a path and places the glyphs differently; "
+                                 "independent resvg 0.47.0 reference (golden README)")},
                 // The vendored PNG is byte-identical to simple-case.png (align placement), so it
                 // does not depict method="stretch". The golden is Donner's own rendering, a
                 // regression guard; testdata/golden/README.md records its evidence and
@@ -1599,17 +1497,9 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
-                {"nested.svg", ResvgV049Reference()},
-                {"path-with-ClosePath.svg", ResvgV049Reference()},
                 {"side=right.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                        "Gray guide and half-turned glyph boundary coverage")},
-                {"simple-case.svg", ResvgV049Reference()},
-                {"spacing=auto.svg", ResvgV049Reference()},
-                {"startOffset=-100.svg", ResvgV049Reference()},
-                {"startOffset=10percent.svg", ResvgV049Reference()},
-                {"startOffset=30.svg", ResvgV049Reference()},
-                {"startOffset=5mm.svg", ResvgV049Reference()},
                 {"tspan-with-absolute-position.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-absolute-position.png")
@@ -1617,17 +1507,16 @@ INSTANTIATE_TEST_SUITE_P(
                 {"tspan-with-relative-position.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png")
-                     .withReason("Reference generated independently with resvg 0.47.0")},
-                {"two-paths.svg", ResvgV049Reference()},
+                     .withReason("Reference disagreement: the vendored PNG predates resvg's "
+                                 "current dx/dy layout on a path and places the shifted spans "
+                                 "differently; independent resvg 0.47.0 reference (golden "
+                                 "README)")},
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
-                {"with-baseline-shift.svg", ResvgV049Reference()},
-                {"with-coordinates-on-text.svg", ResvgV049Reference()},
-                {"with-coordinates-on-textPath.svg", ResvgV049Reference()},
                 // The filter itself is applied to the textPath now, but Donner's glyph coverage
                 // is about 5% lighter than the reference's (measured on the unfiltered
                 // text/tspan/with-clip-path case: 1140473 versus 1208567 total alpha over the
@@ -1638,27 +1527,18 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Accepted difference (2026-11-13): analytic glyph coverage is about "
                               "5% lighter than the reference's, which only a blur makes visible "
                               "away from the glyph edges")},
-                // An invalid path falls back to xlink:href. The relative URL names an external
-                // document and is unresolved in this fixture, leaving the guide path and frame.
-                {"with-invalid-path-and-xlink-href.svg", ResvgV049Reference()},
-                {"with-rotate.svg", ResvgV049Reference()},
-                {"with-text-anchor.svg", ResvgV049Reference()},
-                {"with-transform-on-a-referenced-path.svg", ResvgV049Reference()},
-                {"with-transform-outside-a-referenced-path.svg", ResvgV049Reference()},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
                      .withReason("Regression golden for the on-path underline")},
                 // Upright glyphs take the font's vmtx vertical origin, 860 units below the cell
-                // top; the reference centers the hhea ascent/descent box instead (877.5 units).
-                // Both text backends differ by 215-219 px. With the reference's origin the diff
-                // is 77 px, inside the default 100 px every row allows, so the extra allowance
-                // covers only the origin model.
+                // top. Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"writing-mode=tb.svg",
-                 Params::WithThreshold(kDefaultThreshold, 250,
-                                       "Larger threshold due to reference disagreement: vmtx "
-                                       "upright origin vs hhea-centered cell, 0.0175em per glyph")
-                     .setCanvasSize(300, 300)},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-textPath-writing-mode-tb.png",
+                     kDefaultThreshold,
+                     "Reference disagreement: the PNG moves upright glyphs off the vmtx origin CSS "
+                     "Writing Modes 3 5.1.1 requires (VerticalTextPathPrecision)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1692,10 +1572,6 @@ INSTANTIATE_TEST_SUITE_P(
             "text/tspan",
             {
                 {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
-                // The 300x300 resvg v0.49.0 rendering; the superseded PNG's supersampled
-                // crosshair differed from Donner's by 387 px.
-                {"nested-whitespaces.svg", ResvgV049Reference()},
-                {"tspan-bbox-2.svg", ResvgV049Reference()},
                 // Same cause as text/textPath/with-filter.svg: the span filter applies, but
                 // Donner's glyph coverage is about 5% lighter than the reference's, which only
                 // a blur makes visible away from the glyph edges.
@@ -1730,54 +1606,43 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextWritingMode, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/writing-mode",
-            {
-                {"arabic-with-rl.svg",
-                 Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
-                // The 300x300 entries use references refreshed from upstream resvg, which renders
-                // them at that size (provenance in third_party/resvg-test-suite/BUILD.bazel).
-                {"inheritance.svg", Params().setCanvasSize(300, 300)},
-                {"japanese-with-tb.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png")
-                     .onlyTextFull()
-                     .withReason("Reference disagreement: the PNG places upright glyphs 5.6 px "
-                                 "below the font's vmtx origin; Chromium matches with the "
-                                 "quoted family name (golden README)")},
-                {"mixed-languages-with-tb-and-underline.svg",
-                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                            "donner-mixed-vertical-underline-outline.png")
-                     .onlyTextFull()
-                     .withReason("Reference disagreement: primary-face underline metrics and "
-                                 "mixed vertical glyph geometry (golden README)")},
-                {"mixed-languages-with-tb.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
-                     .setCanvasSize(300, 300)
-                     .onlyTextFull()
-                     .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
-                                 "origin, where Firefox places them (golden README)")},
-                {"tb-and-punctuation.svg",
-                 Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png")
-                     .setCanvasSize(300, 300)
-                     .onlyTextFull()
-                     .withReason("Reference disagreement: vertical punctuation forms 14 px from "
-                                 "where browsers place them, and hhea-centered upright glyphs "
-                                 "(golden README)")},
-                {"tb-rl.svg", Params().setCanvasSize(300, 300)},
-                {"tb-with-alignment.svg", Params().setCanvasSize(300, 300)},
-                {"tb-with-dx-on-second-tspan.svg", Params().setCanvasSize(300, 300)},
-                {"tb-with-dx-on-tspan.svg", Params().setCanvasSize(300, 300)},
-                {"tb-with-dy-on-second-tspan.svg", Params().setCanvasSize(300, 300)},
-                {"tb-with-rotate-and-underline.svg",
-                 Params::UndefinedBehavior("tb with rotate and underline")},
-                {"tb-with-rotate.svg", Params::UndefinedBehavior("tb with rotate")},
-                {"tb.svg", Params().setCanvasSize(300, 300)},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/writing-mode",
+                {
+                    {"arabic-with-rl.svg",
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                    {"japanese-with-tb.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png")
+                         .onlyTextFull()
+                         .withReason("Reference disagreement: the PNG places upright glyphs 5.6 px "
+                                     "below the vmtx origin CSS Writing Modes 3 5.1.1 requires "
+                                     "(golden README)")},
+                    // CSS Text Decoration 3 leaves the position and thickness of an `auto`
+                    // underline to the user agent, and the underline is most of the difference from
+                    // any reference.
+                    {"mixed-languages-with-tb-and-underline.svg",
+                     Params::UndefinedBehavior(
+                         "underline position and thickness are user-agent defined (CSS Text "
+                         "Decoration 3)")},
+                    {"mixed-languages-with-tb.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
+                         .onlyTextFull()
+                         .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
+                                     "origin CSS Writing Modes 3 5.1.1 requires (golden README)")},
+                    {"tb-and-punctuation.svg",
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png")
+                         .onlyTextFull()
+                         .withReason("Reference disagreement: the PNG lacks the `vert` punctuation "
+                                     "forms and vmtx origin CSS Writing Modes 3 5.1.1 requires "
+                                     "(golden README)")},
+                    {"tb-with-rotate-and-underline.svg",
+                     Params::UndefinedBehavior("tb with rotate and underline")},
+                    {"tb-with-rotate.svg", Params::UndefinedBehavior("tb with rotate")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 }  // namespace donner::svg

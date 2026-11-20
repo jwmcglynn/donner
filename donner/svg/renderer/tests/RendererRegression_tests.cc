@@ -410,14 +410,153 @@ TEST_F(RendererRegressionTests, ReferenceContractRadialSingleStopNegativeRadiiDo
   EXPECT_THAT(PixelAt(valid, 32, 32), testing::ElementsAre(0, 0, 255, 255));
 }
 
-TEST_F(RendererRegressionTests, ReferenceContractRadialContainingStartCircleDoesNotPaint) {
+/// Fills the 64x64 canvas with a userSpaceOnUse radial gradient whose start circle is
+/// (\p fx, 32, \p fr) and end circle (\p cx, 32, \p r), plus \p stops and \p spreadMethod.
+RendererBitmap RenderUserSpaceRadial(double fx, double fr, double cx, double r,
+                                     std::string_view spreadMethod, std::string_view stops) {
+  std::ostringstream body;
+  body.precision(17);
+  body << R"svg(<radialGradient id="g" gradientUnits="userSpaceOnUse" fx=")svg" << fx
+       << R"svg(" fy="32" fr=")svg" << fr << R"svg(" cx=")svg" << cx << R"svg(" cy="32" r=")svg"
+       << r << R"svg(" spreadMethod=")svg" << spreadMethod << R"svg(">)svg" << stops
+       << R"svg(</radialGradient><rect width="64" height="64" fill="url(#g)"/>)svg";
+  return RenderReferenceContract(body.str());
+}
+
+// HTML canvas `createRadialGradient` (which SVG 2 `fr` follows) paints the circle at every
+// interpolation parameter with a positive radius, so a start circle that contains the end circle
+// covers the whole plane: t = (fr - distance) / (fr - r) for concentric circles. The expected image
+// evaluates that formula at every pixel center, independently of either rasterizer.
+TEST_F(RendererRegressionTests, RadialContainingStartCirclePaintsCanvasTwoPointGradient) {
+  constexpr int kSize = 64;
+  constexpr double kCenter = 32.0;
+  constexpr double kStartRadius = 24.0;
+  constexpr double kEndRadius = 8.0;
+  const auto actual = RenderUserSpaceRadial(
+      kCenter, kStartRadius, kCenter, kEndRadius, "pad",
+      R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg");
+
+  RendererBitmap expected;
+  expected.dimensions = Vector2i(kSize, kSize);
+  expected.rowBytes = static_cast<std::size_t>(kSize) * 4u;
+  expected.alphaType = AlphaType::Unpremultiplied;
+  expected.pixels.reserve(expected.rowBytes * kSize);
+  for (int y = 0; y < kSize; ++y) {
+    for (int x = 0; x < kSize; ++x) {
+      const double distance = std::hypot(x + 0.5 - kCenter, y + 0.5 - kCenter);
+      // Pad: the last stop inside the end circle, the first stop outside the start circle.
+      const double t =
+          std::clamp((kStartRadius - distance) / (kStartRadius - kEndRadius), 0.0, 1.0);
+      expected.pixels.push_back(static_cast<uint8_t>(std::lround(255.0 * (1.0 - t))));
+      expected.pixels.push_back(0);
+      expected.pixels.push_back(static_cast<uint8_t>(std::lround(255.0 * t)));
+      expected.pixels.push_back(255);
+    }
+  }
+  editor::tests::CompareBitmapToBitmap(actual, expected, "radial_containing_start_circle_formula",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// The circles that cover a point are nested when the start circle contains the end circle, so each
+// point lies on exactly one circle of non-negative radius. Swapping the two circles and mirroring
+// the stops (t -> 1 - t) therefore yields the same image through the well-established case where
+// the start circle lies inside the end circle. Hard stops keep the image piecewise constant, and
+// every color boundary (integer or half-integer t) is a circle with an integer center and radius,
+// at least 0.5 in squared distance from any pixel center, so the comparison is exact.
+TEST_F(RendererRegressionTests, RadialContainingStartCircleMatchesSwappedCircles) {
+  constexpr std::string_view kStops =
+      R"svg(<stop stop-color="red"/><stop offset="0.5" stop-color="red"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="blue"/><stop offset="1" stop-color="blue"/>)svg";
+  constexpr std::string_view kMirroredStops =
+      R"svg(<stop stop-color="blue"/><stop offset="0.5" stop-color="blue"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="red"/><stop offset="1" stop-color="red"/>)svg";
+  // Start circle radius 24 at x = startX, end circle radius 8 at x = 32.
+  for (double startX : {32.0, 36.0}) {
+    for (std::string_view spreadMethod : {"pad", "reflect", "repeat"}) {
+      SCOPED_TRACE(testing::Message() << "startX=" << startX << " spreadMethod=" << spreadMethod);
+      const auto swapped = RenderUserSpaceRadial(32, 8, startX, 24, spreadMethod, kMirroredStops);
+      AssertVisibleFixture(swapped, "radial_swapped_circles_visible");
+      editor::tests::CompareBitmapToBitmap(
+          RenderUserSpaceRadial(startX, 24, 32, 8, spreadMethod, kStops), swapped,
+          "radial_containing_start_circle", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+// Pins current behavior, not a settled rule. The SVG 2 note and the canvas rule paint nothing for
+// identical circles, but svgwg issue 648 and the WPT test radialgradient-fully-overlapping.svg
+// expect the gradient drawn. Change this test together with the resvg fr=0.5 row once that is
+// decided.
+TEST_F(RendererRegressionTests, RadialCoincidentCirclesCurrentlyPaintNothing) {
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
-  for (std::string_view attribute : {R"(fr="0.5")", R"(fr="0.75")"}) {
-    SCOPED_TRACE(attribute);
-    ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "contained_circle_no_paint");
+  AssertVisibleFixture(expected, "radial_coincident_sibling_visible");
+  editor::tests::CompareBitmapToBitmap(RenderReferenceRadial(R"(fr="0.5")"), expected,
+                                       "radial_coincident_circles_no_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Concentric circles whose radii differ by 2^-13 are coincident at tiny-skia's 2^-12 tolerance for
+// concentric radii, so both backends must drop the draw alike. A radius difference of 0.5 is the
+// visible control.
+TEST_F(RendererRegressionTests, RadialNearlyCoincidentConcentricCirclesPaintNothingOnEveryBackend) {
+  constexpr std::string_view kStops =
+      R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg";
+  AssertVisibleFixture(RenderUserSpaceRadial(32, 8, 32, 8.5, "pad", kStops),
+                       "radial_concentric_control_visible");
+  const auto actual = RenderUserSpaceRadial(32, 8, 32, 8.0 + 1.0 / 8192.0, "pad", kStops);
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  RendererBitmap transparent = actual;
+  std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+  editor::tests::CompareBitmapToBitmap(actual, transparent, "radial_nearly_coincident_no_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A zero focal radius is an ordinary radial gradient however small the end circle is: tiny-skia
+// treats a start radius within 2^-15 as a plain radial gradient, never as coincident circles. With
+// end radii of 2^-13 and 2^-11, every pixel center lies outside the end circle, so pad fills the
+// rect with the last stop.
+TEST_F(RendererRegressionTests, RadialTinyEndCircleWithZeroFocalRadiusPadsToLastStop) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect width="64" height="64" fill="blue"/>)svg");
+  AssertVisibleFixture(expected, "radial_tiny_end_circle_expected_visible");
+  for (double radius : {1.0 / 8192.0, 1.0 / 2048.0}) {
+    SCOPED_TRACE(testing::Message() << "r=" << radius);
+    editor::tests::CompareBitmapToBitmap(
+        RenderUserSpaceRadial(
+            32, 0, 32, radius, "pad",
+            R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg"),
+        expected, "radial_tiny_end_circle_last_stop", editor::tests::PixelmatchIdentityParams());
   }
-  ExpectBitmapsDiffer(RenderReferenceRadial(R"(fr="0.25")"), expected, "nonempty_annulus_control");
+}
+
+// Internal tangency: the start circle (40, 32, 24) touches the end circle (32, 32, 16) at (16, 32).
+// Every canvas circle passes through that point, so they cover only the half-plane x > 16; the
+// canvas rule leaves x < 16 unpainted. Each point is on exactly one circle, so the swapped circles
+// with mirrored stops give the same image (see RadialContainingStartCircleMatchesSwappedCircles).
+TEST_F(RendererRegressionTests, RadialInternallyTangentCirclesPaintOneHalfPlane) {
+  const auto ramp = RenderUserSpaceRadial(
+      40, 24, 32, 16, "pad",
+      R"svg(<stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg");
+  EXPECT_THAT(PixelAt(ramp, 8, 32), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(ramp, 2, 60), testing::ElementsAre(0, 0, 0, 0));
+  // Inside the end circle, t = 1.97 pads to the last stop.
+  EXPECT_THAT(PixelAt(ramp, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+  // Outside the start circle on the painted side, t = -0.77 pads to the first stop.
+  EXPECT_THAT(PixelAt(ramp, 60, 5), testing::ElementsAre(255, 0, 0, 255));
+
+  constexpr std::string_view kStops =
+      R"svg(<stop stop-color="red"/><stop offset="0.5" stop-color="red"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="blue"/><stop offset="1" stop-color="blue"/>)svg";
+  constexpr std::string_view kMirroredStops =
+      R"svg(<stop stop-color="blue"/><stop offset="0.5" stop-color="blue"/>)svg"
+      R"svg(<stop offset="0.5" stop-color="red"/><stop offset="1" stop-color="red"/>)svg";
+  // Pad only: with reflect or repeat, the color bands crowd together near the tangent point.
+  const auto swapped = RenderUserSpaceRadial(32, 16, 40, 24, "pad", kMirroredStops);
+  AssertVisibleFixture(swapped, "radial_tangent_swapped_visible");
+  editor::tests::CompareBitmapToBitmap(RenderUserSpaceRadial(40, 24, 32, 16, "pad", kStops),
+                                       swapped, "radial_internally_tangent",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractSingularRadialTransformDoesNotPaint) {
@@ -470,6 +609,44 @@ TEST_F(RendererRegressionTests, ReferenceContractFontAttributeIsIgnored) {
   editor::tests::CompareBitmapToBitmap(
       actual, RenderDocumentWithBackend(plain, ActiveRendererBackend()), "font_attribute_ignored",
       editor::tests::PixelmatchIdentityParams());
+}
+
+// SVG 2 keeps glyph-orientation-vertical="0" as an alias of text-orientation: upright. Latin
+// letters in vertical text are otherwise set sideways, so that control must differ.
+TEST_F(RendererRegressionTests, GlyphOrientationVerticalZeroDrawsUprightGlyphs) {
+  const auto render = [](std::string_view orientation) {
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<text x="32" y="4" font-family="Noto Sans" font-size="20"
+                                writing-mode="vertical-rl" )svg") +
+            std::string(orientation) + R"svg(>Ab</text>)svg",
+        {}, Vector2i(64, 64));
+    RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const auto alias = render(R"svg(glyph-orientation-vertical="0")svg");
+  AssertVisibleFixture(alias, "glyph_orientation_vertical_zero_visible");
+  editor::tests::CompareBitmapToBitmap(alias, render(R"svg(text-orientation="upright")svg"),
+                                       "glyph_orientation_vertical_zero_upright",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // An empty or unreadable render leaves the count at -1, so it cannot pass as a difference.
+  const auto sideways = render("");
+  int sidewaysMismatchedPixels = -1;
+  testing::TestPartResultArray sidewaysDifferences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD,
+        &sidewaysDifferences);
+    editor::tests::CompareBitmapToBitmap(
+        alias, sideways, "glyph_orientation_vertical_zero_not_sideways",
+        editor::tests::PixelmatchIdentityParams(), &sidewaysMismatchedPixels);
+  }
+  std::ostringstream captured;
+  for (int i = 0; i < sidewaysDifferences.size(); ++i) {
+    captured << "\n" << sidewaysDifferences.GetTestPartResult(i).message();
+  }
+  EXPECT_THAT(sidewaysMismatchedPixels, testing::Gt(0))
+      << "The alias must not draw like the default sideways Latin" << captured.str();
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractStyleFontShorthandMatchesLonghands) {
@@ -2859,6 +3036,108 @@ TEST_F(RendererRegressionTests, ThickCrossbarStrokeMatchesItsUnionAtFractionalOf
       ExpectBitmapsIdentical(actual, expected, label);
     }
   }
+}
+
+/// Default pixelmatch threshold with no differing pixels allowed and anti-aliased edge pixels
+/// excluded. Identity is impossible here: the stroke and its reference are different
+/// polygonizations of the same arc, which always differ on anti-aliased edge pixels. A sub-pixel
+/// chord error therefore passes while a chord that misses whole pixels fails. The sub-pixel
+/// guarantee comes from the Path-level sagitta test; these renderer tests catch chords that miss
+/// whole pixels.
+constexpr editor::tests::BitmapGoldenCompareParams kNoMismatchedPixelsParams =
+    editor::tests::ApprovedPixelToleranceParams(0.02f, 0);
+
+TEST_F(RendererRegressionTests, MagnifiedRoundStrokePiecesMatchTheirDeviceSizedGeometry) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  // Each magnified stroke is drawn through a 128x viewBox scale; its reference authors the same
+  // geometry at device size, where the width-based subdivision keeps its chords far below a
+  // pixel. Round pieces subdivided from the device-derived tolerance stay within a quarter pixel
+  // of the reference, while pieces subdivided by their local width alone miss whole pixels.
+  struct Case {
+    const char* name;
+    std::string_view magnified;
+    std::string_view deviceSized;
+  };
+  const Case cases[] = {
+      {"cap", R"(d="M1 2H2" stroke-width="2" stroke-linecap="round")",
+       R"(d="M128 256H256" stroke-width="256" stroke-linecap="round")"},
+      {"join", R"(d="M1 1H3V3" stroke-width="2" stroke-linejoin="round")",
+       R"(d="M128 128H384V384" stroke-width="256" stroke-linejoin="round")"},
+      {"dot", R"(d="M2 2h0" stroke-width="3" stroke-linecap="round")",
+       R"(d="M256 256h0" stroke-width="384" stroke-linecap="round")"},
+  };
+  const auto source = [](std::string_view viewBox, std::string_view attributes) {
+    return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"" + std::string(viewBox) +
+           "\"><path fill=\"none\" stroke=\"#ff00ff\" " + std::string(attributes) + "/></svg>";
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.name);
+    SVGDocument magnifiedDocument =
+        instantiateSubtree(source("0 0 4 4", c.magnified), {}, {512, 512});
+    SVGDocument deviceSizedDocument =
+        instantiateSubtree(source("0 0 512 512", c.deviceSized), {}, {512, 512});
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(deviceSizedDocument, RendererBackend::Geode);
+    AssertVisibleFixture(expected, "magnified_round_" + std::string(c.name) + "_reference");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithBackend(magnifiedDocument, RendererBackend::Geode), expected,
+        "magnified_round_" + std::string(c.name), kNoMismatchedPixelsParams);
+  }
+}
+
+TEST_F(RendererRegressionTests, HugeRoundCapMatchesItsTrueArc) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  // A round cap of radius 4e7 seen through a 256 px window centered on its edge. The reference
+  // fills the true circle sampled about once per pixel along the window, so its edge is exact to
+  // far below a pixel. The window sits pi / 8192 radians from the cap's apex, midway between two
+  // vertices of a 4096-chord cap, where such a cap misses the arc by about 3 pixels.
+  constexpr double kRadius = 4.0e7;
+  const double windowAngle = -MathConstants<double>::kPi / 8192.0;
+  const Vector2d windowCenter(128.5, 128.25);
+  const Vector2d center =
+      windowCenter - Vector2d(std::cos(windowAngle), std::sin(windowAngle)) * kRadius;
+  const auto number = [](double value) {
+    std::ostringstream stream;
+    stream << std::setprecision(17) << value;
+    return stream.str();
+  };
+  const auto point = [&](const Vector2d& p) { return number(p.x) + " " + number(p.y); };
+  const auto document = [](const std::string& element) {
+    return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 256 256\">" + element +
+           "</svg>";
+  };
+
+  const std::string stroke = "<path fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"" +
+                             number(2.0 * kRadius) + "\" stroke-linecap=\"round\" d=\"M" +
+                             point(center - Vector2d(10.0, 0.0)) + "L" + point(center) + "\"/>";
+
+  // Sample the arc 1 px apart for 400 px on either side of the window center, then close the
+  // polygon 1000 px inside the circle.
+  constexpr int kHalfSamples = 400;
+  std::string arc = "M";
+  for (int i = -kHalfSamples; i <= kHalfSamples; ++i) {
+    const double angle = windowAngle + static_cast<double>(i) / kRadius;
+    arc += (i == -kHalfSamples ? "" : "L") +
+           point(center + Vector2d(std::cos(angle), std::sin(angle)) * kRadius);
+  }
+  for (const int i : {kHalfSamples, -kHalfSamples}) {
+    const double angle = windowAngle + static_cast<double>(i) / kRadius;
+    arc += "L" + point(center + Vector2d(std::cos(angle), std::sin(angle)) * (kRadius - 1000.0));
+  }
+  const std::string reference = "<path fill=\"#ff00ff\" d=\"" + arc + "Z\"/>";
+
+  SVGDocument strokeDocument = instantiateSubtree(document(stroke), {}, {256, 256});
+  SVGDocument referenceDocument = instantiateSubtree(document(reference), {}, {256, 256});
+  const RendererBitmap expected =
+      RenderDocumentWithBackend(referenceDocument, RendererBackend::Geode);
+  AssertVisibleFixture(expected, "huge_round_cap_reference");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithBackend(strokeDocument, RendererBackend::Geode), expected, "huge_round_cap",
+      kNoMismatchedPixelsParams);
 }
 
 TEST_F(RendererRegressionTests, FractionalStrokeUnionPreservesGradientCoverage) {
@@ -5845,6 +6124,26 @@ TEST_F(RendererRegressionTests, FeImageFragmentInstancesAreNotReturnedByRectQuer
     renderer->draw(document);
   }
   EXPECT_THAT(renderingContext.findIntersectingRect(canvas), testing::ElementsAreArray(beforeDraw));
+}
+
+// Removing a presentation attribute through the DOM renders like a document authored without it:
+// the rect inherits its group's fill again instead of taking the initial black.
+TEST_F(RendererRegressionTests, RemovedFillPresentationAttributeInheritsAgain) {
+  SVGDocument document = instantiateSubtree(
+      "<g fill='red'><rect id='t' x='4' y='4' width='8' height='8' fill='blue'/></g>", {},
+      Vector2i(16, 16));
+  (void)RenderDocumentWithActiveBackend(document);
+  std::optional<SVGElement> target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  target->removeAttribute("fill");
+
+  SVGDocument fresh = instantiateSubtree(
+      "<g fill='red'><rect x='4' y='4' width='8' height='8'/></g>", {}, Vector2i(16, 16));
+  const RendererBitmap expected = RenderDocumentWithActiveBackend(fresh);
+  AssertVisibleFixture(expected, "removed_fill_oracle");
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expected,
+                                       "removed_fill_inherits",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

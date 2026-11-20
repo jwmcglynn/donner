@@ -312,7 +312,8 @@ std::string interpolateTransformValue(double progress,
   return formatTransform(type, result);
 }
 
-std::string RoundAnimationIntegers(const std::string& input) {
+/// Round each number in \p input to the nearest integer, except one above \p maximum.
+std::string RoundAnimationIntegers(const std::string& input, double maximum) {
   const auto numbers = ParseAnimationLengths(input);
   if (!numbers) {
     return {};
@@ -325,7 +326,8 @@ std::string RoundAnimationIntegers(const std::string& input) {
     if (i != 0) {
       output << ' ';
     }
-    output << std::floor((*numbers)[i].value + 0.5);
+    const double value = (*numbers)[i].value;
+    output << (value > maximum ? value : std::floor(value + 0.5));
   }
   return output.str();
 }
@@ -518,7 +520,7 @@ std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
       sampled = CombineAnimationValues(underlying, sampled, 1, 1, context, true).value_or(sampled);
     }
     if (context.integerValue) {
-      sampled = RoundAnimationIntegers(sampled);
+      sampled = RoundAnimationIntegers(sampled, context.maximumInteger);
     }
     return std::pair<std::string, std::string>{valueComp->attributeName, std::move(sampled)};
   }

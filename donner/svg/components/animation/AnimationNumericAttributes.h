@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <initializer_list>
 #include <optional>
 #include <string_view>
@@ -10,6 +11,24 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 
 namespace donner::svg::components {
+
+/**
+ * The most numbers an animated filter number list keeps: one more than the attribute's structural
+ * limit, so a longer list is still over the limit and fails closed like the authored value, while
+ * the rest of it is never read.
+ *
+ * @param name Animated attribute name.
+ * @return The count for `values`, `kernelMatrix` and `tableValues`; zero for other attributes.
+ */
+constexpr std::size_t AnimatedFilterListCapacity(std::string_view name) {
+  if (name == "values") {
+    return kMaximumFilterColorMatrixValues + 1;
+  }
+  if (name == "kernelMatrix") {
+    return kMaximumFilterKernelValues + 1;
+  }
+  return name == "tableValues" ? kMaximumFilterTableValues + 1 : 0;
+}
 
 /** Visit a matching numeric field on an existing component.
  * @param registry Document storage with write access held.

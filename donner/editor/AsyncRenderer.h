@@ -33,6 +33,7 @@
 /// thread must not call any method on the worker `Renderer` at any time - it lives on the worker.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -370,6 +371,36 @@ struct RenderResult {
     /// is not paired with `gpuOwnerDispatchCount`: a dispatch requested before the iteration can
     /// add wait time here, and one still pending at its end adds none.
     double gpuOwnerDispatchWaitMs = 0.0;
+    /// Where browser GPU owner dispatches came from and where their blocked time went while this
+    /// iteration ran, read as differences of running totals like `gpuOwnerDispatchCount`. All
+    /// zero in native builds.
+    struct GpuOwnerDispatchDetail {
+      /// Dispatches this worker thread requested; the rest of `gpuOwnerDispatchCount` came from
+      /// other client threads.
+      int requestedByWorker = 0;
+      /// Dispatches from every client thread by operation kind, in
+      /// `gpu::browser::BrowserGpuOperationKind` order.
+      std::array<int, 13> requestedByKind{};
+      /// Blocked time from each request until the owner received it.
+      double deliveryMs = 0.0;
+      /// Blocked time from the owner's receipt until execution started.
+      double ownerQueueMs = 0.0;
+      /// Blocked time executing on the owner.
+      double executeMs = 0.0;
+      /// Blocked time from the owner's completion until the requester observed it.
+      double completionWakeMs = 0.0;
+      /// Completed dispatches by request-to-start latency: at most 50 us, 100 us, 250 us, 1 ms,
+      /// 4 ms, 16 ms, 64 ms, then longer.
+      std::array<int, 8> startLatencyBuckets{};
+      /// Owner time with an active canvas frame, for canvas frames that ended.
+      double canvasFrameActiveMs = 0.0;
+      /// Canvas frames that ended.
+      int canvasFrames = 0;
+      /// Requests the owner received while a canvas frame was active.
+      int receivedDuringCanvasFrame = 0;
+    };
+    /// Browser GPU owner dispatch detail for this iteration.
+    GpuOwnerDispatchDetail gpuOwnerDispatch;
     /// True when browser readbacks used the event-driven timed WaitAny path.
     bool usedTimedWaitAny = false;
     /// True when the worker's backend device has been declared lost, either by

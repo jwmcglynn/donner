@@ -76,14 +76,48 @@ result permits this difference in the underlying clip coverage.
   tests/painting/marker/with-markerUnits=userSpaceOnUse.png
   SHA256: 7c4a332633c76f71c1681ca14aadc3c4324d0320bb33c5f89cefcf7b2299fb42
 
-Refreshed references: these tests now live in the resvg repository
-(https://github.com/linebender/resvg, crates/resvg/tests/tests/). The snapshot
-above predates resvg placing sideways vertical glyphs on the central baseline
-at the ascent/descent midpoint, so the following PNGs were replaced with their
-300x300 versions from resvg release v0.49.0 (resvg revision
-66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba). resvg is licensed Apache-2.0 OR MIT;
-these files are used under MIT, with its notice in LICENSE-resvg-MIT. Their SVG
-inputs are byte-identical at both revisions.
+References from the resvg release: these tests live in the resvg repository
+(https://github.com/linebender/resvg, crates/resvg/tests/tests/). resvg is licensed
+Apache-2.0 OR MIT; these files are used under MIT, with its notice in LICENSE-resvg-MIT.
+The 107 files listed in resvg-v0.50.0.sha256 (102 PNGs, each 300x300, and 5 SVGs) are
+byte-identical to crates/resvg/tests/<path> at the resvg v0.50.0 release tag, revision
+5bdbae64eefadc4bf0caa56dcf91702037929086, where <path> is the tests/... path the list gives.
+The tag's source archive holds them under resvg-0.50.0/crates/resvg/tests/:
+
+  https://github.com/linebender/resvg/archive/refs/tags/v0.50.0.tar.gz
+  SHA256: ea6629ecaf8ae523aaa42b23217db7fdbed5d4bb070a2574af0d01040195beb1
+
+resvg-v0.50.0.sha256 records each file's SHA-256 in `shasum -a 256 -c` format, relative to
+this directory and to the archive's crates/resvg/tests/ directory alike.
+//tools/resvg_parity:parity_report_tests fails when a listed file does not have its recorded
+digest, or when the counts and PNG size in the sentence above do not match the list, so a
+changed file must update this provenance too. resvg release v0.49.0 (revision
+66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba) holds the same bytes for each of them. The harness
+takes each case's canvas from its reference image, so these cases render on the 300x300
+canvas of their references.
+
+Two more 300x300 PNGs are byte-identical to crates/resvg/tests/<path> at the resvg v0.49.0
+release tag (revision 66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba), under the same license, and
+their vendored SVGs are byte-identical to that release's. resvg v0.50.0 renders both PNGs
+differently and edits with-invalid-path-and-xlink-href.svg.
+
+  tests/painting/context/with-pattern-objectBoundingBox-in-use.png
+  SHA256: 4a5881e3a93cbf9a40603630990de91e317183129e81f2ad3d69e544f336ab8d
+  tests/text/textPath/with-invalid-path-and-xlink-href.png
+  SHA256: afd5561d73d9239ea9f30d279fea63c78a175830608854cd4c101237fee553d3
+
+The other 13 references that differ from the snapshot's are renders made for this repository
+with the resvg v0.49.0 release CLI at 500x500 or 800x800, each recorded above or below with
+its command and SHA-256. Twelve render the vendored SVG, which is the snapshot's;
+text-decoration/indirect-with-multiple-colors.png renders the independent scene in
+reference-sources/indirect-with-multiple-colors.svg. Two of them, the color emoji references,
+have no counterpart at v0.50.0.
+
+Why the references below differ from the snapshot's, by group. Unless noted, each SVG input is
+byte-identical in the snapshot and in the release its PNG comes from.
+
+The snapshot predates resvg placing sideways vertical glyphs on the central baseline at the
+ascent/descent midpoint.
 
   tests/text/writing-mode/inheritance.png
   tests/text/writing-mode/mixed-languages-with-tb.png
@@ -94,18 +128,14 @@ inputs are byte-identical at both revisions.
   tests/text/writing-mode/tb-with-dx-on-tspan.png
   tests/text/writing-mode/tb-with-dy-on-second-tspan.png
 
-From the same revision and license, this PNG was replaced with its 300x300 version. The
-relative xlink:href names an external document. It stays unresolved after the invalid path
-attribute is ignored, so the reference draws the guide path and frame. The SVG input is
-byte-identical at both revisions.
+The relative xlink:href names an external document. It stays unresolved after the invalid
+path attribute is ignored, so the reference draws the guide path and frame.
 
   tests/text/textPath/with-invalid-path-and-xlink-href.png
-  SHA256: afd5561d73d9239ea9f30d279fea63c78a175830608854cd4c101237fee553d3
 
-From the same revision and license, both the SVG and the PNG of these tests were
-replaced, because upstream quoted their `'Mplus 1p'` font-family. Unquoted, that
-value is not a valid family name, and the old references were drawn in a
-fallback face.
+Both the SVG and the PNG of these tests are upstream's, which quote their `'Mplus 1p'`
+font-family. The snapshot's SVGs leave it unquoted, which is not a valid family name, and its
+references are drawn in a fallback face.
 
   tests/text/writing-mode/tb-and-punctuation.svg
   tests/text/writing-mode/tb-and-punctuation.png
@@ -114,15 +144,12 @@ fallback face.
   tests/text/textPath/writing-mode=tb.svg
   tests/text/textPath/writing-mode=tb.png
 
-From the same revision and license, these PNGs were replaced with their 300x300
-versions because the snapshot's references were drawn in faces outside the
-vendored font set. Upstream's harness maps the generic families to Noto Serif,
-Noto Sans, Noto Mono, Yellowtail and Sedgwick Ave Display, yet the snapshot's
-sans-serif.png differed from its noto-sans.png (the two are byte-identical at
-v0.49.0), and xml-lang=ja.png used per-language CJK faces that are not vendored.
-fallback-1.png was byte-identical to the old sans-serif.png, a centered rendering
-of this left-anchored text. Their SVG inputs are byte-identical at both
-revisions.
+The snapshot's references are drawn in faces outside the vendored font set. Upstream's
+harness maps the generic families to Noto Serif, Noto Sans, Noto Mono, Yellowtail and
+Sedgwick Ave Display, yet the snapshot's sans-serif.png differs from its noto-sans.png (the
+two are byte-identical upstream), and its xml-lang=ja.png uses per-language CJK faces that are
+not vendored. The snapshot's fallback-1.png is byte-identical to its sans-serif.png, a centered
+rendering of this left-anchored text.
 
   tests/text/font-family/bold-sans-serif.png
   tests/text/font-family/cursive.png
@@ -133,12 +160,11 @@ revisions.
   tests/text/font-family/serif.png
   tests/text/text/xml-lang=ja.png
 
-From the same revision and license, these 300x300 PNGs use byte-identical SVG inputs.
-The text decoration in tspan-bbox-2 takes its paint from the declaring text element
-(SVG 2 section 11.11). The glyph fill is the child's gradient. Stable Chrome 158 and
-resvg v0.49.0 paint the underline black. Firefox 157 and the snapshot use the gradient.
-The two ligature fixtures shape the Amiri and Noto Sans runs separately; Amiri forms fi.
-The snapshot differs at the crosshair and glyph edges.
+The text decoration in tspan-bbox-2 takes its paint from the declaring text element (SVG 2
+section 11.11). The glyph fill is the child's gradient. Stable Chrome 158 and resvg paint the
+underline black. Firefox 157 and the snapshot use the gradient. The two ligature fixtures
+shape the Amiri and Noto Sans runs separately; Amiri forms fi. The snapshot differs at the
+crosshair and glyph edges.
 
   tests/text/tspan/tspan-bbox-2.png
   tests/text/text/ligatures-handling-in-mixed-fonts-1.png
@@ -164,34 +190,28 @@ notice. These renders use the unchanged vendored SVGs.
   tests/text/text/emojis.png
   SHA256: ab8dd188c3a11e2ebf4c9bce19e8bfc7fcde82d41eb46935f420998063aaa6e6
 
-From the same revision and license, these PNGs were replaced with their 300x300
-versions. The snapshot's vertical.png placed its sideways glyphs 0.28 units across
-the line from both Donner and resvg v0.49.0, consistent with a rendering from before
-the central baseline, and the snapshot's two underline references drew 0.1em lines, twice the
-0.05em underline thickness in the vendored Noto Sans post table that resvg v0.49.0
-draws. Their SVG inputs are byte-identical at both revisions.
+The snapshot's vertical.png places its sideways glyphs 0.28 units across the line from both
+Donner and resvg, consistent with a rendering from before the central baseline, and the
+snapshot's two underline references draw 0.1em lines, twice the 0.05em underline thickness
+in the vendored Noto Sans post table that resvg draws.
 
   tests/text/lengthAdjust/vertical.png
   tests/text/lengthAdjust/with-underline.png
   tests/text/text-decoration/with-textLength-on-a-single-character.png
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions, which
-Donner matches within the default allowance on both CPU text tiers and on Geode with Metal or
-software Vulkan. The snapshot's with-pattern-objectBoundingBox-in-use reference
-rounded its fractional pattern tile to whole pixels. Their SVG inputs are byte-identical at both
-revisions.
+Donner matches these references within the default allowance on both CPU text tiers and on
+Geode with Metal or software Vulkan. The snapshot's with-pattern-objectBoundingBox-in-use
+reference rounds its fractional pattern tile to whole pixels.
 
   tests/painting/context/with-pattern-objectBoundingBox-in-use.png
   tests/painting/marker/orient=auto-on-M-C-C-4.png
 
-From the same revision and license, these raster-image PNGs were replaced with their 300x300
-versions. The snapshot's references mixed several historical upscalers: a browser's bilinear
-filter with 4-bit subpixel weights, an older resvg that resampled each image to its user-space
-size before the canvas transform, and the Mitchell cubic that resvg v0.49.0 applies to
-`image-rendering: auto`. At v0.49.0 every one of them is drawn with that cubic, except
-optimizeSpeed.png, which uses tiny-skia's nearest-neighbor sampling. Their SVG inputs
-are byte-identical at both revisions, except no-height.svg and no-width.svg, which upstream
-redrew on a 200x200 viewBox and which were replaced as well.
+The snapshot's raster-image references mix several historical upscalers: a browser's
+bilinear filter with 4-bit subpixel weights, an older resvg that resampled each image to its
+user-space size before the canvas transform, and the Mitchell cubic that resvg applies to
+`image-rendering: auto`. Upstream's references draw every one of them with that cubic, except
+optimizeSpeed.png, which uses tiny-skia's nearest-neighbor sampling. The vendored
+no-height.svg and no-width.svg are upstream's, which draw on a 200x200 viewBox.
 
   tests/masking/mask/with-image.png
   tests/painting/image-rendering/optimizeSpeed.png
@@ -222,34 +242,29 @@ redrew on a 200x200 viewBox and which were replaced as well.
   tests/structure/image/width-and-height-set-to-auto.png
   tests/structure/image/with-transform.png
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references were flattened onto white: their opaque seagreen interiors were stored as
-(0, 113, 49) at alpha 209, which matches only when composited over white. Their SVG inputs are
-byte-identical at both revisions. The snapshot's subregion-and-primitiveUnits=objectBoundingBox-1
-and -2 references are flattened the same way but are kept: the v0.49.0 renderings end their
-0.5-wide objectBoundingBox subregion at 98 user units instead of the 84 that the element's
-bounding box gives, which the snapshot and Donner both draw. The snapshot's
-everything-via-xlink-href, some-attributes-via-xlink-href and with-region-and-subregion
-references are flattened too but are kept: their filter regions cut the blur's input, and the
-v0.49.0 renderings drop the box-blur spill there, which Donner keeps.
+The snapshot's references are flattened onto white: their opaque seagreen interiors are
+stored as (0, 113, 49) at alpha 209, which matches only when composited over white. The
+snapshot's subregion-and-primitiveUnits=objectBoundingBox-1 and -2 references are flattened
+the same way but are kept: the resvg renderings end their 0.5-wide objectBoundingBox
+subregion at 98 user units instead of the 84 that the element's bounding box gives, which the
+snapshot and Donner both draw. The snapshot's everything-via-xlink-href,
+some-attributes-via-xlink-href and with-region-and-subregion references are flattened too but
+are kept: their filter regions cut the blur's input, and the resvg renderings drop the
+box-blur spill there, which Donner keeps.
 
   tests/filters/filter/complex-order-and-xlink-href.png
   tests/filters/filter/negative-subregion.png
   tests/filters/filter/with-subregion-1.png
   tests/filters/filter/with-subregion-2.png
 
-From the same revision and license, these PNGs were replaced with their 300x300
-versions. The snapshot's references mapped objectBoundingBox units on text through the
-glyph ink extents, while resvg v0.49.0 uses each glyph's cell: its advance by the font's
-ascent and descent. Their SVG inputs are byte-identical at both revisions.
+The snapshot's references map objectBoundingBox units on text through the glyph ink
+extents, while resvg uses each glyph's cell: its advance by the font's ascent and descent.
 
   tests/masking/clipPath/clip-path-with-transform-on-text.png
   tests/painting/visibility/bbox-impact-3.png
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references predate the current text-on-path layout, so Donner compared against its
-own renderings for most of them; Donner matches the v0.49.0 renderings within the default
-allowance on both CPU text tiers. Their SVG inputs are byte-identical at both revisions.
+The snapshot's references predate resvg's current text-on-path layout; Donner matches upstream's
+within the default allowance on both CPU text tiers.
 
   tests/text/textPath/m-A-path.png
   tests/text/textPath/nested.png
@@ -269,90 +284,70 @@ allowance on both CPU text tiers. Their SVG inputs are byte-identical at both re
   tests/text/textPath/with-transform-on-a-referenced-path.png
   tests/text/textPath/with-transform-outside-a-referenced-path.png
 
-From the same revision and license, this PNG was replaced with its 300x300 version. The
-snapshot's reference was opaque white where every other reference is transparent, and it
-matched only when composited over white. Its SVG input is byte-identical at both revisions.
+The snapshot's reference is opaque white where every other reference is transparent, and it
+matches only when composited over white.
 
   tests/text/textPath/link-to-rect.png
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions, which
-Donner's full text tier matches within 11 pixels. The snapshot's references differed on glyph
-and crosshair edge coverage. The SVG inputs are byte-identical at both revisions, except that
-upstream rotate-on-Arabic.svg changed only its title and a pull-request link.
+Donner's full text tier matches upstream's references within 11 pixels. The snapshot's
+references differ on glyph and crosshair edge coverage. Upstream rotate-on-Arabic.svg
+changed only its title and a pull-request link; the vendored SVG keeps the snapshot's.
 
   tests/text/text/rotate-on-Arabic.png
   tests/text/text/x-and-y-with-multiple-values-and-arabic-text.png
   tests/text/text/zalgo.png
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references covered the crosshair and glyph edges with 4x4 supersampling, which
-differed from Donner's coverage by about 390 pixels per case; Donner matches the v0.49.0
-renderings within 2 pixels. Their SVG inputs are byte-identical at both revisions.
+The snapshot's references cover the crosshair and glyph edges with 4x4 supersampling, which
+differs from Donner's coverage by 386 (font-shorthand), 397 (real-text-height) and 387
+(nested-whitespaces) pixels; Donner matches upstream's references within 2 pixels.
 
   tests/text/font/font-shorthand.png
   tests/text/text/real-text-height.png
   tests/text/tspan/nested-whitespaces.png
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references drew the filtered circle's anti-aliased edge 0.1 to 0.26 coverage lighter
-than its geometry gives wherever the semi-transparent shadow lies beneath it; the v0.49.0
-renderings and Donner both match the geometry there. The v0.49.0 with-percent-offset.png is
-byte-identical to only-stdDeviation.png, since percentages are invalid offsets that fall back to
-the default. Their SVG inputs are byte-identical at both revisions.
+The snapshot's references draw the filtered circle's anti-aliased edge 0.1 to 0.26 coverage
+lighter than its geometry gives wherever the semi-transparent shadow lies beneath it; the
+upstream references and Donner both match the geometry there. Upstream's
+with-percent-offset.png is byte-identical to only-stdDeviation.png, since percentages are
+invalid offsets that fall back to the default.
 
   tests/filters/feDropShadow/only-stdDeviation.png
-  SHA256: ff7c4cf87937e4d8ae4f1fde51f155fcb83246abf405a6aa88fe8b410703e24b
   tests/filters/feDropShadow/with-flood-color.png
-  SHA256: 28ac3a6aad37f0144934071fe28642ef290fe8a7fd0e1bbaad9a488b55ee4de6
   tests/filters/feDropShadow/with-percent-offset.png
-  SHA256: ff7c4cf87937e4d8ae4f1fde51f155fcb83246abf405a6aa88fe8b410703e24b
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references differed from Donner only along rotated glyph edges; Donner matches the
-v0.49.0 renderings within the default allowance on both CPU text tiers and on Geode with Metal
-(the Vulkan lanes were not measured). Their SVG inputs are byte-identical at both revisions.
+The snapshot's references differ from Donner only along rotated glyph edges; Donner matches
+upstream's references within the default allowance on both CPU text tiers and on Geode with Metal
+(the Vulkan lanes were not measured).
 
   tests/structure/transform-origin/on-text-path.png
   tests/structure/transform-origin/on-text.png
 
-From the same revision and license, these PNGs were replaced with their 300x300 versions. The
-snapshot's references were flattened onto white: where the filter output is semi-transparent or
-empty they store opaque colors (for example opaque white for an eroded or empty region, and
+The snapshot's references are flattened onto white: where the filter output is semi-transparent
+or empty they store opaque colors (for example opaque white for an eroded or empty region, and
 (0, 0, 210) at alpha 120 where the filter gives (103, 103, 229) at alpha 199), which match the
-filter output only when composited over white. The v0.49.0 renderings keep the transparency and
+filter output only when composited over white. Upstream's references keep the transparency and
 compare at default settings. The feTurbulence color-interpolation-filters=sRGB reference is not
-flattened, but the snapshot draws its faint noise lighter than both v0.49.0 and Donner (346
-pixels at default settings against Donner, none against v0.49.0). Their SVG inputs are
-byte-identical at both revisions.
+flattened, but the snapshot draws its faint noise lighter than both upstream's reference and Donner
+(346 pixels at default settings against Donner, none against upstream's). The snapshot's
+500x500 edgeMode=wrap PNG reduces the alpha of flat regions where the two 0.75-opacity pattern
+shapes overlap from 239 to 196. A normalized convolution preserves the source alpha in a
+constant region. At the top-left boundary upstream's reference samples the wrapped input.
 
   tests/filters/feConvolveMatrix/edgeMode=none.png
-  SHA256: c79ca487455cd40d69e1f06b4a2cac71b9503efc5f86d589fd92112aa72b76fb
+  tests/filters/feConvolveMatrix/edgeMode=wrap.png
   tests/filters/feConvolveMatrix/order=4-2.png
-  SHA256: 7e286558bf9033b3bb26eff6fc469a9e27eacae21827f1670286e90e79d2ae08
   tests/filters/feConvolveMatrix/order=4-4.png
-  SHA256: c97f4eca75e6410db4e10c0cf9e711d6c46a68ba0edef89b0ec1ba43fd69b5cf
   tests/filters/feConvolveMatrix/order=4.png
-  SHA256: c97f4eca75e6410db4e10c0cf9e711d6c46a68ba0edef89b0ec1ba43fd69b5cf
   tests/filters/feConvolveMatrix/preserveAlpha=true.png
-  SHA256: 98f0f198a2411583fb8124cdd9b9bc08739801ee63cc2455146e07083f2cb060
   tests/filters/feConvolveMatrix/targetX=0.png
-  SHA256: 953732f3d2cbf35e5eabf7f4a38991953612a1380231dbfaed7ec391f0d710db
   tests/filters/feConvolveMatrix/targetX=2.png
-  SHA256: 1563f8f41601d3b1996513fd2079ed09e26223b86d6d73694bd63658f2a2d985
   tests/filters/feConvolveMatrix/unset-order.png
-  SHA256: ad777c7d170f00d7b0b77d44cddbb78d88f93f033c16fa5549d7752182c685de
   tests/filters/feMorphology/radius=0.5.png
-  SHA256: 8570e9d0c448c9d4ad98b2de4431a5d0f2db9299a5bf5907345cdd1dd844a7b3
   tests/filters/feMorphology/radius=1-10.png
-  SHA256: 07b8cafb939aa0da774efe535529b95ccd42a9d618b841372ccf0c0e7e88a00e
   tests/filters/feMorphology/radius=10-1.png
-  SHA256: a7be1ab161ba7770b8adb557c253d2bc4df78a51568f13a36175318a07122b74
   tests/filters/feSpecularLighting/with-feSpotLight-and-specular-and-exponent.png
-  SHA256: 6bc73f186df9748f6c11dd9c1e1b2d22ac1088425f1e76a4ff84d8307f765bf2
   tests/filters/feSpecularLighting/with-feSpotLight-and-specularConstant=5.png
-  SHA256: d36c7e4d895c1d274b89f191f751df376d218f34fd54ecff3050af632f6fa648
   tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
-  SHA256: 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41
 
 The 500x500 paint-order image is generated from the original SVG with resvg
 v0.49.0 and the bundled Noto Sans face. It preserves kerning between the "e"
@@ -378,15 +373,6 @@ that highlight to zero alpha.
 
   tests/filters/feSpecularLighting/with-fePointLight.png
   SHA256: 7ca2b373b0188e04b08892eeadc3236bd8846d46df1db6ff7c8a7cd43d5bb0f0
-
-The 300x300 edgeMode=wrap PNG below is byte-identical to resvg v0.49.0 from the same
-revision and license. Its SVG is unchanged. The snapshot's 500x500 PNG reduces the
-alpha of flat regions where the two 0.75-opacity pattern shapes overlap from 239
-to 196. A normalized convolution preserves the source alpha in a constant region.
-At the top-left boundary the replacement samples the wrapped input.
-
-  tests/filters/feConvolveMatrix/edgeMode=wrap.png
-  SHA256: d44d434e3420f50fff8fbbe82f408ac38ab8c06647f44925f58118802202f43b
 
 The 800x800 text-decoration reference uses the unchanged
 `tests/text/text-decoration/indirect-with-multiple-colors.svg` fixture. At that
@@ -430,10 +416,12 @@ move past v2.011; v2.010 is kept as the oldest release that matches.
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
+    "BUILD.bazel",
     "LICENSE",
     "fonts/Noto-LICENSE-OFL.txt",
     "resources/ub.png",
     "results.csv",
+    "resvg-v0.50.0.sha256",
 ])
 
 filegroup(

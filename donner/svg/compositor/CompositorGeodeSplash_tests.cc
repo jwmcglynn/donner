@@ -1001,6 +1001,22 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragSkipsPiecesWhenSplitWouldChangeCo
                </g>
              </svg>)svg"),
             false},
+           // Text laid out along the target as a `<textPath>` would keep its old layout in the
+           // other pieces.
+           {std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <path id="target" d="M 12 36 L 64 36" stroke="#c00" stroke-width="2"/>
+                 <text font-size="12" fill="#00c"><textPath href="#target">Follow</textPath></text>
+               </g>
+             </svg>)svg"),
+            false},
            // Text has no tight bounds to check against the owner tile.
            {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">

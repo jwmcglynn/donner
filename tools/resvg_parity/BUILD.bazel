@@ -7,6 +7,7 @@ py_binary(
     data = [
         ":exception_policies.json",
         "//:docs/design_docs/0021-resvg_feature_gaps.md",
+        "//donner/svg/renderer/testdata:resvg_golden_documentation",
         "//donner/svg/renderer/tests:resvg_test_policy_sources",
         "//donner/svg/renderer/tests:resvg_test_registration_source",
         "//third_party/resvg-test-suite:results.csv",
@@ -27,10 +28,13 @@ py_test(
     data = [
         ":exception_policies.json",
         "//:docs/design_docs/0021-resvg_feature_gaps.md",
+        "//donner/svg/renderer/testdata:resvg_golden_documentation",
         "//donner/svg/renderer/tests:resvg_test_policy_sources",
         "//donner/svg/renderer/tests:resvg_test_registration_source",
+        "//third_party/resvg-test-suite:BUILD.bazel",
         "//third_party/resvg-test-suite:resources/ub.png",
         "//third_party/resvg-test-suite:results.csv",
+        "//third_party/resvg-test-suite:resvg-v0.50.0.sha256",
         "//third_party/resvg-test-suite:tests",
     ],
     imports = ["."],

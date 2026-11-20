@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from collections import Counter
 
+import hashlib
 import io
 import json
 from pathlib import Path
+import struct
 import tempfile
 import textwrap
 import unittest
@@ -31,13 +33,20 @@ def _registration(suite: str, category_call: str) -> str:
     )
 
 
+def _png_header(width: int, height: int) -> bytes:
+    """Return the PNG signature and IHDR header, which is all the canvas rule reads."""
+
+    return (b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + struct.pack(">II", width, height)
+            + b"\x08\x06\x00\x00\x00")
+
+
 class Fixture:
     def __init__(self) -> None:
         self._temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary_directory.name)
         self.tests_root = self.root / parity_report.TESTS_ROOT
 
-    def add_case(self, relative: str, reference: bytes | None = None) -> None:
+    def add_case(self, relative: str, reference: bytes | None = _png_header(500, 500)) -> None:
         path = self.tests_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("<svg/>\n", encoding="utf-8")
@@ -455,6 +464,250 @@ class ParityReportTests(unittest.TestCase):
             ],
         )
 
+    def test_golden_overrides_need_a_reason(self) -> None:
+        for name in ("bare.svg", "geode.svg", "reasoned.svg", "builder.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"bare.svg", Params::WithGoldenOverride("a.png")},'
+                '{"geode.svg", Params().withGeodeGoldenOverride("g.png")},'
+                '{"reasoned.svg", Params::WithGoldenOverride("a.png", 0.02f, "why")},'
+                '{"builder.svg", Params().withGeodeGoldenOverride("g.png", "why")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(
+            parity_report.golden_reason_violations(report),
+            [
+                "painting/fill/bare.svg: golden override has no reason; record why the vendored "
+                "reference is replaced",
+                "painting/fill/geode.svg: golden override has no reason; record why the vendored "
+                "reference is replaced",
+            ],
+        )
+
+    def test_explicit_capability_gate_needs_a_source_reason(self) -> None:
+        # The arabic row once had a hard-coded exemption; it must fail like any other row.
+        for category, filename in (("text/sample", "gated.svg"),
+                                   ("text/text-anchor", "on-tspan-with-arabic.svg")):
+            fixture = Fixture()
+            self.addCleanup(fixture.close)
+            fixture.add_case(f"{category}/{filename}")
+            report = parity_report.build_report(
+                _registration(
+                    "TextGated",
+                    f'"{category}", {{'
+                    f'{{"{filename}", Params().requireFeature(RendererBackendFeature::TextFull)}}}}',
+                ),
+                fixture.tests_root,
+            )
+
+            with self.subTest(path=f"{category}/{filename}"), self.assertRaisesRegex(
+                parity_report.ParityReportError,
+                f"{category}/{filename}: explicit capability gate needs a source reason",
+            ):
+                parity_report.add_exception_policies(report, {"rules": []})
+
+    def _ratchet_report(self) -> dict[str, object]:
+        for name in ("new.svg", "grown.svg", "shrunk.svg", "kept.svg", "fixed.svg", "geode.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        return parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"new.svg", Params::WithThreshold(0.08f, 150, "new")},'
+                '{"grown.svg", Params::WithThreshold(0.2f, 300, "grown")},'
+                '{"shrunk.svg", Params::WithThreshold(0.06f, 120, "shrunk")},'
+                '{"kept.svg", Params::WithThreshold(0.1f, 200, "kept")},'
+                '{"fixed.svg", Params::WithThreshold(0.05f, 100, "fixed")},'
+                '{"geode.svg", Params().withGeodeMaxPixelsDifferent(500).withReason("geode")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+    def test_pixel_budget_ratchet_rejects_new_grown_shrunk_and_stale_entries(self) -> None:
+        report = self._ratchet_report()
+        every_lane = ("default_text", "max", "geode")
+        allowlist = {
+            "painting/fill/grown.svg": dict.fromkeys(every_lane, 250),
+            "painting/fill/shrunk.svg": dict.fromkeys(every_lane, 150),
+            "painting/fill/kept.svg": dict.fromkeys(every_lane, 200),
+            "painting/fill/fixed.svg": {"max": 400},
+            "painting/fill/geode.svg": {"geode": 500, "max": 500},
+        }
+
+        violations = parity_report.pixel_budget_ratchet_violations(report, allowlist)
+
+        def lanes(path: str, message: str) -> list[str]:
+            return [f"painting/fill/{path} ({lane}): {message}" for lane in every_lane]
+
+        self.assertEqual(violations, sorted([
+            *lanes("new.svg", "max_pixels 150 is above 100 and not in PIXEL_BUDGET_ALLOWLIST; new "
+                   "entries need maintainer approval, so fix the engine instead"),
+            *lanes("grown.svg", "max_pixels 300 is above its recorded 250 in "
+                   "PIXEL_BUDGET_ALLOWLIST, which may only shrink"),
+            *lanes("shrunk.svg", "max_pixels 120 is below its recorded 150; lower the "
+                   "PIXEL_BUDGET_ALLOWLIST entry"),
+            "painting/fill/fixed.svg (max): stale PIXEL_BUDGET_ALLOWLIST entry; the lane no "
+            "longer compares with max_pixels above 100, so remove it",
+            "painting/fill/geode.svg (max): stale PIXEL_BUDGET_ALLOWLIST entry; the lane no "
+            "longer compares with max_pixels above 100, so remove it",
+        ]))
+        self.assertEqual(parity_report.pixel_budget_ratchet_violations(report, {
+            "painting/fill/new.svg": dict.fromkeys(every_lane, 150),
+            "painting/fill/grown.svg": dict.fromkeys(every_lane, 300),
+            "painting/fill/shrunk.svg": dict.fromkeys(every_lane, 120),
+            "painting/fill/kept.svg": dict.fromkeys(every_lane, 200),
+            "painting/fill/geode.svg": {"geode": 500},
+        }), [])
+
+    def test_pixel_budget_ratchet_ignores_lanes_that_do_not_compare(self) -> None:
+        self.fixture.add_case("text/sample/full.svg")
+        report = parity_report.build_report(
+            _registration("TextSample", '"text/sample", {'
+                          '{"full.svg", WithMaxPixels(300, "text-full budget").onlyTextFull()}}'),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(
+            parity_report.pixel_budget_ratchet_violations(
+                report, {"text/sample/full.svg": {"max": 300, "geode": 300}}
+            ),
+            ["text/sample/full.svg (geode): stale PIXEL_BUDGET_ALLOWLIST entry; the lane no "
+             "longer compares with max_pixels above 100, so remove it"],
+        )
+
+    def test_threshold_ratchet_rejects_new_grown_shrunk_and_stale_entries(self) -> None:
+        report = self._ratchet_report()
+        every_lane = ("default_text", "max", "geode")
+        allowlist = {
+            "painting/fill/grown.svg": dict.fromkeys(every_lane, 0.15),
+            "painting/fill/shrunk.svg": dict.fromkeys(every_lane, 0.07),
+            "painting/fill/kept.svg": dict.fromkeys(every_lane, 0.1),
+            "painting/fill/fixed.svg": dict.fromkeys(every_lane, 0.05),
+        }
+
+        violations = parity_report.threshold_ratchet_violations(report, allowlist)
+
+        self.assertEqual(len(violations), 12, violations)
+        self.assertIn("painting/fill/new.svg (geode): threshold 0.08 is above 0.05 and not in "
+                      "THRESHOLD_ALLOWLIST; new entries need maintainer approval, so fix the engine "
+                      "instead", violations)
+        self.assertIn("painting/fill/grown.svg (max): threshold 0.2 is above its recorded 0.15 in "
+                      "THRESHOLD_ALLOWLIST, which may only shrink", violations)
+        self.assertIn("painting/fill/shrunk.svg (default_text): threshold 0.06 is below its "
+                      "recorded 0.07; lower the THRESHOLD_ALLOWLIST entry", violations)
+        self.assertIn("painting/fill/fixed.svg (max): stale THRESHOLD_ALLOWLIST entry; the lane no "
+                      "longer compares with threshold above 0.05, so remove it", violations)
+        self.assertFalse([v for v in violations if v.startswith("painting/fill/kept.svg")])
+
+    def test_skip_ratchet_rejects_new_and_stale_skips(self) -> None:
+        for name in ("listed.svg", "new.svg", "fixed.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '"painting/fill", {'
+                '{"listed.svg", Params::Skip("Not impl: feature (#1)")},'
+                '{"new.svg", Params::Skip("Reference disagreement: the PNG is wrong")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        violations = parity_report.skip_ratchet_violations(
+            report, {"painting/fill/listed.svg", "painting/fill/fixed.svg"}
+        )
+
+        self.assertEqual(
+            violations,
+            [
+                "painting/fill/new.svg: Params::Skip is not in SKIP_ALLOWLIST; "
+                + parity_report.SKIP_RULE,
+                "painting/fill/fixed.svg: stale SKIP_ALLOWLIST entry; the case is no longer an "
+                "active skip, so remove it",
+            ],
+        )
+        self.assertIn("Donner-rendered golden", parity_report.SKIP_RULE)
+        self.assertIn("README_resvg_test_suite.md", parity_report.SKIP_RULE)
+
+    def test_goldens_must_be_listed_in_the_digest_table_with_their_digest(self) -> None:
+        golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
+        (golden_root / "geode").mkdir(parents=True)
+        files = {"listed.png": b"listed", "geode/listed.png": b"geode listed",
+                 "elsewhere.png": b"elsewhere", "stale.png": b"regenerated",
+                 "unlisted.png": b"unlisted"}
+        for name, data in files.items():
+            (golden_root / name).write_bytes(data)
+        (self.fixture.root / parity_report.GOLDEN_ROOT.parent / "escape.png").write_bytes(b"x")
+
+        def digest(name: str) -> str:
+            return hashlib.sha256(files[name]).hexdigest()
+
+        (golden_root / "README.md").write_text(
+            "Prose naming `unlisted.png` with " + digest("unlisted.png") + " is not a table row.\n\n"
+            "## Another section\n\n| Golden | SHA-256 |\n| --- | --- |\n"
+            f"| `elsewhere.png` | `{digest('elsewhere.png')}` |\n"
+            f"| `stale.png` | `{hashlib.sha256(b'original').hexdigest()}` |\n\n"
+            f"{parity_report.GOLDEN_DIGEST_HEADING}\n\n| Golden | SHA-256 |\n| --- | --- |\n"
+            f"| `listed.png` | `{digest('listed.png')}` |\n"
+            f"| `geode/listed.png` | `{digest('geode/listed.png')}` |\n"
+            f"| `stale.png` | `{digest('stale.png')}` |\n\n"
+            "## A later section\n\n"
+            f"| `unlisted.png` | `{digest('unlisted.png')}` |\n",
+            encoding="utf-8",
+        )
+        names = ("a.svg", "b.svg", "c.svg", "d.svg", "e.svg", "f.svg")
+        for name in names:
+            self.fixture.add_case(f"painting/fill/{name}")
+        prefix = parity_report.GOLDEN_ROOT.as_posix()
+        goldens = ("listed.png", "stale.png", "unlisted.png", "missing.png", "elsewhere.png",
+                   "../escape.png")
+        overrides = "".join(
+            f'{{"{name}", Params::WithGoldenOverride("{prefix}/{golden}", 0.02f, "r")'
+            + ('.withGeodeGoldenOverride("' + prefix + '/geode/listed.png")' if name == "a.svg"
+               else "")
+            + "},"
+            for name, golden in zip(names, goldens)
+        )
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {' + overrides + "}"),
+            self.fixture.tests_root,
+        )
+        readme = parity_report.GOLDEN_README
+        section = repr(parity_report.GOLDEN_DIGEST_HEADING)
+
+        self.assertEqual(
+            parity_report.golden_documentation_violations(report, self.fixture.root),
+            [
+                f"{prefix}/../escape.png: golden path is not a normalized repository path",
+                f"{prefix}/elsewhere.png: no row in the {readme} {section} table names it with "
+                "its SHA-256 " + digest("elsewhere.png"),
+                f"{prefix}/missing.png: referenced golden file is missing",
+                f"{prefix}/stale.png: a {readme} row names it without its current SHA-256 "
+                + digest("stale.png"),
+                f"{prefix}/unlisted.png: no row in the {readme} {section} table names it with "
+                "its SHA-256 " + digest("unlisted.png"),
+            ],
+        )
+
+    def test_golden_readme_needs_one_digest_section(self) -> None:
+        golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
+        golden_root.mkdir(parents=True)
+        (golden_root / "README.md").write_text("| `a.png` | `x` |\n", encoding="utf-8")
+        self.fixture.add_case("painting/fill/a.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill"'), self.fixture.tests_root
+        )
+
+        with self.assertRaisesRegex(parity_report.ParityReportError, "needs one"):
+            parity_report.golden_documentation_violations(report, self.fixture.root)
+
     def test_reference_budgets_follow_the_evidence_rule(self) -> None:
         gen = "Reference rasterizer generation: crosshair; "
         label = "Reference label glyphs: heavier labels; "
@@ -585,7 +838,6 @@ class ParityReportTests(unittest.TestCase):
             ".includeAntiAliasingDifferences().enableGoldenUpdateFromEnv()"
         )
         for params in (chained, "WithMaxPixels(10, \"AA\")", "Params{}", "Params()",
-                       "ResvgV049Reference()",
                        "Params::WithGoldenOverride(\"g.png\", 0.1f, \"why\")", "{}"):
             with self.subTest(params=params):
                 report = parity_report.build_report(
@@ -638,14 +890,17 @@ class ParityReportTests(unittest.TestCase):
     def test_free_helpers_are_not_expanded(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         source = (
-            "ImageComparisonParams ResvgV049Reference() {\n"
-            "  return ImageComparisonParams().setCanvasSize(300, 300);\n}\n"
+            "ImageComparisonParams WithMaxPixels(int pixels, std::string_view reason) {\n"
+            "  return Params::WithGoldenOverride(\"g.png\").setCanvasSize(300, 300);\n}\n"
             + _registration("PaintingFill",
-                            '\"painting/fill\", {{\"a.svg\", ResvgV049Reference()}}')
+                            '\"painting/fill\", {{\"a.svg\", WithMaxPixels(120, \"AA\")}}')
         )
         case = parity_report.build_report(source, self.fixture.tests_root)["cases"][0]
-        self.assertEqual(case["raw_params_expression"], "ResvgV049Reference()")
-        self.assertEqual(case["exception_types"], [])
+        self.assertEqual(case["raw_params_expression"], 'WithMaxPixels(120, "AA")')
+        self.assertNotIn("shared_golden", case["exception_types"])
+        settings = case["lanes"]["max"]["settings"]
+        self.assertEqual(settings["max_pixels"], 120)
+        self.assertEqual(settings["canvas_size"], [500, 500])
 
     def test_category_default_params_helper_is_expanded(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
@@ -860,26 +1115,183 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(report["execution_receipts"], {})
         self.assertEqual(report["cases"][0]["lanes"]["max"]["observed"], "unobserved")
 
-    def test_renderer_contract_detects_a_resvg_helper_canvas_change(self) -> None:
+    def test_renderer_contract_detects_a_canvas_rule_change(self) -> None:
         root = parity_report._default_repo_root()
         dst = self.fixture.root / parity_report.RENDERER_TEST_ROOT
         dst.mkdir(parents=True)
         for name in (
-            "BUILD.bazel", "ImageComparisonTestFixture.h", "RendererTestBackendGeode.cc",
-            "RendererTestBackendTinySkia.cc", "resvg_test_suite.cc",
+            "BUILD.bazel", "ImageComparisonTestFixture.h", "ImageComparisonTestFixture.cc",
+            "RendererTestBackendGeode.cc", "RendererTestBackendTinySkia.cc", "resvg_test_suite.cc",
         ):
             original = (root / parity_report.RENDERER_TEST_ROOT / name).read_text(encoding="utf-8")
             (dst / name).write_text(original, encoding="utf-8")
         parity_report.check_renderer_contract(self.fixture.root)
-        source = dst / "resvg_test_suite.cc"
-        original = source.read_text(encoding="utf-8")
-        self.assertIn("return ImageComparisonParams().setCanvasSize(300, 300);", original)
-        source.write_text(original.replace(
-            "return ImageComparisonParams().setCanvasSize(300, 300);",
-            "return ImageComparisonParams().setCanvasSize(400, 400);",
-        ), encoding="utf-8")
-        with self.assertRaisesRegex(parity_report.ParityReportError, "reference canvas differs"):
-            parity_report.check_renderer_contract(self.fixture.root)
+        edits = {
+            "resvg_test_suite.cc": [
+                ("test.params.setCanvasSize(500, 500);", "test.params.setCanvasSize(400, 400);",
+                 "corpus canvas rule differs"),
+                ("test.params.enableCanvasSizeFromReference();", "",
+                 "corpus canvas rule differs"),
+            ],
+            "ImageComparisonTestFixture.cc": [
+                ("static_cast<int>(std::max(width, height))",
+                 "static_cast<int>(std::min(width, height))", "reference canvas rule differs"),
+                ("kMaxDimension = 16384;", "kMaxDimension = 8192;",
+                 "reference canvas rule differs"),
+                ("CanvasSizeResult CanvasSizeFromReferenceImage(", "CanvasSizeResult Renamed(",
+                 "reference canvas rule differs"),
+                ("params, effectiveGoldenFilename, MissingGoldenCanvasFallback",
+                 "params, goldenImageFilename, MissingGoldenCanvasFallback",
+                 "reference canvas rule differs"),
+                ("\\0\\0\\0\\x0dIHDR", "\\0\\0\\0\\x0cIHDR", "reference canvas rule differs"),
+                ("width == 0 || height == 0 || ", "", "reference canvas rule differs"),
+                ("constexpr size_t kHeaderSize = 24;", "constexpr size_t kHeaderSize = 16;",
+                 "reference canvas rule differs"),
+                ('if (getenv("UPDATE_GOLDEN_IMAGES_DIR") == nullptr) {', "if (false) {",
+                 "reference canvas rule differs"),
+            ],
+        }
+        for name, replacements in edits.items():
+            source = dst / name
+            original = source.read_text(encoding="utf-8")
+            for before, after, message in replacements:
+                with self.subTest(file=name, edit=before):
+                    self.assertEqual(original.count(before), 1)
+                    source.write_text(original.replace(before, after), encoding="utf-8")
+                    with self.assertRaisesRegex(parity_report.ParityReportError, message):
+                        parity_report.check_renderer_contract(self.fixture.root)
+            source.write_text(original, encoding="utf-8")
+        parity_report.check_renderer_contract(self.fixture.root)
+
+    def test_reference_canvas_is_the_square_of_the_longer_side(self) -> None:
+        cases = {
+            "square": (_png_header(300, 300), [300, 300]),
+            "landscape": (_png_header(500, 250), [500, 500]),
+            "portrait": (_png_header(250, 400), [400, 400]),
+            "largest": (_png_header(16384, 1), [16384, 16384]),
+            "missing": (None, [None, None]),
+            "empty": (b"", [None, None]),
+            "truncated": (_png_header(300, 300)[:20], [None, None]),
+            "not a PNG": (b"GIF89a" + bytes(30), [None, None]),
+            "IHDR not first": (_png_header(300, 300).replace(b"IHDR", b"tEXt"), [None, None]),
+            "wrong IHDR length": (
+                _png_header(300, 300).replace(b"\x00\x00\x00\x0dIHDR", b"\x00\x00\x00\x0cIHDR"),
+                [None, None]),
+            "zero width": (_png_header(0, 300), [None, None]),
+            "oversized": (_png_header(16385, 300), [None, None]),
+        }
+        for label, (data, expected) in cases.items():
+            with self.subTest(label):
+                path = self.fixture.root / (label + ".png")
+                if data is not None:
+                    path.write_bytes(data)
+                self.assertEqual(parity_report.reference_canvas_size(path), expected)
+
+    def test_lane_canvas_follows_the_lane_reference(self) -> None:
+        self.fixture.add_case("painting/fill/explicit.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/golden.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/missing.svg", None)
+        self.fixture.add_case("painting/fill/render-only.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/upstream.svg", _png_header(300, 300))
+        self.fixture.add_case("painting/fill/wide.svg", _png_header(500, 250))
+        golden_root = self.fixture.root / parity_report.GOLDEN_ROOT
+        golden_root.mkdir(parents=True)
+        (golden_root / "cpu.png").write_bytes(_png_header(800, 800))
+        (golden_root / "gpu.png").write_bytes(_png_header(400, 400))
+        prefix = parity_report.GOLDEN_ROOT.as_posix()
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {'
+                          '{"explicit.svg", Params().setCanvasSize(10, 20)},'
+                          f'{{"golden.svg", Params::WithGoldenOverride("{prefix}/cpu.png")'
+                          f'.withGeodeGoldenOverride("{prefix}/gpu.png", "why")}},'
+                          '{"render-only.svg", Params::UndefinedBehavior("why")}}'),
+            self.fixture.tests_root,
+        )
+        canvases = {
+            case["path"].removeprefix("painting/fill/"):
+                {lane: entry["settings"]["canvas_size"] for lane, entry in case["lanes"].items()}
+            for case in report["cases"]
+        }
+        def same(size: list[int | None]) -> dict[str, list[int | None]]:
+            return {"default_text": size, "max": size, "geode": size}
+
+        self.assertEqual(canvases, {
+            "explicit.svg": same([10, 20]),
+            "golden.svg": {"default_text": [800, 800], "max": [800, 800], "geode": [400, 400]},
+            "missing.svg": same([None, None]),
+            "render-only.svg": same([500, 500]),
+            "upstream.svg": same([300, 300]),
+            "wide.svg": same([500, 500]),
+        })
+        self.assertEqual(parity_report.unresolved_canvas_violations(report), [
+            f"painting/fill/missing.svg ({lane}): no canvas from reference "
+            "third_party/resvg-test-suite/tests/painting/fill/missing.png"
+            for lane in ("default_text", "geode", "max")
+        ])
+        report["source"]["revision"] = "a" * 40
+        receipt = self.fixture.root / "shard.xml"
+        receipt.write_text(
+            '<testsuites><testcase classname="PaintingFill/ImageComparisonTestFixture" '
+            'name="ResvgTest/missing" status="run" result="completed"/></testsuites>',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError, "unresolved comparison"):
+            parity_report.add_execution(report, "max", "a" * 40, receipt)
+
+    def test_upstream_release_manifest_rejects_drifted_entries(self) -> None:
+        suite = self.fixture.root / "suite"
+        (suite / "tests/a").mkdir(parents=True)
+        (suite / "tests/a/kept.png").write_bytes(b"kept")
+        (suite / "tests/a/changed.png").write_bytes(b"regenerated")
+        def digest(data: bytes) -> str:
+            return hashlib.sha256(data).hexdigest()
+
+        good = f"{digest(b'kept')}  tests/a/kept.png"
+        self.assertEqual(parity_report.upstream_release_manifest_violations(good + "\n", suite), [])
+
+        manifest = "\n".join([
+            good,
+            f"{digest(b'original')}  tests/a/changed.png",
+            f"{digest(b'gone')}  tests/a/missing.png",
+            good,
+            f"{digest(b'kept')}  tests/a/../a/kept.png",
+            f"{digest(b'kept')} tests/a/kept.png",
+            f"{digest(b'kept')}  resources/kept.png",
+        ])
+        self.assertEqual(parity_report.upstream_release_manifest_violations(manifest, suite), [
+            f"tests/a/changed.png: SHA-256 is {digest(b'regenerated')}, not the recorded "
+            + digest(b"original"),
+            "tests/a/missing.png: listed file is missing",
+            "tests/a/kept.png: listed more than once",
+            "tests/a/../a/kept.png: not a normalized path under tests/",
+            f"malformed line '{digest(b'kept')} tests/a/kept.png'",
+            f"malformed line '{digest(b'kept')}  resources/kept.png'",
+        ])
+        self.assertEqual(parity_report.upstream_release_manifest_violations("", suite),
+                         ["the manifest lists no files"])
+
+    def test_upstream_release_notes_state_the_manifest_counts(self) -> None:
+        suite = self.fixture.root / "suite"
+        (suite / "tests/a").mkdir(parents=True)
+        (suite / "tests/a/square.png").write_bytes(_png_header(300, 300))
+        (suite / "tests/a/wide.png").write_bytes(_png_header(300, 150))
+        (suite / "tests/a/case.svg").write_bytes(b"<svg/>")
+        manifest = "\n".join(f"{'0' * 64}  tests/a/{name}"
+                              for name in ("square.png", "wide.png", "case.svg"))
+        notes = ("The 3 files listed in resvg-v0.50.0.sha256 (2 PNGs, each\n"
+                 "300x300, and 1 SVGs) are byte-identical.")
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(manifest, notes, suite),
+            ["tests/a/wide.png: not the 300x300 PNG the notes state"])
+        (suite / "tests/a/wide.png").write_bytes(_png_header(300, 300))
+        self.assertEqual(parity_report.upstream_release_note_violations(manifest, notes, suite), [])
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(
+                manifest, notes.replace("2 PNGs", "3 PNGs"), suite),
+            ["the notes state 3 files (3 PNGs, 1 SVGs); the manifest lists 3 (2 PNGs, 1 SVGs)"])
+        self.assertEqual(
+            parity_report.upstream_release_note_violations(manifest, "no counts", suite),
+            ["the provenance notes need one sentence stating the manifest's file counts"])
 
     def test_untracked_report_inputs_keep_the_checkout_revision_unbound(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
@@ -1204,6 +1616,45 @@ class RealTreeParityReportTests(unittest.TestCase):
             "Params::DeprecatedInSVG2 is limited to the SVG 2 removals and deprecations listed in "
             "DEPRECATED_IN_SVG2_FEATURES:\n" + "\n".join(violations),
         )
+
+    def test_live_registrations_follow_the_ratchets_and_document_goldens(self) -> None:
+        repo_root = parity_report._default_repo_root()
+        report = parity_report.generate_report(repo_root)
+        guards = {
+            "Every golden override needs a reason (WithGoldenOverride's third argument, "
+            ".withReason or .withGeodeGoldenOverride's second argument)":
+                parity_report.golden_reason_violations(report),
+            "PIXEL_BUDGET_ALLOWLIST records every compared budget above 100 pixels at its current "
+            "value and may only shrink":
+                parity_report.pixel_budget_ratchet_violations(report),
+            "THRESHOLD_ALLOWLIST records every compared color threshold above 0.05 at its current "
+            "value and may only shrink":
+                parity_report.threshold_ratchet_violations(report),
+            "SKIP_ALLOWLIST equals the active Params::Skip rows and may only shrink":
+                parity_report.skip_ratchet_violations(report),
+            "Every registered golden needs a golden README table row with its SHA-256":
+                parity_report.golden_documentation_violations(report, repo_root),
+            "Every case's canvas comes from a readable reference PNG or an explicit "
+            "setCanvasSize(); the harness fails a comparison whose reference it cannot read":
+                parity_report.unresolved_canvas_violations(report),
+            "Every file in the resvg v0.50.0 manifest has the SHA-256 its provenance records "
+            f"({parity_report.UPSTREAM_RELEASE_MANIFEST})":
+                parity_report.upstream_release_manifest_violations(
+                    (repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST).read_text(
+                        encoding="utf-8"),
+                    repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST.parent),
+            "The provenance notes state the manifest's file counts and PNG size":
+                parity_report.upstream_release_note_violations(
+                    (repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST).read_text(
+                        encoding="utf-8"),
+                    (repo_root / parity_report.UPSTREAM_RELEASE_NOTES).read_text(encoding="utf-8"),
+                    repo_root / parity_report.UPSTREAM_RELEASE_MANIFEST.parent),
+        }
+        for rule, violations in guards.items():
+            with self.subTest(rule=rule):
+                self.assertEqual(violations, [], rule + ":\n" + "\n".join(violations))
+        self.assertEqual(len(parity_report.SKIP_ALLOWLIST), report["summary"]["skip_cases"])
+        self.assertGreater(len(parity_report.referenced_goldens(report)), 0)
 
 
 if __name__ == "__main__":

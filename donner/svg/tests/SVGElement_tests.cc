@@ -1772,6 +1772,180 @@ TEST_F(SVGElementTests, RemoveAttributePresentation) {
   EXPECT_THAT(element.getAttribute("fill"), testing::Eq(std::nullopt));
 }
 
+/// Wraps \p content in an `<svg>` root.
+std::string SvgOf(std::string_view content) {
+  return R"(<svg xmlns="http://www.w3.org/2000/svg">)" + std::string(content) + "</svg>";
+}
+
+/// The computed value of \p member on the element `#t` of \p document.
+template <typename Member>
+auto ComputedTargetValue(SVGDocument& document, Member member) {
+  std::optional<SVGElement> target = document.querySelector("#t");
+  using Value = decltype((target->getComputedStyle().*member).get());
+  if (!target.has_value()) {
+    ADD_FAILURE() << "no #t element";
+    return Value();
+  }
+  return (target->getComputedStyle().*member).get();
+}
+
+/// Matches an optional value equal to \p expected, which may be empty.
+template <typename T>
+testing::Matcher<const std::optional<T>&> OptionalEq(const std::optional<T>& expected) {
+  if (expected.has_value()) {
+    return Optional(testing::Eq(*expected));
+  }
+  return testing::Eq(std::nullopt);
+}
+
+/// Expects the computed \p member of `#t` in \p edited to equal that in \p expected, naming the
+/// property on failure.
+template <typename Member>
+void ExpectSameComputedValue(SVGDocument& edited, SVGDocument& expected, Member member) {
+  SCOPED_TRACE(testing::Message() << "property " << (PropertyRegistry().*member).name);
+  EXPECT_THAT(ComputedTargetValue(edited, member),
+              OptionalEq(ComputedTargetValue(expected, member)));
+}
+
+// Removing a presentation attribute leaves the computed style of a document authored without it:
+// an inherited property inherits again, a non-inherited one takes its initial value, and a
+// stylesheet rule or `style` declaration of the same property stays in effect.
+TEST_F(SVGElementTests, RemovingPresentationAttributeRestoresTheUnauthoredCascade) {
+  struct Case {
+    const char* name;
+    std::string authored;  //!< Document whose `#t` has the attribute.
+    std::string fresh;     //!< The same document authored without it.
+    const char* attribute;
+  };
+  const auto expectRemoval = [&](const Case& item, auto... members) {
+    SCOPED_TRACE(item.name);
+    SVGDocument edited = parseSVG(SvgOf(item.authored));
+    (void(ComputedTargetValue(edited, members)), ...);
+    std::optional<SVGElement> target = edited.querySelector("#t");
+    ASSERT_THAT(target, Optional(testing::_));
+    target->removeAttribute(item.attribute);
+    SVGDocument expected = parseSVG(SvgOf(item.fresh));
+    (ExpectSameComputedValue(edited, expected, members), ...);
+  };
+  for (const Case& item :
+       {Case{"inherited", "<g fill='red'><rect id='t' fill='blue'/></g>",
+             "<g fill='red'><rect id='t'/></g>", "fill"},
+        Case{"stylesheet", "<style>#t { fill: green }</style><rect id='t' fill='blue'/>",
+             "<style>#t { fill: green }</style><rect id='t'/>", "fill"},
+        Case{"style-attribute", "<g fill='red'><rect id='t' fill='blue' style='fill: green'/></g>",
+             "<g fill='red'><rect id='t' style='fill: green'/></g>", "fill"},
+        Case{"never-set", "<g fill='red'><rect id='t'/></g>", "<g fill='red'><rect id='t'/></g>",
+             "fill"}}) {
+    expectRemoval(item, &PropertyRegistry::fill);
+  }
+  expectRemoval(
+      {"inherited-interpolation",
+       "<g color-interpolation-filters='sRGB'><rect id='t' "
+       "color-interpolation-filters='linearRGB'/></g>",
+       "<g color-interpolation-filters='sRGB'><rect id='t'/></g>", "color-interpolation-filters"},
+      &PropertyRegistry::colorInterpolationFilters);
+  expectRemoval({"non-inherited", "<g opacity='.5'><rect id='t' opacity='.25'/></g>",
+                 "<g opacity='.5'><rect id='t'/></g>", "opacity"},
+                &PropertyRegistry::opacity);
+  expectRemoval({"resource-color-style-attribute",
+                 "<filter><feFlood id='t' flood-color='blue' style='flood-color: green'/></filter>",
+                 "<filter><feFlood id='t' style='flood-color: green'/></filter>", "flood-color"},
+                &PropertyRegistry::floodColor);
+  // A shorthand clears every longhand it wrote, and an alias clears the property it writes.
+  expectRemoval({"shorthand",
+                 "<text id='t' text-decoration='overline wavy red' "
+                 "style='text-decoration-line: underline'/>",
+                 "<text id='t' style='text-decoration-line: underline'/>", "text-decoration"},
+                &PropertyRegistry::textDecoration, &PropertyRegistry::textDecorationStyle,
+                &PropertyRegistry::textDecorationColor, &PropertyRegistry::textDecorationThickness);
+  expectRemoval(
+      {"alias", "<g text-orientation='upright'><text id='t' glyph-orientation-vertical='90'/></g>",
+       "<g text-orientation='upright'><text id='t'/></g>", "glyph-orientation-vertical"},
+      &PropertyRegistry::textOrientation);
+}
+
+/// Computes every style of \p document as a frame does, leaving it marked as built so later
+/// mutations take the selective or full restyle a frame would.
+void ComputeFrameStyles(SVGDocument& document) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  components::StyleSystem().computeAllStyles(document.registry(), disabledSink);
+  auto& renderState = document.registry().ctx().contains<components::RenderTreeState>()
+                          ? document.registry().ctx().get<components::RenderTreeState>()
+                          : document.registry().ctx().emplace<components::RenderTreeState>();
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+}
+
+// Removing an attribute re-matches stylesheet selectors that test for it on the next frame, whether
+// its value was the element's declaration, was overridden by `style`, did not parse, or is not a
+// style property.
+TEST_F(SVGElementTests, RemovingAnAttributeRematchesAttributeSelectors) {
+  struct Case {
+    const char* name;
+    const char* attribute;
+    const char* authored;  //!< `#t` with the attribute.
+    const char* fresh;     //!< `#t` without it.
+  };
+  for (const Case& item :
+       {Case{"declared", "fill", "<rect id='t' fill='blue'/>", "<rect id='t'/>"},
+        Case{"style-overrides", "fill", "<rect id='t' fill='blue' style='fill: green'/>",
+             "<rect id='t' style='fill: green'/>"},
+        Case{"unparsable", "fill", "<rect id='t' fill='notacolor'/>", "<rect id='t'/>"},
+        Case{"not-a-property", "transform", "<rect id='t' transform='scale(2)'/>",
+             "<rect id='t'/>"}}) {
+    SCOPED_TRACE(item.name);
+    const std::string rule =
+        std::string("<style>rect[") + item.attribute + "] { stroke: red }</style>";
+    SVGDocument edited = parseSVG(SvgOf(rule + item.authored));
+    ComputeFrameStyles(edited);
+    std::optional<SVGElement> target = edited.querySelector("#t");
+    ASSERT_THAT(target, Optional(testing::_));
+    target->removeAttribute(item.attribute);
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    components::StyleSystem().computeAllStyles(edited.registry(), disabledSink);
+    SVGDocument expected = parseSVG(SvgOf(rule + item.fresh));
+    ExpectSameComputedValue(edited, expected, &PropertyRegistry::stroke);
+  }
+}
+
+// Removing a presentation attribute the element never had changes nothing, including on a
+// document built without a parser: no style storage is created and nothing is invalidated.
+TEST_F(SVGElementTests, RemovingAnUnsetPresentationAttributeIsANoOp) {
+  SVGRectElement rect = createRect();
+  (void)rect.getComputedStyle();
+  const bool hadStyle = rect.entityHandle().all_of<components::StyleComponent>();
+  document_.registry().clear<components::DirtyFlagsComponent>();
+  auto& renderState = document_.registry().ctx().emplace<components::RenderTreeState>();
+  renderState.needsFullStyleRecompute = false;
+
+  rect.removeAttribute("fill");
+  rect.removeAttribute("text-decoration");
+  EXPECT_EQ(rect.entityHandle().all_of<components::StyleComponent>(), hadStyle);
+  EXPECT_THAT(rect.entityHandle().try_get<components::DirtyFlagsComponent>(), testing::IsNull());
+  EXPECT_FALSE(
+      document_.registry().ctx().get<components::RenderTreeState>().needsFullStyleRecompute);
+}
+
+// A presentation attribute set after a removal applies, and removing it again inherits again.
+TEST_F(SVGElementTests, PresentationAttributeSetAndRemoveRoundTrip) {
+  SVGDocument document = parseSVG(SvgOf("<g fill='red'><rect id='t' fill='blue'/></g>"));
+  std::optional<SVGElement> maybeTarget = document.querySelector("#t");
+  ASSERT_THAT(maybeTarget, Optional(testing::_));
+  SVGElement target = *maybeTarget;
+  const auto fill = [&]() { return ComputedTargetValue(document, &PropertyRegistry::fill); };
+  const PaintServer red = PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)));
+  const PaintServer blue = PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)));
+
+  target.removeAttribute("fill");
+  EXPECT_THAT(fill(), Optional(red));
+  target.setAttribute("fill", "blue");
+  EXPECT_THAT(fill(), Optional(blue));
+
+  target.removeAttribute("fill");
+  EXPECT_THAT(fill(), Optional(red));
+}
+
 TEST_F(SVGElementTests, RemoveAttributeId) {
   auto element = create();
   element.setId("myId");

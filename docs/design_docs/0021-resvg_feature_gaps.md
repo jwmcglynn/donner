@@ -7,7 +7,8 @@ of the suite policy.
 
 The triage backlog for [0022](0022-resvg_test_suite_upgrade.md)'s Milestone 2 —
 working through the tests the suite upgrade pulled in and either fixing the
-underlying gap or recording why a `Params::Skip(...)` is the correct state. Each
+underlying gap or recording the registration that fits it (a Donner-rendered golden for a
+reference disagreement, or an allowlisted `Params::Skip(...)` for an unimplemented feature). Each
 entry corresponds to one or more skips/threshold-overrides in
 [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc).
 
@@ -51,12 +52,22 @@ comparison hides every regression in its output, so it needs one of two factorie
   subject is a removed feature uses this bucket even when its reference is the UB marker.
 
 `//tools/resvg_parity:parity_report_tests` enforces both rules, and the parity report counts the
-two buckets separately. Both still render, so they keep no-crash and sanitizer coverage. Donner
-bugs and missing features, reference disagreements where Donner follows the specification,
-harness or background mismatches, and API policy differences are `Params::Skip` with a bug number
-or reason; skipped cases do not render at all. A UB marker reference does not by itself make a
-case undefined behavior: a `Not impl:` or `Deferred:` feature on a marker reference stays a skip.
-A case that passes the default comparison compares.
+two buckets separately. Both still render, so they keep no-crash and sanitizer coverage.
+
+**Reference disagreements get a golden, not a skip.** Where Donner follows the specification and the
+vendored reference does not, where the harness and the reference disagree (for example an opaque
+reference background), and where an API policy differs, the case compares against a Donner-rendered
+golden with a recorded justification: a `Params::WithGoldenOverride` reason, an entry in
+`tools/resvg_parity/exception_policies.json`, and a golden README row with the file's SHA-256. A
+skip is only for an unimplemented feature with an issue number (`Not impl: <feature> (#<issue>)`);
+skipped cases do not render at all. `SKIP_ALLOWLIST` in `parity_report.py` lists every active skip
+and may only shrink, so a new skip needs maintainer approval. The three skips it lists are an
+unsupported input encoding and two accepted filtered-glyph differences. Pixel budgets
+in the hundreds are not accepted: fix the engine, or hold the row back until it is fixed.
+`PIXEL_BUDGET_ALLOWLIST` and `THRESHOLD_ALLOWLIST` record the existing budgets above 100 pixels and
+color thresholds above 0.05 at their current values and may only shrink. A UB marker reference does
+not by itself make a case undefined behavior: an unimplemented feature on a marker reference stays a
+skip. A case that passes the default comparison compares.
 
 ## Current totals
 
@@ -80,18 +91,18 @@ the `text/` category. Focused tests exercise Geode text directly.
 | Registered SVG fixtures | Count |
 | --- | ---: |
 | Total | 1,679 |
-| Pixel comparisons | 1,571 |
-| Comparisons with a numeric setting or custom golden | 83 |
-| Render-only, undefined-behavior registration | 53 |
+| Pixel comparisons | 1,578 |
+| Comparisons with a numeric setting or custom golden | 89 |
+| Render-only, undefined-behavior registration | 55 |
 | Render-only, legacy feature | 43 |
-| Explicit skips | 12 |
+| Explicit skips | 3 |
 | Fixtures in disabled categories | 0 |
 
 | Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
 | --- | ---: | ---: | ---: | ---: |
-| `default_text` | 1,544 | 96 | 27 | 12 |
-| `max` | 1,571 | 96 | 0 | 12 |
-| `geode` | 1,238 | 69 | 360 | 12 |
+| `default_text` | 1,552 | 98 | 26 | 3 |
+| `max` | 1,578 | 98 | 0 | 3 |
+| `geode` | 1,246 | 69 | 361 | 3 |
 
 <!-- END RESVG INVENTORY -->
 
@@ -161,13 +172,13 @@ bottom for completeness.
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | B2  | `filters/filter-functions` coverage                                     | **DONE** (33/43 files compare) | All cases execute; 10 reference qualifications have independent contract tests.                                                                                                                                           |
-| B3  | `structure/image` golden kernel-era mismatch                            |                       **DONE** | Mitchell cubic for quality `<image>` rendering and v0.49.0 raster references (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
+| B3  | `structure/image` golden kernel-era mismatch                            |                       **DONE** | Mitchell cubic for quality `<image>` rendering and upstream resvg raster references (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
-| F10 | Remaining `textPath` vertical case                                      |                              1 | Feature                                                                                                                                                                                             |
+| F10 | `textPath` vertical case                                                |                       **DONE** | Compares against a Donner golden at default settings (see [F10](#f10-textpath-svg2-attributes)).                                                                                                    |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare at default settings; `font/simple-case` remains skipped (see [B7](#b7-text-reference-qualification))                 |
+| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare at default settings; `font/simple-case` compares against a Donner golden (see [B7](#b7-text-reference-qualification))                 |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -191,7 +202,7 @@ reference qualifications and independent rendering assertions. Most use `CssFilt
 | `two-exact-urls`                             | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `two-urls`                                   | Compares by default. The boundary difference was Donner's: the three box passes that approximate the Gaussian discarded what the earlier passes spread past the filter raster edge, which the later passes must read back. TinySkia now runs the passes on zero-padded lines, and Geode evaluates the three passes as one cascade kernel per axis that samples the input directly, so a blur near the raster edge equals the same blur computed with room around it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `url-and-grayscale`                          | CSS functions use sRGB. An independent solid-color oracle gives 115 for the sample's encoded-channel luminance; the historical reference center is 122, consistent with linearRGB processing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `one-invalid-url-in-list`                    | An invalid URL disables the entire chain rather than preserving the prior stage. `FilterReferenceStages.InvalidReferenceDisablesEntireChain` independently covers that behavior.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `one-invalid-url-in-list`                    | An invalid URL disables the entire chain rather than preserving the prior stage. `FilterReferenceStages.InvalidReferenceDisablesEntireChain` independently covers that behavior; the row compares against a Donner golden.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 [Filter Effects](https://www.w3.org/TR/filter-effects-1/#FilterFunctions) defines function grammar,
 sRGB processing and chaining. Drop-shadow now rejects nonzero unitless CSS lengths while preserving
@@ -225,7 +236,7 @@ object-bounding-box units, empty stages, expanded captures and original CPU pain
 captures preserve their coordinate offsets through groups and use existing renderer surfaces;
 GPU stages remain on the GPU. These contracts do not replace or widen corpus pixel tolerances. The
 `invalid-FuncIRI` and `one-invalid-url-in-list` PNGs encode incompatible invalid-URL behavior;
-they are reference-disagreement skips backed by visible-geometry assertions, documented
+the rows compare against Donner goldens backed by visible-geometry assertions, documented
 in [0009](0009-resvg_test_suite_bugs.md#invalid-filter-url-reference-qualifications).
 
 ## External resource policy
@@ -242,7 +253,8 @@ The local `structure/use/xlink-to-an-external-file.svg` resource resolves and re
 in the `Noto Sans` it inherits from the `use`, with glyphs within 0.4 device px of the reference.
 That reference is entirely opaque, whereas the SVG canvas is transparent outside painted content,
 and its glyph stems are 0.6 device px wider; resvg and the browsers fail this row in the corpus
-results, so it stays a harness-mismatch skip. An independently authored inline-versus-external
+results, so it compares against a Donner golden on the transparent canvas, a harness mismatch.
+An independently authored inline-versus-external
 text-fragment comparison covers host style inheritance, fragment selection, the callback
 identifier and transparent canvas behavior.
 
@@ -356,13 +368,12 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   Display). The simple tier now reads GPOS pair kerning wrapped in Extension
   lookups, which Source Sans Pro uses exclusively; `font-list` and
   `source-sans-pro` lost their 1300-pixel simple-tier budgets.
-- **Stale references:** the generic-family PNGs, `xml-lang=ja.png` and
-  `fallback-1.png` were drawn in faces outside the vendored set or for a
-  different layout, and `letter-spacing/non-ASCII-character` named its family
-  unquoted. They were refreshed from resvg v0.49.0 (provenance in
-  `third_party/resvg-test-suite/BUILD.bazel`). The refreshed `xml-lang=ja` draws
-  all three lines in Mplus 1p, the only vendored face covering them, so it no
-  longer exercises language-specific face selection.
+- **Upstream references:** the generic-family PNGs, `xml-lang=ja.png`, `fallback-1.png` and
+  `letter-spacing/non-ASCII-character` are upstream resvg's renderings, byte-identical to the
+  resvg v0.50.0 release (provenance in `third_party/resvg-test-suite/BUILD.bazel`); they draw in
+  the vendored faces, and `non-ASCII-character` quotes its family. `xml-lang=ja` draws all three
+  lines in Mplus 1p, the only vendored face covering them, so it does not exercise
+  language-specific face selection.
 - **Weights 400 and 700 only:** the comparison fixture registers only these
   weights. The snapshot's `font-weight` references draw weights 100 to 300 with
   Noto Sans Regular and 900 with Noto Sans Bold, and Donner matches them with zero
@@ -372,8 +383,9 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   the seven cases. The vendored PNGs reproduce macOS font smoothing and draw more ink at the
   glyph edges. The [qualified references](#color-adjust-label-references) keep the upstream
   filter pixels and compare all seven live-text inputs at default settings.
-- **Remaining:** `text/font/simple-case` disagrees on the unitless
-  `font` shorthand (see the reference qualification table).
+- **`font` attribute:** `text/font/simple-case` disagrees on the `font` shorthand, which SVG 2
+  does not list as a presentation attribute; it compares against a Donner golden (see the
+  reference qualification table).
 - **Default family:** CSS leaves the face for a family list that matches nothing
   to the user agent. resvg appends its default family, serif, to every list, so
   the comparison harness sets serif as `FontManager`'s default family and
@@ -413,9 +425,9 @@ generation:`, only when all of the following hold:
 | `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
 | `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
 
-The two mixed-font ligature fixtures compare against resvg v0.49.0 at the default settings on
-the full text tier. These fixtures exercise the Amiri font's GSUB substitution, which the
-simple tier does not implement.
+The two mixed-font ligature fixtures compare against upstream resvg's references, byte-identical
+to the resvg v0.50.0 release, at the default settings on the full text tier. These fixtures
+exercise the Amiri font's GSUB substitution, which the simple tier does not implement.
 
 Moving `nested-with-baseline` and `hanging` from a 0.1 color threshold with 100 pixels to a 0.02
 count is not tighter on both axes: the count is larger and the color threshold smaller. It is
@@ -514,7 +526,7 @@ pixels at the default threshold:
 - `optimizeSpeed`: a 2019 nearest-neighbor rendering flattened onto white, with ties toward the
   lower texel.
 
-At resvg v0.49.0 every raster-image reference is the Mitchell cubic (nearest for
+In upstream resvg's renderings every raster-image reference is the Mitchell cubic (nearest for
 `optimizeSpeed`). Donner now resamples `<image>` with `image-rendering: auto`, `optimizeQuality`
 and `high-quality` through the same cubic on TinySkia (tiny-skia `FilterQuality::Bicubic`) and
 Geode (a 16-tap cubic image-blit sampling mode), matching the kernel `feImage` already used;
@@ -524,8 +536,8 @@ mapping on both backends: `smooth` is bilinear there too, and a pure translation
 containing texel, as tiny-skia does for `<image>`. That also removed a cubic filtering pass that
 rotated `feImage` placement and nested-SVG `feImage` rasters received at one-to-one scale, which
 re-enabled `filters/feImage/with-subregion-5` and lets `filters/feImage/svg` compare directly
-against a 500x500 resvg v0.49.0 reference. The raster-image
-references were replaced by their v0.49.0 renderings, with provenance in
+against a 500x500 resvg v0.49.0 reference. The raster-image references are upstream resvg's
+renderings, byte-identical to the resvg v0.50.0 release, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
 The `embedded-svg-with-text` row is a harness mismatch and compares against a Donner rendering
@@ -570,12 +582,13 @@ renderer regression checks a fitted span against the same span with an equal `le
 
 With `spacingAndGlyphs`, a glyph's outline is stretched before its rotation, so a sideways glyph in
 vertical text stretches its own x axis and an upright glyph its y axis.
-`lengthAdjust/vertical` compares against resvg v0.49.0's 300x300 rendering. The vendored snapshot
-placed the sideways glyphs 0.28 units across the line from both Donner and resvg v0.49.0, which is
-consistent with a rendering from before the central baseline. Decorations follow the adjusted glyph
-extents; `lengthAdjust/with-underline` and `text-decoration/with-textLength-on-a-single-character`
-also compare against resvg v0.49.0, because the snapshot drew their underlines at 0.1em, twice the
-0.05em thickness in the vendored Noto Sans post table.
+`lengthAdjust/vertical` compares against upstream resvg's 300x300 rendering. The resvg-test-suite
+snapshot's reference places the sideways glyphs 0.28 units across the line from both Donner and
+resvg, which is consistent with a rendering from before the central baseline. Decorations follow
+the adjusted glyph extents; `lengthAdjust/with-underline` and
+`text-decoration/with-textLength-on-a-single-character` also compare against upstream resvg's
+references, because the snapshot's draw their underlines at 0.1em, twice the 0.05em thickness in
+the vendored Noto Sans post table.
 
 `textLength/zero` compares with a 410-pixel budget because its reference comes from a different
 rasterizer generation (see
@@ -606,17 +619,18 @@ resource loader that records requests.
 after a `textPath` from the path's end point, while the vendored image continues from the end of
 the glyphs on the path (see the [golden README](../../donner/svg/renderer/testdata/golden/README.md)).
 
-**Remaining impact:** 1 in `text/textPath/`: vertical layout on a path (`writing-mode=tb.svg`)
-compares with a 250 px allowance for the reference's hhea-centered upright origin, 0.0175em from
-the font's vmtx origin.
+Vertical layout on a path (`text/textPath/writing-mode=tb.svg`) compares at default settings
+against a Donner golden: the reference moves upright glyphs off the font's vmtx origin, which CSS
+Writing Modes 3 section 5.1.1 requires.
 `complex.svg` is undefined behavior: its reference is the resvg UB marker image. The
 filtered-glyph coverage residual (`textPath/with-filter.svg`, `tspan/with-filter.svg`) is an
-accepted difference (2026-11-13). Where browser controls support Donner’s vertical placement
-and the reference encodes resvg's own model (`writing-mode/japanese-with-tb.svg`,
+accepted difference (2026-11-13). Where the reference does not use the font's vertical metrics
+and features, which CSS Writing Modes 3 section 5.1.1 requires (`writing-mode/japanese-with-tb.svg`,
 `writing-mode/mixed-languages-with-tb.svg`, `writing-mode/tb-and-punctuation.svg`,
 `alignment-baseline/hanging-on-vertical.svg`), the row compares against a Donner rendering
-([0009](0009-resvg_test_suite_bugs.md)). The Japanese control quotes the family name so Chromium selects the same face. `writing-mode/mixed-languages-with-tb-and-underline.svg`
-compares against an independent outline with the primary Amiri face's underline geometry.
+([0009](0009-resvg_test_suite_bugs.md)). `writing-mode/mixed-languages-with-tb-and-underline.svg`
+renders without a comparison: CSS Text Decoration 3 leaves the underline's position and
+thickness to the user agent.
 
 ### F11: BiDi / RTL text shaping
 
@@ -657,7 +671,7 @@ content-placement transform.
 | structure/svg             |     0 | `structure/svg/funcIRI-with-quotes.svg` compares with ordinary budgets after the [paint URL parsing fix](../../donner/svg/properties/PropertyRegistry.cc), and `structure/svg/nested-svg-one-with-rect-and-one-with-viewBox.svg` compares with ordinary budgets after the [viewport sizing fix](../../donner/svg/components/layout/LayoutSystem.cc). |
 | structure/style           |     0 | `external-CSS` compares after CSS `@import` loading landed: imports load through the document resource loader with cycle, depth, count and byte bounds; `//donner/svg/renderer/tests:css_import_tests` covers fetches, relative resolution, limits and cascade order.                                                                                |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                     |
-| painting/image-rendering  |     0 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage) documents the `on-feImage` sampling grid. Both TinySkia and Geode compare `optimizeSpeed` against resvg v0.49.0. |
+| painting/image-rendering  |     0 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage) documents the `on-feImage` sampling grid. Both TinySkia and Geode compare `optimizeSpeed` against resvg v0.50.0. |
 | masking/clipPath          |     0 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text case compares against resvg v0.49.0 with zero differing pixels; both use the glyph-cell text box.                                                 |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                      |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                |
@@ -678,7 +692,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case compares against the font-derived full-scene outline reference. `tb-and-punctuation` compares against a Donner rendering. |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. Font fallback is per cluster, so the `mixed-languages-with-tb*` cases draw their Arabic words; vertical anchoring measures chunks between pen positions. `mixed-languages-with-tb` compares against a Donner rendering because its reference sets upright CJK lower than the font's vmtx origin. The underline case renders without a comparison: CSS Text Decoration 3 leaves underline position and thickness to the user agent. `tb-and-punctuation` compares against a Donner rendering. |
 
 ---
 
@@ -746,14 +760,15 @@ Historical `(UB)` titles are not a specification oracle. Seven assigned PNGs are
 copies of `third_party/resvg-test-suite/resources/ub.png`, whose SVG source draws a `UB` label.
 They remain `Params::UndefinedBehavior` corpus cases, with independent `ReferenceContract*`
 comparisons in `RendererRegression_tests.cc`. The other assigned fixtures do not use the UB
-marker, so they are skips with their reason. No reference bitmap or comparison tolerance is
-changed.
+marker. `radialGradient/fr=0.7` compares against its vendored reference at default settings,
+and `svg/no-size` and `font/simple-case` compare against Donner goldens; no comparison tolerance is
+widened.
 
 | Assigned fixture                               | Supported behavior and reference disposition                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `radialGradient/fr=-1`                         | Negative focal radius is invalid and applies no paint. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `radialGradient/fr=0.5`                        | Coincident start/end circles apply no paint. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `radialGradient/fr=0.7`                        | A start circle containing the end circle applies no paint; the reference instead paints a reversed gradient. Reference-disagreement skip, with an independent transparent-paint oracle.                                                                                                                                                                                                                                                                                                                                   |
+| `radialGradient/fr=0.5`                        | Coincident start/end circles apply no paint today; whether they should is an open question (see below). UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `radialGradient/fr=0.7`                        | A start circle containing the end circle paints the whole plane, by the canvas two-point rule that SVG 2 `fr` follows. Compares against the vendored reference at default settings.                                                                                                                                                                                                                                                                                                                                       |
 | `radialGradient/invalid-gradientTransform`     | The authored all-zero matrix is singular, rather than malformed syntax. No paint; UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `radialGradient/invalid-gradientUnits`         | The invalid enumeration is diagnosed and the initial `objectBoundingBox` value is retained. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `radialGradient/negative-r`                    | Negative outer radius is invalid and applies no paint. UB marker reference.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -761,18 +776,25 @@ changed.
 | `fill/valid-FuncIRI-with-a-fallback-ICC-color` | The obsolete SVG 1.1 `icc-color()` paint grammar is unsupported. Invalid CSS declarations are rejected, preserving inherited paint; the historical reference expects a gradient. `Params::DeprecatedInSVG2` (removed in SVG 2): rendered, not compared.                                                                                                                                                                                                                                                                   |
 | `stroke-linejoin/arcs`                         | The SVG Strokes draft join is not implemented; Donner retains its documented miter fallback. The reference is the UB marker, not an arcs rendering.                                                                                                                                                                                                                                                                                                                                                                       |
 | `stroke-linejoin/miter-clip`                   | Separate Geode/editor parity repair and ordinary reference restoration: [#2057](https://github.com/jwmcglynn/donner/pull/2057).                                                                                                                                                                                                                                                                                                                                                                                           |
-| `svg/no-size`                                  | An unsized root uses the caller canvas (512x512 by default) without fitting content bounds. The reference fits the roughly 200-unit artwork to 500 pixels. API-policy skip; caller-canvas geometry has an independent assertion.                                                                                                                                                                                                                                                                                          |
-| `font/simple-case`                             | The PNG is 400x400, so the harness preserves that explicit canvas. SVG 2 lists no `font` presentation attribute, so the `font` attribute is ignored and the case draws the initial 12px serif text. The vendored PNG applies the attribute as SVG 1.1 did and synthesizes bold over Noto Sans Italic. Reference-disagreement skip (#1167).                                                                                                                                                                                |
+| `svg/no-size`                                  | An unsized root has no intrinsic size, and SVG 2 leaves its initial viewport to the host; Donner's API gives it the caller canvas (512x512 by default) at one user unit per px. The reference shows the 200-unit artwork in a 200-unit viewport at 2.5x. API policy: compares against a Donner golden; the caller-canvas contract has an independent assertion.                                                                                                                                                                                                                                                                                          |
+| `font/simple-case`                             | The PNG and its golden are 400x400, the canvas the harness takes from the golden. SVG 2 lists no `font` presentation attribute, so the `font` attribute is ignored and the case draws the initial 12px serif text. The vendored PNG applies the attribute as SVG 1.1 did and synthesizes bold over Noto Sans Italic. Compares against a Donner golden (#1167).                                                                                                                                                                                |
 
-[SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and
-[error processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial
-error and containing-circle expectations. The independent tests preserve visible sibling artwork
-and a valid zero-radius last-stop control. Both backends reject negative radii before solid-color
-shortcuts, including single-stop gradients and an outer radius within the CPU near-zero tolerance.
-[CSS Color 4](https://www.w3.org/TR/css-color-4/#rgb-functions) defines the RGB syntax;
-[SVG 2 paint grammar](https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint) does not include the
-old `icc-color()` suffix. The `arcs`, unitless font shorthand, caller canvas and zero-radius controls
-are explicitly project compatibility contracts, not claims of broader SVG 2 conformance.
+[SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and [error
+processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial error
+expectations. The [canvas two-point
+rule](https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-createradialgradient) that
+`fr` follows paints a start circle that contains the end circle. Identical circles are an open
+question: the SVG 2 note and the canvas rule paint nothing, which Donner does today, while [svgwg
+issue 648](https://github.com/w3c/svgwg/issues/648) and the WPT test
+`svg/pservers/reftests/radialgradient-fully-overlapping.svg` expect the gradient drawn, so `fr=0.5`
+stays render-only and a regression test pins the current behavior. The independent tests preserve
+visible sibling artwork and a valid zero-radius last-stop control. Both backends reject negative
+radii before solid-color shortcuts, including single-stop gradients and an outer radius within the
+CPU near-zero tolerance. [CSS Color 4](https://www.w3.org/TR/css-color-4/#rgb-functions) defines the
+RGB syntax; [SVG 2 paint grammar](https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint) does not
+include the old `icc-color()` suffix. The `arcs`, unitless font shorthand, caller canvas and
+zero-radius controls are explicitly project compatibility contracts, not claims of broader SVG 2
+conformance.
 
 The focused regression targets are `renderer_regression_tests`, `renderer_regression_tests_geode`
 and `renderer_regression_tests_text_full`. The corpus targets are `resvg_test_suite_default_text`,
@@ -789,13 +811,12 @@ historical reference.
 | filters/filter `in=Background*-with-enable-background`                    |     2 | `Params::DeprecatedInSVG2`: the BackgroundImage/BackgroundAlpha snapshot comes from `enable-background`.                                                                                                                                                                          |
 | text/tref, painting/display/none-on-tref                                  | 9 + 1 | `Params::DeprecatedInSVG2`: `<tref>` removed in SVG 2.                                                                                                                                                                                                                            |
 | text/kerning                                                              |     2 | `Params::DeprecatedInSVG2`: `kerning` property removed in SVG 2.                                                                                                                                                                                                                  |
-| text/glyph-orientation-horizontal                                         |     1 | `Params::DeprecatedInSVG2`: removed in SVG 2. `glyph-orientation-vertical` compares against an independently outlined reference at default settings.                                                                                                                                                              |
+| text/glyph-orientation-horizontal                                         |     1 | `Params::DeprecatedInSVG2`: removed in SVG 2. `glyph-orientation-vertical/simple-case` is user-agent defined and renders only (see below).                                                                                                                                                              |
 | painting/fill `icc-color`, `valid-FuncIRI-with-a-fallback-ICC-color`      |     2 | `Params::DeprecatedInSVG2`: SVG 1.1 `icc-color()` paint is not in the SVG 2 paint grammar.                                                                                                                                                                                        |
 | structure/style-attribute, structure/style `non-presentational-attribute` |     2 | `Params::DeprecatedInSVG2`: `<svg version="1.1">` semantics; SVG 2 removed the `version` attribute.                                                                                                                                                                               |
 | masking/clip                                                              |     1 | `Params::DeprecatedInSVG2`: the CSS `clip` property is deprecated by CSS Masking in favor of `clip-path`.                                                                                                                                                                         |
 | text/dominant-baseline `reset-size`, `use-script`                         |     2 | `Params::DeprecatedInSVG2`: SVG 1.1 values removed in SVG 2; UB marker references.                                                                                                                                                                                                |
-| paint-servers/radialGradient                                              |     1 | `fr=0.7` is a reference-disagreement skip with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                                                                                                    |
-| Other `Params::UndefinedBehavior` cases                                   |    52 | Undefined or implementation-defined behavior: 51 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`; we verify no-crash only.                                                                                                                               |
+| Other `Params::UndefinedBehavior` cases                                   |    55 | Undefined or implementation-defined behavior: 52 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`, `glyph-orientation-vertical/simple-case` and `writing-mode/mixed-languages-with-tb-and-underline`; we verify no-crash only.                                                                                                                               |
 
 ---
 

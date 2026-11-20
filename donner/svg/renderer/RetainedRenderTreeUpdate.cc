@@ -30,9 +30,9 @@ constexpr uint16_t kMoveFlags = DirtyFlagsComponent::Layout | DirtyFlagsComponen
                                 DirtyFlagsComponent::RenderInstance;
 
 /// Every change a retained update can apply.
-constexpr uint16_t kRetainedFlags = kMoveFlags | DirtyFlagsComponent::Style |
-                                    DirtyFlagsComponent::Compositing |
-                                    DirtyFlagsComponent::ShadowTree;
+constexpr uint16_t kRetainedFlags =
+    kMoveFlags | DirtyFlagsComponent::Style | DirtyFlagsComponent::Compositing |
+    DirtyFlagsComponent::ShadowTree | DirtyFlagsComponent::ReferencedContent;
 
 /// Changes to an element's own inputs, as opposed to an ancestor's transform.
 constexpr uint16_t kOwnChangeFlags = DirtyFlagsComponent::Transform |
