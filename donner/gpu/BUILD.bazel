@@ -99,6 +99,8 @@ donner_cc_library(
         "//donner/svg/renderer/tests:renderer_image_test_utils",
         "@com_google_gtest//:gtest",
     ],
+    # Sees DONNER_TEXT_ENABLED through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 # The solid-fill scene the Metal and Vulkan solid-fill tests render, matching

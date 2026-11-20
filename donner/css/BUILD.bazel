@@ -18,7 +18,6 @@ donner_cc_library(
         ":core",
         "//donner/css/parser",
     ],
-    variant_neutral = True,
 )
 
 donner_cc_library(
@@ -65,7 +64,6 @@ donner_cc_library(
         "//donner/base/element",
         "//donner/base/xml:xml_qualified_name",
     ],
-    variant_neutral = True,
 )
 
 donner_cc_library(

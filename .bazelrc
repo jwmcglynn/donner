@@ -829,8 +829,6 @@ try-import %workspace%/.bazelrc.user
 # The test targets transition to their own target platforms in this invocation.
 # Linux uses the registered LLVM toolchain; Darwin transitions select the Apple toolchain.
 build:ci-platforms --config=latest_llvm
-# Libraries marked variant_neutral compile once per platform, not once per product variant.
-build:ci-platforms --//build_defs:share_variant_neutral_compiles
 build:ci-platforms --platforms=//tools/ci:linux_ci
 build:ci-platforms --extra_execution_platforms=//tools/ci:linux_ci,//tools/ci:remote_macos_aarch64
 build:ci-platforms --use_target_platform_for_tests

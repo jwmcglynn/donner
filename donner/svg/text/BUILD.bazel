@@ -94,6 +94,8 @@ donner_cc_library(
         "//donner/svg/renderer:text_enabled": [":bidi_paragraph"],
         "//conditions:default": [],
     }),
+    # Defines DONNER_TEXT_ENABLED and includes bidi headers only when text is enabled.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -163,6 +165,8 @@ donner_cc_library(
         "//donner/svg/renderer:text_full_enabled": [":text_backend_full"],
         "//conditions:default": [],
     }),
+    # Defines DONNER_TEXT_ENABLED in the text tiers.
+    variant_neutral = False,
 )
 
 configured_dependency_audit_test(

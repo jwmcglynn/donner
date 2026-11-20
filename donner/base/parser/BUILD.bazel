@@ -22,7 +22,6 @@ donner_cc_library(
         "//donner/base/encoding:base64",
         "//donner/base/encoding:url_decode",
     ],
-    variant_neutral = True,
 )
 
 donner_cc_library(

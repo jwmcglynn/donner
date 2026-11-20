@@ -313,6 +313,8 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 # Same image-comparison source and golden rules as the native fixture, but with only the explicit
@@ -2091,6 +2093,8 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@picosha2",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_binary(
@@ -2359,6 +2363,8 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -2374,6 +2380,8 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 # Retained render-tree updates: every frame of a DOM edit sequence must match the full rebuild of

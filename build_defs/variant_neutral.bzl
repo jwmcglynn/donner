@@ -3,7 +3,14 @@
 `variant_neutral_srcs` compiles a library's own sources in the variant-neutral configuration of
 `variant_settings.bzl` and returns `srcs` for the library itself, which then links those objects in
 the consumer's configuration. Only the library's objects cross the configuration edge: its deps
-and its link stay in the consumer's configuration, so no library is linked twice.
+and its link stay in the consumer's configuration, so no library is linked twice. A consumer sees
+the same library and the same link; only the configuration its objects compile in differs.
+
+`donner_cc_library` does this by default. The neutral configuration resets only the product
+variant settings, so command-line compile options, compilation mode, features, sanitizers and the
+fuzzing engine carry over unchanged. Sharing stays off, and libraries compile in place, when
+`//build_defs:share_variant_neutral_compiles` is false, on platforms other than Linux and macOS
+(WebAssembly objects follow the threading ABI of each profile), and under coverage collection.
 
 Sharing is sound only when a compile of the library is the same in the consumer's configuration
 and in the neutral one. The objects rule checks that during analysis, in every configuration that
@@ -14,30 +21,30 @@ uses it, and fails the build otherwise:
   configuration's apart from the configuration output directory, and so must the inputs the
   target declares: its own sources and headers, the headers of its compilation context, and the
   C++ toolchain's identity and files. Declared inputs are compared rather than `Action.inputs`,
-  which Bazel narrows to the discovered headers once a compile has run. This covers command-line
-  compile options, features and make variables.
+  which Bazel narrows to the discovered headers once a compile has run.
 - What those actions read but do not spell out: the library's own compile attributes, the
   compilation context of its deps (defines, include paths, headers), and the action that writes
-  each generated header in that context where the deps, srcs and hdrs edges reach it. Every
-  generated header must also come from a target on GENERATED_HEADER_ALLOWLIST.
+  each generated header in that context. A generated header whose writing action is not reached
+  along the deps, srcs and hdrs edges must come from a target on GENERATED_HEADER_ALLOWLIST.
 
 A library that sees a variant define, or a header generated differently per variant, therefore
-cannot be shared.
+fails analysis until it sets `variant_neutral = False` or drops the variant dependency.
 
-With sharing on, the objects of a wrapped library live under its `_<name>_neutral_compile` target,
-not under the library, so they do not share cache entries with builds that leave sharing off.
+With sharing on, the objects of a library live under its `_<name>_neutral_compile` target, not
+under the library, so they do not share cache entries with builds that turn sharing off.
 """
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//build_defs:variant_settings.bzl", "variant_neutral_transition")
 
-# Targets that write headers a wrapped library may include, each with the reason the header does
-# not depend on a product variant. A key ending in `*` matches every target name with that prefix.
-# Where the aspect below reaches the writing target, its action is also compared per configuration.
+_ZLIB_COPIES = str(Label("@zlib//:copy_public_header_")) + "*"
+
+# Targets that write headers a shared library may include where the comparison below does not
+# reach the writing action, each with the reason the header does not depend on a product variant.
+# A key ending in `*` matches every target name with that prefix.
 GENERATED_HEADER_ALLOWLIST = {
-    str(Label("//build_defs:_variant_neutral_generated_header")): "Guard test fixture.",
-    str(Label("@zlib//:copy_public_header_")) + "*": "Byte copies of zlib's own source headers.",
+    _ZLIB_COPIES: "Byte copies of zlib's own source headers.",
 }
 
 _COMPILED_EXTENSIONS = ["c", "cc", "cpp", "cxx", "S"]
@@ -67,11 +74,15 @@ def _sorted_paths(files):
 
 _HeaderActionsInfo = provider(
     doc = "Actions in a compile closure that write headers.",
-    fields = {"fingerprints": "depset of normalized descriptions of each header-writing action"},
+    fields = {
+        "fingerprints": "depset of normalized descriptions of each header-writing action",
+        "outputs": "depset of the normalized paths those actions write",
+    },
 )
 
 def _header_actions_impl(target, ctx):
     fingerprints = []
+    written = []
     for action in target.actions:
         outputs = [file for file in action.outputs.to_list() if file.extension in _HEADER_EXTENSIONS]
         if not outputs:
@@ -87,7 +98,9 @@ def _header_actions_impl(target, ctx):
                 for key, value in sorted(action.substitutions.items())
             ]
         fingerprints.append(" ".join(parts))
+        written += _paths(outputs)
     transitive = []
+    transitive_written = []
     for name in _TRAVERSED_ATTRS:
         values = getattr(ctx.rule.attr, name, None)
         if values == None:
@@ -95,7 +108,11 @@ def _header_actions_impl(target, ctx):
         for dep in values if type(values) == "list" else [values]:
             if _HeaderActionsInfo in dep:
                 transitive.append(dep[_HeaderActionsInfo].fingerprints)
-    return [_HeaderActionsInfo(fingerprints = depset(fingerprints, transitive = transitive))]
+                transitive_written.append(dep[_HeaderActionsInfo].outputs)
+    return [_HeaderActionsInfo(
+        fingerprints = depset(fingerprints, transitive = transitive),
+        outputs = depset(written, transitive = transitive_written),
+    )]
 
 _header_actions = aspect(
     implementation = _header_actions_impl,
@@ -108,21 +125,24 @@ def _allowlisted(owner):
             return True
     return False
 
-def _check_generated_headers(library, files):
-    """Fails unless each generated header comes from an allowlisted target.
+def _check_generated_headers(library, files, compared):
+    """Fails unless each generated header is compared per configuration or allowlisted.
 
-    Headers under _virtual_includes are links that cc_library makes to its own headers; a
-    generated header behind such a link is itself in the compilation context and checked there.
+    A header written by an action the aspect reaches is compared through that action. Headers
+    under _virtual_includes are links that cc_library makes to its own headers; a generated header
+    behind such a link is itself in the compilation context and checked there.
     """
     for file in files:
         if file.is_source or "/_virtual_includes/" in file.path:
             continue
+        path = _normalize(file.path)
         owner = str(file.owner)
-        if not _allowlisted(owner):
-            fail(("{} sees the generated header {} from {}, which is not on " +
+        if path not in compared and not _allowlisted(owner):
+            fail(("{} sees the generated header {} from {}, which is written outside the deps, " +
+                  "srcs and hdrs edges the comparison follows and is not on " +
                   "GENERATED_HEADER_ALLOWLIST in build_defs/variant_neutral.bzl. Add it with the " +
-                  "reason its content cannot depend on a product variant, or remove " +
-                  "variant_neutral.").format(library, _normalize(file.path), owner))
+                  "reason its content cannot depend on a product variant, or set " +
+                  "variant_neutral = False on the library.").format(library, path, owner))
 
 _CompileInputsInfo = provider(
     doc = "What a compile of a library's own sources reads, with configuration paths normalized.",
@@ -155,12 +175,15 @@ def _compile_inputs_impl(ctx):
         )
         files += context.headers.to_list()
         lines += _context_lines(name, context)
-    _check_generated_headers(ctx.attr.library_label, files)
     fingerprints = []
+    written = []
     for name in _COMPILE_DEP_ATTRS + _COMPILE_FILE_ATTRS:
         for dep in getattr(ctx.attr, name):
             if _HeaderActionsInfo in dep:
                 fingerprints.append(dep[_HeaderActionsInfo].fingerprints)
+                written.append(dep[_HeaderActionsInfo].outputs)
+    compared = {path: True for path in depset(transitive = written).to_list()}
+    _check_generated_headers(ctx.attr.library_label, files, compared)
     lines += ["header action: " + line for line in sorted(depset(transitive = fingerprints).to_list())]
     return [_CompileInputsInfo(fingerprint = lines)]
 
@@ -231,8 +254,9 @@ def _mismatch(library, consumer, neutral, what = ""):
     only_consumer = _difference(consumer, neutral)
     only_neutral = _difference(neutral, consumer)
     fail(("{} compiles differently in this configuration than in the variant-neutral " +
-          "configuration, so it cannot share one compile across variants. Remove " +
-          "variant_neutral, or keep variant settings out of its compile.{}\n" +
+          "configuration, so it cannot share one compile across product variants. Remove the " +
+          "variant dependency, or set variant_neutral = False on the library with a comment " +
+          "naming the variant its compile depends on.{}\n" +
           "Only in this configuration:\n  {}\nOnly in the neutral configuration:\n  {}{}").format(
         library,
         what,
@@ -303,16 +327,34 @@ def _extension(path):
     basename = path.rpartition("/")[2]
     return basename.rpartition(".")[2] if "." in basename else ""
 
+def _classify(srcs):
+    """Splits plain package sources into compiled sources and headers; None if not eligible."""
+    if type(srcs) != "list":
+        return None
+    compiled = []
+    headers = []
+    for src in srcs:
+        extension = _extension(src) if type(src) == "string" and ":" not in src else None
+        if extension in _COMPILED_EXTENSIONS:
+            compiled.append(src)
+        elif extension in _HEADER_EXTENSIONS:
+            headers.append(src)
+        else:
+            return None
+    return struct(compiled = compiled, headers = headers) if compiled else None
+
 def variant_neutral_srcs(name, srcs, hdrs = [], copts = [], testonly = None, target_compatible_with = None, **kwargs):
     """Declares the neutral compile of a library and returns the `srcs` for the library itself.
 
     The returned value compiles `srcs` in place unless `//build_defs:share_variant_neutral_compiles`
-    is set on a native platform without coverage collection. Then the library links its objects
-    from the variant-neutral configuration, which fails analysis if the compile would differ.
+    (on by default) is set on Linux or macOS without coverage collection. Then the library links
+    its objects from the variant-neutral configuration, which fails analysis if the compile would
+    differ. Sources given as a select(), as labels or as generated files, and libraries with nothing
+    to compile, are returned unchanged and always compile in place.
 
     Args:
       name: The library's name.
-      srcs: The library's sources: files in this package, no select().
+      srcs: The library's sources.
       hdrs: The library's headers.
       copts: The library's compile options.
       testonly: The library's testonly value.
@@ -323,22 +365,11 @@ def variant_neutral_srcs(name, srcs, hdrs = [], copts = [], testonly = None, tar
     Returns:
       The `srcs` value for the library's cc_library.
     """
-    if type(srcs) != "list":
-        fail("variant_neutral needs a plain srcs list: " + name)
-    compiled = []
-    headers = []
-    for src in srcs:
-        if ":" in src:
-            fail("variant_neutral needs source files in this package, not " + src)
-        extension = _extension(src)
-        if extension in _COMPILED_EXTENSIONS:
-            compiled.append(src)
-        elif extension in _HEADER_EXTENSIONS:
-            headers.append(src)
-        else:
-            fail("variant_neutral cannot classify " + src)
-    if not compiled:
-        fail("variant_neutral has nothing to compile for " + name)
+    sources = _classify(srcs)
+    if sources == None:
+        return srcs
+    compiled = sources.compiled
+    headers = sources.headers
 
     compile_kwargs = {
         key: kwargs[key]

@@ -2,9 +2,8 @@
 
 Tests run in several product variants (renderer backend, text tier, Darwin test profile), each in
 its own configuration, so every library below a variant test compiles once per variant even when
-its commands are identical. `variant_neutral_srcs` (`donner_cc_library(variant_neutral = True)`)
-compiles a library's own sources once per platform by resetting the settings below at its compile
-edge.
+its commands are identical. `donner_cc_library` compiles a library's own sources once per platform
+by default (see variant_neutral.bzl), resetting the settings below at its compile edge.
 
 The native test-variant transitions are declared through `variant_transition`, which fails at load
 time when an output is neither a variant setting here nor a platform option, so a new variant

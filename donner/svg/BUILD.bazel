@@ -205,7 +205,6 @@ donner_cc_library(
         "//donner/svg/resources:sandboxed_file_resource_loader",
         "//donner/svg/text:text_engine_headers",
     ],
-    variant_neutral = True,
 )
 
 svg_core_audit_text_dependencies_test(

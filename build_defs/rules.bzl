@@ -860,7 +860,7 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
         **kwargs
     )
 
-def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, variant_neutral = False, **kwargs):
+def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, variant_neutral = True, **kwargs):
     """
     Create a cc_library with donner-specific defaults.
 
@@ -872,8 +872,10 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
       tags: List of tags.
       visibility: Visibility.
       variant_neutral: Compile the sources once per platform rather than once per product
-        variant. Analysis fails where any variant changes what the compile sees; see
-        build_defs/variant_neutral.bzl.
+        variant (see build_defs/variant_neutral.bzl). On by default; a library with generated or
+        selected sources, or with no sources to compile, compiles in place. Analysis fails if a
+        product variant changes what the compile sees; such a library sets
+        `variant_neutral = False` with a comment naming the variant it depends on.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
     ci_darwin_targets()

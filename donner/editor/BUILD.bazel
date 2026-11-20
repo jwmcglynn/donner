@@ -227,6 +227,8 @@ donner_cc_library(
         "//donner/base/xml",
         "//donner/svg",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -1839,6 +1841,8 @@ donner_cc_library(
         "//donner/base",
         "@imgui",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(

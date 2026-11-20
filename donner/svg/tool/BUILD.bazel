@@ -31,6 +31,8 @@ donner_cc_library(
         "//donner/svg",
         "//donner/svg/renderer:renderer_interface",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 packaged_resource_bundle(
@@ -92,6 +94,8 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer:terminal_image_viewer",
     ],
+    # Sees DONNER_TEXT_ENABLED and the text engine's bidi headers through its deps in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_test(

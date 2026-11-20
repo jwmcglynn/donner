@@ -554,6 +554,8 @@ def _query_configured_targets(config: CMakeConfig) -> List[ConfiguredTargetInfo]
         "--output=build",
         "--//build_defs:disable_backend_test_transition=true",
         "--//build_defs:disable_perf_opt_transition=true",
+        # CMake compiles each library's own sources; read them rather than shared Bazel objects.
+        "--//build_defs:share_variant_neutral_compiles=false",
     ]
     args.extend(config.bazel_args)
     output = _run_bazel(args)

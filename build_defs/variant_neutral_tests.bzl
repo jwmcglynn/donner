@@ -31,6 +31,11 @@ def _compiles_in_place_impl(ctx):
     asserts.equals(env, ["Probe.o"], sorted({name: True for name in _compiles(env)}.keys()))
     return analysistest.end(env)
 
+def _compiles_own_sources_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.true(env, len(_compiles(env)) > 0, "expected the library to compile its own sources")
+    return analysistest.end(env)
+
 def _rejected_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, ctx.attr.expected_message)
@@ -50,6 +55,14 @@ _links_neutral_objects_geode_test = analysistest.make(
 )
 _compiles_in_place_test = analysistest.make(
     _compiles_in_place_impl,
+    config_settings = {_SHARE: False, _TEXT_FULL: True},
+)
+_links_neutral_objects_by_default_test = analysistest.make(
+    _links_neutral_objects_impl,
+    config_settings = {_TEXT_FULL: True},
+)
+_compiles_own_sources_when_off_test = analysistest.make(
+    _compiles_own_sources_impl,
     config_settings = {_SHARE: False, _TEXT_FULL: True},
 )
 _rejected_text_full_test = analysistest.make(
@@ -110,10 +123,13 @@ def _fixture(name, **kwargs):
 def _tier_select(full, other):
     return select({_TEXT_FULL_ENABLED: full, "//conditions:default": other})
 
-def _generated_header(name, cmd, include_prefix = None):
+def _generated_header(name, cmd, by_file = False, include_prefix = None):
     common = {"tags": ["manual"], "testonly": True}
     native.genrule(name = name, outs = [name + ".h"], cmd = cmd, **common)
-    cc_library(name = name + "_reader", hdrs = [":" + name], include_prefix = include_prefix, **common)
+
+    # Naming the output file rather than the rule hides the writing action from the comparison.
+    header = name + ".h" if by_file else ":" + name
+    cc_library(name = name + "_reader", hdrs = [header], include_prefix = include_prefix, **common)
 
 def variant_neutral_test_suite(name):
     """Fixtures for each way a variant can reach a compile, and tests that the guard rejects them.
@@ -141,8 +157,7 @@ def variant_neutral_test_suite(name):
         **common
     )
 
-    # A header generated differently per text tier, with the same path in every configuration. Its
-    # target is on GENERATED_HEADER_ALLOWLIST so that the action comparison is what rejects it.
+    # A header generated differently per text tier, with the same path in every configuration.
     _generated_header(
         name = "_variant_neutral_generated_header",
         cmd = _tier_select(
@@ -151,10 +166,12 @@ def variant_neutral_test_suite(name):
         ),
     )
 
-    # A generated header whose target is not on the allowlist, seen through _virtual_includes.
+    # A generated header the comparison cannot reach and the allowlist does not name, seen through
+    # _virtual_includes.
     _generated_header(
         name = "_variant_neutral_unlisted_header",
         cmd = "echo '#define VARIANT_NEUTRAL_TEST_UNLISTED 1' > $@",
+        by_file = True,
         include_prefix = "variant_neutral_test",
     )
 
@@ -187,6 +204,18 @@ def variant_neutral_test_suite(name):
         "variant_neutral_accepts_unused_select_test": (_links_neutral_objects_geode_test, "dep_define"),
         "variant_neutral_accepts_unused_make_variable_test": (_links_neutral_objects_geode_test, "make_variable"),
     }
+
+    # Real libraries: donner_cc_library shares by default, and the flag turns sharing off.
+    defaults = {
+        "variant_neutral_donner_library_shares_by_default_test": (
+            _links_neutral_objects_by_default_test,
+            "//donner/base:base",
+        ),
+        "variant_neutral_flag_off_compiles_in_place_test": (
+            _compiles_own_sources_when_off_test,
+            "//donner/base:base",
+        ),
+    }
     rejected = {
         "variant_neutral_rejects_dep_define_test": (
             _rejected_text_full_test,
@@ -216,17 +245,19 @@ def variant_neutral_test_suite(name):
         "variant_neutral_rejects_unlisted_generated_header_test": (
             _rejected_default_test,
             "unlisted",
-            "_variant_neutral_unlisted_header, which is not on GENERATED_HEADER_ALLOWLIST",
+            "_variant_neutral_unlisted_header, which is written outside the deps",
         ),
     }
     for test_name, (make_test, fixture) in accepted.items():
         make_test(name = test_name, target_under_test = ":_variant_neutral_" + fixture)
+    for test_name, (make_test, target) in defaults.items():
+        make_test(name = test_name, target_under_test = target)
     for test_name, (make_test, fixture, message) in rejected.items():
         make_test(name = test_name, target_under_test = ":_variant_neutral_" + fixture, expected_message = message)
     _unclassified_outputs_test(name = "variant_transition_outputs_classified_test")
     native.test_suite(
         name = name,
-        tests = [":" + test_name for test_name in list(accepted) + list(rejected)] + [
+        tests = [":" + test_name for test_name in list(accepted) + list(defaults) + list(rejected)] + [
             ":variant_transition_outputs_classified_test",
         ],
     )

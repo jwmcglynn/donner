@@ -220,12 +220,15 @@ bool_flag(
     build_setting_default = False,
 )
 
-# Compile libraries marked variant_neutral once per platform instead of once per product variant
-# (see variant_neutral.bzl). Native platforms only; coverage keeps per-configuration compiles,
-# which carry the coverage notes of their sources.
+# Compile donner_cc_library sources once per platform instead of once per product variant (see
+# variant_neutral.bzl). On by default; set it to false to compile every library in place, for
+# example to rule sharing out while debugging. The config settings below also keep sharing off on
+# other platforms (WebAssembly objects follow the threading ABI of each profile) and under coverage
+# collection, whose per-configuration compiles carry the coverage notes of their sources.
 bool_flag(
     name = "share_variant_neutral_compiles",
-    build_setting_default = False,
+    build_setting_default = True,
+    visibility = ["//visibility:public"],
 )
 
 [
