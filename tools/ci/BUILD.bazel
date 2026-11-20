@@ -579,7 +579,10 @@ py_test(
     name = "lint_changes_tests",
     srcs = ["lint_changes.py", "lint_changes_tests.py"],
     imports = ["."],
-    deps = ["//tools/rust_boundary:rust_scopes"],
+    deps = [
+        "//build_defs:check_text_tier_defines",
+        "//tools/rust_boundary:rust_scopes",
+    ],
 )
 
 py_test(
