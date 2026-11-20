@@ -21,6 +21,7 @@ donner_cc_library(
     hdrs = [
         "BrowserBindGroupConstruction.h",
         "BrowserBridge.h",
+        "BrowserDeferredCalls.h",
         "BrowserDevice.h",
         "BrowserGpuTaskQueue.h",
         "BrowserObjectTable.h",
@@ -75,7 +76,10 @@ exports_files(
         "BrowserGpuOwner.h",
         "EmscriptenBrowserBridge.cc",
     ],
-    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/editor/wasm/tests:__pkg__",
+    ],
 )
 
 # A bridge that behaves like the browser side without being one: it keeps its own object registry
@@ -97,6 +101,7 @@ donner_cc_test(
     name = "browser_tests",
     srcs = [
         "tests/BrowserBindGroupConstruction_tests.cc",
+        "tests/BrowserDeferredCalls_tests.cc",
         "tests/BrowserDevice_tests.cc",
         "tests/BrowserGpuTaskQueue_tests.cc",
         "tests/BrowserObjectTable_tests.cc",

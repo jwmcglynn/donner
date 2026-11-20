@@ -8,6 +8,7 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/gpu/browser/tests/FakeBrowserBridge.h"
@@ -19,9 +20,12 @@ namespace donner::geode::tests {
  * Synchronous browser calls, by the operation kind the browser GPU owner counts them under.
  *
  * In the browser, every bridge call from a thread other than the canvas owner is one blocking
- * round trip to the owner, except command recording: all commands between `beginCommandBuffer`
- * and `endCommandBuffer` travel as one batch, split every 1024 commands. Pipeline descriptors
- * are counted once each here although the browser sends them in several calls.
+ * round trip to the owner, except two. Command recording: all commands between
+ * `beginCommandBuffer` and `endCommandBuffer` travel as one batch, split every 1024 commands.
+ * Deferred calls (buffer writes, bind group and layout construction, object destruction): they
+ * travel with the thread's next round trip, or on their own as a command batch once 256 calls or
+ * 256 KiB of payload are waiting. Pipeline descriptors are counted once each here although the
+ * browser sends them in several calls.
  */
 struct BrowserOwnerRoundTrips {
   uint64_t ownershipQuery = 0;         //!< Combined ownership/loss queries.
@@ -44,6 +48,17 @@ struct BrowserOwnerRoundTrips {
   /// Equality operator. @param other Counts to compare against.
   bool operator==(const BrowserOwnerRoundTrips& other) const = default;
 };
+
+/// How this count models one bridge operation outside command recording, for checking the model
+/// against the browser bridge's own dispatch.
+struct BrowserOperationModel {
+  std::string_view operation;  //!< Bridge method, and leading word of its recorded line.
+  std::string_view kind;       //!< `BrowserGpuOperationKind` enumerator its round trip counts as.
+  bool deferred = false;       //!< Whether the bridge defers it to the thread's next round trip.
+};
+
+/// Every operation the count models; any other operation outside recording counts as Other.
+std::vector<BrowserOperationModel> BrowserOperationModels();
 
 /// Prints every kind by name. @param value Counts. @param os Output stream.
 void PrintTo(const BrowserOwnerRoundTrips& value, std::ostream* os);

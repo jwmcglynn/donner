@@ -4,6 +4,7 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/gpu/browser/BrowserDeferredCalls.h"
 #include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodeRuntimeDeviceSource.h"
@@ -47,67 +48,141 @@ private:
   std::shared_ptr<gpu::DeviceLostState> lostState_;
 };
 
-/// The kind of round trip each recorded operation outside command recording makes.
+/// How the browser bridge dispatches one operation outside command recording.
 struct OperationKind {
   std::string_view operation;               //!< Leading word of the recorded line.
-  uint64_t BrowserOwnerRoundTrips::* kind;  //!< Counter it adds to.
+  uint64_t BrowserOwnerRoundTrips::* kind;  //!< Counter its own round trip adds to.
+  BrowserOperationModel model;              //!< The kind and dispatch the bridge uses.
 };
+
+#define DONNER_OPERATION(name, counter, kindName, deferred) \
+  {                                                         \
+    name, &BrowserOwnerRoundTrips::counter, {               \
+      name, kindName, deferred                              \
+    }                                                       \
+  }
 
 constexpr OperationKind kOperationKinds[] = {
-    {"createBuffer", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createTexture", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createTextureView", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createSampler", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createShaderModule", &BrowserOwnerRoundTrips::resourceCreation},
-    {"createBindGroup", &BrowserOwnerRoundTrips::bindGroupConstruction},
-    {"createBindGroupLayout", &BrowserOwnerRoundTrips::bindGroupConstruction},
-    {"createPipelineLayout", &BrowserOwnerRoundTrips::pipelineConstruction},
-    {"createRenderPipeline", &BrowserOwnerRoundTrips::pipelineConstruction},
-    {"createComputePipeline", &BrowserOwnerRoundTrips::pipelineConstruction},
-    {"destroyObject", &BrowserOwnerRoundTrips::resourceDestruction},
-    {"writeBuffer", &BrowserOwnerRoundTrips::bufferWrite},
-    {"writeTexture", &BrowserOwnerRoundTrips::textureWrite},
-    {"shareTexture", &BrowserOwnerRoundTrips::resourceSharing},
-    {"registerSharedTexture", &BrowserOwnerRoundTrips::resourceSharing},
-    {"submitCommandBuffers", &BrowserOwnerRoundTrips::queueSubmit},
+    DONNER_OPERATION("createBuffer", resourceCreation, "ResourceCreation", false),
+    DONNER_OPERATION("createTexture", resourceCreation, "ResourceCreation", false),
+    DONNER_OPERATION("createTextureView", resourceCreation, "ResourceCreation", false),
+    DONNER_OPERATION("createSampler", resourceCreation, "ResourceCreation", false),
+    DONNER_OPERATION("createShaderModule", resourceCreation, "ResourceCreation", false),
+    DONNER_OPERATION("createBindGroup", bindGroupConstruction, "BindGroupConstruction", true),
+    DONNER_OPERATION("createBindGroupLayout", bindGroupConstruction, "BindGroupConstruction", true),
+    DONNER_OPERATION("createPipelineLayout", pipelineConstruction, "PipelineConstruction", false),
+    DONNER_OPERATION("createRenderPipeline", pipelineConstruction, "PipelineConstruction", false),
+    DONNER_OPERATION("createComputePipeline", pipelineConstruction, "PipelineConstruction", false),
+    DONNER_OPERATION("destroyObject", resourceDestruction, "ResourceDestruction", true),
+    DONNER_OPERATION("writeBuffer", bufferWrite, "BufferWrite", true),
+    DONNER_OPERATION("writeTexture", textureWrite, "TextureWrite", false),
+    DONNER_OPERATION("shareTexture", resourceSharing, "ResourceSharing", false),
+    DONNER_OPERATION("registerSharedTexture", resourceSharing, "ResourceSharing", false),
+    DONNER_OPERATION("submitCommandBuffers", queueSubmit, "QueueSubmit", false),
 };
 
-/// The kind of the single round trip that the call recorded as \p line makes, outside recording.
-uint64_t BrowserOwnerRoundTrips::* KindOf(std::string_view line) {
+#undef DONNER_OPERATION
+
+/// The table entry for the call recorded as \p line, or null for one dispatched as Other.
+const OperationKind* EntryFor(std::string_view line) {
   const std::string_view operation = line.substr(0, line.find(' '));
   for (const OperationKind& entry : kOperationKinds) {
     if (entry.operation == operation) {
-      return entry.kind;
+      return &entry;
     }
   }
-  return &BrowserOwnerRoundTrips::other;
+  return nullptr;
 }
 
-/// Counts the round trips the recorded \p calls make, sending each command buffer in batches.
-BrowserOwnerRoundTrips CountCalls(std::span<const std::string> calls) {
-  BrowserOwnerRoundTrips counts;
-  std::size_t recordedCommands = 0;
-  bool recording = false;
-  for (const std::string& line : calls) {
+/// Payload bytes a recorded `writeBuffer` line carries, zero for any other line.
+std::size_t PayloadBytes(std::string_view line) {
+  constexpr std::string_view kBytes = " bytes=";
+  const std::size_t at = line.rfind(kBytes);
+  if (!line.starts_with("writeBuffer") || at == std::string_view::npos) {
+    return 0;
+  }
+  std::size_t bytes = 0;
+  for (const char digit : line.substr(at + kBytes.size())) {
+    bytes = bytes * 10 + static_cast<std::size_t>(digit - '0');
+  }
+  return bytes;
+}
+
+/// Round trips of a recorded call sequence, following the bridge's dispatch: deferred calls ride
+/// along with the thread's next round trip unless they reach their bounds first.
+class RoundTripCounter {
+public:
+  void add(std::string_view line) {
+    const OperationKind* entry = EntryFor(line);
+    if (entry != nullptr && entry->model.deferred) {
+      defer(PayloadBytes(line));
+      return;
+    }
     if (line.starts_with("beginCommandBuffer")) {
-      recording = true;
-      recordedCommands = 0;
+      recording_ = true;
+      recordedCommands_ = 0;
     }
-    if (!recording) {
-      ++(counts.*KindOf(line));
-      continue;
+    if (recording_) {
+      record(line);
+      return;
     }
-    ++recordedCommands;
-    if (line.starts_with("endCommandBuffer")) {
-      // A full batch is sent as soon as it fills, and the end of the buffer sends the rest.
-      counts.commandBatch += recordedCommands / kCommandsPerBatch + 1;
-      recording = false;
+    // A direct call carries every deferred call ahead of it in its own round trip.
+    deferredCalls_ = 0;
+    deferredBytes_ = 0;
+    ++(counts_.*(entry != nullptr ? entry->kind : &BrowserOwnerRoundTrips::other));
+  }
+
+  [[nodiscard]] const BrowserOwnerRoundTrips& counts() const { return counts_; }
+
+private:
+  void defer(std::size_t bytes) {
+    ++deferredCalls_;
+    deferredBytes_ += bytes;
+    if (deferredCalls_ >= gpu::browser::BrowserDeferredCalls::kMaxCalls ||
+        deferredBytes_ >= gpu::browser::BrowserDeferredCalls::kMaxBytes) {
+      ++counts_.commandBatch;
+      deferredCalls_ = 0;
+      deferredBytes_ = 0;
     }
   }
-  return counts;
+
+  void record(std::string_view line) {
+    ++recordedCommands_;
+    if (line.starts_with("endCommandBuffer")) {
+      // A full batch is sent as soon as it fills, and the end of the buffer sends the rest; the
+      // first batch carries the deferred calls.
+      counts_.commandBatch += recordedCommands_ / kCommandsPerBatch + 1;
+      recording_ = false;
+      deferredCalls_ = 0;
+      deferredBytes_ = 0;
+    }
+  }
+
+  BrowserOwnerRoundTrips counts_;
+  bool recording_ = false;
+  std::size_t recordedCommands_ = 0;
+  std::size_t deferredCalls_ = 0;
+  std::size_t deferredBytes_ = 0;
+};
+
+/// Counts the round trips the recorded \p calls make.
+BrowserOwnerRoundTrips CountCalls(std::span<const std::string> calls) {
+  RoundTripCounter counter;
+  for (const std::string& line : calls) {
+    counter.add(line);
+  }
+  return counter.counts();
 }
 
 }  // namespace
+
+std::vector<BrowserOperationModel> BrowserOperationModels() {
+  std::vector<BrowserOperationModel> models;
+  for (const OperationKind& entry : kOperationKinds) {
+    models.push_back(entry.model);
+  }
+  return models;
+}
 
 uint64_t BrowserOwnerRoundTrips::total() const {
   return ownershipQuery + deviceLossQuery + completionQuery + resourceCreation +

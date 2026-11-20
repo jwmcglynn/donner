@@ -8,7 +8,10 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <regex>
+#include <string>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
@@ -35,32 +38,12 @@ struct HeldFrame {
 
 /// The recorded baseline. A change that lowers these updates them; one that raises them must
 /// explain why. Ownership, loss and completion queries are absent: the browser side publishes
-/// that state, so a held frame reads it without a round trip.
+/// that state, so a held frame reads it without a round trip. Buffer writes, bind group
+/// construction and destruction are absent too: they ride along with the next round trip.
 constexpr HeldFrame kHeldFrames[] = {
-    {12.0,
-     {.resourceCreation = 45,
-      .resourceDestruction = 72,
-      .bufferWrite = 44,
-      .resourceSharing = 2,
-      .commandBatch = 5,
-      .queueSubmit = 3,
-      .bindGroupConstruction = 45}},
-    {24.0,
-     {.resourceCreation = 36,
-      .resourceDestruction = 68,
-      .bufferWrite = 53,
-      .resourceSharing = 2,
-      .commandBatch = 5,
-      .queueSubmit = 3,
-      .bindGroupConstruction = 33}},
-    {36.0,
-     {.resourceCreation = 35,
-      .resourceDestruction = 64,
-      .bufferWrite = 55,
-      .resourceSharing = 2,
-      .commandBatch = 5,
-      .queueSubmit = 3,
-      .bindGroupConstruction = 30}},
+    {12.0, {.resourceCreation = 45, .resourceSharing = 2, .commandBatch = 5, .queueSubmit = 3}},
+    {24.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 5, .queueSubmit = 3}},
+    {36.0, {.resourceCreation = 35, .resourceSharing = 2, .commandBatch = 5, .queueSubmit = 3}},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {
@@ -105,6 +88,65 @@ TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseli
         << "the held move must be a fast-path frame for its round trips to be the fast path's";
     ASSERT_FALSE(context.device->isDeviceLost());
     EXPECT_EQ(roundTrips, frame.roundTrips);
+  }
+}
+
+/// How the browser bridge dispatches one of its methods, read from its source.
+struct BridgeDispatch {
+  std::string kind = "Other";  //!< `BrowserGpuOperationKind` its round trip counts as.
+  bool deferred = false;       //!< Whether it defers the call to the thread's next round trip.
+  bool recorded = false;       //!< Whether it records into, or sends, the command batch.
+};
+
+/// Each status-returning method of the browser bridge and how its body dispatches.
+std::map<std::string, BridgeDispatch> ReadBridgeDispatch(const std::string& source) {
+  std::map<std::string, BridgeDispatch> methods;
+  const std::regex method(R"(\nBridgeStatus EmscriptenBrowserBridge::(\w+)\()");
+  const std::regex kind(R"(BrowserGpuOperationKind::(\w+))");
+  for (std::sregex_iterator it(source.begin(), source.end(), method), end; it != end; ++it) {
+    const std::size_t bodyStart = static_cast<std::size_t>(it->position(0));
+    const std::size_t bodyEnd = source.find("\n}\n", bodyStart);
+    const std::string body = source.substr(bodyStart, bodyEnd - bodyStart);
+    BridgeDispatch dispatch;
+    dispatch.deferred = body.find("DeferCall(") != std::string::npos;
+    if (std::smatch match; std::regex_search(body, match, kind)) {
+      dispatch.kind = match[1];
+    }
+    // A command batch is how a recording travels, whether a method queues into it or sends it.
+    dispatch.recorded =
+        body.find("queueCommand(") != std::string::npos || dispatch.kind == "CommandBatch";
+    methods[(*it)[1]] = dispatch;
+  }
+  return methods;
+}
+
+// The round-trip count above models the bridge's dispatch by hand. This holds the model to the
+// bridge: every modeled operation dispatches as modeled, and every other operation outside
+// command recording is a direct round trip of kind Other, which is what the model counts it as.
+TEST(BrowserOwnerRoundTripTest, CountModelMatchesTheBrowserBridgesDispatch) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("donner/gpu/browser/EmscriptenBrowserBridge.cc");
+  DONNER_REQUIRE_RUNFILE(source);
+  std::map<std::string, BridgeDispatch> methods = ReadBridgeDispatch(source.contents);
+  ASSERT_GT(methods.size(), 30u) << "the bridge source no longer reads as expected";
+
+  for (const geode::tests::BrowserOperationModel& model : geode::tests::BrowserOperationModels()) {
+    SCOPED_TRACE(std::string(model.operation));
+    const auto found = methods.find(std::string(model.operation));
+    ASSERT_NE(found, methods.end()) << "the bridge has no such method";
+    EXPECT_EQ(found->second.deferred, model.deferred);
+    if (!model.deferred) {
+      EXPECT_EQ(found->second.kind, model.kind);
+    }
+    methods.erase(found);
+  }
+  for (const auto& [name, dispatch] : methods) {
+    SCOPED_TRACE(name);
+    if (dispatch.recorded) {
+      continue;
+    }
+    EXPECT_FALSE(dispatch.deferred) << "a deferred operation the count does not model";
+    EXPECT_EQ(dispatch.kind, "Other") << "a direct operation the count would misfile as Other";
   }
 }
 
