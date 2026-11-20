@@ -4,14 +4,15 @@
 # tests, and which optional lanes it needs. Each subcommand is one step of the workflow's
 # determine-targets job and writes that step's outputs to $GITHUB_OUTPUT.
 #
-# Usage: tools/ci/determine_targets.sh pr-meta|determine|select-wgpu-reference
-#        bazel run //tools/ci:plan -- pr-meta|determine|select-wgpu-reference
+# Usage: tools/ci/determine_targets.sh pr-meta|determine|determine-hosted-editor|select-wgpu-reference
+#        bazel run //tools/ci:plan -- pr-meta|determine|determine-hosted-editor|select-wgpu-reference
 #
 #   pr-meta                The revision whose bazel-diff hashes the job restores or saves
 #                          (`base_sha`): a pull request's base, or this commit on a main push.
 #   determine              The affected targets (`fallback`, `affected`, `full_test`) and the
 #                          hints that gate optional lanes (`browser_affected`,
 #                          `metal_affected` and the `wgpu_reference_*` outputs).
+#   determine-hosted-editor  Whether a hosted PR needs the full graph or a proven browser subset.
 #   select-wgpu-reference  Whether a pull request runs the Linux WebGPU resvg reference (`run`),
 #                          from the `determine` outputs passed in WGPU_REFERENCE_AFFECTED,
 #                          WGPU_REFERENCE_CHANGED, WGPU_REFERENCE_UNKNOWN and FULL_TEST (each
@@ -108,6 +109,34 @@ pr_meta() {
   echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 }
 
+select_hosted_editor() {
+  local graph="$1" planner="$2"
+  local roots
+  if ! roots="$(cd "$graph/head" && bazelisk query --nokeep_going \
+      'tests(//tools/ci:hosted_editor_wasm_graph + //tools/ci:hosted_wasm_budgets) + //tools/ci:hosted_editor_wasm_package + //tools/ci:editor_wasm_package')"; then
+    echo "Hosted Editor Wasm root query failed; keeping the full graph."
+    return
+  fi
+  printf '%s\n' "$roots" > "$graph/hosted-roots.txt"
+  python3 "$planner/hosted_editor_selection.py" "$graph/affected.txt" "$graph/hosted-roots.txt" >> "$GITHUB_OUTPUT"
+}
+
+# Some inputs change the hosted workflow without a Bazel edge. Keep the complete
+# graph if a change might reach these or dependencies outside the loading graph.
+hosted_editor_unhashed_input() {
+  local path
+  while IFS= read -r path; do
+    case "$path" in
+      .github/workflows/editor_wasm.yml|tools/ci/editor_wasm*|tools/ci/hosted_editor_selection.py|tools/run-browser-ci.sh|\
+      tools/ci_check_runner_disk.sh|tools/ci_select_macos_xcode.sh|tools/ci_macos_xcode.txt|\
+      tools/ci_disk_cache.py|tools/render_notice.py|tools/release_cli/*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 # Selects //... when the affected-target list is longer than the lanes can receive.
 fall_back_if_too_large() {
   local LC_ALL=C
@@ -121,6 +150,9 @@ fall_back_if_too_large() {
 }
 
 determine() {
+  local selection="${1:-standard}"
+  local planner_dir
+  planner_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
   if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
     echo "Non-PR event; keeping full //... coverage."
     echo "fallback=true" >> "$GITHUB_OUTPUT"
@@ -174,6 +206,10 @@ determine() {
   fi
 
   if identical_pr_tree; then
+    if [[ "$selection" == "hosted-editor" ]]; then
+      echo "hosted_editor_mode=unaffected" >> "$GITHUB_OUTPUT"
+      return
+    fi
     echo "Identical source trees; no affected build or test targets."
     echo "browser_affected=false" >> "$GITHUB_OUTPUT"
     echo "metal_affected=false" >> "$GITHUB_OUTPUT"
@@ -291,6 +327,9 @@ determine() {
   done <<< "$changed_files"
 
   if [[ "$should_fallback" == "true" ]]; then
+    if [[ "$selection" == "hosted-editor" ]]; then
+      return
+    fi
     # A full selection skips the graph diff, so without this a change to an input of the
     # hashing itself (these scripts, this workflow, which pins bazel-diff, or Bazel's version,
     # configuration, modules and rules) would first fail on main. Hash this revision once, fail
@@ -329,6 +368,19 @@ determine() {
     return 1
   }
 
+  if [[ "$selection" == "hosted-editor" ]]; then
+    # Match the actual compared trees for inputs outside Bazel. The PR's fork-point
+    # hint list above is useful for ordinary CI but cannot prove hosted irrelevance.
+    local hosted_changed
+    hosted_changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+    if [[ "$browser_inputs_changed" == "true" ]] ||
+        has_unhashed_input <<< "$hosted_changed" ||
+        hosted_editor_unhashed_input <<< "$hosted_changed"; then
+      echo "Hosted Editor Wasm input requires full graph coverage."
+      return
+    fi
+  fi
+
   work_dir="$(mktemp -d)"
   base_dir="$work_dir/base"
   head_dir="$work_dir/head"
@@ -365,6 +417,12 @@ determine() {
     -sh "$work_dir/base-hashes.json" \
     -fh "$work_dir/head-hashes.json" \
     -o "$work_dir/affected.txt"
+
+  if [[ "$selection" == "hosted-editor" ]]; then
+    # Hosted test labels are manual and would be discarded by the ordinary planner.
+    select_hosted_editor "$work_dir" "$planner_dir"
+    return
+  fi
 
   if grep -Eq ':ci_(darwin_|linux_build_)' "$work_dir/affected.txt"; then
     (
@@ -567,7 +625,7 @@ select_wgpu_reference() {
 }
 
 usage() {
-  echo "usage: tools/ci/determine_targets.sh pr-meta|determine|select-wgpu-reference" >&2
+  echo "usage: tools/ci/determine_targets.sh pr-meta|determine|determine-hosted-editor|select-wgpu-reference" >&2
   exit 2
 }
 
@@ -579,6 +637,7 @@ fi
 case "$1" in
   pr-meta) pr_meta ;;
   determine) determine ;;
+  determine-hosted-editor) determine hosted-editor ;;
   select-wgpu-reference) select_wgpu_reference ;;
   *) usage ;;
 esac

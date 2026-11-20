@@ -390,7 +390,12 @@ py_test(
 py_test(
     name = "editor_wasm_evidence_tests",
     size = "small",
-    srcs = ["editor_wasm_evidence.py", "editor_wasm_evidence_tests.py", "verify_unified_tests.py"],
+    srcs = [
+        "editor_wasm_evidence.py",
+        "editor_wasm_evidence_tests.py",
+        "hosted_editor_selection.py",
+        "verify_unified_tests.py",
+    ],
     imports = ["."],
     main = "editor_wasm_evidence_tests.py",
     deps = [":macos_remote_shadow"],
@@ -475,11 +480,22 @@ filegroup(
     srcs = [],
 )
 
+filegroup(
+    name = "hosted_editor_selection_sources",
+    srcs = [
+        "editor_wasm_evidence.py",
+        "hosted_editor_selection.py",
+        "macos_remote_shadow.py",
+        "verify_unified_tests.py",
+    ],
+)
+
 # The CI workflow's target selection: `bazel run //tools/ci:plan -- <step>` runs the same
 # subcommands as the determine-targets job's steps.
 sh_binary(
     name = "plan",
     srcs = ["determine_targets.sh"],
+    data = [":hosted_editor_selection_sources"],
 )
 
 # The CI lane table and its entry point: each main.yml Bazel step runs
@@ -537,6 +553,7 @@ py_test(
     data = [
         "determine_targets.sh",
         "fetch_bazel_diff.sh",
+        ":hosted_editor_selection_sources",
     ],
     deps = [
         "//tools:test_executable_fixtures",

@@ -5,7 +5,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from zipfile import ZipFile
 
-from editor_wasm_evidence import HOSTED, QUARANTINE, RESIDENCY, stage
+from editor_wasm_evidence import HOSTED, QUARANTINE, RESIDENCY, selected_browsers, stage
+from hosted_editor_selection import PACKAGE_ROOTS, select
 
 
 class HostedEvidenceTest(unittest.TestCase):
@@ -38,6 +39,39 @@ class HostedEvidenceTest(unittest.TestCase):
         self.assertEqual([p.read_text() for p in self.destination.glob("*/case-count.txt")], ["3\n"] * 7)
         with self.assertRaisesRegex(ValueError, "Missing hosted browser evidence"):
             stage([], self.root, self.destination)
+
+    def test_browser_subset_requires_exact_positive_evidence(self):
+        first, other = sorted(HOSTED)[:2]
+        event = json.dumps(self.event(first))
+        stage([event], self.root, self.destination, subset={first})
+        self.assertEqual([p.read_text() for p in self.destination.glob("*/case-count.txt")], ["3\n"])
+        with self.assertRaisesRegex(ValueError, "Missing hosted browser evidence"):
+            stage([], self.root, self.destination, subset={first})
+        with self.assertRaisesRegex(ValueError, "Unexpected hosted browser result"):
+            stage([event], self.root, self.destination, subset={other})
+
+    def test_invalid_browser_selection_is_rejected(self):
+        label = sorted(HOSTED)[0]
+        for labels in ("", f"{label} {label}", QUARANTINE, "//tools/ci:hosted_editor_wasm_graph"):
+            with self.subTest(labels=labels):
+                with self.assertRaisesRegex(ValueError, "Invalid hosted Editor Wasm"):
+                    selected_browsers(labels)
+        self.assertEqual(selected_browsers(label), {label})
+
+    def test_selection_distinguishes_complete_unaffected_subset_and_full(self):
+        browser = sorted(HOSTED)[0]
+        audit = "//test:wasm_audit"
+        roots = HOSTED | PACKAGE_ROOTS | {audit}
+        controls = (
+            ({"//unrelated:documentation"}, roots, ("unaffected", ())),
+            ({browser}, roots, ("browser_subset", (browser,))),
+            ({browser, audit}, roots, ("full", ())),
+            (PACKAGE_ROOTS, roots, ("full", ())),
+            ({browser}, roots - {browser}, ("full", ())),
+        )
+        for affected, graph, expected in controls:
+            with self.subTest(affected=affected, graph=graph):
+                self.assertEqual(select(affected, graph), expected)
 
     def test_failed_quarantine_still_retains_its_json_report_and_archive(self):
         stage([json.dumps(self.event(QUARANTINE, "FAILED"))], self.root, self.destination,

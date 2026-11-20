@@ -27,6 +27,16 @@ _HOST_TOOLS = ("cp", "dirname", "grep", "mkdir", "mktemp", "rm")
 _REFERENCE = "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"
 # Query expressions, by a fragment each one contains.
 _REFERENCE_QUERY = "labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))"
+_HOSTED_ROOT_QUERY = "tests(//tools/ci:hosted_editor_wasm_graph"
+_HOSTED_BROWSER_NAMES = (
+    "chromium_composited_invariants_test", "chromium_editor_presentation_test",
+    "chromium_editor_smoke_test", "chromium_editor_startup_test",
+    "firefox_composited_invariants_test", "firefox_editor_compatibility_test",
+    "webkit_editor_carousel_test",
+)
+_HOSTED_BROWSERS = ["//donner/editor/wasm/tests:hosted_" + test for test in _HOSTED_BROWSER_NAMES]
+_HOSTED_PACKAGE = "//tools/ci:hosted_editor_wasm_package"
+_HOSTED_LOCKFILE = "//tools/ci:editor_wasm_package"
 _MANUAL_QUERY = '"manual", set('
 _MANIFEST_QUERY = "tests(//...)) except"
 _BROWSER_QUERY = '"launches-browser", set('
@@ -225,13 +235,47 @@ class DetermineTest(_ScriptTest):
     script_name = "determine_targets.sh"
 
     def determine(self, changed="donner/base/Utils.h\n", affected="//a:b\n", labels=(),
-                  queries=None, **config):
+                  queries=None, mode="determine", **config):
         config = {"merge_base": "fork0", "changed": changed, "affected": affected,
                   "queries": _queries() if queries is None else queries, **config}
-        return self.run_script("determine", config=config, event=_pull_request(labels))
+        return self.run_script(mode, config=config, event=_pull_request(labels))
 
     def queried(self, calls):
         return [call[-1] for call in calls if call[0] == "bazelisk"]
+
+    def test_hosted_selection_reads_raw_manual_roots(self):
+        roots = "\n".join([*_HOSTED_BROWSERS, _HOSTED_PACKAGE, _HOSTED_LOCKFILE])
+        configs = _queries(**{_HOSTED_ROOT_QUERY: (roots, 0)})
+        browser = _HOSTED_BROWSERS[4]
+        cases = [
+            (browser, ["hosted_editor_mode=browser_subset", f"hosted_editor_browser_targets={browser}"]),
+            (_HOSTED_PACKAGE, ["hosted_editor_mode=full"]),
+            ("//donner/native:only", ["hosted_editor_mode=unaffected"]),
+        ]
+        for impacted, expected in cases:
+            with self.subTest(impacted=impacted):
+                result, calls, outputs = self.determine(mode="determine-hosted-editor",
+                                                        affected=impacted, queries=configs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                queries = self.queried(calls)
+                self.assertEqual(len(queries), 1)
+                self.assertIn(_HOSTED_ROOT_QUERY, queries[0])
+                self.assertEqual(outputs.splitlines()[-len(expected):], expected)
+
+    def test_hosted_selection_keeps_full_coverage_without_a_proof(self):
+        controls = [
+            {"labels": ("ci:full-test",)},
+            {"ancestry": "merge0 unrelated-base other-pr"},
+            {"changed": "donner/editor/wasm/tests/pnpm-lock.yaml\n"},
+            {"changed": "tools/ci/editor_wasm_stage.py\n"},
+            {"queries": _queries(**{_HOSTED_ROOT_QUERY: ("", 1)})},
+        ]
+        for config in controls:
+            with self.subTest(config=config):
+                result, _, outputs = self.determine(mode="determine-hosted-editor", **config)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("hosted_editor_mode=unaffected", outputs)
+                self.assertNotIn("hosted_editor_browser_targets=", outputs)
 
     def test_a_push_keeps_full_coverage_without_bazel_diff(self):
         result, calls, outputs = self.run_script("determine", GITHUB_EVENT_NAME="push",
