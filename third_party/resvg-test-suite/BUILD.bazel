@@ -35,18 +35,6 @@ pixel center in the 400x400 gradient rectangle.
     tests/paint-servers/stop/no-stop-color.png
   SHA256: 2fee9cdcbd440a978df83acf035b88a970b9e3ed348a9d687366ef67fa4383ee
 
-The zero-text-length reference was regenerated at its original 500x500 size with the
-resvg 0.49.0 release CLI and the bundled NotoSans-Regular.ttf. SVG2 applies anchoring
-from compressed pen extents after textLength adjustment, which moves this fixture's
-start-anchored glyphs by the final glyph advance (17.328 units). The SVG input is
-unchanged; the reference remains under the MIT notice in LICENSE-resvg-MIT.
-
-  resvg --skip-system-fonts --use-font-file fonts/NotoSans-Regular.ttf \
-    --width 500 --height 500 tests/text/textLength/zero.svg tests/text/textLength/zero.png
-
-  tests/text/textLength/zero.png
-  SHA256: 5d16080849d72f911878f6ba7f1a10674e427b1969b6a09317847c0ca7e963d0
-
 The following 500x500 references were rendered with the resvg v0.49.0 release CLI
 (revision 66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba) from the unchanged SVGs.
 The MIT notice is in LICENSE-resvg-MIT. Run `resvg --width 500 --height 500`
@@ -79,7 +67,7 @@ result permits this difference in the underlying clip coverage.
 References from the resvg release: these tests live in the resvg repository
 (https://github.com/linebender/resvg, crates/resvg/tests/tests/). resvg is licensed
 Apache-2.0 OR MIT; these files are used under MIT, with its notice in LICENSE-resvg-MIT.
-The 107 files listed in resvg-v0.50.0.sha256 (102 PNGs, each 300x300, and 5 SVGs) are
+The 118 files listed in resvg-v0.50.0.sha256 (113 PNGs, each 300x300, and 5 SVGs) are
 byte-identical to crates/resvg/tests/<path> at the resvg v0.50.0 release tag, revision
 5bdbae64eefadc4bf0caa56dcf91702037929086, where <path> is the tests/... path the list gives.
 The tag's source archive holds them under resvg-0.50.0/crates/resvg/tests/:
@@ -106,9 +94,9 @@ differently and edits with-invalid-path-and-xlink-href.svg.
   tests/text/textPath/with-invalid-path-and-xlink-href.png
   SHA256: afd5561d73d9239ea9f30d279fea63c78a175830608854cd4c101237fee553d3
 
-The other 13 references that differ from the snapshot's are renders made for this repository
+The other 12 references that differ from the snapshot's are renders made for this repository
 with the resvg v0.49.0 release CLI at 500x500 or 800x800, each recorded above or below with
-its command and SHA-256. Twelve render the vendored SVG, which is the snapshot's;
+its command and SHA-256. Eleven render the vendored SVG, which is the snapshot's;
 text-decoration/indirect-with-multiple-colors.png renders the independent scene in
 reference-sources/indirect-with-multiple-colors.svg. Two of them, the color emoji references,
 have no counterpart at v0.50.0.
@@ -245,9 +233,10 @@ no-height.svg and no-width.svg are upstream's, which draw on a 200x200 viewBox.
 The snapshot's references are flattened onto white: their opaque seagreen interiors are
 stored as (0, 113, 49) at alpha 209, which matches only when composited over white. The
 snapshot's subregion-and-primitiveUnits=objectBoundingBox-1 and -2 references are flattened
-the same way but are kept: the resvg renderings end their 0.5-wide objectBoundingBox
+the same way but are kept: the resvg v0.49.0 renderings end their 0.5-wide objectBoundingBox
 subregion at 98 user units instead of the 84 that the element's bounding box gives, which the
-snapshot and Donner both draw. The snapshot's everything-via-xlink-href,
+snapshot and Donner both draw. The v0.50.0 references end it at 84, but results.csv records resvg
+failing both rows. The snapshot's everything-via-xlink-href,
 some-attributes-via-xlink-href and with-region-and-subregion references are flattened too but
 are kept: their filter regions cut the blur's input, and the resvg renderings drop the
 box-blur spill there, which Donner keeps.
@@ -348,6 +337,52 @@ constant region. At the top-left boundary upstream's reference samples the wrapp
   tests/filters/feSpecularLighting/with-feSpotLight-and-specular-and-exponent.png
   tests/filters/feSpecularLighting/with-feSpotLight-and-specularConstant=5.png
   tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
+
+At 500x500 the snapshot's references cover the two pixel columns and rows of the 0.5-unit
+crosshair with alpha 128 and 192, where the stroke covers each of them by 0.625 (alpha 159).
+Upstream's 300x300 references give the two columns and rows alpha 95 and 96, the 0.375 coverage
+the stroke has there. Donner matches upstream's references within 2 pixels on both CPU text tiers.
+
+  tests/text/baseline-shift/nested-with-baseline-1.png
+  tests/text/baseline-shift/nested-with-baseline-2.png
+  tests/text/dominant-baseline/hanging.png
+
+SVG 2 applies anchoring from the compressed pen extents after textLength adjustment, which moves
+this fixture's start-anchored glyphs by the final glyph advance (17.328 units). The snapshot's
+reference places them about 17 units further left. Upstream's reference places them where
+Donner does and matches it within 1 pixel on both CPU text tiers.
+
+  tests/text/textLength/zero.png
+
+The comma-separated and concatenated text-decoration lists are invalid, so the text draws
+undecorated. Upstream's two references are byte-identical, and Donner matches them within 21
+pixels on both CPU text tiers. The snapshot's indirect.png outlines the glyphs and the underline in
+green, which the SVG does not paint: 7,309 of its pixels have a green channel above both red and
+blue. Upstream's has none, and Donner matches it with no differing pixel on both CPU text tiers.
+
+  tests/text/text-decoration/all-types-inline-comma-separated.png
+  tests/text/text-decoration/all-types-inline-no-spaces.png
+  tests/text/text-decoration/indirect.png
+
+The snapshot's reference predates resvg's current dx/dy layout on a path and places the shifted
+spans differently. Donner matches upstream's reference within 36 pixels on both CPU text tiers.
+
+  tests/text/textPath/tspan-with-relative-position.png
+
+The first blur's 50-unit primitive subregion clips its result at x=54 units, so the second blur's
+half-alpha crossing on the scanline y=100 lies at x=54.0 in upstream's reference, as in Chrome and
+Firefox; the snapshot's crosses at x=53.33. Donner draws image-rendering="optimizeSpeed" with
+nearest-neighbor sampling, and upstream's on-feImage reference samples the embedded 64x64 image
+at destination pixel centers: every pixel of the 216x216 filter region is within one level of the
+texel nearest its center, where the snapshot's samples a different grid. Filter functions operate
+in sRGB (Filter Effects 1, section 5), so grayscale() of seagreen gives 115, the interior of
+upstream's url-and-grayscale reference; the snapshot's interior is 122, the result for linearRGB
+values. Donner matches upstream's three references at default parameters on both CPU text tiers
+(0, 0 and 37 pixels) and on Geode with Metal and with software Vulkan (3, 3 and 34 pixels).
+
+  tests/filters/filter/with-subregion-3.png
+  tests/painting/image-rendering/on-feImage.png
+  tests/filters/filter-functions/url-and-grayscale.png
 
 The 500x500 paint-order image is generated from the original SVG with resvg
 v0.49.0 and the bundled Noto Sans face. It preserves kerning between the "e"

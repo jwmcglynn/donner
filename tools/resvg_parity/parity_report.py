@@ -1472,12 +1472,8 @@ PIXEL_BUDGET_RATCHET_LIMIT = DEFAULT_MAX_PIXELS
 PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
     "filters/filter/in=BackgroundAlpha.svg": {"default_text": 1200, "max": 1200, "geode": 1200},
     "painting/marker/with-an-image-child.svg": {"geode": 500},
-    "text/baseline-shift/nested-with-baseline-1.svg": {"default_text": 400, "max": 400},
-    "text/baseline-shift/nested-with-baseline-2.svg": {"default_text": 400, "max": 400},
-    "text/dominant-baseline/hanging.svg": {"default_text": 350, "max": 350},
     "text/font-variant/inherit.svg": {"default_text": 1200},
     "text/font-variant/small-caps.svg": {"default_text": 1200},
-    "text/textLength/zero.svg": {"default_text": 410, "max": 410},
     "text/textPath/closed-path.svg": {"default_text": 400, "max": 400},
 }
 
@@ -1583,8 +1579,6 @@ def threshold_ratchet_violations(
 # approval in the pull request that adds it.
 SKIP_ALLOWLIST = frozenset({
     "structure/svg/not-UTF-8-encoding.svg",
-    "text/textPath/with-filter.svg",
-    "text/tspan/with-filter.svg",
 })
 
 SKIP_RULE = (

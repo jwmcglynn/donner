@@ -351,15 +351,12 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 ```
 
-**Skip reason formats**. A new skip uses only the first form. The others are the forms of the
-three skips already in `SKIP_ALLOWLIST`, kept until each is converted or fixed; do not add new
-ones:
+**Skip reason formats**. A new skip uses only the first form. The second is the form of the one
+skip already in `SKIP_ALLOWLIST`, kept until it is fixed; do not add new ones:
 
 - `Not impl: <feature> (#<issue>)` - an unimplemented feature with its tracking issue.
 - `Unsupported input: <input> (#<issue>)` - an input the parser does not accept
   (`structure/svg/not-UTF-8-encoding`).
-- `Accepted difference (<date>): <difference>` - a maintainer-accepted rendering difference
-  recorded on that date.
 
 **Other reason formats**:
 
