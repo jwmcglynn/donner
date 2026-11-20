@@ -38,10 +38,23 @@ case "${PAYLOAD_BUDGET_MODE:-enforce}" in
   *) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; exit 2 ;;
 esac
 
+graph_roots+=("$budget_suite")
+
+# Only a proved browser-only PR subset uses these roots. A full build remains
+# the producer of source-stamped artifacts and their complete browser receipt.
+if [[ -n "${HOSTED_EDITOR_BROWSER_TARGETS:-}" ]]; then
+  if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]]; then
+    echo "Hosted browser subsets are only supported on pull requests." >&2
+    exit 2
+  fi
+  python3 tools/ci/hosted_editor_selection.py --validate-browser-targets
+  read -r -a graph_roots <<< "$HOSTED_EDITOR_BROWSER_TARGETS"
+fi
+
 prefetch() {
   lane_begin "Editor Wasm graph prefetch"
   lane_phase "Fetch hosted Editor Wasm graph" bazelisk fetch \
-    ${source_args[@]+"${source_args[@]}"} "${graph_roots[@]}" "$budget_suite"
+    ${source_args[@]+"${source_args[@]}"} "${graph_roots[@]}"
 }
 
 graph_test() {
@@ -58,7 +71,7 @@ graph_test() {
 build() {
   lane_begin "Hosted Editor Wasm graph"
   graph_test "Qualify editor package and browsers" "${RUNNER_TEMP}/editor-wasm-graph.bep.json" \
-    "${graph_roots[@]}" "$budget_suite"
+    "${graph_roots[@]}"
 }
 
 quarantine() {

@@ -2400,13 +2400,18 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_downloaded_bazel_diff_is_verified_before_execution(self):
         """The downloaded JAR must match the digest published for its release."""
-        workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        self.assertIn('BAZEL_DIFF_TAG: "%s"' % BAZEL_DIFF_TAG, workflow)
-        self.assertIn('BAZEL_DIFF_SHA256: "%s"' % BAZEL_DIFF_SHA256, workflow)
-
-        self.assertEqual(_step_body(workflow, "Download bazel-diff").split("\n\n", 1)[0].strip(),
-                         "if: steps.pr-meta.outputs.identical_tree != 'true'\n        "
-                         "shell: bash\n        run: tools/ci/fetch_bazel_diff.sh")
+        action = self.supply_chain_files[".github/actions/prepare-bazel-diff/action.yml"]
+        main = self.supply_chain_files[".github/workflows/main.yml"]
+        hosted = self.supply_chain_files[".github/workflows/editor_wasm.yml"]
+        self.assertIn('BAZEL_DIFF_TAG: "%s"' % BAZEL_DIFF_TAG, action)
+        self.assertIn('BAZEL_DIFF_SHA256: "%s"' % BAZEL_DIFF_SHA256, action)
+        self.assertIn("key: bazel-diff-base-hashes-tt-" + BAZEL_DIFF_TAG + "-", action)
+        self.assertIn('run: bash "$BAZEL_DIFF_FETCH_SCRIPT"', action)
+        self.assertIn("default: tools/ci/fetch_bazel_diff.sh", action)
+        self.assertIn("uses: ./.github/actions/prepare-bazel-diff", main)
+        self.assertIn("uses: ./hosted-planner/.github/actions/prepare-bazel-diff", hosted)
+        self.assertIn("fetch-script: hosted-planner/tools/ci/fetch_bazel_diff.sh", hosted)
+        self.assertNotIn("actions/cache/save@", action)
         # //tools/ci:determine_targets_tests runs the script's download, check and retries.
         download = _read("tools/ci/fetch_bazel_diff.sh")
         verification = "sha256sum --check --status"
@@ -2414,6 +2419,32 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn(verification, download)
         self.assertLess(download.index(verification), download.index("exit 0"))
         self.assertIn('rm -f "$out"', download)
+
+    def test_hosted_browser_subset_uses_tested_base_and_keeps_release_evidence_full(self):
+        workflow = self.supply_chain_files[".github/workflows/editor_wasm.yml"]
+        preflight = workflow.split("  hosted-selection:\n", 1)[1].split("  build:\n", 1)[0]
+        build = workflow.split("  build:\n", 1)[1]
+        self.assertIn("git rev-list --parents -1 HEAD", preflight)
+        self.assertIn('"$checkout" == "$GITHUB_SHA"', preflight)
+        self.assertIn('"$second" == "$PR_HEAD"', preflight)
+        self.assertIn("ref: ${{ steps.planner-ref.outputs.revision }}", preflight)
+        self.assertIn("steps.determine.outcome == 'success'", preflight)
+        self.assertIn("|| 'full'", preflight)
+        self.assertNotIn("secrets.", preflight)
+        self.assertIn("needs: [trust, hosted-selection]", build)
+        self.assertIn("needs.hosted-selection.result != 'success' ||", build)
+        self.assertIn("needs.hosted-selection.outputs.mode != 'unaffected'", build)
+        self.assertIn("github.event_name != 'pull_request' ||", build)
+        for step in ("Snapshot the browser-tested release files",
+                     "Prove the package's resolved module graph",
+                     "Stage package for handoff", "Upload Geode package artifact",
+                     "Stage immutable Geode deployment candidate",
+                     "Upload Geode deployment candidate",
+                     "Record deployment candidate digest"):
+            with self.subTest(step=step):
+                step_body = _step_body(workflow, step)
+                self.assertEqual(re.findall(r"(?m)^        if: (.*)$", step_body),
+                                 ["env.HOSTED_EDITOR_BROWSER_TARGETS == ''"])
 
     def test_downloaded_tools_are_verified_before_extraction(self):
         badges = ".github/workflows/badges.yaml"

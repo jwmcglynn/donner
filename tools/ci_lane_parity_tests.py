@@ -170,9 +170,9 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9c621c6a319d026b"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "fc1df02d3e583667"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "362fcb75b86cedb4"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "96ce14bae02729c9"),
 }
 
 SHARED_STEP_ALLOWLIST = {
@@ -384,6 +384,26 @@ SHADOW_LANE_CONTEXT = {
         "success", "The shadow lane runs after its run's Linux lane, passed or failed."),
     "needs.macos-remote-shadow-turnstile.outputs.admitted": (
         "true", "Its own admission let it run; otherwise it is skipped."),
+}
+
+# Job results and outputs of the hosted Editor Wasm planner, with the value used in every scenario
+# and why. Each value is the one under which a pull request runs the most: the complete hosted
+# graph, as main runs it. The planner can narrow a pull request two ways, and neither applies to
+# main: mode `unaffected` skips the hosted build job, and mode `browser_subset` skips its
+# release-evidence steps. security_workflow_policy_tests.py pins the `full` default, the
+# `unaffected` clause and the gate on each of those steps.
+HOSTED_EDITOR_SELECTION_CONTEXT = {
+    "needs.trust.result": ("success", "No job runs unless the trust job succeeded."),
+    "needs.hosted-selection.result": (
+        "success", "The advisory planner job completed. It is skipped on main and on unified "
+                   "pull requests, where the build job does not read it."),
+    "needs.hosted-selection.outputs.mode": (
+        "full", "The planner default: the complete hosted graph, as main runs it."),
+    "needs.hosted-selection.outputs.browser-targets": (
+        "", "A complete run selects no browser subset."),
+    "env.HOSTED_EDITOR_BROWSER_TARGETS": (
+        "", "Empty on a complete run; test_hosted_editor_selection_models_a_complete_run holds "
+            "this to the build job's own expression."),
 }
 
 # Job outputs a condition may read, mapped to the scenario key that holds each one's value.
@@ -718,12 +738,10 @@ def _context(scenario):
             return []
         if name == "github.event.deleted":
             return False
-        if name in STEP_OUTPUTS:
-            return STEP_OUTPUTS[name][0]
-        if name in REPOSITORY_VARIABLES:
-            return REPOSITORY_VARIABLES[name][0]
-        if name in SHADOW_LANE_CONTEXT:
-            return SHADOW_LANE_CONTEXT[name][0]
+        for reviewed in (STEP_OUTPUTS, REPOSITORY_VARIABLES, SHADOW_LANE_CONTEXT,
+                         HOSTED_EDITOR_SELECTION_CONTEXT):
+            if name in reviewed:
+                return reviewed[name][0]
         # An output that is not modelled above can decide which checks run, so it fails the
         # test until it is reviewed and listed.
         raise ValueError("unmodelled context %s" % name)
@@ -2333,6 +2351,32 @@ class CiLaneParityTest(unittest.TestCase):
             {(name, job, step, scenario, digest)
              for name, job, scenario, step, _, digest in changed}, SHARED_STEP_ALLOWLIST,
             "a shared job runs a non-Bazel check differently on pull requests")
+
+    def test_hosted_editor_selection_models_a_complete_run(self):
+        build = _jobs(self.workflows["editor_wasm.yml"])["build"]
+        targets = str(build["env"]["HOSTED_EDITOR_BROWSER_TARGETS"])
+        modelled = HOSTED_EDITOR_SELECTION_CONTEXT["env.HOSTED_EDITOR_BROWSER_TARGETS"][0]
+        text = _read(".github/workflows/editor_wasm.yml")
+        for name in HOSTED_EDITOR_SELECTION_CONTEXT:
+            with self.subTest(name=name):
+                self.assertIn(name, text, "stale HOSTED_EDITOR_SELECTION_CONTEXT entry")
+        gated = [step for step in build["steps"]
+                 if "env.HOSTED_EDITOR_BROWSER_TARGETS" in str(step.get("if") or "")]
+        self.assertTrue(gated)
+        for scenario in ("main-push",) + PULL_REQUEST_SCENARIOS:
+            with self.subTest(scenario=scenario):
+                # The step conditions read the job variable; it must be what the job computes.
+                self.assertEqual(render(targets, scenario), modelled)
+                for step in gated:
+                    self.assertTrue(runs(step["if"], scenario), _step_name(step))
+        # A narrowed pull request gets a subset; main never does.
+        subset = {"needs.hosted-selection.outputs.mode": "browser_subset",
+                  "needs.hosted-selection.outputs.browser-targets": "//a:b"}
+        for scenario, expected in (("untrusted-pr", "//a:b"), ("main-push", "")):
+            with self.subTest(subset=scenario):
+                context = _context(scenario)
+                self.assertEqual(_Expression(targets, lambda name, context=context: subset.get(
+                    name, context(name))).evaluate(), expected)
 
     def test_wasm_size_step_differs_only_in_its_reviewed_numeric_budget_mode(self):
         workflow = self.workflows["editor_wasm.yml"]
