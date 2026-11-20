@@ -490,6 +490,35 @@ void ApplyGpuOwnerDispatchDelta(RenderResult::WorkerTimingBreakdown& timing,
       static_cast<int>(after.waitSliceTimeouts - before.waitSliceTimeouts);
   timing.gpuOwnerDispatchWaitMs =
       static_cast<double>(after.dispatchWaitUs - before.dispatchWaitUs) / 1000.0;
+  const auto countDelta = [](std::uint32_t from, std::uint32_t to) {
+    return static_cast<int>(to - from);
+  };
+  const auto msDelta = [](std::uint32_t fromUs, std::uint32_t toUs) {
+    return static_cast<double>(toUs - fromUs) / 1000.0;
+  };
+  auto& detail = timing.gpuOwnerDispatch;
+  static_assert(std::tuple_size_v<decltype(detail.requestedByKind)> ==
+                gpu::browser::kBrowserGpuOperationKindCount);
+  static_assert(std::tuple_size_v<decltype(detail.startLatencyBuckets)> ==
+                std::tuple_size_v<decltype(before.startLatencyBuckets)>);
+  detail.requestedByWorker =
+      countDelta(before.requestedByCallingThread, after.requestedByCallingThread);
+  for (std::size_t kind = 0; kind < detail.requestedByKind.size(); ++kind) {
+    detail.requestedByKind[kind] =
+        countDelta(before.requestedByKind[kind], after.requestedByKind[kind]);
+  }
+  detail.deliveryMs = msDelta(before.deliveryUs, after.deliveryUs);
+  detail.ownerQueueMs = msDelta(before.ownerQueueUs, after.ownerQueueUs);
+  detail.executeMs = msDelta(before.executeUs, after.executeUs);
+  detail.completionWakeMs = msDelta(before.completionWakeUs, after.completionWakeUs);
+  for (std::size_t bucket = 0; bucket < detail.startLatencyBuckets.size(); ++bucket) {
+    detail.startLatencyBuckets[bucket] =
+        countDelta(before.startLatencyBuckets[bucket], after.startLatencyBuckets[bucket]);
+  }
+  detail.canvasFrameActiveMs = msDelta(before.canvasFrameActiveUs, after.canvasFrameActiveUs);
+  detail.canvasFrames = countDelta(before.canvasFrames, after.canvasFrames);
+  detail.receivedDuringCanvasFrame =
+      countDelta(before.receivedDuringCanvasFrame, after.receivedDuringCanvasFrame);
 }
 #endif
 

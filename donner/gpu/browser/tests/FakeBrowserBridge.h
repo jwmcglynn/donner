@@ -217,6 +217,19 @@ public:
   RcString lostReason;
   /// What \ref completedSerial reports.
   uint64_t completed = 0;
+  /// Whether an accepted submission completes at once, raising \ref completed to its serial, as
+  /// on a browser whose queue keeps up.
+  bool completeOnSubmit = false;
+
+  /// Reads that change no browser state. Each is one synchronous browser call, as an accepted call
+  /// in \ref calls is, but they are counted rather than recorded line by line.
+  struct QueryCounts {
+    uint64_t deviceStatus = 0;     //!< Combined ownership/loss queries.
+    uint64_t deviceLoss = 0;       //!< Loss queries.
+    uint64_t completedSerial = 0;  //!< Completed-serial queries.
+  };
+  /// This bridge's query counts. Shared, like \ref calls, so several bridges can count into one.
+  std::shared_ptr<QueryCounts> queries = std::make_shared<QueryCounts>();
   /// Operation name to refuse, matched against the leading word of a recorded line. Empty
   /// refuses nothing.
   std::string failOperation;
@@ -309,20 +322,27 @@ public:
 
   BridgeStatus deviceStatus() const override {
     ++deviceStatusQueries;
+    ++queries->deviceStatus;
     if (deviceStatusOverride.has_value()) {
       return *deviceStatusOverride;
     }
     if (!owned) {
       return BridgeStatus::NotOwner;
     }
-    return isDeviceLost() ? BridgeStatus::DeviceLost : BridgeStatus::Success;
+    return lost || gpuDevice->lost ? BridgeStatus::DeviceLost : BridgeStatus::Success;
   }
 
-  bool isDeviceLost() const override { return lost || gpuDevice->lost; }
+  bool isDeviceLost() const override {
+    ++queries->deviceLoss;
+    return lost || gpuDevice->lost;
+  }
 
   RcString deviceLostReason() const override { return lostReason; }
 
-  uint64_t completedSerial() const override { return completed; }
+  uint64_t completedSerial() const override {
+    ++queries->completedSerial;
+    return completed;
+  }
 
   uint32_t maxTextureDimension2D() const override {
     return requestState == BrowserDeviceRequestState::Ready ? maxTextureDimension : 0;
@@ -760,6 +780,9 @@ public:
     if (status == BridgeStatus::Success) {
       finishedCommandBuffers_ = 0;
       recordingSerial_ = 0;
+      if (completeOnSubmit) {
+        completed = std::max(completed, submissionSerial);
+      }
     }
     return status;
   }
@@ -976,7 +999,7 @@ private:
     if (!owned) {
       return BridgeStatus::NotOwner;
     }
-    if (isDeviceLost()) {
+    if (lost || gpuDevice->lost) {
       return BridgeStatus::DeviceLost;
     }
     if (!failOperation.empty() && line.starts_with(failOperation)) {

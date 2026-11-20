@@ -175,6 +175,8 @@ interface WorkerResultCounters {
   gpuOwnerDispatchCount: number;
   gpuOwnerWaitSliceTimeouts: number;
   gpuOwnerDispatchWaitMs: number;
+  /** Origin, kinds and blocked-time phases of this result's owner dispatches, as published. */
+  gpuOwnerDispatch: unknown;
   compositorRenderCount: number;
   workerMs: number;
   renderFrameMs: number;
@@ -1874,6 +1876,7 @@ async function startWorkerResultCounters(page: Page) {
           gpuOwnerDispatchCount: count("gpuOwnerDispatchCount"),
           gpuOwnerWaitSliceTimeouts: count("gpuOwnerWaitSliceTimeouts"),
           gpuOwnerDispatchWaitMs: count("gpuOwnerDispatchWaitMs"),
+          gpuOwnerDispatch: countersPublished ? (stats.gpuOwnerDispatch ?? null) : null,
           compositorRenderCount: count("compositorRenderCount"),
           workerMs: stats.workerMs,
           renderFrameMs: count("renderFrameMs"),
