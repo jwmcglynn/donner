@@ -264,14 +264,18 @@ bool AdapterBase::beginPatternTile(const Box2d& tileRect, const Transform2d& tar
   return true;
 }
 
-void AdapterBase::endPatternTile(bool forStroke) {
+void AdapterBase::endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) {
   // The driver ends only tiles whose begin returned true.
   if (tileDepth_ == 0) {
     return;
   }
   --tileDepth_;
-  PatternState& state = patternStates_[tileDepth_];
-  (forStroke ? state.pendingStroke : state.pendingFill) = true;
+  // A text span's own pattern tile is closed but not used: adapters paint text spans with the
+  // text element's paint.
+  if (!spanSlot.has_value()) {
+    PatternState& state = patternStates_[tileDepth_];
+    (forStroke ? state.pendingStroke : state.pendingFill) = true;
+  }
   onEndPatternTile(forStroke);
 }
 

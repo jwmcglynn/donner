@@ -444,9 +444,32 @@ private:
   /// True when \p pattern of \p registry's document is already being rendered further up the
   /// active chain.
   bool isActivePatternTile(const Registry& registry, Entity pattern) const;
+  /**
+   * Render the tile of the pattern \p ref names for \p instance and stage it for the next draw.
+   *
+   * @param forStroke True for a stroke paint, false for a fill paint.
+   * @param spanSlot Text span pattern slot to stage the tile in, or nullopt for the instance's own
+   *   fill or stroke.
+   */
   void renderPattern(RenderingInstanceView& view, Registry& registry,
                      const components::RenderingInstanceComponent& instance,
-                     const components::PaintResolvedReference& ref, bool forStroke);
+                     const components::PaintResolvedReference& ref, bool forStroke,
+                     std::optional<std::uint64_t> spanSlot);
+
+  /**
+   * Render the pattern tiles \p instance paints with before its draw: those of its own fill and
+   * stroke, and, when \p drawsElement, those of its text spans' own patterns. When the element is
+   * not drawn the span pattern content is skipped instead, so the view stays in step with the
+   * instances and no span tile is left staged for a later draw.
+   */
+  void renderPaintPatterns(RenderingInstanceView& view, Registry& registry,
+                           const components::RenderingInstanceComponent& instance,
+                           bool drawsElement);
+
+  /// Skip the tile content of the pattern \p ref names when it lies ahead of \p instance.
+  void skipPatternContent(RenderingInstanceView& view, Registry& registry,
+                          const components::RenderingInstanceComponent& instance,
+                          const components::PaintResolvedReference& ref);
 
   /**
    * Resolve a context-paint remap's `entityFromContextTransform` for the current draw. Same-world

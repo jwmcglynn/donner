@@ -323,6 +323,17 @@ bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
          ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
 }
 
+namespace {
+
+// True when @p instance paints its fill, its stroke or a text span's own paint with an expensive
+// resource (see `PaintUsesExpensiveResource`): a text span's own pattern renders a tile.
+bool InstancePaintUsesExpensiveResource(const components::RenderingInstanceComponent& instance) {
+  return PaintUsesExpensiveResource(instance.resolvedFill) ||
+         PaintUsesExpensiveResource(instance.resolvedStroke) || !instance.spanPatternPaints.empty();
+}
+
+}  // namespace
+
 // True when @p paint is a resolved gradient - a fill whose rasterize cost scales
 // with covered pixel area (the shader evaluates per pixel) rather than with the
 // span's draw-op / path-verb counts. Used to add an area term to the immediate
@@ -373,8 +384,7 @@ void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostE
   if ((!ignoreIsolatedLayer && instance->isolatedLayer) || instance->resolvedFilter.has_value() ||
       instance->hasClipPath() || (instance->mask.has_value() && instance->mask->valid()) ||
       instance->markerStart.has_value() || instance->markerMid.has_value() ||
-      instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
-      PaintUsesExpensiveResource(instance->resolvedStroke)) {
+      instance->markerEnd.has_value() || InstancePaintUsesExpensiveResource(*instance)) {
     estimate->hasExpensiveEffect = true;
   }
   if (PaintIsAreaCostly(instance->resolvedFill) || PaintIsAreaCostly(instance->resolvedStroke)) {

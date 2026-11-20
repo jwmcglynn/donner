@@ -5368,7 +5368,7 @@ public:
   void transitionMaskToContent() override {}
   void popMask() override {}
   bool beginPatternTile(const Box2d&, const Transform2d&) override { return true; }
-  void endPatternTile(bool) override {}
+  void endPatternTile(bool, std::optional<std::uint64_t>) override {}
   void setPaint(const PaintParams&) override {}
   void drawPath(const PathShape&, const StrokeParams&) override {}
   void drawRect(const Box2d&, const StrokeParams&) override {}
@@ -6661,7 +6661,7 @@ TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
   renderer.popMask();
 
   EXPECT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), Transform2d()));
-  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
 
   PaintParams paint;
   renderer.setPaint(paint);

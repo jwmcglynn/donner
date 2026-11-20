@@ -778,7 +778,7 @@ TEST_F(RendererGeodeTest, TransformedFilterFailureUnwindsAnOpenPatternTile) {
 
   renderer.popFilterLayer();
   const size_t retainedAfterFilter = renderer.failedFilterTextureCountForTesting();
-  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
 
   EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
   EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
@@ -1021,7 +1021,7 @@ TEST_P(FrameEncoderCloseFailureTest, APopWhoseCloseFailsAbandonsInsteadOfRecordi
     renderer.transitionMaskToContent();
     renderer.popMask();
   } else if (kind == "PatternTile") {
-    renderer.endPatternTile(/*forStroke=*/false);
+    renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
   } else if (kind == "Filter") {
     renderer.popFilterLayer();
   } else {
@@ -2367,7 +2367,7 @@ TEST_F(RendererGeodeTest, RepeatedPatternTilesOfOneSizeAllocateNoTexturesInStead
         << "the tile must be admitted, otherwise a zero allocation count proves nothing";
     renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
     renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
-    renderer.endPatternTile(/*forStroke=*/false);
+    renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
     renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
     renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
     renderer.endFrame();
@@ -2391,7 +2391,7 @@ TEST_F(RendererGeodeTest, APatternPaintTheFrameNeverConsumedIsRetiredNotCarriedF
   renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
   renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
   // No fill or stroke follows, so the promoted pattern paint is never consumed.
-  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
   renderer.endFrame();
 
   EXPECT_EQ(renderer.texturePoolStats().textureCount, pooledBefore + 1u)
@@ -2426,7 +2426,7 @@ TEST_F(RendererGeodeTest, APatternTileLeftOpenAcrossTheFrameBoundaryIsRefusedNot
          "transient texture pool";
 
   beginFrame(renderer);
-  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
   renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
   renderer.endFrame();
@@ -2818,14 +2818,14 @@ TEST_F(RendererGeodeTest, ARecycledPatternTileNeverShowsWhatTheLastFramePaintedI
   ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
   renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
   renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
-  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
   renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
   renderer.endFrame();
 
   // Same extent, so the pool hands the same texture back, and this tile is drawn into by nothing.
   beginFrame(renderer);
   ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
-  renderer.endPatternTile(/*forStroke=*/false);
+  renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
   renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
   renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
   renderer.endFrame();
@@ -2961,7 +2961,7 @@ TEST_F(RendererGeodeTest, SurfaceBudgetCoversClipMaskBlendSnapshotMaskAndPattern
     renderer.beginFrame(viewport);
     ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), Transform2d()));
     EXPECT_EQ(renderer.resourceStats().surfaceCount, 2u);
-    renderer.endPatternTile(/*forStroke=*/false);
+    renderer.endPatternTile(/*forStroke=*/false, std::nullopt);
     renderer.endFrame();
   }
 }

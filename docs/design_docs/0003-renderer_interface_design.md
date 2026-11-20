@@ -177,10 +177,11 @@ class RendererInterface {
   virtual void transitionMaskToContent() = 0;
   virtual void popMask() = 0;
 
-  // Pattern tile recording (stacked for nested patterns)
+  // Pattern tile recording (stacked for nested patterns). A tile ends as the element's fill or
+  // stroke paint, or in a text span pattern slot for the next text draw.
   virtual void beginPatternTile(const Box2d& tileRect,
                                 const Transform2d& patternToTarget) = 0;
-  virtual void endPatternTile(bool forStroke) = 0;
+  virtual void endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) = 0;
 
   // Paint state
   virtual void setPaint(const PaintParams& paint) = 0;

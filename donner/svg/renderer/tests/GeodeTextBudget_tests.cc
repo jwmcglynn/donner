@@ -110,7 +110,7 @@ TEST_F(GeodeTextBudgetTest, RejectedTextReleasesItsStagedPattern) {
               testing::IsTrue());
   renderer_.setPaint(SolidFill(css::RGBA(255, 0, 0, 255)));
   renderer_.drawRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), StrokeParams{});
-  renderer_.endPatternTile(/*forStroke=*/false);
+  renderer_.endPatternTile(/*forStroke=*/false, std::nullopt);
   drawGlyphs(0);
   ASSERT_THAT(renderer_.resourceStats().textMaterializationBudgetRejected, testing::IsTrue());
   renderer_.setPaint(SolidFill(css::RGBA(0, 0, 255, 255)));

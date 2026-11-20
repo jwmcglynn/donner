@@ -5982,6 +5982,42 @@ constexpr std::string_view kMaskedLeafBeforeLayer = R"svg(
     </g>
   </svg>)svg";
 
+/// A text whose "xt" span paints its own pattern, in a static segment, directly before a
+/// translucent rect that gets a layer. The span's pattern content is the last entity of the
+/// segment.
+constexpr std::string_view kTextSpanPatternBeforeLayer = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+        <rect width="4" height="8" fill="#c60"/>
+      </pattern>
+    </defs>
+    <g>
+      <text x="8" y="44" font-size="40" fill="#333">Te<tspan fill="url(#p)">xt</tspan></text>
+      <rect id="target" x="8" y="56" width="20" height="20" fill="#06c" opacity="0.5"/>
+    </g>
+  </svg>)svg";
+
+/// A filtered text whose "xt" span paints its own pattern. The filter gives the text a layer, and
+/// the span's pattern content follows the text in paint order, so the layer must cover it. The text
+/// is not moved: a moved filtered text differs from a fresh render by a few pixels even without
+/// span paint.
+constexpr std::string_view kFilteredTextSpanPattern = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+        <rect width="4" height="8" fill="#c60"/>
+      </pattern>
+      <filter id="f">
+        <feOffset dx="0" dy="0"/>
+      </filter>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <text id="target" x="8" y="44" font-size="40" fill="#333" filter="url(#f)">Te<tspan
+        fill="url(#p)">xt</tspan></text>
+    <rect x="8" y="56" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
 class CompositorDrawnContentTest : public testing::TestWithParam<DrawnContentCase> {};
 
 // Mask, marker and pattern content is instantiated after the element that draws it, so it follows
@@ -6039,6 +6075,9 @@ INSTANTIATE_TEST_SUITE_P(
         DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
         DrawnContentCase{"promoted_marker_leaf", kMarkerLeaf, "#target"},
         DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target", "#target"},
+        DrawnContentCase{"filtered_text_span_pattern", kFilteredTextSpanPattern, nullptr},
+        DrawnContentCase{"text_span_pattern_before_layer", kTextSpanPatternBeforeLayer, nullptr,
+                         "#target"},
         DrawnContentCase{"pattern_before_layer", kPatternBeforeLayer, nullptr, "#target"},
         DrawnContentCase{"markers_before_layer", kMarkersBeforeLayer, nullptr, "#target"},
         DrawnContentCase{"masked_leaf_before_promoted_layer", kMaskedLeafBeforeLayer, "#target",

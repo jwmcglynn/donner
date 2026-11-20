@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -681,37 +682,142 @@ public:
            (filterEffects != nullptr && !filterEffects->empty());
   }
 
-  /**
-   * Give each outermost \ref xml_tspan or \ref xml_textPath that declares `clip-path`, `mask`, or
-   * `filter` its own rendering instance, so the driver wraps that span's glyphs in the effect's
-   * layer. A \ref xml_text element renders as a unit, so its descendants are never reached by the
-   * ordinary traversal.
-   *
-   * Recursion stops at a span that gets an instance: an effect nested inside another span's effect
-   * would need nested layers, which the span instance does not provide yet.
-   *
-   * @param textRootEntity The root \ref xml_text entity being instantiated.
-   */
-  void traverseTextSpanEffects(Entity textRootEntity) {
-    if (!registry_.all_of<TextRootComponent>(textRootEntity) ||
-        !registry_.all_of<RenderingInstanceComponent>(textRootEntity)) {
+  /// The pattern element \p paint references, or null when it is not a pattern reference.
+  static Entity ReferencedPattern(const ResolvedPaintServer& paint) {
+    const auto* reference = std::get_if<PaintResolvedReference>(&paint);
+    return reference != nullptr && reference->reference.handle.all_of<ComputedPatternComponent>()
+               ? reference->reference.handle.entity()
+               : entt::null;
+  }
+
+  /// The paint server reference \p entity's own fill or stroke makes, if any.
+  std::optional<PaintServer::ElementReference> spanPaintReference(Entity entity,
+                                                                  bool forStroke) const {
+    const auto* style = registry_.try_get<ComputedStyleComponent>(entity);
+    if (style == nullptr || !style->properties.has_value()) {
+      return std::nullopt;
+    }
+    const std::optional<PaintServer> paint =
+        StyleSystem::localPaintForInstantiation(*style, forStroke);
+    if (!paint.has_value() || !paint->is<PaintServer::ElementReference>()) {
+      return std::nullopt;
+    }
+    return paint->get<PaintServer::ElementReference>();
+  }
+
+  /// Key of a (pattern, kind of paint) pair.
+  static std::uint64_t SpanPatternKey(Entity pattern, bool forStroke) {
+    return (static_cast<std::uint64_t>(entt::to_integral(pattern)) << 1) |
+           static_cast<std::uint64_t>(forStroke);
+  }
+
+  /// One walk over the text content a text-painting instance draws.
+  struct TextSpanWalk {
+    bool claimsEffectSpans = false;        ///< Give outermost effect spans their own instances.
+    bool collectsPatterns = false;         ///< Record the patterns of the spans' own paint.
+    Entity ownFillPattern = entt::null;    ///< Pattern of the instance's own fill.
+    Entity ownStrokePattern = entt::null;  ///< Pattern of the instance's own stroke.
+    std::vector<SpanPatternPaint> patterns;
+    /// (pattern, kind) keys already in \ref patterns, so the walk stays linear in its spans.
+    std::unordered_set<std::uint64_t> recorded;
+    std::vector<Entity> effectSpans;
+  };
+
+  /// Records the pattern that \p entity's own fill or stroke references in \p walk, and
+  /// instantiates its tile content, unless the instance's own paint or an earlier span of the walk
+  /// already paints that pattern for the same kind of paint.
+  void collectSpanPattern(Entity entity, bool forStroke, TextSpanWalk& walk) {
+    const std::optional<PaintServer::ElementReference> paint =
+        spanPaintReference(entity, forStroke);
+    if (!paint.has_value()) {
       return;
     }
+    const auto resolved = paint->reference.resolve(registry_);
+    if (!resolved || !IsValidPaintServer(resolved->handle) ||
+        !resolved->handle.all_of<ComputedPatternComponent>()) {
+      return;
+    }
+    const Entity pattern = resolved->handle.entity();
+    if (pattern == (forStroke ? walk.ownStrokePattern : walk.ownFillPattern) ||
+        walk.patterns.size() >= kMaxSpanPatternPaints ||
+        !walk.recorded.insert(SpanPatternKey(pattern, forStroke)).second) {
+      return;
+    }
+    walk.patterns.push_back(SpanPatternPaint{
+        PaintResolvedReference{
+            *resolved, paint->fallback,
+            instantiateOffscreenSubtree(
+                EntityHandle(registry_, entity),
+                forStroke ? ShadowBranchType::OffscreenStroke : ShadowBranchType::OffscreenFill),
+            std::nullopt},
+        forStroke});
+  }
 
-    const auto visitChildren = [this, textRootEntity](Entity parent, auto& self) -> void {
-      for (Entity cur = registry_.get<donner::components::TreeComponent>(parent).firstChild();
-           cur != entt::null;
-           cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
-        if (textSpanDeclaresEffect(cur)) {
-          currentTextSpanRoot_ = textRootEntity;
-          traverseTree(cur);
-          currentTextSpanRoot_ = entt::null;
-        } else {
-          self(cur, self);
-        }
+  /// Visit the text content below \p parent for \p walk. Content that the text system hides, by
+  /// its own state or an ancestor's (\p parentHidden), paints no glyphs, so its paint records no
+  /// pattern.
+  void walkTextSpans(Entity parent, TextSpanWalk& walk, bool parentHidden = false) {
+    for (Entity cur = registry_.get<donner::components::TreeComponent>(parent).firstChild();
+         cur != entt::null;
+         cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
+      if (walk.claimsEffectSpans && textSpanDeclaresEffect(cur)) {
+        walk.effectSpans.push_back(cur);
+        continue;
       }
-    };
-    visitChildren(textRootEntity, visitChildren);
+      const bool hidden = IsTextHidden(EntityHandle(registry_, cur), parentHidden, userLanguages_);
+      if (walk.collectsPatterns && !hidden) {
+        collectSpanPattern(cur, /*forStroke=*/false, walk);
+        collectSpanPattern(cur, /*forStroke=*/true, walk);
+      }
+      walkTextSpans(cur, walk, hidden);
+    }
+  }
+
+  /**
+   * Walk the text content that the instance of \p treeEntity paints, once, when it paints text.
+   *
+   * A \ref xml_text element renders as a unit, so its descendants are never reached by the
+   * ordinary traversal. For a \ref xml_text root in the light tree, each outermost \ref xml_tspan
+   * or \ref xml_textPath that declares `clip-path`, `mask`, or `filter` gets its own rendering
+   * instance, so the driver wraps that span's glyphs in the effect's layer. Recursion stops at
+   * such a span: its instance paints the spans below it, and an effect nested inside another
+   * span's effect would need nested layers, which the span instance does not provide yet.
+   *
+   * When the instance's paint is resolved, the walk also instantiates the tile content of each
+   * distinct pattern that a span's own fill or stroke references other than the instance's own,
+   * recorded in \ref RenderingInstanceComponent::spanPatternPaints. That content is instantiated
+   * before the effect span instances, right after the instance's own paint content, which is the
+   * order in which the driver renders the tiles. Text whose spans reference no other pattern
+   * records nothing.
+   *
+   * @param treeEntity The entity just instantiated.
+   */
+  void traverseTextSpans(Entity treeEntity) {
+    const auto* instance = registry_.try_get<RenderingInstanceComponent>(treeEntity);
+    if (instance == nullptr) {
+      return;
+    }
+    const EntityHandle dataHandle = instance->dataHandle(registry_);
+    TextSpanWalk walk;
+    walk.claimsEffectSpans = registry_.all_of<TextRootComponent>(treeEntity);
+    if (!walk.claimsEffectSpans && instance->textSpanRoot == entt::null &&
+        !dataHandle.all_of<ComputedTextComponent>()) {
+      return;
+    }
+    walk.collectsPatterns = instance->visible;
+    walk.ownFillPattern = ReferencedPattern(instance->resolvedFill);
+    walk.ownStrokePattern = ReferencedPattern(instance->resolvedStroke);
+    walkTextSpans(dataHandle.entity(), walk);
+
+    if (!walk.patterns.empty()) {
+      registry_.get<RenderingInstanceComponent>(treeEntity).spanPatternPaints =
+          std::move(walk.patterns);
+    }
+    for (const Entity span : walk.effectSpans) {
+      currentTextSpanRoot_ = treeEntity;
+      traverseTree(span);
+      currentTextSpanRoot_ = entt::null;
+    }
   }
 #endif
 
@@ -729,7 +835,7 @@ public:
     }
 
 #ifdef DONNER_TEXT_ENABLED
-    traverseTextSpanEffects(treeEntity);
+    traverseTextSpans(treeEntity);
 #endif
 
     if (prepared->traverseChildren) {

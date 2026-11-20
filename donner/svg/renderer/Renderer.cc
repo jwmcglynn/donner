@@ -566,8 +566,8 @@ bool Renderer::beginPatternTile(const Box2d& tileRect, const Transform2d& target
   return impl_->beginPatternTile(tileRect, targetFromPattern);
 }
 
-void Renderer::endPatternTile(bool forStroke) {
-  impl_->endPatternTile(forStroke);
+void Renderer::endPatternTile(bool forStroke, std::optional<std::uint64_t> spanSlot) {
+  impl_->endPatternTile(forStroke, spanSlot);
 }
 
 void Renderer::setPaint(const PaintParams& paint) {
