@@ -3,6 +3,7 @@
 /// \c donner::gpu::browser::EmscriptenBrowserBridge - the bridge implementation that calls the
 /// browser.
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -147,6 +148,10 @@ private:
     const char* operation;
     std::function<BridgeStatus()> execute;
   };
+  /// Defers a call whose answer the caller does not wait for to this thread's next owner round
+  /// trip; see \ref BrowserDeferredCalls. A refusal is stored into this bridge's published state.
+  BridgeStatus deferCall(const char* operation, BrowserObjectId objectId,
+                         std::function<BridgeStatus()> execute, std::size_t payloadBytes = 0);
   BridgeStatus queueCommand(const char* operation, std::function<BridgeStatus()> command);
   BridgeStatus flushCommands();
   std::vector<PendingCommand> pendingCommands_;

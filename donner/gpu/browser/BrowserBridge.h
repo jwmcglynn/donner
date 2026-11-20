@@ -247,6 +247,10 @@ struct BrowserPublishedState {
   std::atomic<uint32_t> status{kUnpublished};
   /// Serial of the most recent submission the browser has reported finished.
   std::atomic<uint64_t> completedSerial{0};
+  /// Status, as a \ref BridgeStatus value, of the first call this logical device deferred that
+  /// the browser refused; Success while none has been. Stored by the owner round trip that ran the
+  /// call, and permanent: the device treats it as a loss.
+  std::atomic<uint32_t> deferredRefusal{0};
 };
 
 static_assert(std::atomic<uint32_t>::is_always_lock_free);

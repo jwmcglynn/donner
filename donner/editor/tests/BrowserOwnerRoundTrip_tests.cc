@@ -108,7 +108,7 @@ std::map<std::string, BridgeDispatch> ReadBridgeDispatch(const std::string& sour
     const std::size_t bodyEnd = source.find("\n}\n", bodyStart);
     const std::string body = source.substr(bodyStart, bodyEnd - bodyStart);
     BridgeDispatch dispatch;
-    dispatch.deferred = body.find("DeferCall(") != std::string::npos;
+    dispatch.deferred = body.find("deferCall(") != std::string::npos;
     if (std::smatch match; std::regex_search(body, match, kind)) {
       dispatch.kind = match[1];
     }

@@ -291,6 +291,13 @@ private:
   /// Publishes an observed browser loss to all devices sharing its loss condition.
   void recordBrowserLoss() const;
 
+  /// The status of the first call this device deferred that the browser refused, or Success.
+  BridgeStatus deferredRefusal() const;
+
+  /// Fails closed once the browser has refused a call this device deferred, declaring the loss.
+  /// @param operation Operation name for the error message.
+  Status checkDeferredRefusal(std::string_view operation) const;
+
   /// Ownership and loss together, from the state the browser side publishes once it does, and
   /// from a browser call before that. @return As \ref BrowserBridge::deviceStatus.
   BridgeStatus queryDeviceStatus() const;

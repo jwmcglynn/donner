@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -2771,6 +2772,51 @@ TEST(BrowserDevicePublishedState, ABridgeThatDoesNotPublishKeepsAskingTheBrowser
   // Without publication, a loss the browser records is seen on the next query.
   fixture.bridge->lost = true;
   EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsTrue());
+}
+
+// A call this device deferred that the browser refused surfaces at the device's next operation of
+// any kind, as a loss, and to every device sharing the loss condition, rather than being dropped.
+TEST(BrowserDeviceDeferredRefusal, TheNextOperationFailsClosedAndDeclaresTheLoss) {
+  const auto refused =
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("refused a call this device"));
+  for (const auto& [name, next] :
+       std::vector<std::pair<std::string, std::function<Status(BrowserDevice&, Buffer&)>>>{
+           {"writeBuffer",
+            [](BrowserDevice& device, Buffer& buffer) {
+              const std::array<uint8_t, 4> bytes{1, 2, 3, 4};
+              return device.writeBuffer(buffer, 0, bytes);
+            }},
+           {"createBuffer",
+            [](BrowserDevice& device, Buffer&) -> Status {
+              Result<Buffer> created = device.createBuffer(SimpleBuffer(BufferUsage::Vertex));
+              return created.hasError() ? std::move(created).error() : OkStatus();
+            }},
+       }) {
+    SCOPED_TRACE(name);
+    auto lostState = std::make_shared<DeviceLostState>();
+    auto bridge = std::make_unique<FakeBrowserBridge>();
+    FakeBrowserBridge* raw = bridge.get();
+    Result<std::unique_ptr<BrowserDevice>> device =
+        BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+    ASSERT_THAT(device, HasResult());
+    Result<Buffer> buffer = device.result()->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
+    ASSERT_THAT(buffer, HasResult());
+
+    raw->reportDeferredRefusal(BridgeStatus::UnknownObject);
+    const size_t callsBefore = raw->calls->size();
+    EXPECT_THAT(next(*device.result(), buffer.result()), refused);
+    EXPECT_EQ(raw->calls->size(), callsBefore) << "nothing reaches the browser after the refusal";
+    EXPECT_THAT(device.result()->isDeviceLost(), testing::IsTrue());
+    EXPECT_THAT(lostState->lost.load(), testing::IsTrue());
+  }
+}
+
+TEST(BrowserDeviceDeferredRefusal, AnUnrefusedDeviceIsUnaffected) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  EXPECT_EQ(fixture.bridge->publishedState().deferredRefusal.load(), 0u);
+  EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
+  EXPECT_THAT(fixture.device->isDeviceLost(), testing::IsFalse());
 }
 
 }  // namespace donner::gpu::browser
