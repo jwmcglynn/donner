@@ -215,17 +215,6 @@ public:
 };
 
 /**
- * The browser's GPU service, as the runtime uses it.
- *
- * One instance stands for one logical device: the state one runtime device keeps on the browser
- * side, which is its identifiers, its host mappings, its recording and the serial of its last
- * finished submission. Several logical devices in one worker share that worker's one browser
- * device and its queue, the way a renderer and the snapshot capture context beside it do, and
- * none of them may refuse, overwrite or release another's state. Implementations perform no
- * validation of their own beyond the identifier, kind and ownership checks each call documents:
- * everything else arrives already validated by \ref donner::gpu::Device.
- */
-/**
  * Liveness and completion that the browser side of one logical device publishes into memory its
  * owning thread can read, so that thread answers its ownership, loss and completion queries
  * without a synchronous browser call.
@@ -242,7 +231,9 @@ public:
  *   answered as live.
  *
  * The browser side stops storing when the logical device is released, which the bridge's
- * destructor does before the bridge, and this state inside it, goes away.
+ * destructor does before the bridge, and this state inside it, goes away. Reading it is not a
+ * browser call, so a read after the GPU owner has stopped does not fail closed by itself; the
+ * reader's next browser call does.
  */
 struct BrowserPublishedState {
   /// \ref status before the browser side has published anything: every query asks the browser.
@@ -261,6 +252,17 @@ struct BrowserPublishedState {
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
 
+/**
+ * The browser's GPU service, as the runtime uses it.
+ *
+ * One instance stands for one logical device: the state one runtime device keeps on the browser
+ * side, which is its identifiers, its host mappings, its recording and the serial of its last
+ * finished submission. Several logical devices in one worker share that worker's one browser
+ * device and its queue, the way a renderer and the snapshot capture context beside it do, and
+ * none of them may refuse, overwrite or release another's state. Implementations perform no
+ * validation of their own beyond the identifier, kind and ownership checks each call documents:
+ * everything else arrives already validated by \ref donner::gpu::Device.
+ */
 class BrowserBridge {
 public:
   /// Destructor; releases this logical device's state on the browser side. The browser device
@@ -290,8 +292,9 @@ public:
 
   /// Checks current ownership and loss together. Returns Success for an owned, live device,
   /// NotOwner for a missing device or foreign context, or DeviceLost for an owned, lost device.
-  /// Other statuses indicate a failed query. Implementations must not cache this state; the
-  /// browser side publishes it instead, through \ref beginPublishingState.
+  /// Other statuses indicate a failed query. Implementations answer from the browser's current
+  /// state rather than from a value they kept; a device that reads \ref publishedState instead
+  /// relies on the browser side storing each change as it happens.
   virtual BridgeStatus deviceStatus() const = 0;
 
   /// Whether the browser has reported the device lost. Once true it never becomes false again.

@@ -18,6 +18,7 @@
 #include "donner/editor/FrameCallbackAdmission.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/editor/wasm/BrowserGpuOwnerWait.h"
+#include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
@@ -215,8 +216,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE int donner_test_gpu_owner_libc_wait() {
   if (!device) {
     return 0;
   }
+  // Every runtime device of the browser editor is a browser device: its Geode root opens only
+  // browser devices.
   const auto result = donner::editor::wasm::ExerciseGpuOwnerLibcWaitForTesting(
-      std::shared_ptr<donner::gpu::Device>(device, &device->runtimeDevice()));
+      std::shared_ptr<donner::gpu::browser::BrowserDevice>(
+          device, &static_cast<donner::gpu::browser::BrowserDevice&>(device->runtimeDevice())));
   // clang-format off
   EM_ASM({
     globalThis['__donnerGpuOwnerWaitProbeResult'] = ({

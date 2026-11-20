@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -2607,50 +2608,136 @@ TEST(BrowserDevicePublishedState, AnswersOwnershipLossAndIdleCompletionWithoutBr
       << "a published live device with nothing pending needs no browser query";
 }
 
-TEST(BrowserDevicePublishedState, CompletionNeverRunsAheadOfWhatTheBrowserReported) {
-  BrowserFixture fixture = MakePublishingDevice();
-  ASSERT_THAT(fixture.device, testing::NotNull());
-  Result<Texture> target =
-      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
-  ASSERT_THAT(target, HasResult());
-  Result<TextureView> view =
-      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
-  ASSERT_THAT(view, HasResult());
-  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
-  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
-  ASSERT_EQ(fixture.device->lastSubmittedSerial(), 2u);
+/// A clock a test steps by hand, for the completion-progress interval.
+std::atomic<int64_t> gProgressClockTicks{1'000'000};
 
-  // The browser has finished nothing yet, so the device reports nothing finished.
+BrowserDevice::ProgressClock::time_point SteppedProgressClock() {
+  return BrowserDevice::ProgressClock::time_point(
+      BrowserDevice::ProgressClock::duration(gProgressClockTicks.load()));
+}
+
+/// Advances the stepped clock. @param by How far.
+void StepProgressClock(std::chrono::nanoseconds by) {
+  gProgressClockTicks +=
+      std::chrono::duration_cast<BrowserDevice::ProgressClock::duration>(by).count();
+}
+
+/// A publishing device with one submission the browser has not finished, on the stepped clock.
+BrowserFixture MakePublishingDeviceWithPendingWork() {
+  BrowserFixture fixture = MakePublishingDevice();
+  if (fixture.device == nullptr) {
+    return fixture;
+  }
+  fixture.device->setProgressClockForTesting(&SteppedProgressClock);
+  {
+    Result<Texture> target =
+        fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+    EXPECT_THAT(target, HasResult());
+    if (target.hasError()) {
+      return fixture;
+    }
+    Result<TextureView> view =
+        fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+    EXPECT_THAT(view, HasResult());
+    if (!view.hasError()) {
+      EXPECT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())),
+                  HasResult());
+    }
+  }
+  // Releasing the target reads completion to retire it; start each test outside the interval
+  // that opened.
+  StepProgressClock(BrowserDevice::kCompletionProgressInterval);
+  return fixture;
+}
+
+TEST(BrowserDevicePublishedState, CompletionNeverRunsAheadOfWhatTheBrowserPublished) {
+  BrowserFixture fixture = MakePublishingDeviceWithPendingWork();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  ASSERT_EQ(fixture.device->lastSubmittedSerial(), 1u);
+  // The first poll of unfinished work asks the browser, which has finished nothing yet.
   EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  const uint64_t asked = fixture.bridge->queries->completedSerial;
+
+  // The browser side has moved on but not published it: inside the interval the device reads the
+  // published serial, so it reports nothing finished rather than the browser's own value.
+  fixture.bridge->completed = 1;
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, asked) << "a published read, not a query";
+
   fixture.bridge->completeThrough(1);
   EXPECT_THAT(fixture.device->completedSerial(), 1u);
   EXPECT_THAT(fixture.device->waitForSerial(1, 10.0), testing::IsTrue());
-  fixture.bridge->completeThrough(2);
-  EXPECT_THAT(fixture.device->completedSerial(), 2u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, asked)
+      << "finished work needs no further browser call";
 }
 
-TEST(BrowserDevicePublishedState, PendingWorkStillAsksTheBrowserForProgressAtABoundedRate) {
-  BrowserFixture fixture = MakePublishingDevice();
+TEST(BrowserDevicePublishedState, PendingWorkAsksTheBrowserForProgressOncePerInterval) {
+  BrowserFixture fixture = MakePublishingDeviceWithPendingWork();
   ASSERT_THAT(fixture.device, testing::NotNull());
-  Result<Texture> target =
-      fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
-  ASSERT_THAT(target, HasResult());
-  Result<TextureView> view =
-      fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
-  ASSERT_THAT(view, HasResult());
-  ASSERT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())), HasResult());
 
   // A browser may hold a completion until another queue operation, which only its completion
   // query requests, so unfinished work keeps asking, but not on every poll.
   const uint64_t before = fixture.bridge->queries->completedSerial;
   EXPECT_THAT(fixture.device->completedSerial(), 0u);
   EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 1);
+  StepProgressClock(BrowserDevice::kCompletionProgressInterval - std::chrono::nanoseconds(1));
   EXPECT_THAT(fixture.device->completedSerial(), 0u);
   EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 1)
-      << "a second poll inside the progress interval reads the published serial";
-  std::this_thread::sleep_for(BrowserDevice::kCompletionProgressInterval * 2);
+      << "a poll inside the interval reads the published serial";
+  StepProgressClock(std::chrono::nanoseconds(1));
   EXPECT_THAT(fixture.device->completedSerial(), 0u);
   EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 2);
+}
+
+TEST(BrowserDevicePublishedState, AnotherThreadSharesTheProgressInterval) {
+  BrowserFixture fixture = MakePublishingDeviceWithPendingWork();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  const uint64_t before = fixture.bridge->queries->completedSerial;
+  // The owner-wait probe reads completion from a second thread. The interval it claims is the
+  // device's, so the owning thread does not ask again inside it.
+  std::thread other([&] { EXPECT_THAT(fixture.device->completedSerial(), 0u); });
+  other.join();
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 1);
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 1);
+  StepProgressClock(BrowserDevice::kCompletionProgressInterval);
+  EXPECT_THAT(fixture.device->completedSerial(), 0u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 2);
+}
+
+TEST(BrowserDevicePublishedState, TheBrowserCompletionQueryForTestingAlwaysAsks) {
+  BrowserFixture fixture = MakePublishingDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  const uint64_t before = fixture.bridge->queries->completedSerial;
+  fixture.bridge->completed = 3;
+  EXPECT_EQ(fixture.device->completedSerialFromBrowserForTesting(), 3u);
+  EXPECT_EQ(fixture.device->completedSerialFromBrowserForTesting(), 3u);
+  EXPECT_EQ(fixture.bridge->queries->completedSerial, before + 2);
+}
+
+TEST(BrowserDevicePublishedState, ALossPublishedDuringAYieldingWaitEndsTheWait) {
+  BrowserFixture fixture = MakePublishingDeviceWithPendingWork();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  fixture.bridge->onYield = [&] { fixture.bridge->reportLoss(RcString("lost while waiting")); };
+  EXPECT_THAT(fixture.device->waitForSerial(1, 3600.0), testing::IsFalse());
+  EXPECT_EQ(fixture.bridge->yieldCount, 1u) << "the wait gives up at its first look after the loss";
+  EXPECT_THAT(fixture.device->isLost(), testing::IsTrue());
+}
+
+TEST(BrowserDevicePublishedState, PublishingOnAnAlreadyLostDevicePublishesTheLoss) {
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  bridge->publishes = true;
+  bridge->lost = true;
+  FakeBrowserBridge* raw = bridge.get();
+  Result<std::unique_ptr<BrowserDevice>> device =
+      BrowserDeviceRequest::Begin(std::move(bridge)).take();
+  ASSERT_THAT(device, HasResult());
+  EXPECT_EQ(raw->publishedState().status.load(), BrowserPublishedState::kLost);
+  const uint64_t before = BrowserQueries(*raw);
+  EXPECT_THAT(device.result()->createBuffer(SimpleBuffer(BufferUsage::Vertex)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("was lost")));
+  EXPECT_THAT(device.result()->isDeviceLost(), testing::IsTrue());
+  EXPECT_EQ(BrowserQueries(*raw), before) << "the published loss answers without a query";
 }
 
 TEST(BrowserDevicePublishedState, PublishedLossFailsEveryOperationClosed) {

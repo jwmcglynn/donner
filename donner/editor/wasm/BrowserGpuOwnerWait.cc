@@ -14,6 +14,7 @@
 #include <limits>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 
 extern "C" int __real_emscripten_futex_wait(volatile void* address, uint32_t value,
@@ -28,7 +29,7 @@ struct OwnerWaitProbe {
   double ownerDeadline = 0.0;
   uint64_t serial = 0;
   bool producerIsGpuOwner = false;
-  std::shared_ptr<donner::gpu::Device> device;
+  std::shared_ptr<donner::gpu::browser::BrowserDevice> device;
 };
 
 // Only the owner accesses this anchor. Retain it on failure even if abort throws in JavaScript;
@@ -116,7 +117,8 @@ void* RunOwnerWaitProbeProducer(void* context) {
   if (request->producerIsGpuOwner) {
     std::abort();
   }
-  request->serial = request->device->completedSerial();
+  // A real browser call, not the published serial, so this round trip has to run on the owner.
+  request->serial = request->device->completedSerialFromBrowserForTesting();
   request->complete.store(1, std::memory_order_release);
   emscripten_futex_wake(&request->complete, 1);
   return nullptr;
@@ -145,7 +147,7 @@ double JoinOwnerWaitProbe(pthread_t producer, OwnerWaitProbe& request, double de
 namespace donner::editor::wasm {
 
 OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(
-    const std::shared_ptr<gpu::Device>& device) {
+    const std::shared_ptr<gpu::browser::BrowserDevice>& device) {
   if (!device || !gpu::browser::IsBrowserGpuOwnerThread() ||
       gpu::browser::IsBrowserGpuOwnerDispatchActive() || gOwnerWaitProbe) {
     std::abort();

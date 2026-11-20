@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <memory>
 
-namespace donner::gpu {
-class Device;
+namespace donner::gpu::browser {
+class BrowserDevice;
 }
 
 namespace donner::editor::wasm {
@@ -22,5 +22,6 @@ struct OwnerWaitProbeResult {
 /// SDK blocking futex slices share that deadline, including post-exit join synchronization.
 /// A failed probe retains
 /// one bounded shared request until module teardown; successful return requires producer joining.
-OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(const std::shared_ptr<gpu::Device>& device);
+OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(
+    const std::shared_ptr<gpu::browser::BrowserDevice>& device);
 }  // namespace donner::editor::wasm

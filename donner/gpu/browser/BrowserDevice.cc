@@ -355,12 +355,20 @@ uint64_t BrowserDevice::queryCompletedSerial() const {
                          BrowserPublishedState::kUnpublished) {
     const uint64_t published =
         bridge_->publishedState().completedSerial.load(std::memory_order_acquire);
-    const auto now = std::chrono::steady_clock::now();
-    if (published >= lastSubmittedSerial() ||
-        now - lastCompletionProgressRequest_ < kCompletionProgressInterval) {
+    if (published >= lastSubmittedSerial()) {
       return published;
     }
-    lastCompletionProgressRequest_ = now;
+    // Claim this interval's browser call; a caller that loses the claim to another thread, or
+    // asks inside the interval, reads the published serial instead.
+    const ProgressClock::rep now = progressClock_().time_since_epoch().count();
+    ProgressClock::rep last = lastCompletionProgressTicks_.load(std::memory_order_relaxed);
+    const ProgressClock::rep interval =
+        std::chrono::duration_cast<ProgressClock::duration>(kCompletionProgressInterval).count();
+    if ((last != kNeverAskedForProgress && now - last < interval) ||
+        !lastCompletionProgressTicks_.compare_exchange_strong(last, now,
+                                                              std::memory_order_relaxed)) {
+      return published;
+    }
   }
   return bridge_->completedSerial();
 }

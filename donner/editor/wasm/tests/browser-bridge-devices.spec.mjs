@@ -943,3 +943,36 @@ test("a completion after release stores nothing into the released words", async 
   assert.equal(bridge.read64(serial), 0n, "the runtime may already have reused the released words");
   assert.equal(bridge.read(status), bridge.state.kPublishedLive);
 });
+
+test("a loss reaches every logical device publishing over the browser device", async () => {
+  const bridge = loadLibrary();
+  await beginReady(bridge, kFirst);
+  await beginReady(bridge, kSecond);
+  const words = [kFirst, kSecond].map((handle) => {
+    const status = bridge.reserve(8);
+    const serial = bridge.reserve(8);
+    assert.equal(bridge.entryPoints.donner_gpu_publish_state(handle, status, serial), 1);
+    return status;
+  });
+  assert.deepEqual(words.map((status) => bridge.read(status)), [
+    bridge.state.kPublishedLive,
+    bridge.state.kPublishedLive,
+  ]);
+  bridge.lose({ reason: "destroyed", message: "test loss" });
+  await drain();
+  assert.deepEqual(words.map((status) => bridge.read(status)), [
+    bridge.state.kPublishedLost,
+    bridge.state.kPublishedLost,
+  ]);
+});
+
+test("publishing on a device that is already lost publishes the loss", async () => {
+  const bridge = loadLibrary();
+  await beginReady(bridge, kFirst);
+  bridge.lose({ reason: "destroyed", message: "test loss" });
+  await drain();
+  const status = bridge.reserve(8);
+  const serial = bridge.reserve(8);
+  assert.equal(bridge.entryPoints.donner_gpu_publish_state(kFirst, status, serial), 1);
+  assert.equal(bridge.read(status), bridge.state.kPublishedLost);
+});
