@@ -2172,6 +2172,23 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_decoration_paint_server_tests",
+    srcs = ["TextDecorationPaintServer_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":decoration_test_scene",
+        ":image_comparison_test_fixture",
+        ":rgba_test_matchers",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_decoration_paint_order_tests",
     srcs = ["TextDecorationPaintOrder_tests.cc"],
     opens_gpu_device = True,
