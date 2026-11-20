@@ -56,9 +56,44 @@ class LintChangesTest(unittest.TestCase):
         self.assertEqual(len(phases), 2)
         self.assertEqual([command[-1] for _, command in phases], ["new \nfile.py"] * 2)
         self.assertFalse(lint.requires_bazel(lint.changed_paths(base)))
-        event["pull_request"]["head"]["sha"] = self.first
-        with self.assertRaisesRegex(ValueError, "tested pull request merge"):
-            lint.base_tree("pull_request", event, self.head)
+
+    def test_base_branch_advanced_after_the_payload_base(self):
+        # GitHub merges into the base branch tip of when the run starts. The payload keeps the
+        # older base commit, which this depth-two checkout does not even contain.
+        event = {"pull_request": {"base": {"sha": self.first}, "head": {"sha": self.feature}}}
+        base = lint.base_tree("pull_request", event, self.head)
+        self.assertEqual(base, self.base)
+        self.assertEqual(lint.changed_paths(base), ["new \nfile.py"])
+        self.assertNotEqual(subprocess.run(["git", "cat-file", "-e", self.first],
+                                           stderr=subprocess.DEVNULL).returncode, 0)
+
+    def test_checkout_must_be_the_event_commit(self):
+        event = {"pull_request": {"base": {"sha": self.base}, "head": {"sha": self.feature}}}
+        with self.assertRaisesRegex(ValueError, f"Checkout {self.head} is not the event commit {self.base}"):
+            lint.base_tree("pull_request", event, self.base)
+
+    def test_merge_second_parent_must_be_the_payload_head(self):
+        for head in (self.base, self.first):
+            event = {"pull_request": {"base": {"sha": self.base}, "head": {"sha": head}}}
+            with self.subTest(head=head), self.assertRaisesRegex(
+                    ValueError, f"Checkout {self.head} is not a merge of pull request head {head} "
+                                f"\\(parents: {self.base} {self.feature}\\)"):
+                lint.base_tree("pull_request", event, self.head)
+
+    def test_non_merge_checkout_is_rejected(self):
+        git("config", "user.email", "tests@example.invalid")
+        git("config", "user.name", "Test")
+        git("commit", "--allow-empty", "-m", "single parent")
+        single = git("rev-parse", "HEAD")
+        event = {"pull_request": {"base": {"sha": self.base}, "head": {"sha": self.head}}}
+        with self.assertRaisesRegex(ValueError, f"Checkout {single} is not a merge of pull request head "
+                                                f"{self.head} \\(parents: {self.head}\\)"):
+            lint.base_tree("pull_request", event, single)
+        # The shallow boundary commit shows no parents at all.
+        git("checkout", "--detach", self.feature)
+        event["pull_request"]["head"]["sha"] = self.feature
+        with self.assertRaisesRegex(ValueError, "\\(parents: none\\)"):
+            lint.base_tree("pull_request", event, self.feature)
 
     def test_batch_push_fetches_the_exact_missing_before_commit(self):
         before = {"before": self.first, "after": self.head}
