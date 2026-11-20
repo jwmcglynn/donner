@@ -5641,4 +5641,141 @@ INSTANTIATE_TEST_SUITE_P(
       return std::string(info.param.name);
     });
 
+/// A document with an element that draws mask, marker or pattern content.
+struct DrawnContentCase {
+  const char* name;         ///< Case name.
+  std::string_view source;  ///< Document source.
+  /// Selector of an element to promote explicitly, or null when the element gets a layer by itself.
+  const char* promote;
+};
+
+void PrintTo(const DrawnContentCase& value, std::ostream* os) {
+  *os << value.name;
+}
+
+/// A masked rect with no children, between two plain rects.
+constexpr std::string_view kMaskedLeafBetweenContent = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect width="96" height="48" fill="#c60" mask="url(#m)" transform="translate(0 40)"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// A masked rect with no children as the last element of the document.
+constexpr std::string_view kMaskedLeafLast = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect width="96" height="48" fill="#c60" mask="url(#m)" transform="translate(0 40)"/>
+  </svg>)svg";
+
+/// A masked rect whose mask content is itself masked.
+constexpr std::string_view kMaskedLeafWithMaskedMaskContent = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <mask id="inner" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <circle cx="60" cy="24" r="14" fill="white"/>
+      </mask>
+      <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="white" mask="url(#inner)"/>
+      </mask>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect width="96" height="48" fill="#c60" mask="url(#m)" transform="translate(0 40)"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// A translucent rect with no children painted with a pattern, between two plain rects.
+constexpr std::string_view kTranslucentPatternLeaf = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="16" height="16">
+        <rect width="8" height="16" fill="#c60"/>
+      </pattern>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect id="target" x="8" y="40" width="80" height="40" fill="url(#p)" opacity="0.5"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// A translucent path with a marker, between two plain rects.
+constexpr std::string_view kTranslucentMarkerLeaf = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <marker id="mk" markerUnits="userSpaceOnUse" markerWidth="24" markerHeight="24" refX="12"
+              refY="12" overflow="visible">
+        <circle cx="12" cy="12" r="10" fill="#c60"/>
+      </marker>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <path id="target" d="M 20 60 L 76 60" stroke="#333" stroke-width="2" fill="none"
+          marker-start="url(#mk)" marker-end="url(#mk)" opacity="0.5"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+/// An opaque rect with no children painted with a pattern, between two plain rects.
+constexpr std::string_view kPatternLeaf = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="16" height="16">
+        <rect width="8" height="16" fill="#c60"/>
+      </pattern>
+    </defs>
+    <rect width="96" height="96" fill="#eee"/>
+    <rect id="target" x="8" y="40" width="80" height="40" fill="url(#p)"/>
+    <rect x="8" y="8" width="20" height="20" fill="#06c"/>
+  </svg>)svg";
+
+class CompositorDrawnContentTest : public testing::TestWithParam<DrawnContentCase> {};
+
+// Mask, marker and pattern content is instantiated after the element that draws it, so it follows
+// that element in paint order. Frames composed from tiles must draw it only through the element:
+// the first frame is drawn flat, so the later frames are the ones composed from tiles.
+TEST_P(CompositorDrawnContentTest, ComposedFramesMatchFreshRender) {
+  const DrawnContentCase& item = GetParam();
+  SVGDocument document = parseDocument(item.source);
+  SVGDocument reference = parseDocument(item.source);
+  document.setCanvasSize(96, 96);
+  reference.setCanvasSize(96, 96);
+  const RenderViewport viewport{Vector2d(96, 96)};
+
+  svg::Renderer renderer;
+  CompositorController compositor(document, renderer);
+  for (int frame = 0; frame < 3; ++frame) {
+    if (frame == 1 && item.promote != nullptr) {
+      const Entity target = document.querySelector(item.promote)->unsafeEntityHandle().entity();
+      (void)compositor.promoteEntity(target, InteractionHint::Selection);
+    }
+    compositor.renderFrame(viewport);
+    svg::Renderer referenceRenderer;
+    RendererDriver(referenceRenderer).draw(reference, viewport, Transform2d());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), referenceRenderer.takeSnapshot(),
+                                         std::string(item.name) + "_frame" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Content, CompositorDrawnContentTest,
+    testing::Values(
+        DrawnContentCase{"masked_leaf_between_content", kMaskedLeafBetweenContent, nullptr},
+        DrawnContentCase{"masked_leaf_last", kMaskedLeafLast, nullptr},
+        DrawnContentCase{"masked_leaf_with_masked_mask_content", kMaskedLeafWithMaskedMaskContent,
+                         nullptr},
+        DrawnContentCase{"translucent_pattern_leaf", kTranslucentPatternLeaf, nullptr},
+        DrawnContentCase{"translucent_marker_leaf", kTranslucentMarkerLeaf, nullptr},
+        DrawnContentCase{"promoted_pattern_leaf", kPatternLeaf, "#target"}),
+    [](const testing::TestParamInfo<DrawnContentCase>& info) {
+      return std::string(info.param.name);
+    });
+
 }  // namespace donner::svg::compositor

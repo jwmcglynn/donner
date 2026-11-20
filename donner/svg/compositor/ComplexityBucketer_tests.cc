@@ -365,4 +365,29 @@ TEST_F(ComplexityBucketerTest, BudgetZeroProducesNothing) {
   EXPECT_EQ(bucketer.stats().bucketsPublished, 0u) << "but zero published under zero budget";
 }
 
+TEST_F(ComplexityBucketerTest, ContentDrawnForAnElementIsNotBucketed) {
+  // A masked leaf followed by its mask content, which is itself masked. The mask content is
+  // instantiated after the leaf and reaches the frame only through it.
+  const Entity root = makeInstance();
+  const Entity host = makeInstance();
+  const Entity maskContentFirst = makeInstance();
+  const Entity maskContentLast = makeInstance();
+  int drawOrder = 0;
+  for (const Entity entity : {root, host, maskContentFirst, maskContentLast}) {
+    registry_.get<RenderingInstanceComponent>(entity).drawOrder = drawOrder++;
+  }
+  components::ResolvedMask mask;
+  mask.subtreeInfo = SubtreeInfo{maskContentFirst, maskContentLast};
+  registry_.get<RenderingInstanceComponent>(host).mask = mask;
+  registry_.get<RenderingInstanceComponent>(maskContentLast).mask = components::ResolvedMask{};
+
+  ComplexityBucketer bucketer;
+  bucketer.reconcile(registry_);
+
+  EXPECT_EQ(countHints(host, HintSource::ComplexityBucket), 1u);
+  EXPECT_EQ(countHints(maskContentFirst, HintSource::ComplexityBucket), 0u);
+  EXPECT_EQ(countHints(maskContentLast, HintSource::ComplexityBucket), 0u);
+  EXPECT_EQ(bucketer.stats().candidatesConsidered, 1u);
+}
+
 }  // namespace donner::svg::compositor
