@@ -2,6 +2,7 @@
 /// @file
 /// Dispatches browser GPU primitives to the editor's canvas-owning application thread.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -27,6 +28,15 @@ enum class BrowserGpuOperationKind {
   BindGroupConstruction,
   PipelineConstruction,
 };
+
+/// Number of \ref BrowserGpuOperationKind values; per-kind totals are indexed by the enum value.
+inline constexpr std::size_t kBrowserGpuOperationKindCount =
+    static_cast<std::size_t>(BrowserGpuOperationKind::PipelineConstruction) + 1;
+
+/// Inclusive upper bounds, in microseconds, of the request-to-start latency buckets of
+/// \ref BrowserGpuOwnerDispatchTotals; a last bucket holds every longer latency.
+inline constexpr std::array<std::uint32_t, 7> kBrowserGpuOwnerStartLatencyBucketUpperUs = {
+    50, 100, 250, 1000, 4000, 16000, 64000};
 
 /// Record an attempted cross-owner buffer-write size without reading payloads or resource ids.
 /// Owner-local calls are excluded. @param bytes Borrowed payload size before dispatch.
@@ -91,6 +101,37 @@ struct BrowserGpuOwnerDispatchTotals {
   std::uint32_t waitSliceTimeouts = 0;
   /// Saturating wall time requesting threads spent blocked on dispatches, in microseconds.
   std::uint32_t dispatchWaitUs = 0;
+  /// Dispatches requested by the thread reading the totals. Thread-local, so it wraps
+  /// independently of \ref requested.
+  std::uint32_t requestedByCallingThread = 0;
+  /// Dispatches requested from every client thread, indexed by \ref BrowserGpuOperationKind.
+  std::array<std::uint32_t, kBrowserGpuOperationKindCount> requestedByKind{};
+
+  // The phases below partition each completed dispatch's blocked time, are added when the
+  // requesting thread observes completion, and saturate in microseconds. Phase boundaries are
+  // read on the requesting thread and on the owner; pthread builds report absolute time on every
+  // thread, so they compare across threads to within the browser's timer resolution.
+
+  /// From the request until the owner received it: the owner was busy elsewhere or waking.
+  std::uint32_t deliveryUs = 0;
+  /// From the owner's receipt until execution started: queued behind an active canvas frame, a
+  /// running batch, the inline budget or earlier requests.
+  std::uint32_t ownerQueueUs = 0;
+  /// Execution of the dispatched operations on the owner.
+  std::uint32_t executeUs = 0;
+  /// From the owner's completion until the requesting thread observed it.
+  std::uint32_t completionWakeUs = 0;
+  /// Completed dispatches by request-to-start latency (delivery plus owner queue), bucketed by
+  /// \ref kBrowserGpuOwnerStartLatencyBucketUpperUs with a final unbounded bucket.
+  std::array<std::uint32_t, kBrowserGpuOwnerStartLatencyBucketUpperUs.size() + 1>
+      startLatencyBuckets{};
+  /// Saturating owner time with an active canvas frame, during which no dispatch starts, in
+  /// microseconds. Added when each canvas frame ends.
+  std::uint32_t canvasFrameActiveUs = 0;
+  /// Canvas frames that ended.
+  std::uint32_t canvasFrames = 0;
+  /// Requests the owner received while a canvas frame was active.
+  std::uint32_t receivedDuringCanvasFrame = 0;
 };
 
 /// Read the dispatch totals without synchronizing with dispatches in flight. All zero without a

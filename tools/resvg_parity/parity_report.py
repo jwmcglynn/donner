@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import csv
 import hashlib
 from dataclasses import dataclass
@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 import sys
 from typing import Iterable, Sequence, TextIO
@@ -371,7 +372,7 @@ def _parse_overrides(
 # ImageComparisonParams (ImageComparisonTestFixture.h) or resvg_test_suite.cc gains a new one.
 PARAMS_FACTORIES = {"Skip", "UndefinedBehavior", "DeprecatedInSVG2", "WithThreshold",
                     "WithGoldenOverride", "RenderOnly"}
-PARAMS_FREE_HELPERS = {"Params", "WithMaxPixels", "ResvgV049Reference"}
+PARAMS_FREE_HELPERS = {"Params", "WithMaxPixels"}
 PARAMS_BUILDER_METHODS = {
     "withReason", "withGeodeGoldenOverride", "includeAntiAliasingDifferences",
     "enableGoldenUpdateFromEnv", "setCanvasSize", "disableBackend", "requireFeature",
@@ -803,6 +804,44 @@ CORPUS_LANES = {
 }
 DEFAULT_THRESHOLD = 0.02
 DEFAULT_MAX_PIXELS = 100
+# A render-only case compares with no image, so the harness keeps the suite's original canvas.
+RENDER_ONLY_CANVAS = [500, 500]
+# The PNG signature, then the IHDR chunk's length (13) and type; the width and height follow.
+_PNG_HEADER_PREFIX = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
+_MAX_REFERENCE_DIMENSION = 16384
+
+
+def reference_canvas_size(path: Path) -> list[int | None]:
+    """Return the canvas the harness derives from a reference PNG, as [width, height].
+
+    The resvg suite renders each reference by fitting the document into a square canvas, so the
+    canvas is the square of the image's longer side: a 500x250 reference comes from a 500x500
+    canvas. Only the PNG signature and IHDR header are read. A reference that is missing, not a
+    PNG or outside 1 to 16384 pixels gives [None, None], an unresolved canvas: the harness fails
+    that comparison instead of guessing a size.
+    """
+
+    dimensions = png_dimensions(path)
+    if dimensions is None:
+        return [None, None]
+    side = max(dimensions)
+    return [side, side]
+
+
+def png_dimensions(path: Path) -> tuple[int, int] | None:
+    """Return a PNG's (width, height) from its IHDR header, or None as reference_canvas_size."""
+
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(24)
+    except OSError:
+        return None
+    if len(header) < 24 or not header.startswith(_PNG_HEADER_PREFIX):
+        return None
+    width, height = struct.unpack(">II", header[16:24])
+    if not (0 < width <= _MAX_REFERENCE_DIMENSION and 0 < height <= _MAX_REFERENCE_DIMENSION):
+        return None
+    return width, height
 
 
 def _number(expression: str, *, integer: bool = False) -> int | float | None:
@@ -833,7 +872,6 @@ _ARGUMENT_SETTINGS = {
 }
 _CONSTANT_SETTINGS = {
     "includeAntiAliasingDifferences": {"include_antialiasing": True},
-    "ResvgV049Reference": {"canvas_size": [300, 300]},
 }
 _SETTING_CALLS = {*_ARGUMENT_SETTINGS, *_CONSTANT_SETTINGS, "setCanvasSize"}
 
@@ -852,7 +890,8 @@ def _check_numeric_settings(settings: dict[str, object], expression: str) -> Non
     canvas = settings["canvas_size"]
     if ((threshold is not None and (not math.isfinite(threshold) or not 0 <= threshold <= 1))
             or (budget is not None and budget < 0)
-            or len(canvas) != 2 or any(value is not None and value <= 0 for value in canvas)):
+            or (canvas is not None and (
+                len(canvas) != 2 or any(value is not None and value <= 0 for value in canvas)))):
         raise ParityReportError(f"invalid numeric comparison settings: {expression!r}")
 
 
@@ -865,7 +904,8 @@ def _settings_from_params(expression: str) -> dict[str, object]:
         "shared_golden": None,
         "geode_golden": None,
         "include_antialiasing": False,
-        "canvas_size": [500, 500],
+        # None until setCanvasSize() names one: the canvas then comes from the lane's reference.
+        "canvas_size": None,
     }
     for _, name, args in sorted(_iter_named_calls(expression, _SETTING_CALLS)):
         settings.update(_settings_for_call(name, args))
@@ -909,23 +949,36 @@ def _lane_reference(path: str, config: dict[str, object], geode: bool) -> dict[s
     }
 
 
-def _case_lanes(case: dict[str, object]) -> dict[str, object]:
+def _lane_canvas(
+    case: dict[str, object], config: dict[str, object], reference: str, repo_root: Path
+) -> list[int | None]:
+    """Return the lane's canvas as the harness resolves it (resvg_test_suite.cc)."""
+
+    if config["canvas_size"] is not None:
+        return config["canvas_size"]
+    if case["primary_state"] == "render-only":
+        return list(RENDER_ONLY_CANVAS)
+    return reference_canvas_size(repo_root / reference)
+
+
+def _case_lanes(case: dict[str, object], repo_root: Path) -> dict[str, object]:
     config = _settings_from_params(case["raw_params_expression"])
     lanes = {}
     for lane, (mode, capabilities) in CORPUS_LANES.items():
         geode = lane == "geode"
         missing = sorted(set(case["backend_requirements"]) - capabilities)
+        reference = _lane_reference(case["path"], config, geode)
         lanes[lane] = {
             "mode": mode,
             "text_configuration": "full" if lane == "max" else "simple",
             "configured_state": _lane_state(case, "geode" if geode else "tiny-skia", missing),
             "missing_features": missing,
             "settings": {
-                "canvas_size": config["canvas_size"],
+                "canvas_size": _lane_canvas(case, config, reference["path"], repo_root),
                 "include_antialiasing": config["include_antialiasing"],
                 "max_pixels": _lane_budget(config, lane),
                 "threshold": config["threshold"],
-                "reference": _lane_reference(case["path"], config, geode),
+                "reference": reference,
             },
             "observed": "unobserved",
         }
@@ -1116,6 +1169,26 @@ def add_execution(
     report["lane_summary"] = _execution_summary(report)
 
 
+def unresolved_canvas_violations(report: dict[str, object]) -> list[str]:
+    """Return the active lanes whose reference gives no canvas; the harness fails them."""
+
+    return sorted(
+        f"{case['path']} ({lane}): no canvas from reference {settings['reference']['path']}"
+        for case in report["cases"] if case["registration"] == "active"
+        for lane, settings in ((name, entry["settings"]) for name, entry in case["lanes"].items())
+        if None in settings["canvas_size"]
+    )
+
+
+def _repo_root_of_tests_root(tests_root: Path) -> Path:
+    """Return the repository root holding tests_root, which must end in TESTS_ROOT."""
+
+    depth = len(TESTS_ROOT.parts)
+    if tests_root.parts[-depth:] != TESTS_ROOT.parts:
+        raise ParityReportError(f"vendored tests root does not end in {TESTS_ROOT}: {tests_root}")
+    return tests_root.parents[depth - 1]
+
+
 def build_report(source: str, tests_root: Path) -> dict[str, object]:
     """Join parsed source registrations to the vendored SVG corpus."""
 
@@ -1131,8 +1204,9 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
         pixel_budget_sources += _pixel_budget_source_count(registration)
         cases.extend(_registration_cases(registration, vendored[registration.category]))
     cases.sort(key=lambda item: str(item["path"]))
+    repo_root = _repo_root_of_tests_root(tests_root)
     for case in cases:
-        case["lanes"] = _case_lanes(case)
+        case["lanes"] = _case_lanes(case, repo_root)
 
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -1156,15 +1230,107 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
 
 
 UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
+# Vendored files that are byte-identical to the resvg v0.50.0 release tag's
+# crates/resvg/tests/ tree, in `sha256sum` format relative to the suite root; the provenance is in
+# third_party/resvg-test-suite/BUILD.bazel.
+UPSTREAM_RELEASE_MANIFEST = Path("third_party/resvg-test-suite/resvg-v0.50.0.sha256")
+UPSTREAM_RELEASE_NOTES = Path("third_party/resvg-test-suite/BUILD.bazel")
+_MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (tests/[^\s].*)")
 
-# `Params::UndefinedBehavior` cases whose vendored reference is not the resvg UB marker image. Each
-# entry must be behavior the specification leaves undefined or implementation-defined.
-SPEC_UB_ALLOWLIST = {
+
+def _manifest_line_violation(line: str, suite_root: Path, seen: set[str]) -> str | None:
+    match = _MANIFEST_LINE.fullmatch(line)
+    if match is None:
+        return f"malformed line {line!r}"
+    digest, relative = match.groups()
+    path = Path(relative)
+    if ".." in path.parts or "." in path.parts or relative != path.as_posix():
+        return f"{relative}: not a normalized path under tests/"
+    if relative in seen:
+        return f"{relative}: listed more than once"
+    seen.add(relative)
+    try:
+        actual = hashlib.sha256((suite_root / path).read_bytes()).hexdigest()
+    except OSError:
+        return f"{relative}: listed file is missing"
+    if actual != digest:
+        return f"{relative}: SHA-256 is {actual}, not the recorded {digest}"
+    return None
+
+
+_MANIFEST_NOTE = re.compile(
+    r"The\s+(\d+)\s+files\s+listed\s+in\s+resvg-v0\.50\.0\.sha256\s+\((\d+)\s+PNGs,\s+each\s+"
+    r"(\d+)x(\d+),\s+and\s+(\d+)\s+SVGs\)"
+)
+
+
+def upstream_release_note_violations(manifest: str, notes: str, suite_root: Path) -> list[str]:
+    """Return how the manifest disagrees with the counts and PNG size its provenance notes state.
+
+    The notes (third_party/resvg-test-suite/BUILD.bazel) say how many files the manifest lists, how
+    many are PNGs and SVGs, and the size of every PNG; this keeps that sentence true.
+    """
+
+    stated = _MANIFEST_NOTE.findall(notes)
+    if len(stated) != 1:
+        return ["the provenance notes need one sentence stating the manifest's file counts"]
+    total, pngs, width, height, svgs = (int(value) for value in stated[0])
+    paths = [match.group(2) for match in map(_MANIFEST_LINE.fullmatch, manifest.splitlines())
+             if match]
+    actual = Counter(Path(path).suffix for path in paths)
+    violations = []
+    if (len(paths), actual[".png"], actual[".svg"]) != (total, pngs, svgs):
+        violations.append(
+            f"the notes state {total} files ({pngs} PNGs, {svgs} SVGs); the manifest lists "
+            f"{len(paths)} ({actual['.png']} PNGs, {actual['.svg']} SVGs)")
+    for path in paths:
+        if path.endswith(".png") and png_dimensions(suite_root / path) != (width, height):
+            violations.append(f"{path}: not the {width}x{height} PNG the notes state")
+    return violations
+
+
+def upstream_release_manifest_violations(manifest: str, suite_root: Path) -> list[str]:
+    """Return the manifest entries whose vendored file does not have its recorded SHA-256.
+
+    The manifest records the vendored files that are byte-identical to an upstream release, so a
+    changed, renamed or missing file must update the manifest and its provenance together.
+    """
+
+    lines = manifest.splitlines()
+    if not lines:
+        return ["the manifest lists no files"]
+    seen: set[str] = set()
+    violations = (_manifest_line_violation(line, suite_root, seen) for line in lines)
+    return [violation for violation in violations if violation]
+
+# `Params::UndefinedBehavior` cases whose vendored reference is not the resvg UB marker image, each
+# mapped to its policy classification and the specification text that leaves the behavior
+# undefined or implementation-defined.
+SPEC_UB_ALLOWLIST: Mapping[str, tuple[str, str, str]] = {
     # Filter Effects defines an exact Gaussian but no bound on stdDeviation. stdDeviation=1000 is
     # 2500 device pixels; every renderer clamps it to an implementation-defined resource limit
     # (Donner: kMaximumFilterPixelRadius), so the reference records resvg's clamp, not a result
     # the specification determines. The upstream test asserts only that rendering does not crash.
-    "filters/feGaussianBlur/huge-stdDeviation.svg",
+    "filters/feGaussianBlur/huge-stdDeviation.svg": (
+        "implementation-resource-limit",
+        "https://www.w3.org/TR/filter-effects-1/#feGaussianBlurElement",
+        "Archived image records an implementation-dependent blur resource limit.",
+    ),
+    # SVG 2 aliases glyph-orientation-vertical="0" to upright text, but Noto Sans has no vertical
+    # metrics, and CSS Writing Modes 3 section 5.1.1 does not define how a user agent synthesizes
+    # them, so the glyph positions are user-agent defined.
+    "text/glyph-orientation-vertical/simple-case.svg": (
+        "user-agent-defined",
+        "https://www.w3.org/TR/css-writing-modes-3/#vertical-font-features",
+        "Archived image records one renderer's synthesized vertical metrics.",
+    ),
+    # CSS Text Decoration 3 leaves the position and thickness of an `auto` underline to the user
+    # agent, and the underline is most of the difference between renderers.
+    "text/writing-mode/mixed-languages-with-tb-and-underline.svg": (
+        "user-agent-defined",
+        "https://www.w3.org/TR/css-text-decor-3/#text-underline-position-property",
+        "Archived image records one renderer's underline position and thickness.",
+    ),
 }
 
 # Features removed from or deprecated in SVG 2 that Donner deliberately does not implement. Every
@@ -1202,8 +1368,8 @@ def render_only_policy_violations(report: dict[str, object]) -> list[str]:
     Rendering without a pixel comparison hides every regression in the case, so it needs one of
     two explicit factories: `Params::UndefinedBehavior` for behavior the specification leaves
     undefined or implementation-defined, or `Params::DeprecatedInSVG2` for features removed from or
-    deprecated in SVG 2. Bugs, missing features, reference disagreements and harness mismatches
-    are skips.
+    deprecated in SVG 2. Reference disagreements, harness mismatches and API-policy differences
+    compare against a Donner-rendered golden; unimplemented features are allowlisted skips.
     """
 
     violations: list[str] = []
@@ -1282,6 +1448,241 @@ def deprecated_in_svg2_violations(
         violations.append(f"{key}: listed in DEPRECATED_IN_SVG2_FEATURES, but no active "
                           "deprecated-in-svg2 case uses it")
     return sorted(violations)
+
+
+def golden_reason_violations(report: dict[str, object]) -> list[str]:
+    """Return active cases that compare against a custom golden without a Params reason."""
+
+    return sorted(
+        f"{case['path']}: golden override has no reason; record why the vendored reference is "
+        "replaced"
+        for case in report["cases"]  # type: ignore[union-attr]
+        if case["registration"] == "active"
+        and {"shared_golden", "geode_golden"} & set(case["exception_types"])
+        and not str(case["reason"] or "").strip()
+    )
+
+
+# The two ratchets below record every comparison setting looser than its limit, per case and per
+# configured lane, at its current value. They may only shrink: lower or remove an entry when its
+# row improves. A new entry or a larger value needs maintainer approval in the pull request that
+# adds it. Pixel budgets in the hundreds are not accepted for new work: fix the engine, or hold
+# the row back from the change until it is fixed.
+PIXEL_BUDGET_RATCHET_LIMIT = DEFAULT_MAX_PIXELS
+PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
+    "filters/filter/in=BackgroundAlpha.svg": {"default_text": 1200, "max": 1200, "geode": 1200},
+    "painting/marker/with-an-image-child.svg": {"geode": 500},
+    "text/baseline-shift/nested-with-baseline-1.svg": {"default_text": 400, "max": 400},
+    "text/baseline-shift/nested-with-baseline-2.svg": {"default_text": 400, "max": 400},
+    "text/dominant-baseline/hanging.svg": {"default_text": 350, "max": 350},
+    "text/font-variant/inherit.svg": {"default_text": 1200},
+    "text/font-variant/small-caps.svg": {"default_text": 1200},
+    "text/textLength/zero.svg": {"default_text": 410, "max": 410},
+    "text/textPath/closed-path.svg": {"default_text": 400, "max": 400},
+}
+
+THRESHOLD_RATCHET_LIMIT = 0.05
+THRESHOLD_ALLOWLIST: dict[str, dict[str, float]] = {
+    "filters/feDiffuseLighting/complex-transform.svg": {
+        "default_text": 0.11, "max": 0.11, "geode": 0.11,
+    },
+    "filters/feMerge/complex-transform.svg": {"default_text": 0.14, "max": 0.14, "geode": 0.14},
+    "filters/fePointLight/complex-transform.svg": {
+        "default_text": 0.11, "max": 0.11, "geode": 0.11,
+    },
+    "text/text-decoration/tspan-decoration.svg": {"default_text": 0.09, "max": 0.09},
+    "text/text/compound-emojis-and-coordinates-list.svg": {"max": 0.1},
+    "text/text/compound-emojis.svg": {"max": 0.1},
+    "text/text/emojis.svg": {"max": 0.1},
+}
+
+
+def _compared_lane_settings(
+    report: dict[str, object], setting: str
+) -> Iterable[tuple[str, str, float | None]]:
+    """Yield (path, lane, value) for every lane of an active case that compares pixels."""
+
+    for case in report["cases"]:  # type: ignore[union-attr]
+        if case["registration"] != "active":
+            continue
+        for lane, entry in case["lanes"].items():
+            if entry["configured_state"] == "compare":
+                yield str(case["path"]), lane, entry["settings"][setting]
+
+
+def _ratchet_message(
+    where: str, value: float | None, recorded: float | None, limit: float, allowlist_name: str
+) -> str | None:
+    if value is None:
+        return f"{where} is unresolved"
+    if recorded is None:
+        return (f"{where} is above {limit} and not in {allowlist_name}; new entries need "
+                "maintainer approval, so fix the engine instead")
+    if value > recorded:
+        return (f"{where} is above its recorded {recorded} in {allowlist_name}, which may only "
+                "shrink")
+    if value < recorded:
+        return f"{where} is below its recorded {recorded}; lower the {allowlist_name} entry"
+    return None
+
+
+def _ratchet_violations(
+    report: dict[str, object],
+    allowlist: Mapping[str, Mapping[str, float]],
+    setting: str,
+    limit: float,
+    allowlist_name: str,
+) -> list[str]:
+    """Return comparing lanes whose `setting` is above `limit` without a matching entry.
+
+    Each entry must equal its lane's current value, so the list records the live loosening
+    exactly: a larger value fails, a smaller one must lower its entry, and an entry whose lane no
+    longer compares above the limit is stale.
+    """
+
+    violations: list[str] = []
+    live: set[tuple[str, str]] = set()
+    for path, lane, value in _compared_lane_settings(report, setting):
+        if value is not None and value <= limit:
+            continue
+        live.add((path, lane))
+        message = _ratchet_message(f"{path} ({lane}): {setting} {value}", value,
+                                   allowlist.get(path, {}).get(lane), limit, allowlist_name)
+        if message:
+            violations.append(message)
+
+    for path, lanes in sorted(allowlist.items()):
+        violations += [
+            f"{path} ({lane}): stale {allowlist_name} entry; the lane no longer compares with "
+            f"{setting} above {limit}, so remove it"
+            for lane in sorted(lanes) if (path, lane) not in live
+        ]
+    return sorted(violations)
+
+
+def pixel_budget_ratchet_violations(
+    report: dict[str, object], allowlist: Mapping[str, Mapping[str, int]] = PIXEL_BUDGET_ALLOWLIST
+) -> list[str]:
+    """Return comparing lanes whose mismatched-pixel budget breaks PIXEL_BUDGET_ALLOWLIST."""
+
+    return _ratchet_violations(report, allowlist, "max_pixels", PIXEL_BUDGET_RATCHET_LIMIT,
+                               "PIXEL_BUDGET_ALLOWLIST")
+
+
+def threshold_ratchet_violations(
+    report: dict[str, object], allowlist: Mapping[str, Mapping[str, float]] = THRESHOLD_ALLOWLIST
+) -> list[str]:
+    """Return comparing lanes whose per-pixel color threshold breaks THRESHOLD_ALLOWLIST."""
+
+    return _ratchet_violations(report, allowlist, "threshold", THRESHOLD_RATCHET_LIMIT,
+                               "THRESHOLD_ALLOWLIST")
+
+
+# Every active Params::Skip row. A skipped case does not render, so it loses its regression,
+# no-crash and sanitizer coverage. This list may only shrink; a new entry needs maintainer
+# approval in the pull request that adds it.
+SKIP_ALLOWLIST = frozenset({
+    "structure/svg/not-UTF-8-encoding.svg",
+    "text/textPath/with-filter.svg",
+    "text/tspan/with-filter.svg",
+})
+
+SKIP_RULE = (
+    "a reference disagreement, harness mismatch or API-policy difference compares against a "
+    "Donner-rendered golden with a recorded justification, not a skip; a skip is only for an "
+    "unimplemented feature, `Not impl: <feature> (#<issue>)`, and needs maintainer approval to "
+    "join SKIP_ALLOWLIST (donner/svg/renderer/tests/README_resvg_test_suite.md)"
+)
+
+
+def skip_ratchet_violations(
+    report: dict[str, object], allowlist: Iterable[str] = SKIP_ALLOWLIST
+) -> list[str]:
+    """Return active skips missing from `allowlist`, and entries that are no longer skips."""
+
+    allowed = set(allowlist)
+    skipped = {
+        str(case["path"])
+        for case in report["cases"]  # type: ignore[union-attr]
+        if case["registration"] == "active" and case["primary_state"] == "skip"
+    }
+    return [
+        f"{path}: Params::Skip is not in SKIP_ALLOWLIST; {SKIP_RULE}"
+        for path in sorted(skipped - allowed)
+    ] + [
+        f"{path}: stale SKIP_ALLOWLIST entry; the case is no longer an active skip, so remove it"
+        for path in sorted(allowed - skipped)
+    ]
+
+
+GOLDEN_ROOT = Path("donner/svg/renderer/testdata/golden")
+GOLDEN_README = GOLDEN_ROOT / "README.md"
+GOLDEN_DIGEST_HEADING = "## Registered golden digests"
+_SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
+
+
+def referenced_goldens(report: dict[str, object]) -> list[str]:
+    """Return the repository path of every golden an active registration compares against."""
+
+    paths: set[str] = set()
+    for case in report["cases"]:  # type: ignore[union-attr]
+        if case["registration"] == "active":
+            config = _settings_from_params(str(case["raw_params_expression"]))
+            paths.update(config[key] for key in REFERENCE_KINDS if config[key])
+    return sorted(paths)
+
+
+def _golden_table_rows(readme: str) -> tuple[list[str], list[str]]:
+    """Return the digest section's table rows and every table row in the README."""
+
+    lines = readme.splitlines()
+    if lines.count(GOLDEN_DIGEST_HEADING) != 1:
+        raise ParityReportError(f"{GOLDEN_README} needs one {GOLDEN_DIGEST_HEADING!r} section")
+    start = lines.index(GOLDEN_DIGEST_HEADING) + 1
+    end = next((index for index in range(start, len(lines)) if lines[index].startswith("## ")),
+               len(lines))
+    rows = [line for line in lines if line.lstrip().startswith("|")]
+    return [line for line in lines[start:end] if line.lstrip().startswith("|")], rows
+
+
+def _golden_digest_violation(
+    golden: str, repo_root: Path, digest_rows: list[str], rows: list[str]
+) -> str | None:
+    path = Path(golden)
+    if ".." in path.parts or "." in path.parts or path.is_absolute():
+        return f"{golden}: golden path is not a normalized repository path"
+    if GOLDEN_ROOT not in path.parents:
+        return f"{golden}: golden is outside {GOLDEN_ROOT}"
+    try:
+        digest = hashlib.sha256((repo_root / path).read_bytes()).hexdigest()
+    except OSError:
+        return f"{golden}: referenced golden file is missing"
+    token = f"`{path.relative_to(GOLDEN_ROOT).as_posix()}`"
+    if not any(token in row and digest in _SHA256.findall(row) for row in digest_rows):
+        return (f"{golden}: no row in the {GOLDEN_README} {GOLDEN_DIGEST_HEADING!r} table names "
+                f"it with its SHA-256 {digest}")
+    if any(token in row and digest not in _SHA256.findall(row) for row in rows):
+        return f"{golden}: a {GOLDEN_README} row names it without its current SHA-256 {digest}"
+    return None
+
+
+def golden_documentation_violations(report: dict[str, object], repo_root: Path) -> list[str]:
+    """Return referenced goldens that the golden README does not list with their SHA-256.
+
+    Each referenced golden needs a row in the README's digest table that names its path relative
+    to the golden directory in backticks, such as `geode/name.png` in backticks, and gives the
+    committed file's SHA-256. Any other table row in the README that names the golden must carry
+    the same digest, so a regenerated file cannot keep a stale entry anywhere.
+    """
+
+    try:
+        readme = (repo_root / GOLDEN_README).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read golden README: {error}") from error
+    digest_rows, rows = _golden_table_rows(readme)
+    violations = (_golden_digest_violation(golden, repo_root, digest_rows, rows)
+                  for golden in referenced_goldens(report))
+    return [violation for violation in violations if violation]
 
 
 REFERENCE_GENERATION_PREFIX = "Reference rasterizer generation:"
@@ -1422,12 +1823,8 @@ def _marker_policy(path: str) -> dict[str, object]:
     evidence = [UB_MARKER_REFERENCE.as_posix(), "docs/design_docs/0021-resvg_feature_gaps.md"]
     provenance = "Upstream UB-marker image. The marker does not classify the SVG's normative behavior."
     if path in SPEC_UB_ALLOWLIST:
-        classification = "implementation-resource-limit"
-        evidence = [
-            REGISTRATION_SOURCE.as_posix(),
-            "https://www.w3.org/TR/filter-effects-1/#feGaussianBlurElement",
-        ]
-        provenance = "Archived image records an implementation-dependent blur resource limit."
+        classification, specification, provenance = SPEC_UB_ALLOWLIST[path]
+        evidence = [REGISTRATION_SOURCE.as_posix(), specification]
     elif path in DEFINED_MARKER_CASES:
         classification, specification = DEFINED_MARKER_CASES[path]
         evidence.append(specification)
@@ -1451,8 +1848,7 @@ def _capability_policy(case: dict[str, object]) -> dict[str, object] | None:
                       for lane in case["lanes"].values())
     if not has_explicit_gate and not still_gated:
         return None
-    if (has_explicit_gate and not (case["reason"] or case["backend_requirement_reason"])
-            and case["path"] != "text/text-anchor/on-tspan-with-arabic.svg"):
+    if has_explicit_gate and not (case["reason"] or case["backend_requirement_reason"]):
         raise ParityReportError(f"{case['path']}: explicit capability gate needs a source reason")
     return {
         "classification": "backend-capability",
@@ -1796,14 +2192,85 @@ def _check_reference_defaults(header: str, registry: str) -> None:
     if (thresholds != [str(DEFAULT_THRESHOLD)] or budgets != [str(DEFAULT_MAX_PIXELS)]
             or not re.search(r"bool includeAntiAliasing\s*=\s*false;", header)):
         raise ParityReportError("C++ comparison defaults differ from parity report")
-    if not re.search(r"\btest\.params\.setCanvasSize\(500,\s*500\);", registry):
-        raise ParityReportError("C++ corpus default canvas differs from parity report")
+    width, height = RENDER_ONLY_CANVAS
     if not re.search(
-        r"ImageComparisonParams ResvgV049Reference\(\)\s*\{\s*return "
-        r"ImageComparisonParams\(\)\.setCanvasSize\(300,\s*300\);\s*\}",
+        r"if \(!test\.params\.canvasSize && test\.params\.isRenderOnly\(\)\) \{\s*"
+        rf"test\.params\.setCanvasSize\({width},\s*{height}\);\s*\}}\s*"
+        r"test\.params\.enableCanvasSizeFromReference\(\);",
         registry,
     ):
-        raise ParityReportError("resvg v0.49 reference canvas differs from parity report")
+        raise ParityReportError("C++ corpus canvas rule differs from parity report")
+
+
+_C_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|[rn\\\"'])")
+
+
+def _decode_c_string(literal: str) -> bytes:
+    """Decode the escapes a C++ string literal in the fixture uses into its bytes."""
+
+    def byte(match: re.Match[str]) -> str:
+        escape = match.group(1)
+        if escape[0] == "x":
+            return chr(int(escape[1:], 16))
+        if escape[0].isdigit():
+            return chr(int(escape, 8))
+        return {"r": "\r", "n": "\n"}.get(escape, escape)
+
+    return _C_ESCAPE.sub(byte, literal).encode("latin-1")
+
+
+def _function_body(source: str, signature: str) -> str:
+    start = source.find(signature)
+    if start < 0 or "{" not in source[start:]:
+        return ""
+    body = source[start:]
+    return body[:_find_matching(body, body.index("{"), "{", "}")]
+
+
+def _check_reference_canvas_rule(fixture: str) -> None:
+    """Check that the harness derives the canvas as reference_canvas_size does.
+
+    The C++ must read the same PNG header prefix, reject the same dimensions, use the square of
+    the longer side, and resolve each comparison's canvas from the image that mode compares with:
+    the Geode golden in the Geode mode, otherwise the shared golden or vendored PNG.
+    """
+
+    def fail() -> None:
+        raise ParityReportError("C++ reference canvas rule differs from parity report")
+
+    body = _function_body(fixture, "CanvasSizeResult CanvasSizeFromReferenceImage(")
+    prefix = re.search(r'kHeaderPrefix\("((?:[^"\\]|\\.)*)",\s*(\d+)\);', body)
+    if (prefix is None or _decode_c_string(prefix.group(1))[:int(prefix.group(2))]
+            != _PNG_HEADER_PREFIX or int(prefix.group(2)) != len(_PNG_HEADER_PREFIX)):
+        fail()
+    if not all(re.search(pattern, body) for pattern in (
+        r"constexpr size_t kHeaderSize = 24;",
+        rf"kMaxDimension\s*=\s*{_MAX_REFERENCE_DIMENSION};",
+        r"if \(width == 0 \|\| height == 0 \|\| width > kMaxDimension \|\| "
+        r"height > kMaxDimension\) \{\s*return \{std::nullopt,",
+        r"const int side = static_cast<int>\(std::max\(width, height\)\);",
+        r"return \{Vector2i\(side, side\), \{\}\};",
+    )):
+        fail()
+    # One call site, after the Geode golden replaces the shared one for the Geode mode.
+    effective = re.search(
+        r"if \(mode == ComparisonMode::GeodeGolden && "
+        r"!params\.geodeOverrideGoldenFilename\.empty\(\)\) \{\s*"
+        r"geodeGoldenStorage = std::string\(params\.geodeOverrideGoldenFilename\);\s*"
+        r"effectiveGoldenFilename = geodeGoldenStorage\.c_str\(\);\s*\}"
+        r"(?:(?!effectiveGoldenFilename =).)*?"
+        r"ResolveComparisonCanvasSize\(\s*params, effectiveGoldenFilename, "
+        r"MissingGoldenCanvasFallback\(svgFilename\)\)",
+        fixture, re.DOTALL,
+    )
+    update_only = re.search(
+        r'MissingGoldenCanvasFallback\(\s*const std::filesystem::path& svgFilename\) \{\s*'
+        r'if \(getenv\("UPDATE_GOLDEN_IMAGES_DIR"\) == nullptr\) \{\s*return std::nullopt;\s*\}\s*'
+        r'return std::filesystem::path\(svgFilename\)\.replace_extension\("\.png"\);',
+        fixture,
+    )
+    if effective is None or update_only is None or fixture.count("ResolveComparisonCanvasSize(") != 2:
+        fail()
 
 
 _FEATURE_NAMES = {
@@ -1872,6 +2339,7 @@ def check_renderer_contract(repo_root: Path) -> None:
 
     _check_reference_defaults(_mask_comments(read("ImageComparisonTestFixture.h")),
                               _mask_comments(read("resvg_test_suite.cc")))
+    _check_reference_canvas_rule(_mask_comments(read("ImageComparisonTestFixture.cc")))
     _check_geode_capabilities(_mask_comments(read("RendererTestBackendGeode.cc")))
     _check_tiny_capabilities(_mask_comments(read("RendererTestBackendTinySkia.cc")))
     _check_corpus_wrappers(read("BUILD.bazel"))

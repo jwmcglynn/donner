@@ -1107,6 +1107,27 @@ Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Box2d& viewBox, bool 
       toPercent(y, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y));
 }
 
+/// Whether a radial gradient's start and end circles count as identical, the one case in which a
+/// canvas two-point gradient (which SVG 2 `fr` follows) paints nothing, using the tolerances of the
+/// tiny-skia radial gradient this renderer draws with.
+/// For concentric circles (centers within 2^-15), tiny-skia treats radii within 2^-15 of each other
+/// as identical circles; otherwise it draws a start radius of at most 2^-15 as an ordinary radial
+/// gradient, and paints nothing when the radii are within 2^-12 of each other (its rejection of two
+/// radii both at most 2^-12 falls inside that case).
+/// Keep this identical in meaning to the Geode renderer's copy so both backends drop the same
+/// draws.
+bool radialCirclesCoincide(const Vector2d& center, double radius, const Vector2d& focalCenter,
+                           double focalRadius) {
+  constexpr double kDegenerateTolerance = 1.0 / (1 << 15);
+  constexpr double kConcentricRadiusTolerance = 1.0 / (1 << 12);
+  if (!NearZero((center - focalCenter).length(), kDegenerateTolerance)) {
+    return false;
+  }
+  return NearEquals(radius, focalRadius, kDegenerateTolerance) ||
+         (focalRadius > kDegenerateTolerance &&
+          NearEquals(radius, focalRadius, kConcentricRadiusTolerance));
+}
+
 Transform2d resolveGradientTransform(
     const components::ComputedLocalTransformComponent* maybeTransformComponent,
     const Box2d& viewBox) {
@@ -1231,8 +1252,9 @@ std::optional<tiny_skia::Shader> instantiateGradientShader(
       return tiny_skia::Shader(stops.back().color);
     }
 
-    const double distanceBetweenCenters = (center - focalCenter).length();
-    if (distanceBetweenCenters + radius <= focalRadius) {
+    // A start circle that contains the end circle still paints the whole plane, which tiny-skia's
+    // two-point conical shader evaluates; only identical circles paint nothing.
+    if (radialCirclesCoincide(center, radius, focalCenter, focalRadius)) {
       return std::nullopt;
     }
 

@@ -9,10 +9,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <span>
 #include <utility>
 
 #include "donner/base/MemoryAttribution.h"
+#include "donner/base/Utils.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -89,6 +91,31 @@ EM_JS(int, WorkerResultBoundaryKnown,
       });
 // clang-format on
 
+/// Writes \p detail into \p values in the order the worker stats publisher reads it, filling it.
+/// @param detail Owner dispatch detail of one worker result.
+/// @param values Slots after the publisher's fixed values.
+void AppendOwnerDispatchDetail(
+    const RenderResult::WorkerTimingBreakdown::GpuOwnerDispatchDetail& detail,
+    std::span<double> values) {
+  std::size_t next = 0;
+  const auto append = [&](double value) { values[next++] = value; };
+  append(static_cast<double>(detail.requestedByWorker));
+  for (const int count : detail.requestedByKind) {
+    append(static_cast<double>(count));
+  }
+  append(detail.deliveryMs);
+  append(detail.ownerQueueMs);
+  append(detail.executeMs);
+  append(detail.completionWakeMs);
+  for (const int count : detail.startLatencyBuckets) {
+    append(static_cast<double>(count));
+  }
+  append(detail.canvasFrameActiveMs);
+  append(static_cast<double>(detail.canvasFrames));
+  append(static_cast<double>(detail.receivedDuringCanvasFrame));
+  UTILS_RELEASE_ASSERT(next == values.size());
+}
+
 // Proxied to the browser main thread: the render pthread has no `window`.
 // Numeric values ride an owned heap buffer because EM_ASM argument substitution stops at $15.
 // Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
@@ -100,9 +127,11 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
   const auto& timing = result.workerTiming;
   const auto& compositorStats = result.compositorFrameStats;
   const auto& fastPath = result.compositorFastPathDelta;
-  constexpr std::size_t kValueCount = 59;
+  // The fixed values below, then the owner dispatch detail appended after them.
+  constexpr std::size_t kCoreValueCount = 59;
+  constexpr std::size_t kValueCount = 88;
   const WorkerTilePayloadCounts payloadCounts = CountWorkerTilePayloads(result);
-  const double values[kValueCount] = {
+  const double coreValues[kCoreValueCount] = {
       result.workerMs,
       timing.queueWaitMs,
       timing.dequeueToStartMs,
@@ -162,6 +191,10 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
       timing.gpuOwnerDispatchWaitMs,
       static_cast<double>(result.compositorRenderCount),
       static_cast<double>(RepresentsActiveDrag(result))};
+  double values[kValueCount] = {};
+  std::copy(std::begin(coreValues), std::end(coreValues), std::begin(values));
+  AppendOwnerDispatchDetail(timing.gpuOwnerDispatch,
+                            std::span<double>(values).subspan(kCoreValueCount));
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -257,6 +290,32 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
           stats[resultCounterNames[index]] = heap[b + 45 + index];
         }
         stats['activeDragResult'] = heap[b + 58] > 0;
+        // Where this result's owner dispatches came from and where their blocked time went.
+        const kindNames = ([
+          'other', 'ownershipQuery', 'deviceLossQuery', 'completionQuery', 'resourceCreation',
+          'resourceDestruction', 'bufferWrite', 'textureWrite', 'resourceSharing', 'commandBatch',
+          'queueSubmit', 'bindGroupConstruction', 'pipelineConstruction'
+        ]);
+        const latencyNames = ([
+          'upTo50Us', 'upTo100Us', 'upTo250Us', 'upTo1Ms', 'upTo4Ms', 'upTo16Ms', 'upTo64Ms',
+          'over64Ms'
+        ]);
+        const slotsFrom = (start, names) =>
+            Object.fromEntries(names.map((name, index) => [name, heap[b + start + index]]));
+        const byKind = slotsFrom(60, kindNames);
+        const startLatency = slotsFrom(77, latencyNames);
+        stats['gpuOwnerDispatch'] = ({
+          'requestedByWorker' : heap[b + 59],
+          'byKind' : byKind,
+          'deliveryMs' : heap[b + 73],
+          'ownerQueueMs' : heap[b + 74],
+          'executeMs' : heap[b + 75],
+          'completionWakeMs' : heap[b + 76],
+          'startLatency' : startLatency,
+          'canvasFrameActiveMs' : heap[b + 85],
+          'canvasFrames' : heap[b + 86],
+          'receivedDuringCanvasFrame' : heap[b + 87],
+        });
         const totals = ([
           [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
           [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],

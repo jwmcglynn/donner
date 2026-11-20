@@ -18,6 +18,7 @@ filegroup(
     name = "resvg_test_policy_sources",
     srcs = [
         "BUILD.bazel",
+        "ImageComparisonTestFixture.cc",
         "ImageComparisonTestFixture.h",
         "RendererTestBackendGeode.cc",
         "RendererTestBackendTinySkia.cc",
@@ -361,6 +362,7 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        ":renderer_image_test_utils",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/svg/renderer:renderer_image_io",
@@ -710,6 +712,19 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "animated_filter_limits_tests",
+    srcs = ["AnimatedFilterLimits_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/renderer:rendering_context",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "filter_attribute_edit_tests",
     srcs = ["FilterAttributeEdit_tests.cc"],
     opens_gpu_device = True,
@@ -723,6 +738,25 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/components",
         "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "reference_invalidation_tests",
+    srcs = ["ReferenceInvalidation_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/components:reference_invalidation",
+        "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -753,6 +787,7 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":image_comparison_test_fixture",
         ":renderer_test_utils",
         ":rgba_test_matchers",
         "//donner/base:base_test_utils",

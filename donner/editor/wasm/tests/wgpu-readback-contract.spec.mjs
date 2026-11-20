@@ -80,6 +80,14 @@ const browserLibrarySource = await readFile(
   new URL("../../../gpu/browser/library_donner_gpu.js", import.meta.url),
   "utf8",
 );
+const gpuOwnerSource = await readFile(
+  new URL("../../../gpu/browser/BrowserGpuOwner.cc", import.meta.url),
+  "utf8",
+);
+const gpuOwnerHeader = await readFile(
+  new URL("../../../gpu/browser/BrowserGpuOwner.h", import.meta.url),
+  "utf8",
+);
 
 function productionPredicates(sourceText, prefix) {
   const predicates = {};
@@ -1758,4 +1766,110 @@ test("production completion-time predicate preserves finite nonnegative timestam
   ]) {
     assert.equal(Boolean(valid(completedAt)), expected);
   }
+});
+
+/** The owner's stats slots by name, from the `constexpr std::size_t kName = N;` table. */
+function gpuOwnerStatSlots() {
+  const slots = {};
+  for (const [, name, index] of gpuOwnerSource.matchAll(/constexpr std::size_t (k\w+) = (\d+);/g)) {
+    slots[name] = Number(index);
+  }
+  return slots;
+}
+
+/** Operation kinds in `BrowserGpuOperationKind` order, in the published lowerCamelCase. */
+function gpuOwnerOperationKinds() {
+  const body = gpuOwnerHeader.match(/enum class BrowserGpuOperationKind \{([\s\S]*?)\};/)[1];
+  return [...body.matchAll(/^\s*([A-Z]\w*),/gm)].map(
+    ([, name]) => name[0].toLowerCase() + name.slice(1),
+  );
+}
+
+test("the owner stats reader reads each dispatch phase from its own slot", () => {
+  const slots = gpuOwnerStatSlots();
+  const size = Number(/std::array<std::atomic<uint32_t>, (\d+)> gOwnerWaitStats/.exec(gpuOwnerSource)[1]);
+  const reader = gpuOwnerSource.match(
+    /(const index = Number\(\$0\) \/ 4;[\s\S]*?\n {4}\}\);)\n {2}\}, gOwnerWaitStats\.data\(\)\);/,
+  );
+  assert.ok(reader, "the reader must stay installed from the stats array");
+  const scope = {};
+  // Each slot holds its own index plus one, so a reader that reads a neighbor is caught.
+  const heap = Uint32Array.from({ length: size }, (_, index) => index + 1);
+  new Function("globalThis", "HEAPU32", "$0", reader[1])(scope, heap, 0);
+  const stats = scope.__donnerReadGpuOwnerWaitStats();
+  const microseconds = (name) => (slots[name] + 1) / 1000;
+  assert.deepEqual({
+    deliveryMs: stats.deliveryMs,
+    ownerQueueMs: stats.ownerQueueMs,
+    executeMs: stats.executeMs,
+    completionWakeMs: stats.completionWakeMs,
+    canvasFrameActiveMs: stats.canvasFrameActiveMs,
+    canvasFrames: stats.canvasFrames,
+    receivedDuringCanvasFrame: stats.receivedDuringCanvasFrame,
+  }, {
+    deliveryMs: microseconds("kDeliveryUs"),
+    ownerQueueMs: microseconds("kOwnerQueueUs"),
+    executeMs: microseconds("kExecuteUs"),
+    completionWakeMs: microseconds("kCompletionWakeUs"),
+    canvasFrameActiveMs: microseconds("kCanvasFrameActiveUs"),
+    canvasFrames: slots.kCanvasFrames + 1,
+    receivedDuringCanvasFrame: slots.kReceivedDuringCanvasFrame + 1,
+  });
+  const bucketBounds = gpuOwnerHeader.match(/kBrowserGpuOwnerStartLatencyBucketUpperUs = \{([^}]*)\}/)[1];
+  const bucketCount = bucketBounds.split(",").length + 1;
+  assert.deepEqual(
+    Object.values(stats.startLatency),
+    Array.from({ length: bucketCount }, (_, bucket) => slots.kStartLatencyBucketStart + bucket + 1),
+  );
+  assert.equal(slots.kStartLatencyBucketStart + bucketCount, slots.kCanvasFrameActiveUs);
+  assert.equal(slots.kReceivedDuringCanvasFrame + 1, size, "every slot up to the last is read");
+  assert.equal(stats.timingSaturated, false);
+  heap[slots.kExecuteUs] = 4294967295;
+  assert.equal(scope.__donnerReadGpuOwnerWaitStats().timingSaturated, true);
+});
+
+test("a worker result publishes its owner dispatch detail from the slots after the core values", () => {
+  const timingPublisher = renderCoordinatorSource.match(
+    /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
+  )[0];
+  const body = timingPublisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publish = makeProductionPublisher(workerTimingPredicates,
+    "window", "$0", "$1", "$2", "HEAPF64", "_free", "UTF8ToString", "performance",
+    "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0", body,
+  );
+  const count = Number(/kValueCount = (\d+)/.exec(timingPublisher)[1]);
+  const core = Number(/kCoreValueCount = (\d+)/.exec(timingPublisher)[1]);
+  const heap = Float64Array.from({ length: count }, (_, index) => 1000 + index);
+  const window = {};
+  publish(window, 0, 0, count, heap, () => {}, () => "none", { timeOrigin: 0, now: () => 0 });
+  const detail = window.__donnerWorkerStats.gpuOwnerDispatch;
+  const kinds = gpuOwnerOperationKinds();
+  assert.deepEqual(Object.keys(detail.byKind), kinds, "kinds follow the enum's order");
+  // The appended order in C++: worker requests, kinds, four phases, latency buckets, canvas.
+  const slots = [
+    detail.requestedByWorker,
+    ...Object.values(detail.byKind),
+    detail.deliveryMs,
+    detail.ownerQueueMs,
+    detail.executeMs,
+    detail.completionWakeMs,
+    ...Object.values(detail.startLatency),
+    detail.canvasFrameActiveMs,
+    detail.canvasFrames,
+    detail.receivedDuringCanvasFrame,
+  ];
+  assert.deepEqual(slots, Array.from({ length: count - core }, (_, index) => 1000 + core + index));
+  assert.match(
+    timingPublisher,
+    /AppendOwnerDispatchDetail\(timing\.gpuOwnerDispatch,\s*std::span<double>\(values\)\.subspan\(kCoreValueCount\)\);/,
+    "the detail fills the slots after the core values",
+  );
+  const appended = renderCoordinatorSource.match(/void AppendOwnerDispatchDetail\([\s\S]*?\n\}/)[0];
+  assert.deepEqual(
+    [...appended.matchAll(/detail\.(\w+)/g)].map(([, name]) => name),
+    ["requestedByWorker", "requestedByKind", "deliveryMs", "ownerQueueMs", "executeMs",
+      "completionWakeMs", "startLatencyBuckets", "canvasFrameActiveMs", "canvasFrames",
+      "receivedDuringCanvasFrame"],
+    "the native side appends the detail in the order the publisher reads it",
+  );
 });

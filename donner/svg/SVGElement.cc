@@ -365,6 +365,53 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
   }
 }
 
+/**
+ * Remove the declarations the presentation attribute \p name contributed to the element's style,
+ * so the properties it writes cascade as if it were never authored, with the invalidation a write
+ * of that attribute needs. When it declared nothing, nothing is created, and only a stylesheet that
+ * selects on the attribute is re-matched.
+ *
+ * @return False when \p name is not stored in the element's style, such as `transform` or an
+ *   element-specific attribute like `cx`, whose state the caller resets instead.
+ */
+bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAccess& access,
+                                   ElementType elementType, std::string_view name) {
+  using Clear = PropertyRegistry::PresentationAttributeClear;
+  if (!PropertyRegistry::isPresentationAttributeName(name)) {
+    return false;
+  }
+  auto* style = handle.try_get<components::StyleComponent>(access);
+  const Clear result = style ? style->properties.clearPresentationAttribute(name)
+                             : PropertyRegistry().clearPresentationAttribute(name);
+  if (result == Clear::Cleared) {
+    MarkPresentationAttributeDirty(handle, elementType, name, name);
+  } else if (result == Clear::NotSet) {
+    // The attribute may still be present, overridden by `style` or holding a value that did not
+    // parse, so a stylesheet selecting on it must re-match.
+    markFullStyleRecomputeIfSelected(handle, name);
+  }
+  return result != Clear::NotStored;
+}
+
+/**
+ * Remove the attribute \p name from \p element's style: the declarations it made when it is a
+ * presentation attribute stored in the element's style, which is a no-op when it declared none,
+ * otherwise a reset of the element state it set and a full restyle.
+ */
+void RemovePresentationAttribute(SVGElement& element, const ElementAnchor& handle,
+                                 DocumentWriteAccess& access,
+                                 const xml::XMLQualifiedNameRef& name) {
+  // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
+  const bool presentation = name.namespacePrefix.empty();
+  if (presentation && RemovePresentationDeclaration(handle, access, element.type(), name.name)) {
+    return;
+  }
+  if (presentation) {
+    [[maybe_unused]] auto trySetResult = element.trySetPresentationAttribute(name.name, "initial");
+  }
+  markNeedsFullStyleRecompute(handle);
+}
+
 std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entity) {
   if (entity == entt::null) {
     return std::nullopt;
@@ -924,13 +971,7 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
   } else if (RemoveLineCoordinateAttribute(handle_, name) ||
              RemoveConvolveOrderAttribute(handle_, name)) {
   } else {
-    // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
-    // Only parse empty namespaces for now.
-    if (name.namespacePrefix.empty()) {
-      [[maybe_unused]] auto trySetResult = trySetPresentationAttribute(name.name, "initial");
-    }
-    markNeedsFullStyleRecompute(handle_);
-    // Ignore return result, since it's fine if the attribute doesn't exist.
+    RemovePresentationAttribute(*this, handle_, access, name);
   }
 
   // Remove any storage for this attribute.

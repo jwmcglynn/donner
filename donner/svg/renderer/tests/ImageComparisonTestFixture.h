@@ -71,12 +71,12 @@ const std::vector<ComparisonMode>& ActiveComparisonModes();
 static constexpr int kDefaultMismatchedPixels = 100;
 
 /**
- * @brief Default threshold for pixel differences in image comparisons.
+ * @brief Default per-pixel color difference threshold for image comparisons.
  *
- * For most tests, a threshold of 0.01 (1%) is sufficient. Some specific tests might require a
- * larger threshold due to subtle anti-aliasing differences. For example:
- * - `a_transform_007` might need up to 0.05.
- * - `e_line_001` might need up to 0.02.
+ * Every comparison uses 0.02 unless its params set another value. A pixel whose color difference
+ * exceeds the threshold counts toward the mismatched-pixel budget (default
+ * \ref kDefaultMismatchedPixels). In the resvg suite, a threshold above 0.05 must be recorded in
+ * `THRESHOLD_ALLOWLIST` in `tools/resvg_parity/parity_report.py`, which may only shrink.
  */
 static constexpr float kDefaultThreshold = 0.02f;
 
@@ -109,6 +109,10 @@ struct ImageComparisonParams {
   bool showTerminalPreview = true;
   /// Optional canvas size override, which determines the size of the rendered image.
   std::optional<Vector2i> canvasSize;
+  /// If true and \ref canvasSize is unset, render on the canvas the comparison's reference image
+  /// was rendered on (\ref ResolveComparisonCanvasSize). A reference that cannot be read fails the
+  /// comparison instead of falling back to the document's own size.
+  bool canvasSizeFromReference = false;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
   /// Optional Geode-specific golden image, used ONLY for the `GeodeGolden`
@@ -134,6 +138,13 @@ struct ImageComparisonParams {
 
   /**
    * @brief Creates parameters to skip a test.
+   *
+   * A skipped test does not render, so it loses regression, no-crash and sanitizer coverage. In
+   * the resvg suite a skip is only for an unimplemented feature with an issue number,
+   * `Not impl: <feature> (#<issue>)`, and every skip must be listed in `SKIP_ALLOWLIST` in
+   * `tools/resvg_parity/parity_report.py`, which needs maintainer approval to grow. Reference
+   * disagreements, harness mismatches and API-policy differences compare against a
+   * Donner-rendered golden with a recorded justification instead (\ref WithGoldenOverride).
    * @param reason Human-readable explanation, shown in the skip message.
    * @return ImageComparisonParams configured to skip.
    */
@@ -149,8 +160,8 @@ struct ImageComparisonParams {
    *
    * For tests whose output the specification leaves undefined or implementation-defined, or
    * whose resvg reference is the UB marker image. Rendering still has to complete, which keeps
-   * no-crash and sanitizer coverage. Bugs, missing features, reference disagreements and harness
-   * mismatches use \ref Skip instead.
+   * no-crash and sanitizer coverage. Reference disagreements, harness mismatches and API-policy
+   * differences use \ref WithGoldenOverride with a reason; unimplemented features use \ref Skip.
    * @param reason Human-readable explanation, shown in the test log.
    * @return ImageComparisonParams configured to render without comparing.
    */
@@ -200,6 +211,10 @@ struct ImageComparisonParams {
 
   /**
    * @brief Creates parameters with an overridden golden image filename.
+   *
+   * In the resvg suite every golden override needs a reason (here, or through \ref withReason or
+   * \ref withGeodeGoldenOverride), and the golden needs a row with its SHA-256 in
+   * `donner/svg/renderer/testdata/golden/README.md`; `parity_report_tests` checks both.
    *
    * @param filename The filename to use for the golden image.
    * @param threshold Optional per-pixel difference threshold to use with the override.
@@ -277,6 +292,17 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& setCanvasSize(int width, int height) {
     canvasSize = Vector2i(width, height);
+    return *this;
+  }
+
+  /**
+   * @brief Sets \ref canvasSizeFromReference, so the case renders on the canvas its reference
+   * image implies unless \ref setCanvasSize sets one.
+   *
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& enableCanvasSizeFromReference() {
+    canvasSizeFromReference = true;
     return *this;
   }
 
@@ -510,6 +536,52 @@ void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& exp
  * @return Path the bitmap was written to.
  */
 std::string WriteBitmapToTestOutputs(const RendererBitmap& bitmap, std::string_view label);
+
+/**
+ * @brief The canvas size of one comparison, or why it cannot be determined.
+ */
+struct CanvasSizeResult {
+  /// Canvas to render on; empty when the document's own size applies or on error.
+  std::optional<Vector2i> size;
+  /// Why the canvas cannot be determined; empty on success.
+  std::string error;
+};
+
+/**
+ * @brief Reads the canvas a reference image was rendered on: the square whose side is the
+ * image's longer dimension.
+ *
+ * The resvg suite renders each reference by fitting the document into a square canvas, so a 2:1
+ * document gives a 500x250 reference from a 500x500 canvas. Only the PNG signature and IHDR
+ * header are read.
+ *
+ * @param referencePath The reference PNG.
+ * @return The canvas size, or an error naming @p referencePath when it is missing, unreadable,
+ * shorter than a PNG header, does not start with the PNG signature and a 13-byte IHDR chunk, or
+ * has dimensions outside 1 to 16384 pixels.
+ */
+CanvasSizeResult CanvasSizeFromReferenceImage(const std::filesystem::path& referencePath);
+
+/**
+ * @brief Resolves the canvas of one comparison.
+ *
+ * The canvas is \ref ImageComparisonParams::canvasSize when set; otherwise, when
+ * \ref ImageComparisonParams::canvasSizeFromReference is set, the canvas \p referencePath implies;
+ * otherwise none, so the document's own size applies.
+ *
+ * When \p referencePath does not exist and \p missingReferenceFallback is given, the canvas comes
+ * from that image instead. The fixture passes the case's vendored corpus PNG only while
+ * `UPDATE_GOLDEN_IMAGES_DIR` is set, so a deleted override golden is written again on the canvas of
+ * the case's vendored reference; outside that mode a missing reference fails.
+ *
+ * @param params Comparison parameters.
+ * @param referencePath The image this comparison is compared with.
+ * @param missingReferenceFallback Image whose canvas applies when \p referencePath is missing.
+ * @return The canvas, or an error when it must come from an image that cannot be read.
+ */
+CanvasSizeResult ResolveComparisonCanvasSize(
+    const ImageComparisonParams& params, const std::filesystem::path& referencePath,
+    const std::optional<std::filesystem::path>& missingReferenceFallback = std::nullopt);
 
 /**
  * @brief Terminal preview configuration derived from the environment.

@@ -71,6 +71,8 @@ exports_files(["library_donner_gpu.js"])
 exports_files(
     [
         "BrowserDevice.cc",
+        "BrowserGpuOwner.cc",
+        "BrowserGpuOwner.h",
         "EmscriptenBrowserBridge.cc",
     ],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],

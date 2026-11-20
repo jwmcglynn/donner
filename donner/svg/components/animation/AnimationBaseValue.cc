@@ -848,7 +848,8 @@ void ConfigureNumericContext(Registry& registry, Entity target, std::string_view
        registry.all_of<FEConvolveMatrixComponent>(target)) ||
       (HasTrait(traits, AttributeTrait::FunctionList) &&
        registry.all_of<FEFuncComponent>(target))) {
-    context.maximumNumbers = AnimationResourceBudget::kMaximumNumbersPerValue;
+    context.maximumNumbers = AnimatedFilterListCapacity(name);
+    context.keepLeadingNumbers = true;
   }
 }
 
@@ -957,6 +958,10 @@ void ConfigureValueKinds(Registry& registry, Entity target, const AnimationAttri
   context.referenceValue = HasTrait(traits, AttributeTrait::Reference);
   context.numberPair = HasTrait(traits, AttributeTrait::NumberPair);
   context.integerValue = HasTrait(traits, AttributeTrait::Integer);
+  if (traits.name == "order") {
+    // An order above the limit stays unrounded, so it fails closed as an authored one does.
+    context.maximumInteger = kMaximumFilterConvolveOrder;
+  }
 }
 
 AnimationValueContext AnimationContextFor(Registry& registry, Entity target,

@@ -777,6 +777,23 @@ donner_cc_test(
     deps = _ASYNC_RENDERER_TEST_DEPS,
 )
 
+# Browser GPU owner round trips per held masked-child drag frame, counted over fake browser bridges
+# so the count is deterministic and needs neither a browser nor a GPU.
+donner_cc_test(
+    name = "browser_owner_round_trip_tests",
+    srcs = ["BrowserOwnerRoundTrip_tests.cc"],
+    data = ["//:geode_splash.svg"],
+    variants = ["geode"],
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer/geode:fake_browser_geode_context",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "render_coordinator_tests",
     srcs = ["RenderCoordinator_tests.cc"],

@@ -18,6 +18,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/FontMetricDependenciesComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
+#include "donner/svg/components/ReferenceInvalidation.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -1686,6 +1687,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& war
 }
 
 void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
+  InvalidateReferenceDependents(registry_);
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
 

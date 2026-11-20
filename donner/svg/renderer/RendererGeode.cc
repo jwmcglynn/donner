@@ -551,6 +551,27 @@ inline double resolveGradientCoord(Lengthd value, const Box2d& bounds, bool numb
   return coerceGradientLength(value, numbersArePercent).toPixels(bounds, FontMetrics());
 }
 
+/// Whether a radial gradient's start and end circles count as identical, the one case in which a
+/// canvas two-point gradient (which SVG 2 `fr` follows) paints nothing, using the tolerances of the
+/// tiny-skia radial gradient the software renderer draws with.
+/// For concentric circles (centers within 2^-15), tiny-skia treats radii within 2^-15 of each other
+/// as identical circles; otherwise it draws a start radius of at most 2^-15 as an ordinary radial
+/// gradient, and paints nothing when the radii are within 2^-12 of each other (its rejection of two
+/// radii both at most 2^-12 falls inside that case).
+/// Keep this identical in meaning to the software renderer's copy so both backends drop the same
+/// draws.
+bool radialCirclesCoincide(const Vector2d& center, double radius, const Vector2d& focalCenter,
+                           double focalRadius) {
+  constexpr double kDegenerateTolerance = 1.0 / (1 << 15);
+  constexpr double kConcentricRadiusTolerance = 1.0 / (1 << 12);
+  if (!NearZero((center - focalCenter).length(), kDegenerateTolerance)) {
+    return false;
+  }
+  return NearEquals(radius, focalRadius, kDegenerateTolerance) ||
+         (focalRadius > kDegenerateTolerance &&
+          NearEquals(radius, focalRadius, kConcentricRadiusTolerance));
+}
+
 /// Resolve the `gradientTransform` attribute of a gradient into a concrete
 /// Transform2d. If the referenced entity has no transform component, returns
 /// identity. Mirrors the logic in the software renderer.
@@ -717,6 +738,27 @@ bool paintReferenceIsGradient(const components::ResolvedPaintServer& server) {
   const auto* computedGradient = handle.try_get<components::ComputedGradientComponent>();
   return computedGradient != nullptr && computedGradient->initialized;
 }
+
+/// The solid color a text draw paints for \p server at \p opacity, or nullopt when it paints no
+/// solid color. A paint server reference paints its server rather than its fallback color wherever
+/// the text draw can paint that server: a gradient (one that cannot be drawn falls back where it is
+/// drawn), or a pattern when the driver staged a tile, as \p patternStaged says. The staged tile
+/// is always the text element's own pattern. Only a pattern reference with no staged tile paints
+/// its fallback color.
+std::optional<css::RGBA> TextSolidPaint(const components::ResolvedPaintServer& server,
+                                        double opacity, const css::RGBA& currentColor,
+                                        bool patternStaged) {
+  const float alpha = static_cast<float>(opacity);
+  if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
+    return solid->color.resolve(currentColor, alpha);
+  }
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
+  if (ref == nullptr || !ref->fallback.has_value() || patternStaged ||
+      paintReferenceIsGradient(server)) {
+    return std::nullopt;
+  }
+  return ref->fallback->resolve(currentColor, alpha);
+}
 #endif  // DONNER_TEXT_ENABLED
 
 /// Attempt to resolve a `PaintResolvedReference` into a concrete linear-gradient
@@ -785,9 +827,8 @@ struct ResolvedRadialGradient {
 /// Returns `nullopt` if the referenced entity isn't a radial gradient. If it
 /// IS a radial gradient but is degenerate (zero outer radius), returns a
 /// populated `solidFallback` with the last stop's color, matching the removed
-/// full-Skia backend. If the focal circle fully
-/// contains the outer circle, returns an empty result (both fields unset)
-/// so the caller drops the draw.
+/// full-Skia backend. If the focal and outer circles are identical, returns
+/// an empty result (both fields unset) so the caller drops the draw.
 std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
     const css::RGBA currentColor, float opacity,
@@ -855,11 +896,10 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
       resolveGradientCoords(radial->fx.value_or(radial->cx), radial->fy.value_or(radial->cy),
                             frame->coordBounds, frame->numbersArePercent);
 
-  // Empty annulus: focal circle entirely contains the outer circle, so the
-  // gradient never has a valid `t` anywhere. Match tiny-skia: drop the draw
-  // (no shader can produce meaningful colors).
-  const double centerDistance = (center - focalCenter).length();
-  if (centerDistance + radius <= focalRadius) {
+  // A start circle that contains the end circle still paints the whole plane: the circles are
+  // nested, so the radial `t` solve in the gradient shaders finds exactly one root with a
+  // non-negative radius at every point. Only identical circles paint nothing.
+  if (radialCirclesCoincide(center, radius, focalCenter, focalRadius)) {
     return ResolvedRadialGradient{};
   }
 
@@ -3584,17 +3624,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool warnedGradient = false;
   bool warnedText = false;
 
-  /// Resolve the current fill/stroke paint's fallback to a solid RGBA color
-  /// when the referenced paint server can't instantiate. Returns nullopt for
-  /// None and for paint-server references without a fallback.
-  std::optional<css::RGBA> resolveSolidFill() {
-    return resolveSolidPaint(paint.fill, paint.fillOpacity);
-  }
-
-  std::optional<css::RGBA> resolveSolidStroke() {
-    return resolveSolidPaint(paint.stroke, paint.strokeOpacity);
-  }
-
+  /// The solid color of \p server at \p effectiveOpacity: a solid's color, or a paint server
+  /// reference's fallback color. Returns nullopt for None and for a reference without a fallback.
   std::optional<css::RGBA> resolveSolidPaint(const components::ResolvedPaintServer& server,
                                              double effectiveOpacity) {
     if (std::holds_alternative<PaintServer::None>(server)) {
@@ -8023,11 +8054,12 @@ GlyphGeometryModes ResolveGlyphGeometryModes(bool solidFill, bool gradientFill, 
 /// The solid color the glyphs of run \p runIndex of \p text fill with. A run whose span does not
 /// own its fill takes \p textFill, the text element's solid fill (already scaled by its fill
 /// opacity); a span whose own fill is none is not filled. A span's own fill is resolved at the
-/// product of its `fill-opacity` and `opacity`: a solid to its color, and a paint server reference
-/// to its fallback color, or to \p textFill when it has none, since the server itself is drawn
-/// separately.
+/// product of its `fill-opacity` and `opacity` by \ref TextSolidPaint, with \p patternStaged
+/// saying whether the driver staged a fill pattern tile; a fill with no solid color takes
+/// \p textFill, since its server is drawn separately.
 css::RGBA SpanFillColor(const components::ComputedTextComponent& text, std::size_t runIndex,
-                        const css::RGBA& textFill, const css::RGBA& currentColor) {
+                        const css::RGBA& textFill, const css::RGBA& currentColor,
+                        bool patternStaged) {
   if (runIndex >= text.spans.size() || !text.spans[runIndex].ownsFill()) {
     return textFill;
   }
@@ -8035,16 +8067,9 @@ css::RGBA SpanFillColor(const components::ComputedTextComponent& text, std::size
   if (std::holds_alternative<PaintServer::None>(span.resolvedFill)) {
     return css::RGBA(0, 0, 0, 0);
   }
-  const float opacityScale = static_cast<float>(span.fillOpacity * span.opacity);
-  if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
-    return solid->color.resolve(currentColor, opacityScale);
-  }
-  if (const auto* ref = std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
-    if (ref->fallback.has_value()) {
-      return ref->fallback->resolve(currentColor, opacityScale);
-    }
-  }
-  return textFill;
+  return TextSolidPaint(span.resolvedFill, span.fillOpacity * span.opacity, currentColor,
+                        patternStaged)
+      .value_or(textFill);
 }
 #endif  // DONNER_TEXT_ENABLED
 
@@ -8086,10 +8111,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // pattern bleeding onto the following element. Per-span pattern fill is a
   // separate gap (matching the element-level handling here).
   const bool hasPatternFill = impl_->patternFillPaint.has_value();
+  const bool hasPatternStroke = impl_->patternStrokePaint.has_value();
+  const css::RGBA currentColor = impl_->paint.currentColor;
 
   // Resolve a default fill colour from the text-element-level paint
   // state. Per-span fills override below when present.
-  std::optional<css::RGBA> defaultFill = impl_->resolveSolidFill();
+  std::optional<css::RGBA> defaultFill =
+      TextSolidPaint(impl_->paint.fill, impl_->paint.fillOpacity, currentColor, hasPatternFill);
   if (!defaultFill.has_value()) {
     // No solid fill and no fallback -- text is effectively invisible.
     // Still walk through in case a per-span fill kicks in.
@@ -8132,7 +8160,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     }
 
     const css::RGBA spanFill =
-        SpanFillColor(text, runIndex, *defaultFill, impl_->paint.currentColor);
+        SpanFillColor(text, runIndex, *defaultFill, currentColor, hasPatternFill);
     const bool hasFill = spanFill.a != 0;
 
     // Effective per-run fill paint *server*: a span's own computed fill overrides
@@ -8188,7 +8216,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     bool spanOverridesStroke = false;
     {
       StrokeParams runStrokeParams = params.strokeParams;
-      std::optional<css::RGBA> color = impl_->resolveSolidStroke();
+      std::optional<css::RGBA> color = TextSolidPaint(
+          impl_->paint.stroke, impl_->paint.strokeOpacity, currentColor, hasPatternStroke);
       bool runHasStroke = true;
       if (runIndex < text.spans.size()) {
         const auto& span = text.spans[runIndex];
@@ -8204,7 +8233,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           spanOverridesStroke = true;
           strokeServer = &span.resolvedStroke;
           strokeOpacity = span.strokeOpacity * span.opacity;
-          color = impl_->resolveSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity);
+          color = TextSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity,
+                                 currentColor, hasPatternStroke);
         }
       }
       if (runHasStroke && runStrokeParams.strokeWidth > 0.0) {

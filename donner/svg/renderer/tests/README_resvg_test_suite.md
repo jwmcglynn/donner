@@ -51,6 +51,22 @@ reference is not the resvg UB marker image and the case is not in `SPEC_UB_ALLOW
 deprecated-in-SVG-2 case is not under a feature in `DEPRECATED_IN_SVG2_FEATURES` (both in
 `parity_report.py`; see the policy below).
 
+The same test also enforces these registration rules, each against a list in `parity_report.py`:
+
+- Every golden override (`WithGoldenOverride` or `withGeodeGoldenOverride`) has a non-empty reason.
+- Every golden a registration compares against has a row in
+  `donner/svg/renderer/testdata/golden/README.md` that names its path relative to that directory
+  in backticks and gives the committed file's SHA-256.
+- `PIXEL_BUDGET_ALLOWLIST` records each compared lane whose mismatched-pixel budget is above the
+  default 100, at its current value, and `THRESHOLD_ALLOWLIST` does the same for per-pixel color
+  thresholds above 0.05. A lane above the limit without an entry fails, a value different from
+  its entry fails, and an entry whose lane no longer exceeds the limit is stale and fails.
+- `SKIP_ALLOWLIST` equals the set of active `Params::Skip` rows. A new skip fails, and an entry
+  whose row no longer skips is stale and fails.
+
+These lists may only shrink. A new entry, or a larger value, needs maintainer approval in the pull
+request that adds it.
+
 `--head-to-head` compares Donner with resvg's own recorded results for the same snapshot, the
 `resvg` column of `third_party/resvg-test-suite/results.csv`:
 
@@ -58,16 +74,33 @@ deprecated-in-SVG-2 case is not under a feature in `DEPRECATED_IN_SVG2_FEATURES`
 bazel run //tools/resvg_parity:parity_report -- --head-to-head --output /tmp/resvg-head-to-head.json
 ```
 
-It reports both pass counts, the margin (Donner passes minus resvg passes), a strict Donner count
-(no pixel budget or golden override), the cases Donner passes and resvg does not (with resvg's
-recorded result), and the gap: cases resvg passes and Donner does not, with their state and reason.
-A Donner pass is a case that compares, by default or within a recorded budget, so the count assumes
-the comparison tests are green. Skipped and render-only cases are not passes; neither are resvg's
-`unknown` or `crashed` rows. The `results.csv` values are manual visual judgments recorded with the
-snapshot, not a pixel diff, and current upstream resvg may score differently.
+It reports both pass counts, the margin (Donner passes minus resvg passes), a strict Donner count,
+the cases Donner passes and resvg does not (with resvg's recorded result), and the gap: cases resvg
+passes and Donner does not, with their state and reason.
 
-Some tests require a more lenient threshold, or must be skipped entirely due to incomplete Donner
-functionality. To do this, per-test params may be specified. A test registration appears as:
+A Donner pass is an active case registered to compare, by default or within its recorded
+settings, that `disableBackend` does not remove from every comparison mode; the count assumes the
+comparison tests are green, and a text-full or backend capability gate does not remove a case. It
+also credits two render-only contract rows listed in `RENDER_PASS_CONTRACTS` in
+`parity_report.py`, `filters/feGaussianBlur/huge-stdDeviation` and
+`structure/svg/funcIRI-with-invalid-characters`, whose reviewed contract is a completed render
+rather than a pixel match. Other render-only cases and skips are not passes; neither are resvg's
+`unknown` or `crashed` rows.
+
+The strict count takes the compared cases only, so it excludes those two render-only credits, and
+then excludes every case whose params carry a pixel-budget or threshold call (`WithThreshold`,
+`WithMaxPixels`, `withMaxPixelsDifferent`, `withSimpleTextMaxPixels` or
+`withGeodeMaxPixelsDifferent`, even when the value equals the default) or a custom golden
+(`WithGoldenOverride` or `withGeodeGoldenOverride`). It still counts cases whose vendored
+reference is an upstream resvg rendering newer than the snapshot (provenance in
+`third_party/resvg-test-suite/BUILD.bazel`), cases whose reference is not 500x500, and cases behind
+a text-full or backend capability gate.
+
+The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
+and current upstream resvg may score differently.
+
+Some tests need a different reference, a documented comparison setting, or (for an unimplemented
+feature) a skip. To do this, per-test params may be specified. A test registration appears as:
 
 ```cpp
 INSTANTIATE_TEST_SUITE_P(
@@ -76,7 +109,8 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "painting/stroke-linecap",
             {
-                {"zero-length-path-with-round-cap.svg", Params::Skip("Bug: zero-length subpath caps")},
+                {"zero-length-path-with-round-cap.svg",
+                 Params::Skip("Not impl: zero-length subpath caps (#NNNN)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -98,6 +132,26 @@ filename stem has every non-alphanumeric character replaced by `_`. For the exam
 
 On the Geode build (multiple comparison modes) the mode is appended, for example
 `..._TinyGolden` / `..._GeodeGolden`.
+
+Each comparison renders on the canvas its reference image was rendered on, so no registration
+states a canvas size. The harness reads the PNG header of the image the mode compares with (the
+vendored PNG, the `WithGoldenOverride` golden, or in the `GeodeGolden` mode the
+`withGeodeGoldenOverride` golden) and fits the document into the square of the image's longer
+side, the way resvg renders the suite: most references are 500x500, upstream resvg's newer
+references are 300x300, and a 2:1 document's 500x250 reference comes from a 500x500 canvas. An
+explicit `.setCanvasSize(w, h)` always takes precedence. Render-only cases
+(`Params::UndefinedBehavior`, `Params::DeprecatedInSVG2`) compare with no image and keep the
+suite's 500x500 canvas. `parity_report` derives the same canvas for each lane from the PNG header.
+
+A reference that is missing or unreadable fails the case with a message naming the file, rather
+than rendering at a guessed size. The exception is golden regeneration: with
+`UPDATE_GOLDEN_IMAGES_DIR` set, a missing golden is rendered on the canvas of the case's vendored
+PNG and written, so deleting a Donner-rendered golden and rerunning its row regenerates it. Every
+golden has its vendored PNG's size except the 800x800 ones (`resvg-half-box-blur.png`,
+`resvg-all-types-inline-*.png` and `resvg-complex-graphemes-and-coordinates-list.png`), which are
+resvg renderings of independent scenes; regenerate those with the resvg commands in the golden
+README, not with `UPDATE_GOLDEN_IMAGES_DIR`, which would write them at their rows' 500x500 size. A new case whose vendored PNG is missing too
+needs an explicit `.setCanvasSize(w, h)`.
 
 To run a single test:
 
@@ -132,7 +186,7 @@ First, identify which tests are failing:
 bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=TextFontWeight/*'
 ```
 
-Look for tests marked as `FAIL` and note the pixel difference count. Tests pass if pixel differences are under the threshold (default 100 pixels).
+Look for tests marked as `FAIL` and note the pixel difference count. Tests pass if the count of pixels whose color difference exceeds the threshold (default 0.02) is within the pixel budget (default 100 pixels).
 
 ### 2. Examine the Test Output
 
@@ -147,7 +201,7 @@ When a test fails, the framework provides detailed diagnostic information:
 - **FAIL**: Test failed (vs PASS for success)
 - **[TinySkia]**: which backend rendered this comparison (`TinySkia`, or a `Geode*` mode)
 - **8234 pixels differ**: Number of pixels that don't match between actual and expected
-- **with 100 max**: Threshold for passing (tests pass if pixel diff ≤ 100)
+- **with 100 max**: Pixel budget for passing (tests pass if pixel diff ≤ 100)
 
 #### Verbose Rendering Output
 
@@ -213,7 +267,7 @@ mark differing pixels, colored outlines mark positional differences.
 - **Diff image**:
   - Solid red areas = completely different pixels
   - Colored outlines = positional/alignment differences
-  - Minimal differences = may just need threshold adjustment
+  - Minimal differences = still a real cause to find; do not widen the threshold or budget to absorb them
   - Large differences = missing feature or wrong implementation
 
 - **Actual vs Expected**:
@@ -249,7 +303,9 @@ Based on the output, determine what's causing the failure:
 
 Common failure categories:
 
-- **Not implemented**: Feature doesn't exist yet (e.g., `<tspan>`, `writing-mode`)
+- **Not implemented**: Feature doesn't exist yet (e.g., `<tspan>`, `writing-mode`). With a
+  tracking issue, this is the only new `Params::Skip`, and it needs maintainer approval to join
+  `SKIP_ALLOWLIST`. Skipped cases do not render, so they lose no-crash and sanitizer coverage.
 - **Undefined behavior**: The specification leaves the behavior undefined or
   implementation-defined, or the vendored reference is the resvg UB marker image (a byte-for-byte
   copy of `third_party/resvg-test-suite/resources/ub.png`); `Params::UndefinedBehavior(reason)`
@@ -259,19 +315,27 @@ Common failure categories:
   `Params::DeprecatedInSVG2(reason)` renders without a comparison. A removed feature with a UB
   marker reference belongs here.
 
-  Nothing else renders without a comparison: bugs, missing features, reference disagreements,
-  harness or background mismatches, and API policy differences are `Params::Skip` with a bug
-  number or reason, and a case that passes the default comparison compares. Skipped cases do not
-  render, so they lose no-crash and sanitizer coverage.
-- **Bug**: Wrong output for an implemented feature — find the root cause (wrong transform,
-  coverage geometry, color space, premultiplication, layer compositing). Note: pixelmatch already
-  excludes anti-aliased edge pixels, so a diff our harness reports is **never** "just AA" — a
-  diff large enough to fail a test has a real cause (see CLAUDE.md §"Anti-Aliasing Is Never the
-  Root Cause").
+  Nothing else renders without a comparison, and a case that passes the default comparison
+  compares.
+- **Reference disagreement, harness mismatch, or API-policy difference**: Donner follows the
+  specification and the vendored reference does not, the harness and reference disagree (for
+  example an opaque reference background), or Donner's API policy differs. These are not skips:
+  the case compares against a Donner-rendered golden with a recorded justification, via
+  `Params::WithGoldenOverride(path, threshold, "Reference disagreement: <what the vendored PNG
+  gets wrong>")` (or `Harness mismatch:` / `API policy:`), plus an entry in
+  `tools/resvg_parity/exception_policies.json` and a row with the golden's SHA-256 in
+  `donner/svg/renderer/testdata/golden/README.md`.
+- **Bug**: Wrong output for an implemented feature. Find the root cause (wrong transform,
+  coverage geometry, color space, premultiplication, layer compositing) and fix the engine. Note:
+  pixelmatch already excludes anti-aliased edge pixels, so a diff our harness reports is
+  **never** "just AA": a diff large enough to fail a test has a real cause (see CLAUDE.md
+  §"Anti-Aliasing Is Never the Root Cause"). A pixel budget in the hundreds is not accepted:
+  fix the engine, or hold the row back from the change until it is fixed.
 
 ### 5. Document in resvg_test_suite.cc
 
-Add the failing test to the appropriate `INSTANTIATE_TEST_SUITE_P` block with a skip comment:
+Add the test to the appropriate `INSTANTIATE_TEST_SUITE_P` block with params and a reason. For an
+approved skip of an unimplemented feature:
 
 ```cpp
 INSTANTIATE_TEST_SUITE_P(
@@ -280,25 +344,38 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/word-spacing",
             {
-                {"simple-case.svg", Params::Skip("Not impl: word-spacing")},
-                {"negative.svg", Params::Skip("Not impl: word-spacing")},
+                {"simple-case.svg", Params::Skip("Not impl: word-spacing (#NNNN)")},
+                {"negative.svg", Params::Skip("Not impl: word-spacing (#NNNN)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 ```
 
-**Comment format**:
+**Skip reason formats**. A new skip uses only the first form. The others are the forms of the
+three skips already in `SKIP_ALLOWLIST`, kept until each is converted or fixed; do not add new
+ones:
 
-- `Not impl: <feature>` - Feature not yet implemented
+- `Not impl: <feature> (#<issue>)` - an unimplemented feature with its tracking issue.
+- `Unsupported input: <input> (#<issue>)` - an input the parser does not accept
+  (`structure/svg/not-UTF-8-encoding`).
+- `Accepted difference (<date>): <difference>` - a maintainer-accepted rendering difference
+  recorded on that date.
+
+**Other reason formats**:
+
+- `Params::WithGoldenOverride(path, threshold, "Reference disagreement: <what the vendored PNG
+  gets wrong>")` (or `Harness mismatch:` / `API policy:`) - compares against a Donner-rendered
+  golden; record its provenance and SHA-256 in the golden README.
 - `Params::UndefinedBehavior("<reason>")` - Undefined behavior or a UB marker reference (renders,
   no compare). The factory name carries the classification, so the reason only explains it.
 - `Params::DeprecatedInSVG2("<feature> (removed in SVG 2)")` - Removed or deprecated SVG 2
   feature (renders, no compare). Add the feature to `DEPRECATED_IN_SVG2_FEATURES` in
   `tools/resvg_parity/parity_report.py` first; `//tools/resvg_parity:parity_report_tests` fails
   otherwise.
-- `Bug: <description>` - Known bug
 - `Params::WithThreshold(t, maxPx)` - only after a root-cause investigation, with the reason. Never
-  widen a threshold to absorb a diff you haven't explained (see CLAUDE.md / `AGENTS.md`).
+  widen a threshold to absorb a diff you haven't explained (see CLAUDE.md / `AGENTS.md`). A
+  threshold above 0.05 or a budget above 100 pixels must already be in `THRESHOLD_ALLOWLIST` or
+  `PIXEL_BUDGET_ALLOWLIST`; new entries need maintainer approval.
 - `Reference rasterizer generation: <cause>; analytic residual N px, supersampled M px` - a
   per-case pixel budget (`withMaxPixelsDifferent` or `WithMaxPixels`, default color threshold, no
   other exception) for a reference drawn with 4x4 supersampled edge coverage where Donner's
@@ -321,11 +398,8 @@ read at a glance:
 ```cpp
 {
     // Not impl: variable-font weight axis
-    {"variable-weight.svg", Params::Skip("Not impl: variable-font weight")},
-    {"weight-interpolation.svg", Params::Skip("Not impl: variable-font weight")},
-
-    // Bug: synthetic-bold metrics
-    {"bolder-keyword.svg", Params::Skip("Bug: synthetic-bold advance width")},
+    {"variable-weight.svg", Params::Skip("Not impl: variable-font weight (#NNNN)")},
+    {"weight-interpolation.svg", Params::Skip("Not impl: variable-font weight (#NNNN)")},
 }
 ```
 
@@ -358,7 +432,7 @@ You should see:
 
 3. Open the diff image to see where differences are
 
-4. Identify the cause of the failure. Either fix the root cause in Donner, modify the test parameters in resvg_test_suite.cc, or mark the test skipped to defer resolving the issue while keeping the suite operational.
+4. Identify the cause of the failure. Fix the root cause in Donner; for a reference disagreement, harness mismatch or API-policy difference, compare against a Donner-rendered golden with a recorded justification; skip only an unimplemented feature with a tracking issue and maintainer approval.
 
 ### Tips
 

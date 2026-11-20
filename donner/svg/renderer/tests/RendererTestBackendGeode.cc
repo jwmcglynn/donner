@@ -52,14 +52,9 @@ std::shared_ptr<geode::GeodeDevice> SharedTestDevice() {
 
 bool GeodeSupportsFeature(RendererBackendFeature feature) {
   switch (feature) {
-    // FilterEffects reports `false` here so the resvg_test_suite
-    // `filters/*` categories skip cleanly on Geode via the category
-    // gate's `requireFeature(FilterEffects)`. The underlying
-    // `GeodeFilterEngine` does implement most of the filter primitives
-    // (used by the WASM editor path), but the image-comparison suite
-    // is blocked on per-backend (Metal / Vulkan / D3D12) pixel-diff
-    // tuning that needs its own PR. Once that lands, flip this to
-    // `true` and the category gate will let the tests run.
+    // FilterEffects reports `true`: Geode renders filter effects through
+    // `GeodeFilterEngine`, so the resvg_test_suite `filters/*` categories,
+    // gated by `requireFeature(FilterEffects)`, run and compare on Geode.
     //
     // Text is implemented in `RendererGeode::drawText`
     // -- the renderer walks `TextEngine` runs, pulls each glyph
@@ -68,10 +63,10 @@ bool GeodeSupportsFeature(RendererBackendFeature feature) {
     // `RendererGeode::draw` directly get correct text rendering.
     //
     // The `Text` / `TextFull` feature flags still return `false`
-    // here so the resvg test suite skips the `text/*` category on
+    // here so the resvg test suite skips the `text/*` category on Geode:
     // Geode text currently differs from the tiny-skia reference by
     // ~600-800 pixels on realistic text tests, well past the default
-    // 100-pixel threshold. The differing pixels are frequently fully
+    // 100-pixel budget. The differing pixels are frequently fully
     // off rather than partial, so threshold widening is not justified.
     // Keep the feature gate until the positional/coverage root cause is
     // identified and fixed.
