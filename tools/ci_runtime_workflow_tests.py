@@ -161,9 +161,9 @@ def _run_bodies(text):
 
 def _action_input_defaults(text):
     """The default values of a composite action's inputs, which its steps may run as scripts."""
-    inputs = text.split("\ninputs:\n", 1)[1] if "\ninputs:\n" in text else ""
-    inputs = re.split(r"^\S", inputs, maxsplit=1, flags=re.MULTILINE)[0]
-    return re.findall(r"^    default: *(.*)$", inputs, re.MULTILINE)
+    parts = re.split(r"^inputs:[ \t]*\n", text, maxsplit=1, flags=re.MULTILINE)
+    inputs = re.split(r"^\S", parts[1], maxsplit=1, flags=re.MULTILINE)[0] if len(parts) > 1 else ""
+    return re.findall(r"^ +default: *(.*)$", inputs, re.MULTILINE)
 
 
 def _phases_testing_the_selection():
@@ -882,6 +882,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(_action_input_defaults(
             "name: a\ninputs:\n  script:\n    default: tools/a.sh\nruns:\n  using: composite\n"
             "  steps:\n    - with:\n        default: tools/b.sh\n"), ["tools/a.sh"])
+        self.assertEqual(_action_input_defaults("inputs:\n  script:\n    default: tools/a.sh\n"),
+                         ["tools/a.sh"])
 
     def _run_script(self, text, args, env=None, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:

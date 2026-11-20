@@ -278,6 +278,19 @@ class DetermineTest(_ScriptTest):
                 self.assertNotIn("hosted_editor_mode=unaffected", outputs)
                 self.assertNotIn("hosted_editor_browser_targets=", outputs)
 
+    def test_hosted_selection_keeps_full_coverage_for_infra_before_hashing(self):
+        # The main workflow's planner hashes these revisions; the hosted one leaves no verdict.
+        for changed in (".bazelversion\n", ".github/actions/prepare-bazel-diff/action.yml\n"):
+            with self.subTest(changed=changed):
+                result, calls, outputs = self.determine(mode="determine-hosted-editor",
+                                                        changed=changed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Infra change requires full //... coverage: " + changed.strip(),
+                              result.stdout)
+                self.assertEqual([call for call in calls if call[0] == "java"], [])
+                self.assertNotIn(["git", "worktree", "add"], [call[:3] for call in calls])
+                self.assertNotIn("hosted_editor_mode=", outputs)
+
     def test_a_push_keeps_full_coverage_without_bazel_diff(self):
         result, calls, outputs = self.run_script("determine", GITHUB_EVENT_NAME="push",
                                                  GITHUB_REF="refs/heads/feature")
