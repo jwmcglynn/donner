@@ -381,15 +381,15 @@ in both sampled renderings and 217 and 166 on Geode.
 
 An area-coverage control decides which coverage is right. The software renderer draws each fixture
 at 4000 x 4000, and averaging each 8 x 8 block gives a coverage sampled on 32 sub-scanlines per
-output pixel instead of 4. At the pixels Geode counts, Geode's alpha is within 8 levels
-of the control at 365 of 511 (linear) and 347 of 497 (radial), with a mean difference of 6.1
+output pixel instead of 4. At the pixels Geode counts, Geode's alpha is within 8 levels of the
+control at 365 of 511 (linear) and 347 of 497 (radial), with mean differences of 6.1 and 6.2
 levels. Firefox's is within 8 levels at 152 and 153, with a mean of 18.6, and the software
 renderer's at 162 and 170, with a mean of 17.8 and 17.1. So the Geode difference is the Firefox
 images' sub-scanline coverage, not a Geode defect, and comparing Geode with them is unfair.
 
-The Linux renderings are the goldens. Metal differs from them in METALPIXELS pixels by at most
-METALDELTA levels, and its comparison counts METALCOUNT at the default threshold and 100-pixel
-allowance.
+The Linux renderings are the goldens. Metal's renderings differ from them in 3 (linear) and 4
+(radial) pixels, by at most 2 and 5 levels, and its comparison against them counts 0 pixels at the
+default threshold and 100-pixel allowance, as software Vulkan's does.
 
 To regenerate, delete a file and run from the repository root on Linux with the lavapipe ICD:
 
