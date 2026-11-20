@@ -186,6 +186,10 @@ public:
   /// gradient-stop budget is no larger, so every draw it admits fits.
   static constexpr std::size_t kMaxGradientRampStops = 256u * 1024u;
 
+  /// Most stops a gradient may have to draw through the cross-entity scene batch, whose paint
+  /// block carries them inline; `ensureResidentSceneRecord` refuses a gradient with more.
+  static constexpr std::size_t kMaxSceneGradientStops = 16u;
+
   /**
    * Create an encoder targeting the given texture.
    *

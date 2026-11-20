@@ -196,6 +196,8 @@ static_assert(kPaintStopColorRow + kMaxGradientStops <= kPaintStopOffsetRow &&
               "gradient paint block is too small for its stop ramp");
 
 using GradientUniforms = gpu::shader::programs::SlugGradientParams;
+static_assert(GeoEncoder::kMaxSceneGradientStops == kMaxGradientStops,
+              "the scene batch's paint block carries the same stops as the gradient uniform");
 static_assert(sizeof(EncodedPath::Band) == sizeof(gpu::shader::programs::SlugGradientBand));
 static_assert(offsetof(EncodedPath::Band, curveStart) ==
               offsetof(gpu::shader::programs::SlugGradientBand, curveStart));

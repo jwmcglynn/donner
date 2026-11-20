@@ -655,11 +655,38 @@ inline uint32_t toGeoSpreadMode(GradientSpreadMethod method) {
   return 0u;
 }
 
+/// How a gradient resolver charges the stops it converts for one draw, and what it reports.
+struct GradientStopCharge {
+  /// Charges the draw's stops to the frame before any is converted; empty when the caller already
+  /// charged this draw. Returns false when the frame's budget refuses them.
+  std::function<bool(std::size_t)> reserve;
+  /// Counts the stops converted; may be null.
+  std::uint64_t* conversions = nullptr;
+  /// Set when `reserve` refused the draw: nothing was converted and the draw must not happen.
+  bool refused = false;
+  /// Set when `reserve` charged the draw's stops.
+  bool charged = false;
+
+  /// Charges \p stops unless the caller already did. @return Whether the draw may convert them.
+  bool admit(std::size_t stops) {
+    if (!reserve) {
+      return true;
+    }
+    refused = !reserve(stops);
+    charged = !refused;
+    return charged;
+  }
+};
+
 /// Translate the gradient's stop list into the encoder wire format, every stop included.
 void buildGradientStops(const components::ComputedGradientComponent& computedGradient,
                         const css::RGBA currentColor, float opacity,
-                        std::vector<geode::LinearGradientParams::Stop>& stopsStorage) {
+                        std::vector<geode::LinearGradientParams::Stop>& stopsStorage,
+                        GradientStopCharge& charge) {
   const size_t stopCount = computedGradient.stops.size();
+  if (charge.conversions != nullptr) {
+    *charge.conversions += stopCount;
+  }
   stopsStorage.clear();
   stopsStorage.reserve(stopCount);
 
@@ -717,7 +744,7 @@ bool paintReferenceIsGradient(const components::ResolvedPaintServer& server) {
 std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
     const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
     const css::RGBA currentColor, float opacity,
-    std::vector<geode::LinearGradientParams::Stop>& stopsStorage) {
+    std::vector<geode::LinearGradientParams::Stop>& stopsStorage, GradientStopCharge& charge) {
   const EntityHandle handle = ref.reference.handle;
   if (!handle) {
     return std::nullopt;
@@ -743,11 +770,11 @@ std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
   const Vector2d endGrad =
       resolveGradientCoords(linear->x2, linear->y2, frame->coordBounds, frame->numbersArePercent);
 
-  if (computedGradient->stops.empty()) {
+  if (computedGradient->stops.empty() || !charge.admit(computedGradient->stops.size())) {
     return std::nullopt;
   }
 
-  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage);
+  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage, charge);
 
   geode::LinearGradientParams params;
   params.startGrad = startGrad;
@@ -766,8 +793,6 @@ std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
 struct ResolvedRadialGradient {
   std::optional<geode::RadialGradientParams> gradient;
   std::optional<css::RGBA> solidFallback;
-  /// Stops the gradient has, which a draw of either form charges to the frame.
-  std::size_t stopCount = 0;
 };
 
 /// Same shape as @ref resolveLinearGradientParams, but for radial gradients.
@@ -780,7 +805,7 @@ struct ResolvedRadialGradient {
 std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
     const css::RGBA currentColor, float opacity,
-    std::vector<geode::RadialGradientParams::Stop>& stopsStorage) {
+    std::vector<geode::RadialGradientParams::Stop>& stopsStorage, GradientStopCharge& charge) {
   const EntityHandle handle = ref.reference.handle;
   if (!handle) {
     return std::nullopt;
@@ -821,6 +846,9 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   // radial gradients (e.g., `r="0"` with a single visible color).
   if (radius == 0.0) {
     ResolvedRadialGradient out;
+    if (!charge.admit(computedGradient->stops.size())) {
+      return out;
+    }
     const auto& lastStop = computedGradient->stops.back();
     const css::RGBA base = lastStop.color.resolve(currentColor, opacity);
     // Multiply in stop-opacity per SVG2 (stop-color * stop-opacity) and then
@@ -828,7 +856,6 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     const double stopOpacity = std::clamp<double>(lastStop.opacity, 0.0, 1.0);
     out.solidFallback =
         css::RGBA(base.r, base.g, base.b, static_cast<uint8_t>(std::round(base.a * stopOpacity)));
-    out.stopCount = computedGradient->stops.size();
     return out;
   }
 
@@ -845,11 +872,11 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   // gradient never has a valid `t` anywhere. Match tiny-skia: drop the draw
   // (no shader can produce meaningful colors).
   const double centerDistance = (center - focalCenter).length();
-  if (centerDistance + radius <= focalRadius) {
+  if (centerDistance + radius <= focalRadius || !charge.admit(computedGradient->stops.size())) {
     return ResolvedRadialGradient{};
   }
 
-  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage);
+  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage, charge);
 
   geode::RadialGradientParams params;
   params.center = center;
@@ -861,7 +888,6 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   params.stops = std::span<const geode::RadialGradientParams::Stop>(stopsStorage);
 
   ResolvedRadialGradient out;
-  out.stopCount = stopsStorage.size();
   out.gradient = std::move(params);
   return out;
 }
@@ -5824,33 +5850,51 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
+  /// A charge that reserves each draw's stops against the frame's budget before they are
+  /// converted, unless \p alreadyCharged, and counts the conversions in the frame's counters.
+  GradientStopCharge gradientStopCharge(bool alreadyCharged) {
+    GradientStopCharge charge;
+    if (!alreadyCharged) {
+      charge.reserve = [this](std::size_t stops) { return reserveGradientStops(stops); };
+    }
+    charge.conversions = &counters.gradientStopConversions;
+    return charge;
+  }
+
   bool resolveBatchGradient(const Path& geometryPath, const components::ResolvedPaintServer& server,
                             double effectiveOpacity,
                             std::optional<geode::LinearGradientParams>& outLinear,
-                            std::optional<geode::RadialGradientParams>& outRadial) {
+                            std::optional<geode::RadialGradientParams>& outRadial,
+                            bool& outStopsCharged) {
     const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
-    if (ref == nullptr) {
+    // A gradient with more stops than the batch's paint block carries never batches, so it is
+    // left to the ordinary emit path without converting or charging its stops here.
+    const auto* computedGradient =
+        ref != nullptr && ref->reference.handle
+            ? ref->reference.handle.try_get<components::ComputedGradientComponent>()
+            : nullptr;
+    if (computedGradient == nullptr ||
+        computedGradient->stops.size() > geode::GeoEncoder::kMaxSceneGradientStops) {
       return false;
     }
     const css::RGBA currentColor = paint.currentColor;
     const float opacity = static_cast<float>(effectiveOpacity);
     const Box2d geometryBounds = geometryPath.bounds();
+    // A gradient the batch takes is charged here, before its stops are converted, and the caller
+    // tells the ordinary emit path so a fill that leaves the batch is not charged twice.
+    GradientStopCharge charge = gradientStopCharge(/*alreadyCharged=*/false);
     outLinear = resolveLinearGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                            opacity, gradientStopScratch);
-    if (!outLinear.has_value()) {
+                                            opacity, gradientStopScratch, charge);
+    if (!outLinear.has_value() && !charge.refused) {
       auto radial = resolveRadialGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                                opacity, gradientStopScratch);
+                                                opacity, gradientStopScratch, charge);
       if (radial.has_value() && radial->gradient.has_value()) {
         outRadial = std::move(radial->gradient);
       }
     }
-    // A gradient the batch takes is charged here, and the caller tells the ordinary emit path so
-    // a fill that leaves the batch is not charged twice.
-    if ((outLinear.has_value() || outRadial.has_value()) &&
-        !reserveGradientStops(gradientStopScratch.size())) {
-      outLinear.reset();
-      outRadial.reset();
-    }
+    // A zero-radius radial gradient is charged here too, though it draws as a solid fill outside
+    // the batch.
+    outStopsCharged = charge.charged;
     return outLinear.has_value() || outRadial.has_value();
   }
 
@@ -5899,16 +5943,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                            residentSlot, gradientResidentSlot, gradientStopsCharged);
   }
 
-  /// Draws \p linear over \p drawPath, charging its stops to the frame unless
-  /// \p stopsCharged says the caller already did. A charge past the frame's cap
-  /// refuses the draw.
+  /// Draws \p linear over \p drawPath; its stops were charged when they were converted.
   void drawLinearGradient(const Path& drawPath, const geode::LinearGradientParams& linear,
                           FillRule rule, const geode::EncodedPath* precomputedEncoded,
-                          geode::GeodeResidentGradientSlot* gradientResidentSlot,
-                          bool stopsCharged) {
-    if (!stopsCharged && !reserveGradientStops(linear.stops.size())) {
-      return;
-    }
+                          geode::GeodeResidentGradientSlot* gradientResidentSlot) {
     syncTransform();
     if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
       encoder->fillPathLinearGradientResident(*gradientResidentSlot, *precomputedEncoded, linear,
@@ -5919,27 +5957,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Draws a resolved radial gradient over \p drawPath, or the single color a
-  /// zero radius collapses it to, charging its stops to the frame unless
-  /// \p stopsCharged says the caller already did.
+  /// zero radius collapses it to; its stops were charged when it was resolved.
   /// @param resolved The radial resolution; empty when the reference is not a
   ///   radial gradient.
   /// @return False when there is no usable radial gradient and the caller should
-  ///   paint the reference's fallback instead; true when it was drawn or the
-  ///   frame's cap refused it.
+  ///   paint the reference's fallback instead; true when it was drawn.
   bool drawRadialGradient(const Path& drawPath,
                           const std::optional<ResolvedRadialGradient>& resolved, FillRule rule,
                           const geode::EncodedPath* precomputedEncoded,
                           geode::GeodeResidentSlot* residentSlot,
-                          geode::GeodeResidentGradientSlot* gradientResidentSlot,
-                          bool stopsCharged) {
+                          geode::GeodeResidentGradientSlot* gradientResidentSlot) {
     if (!resolved.has_value() ||
         (!resolved->gradient.has_value() && !resolved->solidFallback.has_value())) {
       return false;
     }
     const ResolvedRadialGradient& radial = *resolved;
-    if (!stopsCharged && !reserveGradientStops(radial.stopCount)) {
-      return true;
-    }
     syncTransform();
     if (radial.solidFallback.has_value()) {
       // SVG2 degenerate radial (r=0): paint the last stop color as a
@@ -5952,6 +5984,40 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       encoder->fillPathRadialGradient(drawPath, *radial.gradient, rule, precomputedEncoded);
     }
     return true;
+  }
+
+  /// Resolves \p ref as a linear or radial gradient and draws it over \p drawPath. The draw's
+  /// stops are charged to the frame before they are converted, unless \p stopsCharged says the
+  /// caller already charged them. Once the frame's stop budget has refused a draw, the frame draws
+  /// nothing more, as on the CPU renderer, so no later gradient is resolved or converted.
+  /// @return True when the reference was drawn or refused; false when it is not a usable
+  ///   gradient and the caller should paint its fallback.
+  bool drawGradientReference(const components::PaintResolvedReference& ref,
+                             const Path& geometryPath, const Path& drawPath, float opacity,
+                             FillRule rule, const geode::EncodedPath* precomputedEncoded,
+                             geode::GeodeResidentSlot* residentSlot,
+                             geode::GeodeResidentGradientSlot* gradientResidentSlot,
+                             bool stopsCharged) {
+    if (drawBudget->rejected()) {
+      return true;
+    }
+    GradientStopCharge charge = gradientStopCharge(stopsCharged);
+    const Box2d geometryBounds = geometryPath.bounds();
+    auto linear =
+        resolveLinearGradientParams(ref, geometryBounds, paint.viewBox, paint.currentColor, opacity,
+                                    gradientStopScratch, charge);
+    if (linear.has_value()) {
+      drawLinearGradient(drawPath, *linear, rule, precomputedEncoded, gradientResidentSlot);
+      return true;
+    }
+    if (charge.refused) {
+      return true;
+    }
+    auto radial =
+        resolveRadialGradientParams(ref, geometryBounds, paint.viewBox, paint.currentColor, opacity,
+                                    gradientStopScratch, charge);
+    return charge.refused || drawRadialGradient(drawPath, radial, rule, precomputedEncoded,
+                                                residentSlot, gradientResidentSlot);
   }
 
   /// Same as `drawPaintedPath`, but the gradient's objectBoundingBox is
@@ -5988,20 +6054,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // Paint-server reference: try linear gradient first, then radial; if
     // neither matches, fall back to the reference's solid fallback color.
     if (const auto* ref = std::get_if<components::PaintResolvedReference>(&server)) {
-      const Box2d geometryBounds = geometryPath.bounds();
-
-      auto linear = resolveLinearGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                                opacity, gradientStopScratch);
-      if (linear.has_value()) {
-        drawLinearGradient(drawPath, *linear, rule, precomputedEncoded, gradientResidentSlot,
-                           gradientStopsCharged);
-        return;
-      }
-
-      auto radial = resolveRadialGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
-                                                opacity, gradientStopScratch);
-      if (drawRadialGradient(drawPath, radial, rule, precomputedEncoded, residentSlot,
-                             gradientResidentSlot, gradientStopsCharged)) {
+      if (drawGradientReference(*ref, geometryPath, drawPath, opacity, rule, precomputedEncoded,
+                                residentSlot, gradientResidentSlot, gradientStopsCharged)) {
         return;
       }
       // Recognized as radial but otherwise unusable (empty stops, focal
@@ -7813,6 +7867,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // than at emit time because the batcher needs them before it can decide.
   std::optional<geode::LinearGradientParams> batchLinear;
   std::optional<geode::RadialGradientParams> batchRadial;
+  // Whether batch resolution charged the fill's gradient stops, so the ordinary emit path does
+  // not charge them again.
+  bool fillStopsCharged = false;
   //
   // The state-driven reasons a gradient would be declined are cheap to test up
   // front, and testing them here keeps the ordinary emit path from re-resolving
@@ -7822,7 +7879,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   if (kEnableSceneBatching && referenceFill && fillShapeBatchable &&
       !impl_->encoder->hasActiveClipState() && !impl_->encoder->hasOpenMaskPass()) {
     impl_->resolveBatchGradient(drawPathGeometry, impl_->paint.fill, impl_->paint.fillOpacity,
-                                batchLinear, batchRadial);
+                                batchLinear, batchRadial, fillStopsCharged);
   }
   const bool gradientFillBatchable = batchLinear.has_value() || batchRadial.has_value();
 
@@ -7885,7 +7942,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
     if (impl_->paint.drawFillComponent) {
       impl_->fillResolved(drawPathGeometry, path.fillRule, fillEncoded, residentFill,
-                          residentGradientFill, /*gradientStopsCharged=*/gradientFillBatchable);
+                          residentGradientFill, /*gradientStopsCharged=*/fillStopsCharged);
     }
   }
 

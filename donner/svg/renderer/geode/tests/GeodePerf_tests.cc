@@ -1116,6 +1116,39 @@ TEST_F(GeodePerfTest, ManyStopGradient_SolidOrPatternPaintReleasesTheRamp) {
   }
 }
 
+/// A frame converts a gradient draw's stops only after its stop budget admits them, once per draw
+/// even when the fill leaves the batch, and converts none once the budget has refused a draw.
+/// Forty rects share one 400-stop gradient: unbounded, the frame converts all 16,000 stops; under
+/// a cap of 3,000 it converts the seven draws that fit, 2,800 stops, and nothing after the
+/// eighth is refused.
+TEST_F(GeodePerfTest, ManyStopGradient_StopConversionsStayWithinTheFrameBudget) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" +
+      ManyStopGradientDefs("g", 400) + "</defs>";
+  for (int i = 0; i < 40; ++i) {
+    source += "<rect x=\"" + std::to_string((i % 10) * 12) + "\" y=\"" +
+              std::to_string((i / 10) * 20) + R"svg(" width="10" height="18" fill="url(#g)"/>)svg";
+  }
+  source += "</svg>";
+
+  for (const std::size_t cap : {RendererDrawBudget::kMaximumGradientStops, std::size_t{3000}}) {
+    SCOPED_TRACE(cap);
+    SVGDocument document = ParsePerfDocument(source);
+    RendererGeode renderer(device);
+    renderer.setGradientStopBudgetForTesting(cap);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("ManyStopGradient stop conversions", c);
+    const RendererResourceStats stats = renderer.resourceStats();
+    const std::uint64_t expected = cap < 16000u ? 7u * 400u : 40u * 400u;
+    EXPECT_EQ(c.gradientStopConversions, expected);
+    EXPECT_EQ(stats.gradientStops, expected);
+    EXPECT_EQ(stats.drawBudgetRejected, cap < 16000u);
+  }
+}
+
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";

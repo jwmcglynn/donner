@@ -72,6 +72,10 @@ struct GeodeCounters {
   /// state target with the path-encode cache: `== 0` on an unchanged-
   /// geometry frame (the `GeodePathCacheComponent` serves all paths).
   uint64_t pathEncodes = 0;
+  /// Gradient stops converted into draw parameters this frame. Each gradient draw converts its
+  /// stops only after the frame's stop budget admits them, so this never exceeds that budget's
+  /// charge, and a frame the budget refused converts no more.
+  uint64_t gradientStopConversions = 0;
 
   /// `gpu::RenderPassEncoder::draw` / `drawIndexed` calls. One per
   /// submitted draw call, regardless of instance count. Used to gate
