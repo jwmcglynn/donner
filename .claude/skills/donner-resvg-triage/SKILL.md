@@ -205,8 +205,10 @@ It scans one directory under `third_party/resvg-test-suite/tests/<category>/` an
 tracked once per category block, not in a shared list. Beware: a typo'd category name returns an
 empty vector _silently_ — zero tests, no error — so after adding a block, confirm the tests appear
 with a `--gtest_filter` run. Category-wide requirements are automatic: `filters/*` requires the
-FilterEffects backend feature, `text/*` requires Text; canvas is forced to 500x500 to match resvg's
-references.
+FilterEffects backend feature, `text/*` requires Text. Each case renders on the canvas of the
+image it compares with (the square of the reference PNG's longer side; render-only cases keep
+500x500). A missing golden fails the case unless `UPDATE_GOLDEN_IMAGES_DIR` is set, which writes
+it on the canvas of the case's vendored PNG.
 
 Group override entries by reason with a short comment line, e.g.:
 
@@ -250,7 +252,8 @@ ls third_party/resvg-test-suite/tests/            # current category roots
 Goldens are resvg's reference renders — you normally never regenerate them from Donner output.
 `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace)` only takes effect for tests with
 `.enableGoldenUpdateFromEnv()` or when a golden file is missing (e.g. a new
-`.withGeodeGoldenOverride` PNG). Committing a Donner render over a resvg golden converts a
+`.withGeodeGoldenOverride` PNG); a missing golden is written on the canvas of the case's vendored
+PNG. Committing a Donner render over a resvg golden converts a
 conformance test into a self-fulfilling snapshot — if you believe resvg's golden is wrong, that
 claim belongs in `docs/design_docs/0009-resvg_test_suite_bugs.md` with a `WithGoldenOverride`.
 

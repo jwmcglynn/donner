@@ -91,9 +91,10 @@ The strict count takes the compared cases only, so it excludes those two render-
 then excludes every case whose params carry a pixel-budget or threshold call (`WithThreshold`,
 `WithMaxPixels`, `withMaxPixelsDifferent`, `withSimpleTextMaxPixels` or
 `withGeodeMaxPixelsDifferent`, even when the value equals the default) or a custom golden
-(`WithGoldenOverride` or `withGeodeGoldenOverride`). It still counts cases that compare against a
-replacement resvg v0.49.0 reference (`ResvgV049Reference()`), cases with another canvas size, and
-cases behind a text-full or backend capability gate.
+(`WithGoldenOverride` or `withGeodeGoldenOverride`). It still counts cases whose vendored
+reference is an upstream resvg rendering newer than the snapshot (provenance in
+`third_party/resvg-test-suite/BUILD.bazel`), cases whose reference is not 500x500, and cases behind
+a text-full or backend capability gate.
 
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.
@@ -131,6 +132,26 @@ filename stem has every non-alphanumeric character replaced by `_`. For the exam
 
 On the Geode build (multiple comparison modes) the mode is appended, for example
 `..._TinyGolden` / `..._GeodeGolden`.
+
+Each comparison renders on the canvas its reference image was rendered on, so no registration
+states a canvas size. The harness reads the PNG header of the image the mode compares with (the
+vendored PNG, the `WithGoldenOverride` golden, or in the `GeodeGolden` mode the
+`withGeodeGoldenOverride` golden) and fits the document into the square of the image's longer
+side, the way resvg renders the suite: most references are 500x500, upstream resvg's newer
+references are 300x300, and a 2:1 document's 500x250 reference comes from a 500x500 canvas. An
+explicit `.setCanvasSize(w, h)` always takes precedence. Render-only cases
+(`Params::UndefinedBehavior`, `Params::DeprecatedInSVG2`) compare with no image and keep the
+suite's 500x500 canvas. `parity_report` derives the same canvas for each lane from the PNG header.
+
+A reference that is missing or unreadable fails the case with a message naming the file, rather
+than rendering at a guessed size. The exception is golden regeneration: with
+`UPDATE_GOLDEN_IMAGES_DIR` set, a missing golden is rendered on the canvas of the case's vendored
+PNG and written, so deleting a Donner-rendered golden and rerunning its row regenerates it. Every
+golden has its vendored PNG's size except the 800x800 ones (`resvg-half-box-blur.png`,
+`resvg-all-types-inline-*.png` and `resvg-complex-graphemes-and-coordinates-list.png`), which are
+resvg renderings of independent scenes; regenerate those with the resvg commands in the golden
+README, not with `UPDATE_GOLDEN_IMAGES_DIR`, which would write them at their rows' 500x500 size. A new case whose vendored PNG is missing too
+needs an explicit `.setCanvasSize(w, h)`.
 
 To run a single test:
 

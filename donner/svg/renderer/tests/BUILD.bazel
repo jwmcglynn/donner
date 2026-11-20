@@ -18,6 +18,7 @@ filegroup(
     name = "resvg_test_policy_sources",
     srcs = [
         "BUILD.bazel",
+        "ImageComparisonTestFixture.cc",
         "ImageComparisonTestFixture.h",
         "RendererTestBackendGeode.cc",
         "RendererTestBackendTinySkia.cc",
@@ -361,6 +362,7 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        ":renderer_image_test_utils",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/svg/renderer:renderer_image_io",

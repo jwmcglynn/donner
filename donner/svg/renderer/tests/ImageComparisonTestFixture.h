@@ -109,6 +109,10 @@ struct ImageComparisonParams {
   bool showTerminalPreview = true;
   /// Optional canvas size override, which determines the size of the rendered image.
   std::optional<Vector2i> canvasSize;
+  /// If true and \ref canvasSize is unset, render on the canvas the comparison's reference image
+  /// was rendered on (\ref ResolveComparisonCanvasSize). A reference that cannot be read fails the
+  /// comparison instead of falling back to the document's own size.
+  bool canvasSizeFromReference = false;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
   /// Optional Geode-specific golden image, used ONLY for the `GeodeGolden`
@@ -288,6 +292,17 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& setCanvasSize(int width, int height) {
     canvasSize = Vector2i(width, height);
+    return *this;
+  }
+
+  /**
+   * @brief Sets \ref canvasSizeFromReference, so the case renders on the canvas its reference
+   * image implies unless \ref setCanvasSize sets one.
+   *
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& enableCanvasSizeFromReference() {
+    canvasSizeFromReference = true;
     return *this;
   }
 
@@ -521,6 +536,52 @@ void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& exp
  * @return Path the bitmap was written to.
  */
 std::string WriteBitmapToTestOutputs(const RendererBitmap& bitmap, std::string_view label);
+
+/**
+ * @brief The canvas size of one comparison, or why it cannot be determined.
+ */
+struct CanvasSizeResult {
+  /// Canvas to render on; empty when the document's own size applies or on error.
+  std::optional<Vector2i> size;
+  /// Why the canvas cannot be determined; empty on success.
+  std::string error;
+};
+
+/**
+ * @brief Reads the canvas a reference image was rendered on: the square whose side is the
+ * image's longer dimension.
+ *
+ * The resvg suite renders each reference by fitting the document into a square canvas, so a 2:1
+ * document gives a 500x250 reference from a 500x500 canvas. Only the PNG signature and IHDR
+ * header are read.
+ *
+ * @param referencePath The reference PNG.
+ * @return The canvas size, or an error naming @p referencePath when it is missing, unreadable,
+ * shorter than a PNG header, does not start with the PNG signature and a 13-byte IHDR chunk, or
+ * has dimensions outside 1 to 16384 pixels.
+ */
+CanvasSizeResult CanvasSizeFromReferenceImage(const std::filesystem::path& referencePath);
+
+/**
+ * @brief Resolves the canvas of one comparison.
+ *
+ * The canvas is \ref ImageComparisonParams::canvasSize when set; otherwise, when
+ * \ref ImageComparisonParams::canvasSizeFromReference is set, the canvas \p referencePath implies;
+ * otherwise none, so the document's own size applies.
+ *
+ * When \p referencePath does not exist and \p missingReferenceFallback is given, the canvas comes
+ * from that image instead. The fixture passes the case's vendored corpus PNG only while
+ * `UPDATE_GOLDEN_IMAGES_DIR` is set, so a deleted override golden is written again on the canvas of
+ * the case's vendored reference; outside that mode a missing reference fails.
+ *
+ * @param params Comparison parameters.
+ * @param referencePath The image this comparison is compared with.
+ * @param missingReferenceFallback Image whose canvas applies when \p referencePath is missing.
+ * @return The canvas, or an error when it must come from an image that cannot be read.
+ */
+CanvasSizeResult ResolveComparisonCanvasSize(
+    const ImageComparisonParams& params, const std::filesystem::path& referencePath,
+    const std::optional<std::filesystem::path>& missingReferenceFallback = std::nullopt);
 
 /**
  * @brief Terminal preview configuration derived from the environment.
