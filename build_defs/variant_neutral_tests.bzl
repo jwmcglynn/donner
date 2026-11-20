@@ -131,6 +131,16 @@ def variant_neutral_test_suite(name):
         **common
     )
 
+    # A dependency that declares a different header in the full text tier.
+    cc_library(
+        name = "_variant_neutral_header_reader",
+        hdrs = _tier_select(
+            ["testdata/variant_neutral/ReaderFull.h"],
+            ["testdata/variant_neutral/Reader.h"],
+        ),
+        **common
+    )
+
     # A header generated differently per text tier, with the same path in every configuration. Its
     # target is on GENERATED_HEADER_ALLOWLIST so that the action comparison is what rejects it.
     _generated_header(
@@ -154,6 +164,7 @@ def variant_neutral_test_suite(name):
 
     _fixture(name = "_variant_neutral_clean")
     _fixture(name = "_variant_neutral_dep_define", deps = [":_variant_neutral_define_reader"])
+    _fixture(name = "_variant_neutral_dep_header", deps = [":_variant_neutral_header_reader"])
     _fixture(name = "_variant_neutral_generated", deps = [":_variant_neutral_generated_header_reader"])
     _fixture(name = "_variant_neutral_unlisted", deps = [":_variant_neutral_unlisted_header_reader"])
     _fixture(
@@ -196,6 +207,11 @@ def variant_neutral_test_suite(name):
             _rejected_text_full_test,
             "make_variable",
             "argv: -DVARIANT_NEUTRAL_TEST_TIER=2",
+        ),
+        "variant_neutral_rejects_dep_header_test": (
+            _rejected_text_full_test,
+            "dep_header",
+            "deps header: build_defs/testdata/variant_neutral/ReaderFull.h",
         ),
         "variant_neutral_rejects_unlisted_generated_header_test": (
             _rejected_default_test,

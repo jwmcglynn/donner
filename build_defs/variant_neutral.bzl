@@ -10,9 +10,12 @@ and in the neutral one. The objects rule checks that during analysis, in every c
 uses it, and fails the build otherwise:
 
 - The library's compile actions. The neutral compile target is also analyzed, never built, in the
-  consumer's configuration; each compile's arguments, environment and declared inputs must match
-  the neutral configuration's apart from the configuration output directory. This covers the C++
-  toolchain, its features, command-line compile options and make variables.
+  consumer's configuration. Each compile's arguments and environment must match the neutral
+  configuration's apart from the configuration output directory, and so must the inputs the
+  target declares: its own sources and headers, the headers of its compilation context, and the
+  C++ toolchain's identity and files. Declared inputs are compared rather than `Action.inputs`,
+  which Bazel narrows to the discovered headers once a compile has run. This covers command-line
+  compile options, features and make variables.
 - What those actions read but do not spell out: the library's own compile attributes, the
   compilation context of its deps (defines, include paths, headers), and the action that writes
   each generated header in that context where the deps, srcs and hdrs edges reach it. Every
@@ -182,16 +185,41 @@ _compile_inputs = rule(
 )
 
 _CompileActionsInfo = provider(
-    doc = "A target's compile actions, by normalized primary output.",
-    fields = {"actions": "dict of normalized output path to Action"},
+    doc = "A C++ target's compile commands and the inputs it declares for them.",
+    fields = {
+        "commands": "dict of normalized output path to a list of argv and env lines",
+        "declared": "sorted lines naming the declared inputs and the C++ toolchain",
+    },
 )
 
-def _compile_actions_impl(target, _ctx):
-    actions = {}
+_CPP_TOOLCHAIN_TYPE = "@bazel_tools//tools/cpp:toolchain_type"
+
+def _toolchain_lines(ctx):
+    toolchain = None
+    toolchains = getattr(ctx.rule, "toolchains", None)
+    if toolchains != None and _CPP_TOOLCHAIN_TYPE in toolchains:
+        toolchain = getattr(toolchains[_CPP_TOOLCHAIN_TYPE], "cc", None)
+    legacy = getattr(ctx.rule.attr, "_cc_toolchain", None)
+    if toolchain == None and legacy != None and cc_common.CcToolchainInfo in legacy:
+        toolchain = legacy[cc_common.CcToolchainInfo]
+    if toolchain == None:
+        fail("variant_neutral cannot find the C++ toolchain of " + str(ctx.label))
+    lines = ["toolchain: " + toolchain.toolchain_id, "compiler: " + _normalize(toolchain.compiler_executable)]
+    return lines + ["toolchain file: " + path for path in _sorted_paths(toolchain.all_files.to_list())]
+
+def _compile_actions_impl(target, ctx):
+    commands = {}
     for action in target.actions:
         if action.mnemonic in _COMPILE_MNEMONICS:
-            actions[_normalize(action.outputs.to_list()[0].path)] = action
-    return [_CompileActionsInfo(actions = actions)]
+            lines = ["argv: " + _normalize(arg) for arg in action.argv]
+            lines += ["env: %s=%s" % (key, _normalize(value)) for key, value in sorted(action.env.items())]
+            commands[_normalize(action.outputs.to_list()[0].path)] = lines
+    files = []
+    for name in _COMPILE_FILE_ATTRS:
+        files += getattr(ctx.rule.files, name, [])
+    declared = ["input: " + path for path in _sorted_paths(files)]
+    declared += ["header: " + path for path in _sorted_paths(target[CcInfo].compilation_context.headers.to_list())]
+    return [_CompileActionsInfo(commands = commands, declared = declared + _toolchain_lines(ctx))]
 
 _compile_actions = aspect(implementation = _compile_actions_impl)
 
@@ -213,22 +241,18 @@ def _mismatch(library, consumer, neutral, what = ""):
         "" if only_consumer or only_neutral else "\n(same entries in a different order)",
     ))
 
-def _action_lines(action):
-    lines = ["argv: " + _normalize(arg) for arg in action.argv]
-    lines += ["env: %s=%s" % (key, _normalize(value)) for key, value in sorted(action.env.items())]
-    return lines + ["input: " + path for path in _sorted_paths(action.inputs.to_list())]
-
 def _compare_compile_actions(library, consumer, neutral):
-    if sorted(consumer.keys()) != sorted(neutral.keys()):
-        _mismatch(library, ["compile: " + key for key in sorted(consumer.keys())], [
-            "compile: " + key
-            for key in sorted(neutral.keys())
-        ])
-    for output in sorted(neutral.keys()):
-        consumer_lines = _action_lines(consumer[output])
-        neutral_lines = _action_lines(neutral[output])
-        if consumer_lines != neutral_lines:
-            _mismatch(library, consumer_lines, neutral_lines, " Compile of " + output + ":")
+    if sorted(consumer.commands.keys()) != sorted(neutral.commands.keys()):
+        _mismatch(
+            library,
+            ["compile: " + key for key in sorted(consumer.commands.keys())],
+            ["compile: " + key for key in sorted(neutral.commands.keys())],
+        )
+    for output in sorted(neutral.commands.keys()):
+        if consumer.commands[output] != neutral.commands[output]:
+            _mismatch(library, consumer.commands[output], neutral.commands[output], " Compile of " + output + ":")
+    if consumer.declared != neutral.declared:
+        _mismatch(library, consumer.declared, neutral.declared, " Declared compile inputs:")
 
 def _object_stem(basename):
     return basename.removesuffix(".o").removesuffix(".pic")
@@ -242,8 +266,8 @@ def _variant_neutral_objects_impl(ctx):
     neutral_library = ctx.attr.library[0]
     _compare_compile_actions(
         library,
-        ctx.attr.consumer_library[_CompileActionsInfo].actions,
-        neutral_library[_CompileActionsInfo].actions,
+        ctx.attr.consumer_library[_CompileActionsInfo],
+        neutral_library[_CompileActionsInfo],
     )
     objects = [
         file
