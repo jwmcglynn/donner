@@ -70,14 +70,12 @@ requires the clipped render to equal the visible part of the rect blurred with r
 | filters/feSpotLight        | complex-transform                     | Reference shades before skew and attenuates the cone edge differently |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
 | filters/filter             | subregion-and-primitiveUnits=objectBoundingBox-1/-2 | Explicit half-box clip; opaque interior and exact crosshair ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
-| filters/filter             | with-subregion-3                     | Firefox reference preserves the first blur's clipped edge ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | painting/stroke            | radial-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
 | structure/image            | embedded-svg-with-text                | Harness mismatch: SVG images get the suite's test fonts        |
 | text/text-decoration | all-types-inline | Literal bands preserve multiline decoration offsets and paint order |
-| text/text-decoration | all-types-inline-comma-separated, all-types-inline-no-spaces | Malformed lists preserve undecorated glyphs |
 | text/font-size-adjust      | simple-case                           | Reference disagreement: anchor on the shaped advance (#1173)   |
 | text/textPath              | mixed-children-1                      | Reference disagreement: SVG 2 continues at the path end point  |
 | text/textPath              | mixed-children-2                      | Reference disagreement: SVG 2 continues at the path end point  |
@@ -178,21 +176,6 @@ requires stretch on a straight path to equal ordinary rotated text, is the indep
 check. The evidence and the regeneration command are in the
 [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
-### Allowed nearest-neighbor reference differences
-
-CSS Images permits an implementation-selected edge-preserving algorithm for
-`crisp-edges`; deprecated `optimizeSpeed` maps to that value. An alternate nearest
-sampling grid does not establish that the upstream reference violates the specification.
-
-| Category | Test | Reason |
-| --- | --- | --- |
-| painting/image-rendering | on-feImage | Nearest sampling at destination pixel centers |
-
-The [golden README](../../donner/svg/renderer/testdata/golden/README.md#nearest-neighbor-sampling-for-on-feimage)
-records the construction and checksums for `on-feImage`. The separate `optimizeSpeed` fixture
-compares against its resvg v0.49.0 rendering on TinySkia and Geode. Geode maps destination
-pixel centers through the inverse transform to select the nearest source texel.
-
 ### Sharp pattern-tile seams (reference rasterization, not a spec violation)
 
 The specification does not say how a pattern tile is rasterized, so these are not "wrong per
@@ -250,21 +233,21 @@ resvg v0.49.0 references and a 0.10 threshold for bitmap resampling. The
 [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-emoji-bitmap-sampling)
 records the comparison.
 
-### textPath and text-decoration overrides
+### textPath overrides
 
 | Category             | Test                         | Reason |
 | -------------------- | ---------------------------- | ------ |
 | text/textPath        | dy-with-tiny-coordinates     | Reference disagreement: the vendored PNG predates resvg's current dy layout on a path; independent resvg 0.47.0 reference |
 | text/textPath        | tspan-with-absolute-position | Regression golden for absolute distance along the text path (legacy PNG, provenance not recorded) |
-| text/textPath        | tspan-with-relative-position | Reference disagreement: the vendored PNG predates resvg's current dx/dy layout on a path; independent resvg 0.47.0 reference |
 | text/textPath        | with-underline               | Regression golden for the on-path underline (legacy PNG, provenance not recorded) |
-| text/text-decoration | indirect                     | Reference disagreement: the vendored PNG outlines the glyphs and underline in green, which the SVG does not paint (legacy PNG, provenance not recorded) |
 
 The golden README records the evidence and, where known, the regeneration command for each.
 
 ## Golden files
 
-Every `resvg-*.png` and `donner-*.png` in `golden/` is referenced by an override above. The
+Every `resvg-*.png` and `donner-*.png` in `golden/` is referenced by an override above, except
+`resvg-tspan-with-relative-position.png`, which `TextPathGeode_tests.cc` compares Geode's
+text-on-path rendering with. The
 `text/font-size` tests other than `named-value{,-without-a-parent}` compare against the upstream
 references.
 

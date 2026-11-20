@@ -111,7 +111,6 @@ settings on the canvas each case takes from its reference. Their provenance is i
 | side=right | threshold 0.05 | Half-turned glyph edges |
 | tspan-with-absolute-position | golden | Absolute distance along the text path |
 | with-underline | golden | Underline paint along the text path |
-| tspan-with-relative-position | golden | Reference generated independently with resvg 0.47.0 |
 | writing-mode=tb | golden, default settings, 300x300 | The reference moves upright glyphs off the font's vmtx origin |
 
 For the opaque `with-path` and `with-path-and-xlink-href` cases, see the
