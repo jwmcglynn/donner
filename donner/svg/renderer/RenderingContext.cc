@@ -690,12 +690,11 @@ public:
                : entt::null;
   }
 
-  /// The paint server reference \p entity's own fill or stroke makes, when it paints at all.
+  /// The paint server reference \p entity's own fill or stroke makes, if any.
   std::optional<PaintServer::ElementReference> spanPaintReference(Entity entity,
                                                                   bool forStroke) const {
     const auto* style = registry_.try_get<ComputedStyleComponent>(entity);
-    if (style == nullptr || !style->properties.has_value() ||
-        style->properties->display.get().value() == Display::None) {
+    if (style == nullptr || !style->properties.has_value()) {
       return std::nullopt;
     }
     const std::optional<PaintServer> paint =
@@ -754,8 +753,10 @@ public:
         forStroke});
   }
 
-  /// Visit the text content below \p parent for \p walk.
-  void walkTextSpans(Entity parent, TextSpanWalk& walk) {
+  /// Visit the text content below \p parent for \p walk. Content that the text system hides, by
+  /// its own state or an ancestor's (\p parentHidden), paints no glyphs, so its paint records no
+  /// pattern.
+  void walkTextSpans(Entity parent, TextSpanWalk& walk, bool parentHidden = false) {
     for (Entity cur = registry_.get<donner::components::TreeComponent>(parent).firstChild();
          cur != entt::null;
          cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
@@ -763,11 +764,12 @@ public:
         walk.effectSpans.push_back(cur);
         continue;
       }
-      if (walk.collectsPatterns) {
+      const bool hidden = IsTextHidden(EntityHandle(registry_, cur), parentHidden, userLanguages_);
+      if (walk.collectsPatterns && !hidden) {
         collectSpanPattern(cur, /*forStroke=*/false, walk);
         collectSpanPattern(cur, /*forStroke=*/true, walk);
       }
-      walkTextSpans(cur, walk);
+      walkTextSpans(cur, walk, hidden);
     }
   }
 

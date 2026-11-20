@@ -863,14 +863,15 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
 TEST_F(RendererDriverTest, TextStagesATileOnlyForASpansOwnPattern) {
   // Text whose spans paint only the text's own paint stages no span tile and records no span
   // pattern; a span pattern is staged once for every span that references it, as the instance's
-  // entry 0.
+  // entry 0. A span that the text system hides, by its own state or an ancestor's, paints no
+  // glyphs, so its pattern is staged only when a shown span also references it.
   struct Case {
     std::string_view label;
     std::string_view content;
     int elementTiles;
     int spanTiles;
   };
-  const std::array<Case, 4> cases = {{
+  const std::array<Case, 7> cases = {{
       {"solid", R"svg(fill="red">Te<tspan fill="blue">xt</tspan>)svg", 0, 0},
       {"text_pattern",
        R"svg(fill="url(#a)">T<tspan fill="url(#a)">e</tspan><tspan fill="red">x</tspan>t)svg", 1,
@@ -880,6 +881,16 @@ TEST_F(RendererDriverTest, TextStagesATileOnlyForASpansOwnPattern) {
        1, 1},
       {"span_pattern_in_solid_text", R"svg(fill="red">Te<tspan stroke="url(#b)">xt</tspan>)svg", 0,
        1},
+      {"span_pattern_under_hidden_span",
+       R"svg(fill="red">Te<tspan display="none"><tspan fill="url(#b)">xt</tspan></tspan>)svg", 0,
+       0},
+      {"span_pattern_under_unmatched_language",
+       R"svg(fill="red">Te<tspan systemLanguage="zz"><tspan fill="url(#b)">xt</tspan></tspan>)svg",
+       0, 0},
+      {"span_pattern_also_shown",
+       R"svg(fill="red">T<tspan display="none"><tspan fill="url(#b)">e</tspan></tspan><tspan
+           fill="url(#b)">xt</tspan>)svg",
+       0, 1},
   }};
   for (const Case& testCase : cases) {
     SCOPED_TRACE(testCase.label);
@@ -917,7 +928,7 @@ TEST_F(RendererDriverTest, TextStagesATileOnlyForASpansOwnPattern) {
     EXPECT_EQ(elementTiles, testCase.elementTiles);
     EXPECT_THAT(spanSlots, testing::SizeIs(testCase.spanTiles));
     const auto text = document.querySelector("#text");
-    ASSERT_TRUE(text.has_value());
+    ASSERT_THAT(text, testing::Optional(testing::_));
     const int textDrawOrder =
         document.registry()
             .get<components::RenderingInstanceComponent>(text->unsafeEntityHandle().entity())
