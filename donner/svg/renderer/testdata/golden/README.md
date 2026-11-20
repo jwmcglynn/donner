@@ -415,8 +415,9 @@ viewBox, crosshair, frame, and implicit horizontal advances stay the same:
 resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoColorEmoji.ttf --width 500 --height 500 reference.svg donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png
 ```
 
-The existing per-pixel threshold remains 0.1; the comparison uses the ordinary
-100-pixel budget, replacing the former 1100-pixel allowance.
+The comparison uses a 0.07 per-pixel threshold for the shifted crosshair guide
+described under [color emoji bitmap sampling](#color-emoji-bitmap-sampling), and the
+ordinary 100-pixel budget.
 
 Font SHA-256: `21fc478e003fc871200ba3bcf4215295a80e06a5c1b96f5368adc2183956f01a`.
 
@@ -437,19 +438,30 @@ cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.
 `text/text/compound-emojis` and `text/text/emojis` use 500 × 500 resvg v0.49.0
 renders of the unchanged corpus SVGs with the bundled Noto Color Emoji font. The
 first scene draws one joined rainbow flag. The second draws four centered faces.
-The full CPU text tier agrees with resvg on the visible color bounds of every
-glyph. The remaining differences are compatible with bitmap resampling.
+Bitmap glyphs resample with the kernel an image with `image-rendering: auto` uses.
+Outside the vertical crosshair guide, the full CPU text tier then matches both
+references at the default 0.02 threshold.
 
-| Fixture | Differences at 0.02 | Differences at 0.10 |
-| --- | ---: | ---: |
-| `compound-emojis` | 375 | 0 |
-| `emojis` | 657 | 0 |
+The remaining differences are all on that guide. Its 1.25 px
+stroke is centered on the boundary between columns 249 and 250, so exact coverage
+is 0.625 in each column, alpha 160 in Donner. Both references, and the resvg 0.47.0
+reference of `compound-emojis-and-coordinates-list`, draw it at alphas 128 and 192:
+the guide is shifted 1/8 px right. On the gray guide that 32-level alpha step needs
+a 0.061 color threshold. 186 other 500x500 corpus references draw the same guide
+at 160 and 160.
 
-The comparison uses 0.10 and the ordinary 100-pixel allowance. The Linux and
-macOS resvg renders are byte-identical, as are the two sets of Donner outputs.
-The corpus [BUILD file](../../../../../third_party/resvg-test-suite/BUILD.bazel)
-records the reproduction command and checksums. Both fixtures require full CPU
-text for the font's color bitmap strikes.
+| Fixture | Differences at 0.02 | Of those, in the guide's two columns | Differences at 0.07 |
+| --- | ---: | ---: | ---: |
+| `compound-emojis` | 335 | 335 | 0 |
+| `emojis` | 396 | 396 | 0 |
+| `compound-emojis-and-coordinates-list` | 359 | 359 | 0 |
+
+The comparisons use 0.07 and the ordinary 100-pixel allowance. Counts at 0.02 are
+from macOS arm64 with the full CPU text tier. The Linux and macOS resvg renders are
+byte-identical. The corpus
+[BUILD file](../../../../../third_party/resvg-test-suite/BUILD.bazel) records the
+reproduction command and checksums. All three fixtures require full CPU text for
+the font's color bitmap strikes.
 
 ## Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent`
 

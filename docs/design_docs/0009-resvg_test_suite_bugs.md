@@ -233,7 +233,9 @@ emoji cluster placement.
 | text/text | compound-emojis-and-coordinates-list         | resvg v0.47.0 rendering of explicitly placed emoji clusters |
 
 The separate `text/text/compound-emojis` and `text/text/emojis` fixtures use
-resvg v0.49.0 references and a 0.10 threshold for bitmap resampling. The
+resvg v0.49.0 references. All three emoji rows compare at a 0.07 threshold: the
+glyphs agree at the default, and the references draw the vertical crosshair guide
+1/8 px right of its exact coverage. The
 [golden README](../../donner/svg/renderer/testdata/golden/README.md#color-emoji-bitmap-sampling)
 records the comparison.
 

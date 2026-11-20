@@ -1473,17 +1473,19 @@ INSTANTIATE_TEST_SUITE_P(
                     {"compound-emojis-and-coordinates-list.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-compound-emojis-and-coordinates-list.png",
-                                                0.1f)
+                                                0.07f)
                          .onlyTextFull()
                          .withReason(
                              "Codepoint positioning reference preserves complete emoji clusters")},
-                    // resvg v0.49.0 with the bundled Noto Color Emoji face at 500x500.
-                    // Glyph placement agrees; bitmap resampling requires a higher threshold.
-                    {"compound-emojis.svg", Params::WithThreshold(0.10f, kDefaultMismatchedPixels,
-                                                                  "Color emoji bitmap resampling")
-                                                .onlyTextFull()},
-                    {"emojis.svg", Params::WithThreshold(0.10f, kDefaultMismatchedPixels,
-                                                         "Color emoji bitmap resampling")
+                    // resvg v0.49.0 with the bundled Noto Color Emoji face at 500x500. The glyphs
+                    // agree at the default threshold; the reference draws the 1.25 px vertical
+                    // guide 1/8 px right of its exact coverage, a 32-level alpha step on gray.
+                    {"compound-emojis.svg",
+                     Params::WithThreshold(0.07f, kDefaultMismatchedPixels,
+                                           "Reference vertical guide shifted 1/8 px")
+                         .onlyTextFull()},
+                    {"emojis.svg", Params::WithThreshold(0.07f, kDefaultMismatchedPixels,
+                                                         "Reference vertical guide shifted 1/8 px")
                                        .onlyTextFull()},
                     {"fill-rule=evenodd.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},

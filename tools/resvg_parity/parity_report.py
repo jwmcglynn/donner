@@ -1509,9 +1509,9 @@ THRESHOLD_ALLOWLIST: dict[str, dict[str, float]] = {
         "default_text": 0.11, "max": 0.11, "geode": 0.11,
     },
     "text/text-decoration/tspan-decoration.svg": {"default_text": 0.09, "max": 0.09},
-    "text/text/compound-emojis-and-coordinates-list.svg": {"max": 0.1},
-    "text/text/compound-emojis.svg": {"max": 0.1},
-    "text/text/emojis.svg": {"max": 0.1},
+    "text/text/compound-emojis-and-coordinates-list.svg": {"max": 0.07},
+    "text/text/compound-emojis.svg": {"max": 0.07},
+    "text/text/emojis.svg": {"max": 0.07},
 }
 
 
