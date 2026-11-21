@@ -2738,12 +2738,20 @@ class CiLaneParityTest(unittest.TestCase):
                         lanes.bep(step_id) in command for command in lane_commands(
                             steps[step_id])), step_id)
 
+    def test_hosted_gold_linker_jobs_install_gold(self):
+        for workflow, job_name in (("main.yml", "linux"), ("github_hosted_nightly.yml", "build")):
+            with self.subTest(workflow=workflow, job=job_name):
+                job = _jobs(self.workflows[workflow])[job_name]
+                install = next(step for step in job["steps"]
+                               if step.get("uses") == "./.github/actions/apt-install")
+                self.assertIn("binutils-gold", install["with"]["packages"].split())
+
     def test_coverage_contract_job_needs_every_receipt_and_selection_source(self):
         # The contract job waits for every job whose receipt it reads.
         manifest = self._coverage_manifest()
         jobs = _jobs(self.workflows["main.yml"])
         contract = jobs["coverage-contract"]
-        self.assertEqual(contract["runs-on"], "ubuntu-24.04")
+        self.assertEqual(contract["runs-on"], "ubuntu-26.04")
         self.assertIn("!cancelled() &&", contract["if"])
         self.assertIn("needs.gatekeeper.outputs.use_self_hosted_linux == 'true'", contract["if"])
         declared = {(c["job"], c["step"]) for c in self._counterparts(manifest)}

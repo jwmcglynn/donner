@@ -60,7 +60,7 @@ permissions:
 jobs:
   assemble:
     if: github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       actions: read
@@ -109,7 +109,7 @@ jobs:
   # Signs the record digest only. No checkout or repository code runs with the OIDC token.
   attest-record:
     needs: assemble
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       id-token: write

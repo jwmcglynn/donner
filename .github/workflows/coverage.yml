@@ -34,7 +34,7 @@ jobs:
   # on its own ("Re-run failed jobs") in seconds with the report this job
   # already produced, instead of repeating the whole instrumented build.
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       # The complete product tree. GPU implementation files enter the report
       # as SVG and editor dependencies, so their owning tests must run too; an
@@ -148,7 +148,7 @@ jobs:
 
   upload-coverage:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Runs only after a successful build, which always ends by uploading the
     # report; a failed or cancelled build skips this job. An upload failure
     # still fails the workflow run.

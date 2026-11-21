@@ -115,7 +115,7 @@ SELF_HOSTED_NARROWING = {
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
 # label, label list or runner group can route a job to a self-hosted runner.
-HOSTED_IMAGES = frozenset({"ubuntu-24.04", "ubuntu-latest", "xcode-27", "macos-latest"})
+HOSTED_IMAGES = frozenset({"ubuntu-24.04", "ubuntu-26.04", "ubuntu-latest", "xcode-27", "macos-latest"})
 
 SELF_HOSTED_GATE_PREFIX = (
     "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
@@ -4519,7 +4519,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         cmake = ".github/workflows/cmake.yml"
         narrowing = SELF_HOSTED_NARROWING[(cmake, "cmake-cache-producer")]
         self.assertIn(gate + narrowing, files[cmake])
-        hosted = "    runs-on: ubuntu-24.04\n"
+        hosted = "    runs-on: ubuntu-26.04\n"
         ungated = "without the trusted gate"
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
         bazel = "        bazel: ['7.x', '8.x']\n"
@@ -4846,7 +4846,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for label in ("ubuntu-unreviewed-worker", "macos-unreviewed-worker",
                       "windows-unreviewed-worker"):
             with self.subTest(label=label):
-                changed = files[path].replace("runs-on: ubuntu-24.04", "runs-on: " + label, 1)
+                changed = files[path].replace("runs-on: ubuntu-26.04", "runs-on: " + label, 1)
                 self.assertNotEqual(changed, files[path])
                 self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
 
