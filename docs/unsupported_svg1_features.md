@@ -29,9 +29,9 @@ cases whose snapshot is empty differ from the isolation-group backdrop) and
 `filters/filter/in=BackgroundImage-with-enable-background` /
 `in=BackgroundAlpha-with-enable-background` (`Params::DeprecatedInSVG2`). These render without a
 pixel comparison. `filters/filter/in=BackgroundImage` and `filters/filter/in=BackgroundAlpha` read
-the isolation-group backdrop and compare; the BackgroundAlpha reference's blur reaches full alpha
-slightly later than the identical-alpha BackgroundImage reference, which its registration
-explains.
+the isolation-group backdrop and compare: `in=BackgroundImage` with its vendored reference, and
+`in=BackgroundAlpha` with a Donner golden, because its vendored reference blurs with a different
+valid Gaussian approximation than its sibling's (see the golden README).
 
 ## SVG Fonts (&lt;font&gt;, &lt;glyph&gt;, &lt;missing-glyph&gt;, etc.)
 

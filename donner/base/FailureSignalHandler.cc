@@ -9,6 +9,10 @@
 #include <execinfo.h>
 #include <unistd.h>
 
+#if defined(__linux__)
+#include <ucontext.h>
+#endif
+
 #include <array>
 #include <csignal>
 #include <cstdint>
@@ -141,6 +145,13 @@ void printBacktraceFrame(void* frame) {
     writeToStderr("  ");
     writeToStderr(imageName);
   }
+  // `dladdr` names only exported symbols, so frames in an executable linked without
+  // `-rdynamic` carry no name. Their offset from the image's load address still resolves
+  // offline against the same binary, for example with `llvm-symbolizer`.
+  if (info.dli_fbase != nullptr) {
+    writeToStderr("+");
+    writeHex(reinterpret_cast<uintptr_t>(frame) - reinterpret_cast<uintptr_t>(info.dli_fbase));
+  }
 
   if (info.dli_sname != nullptr) {
     writeToStderr("  ");
@@ -178,8 +189,64 @@ void prewarmSymbolization() {
   }
 }
 
+/// Print one labelled address, with its symbol when `dladdr` can name it. Unused on platforms
+/// whose registers this handler does not read.
+[[maybe_unused]] void printLabelledAddress(std::string_view label, uintptr_t address) {
+  writeToStderr(label);
+  printBacktraceFrame(reinterpret_cast<void*>(address));
+}
+
+/// Print the fault address and the interrupted thread's registers that locate the fault.
+///
+/// These come from the signal's own context and read no memory, so they print before the stack
+/// walk. `backtrace` starts from this handler and steps through the kernel's signal frame into the
+/// interrupted code, and it cannot always continue from there: a call through a null function
+/// pointer stops at program counter 0, which glibc drops, leaving the trace empty, and a jump to
+/// any other unmapped address faults again inside the unwinder, which ends the process before the
+/// trace prints. The registers still name the faulting call site.
+void printFaultRegisters(const siginfo_t* info, const void* context) {
+  if (info != nullptr && (info->si_signo == SIGSEGV || info->si_signo == SIGBUS)) {
+    writeToStderr("Fault address: ");
+    writeHex(reinterpret_cast<uintptr_t>(info->si_addr));
+    writeToStderr("\n");
+  }
+  if (context == nullptr) {
+    return;
+  }
+
+#if defined(__linux__) && defined(__x86_64__)
+  const auto* ucontext = static_cast<const ucontext_t*>(context);
+  printLabelledAddress("Interrupted PC:",
+                       static_cast<uintptr_t>(ucontext->uc_mcontext.gregs[REG_RIP]));
+#elif defined(__linux__) && defined(__aarch64__)
+  const auto* ucontext = static_cast<const ucontext_t*>(context);
+  printLabelledAddress("Interrupted PC:", static_cast<uintptr_t>(ucontext->uc_mcontext.pc));
+  // A branch-and-link leaves the caller's return address in x30 until the callee saves it.
+  printLabelledAddress("Link register: ", static_cast<uintptr_t>(ucontext->uc_mcontext.regs[30]));
+#endif
+}
+
+/// On x86_64, print the word at the interrupted stack pointer.
+///
+/// A `call` pushes its return address, so at a fault on the callee's first instruction, which is
+/// where a call through a null function pointer faults, that word names the caller. Elsewhere it
+/// is ordinary stack data. Reading it can fault when the stack pointer itself is bad, so this runs
+/// last; `SA_RESETHAND` then ends the process with the default action for the signal.
+void printWordAtStackPointer([[maybe_unused]] const void* context) {
+#if defined(__linux__) && defined(__x86_64__)
+  if (context == nullptr) {
+    return;
+  }
+  const auto* ucontext = static_cast<const ucontext_t*>(context);
+  const auto sp = static_cast<uintptr_t>(ucontext->uc_mcontext.gregs[REG_RSP]);
+  if (sp != 0 && sp % alignof(uintptr_t) == 0) {
+    printLabelledAddress("Word at SP:    ", *reinterpret_cast<const uintptr_t*>(sp));
+  }
+#endif
+}
+
 /// Signal handler that prints a stack trace and re-raises the signal.
-void failureSignalHandler(int signo) {
+void failureSignalHandler(int signo, siginfo_t* info, void* context) {
   const char* signalName = "UNKNOWN";
   int signalIndex = -1;
   for (size_t i = 0; i < kNumFailureSignals; ++i) {
@@ -193,6 +260,7 @@ void failureSignalHandler(int signo) {
   writeToStderr("\n*** ");
   writeToStderr(signalName);
   writeToStderr(" received ***\n");
+  printFaultRegisters(info, context);
 
   std::array<void*, kMaxStackFrames> frames = {};
   const int numFrames = backtrace(frames.data(), kMaxStackFrames);
@@ -202,6 +270,7 @@ void failureSignalHandler(int signo) {
       printBacktraceFrame(frames[static_cast<size_t>(i)]);
     }
   }
+  printWordAtStackPointer(context);
 
   if (signalIndex >= 0) {
     sigaction(signo, &previousActions()[signalIndex], nullptr);
@@ -217,9 +286,9 @@ void installHandlers() {
 
   for (size_t i = 0; i < kNumFailureSignals; ++i) {
     struct sigaction action = {};
-    action.sa_handler = failureSignalHandler;
+    action.sa_sigaction = failureSignalHandler;
     sigemptyset(&action.sa_mask);
-    action.sa_flags = SA_RESETHAND;
+    action.sa_flags = SA_RESETHAND | SA_SIGINFO;
 
     sigaction(kFailureSignals[i].signo, &action, &previousActions()[i]);
   }

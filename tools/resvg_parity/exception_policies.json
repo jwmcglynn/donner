@@ -322,14 +322,15 @@
         "threshold"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Retain the measured coverage allowance.",
+      "disposition": "Retain the measured allowance for the reference's offset snapping.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/pull/2406"
+        "https://github.com/jwmcglynn/donner/pull/2406",
+        "https://github.com/jwmcglynn/donner/issues/2526"
       ],
-      "removal_criteria": "Use default settings after a compared independent blur control agrees under the transform.",
-      "reference_provenance": "Archived blur is applied before skew.",
-      "max_threshold": 0.14,
+      "removal_criteria": "Use default settings after a reference applies the fractional feOffset exactly and the linearRGB mixing difference tracked in #2526 is resolved.",
+      "reference_provenance": "Archived reference snaps the 40-unit offset to 115 of 115.47 local raster pixels, about 0.4 device px, so alpha differs by 17 to 19 levels at the offset copies' horizontal blur edges; at 0.085 the row counts 25 pixels on both renderers. With an offset that lands on whole local pixels, alpha agrees within 2 levels and the remaining linearRGB color mixing in the blurred overlap needs 0.05 on both renderers.",
+      "max_threshold": 0.085,
       "max_pixels": 100
     },
     {
@@ -521,18 +522,22 @@
         "filters/filter/in=BackgroundAlpha.svg"
       ],
       "kinds": [
-        "threshold"
+        "shared_golden"
       ],
-      "classification": "reference-precision",
-      "disposition": "Preserve equality of the live BackgroundImage and BackgroundAlpha coverage.",
+      "classification": "reference-disagreement",
+      "disposition": "Keep BackgroundAlpha equal to the alpha of BackgroundImage under the specified box-blur approximation.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "https://www.w3.org/TR/filter-effects-1/#attr-valuedef-in-backgroundalpha",
+        "https://www.w3.org/TR/filter-effects-1/#feGaussianBlurElement"
       ],
-      "removal_criteria": "Compare normally after independently regenerating the equal-alpha blur edge at default settings.",
-      "reference_provenance": "The archived alpha blur reaches full coverage two pixels later.",
+      "removal_criteria": "Use the adjacent reference when its blurred alpha equals the in=BackgroundImage reference's.",
+      "reference_provenance": "Donner rendering; the adjacent BackgroundAlpha and BackgroundImage references blur the same alpha with two different Gaussian approximations.",
       "max_threshold": 0.02,
-      "max_pixels": 1200
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-in-BackgroundAlpha.png"
+      }
     },
     {
       "id": "half-box-blur",
@@ -640,18 +645,21 @@
         "painting/marker/with-an-image-child.svg"
       ],
       "kinds": [
-        "geode_threshold"
+        "geode_golden"
       ],
       "classification": "accepted-rasterization-difference",
-      "disposition": "Keep the measured 442 Metal and 449 Vulkan edge residual within the Geode-only bound.",
+      "disposition": "Keep Geode's exact coverage of the 0.40 device px letter strokes in the 0.8x nested image.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
         "donner/svg/renderer/testdata/golden/README.md"
       ],
-      "removal_criteria": "Remove when the same 0.8x thin-stroke image matches both independent coverage and the ordinary shared allowance.",
-      "reference_provenance": "Adjacent reference with analytic sampling differences on nested SVG boundaries; explicit placements and a half-unit shift control isolate the residual from marker placement.",
+      "removal_criteria": "Remove the Geode override when a shared reference covers sub-pixel strokes by their geometry rather than as width-scaled hairlines.",
+      "reference_provenance": "Backend golden; the adjacent reference and the CPU renderer draw the strokes as width-scaled 1 px hairlines and snap or halve the nested image's half-pixel edges. A 16x16 supersampled exact-geometry model of the letter V is recorded in the golden README.",
       "max_threshold": 0.02,
-      "max_pixels": 500
+      "max_pixels": 100,
+      "references": {
+        "geode_golden": "donner/svg/renderer/testdata/golden/geode/painting_marker_with-an-image-child.png"
+      }
     },
     {
       "id": "strict-dash-seam",
@@ -800,28 +808,6 @@
       }
     },
     {
-      "id": "small-caps-synthesis",
-      "paths": [
-        "text/font-variant/inherit.svg",
-        "text/font-variant/small-caps.svg"
-      ],
-      "kinds": [
-        "simple_text_threshold"
-      ],
-      "classification": "backend-capability",
-      "disposition": "Retain the measured simple-tier coverage allowance for synthetic small caps. The exact corpus face selects different native small-cap glyphs in full text.",
-      "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185",
-        "donner/svg/renderer/tests/TextBackend_tests.cc",
-        "third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf"
-      ],
-      "removal_criteria": "Remove after the simple engine supports native smcp and both explicit and inherited fixtures pass at default settings.",
-      "reference_provenance": "Adjacent native-small-cap references with the bundled Noto Sans face. Independent HarfBuzz selection with smcp produces e.sc, x.sc and t.sc for Text, while the simple tier scales uppercase outlines.",
-      "max_threshold": 0.02,
-      "max_pixels": 1200
-    },
-    {
       "id": "anchor-background",
       "paths": [
         "text/text-anchor/coordinates-list.svg"
@@ -930,48 +916,37 @@
       }
     },
     {
-      "id": "emoji-list",
+      "id": "emoji-guide",
       "paths": [
-        "text/text/compound-emojis-and-coordinates-list.svg"
-      ],
-      "kinds": [
-        "shared_golden",
-        "threshold"
-      ],
-      "classification": "reference-disagreement",
-      "disposition": "Keep the authored codepoint addressing of the joined cluster.",
-      "evidence": [
-        "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/issues/1176"
-      ],
-      "removal_criteria": "Switch to an unchanged-input reference with complete emoji clusters at the independently verified baselines and ordinary limits.",
-      "reference_provenance": "Independent resvg v0.47 with explicit cluster spans and bundled Noto Color Emoji.",
-      "max_threshold": 0.1,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png"
-      }
-    },
-    {
-      "id": "emoji-bitmap",
-      "paths": [
+        "text/text/compound-emojis-and-coordinates-list.svg",
         "text/text/compound-emojis.svg",
         "text/text/emojis.svg"
       ],
       "kinds": [
-        "threshold"
+        "shared_golden"
       ],
-      "classification": "accepted-rasterization-difference",
-      "disposition": "Keep full text and the independently reproduced image sampling allowance.",
+      "classification": "reference-disagreement",
+      "disposition": "Compare with Donner renderings: the resvg renders match the glyphs and shift the vertical guide 1/8 px right of its exact coverage.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
-        "third_party/resvg-test-suite/BUILD.bazel",
-        "https://github.com/jwmcglynn/donner/pull/2406"
+        "donner/svg/renderer/tests/RendererRegression_tests.cc",
+        "https://github.com/jwmcglynn/donner/issues/1176"
       ],
-      "removal_criteria": "Remove the allowance after the pinned bitmap font rendering agrees at ordinary threshold across supported CPU builds.",
-      "reference_provenance": "Official resvg v0.49 render of unchanged corpus SVG with the bundled Noto Color Emoji face.",
-      "max_threshold": 0.1,
-      "max_pixels": 100
+      "removal_criteria": "Switch to an independent reference that draws the guide at its exact coverage and places the emoji clusters at the codepoint-indexed baselines.",
+      "reference_provenance": "Donner full-text CPU renderings; outside the guide no premultiplied channel differs from resvg v0.49 (two rows) and v0.47 (coordinate list) by more than 2 levels.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references_by_fixture": {
+        "text/text/compound-emojis-and-coordinates-list.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-compound-emojis-and-coordinates-list.png"
+        },
+        "text/text/compound-emojis.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-compound-emojis.png"
+        },
+        "text/text/emojis.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-emojis.png"
+        }
+      }
     },
     {
       "id": "path-boundary-coverage",

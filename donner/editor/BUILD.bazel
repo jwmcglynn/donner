@@ -87,6 +87,7 @@ donner_cc_library(
     deps = [
         ":whole_app_worker_config",
         "//donner/base:asyncify_suspend_probe",
+        "//donner/base:fatal_abort",
         "//donner/base:memory_attribution",
     ] + select({
         "@platforms//os:emscripten": ["//donner/svg/resources:font_catalog"],
@@ -315,6 +316,7 @@ donner_cc_library(
     name = "browser_file_dialog",
     srcs = ["BrowserFileDialog.cc"],
     hdrs = ["BrowserFileDialog.h"],
+    deps = ["//donner/base:fatal_abort"],
 )
 
 donner_cc_library(
@@ -612,6 +614,7 @@ donner_cc_library(
         ":tracy_wrapper",
         ":viewport_state",
         "//donner/base",
+        "//donner/base:fatal_abort",
         "//donner/base:memory_attribution",
         "//donner/svg",
         "//donner/svg/compositor",

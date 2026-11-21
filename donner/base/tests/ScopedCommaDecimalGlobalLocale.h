@@ -2,7 +2,6 @@
 /// @file
 
 #include <locale>
-#include <string>
 
 namespace donner {
 
@@ -16,23 +15,13 @@ namespace donner {
  */
 class ScopedCommaDecimalGlobalLocale {
 public:
-  ScopedCommaDecimalGlobalLocale()
-      : previous_(std::locale::global(std::locale(std::locale::classic(), new CommaDecimal))) {}
-
-  ~ScopedCommaDecimalGlobalLocale() { std::locale::global(previous_); }
+  ScopedCommaDecimalGlobalLocale();
+  ~ScopedCommaDecimalGlobalLocale();
 
   ScopedCommaDecimalGlobalLocale(const ScopedCommaDecimalGlobalLocale&) = delete;
   ScopedCommaDecimalGlobalLocale& operator=(const ScopedCommaDecimalGlobalLocale&) = delete;
 
 private:
-  /// Number punctuation with a decimal comma and dot-grouped thousands.
-  class CommaDecimal final : public std::numpunct<char> {
-  protected:
-    char do_decimal_point() const override { return ','; }
-    char do_thousands_sep() const override { return '.'; }
-    std::string do_grouping() const override { return "\3"; }
-  };
-
   std::locale previous_;
 };
 

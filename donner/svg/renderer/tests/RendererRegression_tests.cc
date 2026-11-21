@@ -1184,6 +1184,118 @@ TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredW
       "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
 }
 
+/**
+ * Renders \p content, inside a group transformed by \p transform, on a \p size canvas with the
+ * hermetic defaults. The document defines filter `f` in user space over \p region
+ * (`x y width height`) with \p primitives; content elements reference it as `url(#f)`.
+ */
+RendererBitmap RenderTransformedFilterScene(std::string_view region, std::string_view primitives,
+                                            std::string_view transform, std::string_view content,
+                                            Vector2i size) {
+  std::istringstream regionValues{std::string(region)};
+  std::string x, y, width, height;
+  regionValues >> x >> y >> width >> height;
+  const std::string body = "<filter id=\"f\" filterUnits=\"userSpaceOnUse\" x=\"" + x + "\" y=\"" +
+                           y + "\" width=\"" + width + "\" height=\"" + height + "\">" +
+                           std::string(primitives) + "</filter><g transform=\"" +
+                           std::string(transform) + "\">" + std::string(content) + "</g>";
+  SVGDocument document = instantiateSubtree(body, {}, size);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// A seagreen square and a thin black bar, each filtered by `f` when \p filtered.
+std::string SquareAndBar(bool filtered) {
+  const std::string filter = filtered ? R"svg( filter="url(#f)")svg" : "";
+  return R"svg(<rect x="8" y="8" width="24" height="24" fill="seagreen")svg" + filter +
+         R"svg(/><rect x="40" y="10.5" width="6" height="20.3")svg" + filter + "/>";
+}
+
+/// \ref SquareAndBar in `skewX(30)` at 96x48, filtered by \p primitives when they are not empty,
+/// through a region holding the whole element.
+RendererBitmap RenderSkewedSquareAndBar(std::string_view primitives) {
+  return RenderTransformedFilterScene("-20 -20 140 160", primitives, "skewX(30)",
+                                      SquareAndBar(!primitives.empty()), Vector2i(96, 48));
+}
+
+// A shadow merge draws SourceGraphic unblurred over its shadow. Under a skew that branch must not
+// be resampled onto the filter-aligned raster and back: with the shadow 60 units below, off the
+// canvas, the filtered render equals the element drawn without the filter.
+TEST_F(RendererRegressionTests, SkewedShadowMergeKeepsSourceGraphicSharp) {
+  const RendererBitmap plain = RenderSkewedSquareAndBar("");
+  ExpectVisibleBitmap(plain, "skewed_shadow_plain_visible");
+  editor::tests::CompareBitmapToBitmap(
+      RenderSkewedSquareAndBar(
+          R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="2 1"/><feOffset dy="60" result="s"/>
+                <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>)svg"),
+      plain, "skewed_shadow_merge_source", editor::tests::PixelmatchIdentityParams());
+}
+
+// feDropShadow under a skew takes the same filter-aligned raster as a plain blur, so with an
+// invisible shadow and the same negligible deviation the two draw their source identically.
+// TransformedBlurPathTest.EligibilityTable pins the rule itself.
+TEST_F(RendererRegressionTests, SkewedDropShadowTakesThePlainBlurPath) {
+  const RendererBitmap plainBlur =
+      RenderSkewedSquareAndBar(R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg");
+  ExpectVisibleBitmap(plainBlur, "skewed_drop_shadow_plain_blur_visible");
+  editor::tests::CompareBitmapToBitmap(
+      RenderSkewedSquareAndBar(
+          R"svg(<feDropShadow dx="0" dy="0" stdDeviation="0.01" flood-opacity="0"/>)svg"),
+      plainBlur, "skewed_drop_shadow_plain_blur_path", editor::tests::PixelmatchIdentityParams());
+}
+
+// Under a skew a blur keeps its user-space shape by running on a raster aligned with the filter's
+// axes. A blur read through a named result and a merge, or of SourceAlpha, must take the same path
+// as the plain blur: merging one input reproduces it, and SourceAlpha of an opaque rect is the
+// same rect in black.
+TEST_F(RendererRegressionTests, SkewedBlurThroughMergeOrSourceAlphaMatchesThePlainBlur) {
+  const auto render = [](std::string_view primitives, std::string_view fill) {
+    return RenderTransformedFilterScene(
+        "-40 0 140 64", primitives, "skewX(40)",
+        R"svg(<rect x="8" y="16" width="24" height="32" fill=")svg" + std::string(fill) +
+            R"svg(" filter="url(#f)"/>)svg",
+        Vector2i(96, 64));
+  };
+  constexpr std::string_view kBlur = R"svg(<feGaussianBlur stdDeviation="3 1"/>)svg";
+  constexpr std::string_view kBlurThroughMerge =
+      R"svg(<feGaussianBlur stdDeviation="3 1" result="b"/>
+            <feMerge><feMergeNode in="b"/></feMerge>)svg";
+  const RendererBitmap plain = render(kBlur, "seagreen");
+  ExpectVisibleBitmap(plain, "skewed_plain_blur_visible");
+  editor::tests::CompareBitmapToBitmap(render(kBlurThroughMerge, "seagreen"), plain,
+                                       "skewed_blur_through_merge",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      render(R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 1"/>)svg", "seagreen"),
+      render(kBlur, "black"), "skewed_source_alpha_blur",
+      editor::tests::PixelmatchIdentityParams());
+}
+
+// When the filter-aligned raster would not fit the execution budget, both renderers draw the filter
+// on the device raster rather than compositing an unfiltered source. The large region makes the
+// local raster about 1500 x 1750 pixels, past the budget for eight named float results, while the
+// device capture stays canvas sized. A trailing pass-through offset with an explicit subregion
+// keeps the reference graph on the device raster.
+TEST_F(RendererRegressionTests, SkewedFilterOverTheLocalRasterBudgetUsesTheDeviceRaster) {
+  std::string blurs;
+  std::string merge = "<feMerge>";
+  for (int i = 0; i < 8; ++i) {
+    blurs += "<feGaussianBlur stdDeviation=\"" + std::to_string(1 + i % 2) + "\" result=\"b" +
+             std::to_string(i) + "\"/>";
+    merge += "<feMergeNode in=\"b" + std::to_string(i) + "\"/>";
+  }
+  merge += "</feMerge>";
+  constexpr std::string_view kRegion = "-700 -700 1500 1500";
+  const auto render = [&](std::string_view tail) {
+    return RenderTransformedFilterScene(kRegion, blurs + merge + std::string(tail), "skewX(30)",
+                                        SquareAndBar(true), Vector2i(96, 48));
+  };
+  const RendererBitmap deviceRaster =
+      render(R"svg(<feOffset dx="0" dy="0" x="-700" y="-700" width="1500" height="1500"/>)svg");
+  ExpectVisibleBitmap(deviceRaster, "skewed_over_budget_device_raster_visible");
+  editor::tests::CompareBitmapToBitmap(render(""), deviceRaster, "skewed_over_budget",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// Group layers drawn inside an feOffset filter whose region starts above and left of the canvas:
 /// an opacity group, a mix-blend-mode group and an isolation group over a backdrop, a mask, a clip
 /// path, a nested filter, and a nested filter whose own region starts further out. The filter
@@ -6651,7 +6763,8 @@ SVGDocument BitmapGlyphDocument(std::string_view body) {
  * font reports for that glyph. The placement is composed here, independently of the renderers:
  * the glyph origin comes from the text layout, and the strike's bearings and scale from the font,
  * so each image is `translate(origin) rotate(r) translate(-origin)` applied after
- * `translate(origin.x + bearingX, origin.y - bearingY) scale(strikeScale)`.
+ * `translate(origin.x + bearingX, origin.y - bearingY) scale(strikeScale)`, resampled as an image
+ * with `image-rendering: auto` is.
  */
 std::vector<std::string> BitmapGlyphImages(std::string_view body) {
   SVGDocument document = BitmapGlyphDocument(body);
@@ -6683,7 +6796,7 @@ std::vector<std::string> BitmapGlyphImages(std::string_view body) {
           bitmap->rgbaPixels, bitmap->width, bitmap->height);
       std::ostringstream image;
       image << std::setprecision(17) << "<image width='" << bitmap->width << "' height='"
-            << bitmap->height << "' preserveAspectRatio='none' image-rendering='smooth' "
+            << bitmap->height << "' preserveAspectRatio='none' image-rendering='auto' "
             << "transform='translate(" << glyph.xPosition << " " << glyph.yPosition << ") rotate("
             << glyph.rotateDegrees << ") translate(" << -glyph.xPosition << " " << -glyph.yPosition
             << ") translate(" << glyph.xPosition + bitmap->bearingX << " "
@@ -6758,7 +6871,8 @@ TEST_F(RendererRegressionTests, BitmapGlyphUnderSpanOpacityMatchesSoftwareRender
 
 // Color emoji in the vendored Noto Color Emoji are bitmap strikes. Each scene renders the emoji
 // text and, on the same renderer, the same strikes drawn as `<image>` elements placed from the
-// font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside.
+// font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside. Both the
+// active renderer and the software renderer must draw them identically.
 TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
   DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   struct Scene {
@@ -6784,6 +6898,10 @@ TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
   const std::vector<Scene> scenes = {
       {"scaled_strike",
        R"svg(<text id="emoji" x="12" y="120" font-family="Noto Color Emoji" font-size="48">&#x1F600;&#x1F601;&#x1F602;</text>)svg",
+       all},
+      // Well above the 109 ppem strike, so the strike is upscaled.
+      {"upscaled_strike",
+       R"svg(<text id="emoji" x="8" y="160" font-family="Noto Color Emoji" font-size="140">&#x1F600;</text>)svg",
        all},
       {"rotated_under_transform",
        R"svg(<g transform="translate(15 9) scale(1.25 0.75)"><text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="40" rotate="30 -15">&#x1F600;&#x1F923;</text></g>)svg",
@@ -6816,13 +6934,15 @@ TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
     SCOPED_TRACE(scene.label);
     const std::vector<std::string> images = BitmapGlyphImages(scene.text);
     ASSERT_THAT(images, testing::Not(testing::IsEmpty()));
-    const RendererBitmap actual = RenderTextOpacityCase(scene.text);
-    editor::tests::CompareBitmapToBitmap(actual, RenderTextOpacityCase(scene.reference(images)),
-                                         "bitmap_glyph_" + std::string(scene.label),
-                                         editor::tests::PixelmatchIdentityParams());
     const std::string withoutEmoji = scene.reference({});
     for (const RendererBackend backend : {ActiveRendererBackend(), RendererBackend::TinySkia}) {
       SCOPED_TRACE(RendererBackendName(backend));
+      editor::tests::CompareBitmapToBitmap(RenderBitmapGlyphScene(scene.text, backend),
+                                           RenderBitmapGlyphScene(scene.reference(images), backend),
+                                           "bitmap_glyph_" +
+                                               std::string(RendererBackendName(backend)) + "_" +
+                                               std::string(scene.label),
+                                           editor::tests::PixelmatchIdentityParams());
       EXPECT_THAT(IdentityMismatchCount(RenderBitmapGlyphScene(scene.text, backend),
                                         RenderBitmapGlyphScene(withoutEmoji, backend),
                                         "bitmap_glyph_removed_" + std::string(scene.label)),

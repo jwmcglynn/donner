@@ -94,6 +94,15 @@ inputs:
       every N times this, up to max-poll-seconds.
     required: false
     default: "60"
+  confirm-seconds:
+    description: >-
+      Seconds between a poll that finds a free slot and the confirming poll
+      that admits the run (a small jitter is added, scaled to the interval).
+      Blocked polls keep poll-seconds. The clear, clear, admit path makes the
+      same requests, sooner; a pool flapping between clear and blocked is
+      polled more often. Capped at poll-seconds; invalid takes the default.
+    required: false
+    default: "10"
   timeout-result:
     description: >-
       What the safety timeout means. "proceed" (the default, for gating lanes) fails open: the
@@ -132,6 +141,7 @@ runs:
         TURNSTILE_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         TURNSTILE_TIMEOUT_RESULT: ${{ inputs.timeout-result }}
         TURNSTILE_POLL_SECONDS: ${{ inputs.poll-seconds }}
+        TURNSTILE_CONFIRM_SECONDS: ${{ inputs.confirm-seconds }}
         TURNSTILE_MAX_POLL_SECONDS: ${{ inputs.max-poll-seconds }}
         TURNSTILE_ACTION_PATH: ${{ github.action_path }}
       run: python3 "${TURNSTILE_ACTION_PATH}/turnstile.py"

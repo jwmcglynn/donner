@@ -38,6 +38,24 @@ Full-graph runs exercise the disjoint `resvg_test_suite_max_text` and
 the full shaping tier, select `resvg_test_suite_max` explicitly. When using
 `--config=ci` for that invocation, add `--test_tag_filters=` to include the manual target.
 
+The suite has these lanes, each a Bazel wrapper that `bazel test //...` runs:
+
+| Wrapper | Backend | Text tier | Cases |
+| --- | --- | --- | --- |
+| `resvg_test_suite_default_text` | TinySkia | simple | all |
+| `resvg_test_suite_max_text` | TinySkia | full | text-rendering |
+| `resvg_test_suite_max_nontext` | TinySkia | full | the rest |
+| `resvg_test_suite_geode` | Geode | simple | all |
+| `resvg_test_suite_geode_max_text` | Geode | full | text-rendering |
+
+The text-rendering cases are `//third_party/resvg-test-suite:tests_with_text`. Only their
+output depends on the text tier, so Geode with full shaping runs them alone; the other cases render
+the same in both tiers, and `resvg_test_suite_geode` compares them on Geode. Both Geode wrappers
+run only the `GeodeGolden` comparisons, as the CPU wrappers of the same cases run the
+`TinyGolden` ones. `resvg_test_suite_max` (manual) is the complete corpus in the full tier on
+TinySkia, and `resvg_test_suite_wgpu_reference_linux` (manual) compares the simple tier through
+the test-only wgpu-native reference.
+
 ## Generated Parity Ledger
 
 Generate a deterministic JSON ledger of every vendored case, active or disabled category,
@@ -74,12 +92,13 @@ The same test also enforces these registration rules, each against a list in `pa
 - `QUARTER_PIXEL_EDGE_ALLOWLIST` equals the set of active rows that opt their Geode comparison into
   the quarter-pixel edge coverage rule (`withGeodeQuarterPixelEdgeCoverage()`, see
   [Quarter-pixel edge coverage on Geode](#ResvgQuarterPixelEdgeCoverage)). An opted-in row that is
-  not listed fails, as does one whose Geode lane does not compare, compares against a Geode golden
+  not listed fails, as does one that no Geode lane compares, that compares against a Geode golden
   or against a custom golden that the golden README does not record as quarter-pixel quantized, or
-  counts anti-aliased pixels; an entry whose row no longer opts in is stale and fails.
-- `GEODE_GATE_ALLOWLIST` equals the set of active rows that disable their Geode comparison (see
-  [Geode gates](#ResvgGeodeGates)). A row that disables another backend, disables Geode without a
-  reason, or is not listed fails; an entry whose row no longer disables Geode is stale and fails.
+  that counts anti-aliased pixels; an entry whose row no longer opts in is stale and fails.
+- `GEODE_GATE_ALLOWLIST` maps each active row that disables its Geode comparison to the text tiers
+  it disables it in (see [Geode gates](#ResvgGeodeGates)). A row that disables another backend,
+  disables Geode without a reason, is not listed or is listed with other tiers fails; an entry whose
+  row no longer disables Geode is stale and fails.
 
 `//tools/resvg_parity:parity_report_tests` enforces in CI that each list matches the registry.
 That the lists only shrink is a review rule: a new entry, or a larger value, needs maintainer
@@ -163,8 +182,8 @@ condition is not limited to horizontal edges. It still accepts:
 
 It rejects a uniform partially covered region two or more rows tall, the first row of a translucent
 shape directly below an opaque one, pure vertical edges, and the interior of a vertical alpha
-gradient. Across the 173 opted-in rows the rule accepts 51,612 pixels on Metal and 51,610 on
-software Vulkan, and every row passes its unchanged budget.
+gradient. On `resvg_test_suite_geode`, across the 173 rows opted in there, the rule accepts 51,612
+pixels on Metal and 51,610 on software Vulkan, and every row passes its unchanged budget.
 
 The rule is part of the canonical comparison
 (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage` in
@@ -174,29 +193,24 @@ image, and it does not change the pixel budget. The test log reports how many pi
 accepted and their largest alpha difference; the diff image draws them in blue. A row whose Geode
 comparison passes without the rule leaves the list.
 
-The Geode corpus lane (`resvg_test_suite_geode`) renders the simple text tier only, so the list
-holds the rows that need the rule there. Some full-shaping rows (bidirectional, Arabic and vertical
-text) also fail the default budget on Geode without the rule and pass with it, but the resvg corpus
-has no Geode full-shaping wrapper, so they are not listed. The `*_text_full` unit test variants do
-run on Geode with full shaping; only the corpus lacks such a lane. Adding one means measuring its
-rows, opting in the ones that need the rule, and teaching `parity_report.py` that lane's
-capabilities.
+The opt-in applies to both Geode lanes, `resvg_test_suite_geode` (simple text tier) and
+`resvg_test_suite_geode_max_text` (full shaping). The list holds 187 rows: the 173 that need the
+rule on the simple tier, which need it on the full tier too, and 14 rows that only the full tier
+renders (13 bidirectional, Arabic and complex-script rows, and `text/text/emojis` against its
+recorded Donner golden). On the full tier the rule accepts 55,653 pixels across those 187 rows on
+software Vulkan (55,657 on Metal), and the largest count it leaves is 91 of 100.
 
 ### Geode gates {#ResvgGeodeGates}
 
 A row whose Geode comparison fails for a cause the edge coverage rule does not cover disables its
-Geode comparison with `disableBackend(RendererBackend::Geode, reason)` and is listed in
-`GEODE_GATE_ALLOWLIST`; its CPU comparisons are unchanged. The reason names the measured cause,
-and `resvg_test_suite.cc` keeps one helper per cause (for example `GeodeUnquantizedGoldenGate`) so
-the reason is written once. `//tools/resvg_parity:parity_report_tests` enforces in CI that the list
+Geode comparison with `disableBackend(RendererBackend::Geode, reason)`, in both text tiers, and is
+listed in `GEODE_GATE_ALLOWLIST`; its CPU comparisons are unchanged. A cause that only the simple
+tier has uses `disableGeodeForSimpleText(reason)` instead, so the full-shaping lane still compares
+the row; the list records which tiers each row disables. The reason names the measured cause, and
+`resvg_test_suite.cc` keeps one helper per cause (for example `GeodeUnquantizedGoldenGate`) so the
+reason is written once. `//tools/resvg_parity:parity_report_tests` enforces in CI that the list
 matches the gated rows and that no other backend is disabled; that the list only shrinks is a review
 rule.
-
-`GeodeCpuAllowanceGate` covers rows whose CPU comparison has a budget above the default in
-`PIXEL_BUDGET_ALLOWLIST` (1,200 px for the two `text/font-variant` rows). That budget is not
-approved for the Geode lane, and comparing would apply a budget in the hundreds to it. On the full
-shaping tier the two font-variant rows measure 0 px on Geode, so the gate can go once a Geode
-full-shaping corpus lane exists.
 
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.
