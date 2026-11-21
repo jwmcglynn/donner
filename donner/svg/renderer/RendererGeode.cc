@@ -1691,6 +1691,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool failFilterFrameRestoreForTesting = false;
   bool frameRecordingAbandoned = false;
   bool frameArenaWriteFailed = false;
+  bool failNextLocalFilterRasterAllocationForTesting = false;
   bool failNextTransformedResampleArenaWriteForTesting = false;
 
   // Per-frame perf counters. Reset at `beginFrame`, read via
@@ -3657,6 +3658,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
     const std::optional<GeodeLocalRasterGeometry> geometry = transformedFilterGeometry(frame);
     if (!geometry.has_value()) {
+      return TransformedFilterResult::NotApplicable;
+    }
+
+    if (std::exchange(failNextLocalFilterRasterAllocationForTesting, false)) {
       return TransformedFilterResult::NotApplicable;
     }
 
@@ -9863,6 +9868,10 @@ void RendererGeode::injectDeviceLossForTesting() {
   if (impl_->device) {
     impl_->device->markDeviceLost("test-injected device loss");
   }
+}
+
+void RendererGeode::injectFilterLocalRasterAllocationFailureForTesting() {
+  impl_->failNextLocalFilterRasterAllocationForTesting = true;
 }
 
 void RendererGeode::injectFilterFrameSuspensionAndRestoreFailureForTesting() {

@@ -274,6 +274,10 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
+  void injectFilterLocalRasterAllocationFailureForTesting() override {
+    failNextLocalFilterRasterAllocationForTesting_ = true;
+  }
+
   [[nodiscard]] RendererResourceStats resourceStats() const override;
   [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
   void setMaximumGlyphs(std::size_t maximumGlyphs) override;
@@ -641,6 +645,7 @@ private:
   std::shared_ptr<RendererTextMaterializationBudget> textMaterializationBudget_ =
       std::make_shared<RendererTextMaterializationBudget>();
   bool ownsTextMaterializationBudget_ = true;
+  bool failNextLocalFilterRasterAllocationForTesting_ = false;
   std::size_t frameResourceScopeDepth_ = 0;
   std::shared_ptr<DashedPathWorkBudget> dashedPathWorkBudget_;
   /// Most outline points one stroke expansion may emit; a stroke past it rejects the draw budget.

@@ -349,6 +349,17 @@ inline bool IsBlurFilterNode(const components::FilterNode& node) {
          std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
 }
 
+/// Whether \p node depends only on captured source pixels or results in its graph.
+/// @param node Filter primitive.
+inline bool OnlyCapturedFilterInputs(const components::FilterNode& node) {
+  using namespace components;
+  return std::none_of(node.inputs.begin(), node.inputs.end(), [](const FilterInput& input) {
+    const auto* standard = std::get_if<FilterStandardInput>(&input.value);
+    return standard && *standard != FilterStandardInput::SourceGraphic &&
+           *standard != FilterStandardInput::SourceAlpha;
+  });
+}
+
 /// Whether \p node may run on the transformed path's local raster: a blur, drop shadow, offset or
 /// merge without a primitive subregion whose standard inputs are SourceGraphic or SourceAlpha. Any
 /// named input is admitted, including forward or missing references, which the same executor
@@ -361,11 +372,7 @@ inline bool IsTransformedBlurPathNode(const components::FilterNode& node) {
   if (!admitted || node.hasExplicitRegion() || node.hasAnimatedRegion()) {
     return false;
   }
-  return std::none_of(node.inputs.begin(), node.inputs.end(), [](const FilterInput& input) {
-    const auto* standard = std::get_if<FilterStandardInput>(&input.value);
-    return standard && *standard != FilterStandardInput::SourceGraphic &&
-           *standard != FilterStandardInput::SourceAlpha;
-  });
+  return OnlyCapturedFilterInputs(node);
 }
 
 /// The minimum Gaussian deviation along each filter axis that can cover the local raster's
@@ -403,7 +410,7 @@ inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
 inline bool IsShadowColorNode(const components::FilterNode& node) {
   using namespace components;
   using namespace filter_primitive;
-  if (node.hasExplicitRegion() || node.hasAnimatedRegion()) {
+  if (node.hasExplicitRegion() || node.hasAnimatedRegion() || !OnlyCapturedFilterInputs(node)) {
     return false;
   }
   const auto* composite = std::get_if<Composite>(&node.primitive);
