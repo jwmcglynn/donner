@@ -39,6 +39,15 @@ exports_files([
 
 # Manual suites select existing tests without adding new wildcard configurations.
 test_suite(
+    name = "linux_hardware_gpu_tests",
+    tags = ["manual", "ci-linux-hardware-gpu"],
+    tests = [
+        "//donner/svg/renderer/geode:ci_linux_gpu_tests",
+        "//donner/svg/renderer/tests:ci_linux_gpu_tests",
+    ],
+)
+
+test_suite(
     name = "chromium_context_diagnostic",
     tags = ["manual"],
     tests = ["//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic"],

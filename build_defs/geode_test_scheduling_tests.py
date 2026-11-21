@@ -334,6 +334,11 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         )
         self.assertIn("opens_gpu_device = False", self.rules)
 
+    def test_combined_remote_variants_mark_only_the_real_hardware_source(self):
+        runfiles = Path(os.environ["TEST_SRCDIR"]) / os.environ["TEST_WORKSPACE"]
+        labels = (runfiles / "build_defs/hardware_gpu_source_labels").read_text().splitlines()
+        self.assertEqual([label.lstrip("@") for label in labels], ["//build_defs:gpu_registration_fixture"])
+
     def test_remote_ci_can_parallelize_opted_in_gpu_tests_without_weakening_local_isolation(self):
         """Opted-in suites get a remote-only copy for the RE lane.
 
@@ -347,7 +352,8 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         self.assertIn('"ci-remote-gpu"', self.rules)
         self.assertIn('"no-local"', self.rules)
         self.assertIn('"local-gpu-isolated"', self.rules)
-        self.assertIn('if tag not in [LOCAL_GPU_TEST_TAG, "local-gpu-isolated"]', self.rules)
+        self.assertIn('if tag not in [LOCAL_GPU_TEST_TAG, "local-gpu-isolated", "ci-linux-hardware-gpu-source"]',
+                      self.rules)
         self.assertIn(
             "test --test_tag_filters=-ci-remote-gpu,-editor-wasm-browser",
             self.bazelrc,

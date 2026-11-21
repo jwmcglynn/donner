@@ -122,6 +122,10 @@ reviewable work remains unpublished, prioritize publishing or repairing it befor
 unit. Each unit remains independently understandable and testable; coordination must not weaken
 quality gates or cause every worker to repair the same unrelated failure.
 
+Keep the native CI graph in one Bazel build/test invocation. Use target-level transitions
+for platform, backend, and hardware variants. An invocation can compose multiple `--config`
+flags. Add new variants to the same invocation and its affected selection.
+
 When creating a pull request:
 
 1. **Update against the actual PR base** before pushing. Independent PRs normally target
