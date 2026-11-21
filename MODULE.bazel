@@ -565,16 +565,19 @@ bazel_dep(name = "zstd", version = "1.5.7.bcr.3", dev_dependency = True)
 #
 
 bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
-bazel_dep(name = "protobuf", version = "30.2", dev_dependency = True)
+# This release loads its C++ rules and providers explicitly for Bazel 9.
+bazel_dep(name = "protobuf", version = "33.6", dev_dependency = True)
 single_version_override(
     module_name = "protobuf",
-    version = "30.2",
+    version = "33.6",
 )
 
 bazel_dep(name = "bloaty", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "bloaty",
     commit = "a655c418811ef5097e37a562ce62f925bda72d88",
+    patch_strip = 1,
+    patches = ["//third_party/patches:bloaty_explicit_cc_rules.patch"],
     remote = "https://github.com/jwmcglynn/bloaty",
 )
 
