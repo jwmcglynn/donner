@@ -2006,6 +2006,28 @@ def geode_gated_tiers(case: dict[str, object]) -> frozenset[str]:
     return frozenset()
 
 
+def _geode_gate_case_violations(
+    case: dict[str, object], tiers: frozenset[str], allowlist: Mapping[str, frozenset[str]]
+) -> list[str]:
+    """Return why one Geode-gated row breaks GEODE_GATE_ALLOWLIST."""
+
+    path = str(case["path"])
+    violations = []
+    if case["disabled_backends"] not in ([], ["geode"]):
+        violations.append(f"{path}: disables {case['disabled_backends']}; {GEODE_GATE_RULE}")
+    elif not _geode_disable_reason(str(case["raw_params_expression"])):
+        violations.append(f"{path}: disables the Geode comparison without a reason")
+    recorded = allowlist.get(path)
+    if recorded is None:
+        violations.append(f"{path}: not in GEODE_GATE_ALLOWLIST; {GEODE_GATE_RULE}")
+    elif tiers and recorded != tiers:
+        violations.append(
+            f"{path}: disables its Geode comparison in the {', '.join(sorted(tiers))} text "
+            f"tier(s), but GEODE_GATE_ALLOWLIST records {', '.join(sorted(recorded))}; "
+            + GEODE_GATE_RULE)
+    return violations
+
+
 def geode_gate_violations(
     report: dict[str, object], allowlist: Mapping[str, frozenset[str]] = GEODE_GATE_ALLOWLIST
 ) -> list[str]:
@@ -2021,19 +2043,8 @@ def geode_gate_violations(
         tiers = geode_gated_tiers(case)
         if case["registration"] != "active" or not (tiers or case["disabled_backends"]):
             continue
-        path = str(case["path"])
-        gated.add(path)
-        if case["disabled_backends"] not in ([], ["geode"]):
-            violations.append(f"{path}: disables {case['disabled_backends']}; {GEODE_GATE_RULE}")
-        elif not _geode_disable_reason(str(case["raw_params_expression"])):
-            violations.append(f"{path}: disables the Geode comparison without a reason")
-        if path not in allowlist:
-            violations.append(f"{path}: not in GEODE_GATE_ALLOWLIST; {GEODE_GATE_RULE}")
-        elif tiers and allowlist[path] != tiers:
-            violations.append(
-                f"{path}: disables its Geode comparison in the {', '.join(sorted(tiers))} text "
-                f"tier(s), but GEODE_GATE_ALLOWLIST records {', '.join(sorted(allowlist[path]))}; "
-                + GEODE_GATE_RULE)
+        gated.add(str(case["path"]))
+        violations += _geode_gate_case_violations(case, tiers, allowlist)
     violations += [
         f"{path}: stale GEODE_GATE_ALLOWLIST entry; the row no longer disables its Geode "
         "comparison, so remove it"
