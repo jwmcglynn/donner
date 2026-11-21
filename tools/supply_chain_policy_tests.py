@@ -85,9 +85,6 @@ LEGACY_GIT_COMMIT_PINS = {
         "https://github.com/jwmcglynn/bloaty", "a655c418811ef5097e37a562ce62f925bda72d88"),
     ("MODULE.bazel", "glfw"): (
         "https://github.com/glfw/glfw", "92dcf4ce74f2e2554a98fea09be7c705c17daa5a"),
-    ("MODULE.bazel", "hedron_compile_commands"): (
-        "https://github.com/hedronvision/bazel-compile-commands-extractor",
-        "abb61a688167623088f8768cc9264798df6a9d10"),
     ("MODULE.bazel", "imgui"): (
         "https://github.com/ocornut/imgui", "ee1deccc08c14ab1e6abcfa6aae11d915763cdb7"),
     ("third_party/bazel/non_bcr_deps.bzl", "bazel_clang_tidy"): (

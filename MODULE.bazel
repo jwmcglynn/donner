@@ -564,15 +564,6 @@ bazel_dep(name = "zstd", version = "1.5.7.bcr.3", dev_dependency = True)
 # Devtools
 #
 
-# Hedron's Compile Commands Extractor for Bazel
-# https://github.com/hedronvision/bazel-compile-commands-extractor
-bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
-git_override(
-    module_name = "hedron_compile_commands",
-    commit = "abb61a688167623088f8768cc9264798df6a9d10",
-    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor",
-)
-
 bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
 bazel_dep(name = "protobuf", version = "30.2", dev_dependency = True)
 single_version_override(
