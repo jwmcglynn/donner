@@ -191,10 +191,9 @@ def _read_events(events, selection):
     summaries = {}
     skipped = set()
     for event in events:
+        finished = event.get("finished", finished)
         identity = event.get("id", {})
-        if "buildFinished" in identity:
-            finished = event.get("finished", {})
-        elif "testResult" in event:
+        if "testResult" in event:
             label = identity["testResult"]["label"]
             problems += _result_problems(label, event["testResult"], selection)
             shards.setdefault(label, set()).add(
