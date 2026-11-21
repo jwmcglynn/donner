@@ -8,6 +8,7 @@ import subprocess
 import sys
 from urllib.parse import quote
 
+from build_defs.check_gpu_routing import checked_path as gpu_routing_path
 from build_defs.check_text_tier_defines import is_governed as text_tier_governed
 from tools.rust_boundary.rust_scopes import is_build_graph_path, is_rust_source_path
 
@@ -198,6 +199,10 @@ def gpu_commands(paths):
         yield "Check GPU scheduling policy", [py, "build_defs/check_local_gpu_tags.py"]
     else:
         yield from file_commands("Check changed GPU scheduling tags", [py, "build_defs/check_local_gpu_tags.py"], builds)
+    # The routing rules relate files to each other (a platform, the config that selects it), so a
+    # change to any routing file rechecks the whole tracked set.
+    if "build_defs/check_gpu_routing.py" in changed or any(gpu_routing_path(p) for p in paths):
+        yield "Check remote GPU routing", [py, "build_defs/check_gpu_routing.py"]
 
 
 def text_tier_commands(paths):

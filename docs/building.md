@@ -561,6 +561,18 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
 
+### Linux hardware GPU tests
+
+The mixed CI configuration (`--config=ci-platforms`) runs each test on its target platform.
+`//tools/ci:linux_ci_gpu` inherits the Linux CI platform and adds the execution property
+`gpu=present`. A native test wrapper can select this platform so that its TestRunner requests a
+GPU while its build actions use the ordinary execution platforms. Select hardware tests by
+target. Setting the GPU platform globally makes unrelated tests request GPU capacity.
+
+A test that requires hardware can set `DONNER_REQUIRE_HARDWARE_GPU=1` in its own environment.
+Donner then excludes CPU-type Vulkan devices from both headless and presentation device
+selection and reports the name of each refused adapter.
+
 ### Linux CI test selection
 
 The Linux Test step runs the affected native tests, the deterministic fuzzer wrapper probe,
