@@ -37,6 +37,27 @@ class UnifiedTest(unittest.TestCase):
     def test_all_requested_shards_executed(self):
         verify(events(), [SUITE, METAL])
 
+    def test_selected_linux_hardware_variant_requires_fresh_remote_results(self):
+        label = "//pkg:ci_linux_gpu_device_test"
+        target = {"label": label, "configuration": {"id": "gpu"}}
+        shard = {**target, "shard": 1, "run": 1}
+        records = list(events()) + [
+            {"id": {"targetCompleted": target}, "completed": {"success": True}},
+            {"id": {"testSummary": target}, "testSummary": {"overallStatus": "PASSED", "runCount": 1}},
+        ]
+        for strategy, cached in [("remote", False), ("remote", True), ("local", False)]:
+            result = {"id": {"testResult": shard}, "testResult": {"status": "PASSED",
+                      "cachedLocally": cached, "executionInfo": {"strategy": strategy}}}
+            with self.subTest(strategy=strategy, cached=cached):
+                if strategy == "remote" and not cached:
+                    verify(records + [result], [SUITE, METAL], linux=[label])
+                else:
+                    with self.assertRaises(ValueError):
+                        verify(records + [result], [SUITE, METAL], linux=[label])
+        skipped = {"id": {"targetCompleted": target}, "aborted": {"reason": "SKIPPED"}}
+        with self.assertRaises(ValueError):
+            verify(list(events()) + [skipped], [SUITE, METAL], linux=[label])
+
     def test_missing_shard_or_suite(self):
         with self.assertRaisesRegex(ValueError, "incomplete remote shards"):
             verify(list(events())[:-1], [SUITE, METAL])

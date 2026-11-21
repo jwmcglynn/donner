@@ -569,9 +569,18 @@ The mixed CI configuration (`--config=ci-platforms`) runs each test on its targe
 GPU while its build actions use the ordinary execution platforms. Select hardware tests by
 target. Setting the GPU platform globally makes unrelated tests request GPU capacity.
 
-A test that requires hardware can set `DONNER_REQUIRE_HARDWARE_GPU=1` in its own environment.
-Donner then excludes CPU-type Vulkan devices from both headless and presentation device
-selection and reports the name of each refused adapter.
+The Geode tests marked `linux_hardware_gpu = True` have a hardware variant alongside their
+ordinary variant. Each hardware variant selects the Vulkan driver environment, requires a
+non-CPU adapter through `DONNER_REQUIRE_HARDWARE_GPU=1`, and runs uncached on a remote executor. The Geode golden tests are included;
+the exact radial-gradient comparisons in `renderer_geode_tests` remain on the ordinary route
+pending [#2541](https://github.com/jwmcglynn/donner/issues/2541).
+
+Set the repository variable `DONNER_CI_LINUX_HARDWARE_GPU=true` once every trusted mixed CI
+coordinator's existing remote execution instance serves both ordinary builds and Linux hardware
+GPU tests. The admitted mixed job then includes the hardware variants of affected tests in its
+existing Bazel invocation. Leave the variable unset or false while the instances are separate.
+To select the whole suite on a qualified shared instance, run
+`bazel test --config=ci --config=ci-platforms //tools/ci:linux_hardware_gpu_tests`.
 
 ### Linux CI test selection
 

@@ -7,7 +7,7 @@ load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:ci_link_options_tests.bzl", "ci_link_options_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:performance_tests.bzl", "performance_tests")
-load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_multi_transitioned_test", "fuzzer_compatible_with")
 load("//build_defs:variant_neutral_tests.bzl", "variant_neutral_test_suite")
 
 exports_files(
@@ -69,6 +69,32 @@ py_test(
     deps = [":check_text_tier_defines"],
 )
 
+# Loading-only fixture for a test that registers both remote variants.
+donner_multi_transitioned_test(
+    name = "gpu_registration_fixture",
+    dep = "//tools/ci:ci_linux_kernel_test",
+    linux_hardware_gpu = True,
+    opens_gpu_device = True,
+    remote_parallel_ci = True,
+    renderer_backend = "geode",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//:incompatible"],
+)
+
+_GPU_REGISTRATION_FIXTURES = [
+    "//build_defs:ci_linux_gpu_gpu_registration_fixture",
+    "//build_defs:gpu_registration_fixture",
+    "//build_defs:gpu_registration_fixture_ci_remote",
+]
+
+genquery(
+    name = "hardware_gpu_source_labels",
+    expression = 'attr(tags, "ci-linux-hardware-gpu-source", set(%s))' % " ".join(_GPU_REGISTRATION_FIXTURES),
+    scope = _GPU_REGISTRATION_FIXTURES,
+    tags = ["manual"],
+    testonly = True,
+)
+
 py_test(
     name = "geode_test_scheduling_tests",
     size = "small",
@@ -77,6 +103,7 @@ py_test(
         "geode_test_scheduling_tests.py",
     ],
     data = [
+        ":hardware_gpu_source_labels",
         ":rules.bzl",
         "//:.bazelrc",
         "//:.github/workflows/main.yml",

@@ -36,6 +36,10 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
                                       rule("//pkg:normal"), rule("//pkg:soak", "fuzz_soak")])
         self.assertEqual(set(roots), {REMOTE_TARGETS[local], "//donner/editor/tests:ci_linux_build_rnr_replay_tests_geode",
                                      "//pkg:ci_linux_build_perf", "//pkg:normal", "//pkg:ci_linux_build_soak"})
+        affected = [rule("//pkg:ordinary"), rule("//pkg:device", "ci-linux-hardware-gpu-source")]
+        self.assertEqual(linux_native_patterns(affected), ["//pkg:device", "//pkg:ordinary"])
+        self.assertEqual(linux_native_patterns(affected, hardware_gpu=True),
+                         ["//pkg:ci_linux_gpu_device", "//pkg:device", "//pkg:ordinary"])
 
     def test_mapping_is_limited_to_measured_sharded_suites(self):
         self.assertEqual(

@@ -470,14 +470,20 @@ class DetermineTest(_ScriptTest):
             self.assertEqual(call, _hashing(self.runner_temp, call[call.index("-w") + 1],
                                             call[-1]))
 
-    def test_generated_darwin_variants_do_not_inflate_the_affected_selection(self):
-        variant = "//a:ci_darwin_example"
-        ordinary = "//a:ci_darwin_named_product"
-        result, _, outputs = self.determine(
-            affected="\n".join([variant, ordinary, "//a:example", ""]),
-            queries=_queries(**{'kind("ci_platform_(test|build) rule"': (variant + "\n", 0)}))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("fallback=false\naffected=" + ordinary + " //a:example", outputs)
+    def test_generated_variants_do_not_inflate_the_affected_selection(self):
+        hardware = 'kind("(ci_platform_test|test_suite) rule", attr(tags, "ci-linux-hardware-gpu", //...))'
+        for variant, query in (("//a:ci_darwin_example", 'attr(tags, "ci-darwin-(test|build)"'),
+                               ("//a:ci_linux_gpu_example", hardware),
+                               ("//tools/ci:linux_hardware_gpu_tests", hardware)):
+            with self.subTest(variant=variant):
+                # Exercise each trigger without relying on a second type of variant. A
+                # similarly named product must survive when the query does not return it.
+                product = variant + "_named_product"
+                result, _, outputs = self.determine(
+                    affected="\n".join([variant, "//a:example", product, ""]),
+                    queries=_queries(**{query: (variant + "\n", 0)}))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("fallback=false\naffected=//a:example " + product, outputs)
 
     def test_graph_tracked_build_defs_and_other_workflows_select_incrementally(self):
         # A lint script under build_defs is an ordinary source of its own tests, and another
