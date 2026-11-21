@@ -108,8 +108,7 @@ public:
   /// (cursive/connected scripts like Arabic). Simple backends return false.
   virtual bool isCursive(uint32_t codepoint) const = 0;
 
-  /// Returns true if the font has a native OpenType small-caps feature (smcp).
-  /// If false, the engine synthesizes small-caps via uppercase + reduced size.
+  /// Returns whether the face has native small caps for a Latin probe in the default language.
   virtual bool hasSmallCapsFeature(FontHandle font) const = 0;
 
   // ── Bitmap glyphs (optional) ──────────────────────────────────
@@ -297,7 +296,19 @@ public:
     WorkBudget* work = nullptr;
     /// Resolved horizontal embedding parity; overrides every guessed shaping direction.
     std::optional<bool> rightToLeft;
+    /// An explicit OpenType language-system tag in big-endian byte order, when known.
+    uint32_t openTypeLanguage = 0;
+    /// Context script cached by the simple backend, independently of HarfBuzz properties.
+    mutable std::optional<uint32_t> simpleUnicodeScript;
   };
+
+  /// Whether the actual script and language of this range can use native small caps.
+  virtual bool hasSmallCapsFeatureForRun(FontHandle font, std::string_view /*text*/,
+                                         size_t /*offset*/, size_t /*length*/, bool /*vertical*/,
+                                         TextOrientation /*orientation*/,
+                                         const ShapingContext* /*context*/) const {
+    return hasSmallCapsFeature(font);
+  }
 
   /**
    * Shape [\p byteOffset, \p byteOffset + \p byteLength) as one part of \p context, such as one

@@ -1372,7 +1372,8 @@ std::optional<size_t> SfntTableOffset(std::span<const uint8_t> bytes, uint32_t t
 }
 
 /// Registers Noto Sans with no features in one script's default language system.
-FontHandle RegisterCapsFaceWithoutScriptFeatures(FontManager& manager, uint32_t scriptTag) {
+FontHandle RegisterCapsFaceWithoutScriptFeatures(FontManager& manager, uint32_t scriptTag,
+                                                 bool keepNamedLanguages = false) {
   std::vector<uint8_t> bytes = ReadResvgFontBytes("NotoSans-Regular.ttf");
   const auto gsub = SfntTableOffset(bytes, 0x47535542);  // GSUB
   if (!gsub) {
@@ -1390,7 +1391,9 @@ FontHandle RegisterCapsFaceWithoutScriptFeatures(FontManager& manager, uint32_t 
       return {};
     }
     const size_t langSys = script + defaultOffset;
-    WriteBe16(&bytes, script + 2, 0);  // No script-specific languages.
+    if (!keepNamedLanguages) {
+      WriteBe16(&bytes, script + 2, 0);
+    }
     WriteBe16(&bytes, langSys + 4, 0);  // No features in the default language.
     css::FontFace face;
     face.familyName = RcString("CapsScriptControl");
@@ -1438,9 +1441,9 @@ void CheckLatinSmallCapsScript(bool latinHasFeature) {
     const auto direct =
         backend->shapeRun(modified, 64.f, "a", 0, 1, false, FontVariant::SmallCaps, false);
     ASSERT_THAT(direct.glyphs, SizeIs(1));
-    EXPECT_THAT(direct.glyphs[0].glyphIndex,
-                testing::Eq(latinHasFeature ? native.glyphs[0].glyphIndex
-                                            : upper.glyphs[0].glyphIndex));
+    EXPECT_THAT(
+        direct.glyphs[0].glyphIndex,
+        testing::Eq(latinHasFeature ? native.glyphs[0].glyphIndex : upper.glyphs[0].glyphIndex));
     EXPECT_THAT(direct.glyphs[0].fontSizeScale, FloatEq(latinHasFeature ? 1.0f : 0.8f));
 
     TextEngine engine(fontManager, registry, std::move(backend));
@@ -1459,9 +1462,9 @@ void CheckLatinSmallCapsScript(bool latinHasFeature) {
     const auto runs = engine.layout(text, params);
     ASSERT_THAT(runs, SizeIs(1));
     ASSERT_THAT(runs[0].glyphs, SizeIs(1));
-    EXPECT_THAT(runs[0].glyphs[0].glyphIndex,
-                testing::Eq(latinHasFeature ? native.glyphs[0].glyphIndex
-                                            : lower.glyphs[0].glyphIndex));
+    EXPECT_THAT(
+        runs[0].glyphs[0].glyphIndex,
+        testing::Eq(latinHasFeature ? native.glyphs[0].glyphIndex : lower.glyphs[0].glyphIndex));
     EXPECT_THAT(runs[0].glyphs[0].fontSizeScale, FloatEq(1.0f));
   }
 }
@@ -1472,6 +1475,77 @@ TEST(TextBackendSimpleCapabilities, NativeSmallCapsUseTheLatinScriptFeature) {
 
 TEST(TextBackendSimpleCapabilities, NativeSmallCapsDoNotBorrowFromDefaultScriptForLatin) {
   CheckLatinSmallCapsScript(false);
+}
+
+TEST(TextBackendSimpleCapabilities, NativeSmallCapsUseTheSelectedLanguage) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull full(manager, registry);
+  TextBackendSimple simple(manager, registry);
+  const FontHandle original = LoadResvgFont(manager, "NotoSans-Regular.ttf", "CapsReference");
+  const FontHandle modified =
+      RegisterCapsFaceWithoutScriptFeatures(manager, 0x6C61746Eu, true);  // latn.
+  ASSERT_TRUE(static_cast<bool>(original));
+  ASSERT_TRUE(static_cast<bool>(modified));
+  const auto expected =
+      full.shapeRun(original, 64.f, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  ASSERT_THAT(expected.glyphs, ElementsAre(GlyphFontSizeScaleIs(FloatEq(1.0f))));
+
+  TextBackend::ShapingContext context{0, 1};
+  context.openTypeLanguage = 0x43415420;  // CAT: Noto Sans has a Catalan language system.
+  for (const TextBackend* backend : std::array<const TextBackend*, 2>{&simple, &full}) {
+    EXPECT_FALSE(backend->hasSmallCapsFeature(modified));
+    EXPECT_TRUE(backend->hasSmallCapsFeatureForRun(modified, "a", 0, 1, false,
+                                                   TextOrientation::Mixed, &context));
+    const auto actual =
+        backend->shapeRunInContext(modified, 64.f, "a", context, 0, 1, false,
+                                   TextOrientation::Mixed, FontVariant::SmallCaps, false);
+    EXPECT_THAT(actual.glyphs,
+                Pointwise(SameGlyphAndAdvanceAs(FullTierPrecisionPx(64.0)), expected.glyphs));
+  }
+}
+
+TEST(TextBackendSimpleCapabilities, SvgSmallCapsSynthesisNoneUsesTheRunScript) {
+  const auto render = [](bool reference, bool latinHasFeature, bool fullTier) {
+    const std::string_view smallCaps =
+        "<text x='8' y='50' font-family='CapsScriptControl' font-size='64' "
+        "font-variant='small-caps' style='font-synthesis-small-caps:none'>a</text>";
+    const std::string_view normal =
+        "<text x='8' y='50' font-family='CapsScriptControl' font-size='64'>a</text>";
+    auto document =
+        instantiateSubtree(reference && !latinHasFeature ? normal : smallCaps, {}, {80, 64});
+    auto& registry = document.registry();
+    auto& manager = registry.ctx().emplace<FontManager>(registry);
+    const FontHandle font =
+        reference ? LoadResvgFont(manager, "NotoSans-Regular.ttf", "CapsScriptControl")
+                  : RegisterCapsFaceWithoutScriptFeatures(
+                        manager, latinHasFeature ? 0x44464C54u : 0x6C61746Eu);
+    if (!font) {
+      return RendererBitmap{};
+    }
+    std::unique_ptr<TextBackend> backend;
+    if (fullTier) {
+      backend = std::make_unique<TextBackendFull>(manager, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(manager, registry);
+    }
+    registry.ctx().emplace<TextEngine>(manager, registry, std::move(backend));
+    return RenderDocumentWithActiveBackend(document);
+  };
+  for (bool fullTier : {false, true}) {
+    for (bool latinHasFeature : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "full=" << fullTier << " latn=" << latinHasFeature);
+      const auto expected = render(true, latinHasFeature, fullTier);
+      const auto actual = render(false, latinHasFeature, fullTier);
+      ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(80, 64)));
+      ASSERT_THAT(actual.dimensions, testing::Eq(expected.dimensions));
+      ASSERT_THAT(expected.pixels, Not(Each(testing::Eq(0))));
+      const auto label = std::string("small_caps_script_") + (fullTier ? "full_" : "simple_") +
+                         (latinHasFeature ? "latn" : "default");
+      editor::tests::CompareBitmapToBitmap(actual, expected, label,
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 // The simple backend reads only trusted faces, so the GSUB reader never sees document-supplied

@@ -909,17 +909,15 @@ TEST_F(TextBackendSimpleTest, NativeSmallCapsRejectAFaceOverTheSubtableLimit) {
               ElementsAre(AllOf(GlyphIndexIs(1), GlyphFontSizeScaleIs(FloatEq(0.8f)))));
 }
 
-// Only the first script's default language system counts, as in the full backend: an smcp feature
-// that only a later script lists leaves the face without native small caps.
-TEST_F(TextBackendSimpleTest, NativeSmallCapsReadOnlyTheFirstScript) {
+TEST_F(TextBackendSimpleTest, NativeSmallCapsUseTheSelectedScript) {
   const FontHandle font = loadFont(MakeGsubTestFont(
       GsubTable({{}, {0}}, {{"smcp", {0}}}, {GposLookup(1, SingleSubstGlyph(3, 2))})));
-  EXPECT_FALSE(backend_.hasSmallCapsFeature(font));
+  EXPECT_TRUE(backend_.hasSmallCapsFeature(font));
 
   const auto shaped =
       backend_.shapeRun(font, 100.0f, "a", 0, 1, false, FontVariant::SmallCaps, false);
   EXPECT_THAT(shaped.glyphs,
-              ElementsAre(AllOf(GlyphIndexIs(1), GlyphFontSizeScaleIs(FloatEq(0.8f)))));
+              ElementsAre(AllOf(GlyphIndexIs(2), GlyphFontSizeScaleIs(FloatEq(1.0f)))));
 }
 
 // A format-2 coverage range's startCoverageIndex selects the substitute.

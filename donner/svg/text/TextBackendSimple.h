@@ -36,6 +36,9 @@ public:
   bool isBitmapOnly(FontHandle font) const override;
   bool isCursive(uint32_t codepoint) const override;
   bool hasSmallCapsFeature(FontHandle font) const override;
+  bool hasSmallCapsFeatureForRun(FontHandle font, std::string_view text, size_t offset,
+                                 size_t length, bool vertical, TextOrientation orientation,
+                                 const ShapingContext* context) const override;
   std::optional<BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
                                          float scale) const override;
   ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
@@ -72,7 +75,8 @@ private:
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
                          TextOrientation textOrientation, FontVariant fontVariant,
-                         bool enableKerning, bool forceLogicalOrder, bool backward = false) const;
+                         bool enableKerning, bool forceLogicalOrder, bool backward = false,
+                         const ShapingContext* context = nullptr) const;
 
   const stbtt_fontinfo* getFontInfo(FontHandle font) const;
 

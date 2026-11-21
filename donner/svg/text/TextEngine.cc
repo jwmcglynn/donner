@@ -4046,9 +4046,13 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
 
 /// Apply synthesis policy to the actual face without mutating its native feature state.
 FontVariant EffectiveSmallCapsVariant(const TextBackend& backend, FontHandle font,
-                                      FontVariant variant, FontSynthesisSmallCaps synthesis) {
+                                      FontVariant variant, FontSynthesisSmallCaps synthesis,
+                                      std::string_view text, size_t start, size_t length,
+                                      bool vertical, TextOrientation orientation,
+                                      const TextBackend::ShapingContext* context) {
   return variant == FontVariant::SmallCaps && synthesis == FontSynthesisSmallCaps::None &&
-                 !backend.hasSmallCapsFeature(font)
+                 !backend.hasSmallCapsFeatureForRun(font, text, start, length, vertical,
+                                                    orientation, context)
              ? FontVariant::Normal
              : variant;
 }
@@ -5425,13 +5429,16 @@ private:
                                    const TextBackend::ShapingContext* context,
                                    TextOrientation orientation) const {
     const size_t length = chunk.byteEnd - chunk.byteStart;
-    const FontVariant variant = EffectiveSmallCapsVariant(backend_, font, variant_, synthesis_);
+    const bool useBidiContext = context && bidi_;
+    const size_t offset = useBidiContext ? bidi_->spans[sourceSpan_].byte : 0;
+    const std::string_view input = useBidiContext ? std::string_view(bidi_->source) : text_;
+    const size_t start = offset + chunk.byteStart;
+    const FontVariant variant =
+        EffectiveSmallCapsVariant(backend_, font, variant_, synthesis_, input, start, length,
+                                  vertical_, orientation, context);
     if (context) {
-      const size_t offset = bidi_ ? bidi_->spans[sourceSpan_].byte : 0;
-      const std::string_view input = bidi_ ? std::string_view(bidi_->source) : text_;
-      auto shaped = backend_.shapeRunInContext(font, run_.usedFontSizePx, input, *context,
-                                               offset + chunk.byteStart, length, vertical_,
-                                               orientation, variant, kerning_);
+      auto shaped = backend_.shapeRunInContext(font, run_.usedFontSizePx, input, *context, start,
+                                               length, vertical_, orientation, variant, kerning_);
       if (bidi_) {
         if (shaped.glyphs.size() > length * 8u) {
           bidi_->reject();
@@ -7223,7 +7230,8 @@ private:
         state.shaping.chunks.front().shaped.glyphs.empty()) {
       return {};
     }
-    size_t firstByte = state.chunkRanges.front().byteStart;
+    const ChunkRange& chunk = state.chunkRanges.front();
+    size_t firstByte = chunk.byteStart;
     const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
     const FontHandle firstFace = state.shaping.chunks.front().drawingFace(0, state.font);
     const bool compatible =
@@ -7231,7 +7239,9 @@ private:
         CompatibleKerningRuns(
             fontManager_, firstFace, state.run.usedFontSizePx,
             EffectiveSmallCapsVariant(backend_, firstFace, state.span->fontVariant,
-                                      state.span->fontSynthesisSmallCaps),
+                                      state.span->fontSynthesisSmallCaps, state.text,
+                                      chunk.byteStart, chunk.byteEnd - chunk.byteStart,
+                                      state.vertical, state.orientation, nullptr),
             previousSpanFont_, previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
             previousSpanKerning_);
     const double value =
@@ -7566,8 +7576,13 @@ private:
     previousSpanFont_ = state.lastFont ? state.lastFont : state.font;
     previousSpanFontSizePx_ = state.fontSizePx;
     previousSpanKerning_ = state.fontKerning;
-    previousSpanFontVariant_ = EffectiveSmallCapsVariant(
-        backend_, previousSpanFont_, state.span->fontVariant, state.span->fontSynthesisSmallCaps);
+    if (state.lastCodepoint != 0 && !state.chunkRanges.empty()) {
+      const ChunkRange& chunk = state.chunkRanges.back();
+      previousSpanFontVariant_ = EffectiveSmallCapsVariant(
+          backend_, previousSpanFont_, state.span->fontVariant, state.span->fontSynthesisSmallCaps,
+          state.text, chunk.byteStart, chunk.byteEnd - chunk.byteStart, state.vertical,
+          state.orientation, nullptr);
+    }
     previousSpanOrientation_ = state.orientation;
     previousSpanPathSource_ = SpanKerningPathSource(*state.span);
   }
