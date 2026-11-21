@@ -2971,12 +2971,12 @@ TEST(TransformedBlurPathTest, OnlyMaskedFloodIsABlurredShadow) {
 
   FilterGraph graph;
   graph.nodes = {blur, flood, merge};
-  EXPECT_FALSE(TransformedShadowForeground(graph, deviceFromFilter).has_value());
+  EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
   graph.nodes = {blur, flood, masked, merge};
-  EXPECT_EQ(TransformedShadowForeground(graph, deviceFromFilter),
-            FilterStandardInput::SourceGraphic);
+  EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter),
+              testing::Optional(FilterStandardInput::SourceGraphic));
   graph.nodes.back().inputs = {source, FilterInput()};
-  EXPECT_FALSE(TransformedShadowForeground(graph, deviceFromFilter).has_value());
+  EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
 }
 
 TEST(TransformedBlurPathTest, ShadowColorRejectsUncapturedStandardInputs) {
@@ -2995,9 +2995,9 @@ TEST(TransformedBlurPathTest, ShadowColorRejectsUncapturedStandardInputs) {
     FilterGraph graph;
     graph.nodes = {BlurPathNode(Composite{Composite::Operator::In}, {FilterInput(kind), alpha}),
                    blur, merge};
-    EXPECT_FALSE(TransformedShadowForeground(graph, deviceFromFilter).has_value());
+    EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
     graph.nodes.front().inputs = {alpha, FilterInput(kind)};
-    EXPECT_FALSE(TransformedShadowForeground(graph, deviceFromFilter).has_value());
+    EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
   }
 }
 
