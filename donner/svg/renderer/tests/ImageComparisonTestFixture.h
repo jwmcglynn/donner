@@ -376,6 +376,21 @@ struct ImageComparisonParams {
   }
 
   /**
+   * @brief Returns true if the comparison with \p backend runs, in a build whose text tier is full
+   * (\p fullText) or simple.
+   *
+   * @param backend The backend the comparison renders with.
+   * @param fullText True when \ref BuiltTextTier is \ref TextTier::Full.
+   */
+  bool allowsBackend(RendererBackend backend, bool fullText) const {
+    switch (backend) {
+      case RendererBackend::TinySkia: return allowTinySkia;
+      case RendererBackend::Geode: return allowGeode && (allowGeodeSimpleText || fullText);
+    }
+    return false;
+  }
+
+  /**
    * @brief Requires a renderer feature for this test case.
    *
    * @param feature The feature to require.

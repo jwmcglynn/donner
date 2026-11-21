@@ -844,23 +844,29 @@ CORPUS_LANES = {
     "geode_max_text": CorpusLane("geode-golden", "geode", "full", _FULL_TEXT, corpus="text"),
 }
 TEXT_CORPUS_BUILD = Path("third_party/resvg-test-suite/BUILD.bazel")
-_TEXT_CASES_OUTSIDE = re.compile(r"_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = \[(.*?)\]", re.S)
+# The list, one quoted `tests/` path per line, closed by `]` alone on its own line.
+_TEXT_CASES_OUTSIDE = re.compile(
+    r'^_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = \[\n((?:    "tests/[^"\n]+",\n)*)\]\n', re.M)
 
 
 def text_cases(tests_root: Path, paths: Iterable[str]) -> frozenset[str]:
     """Return the cases, relative to `tests_root`, in the text corpus partition.
 
     The partition is `tests/text/` plus `_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY` in the suite's
-    BUILD.bazel. A tree without that file (a test fixture) has only the `text/` cases.
+    BUILD.bazel. A missing file, or a list that is not one quoted path per line closed by `]`,
+    fails.
     """
 
     build = tests_root.parent / "BUILD.bazel"
-    outside: set[str] = set()
-    if build.is_file():
-        match = _TEXT_CASES_OUTSIDE.search(build.read_text(encoding="utf-8"))
-        if match is None:
-            raise ParityReportError(f"{build}: no _TEXT_CASES_OUTSIDE_TEXT_DIRECTORY list")
-        outside = {path.removeprefix("tests/") for path in re.findall(r'"([^"]+)"', match.group(1))}
+    try:
+        source = build.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read the text corpus partition: {error}") from error
+    match = _TEXT_CASES_OUTSIDE.search(source)
+    if match is None:
+        raise ParityReportError(
+            f"{build}: no well-formed _TEXT_CASES_OUTSIDE_TEXT_DIRECTORY list")
+    outside = {path.removeprefix("tests/") for path in re.findall(r'"([^"]+)"', match.group(1))}
     return frozenset(path for path in paths if path.startswith("text/") or path in outside)
 DEFAULT_THRESHOLD = 0.02
 DEFAULT_MAX_PIXELS = 100
@@ -1905,7 +1911,18 @@ def _edge_coverage_lane_violation(
     if not comparing:
         return (f"{path}: no Geode lane compares, so the quarter-pixel edge coverage rule has no "
                 "effect; remove it")
-    geode = comparing[0]
+    for geode in comparing:
+        violation = _geode_lane_edge_coverage_violation(path, geode, quantized_goldens)
+        if violation:
+            return violation
+    return None
+
+
+def _geode_lane_edge_coverage_violation(
+    path: str, geode: dict[str, object], quantized_goldens: frozenset[str]
+) -> str | None:
+    """Return why one comparing Geode lane cannot apply the edge coverage rule, if it cannot."""
+
     if not geode["settings"]["quarter_pixel_edge_coverage"]:
         return (f"{path}: the Geode lane compares against a Geode golden, which is not "
                 "quarter-pixel quantized; remove the quarter-pixel edge coverage rule")
@@ -2029,6 +2046,12 @@ def _geode_gate_case_violations(
             f"{path}: disables its Geode comparison in the {', '.join(sorted(tiers))} text "
             f"tier(s), but GEODE_GATE_ALLOWLIST records {', '.join(sorted(recorded))}; "
             + GEODE_GATE_RULE)
+    full = case["lanes"].get("geode_max_text", {}).get("configured_state")
+    if tiers == SIMPLE_TIER and full != "compare":
+        violations.append(
+            f"{path}: disables its Geode comparison in the simple text tier only, but the Geode "
+            f"full-shaping lane does not compare it ({full or 'not in the text corpus'}), so the "
+            "row has no Geode comparison; disable it in both tiers")
     return violations
 
 
@@ -2801,16 +2824,24 @@ def _check_edge_coverage_rule(fixture: str) -> None:
         raise ParityReportError("C++ quarter-pixel edge coverage rule differs from parity report")
 
 
-def _check_simple_text_geode_gate(fixture: str) -> None:
+def _check_simple_text_geode_gate(header: str, fixture: str) -> None:
     """Check that the harness disables Geode in the simple tier only, as the lane states model."""
 
-    gated = re.search(
-        r"case RendererBackend::Geode:\s*"
-        r"return params\.allowGeode && "
-        r"\(params\.allowGeodeSimpleText \|\| IsFullTextBuiltIn\(\)\);",
-        fixture,
+    setter = re.search(
+        r"ImageComparisonParams& disableGeodeForSimpleText\(std::string_view reason\) \{\s*"
+        r"allowGeodeSimpleText = false;\s*backendRequirementReason = reason;\s*"
+        r"return \*this;\s*\}",
+        header,
     )
-    if gated is None or fixture.count("allowGeodeSimpleText") != 1:
+    allowed = re.search(
+        r"case RendererBackend::Geode: return allowGeode && "
+        r"\(allowGeodeSimpleText \|\| fullText\);",
+        header,
+    )
+    applied = re.search(r"return params\.allowsBackend\(backend, IsFullTextBuiltIn\(\)\);",
+                        fixture)
+    if (setter is None or allowed is None or applied is None
+            or header.count("allowGeodeSimpleText") != 3 or "allowGeodeSimpleText" in fixture):
         raise ParityReportError("C++ simple-tier Geode gate differs from parity report")
 
 
@@ -2904,9 +2935,11 @@ def _check_text_corpus_wrapper(build: str) -> None:
         raise ParityReportError("Bazel text corpus wrapper differs from parity report")
     opening = build.rindex("(", 0, start)
     block = build[opening:_find_matching(build, opening)]
-    settings = dict(re.findall(r'^\s*(\w+) = "([^"]*)",', block, re.M))
-    expected = {"name": "resvg_test_suite_geode_max_text", "dep": ":resvg_test_suite_max_text_impl",
-                "renderer_backend": "geode", "text": "true", "text_full": "true"}
+    settings = dict(re.findall(r'^\s*(\w+) = ("[^"]*"|\[[^\]]*\]|True|False),', block, re.M))
+    expected = {"name": '"resvg_test_suite_geode_max_text"',
+                "dep": '":resvg_test_suite_max_text_impl"', "renderer_backend": '"geode"',
+                "text": '"true"', "text_full": '"true"', "opens_gpu_device": "True",
+                "args": '["--gtest_filter=-*_TinyGolden"]'}
     if {key: settings.get(key) for key in expected} != expected:
         raise ParityReportError("Bazel text corpus wrapper differs from parity report")
 
@@ -2921,7 +2954,8 @@ def check_renderer_contract(repo_root: Path) -> None:
     _check_reference_canvas_rule(_mask_comments(read("ImageComparisonTestFixture.cc")))
     _check_geode_capabilities(_mask_comments(read("RendererTestBackendGeode.cc")))
     _check_edge_coverage_rule(_mask_comments(read("ImageComparisonTestFixture.cc")))
-    _check_simple_text_geode_gate(_mask_comments(read("ImageComparisonTestFixture.cc")))
+    _check_simple_text_geode_gate(_mask_comments(read("ImageComparisonTestFixture.h")),
+                                  _mask_comments(read("ImageComparisonTestFixture.cc")))
     _check_tiny_capabilities(_mask_comments(read("RendererTestBackendTinySkia.cc")))
     _check_corpus_wrappers(read("BUILD.bazel"))
 

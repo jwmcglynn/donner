@@ -51,6 +51,10 @@ class Fixture:
         self._temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary_directory.name)
         self.tests_root = self.root / parity_report.TESTS_ROOT
+        # The text corpus partition: tests/text/ only.
+        self.tests_root.mkdir(parents=True)
+        (self.tests_root.parent / "BUILD.bazel").write_text(
+            "_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = [\n]\n", encoding="utf-8")
 
     def add_case(self, relative: str, reference: bytes | None = _png_header(500, 500)) -> None:
         path = self.tests_root / relative
@@ -1185,12 +1189,22 @@ class ParityReportTests(unittest.TestCase):
             {"compare": 3})
         self.assertEqual(report["source"]["normal_lanes"]["geode_max_text"]["corpus"], "text")
 
-    def test_text_partition_needs_its_list_when_the_build_file_exists(self) -> None:
+    def test_text_partition_fails_without_a_well_formed_list(self) -> None:
         self.fixture.add_case("text/sample/a.svg")
-        (self.fixture.tests_root.parent / "BUILD.bazel").write_text("", encoding="utf-8")
-        with self.assertRaisesRegex(parity_report.ParityReportError, "_TEXT_CASES_OUTSIDE"):
-            parity_report.build_report(_registration("TextSample", '"text/sample"'),
-                                       self.fixture.tests_root)
+        build = self.fixture.tests_root.parent / "BUILD.bazel"
+        unterminated = ('_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = [\n    "tests/painting/a.svg",\n'
+                        '_OTHER = [\n    "tests/painting/b.svg",\n]\n')
+        for contents, message in (("", "_TEXT_CASES_OUTSIDE"),
+                                  (unterminated, "_TEXT_CASES_OUTSIDE"),
+                                  (None, "cannot read the text corpus partition")):
+            with self.subTest(contents=contents):
+                if contents is None:
+                    build.unlink()
+                else:
+                    build.write_text(contents, encoding="utf-8")
+                with self.assertRaisesRegex(parity_report.ParityReportError, message):
+                    parity_report.build_report(_registration("TextSample", '"text/sample"'),
+                                               self.fixture.tests_root)
 
     def test_simple_tier_geode_gate_compares_on_the_full_tier(self) -> None:
         for name in ("simple.svg", "both.svg"):
@@ -1221,6 +1235,25 @@ class ParityReportTests(unittest.TestCase):
             "text/sample/both.svg: disables its Geode comparison in the full, simple text tier(s), "
             "but GEODE_GATE_ALLOWLIST records simple; " + parity_report.GEODE_GATE_RULE,
         ]))
+
+    def test_simple_tier_gate_needs_a_full_tier_geode_comparison(self) -> None:
+        self.fixture.add_case("painting/fill/simple.svg")
+        self.fixture.add_case("text/sample/text-row.svg")
+        report = parity_report.build_report(
+            _registration("PaintingFill", '"painting/fill", {'
+                          '{"simple.svg", Params().disableGeodeForSimpleText("Bug: simple")}}')
+            + _registration("TextSample", '"text/sample", {'
+                            '{"text-row.svg", Params().disableGeodeForSimpleText("Bug: simple")}}'),
+            self.fixture.tests_root,
+        )
+        simple = parity_report.SIMPLE_TIER
+        violations = parity_report.geode_gate_violations(
+            report, {"painting/fill/simple.svg": simple, "text/sample/text-row.svg": simple})
+
+        self.assertEqual(violations, [
+            "painting/fill/simple.svg: disables its Geode comparison in the simple text tier "
+            "only, but the Geode full-shaping lane does not compare it (not in the text corpus), "
+            "so the row has no Geode comparison; disable it in both tiers"])
 
     def test_google_test_receipt_distinguishes_pass_failure_suppression_and_unobserved(self) -> None:
         rows = ("a.svg", "b.svg", "c.svg", "d.svg")
@@ -1389,6 +1422,14 @@ class ParityReportTests(unittest.TestCase):
                  'dep = ":resvg_test_suite_impl",\n    opens_gpu_device = True,',
                  "text corpus wrapper differs"),
             ],
+            "ImageComparisonTestFixture.h": [
+                ("allowGeodeSimpleText = false;\n    backendRequirementReason",
+                 "allowGeodeSimpleText = false;\n    allowGeode = false;\n"
+                 "    backendRequirementReason",
+                 "simple-tier Geode gate differs"),
+                ("return allowGeode && (allowGeodeSimpleText || fullText);",
+                 "return allowGeodeSimpleText || fullText;", "simple-tier Geode gate differs"),
+            ],
             "RendererTestBackendGeode.cc": [
                 ("return IsTextBuiltIn();", "return true;", "Geode capability Text differs"),
                 ("return IsFullTextBuiltIn();", "return IsTextBuiltIn();",
@@ -1414,8 +1455,8 @@ class ParityReportTests(unittest.TestCase):
                 (".acceptQuarterPixelEdgeCoverage = acceptsQuarterPixelEdgeCoverage(params, mode)}",
                  ".acceptQuarterPixelEdgeCoverage = true}",
                  "quarter-pixel edge coverage rule differs"),
-                ("(params.allowGeodeSimpleText || IsFullTextBuiltIn())",
-                 "(params.allowGeodeSimpleText || !IsFullTextBuiltIn())",
+                ("params.allowsBackend(backend, IsFullTextBuiltIn())",
+                 "params.allowsBackend(backend, true)",
                  "simple-tier Geode gate differs"),
                 ("static_cast<int>(std::max(width, height))",
                  "static_cast<int>(std::min(width, height))", "reference canvas rule differs"),
