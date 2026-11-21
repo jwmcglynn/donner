@@ -1,12 +1,14 @@
 #include "donner/svg/text/TextBackendSimple.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -111,17 +113,50 @@ bool HasIntrinsicItalicStyle(const FontManager& fontManager, FontHandle font) {
   return false;
 }
 
+/// OpenType encodes four-character tags in big-endian order.
+constexpr uint32_t LayoutTag(const char (&tag)[5]) {
+  return (static_cast<uint32_t>(tag[0]) << 24) | (static_cast<uint32_t>(tag[1]) << 16) |
+         (static_cast<uint32_t>(tag[2]) << 8) | static_cast<uint32_t>(tag[3]);
+}
+
+/// Preferred GSUB script tags, followed by the default-script fallbacks.
+std::array<uint32_t, 6> OpenTypeScriptTags(uint32_t script) {
+  uint32_t legacy = script == 0 ? 0 : script | 0x20000000;
+  switch (script) {
+    case LayoutTag("Hira"): legacy = LayoutTag("kana"); break;
+    case LayoutTag("Laoo"): legacy = LayoutTag("lao "); break;
+    case LayoutTag("Yiii"): legacy = LayoutTag("yi  "); break;
+    case LayoutTag("Nkoo"): legacy = LayoutTag("nko "); break;
+    case LayoutTag("Vaii"): legacy = LayoutTag("vai "); break;
+    default: break;
+  }
+
+  constexpr std::pair<uint32_t, uint32_t> versioned[] = {
+      {LayoutTag("Beng"), LayoutTag("bng2")}, {LayoutTag("Deva"), LayoutTag("dev2")},
+      {LayoutTag("Gujr"), LayoutTag("gjr2")}, {LayoutTag("Guru"), LayoutTag("gur2")},
+      {LayoutTag("Knda"), LayoutTag("knd2")}, {LayoutTag("Mlym"), LayoutTag("mlm2")},
+      {LayoutTag("Orya"), LayoutTag("ory2")}, {LayoutTag("Taml"), LayoutTag("tml2")},
+      {LayoutTag("Telu"), LayoutTag("tel2")}, {LayoutTag("Mymr"), LayoutTag("mym2")},
+  };
+  uint32_t version2 = 0;
+  for (const auto& [iso, tag] : versioned) {
+    if (script == iso) {
+      version2 = tag;
+      break;
+    }
+  }
+  // Myanmar has no version 3 script tag.
+  const uint32_t version3 = version2 != 0 && script != LayoutTag("Mymr") ? version2 + 1 : 0;
+  return {version3, version2, legacy, LayoutTag("DFLT"), LayoutTag("dflt"), LayoutTag("latn")};
+}
+
 /**
  * The face's native small-cap glyphs: the single substitutions of its GSUB `smcp` feature, which
  * the full backend applies through HarfBuzz.
  *
- * The lookups are those the feature lists in the default language system of the GSUB script list's
- * first script, applied in lookup-list order, as HarfBuzz applies them. The full backend decides
- * whether a face has native small caps from that same language system, so both tiers agree. Only
- * single substitution subtables are read (lookup type 1, also inside an extension, type 7), the
- * kind `smcp` uses; lookup flags are not applied. Reading is bounded by a step budget and a
- * subtable limit; a face that exceeds either is treated as having no native small caps, so it
- * keeps the synthesized capitals.
+ * The selected script and language system supply the lookups in lookup-list order. Only single
+ * substitution subtables are read (lookup type 1, also inside an extension, type 7). Lookup flags
+ * are not applied. A bounded number of language systems is cached per trusted face.
  */
 class SimpleSmallCapsSubstitution {
 public:
@@ -130,19 +165,53 @@ public:
   /// Single substitution subtables one face may contribute; each glyph is checked against all.
   static constexpr size_t kMaximumSubtables = 64;
 
-  /// Reads the `smcp` lookups of \p font; the result is empty if the face has none.
-  static SimpleSmallCapsSubstitution Read(const FontManager& manager, FontHandle font) {
+  /// Resolves a GSUB language system for the requested Unicode script and OpenType language.
+  static size_t LanguageSystem(std::span<const uint8_t> table, uint32_t scriptTag,
+                               std::span<const uint32_t> languageTags) {
+    const SfntTableReader reader(table);
+    const auto scripts = reader.u16(4);
+    if (!scripts || *scripts == 0) {
+      return 0;
+    }
+    const auto count = reader.u16(*scripts).value_or(0);
+    size_t scriptOffset = 0;
+    for (const uint32_t tag : OpenTypeScriptTags(scriptTag)) {
+      const auto offset = FindTaggedOffset(reader, *scripts + 2, count, tag);
+      if (offset != 0) {
+        scriptOffset = *scripts + offset;
+        break;
+      }
+    }
+    if (scriptOffset == 0) {
+      return 0;
+    }
+    const auto languageCount = reader.u16(scriptOffset + 2).value_or(0);
+    uint16_t offset = 0;
+    for (const uint32_t tag : languageTags) {
+      offset = FindTaggedOffset(reader, scriptOffset + 4, languageCount, tag);
+      if (offset != 0) {
+        break;
+      }
+    }
+    if (offset == 0) {
+      offset = FindTaggedOffset(reader, scriptOffset + 4, languageCount, LayoutTag("dflt"));
+    }
+    const size_t langSys = offset != 0 ? offset : reader.u16(scriptOffset).value_or(0);
+    return langSys == 0 ? 0 : scriptOffset + langSys;
+  }
+
+  /// Reads the `smcp` lookups of the selected language system in \p gsub.
+  static SimpleSmallCapsSubstitution Read(std::span<const uint8_t> gsub, size_t langSys,
+                                          size_t& steps) {
     SimpleSmallCapsSubstitution result;
-    const auto gsub = manager.sfntTable(font, "GSUB");
-    const SfntTableReader reader(gsub.value_or(std::span<const uint8_t>()));
+    const SfntTableReader reader(gsub);
     const auto lookupList = reader.u16(8);
     if (!lookupList) {
       return result;
     }
-    size_t steps = kMaximumReadSteps;
     size_t subtableCount = 0;
     const uint16_t lookupCount = reader.u16(*lookupList).value_or(0);
-    for (const uint16_t index : SmcpLookupIndices(reader, steps)) {
+    for (const uint16_t index : SmcpLookupIndices(reader, langSys, steps)) {
       const auto lookupOffset = reader.u16(*lookupList + 2 + size_t{index} * 2);
       if (index >= lookupCount || !lookupOffset) {
         continue;
@@ -157,7 +226,7 @@ public:
     if (steps == 0 || subtableCount > kMaximumSubtables) {
       return SimpleSmallCapsSubstitution();
     }
-    result.gsub_ = *gsub;
+    result.gsub_ = gsub;
     return result;
   }
 
@@ -199,19 +268,39 @@ private:
     return true;
   }
 
-  /// Returns the sorted, distinct lookup indices of the `smcp` features that the default language
-  /// system of the first script lists.
-  static std::vector<uint16_t> SmcpLookupIndices(const SfntTableReader& reader, size_t& steps) {
-    std::vector<uint16_t> indices;
-    const auto scriptList = reader.u16(4);
-    const auto featureList = reader.u16(6);
-    if (!scriptList || !featureList || reader.u16(*scriptList).value_or(0) == 0) {
-      return indices;
+  /// Looks up a tag in an OpenType list of sorted six-byte tag/offset records.
+  static uint16_t FindTaggedOffset(const SfntTableReader& reader, size_t records, size_t count,
+                                   uint32_t tag) {
+    if (tag == 0) {
+      return 0;
     }
-    const size_t scriptTable = size_t{*scriptList} + reader.u16(*scriptList + 6).value_or(0);
-    const uint16_t defaultLangSys = reader.u16(scriptTable).value_or(0);
-    if (defaultLangSys != 0) {
-      AppendSmcpLookups(reader, *featureList, scriptTable + defaultLangSys, indices, steps);
+    size_t first = 0;
+    while (first < count) {
+      const size_t middle = first + (count - first) / 2;
+      const size_t record = records + middle * 6;
+      const auto value = reader.u32(record);
+      if (!value) {
+        return 0;
+      }
+      if (*value == tag) {
+        return reader.u16(record + 4).value_or(0);
+      }
+      if (*value < tag) {
+        first = middle + 1;
+      } else {
+        count = middle;
+      }
+    }
+    return 0;
+  }
+
+  /// Returns the sorted, distinct lookup indices for the selected language system.
+  static std::vector<uint16_t> SmcpLookupIndices(const SfntTableReader& reader, size_t langSys,
+                                                 size_t& steps) {
+    std::vector<uint16_t> indices;
+    const auto featureList = reader.u16(6);
+    if (featureList && *featureList != 0) {
+      AppendSmcpLookups(reader, *featureList, langSys, indices, steps);
     }
     std::sort(indices.begin(), indices.end());
     indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
@@ -223,8 +312,8 @@ private:
                                 std::vector<uint16_t>& indices, size_t& steps) {
     const uint16_t featureRecords = reader.u16(featureList).value_or(0);
     const uint16_t featureCount = reader.u16(langSys + 4).value_or(0);
-    for (size_t i = 0; i < featureCount && Spend(steps); ++i) {
-      const auto featureIndex = reader.u16(langSys + 6 + i * 2);
+    for (size_t i = 0; i <= featureCount && Spend(steps); ++i) {
+      const auto featureIndex = reader.u16(i == 0 ? langSys + 2 : langSys + 4 + i * 2);
       const size_t record = featureList + 2 + size_t{featureIndex.value_or(0)} * 6;
       const auto featureOffset = reader.u16(record + 4);
       if (!featureIndex || *featureIndex >= featureRecords || !featureOffset ||
@@ -322,19 +411,87 @@ struct StbFontComponent {
   stbtt_fontinfo fontInfo{};
   bool valid = false;
   bool intrinsicItalic = false;
-  /// The face's `smcp` substitutions, read on the first small-caps query.
-  std::optional<SimpleSmallCapsSubstitution> smallCaps;
+  /// Small-cap lookups keyed by the selected language-system offset within this face's GSUB.
+  std::unordered_map<size_t, SimpleSmallCapsSubstitution> smallCaps;
+  std::array<size_t, 32> smallCapsOrder{};
+  size_t smallCapsNext = 0;
 };
 
-/// Returns the cached `smcp` substitutions of \p font, whose stb_truetype state \p registry already
-/// holds as valid, reading them on first use.
-const SimpleSmallCapsSubstitution& CachedSmallCaps(Registry& registry, const FontManager& manager,
-                                                   FontHandle font) {
-  StbFontComponent& cached = registry.get<StbFontComponent>(font.entity());
-  if (!cached.smallCaps) {
-    cached.smallCaps = SimpleSmallCapsSubstitution::Read(manager, font);
+bool AdmitSimpleSmallCapsScript(const TextBackend::ShapingContext& context, size_t length) {
+  return !context.work ||
+         context.work->consume(length, context.simpleUnicodeScript || length >= context.byteLength
+                                           ? 0
+                                           : context.byteLength);
+}
+
+uint32_t DetectUnicodeScript(std::string_view text) {
+  for (size_t offset = 0; offset < text.size();) {
+    const uint32_t scalar = decodeUtf8(text, offset);
+#ifdef DONNER_TEXT_ENABLED
+    const uint32_t script = BidiParagraph::StrongScript(scalar);
+    if (script != 0) {
+      return script;
+    }
+#else
+    if ((scalar >= 'A' && scalar <= 'Z') || (scalar >= 'a' && scalar <= 'z')) {
+      return LayoutTag("Latn");
+    }
+#endif
   }
-  return *cached.smallCaps;
+  return 0;
+}
+
+uint32_t ShapingScript(std::string_view text, size_t offset, size_t length,
+                       const TextBackend::ShapingContext* context) {
+  const uint32_t script = DetectUnicodeScript(text.substr(offset, length));
+  if (!context || context->byteLength <= length || context->byteOffset > text.size() ||
+      context->byteLength > text.size() - context->byteOffset) {
+    return script;
+  }
+  if (!context->simpleUnicodeScript) {
+    context->simpleUnicodeScript =
+        DetectUnicodeScript(text.substr(context->byteOffset, context->byteLength));
+  }
+  return script != 0 ? script : *context->simpleUnicodeScript;
+}
+
+/// Reuses the selected language system's bounded lookup parse across runs of this face.
+const SimpleSmallCapsSubstitution* CachedSmallCaps(Registry& registry, const FontManager& manager,
+                                                   FontHandle font, uint32_t script,
+                                                   std::span<const uint32_t> languages) {
+  const auto gsub = manager.sfntTable(font, "GSUB");
+  const size_t langSys =
+      gsub ? SimpleSmallCapsSubstitution::LanguageSystem(*gsub, script, languages) : 0;
+  if (langSys == 0) {
+    return nullptr;
+  }
+  StbFontComponent& cached = registry.get<StbFontComponent>(font.entity());
+  const auto found = cached.smallCaps.find(langSys);
+  if (found != cached.smallCaps.end()) {
+    return &found->second;
+  }
+  // Keep cache capacity independent of which scripts have already been requested. Eviction changes
+  // the cost of reusing a language system, but the same bounded parse always selects its result.
+  cached.smallCaps.erase(cached.smallCapsOrder[cached.smallCapsNext]);
+  cached.smallCapsOrder[cached.smallCapsNext] = langSys;
+  cached.smallCapsNext = (cached.smallCapsNext + 1) % cached.smallCapsOrder.size();
+  size_t steps = SimpleSmallCapsSubstitution::kMaximumReadSteps;
+  const auto it =
+      cached.smallCaps.emplace(langSys, SimpleSmallCapsSubstitution::Read(*gsub, langSys, steps));
+  return &it.first->second;
+}
+
+const SimpleSmallCapsSubstitution* SmallCapsForRun(Registry& registry, const FontManager& manager,
+                                                   FontHandle font, FontVariant variant,
+                                                   std::string_view text, size_t offset,
+                                                   size_t length,
+                                                   const TextBackend::ShapingContext* context) {
+  return variant == FontVariant::SmallCaps
+             ? CachedSmallCaps(registry, manager, font,
+                               ShapingScript(text, offset, length, context),
+                               context ? std::span<const uint32_t>(context->openTypeLanguageTags)
+                                       : std::span<const uint32_t>())
+             : nullptr;
 }
 
 Path OutlineFromStbVertices(const stbtt_vertex* vertices, int numVertices, float scale) {
@@ -563,7 +720,20 @@ bool TextBackendSimple::isCursive(uint32_t /*codepoint*/) const {
 }
 
 bool TextBackendSimple::hasSmallCapsFeature(FontHandle font) const {
-  return getFontInfo(font) != nullptr && !CachedSmallCaps(registry_, fontManager_, font).empty();
+  return hasSmallCapsFeatureForRun(font, "a", 0, 1, false, TextOrientation::Mixed, nullptr);
+}
+
+bool TextBackendSimple::hasSmallCapsFeatureForRun(FontHandle font, std::string_view text,
+                                                  size_t offset, size_t length, bool /*vertical*/,
+                                                  TextOrientation /*orientation*/,
+                                                  const ShapingContext* context) const {
+  if (offset > text.size() || length > text.size() - offset || !getFontInfo(font) ||
+      (context && !AdmitSimpleSmallCapsScript(*context, length))) {
+    return false;
+  }
+  const auto* caps = SmallCapsForRun(registry_, fontManager_, font, FontVariant::SmallCaps, text,
+                                     offset, length, context);
+  return caps && !caps->empty();
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendSimple::bitmapGlyph(FontHandle /*font*/,
@@ -610,7 +780,9 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunInContext(
     FontHandle font, float fontSizePx, std::string_view spanText, const ShapingContext& context,
     size_t byteOffset, size_t byteLength, bool isVertical, TextOrientation textOrientation,
     FontVariant fontVariant, bool kerning) const {
-  if (context.work && !context.work->consume(byteLength)) {
+  if (context.work &&
+      !(fontVariant == FontVariant::SmallCaps ? AdmitSimpleSmallCapsScript(context, byteLength)
+                                              : context.work->consume(byteLength))) {
     return {};
   }
   bool backward = false;
@@ -618,7 +790,7 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunInContext(
   backward = context.rightToLeft.value_or(false);
 #endif
   return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
-                      textOrientation, fontVariant, kerning, false, backward);
+                      textOrientation, fontVariant, kerning, false, backward, &context);
 }
 
 namespace {
@@ -871,11 +1043,11 @@ struct SimpleShapingMetrics {
   FontVariant variant;
   bool kerning;
   SimpleVerticalMetrics verticalMetrics;
-  SimpleSmallCapsSubstitution smallCaps;
+  const SimpleSmallCapsSubstitution* smallCaps;
 
   TextBackend::ShapedGlyph glyph(SimpleScalar scalar, int previousGlyph,
                                  const TextBackend::ShapedGlyph* uprightBase) const {
-    const bool nativeSmallCaps = variant == FontVariant::SmallCaps && !smallCaps.empty();
+    const bool nativeSmallCaps = smallCaps && !smallCaps->empty();
     // Without native small caps, lowercase ASCII is synthesized as scaled capitals.
     const bool smallCap = variant == FontVariant::SmallCaps && !nativeSmallCaps &&
                           scalar.codepoint >= 'a' && scalar.codepoint <= 'z';
@@ -885,7 +1057,7 @@ struct SimpleShapingMetrics {
     int index = stbtt_FindGlyphIndex(info, static_cast<int>(scalar.codepoint));
     if (nativeSmallCaps) {
       // stb_truetype does not range-check glyph metrics, so a substitute past the face is ignored.
-      const int substitute = smallCaps.substitute(index);
+      const int substitute = smallCaps->substitute(index);
       index = substitute < info->numGlyphs ? substitute : index;
     }
     int advanceWidth = 0;
@@ -928,10 +1100,13 @@ bool ValidSimpleShapingRange(float size, std::string_view text, size_t offset, s
 
 }  // namespace
 
-TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
-    FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
-    size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
-    bool enableKerning, bool /*forceLogicalOrder*/, bool backward) const {
+TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fontSizePx,
+                                                       std::string_view spanText, size_t byteOffset,
+                                                       size_t byteLength, bool isVertical,
+                                                       TextOrientation textOrientation,
+                                                       FontVariant fontVariant, bool enableKerning,
+                                                       bool /*forceLogicalOrder*/, bool backward,
+                                                       const ShapingContext* context) const {
   if (!ValidSimpleShapingRange(fontSizePx, spanText, byteOffset, byteLength)) {
     return {};
   }
@@ -955,8 +1130,8 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(
       fontVariant,
       enableKerning,
       isVertical ? SimpleVerticalMetrics::Read(fontManager_, font, info) : SimpleVerticalMetrics{},
-      fontVariant == FontVariant::SmallCaps ? CachedSmallCaps(registry_, fontManager_, font)
-                                            : SimpleSmallCapsSubstitution{}};
+      SmallCapsForRun(registry_, fontManager_, font, fontVariant, spanText, byteOffset, byteLength,
+                      context)};
   SimpleScalarSequence sequence(spanText, byteOffset, byteLength, backward);
   ShapedRun result;
   result.backward = backward;
