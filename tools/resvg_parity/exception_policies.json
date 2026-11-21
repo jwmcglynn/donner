@@ -808,28 +808,6 @@
       }
     },
     {
-      "id": "small-caps-synthesis",
-      "paths": [
-        "text/font-variant/inherit.svg",
-        "text/font-variant/small-caps.svg"
-      ],
-      "kinds": [
-        "simple_text_threshold"
-      ],
-      "classification": "backend-capability",
-      "disposition": "Retain the measured simple-tier coverage allowance for synthetic small caps. The exact corpus face selects different native small-cap glyphs in full text.",
-      "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185",
-        "donner/svg/renderer/tests/TextBackend_tests.cc",
-        "third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf"
-      ],
-      "removal_criteria": "Remove after the simple engine supports native smcp and both explicit and inherited fixtures pass at default settings.",
-      "reference_provenance": "Adjacent native-small-cap references with the bundled Noto Sans face. Independent HarfBuzz selection with smcp produces e.sc, x.sc and t.sc for Text, while the simple tier scales uppercase outlines.",
-      "max_threshold": 0.02,
-      "max_pixels": 1200
-    },
-    {
       "id": "anchor-background",
       "paths": [
         "text/text-anchor/coordinates-list.svg"

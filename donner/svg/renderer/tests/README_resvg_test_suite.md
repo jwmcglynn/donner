@@ -212,11 +212,6 @@ reason is written once. `//tools/resvg_parity:parity_report_tests` enforces in C
 matches the gated rows and that no other backend is disabled; that the list only shrinks is a review
 rule.
 
-`GeodeSimpleTextCpuAllowanceGate` covers the two `text/font-variant` rows, whose 1,200 px budget in
-`PIXEL_BUDGET_ALLOWLIST` applies to the simple tier only; that budget is not approved for Geode, and
-comparing would apply a budget in the hundreds to it. With full shaping they have the default
-budget and differ by 0 px on Geode, so the full-shaping lane compares them.
-
 The `results.csv` values are manual visual judgments recorded with the snapshot, not a pixel diff,
 and current upstream resvg may score differently.
 

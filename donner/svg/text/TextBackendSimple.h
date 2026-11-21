@@ -14,7 +14,8 @@ namespace donner::svg {
  * stb_truetype-based font backend.
  *
  * Provides font metrics, glyph outlines, and table-derived data using stb_truetype.
- * No GSUB/GPOS shaping, no bitmap glyph support, no cursive script detection.
+ * No GSUB/GPOS shaping beyond native small caps (the face's `smcp` single substitutions), no
+ * bitmap glyph support, no cursive script detection.
  */
 class TextBackendSimple final : public TextBackend {
 public:

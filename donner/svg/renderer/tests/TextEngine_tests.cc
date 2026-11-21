@@ -2563,7 +2563,8 @@ TEST(TextEngineTest, BidiNormalDirectedRealKerningMatchesPaintSplitAndHasANonzer
 TEST(TextEngineTest, SmallCapsSynthesisDoesNotLeakAcrossSimpleShapingRequests) {
   Registry registry;
   FontManager manager(registry);
-  const FontHandle font = LoadResvgFont(manager, "NotoSans-Regular.ttf", "CapsFont");
+  // MPLUS 1p has no smcp feature, so its small caps are synthesized.
+  const FontHandle font = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "CapsFont");
   ASSERT_TRUE(static_cast<bool>(font));
   auto backend = std::make_unique<TextBackendSimple>(manager, registry);
   TextEngine engine(manager, registry, std::move(backend));

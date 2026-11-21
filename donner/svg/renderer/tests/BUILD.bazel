@@ -2455,11 +2455,15 @@ donner_cc_test(
 # manual perf lane.
 donner_perf_cc_test(
     name = "sprite_field_prepare_tests",
+    size = "small",
     # Five cases of up to 16 s each under ASan on the hosted nightly runner, which timed the
     # unsharded correctness target out at its 60 s `size = "small"` limit. One case per shard.
     correctness_shard_count = 5,
     correctness_srcs = ["SpriteFieldPrepareCorrectness_tests.cc"],
     wallclock_srcs = ["SpriteFieldPrepareWallclock_tests.cc"],
+    # The paired measurements draw 88 full frames outside the timed prepare calls. On hosted
+    # macOS that took up to 49 s in passing runs and exhausted a 60 s timeout in the nightly.
+    wallclock_timeout = "moderate",
     deps = [
         ":sprite_field_scene",
         "//donner/base",
