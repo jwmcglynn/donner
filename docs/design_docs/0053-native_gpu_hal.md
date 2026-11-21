@@ -96,7 +96,9 @@ The maintainer decided:
   their caps with the measured peaks recorded on the issue.
 - Native Metal admits frame work with at most three outstanding submissions per Geode context.
   At capacity the next frame submission waits for the oldest serial needed to make room.
-  The 64-frame zoom-8 DPR2 splash workload drains within this bound on Apple silicon.
+  On native Metal, `//donner/svg/renderer/tests:renderer_geode_tests` enforces the bound in
+  `RendererGeodeTest.NativeMetalBoundsOutstandingFrameSubmissions`. The 64-frame zoom-8 DPR2
+  splash workload also drained within this bound on Apple silicon.
   [#1697](https://github.com/jwmcglynn/donner/issues/1697)
 - [#1719](https://github.com/jwmcglynn/donner/issues/1719): find why a discrete Vulkan GPU's
   driver reported device loss in the same drain.
