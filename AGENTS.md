@@ -184,6 +184,24 @@ When creating a pull request:
 
 See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behind these checks and the taxonomy of CI escapes they prevent.
 
+## Filing Issues
+
+- **Set the issue type on every issue you file: `Bug`, `Feature` or `Task`.** Labels do not replace
+  the type. `gh issue create` does not set it, so set it right after creating the issue and read it
+  back:
+
+  ```sh
+  gh api -X PATCH repos/jwmcglynn/donner/issues/<number> -f type=Bug -q '.type.name'
+  ```
+
+  Use `Bug` for a defect in shipped behavior, including a flaky or crashing test; `Feature` for new
+  user-visible capability; `Task` for everything else (cleanup, tooling, CI, documentation,
+  follow-up work).
+- Add the labels that apply (`correctness`, `crash`, `perf`, `editor`, `text`, `css`, `resvg`,
+  `tech debt`, ...) in addition to the type. There is no `bug` label; the type carries that.
+- Check that the issue body is not empty after creating it, and follow the AI comment convention in
+  `CLAUDE.md`: the description carries no agent marker.
+
 ## General Practices
 
 - Prefer existing Donner utilities (`Transform2d`, `RcString`, `StringUtils`) before adding dependencies.
