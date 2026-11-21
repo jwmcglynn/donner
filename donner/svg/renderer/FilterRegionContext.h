@@ -329,11 +329,18 @@ inline const components::FilterNode* FilterFirstInputNode(const components::Filt
   return &graph.nodes[index - 1];
 }
 
-/// Scale of the transformed path's local raster along each filter axis: the axis's device length,
-/// at least 1. @param deviceFromFilter Filter user space to device pixels.
+/// Device pixels per filter user unit along each axis.
+/// @param deviceFromFilter Filter user space to device pixels.
+inline Vector2d FilterDeviceAxisScale(const Transform2d& deviceFromFilter) {
+  return Vector2d(deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length(),
+                  deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+}
+
+/// Scale of the transformed path's local raster, clamped to at least one pixel per user unit.
+/// @param deviceFromFilter Filter user space to device pixels.
 inline Vector2d TransformedPathLocalScale(const Transform2d& deviceFromFilter) {
-  return Vector2d(std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length()),
-                  std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length()));
+  const Vector2d deviceScale = FilterDeviceAxisScale(deviceFromFilter);
+  return Vector2d(std::max(1.0, deviceScale.x), std::max(1.0, deviceScale.y));
 }
 
 /// Whether \p node is a Gaussian blur or drop shadow. @param node Filter node.
@@ -361,24 +368,17 @@ inline bool IsTransformedBlurPathNode(const components::FilterNode& node) {
   });
 }
 
-/**
- * Smallest Gaussian deviation, in local raster pixels along each axis, that counts as blurring
- * for \ref FilterOutputIsBlurred. The local raster is resampled from the device and back with
- * bilinear filtering. Against the exact device-raster result for a hard-edged square and bar under
- * `rotate(30)`, that double resample changed 270 to 340 pixels at a pixelmatch threshold of 0.02
- * for deviations up to 0.5 pixel on both renderers, 150 to 180 at 0.75, 77 to 79 at 1, and 23 to
- * 28 at 1.5. One pixel is the smallest measured deviation within the 100 pixels the resvg suite
- * allows at its default settings.
- */
+/// The minimum Gaussian deviation along each filter axis that can cover the local raster's
+/// resampling footprint in device pixels.
 inline constexpr double kMinimumBlurringDeviationPixels = 1.0;
 
-/// Whether \p node is a Gaussian blur whose deviation along both axes, in local raster pixels at
-/// \p localScale, is at least \ref kMinimumBlurringDeviationPixels.
-/// @param node Filter node. @param localScale Local raster pixels per user unit along each axis.
-inline bool IsBlurringNode(const components::FilterNode& node, const Vector2d& localScale) {
+/// Whether \p node is a Gaussian blur meeting \ref kMinimumBlurringDeviationPixels on both axes.
+/// @param node Filter node. @param deviceScale Device pixels per user unit along each axis.
+inline bool IsBlurringNode(const components::FilterNode& node, const Vector2d& deviceScale) {
   const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(&node.primitive);
-  return blur != nullptr && blur->stdDeviationX * localScale.x >= kMinimumBlurringDeviationPixels &&
-         blur->stdDeviationY * localScale.y >= kMinimumBlurringDeviationPixels;
+  return blur != nullptr &&
+         blur->stdDeviationX * deviceScale.x >= kMinimumBlurringDeviationPixels &&
+         blur->stdDeviationY * deviceScale.y >= kMinimumBlurringDeviationPixels;
 }
 
 /// Whether input \p input of node \p index carries only blurred content, given \p blurred for the
@@ -406,10 +406,10 @@ inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
  * unblurred; every other node reads its first input slot, the previous result when unset.
  *
  * @param graph Filter graph.
- * @param localScale Local raster pixels per user unit along each axis.
+ * @param deviceScale Device pixels per user unit along each axis.
  */
 inline bool FilterOutputIsBlurred(const components::FilterGraph& graph,
-                                  const Vector2d& localScale) {
+                                  const Vector2d& deviceScale) {
   std::vector<bool> blurred(graph.nodes.size(), false);
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     const components::FilterNode& node = graph.nodes[index];
@@ -420,7 +420,7 @@ inline bool FilterOutputIsBlurred(const components::FilterGraph& graph,
     for (size_t slot = 0; slot < slots; ++slot) {
       all = all && FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(node, slot), index);
     }
-    blurred[index] = IsBlurringNode(node, localScale) || all;
+    blurred[index] = IsBlurringNode(node, deviceScale) || all;
   }
   return !blurred.empty() && blurred.back();
 }
@@ -460,7 +460,7 @@ inline bool IsEligibleForTransformedBlurPath(const components::FilterGraph& grap
   }
   return (IsLinearBlurChain(graph) &&
           std::any_of(graph.nodes.begin(), graph.nodes.end(), IsBlurFilterNode)) ||
-         FilterOutputIsBlurred(graph, TransformedPathLocalScale(deviceFromFilter));
+         FilterOutputIsBlurred(graph, FilterDeviceAxisScale(deviceFromFilter));
 }
 
 /// Whether any blur or drop shadow of \p graph has unequal X and Y deviations. @param graph Graph.

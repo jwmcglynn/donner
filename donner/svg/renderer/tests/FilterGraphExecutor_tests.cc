@@ -2889,26 +2889,31 @@ TEST(TransformedBlurPathTest, EligibilityTable) {
                 merge({name("b"), name("l")})}),
        false},
   };
-  const Transform2d identity;
+  const Transform2d deviceFromFilter;
   for (const Case& entry : cases) {
     SCOPED_TRACE(entry.label);
-    EXPECT_THAT(IsEligibleForTransformedBlurPath(entry.graph, identity),
+    EXPECT_THAT(IsEligibleForTransformedBlurPath(entry.graph, deviceFromFilter),
                 testing::Eq(entry.eligible));
   }
 }
 
-// The blurring floor is measured in local raster pixels, so a deviation below it in user units
-// counts once the transform scales the local raster past it.
-TEST(TransformedBlurPathTest, BlurringFloorIsInLocalRasterPixels) {
+TEST(TransformedBlurPathTest, BlurringFloorUsesUnclampedDevicePixels) {
   using namespace components;
-  FilterGraph graph;
-  graph.nodes = {
-      BlurPathNode(filter_primitive::GaussianBlur{0.5 * kMinimumBlurringDeviationPixels,
-                                                  0.5 * kMinimumBlurringDeviationPixels},
-                   {}, RcString("b")),
-      BlurPathNode(filter_primitive::Merge{}, {FilterInput(FilterInput::Named{RcString("b")})})};
-  EXPECT_THAT(IsEligibleForTransformedBlurPath(graph, Transform2d()), testing::IsFalse());
-  EXPECT_THAT(IsEligibleForTransformedBlurPath(graph, Transform2d::Scale(4.0)), testing::IsTrue());
+  const auto eligible = [](double deviation, const Transform2d& deviceFromFilter) {
+    FilterGraph graph;
+    graph.nodes = {
+        BlurPathNode(filter_primitive::GaussianBlur{deviation, deviation}, {}, RcString("b")),
+        BlurPathNode(filter_primitive::Merge{}, {FilterInput(FilterInput::Named{RcString("b")})})};
+    return IsEligibleForTransformedBlurPath(graph, deviceFromFilter);
+  };
+
+  EXPECT_FALSE(eligible(0.5, Transform2d()));
+  EXPECT_TRUE(eligible(0.5, Transform2d::Scale(2.0)));
+  EXPECT_FALSE(eligible(1.0, Transform2d::Scale(0.5)));
+  EXPECT_FALSE(eligible(1.0, Transform2d::Scale(0.5, 2.0)));
+  EXPECT_FALSE(eligible(1.0, Transform2d::Scale(2.0, 0.5)));
+  EXPECT_TRUE(eligible(2.0, Transform2d::Scale(0.5)));
+  EXPECT_TRUE(eligible(2.0, Transform2d::Scale(-0.5, 0.5)));
 }
 
 // A skew requires the local raster for any eligible graph. Without one, only a linear blur chain
@@ -2923,25 +2928,28 @@ TEST(TransformedBlurPathTest, BudgetFallbackAdmitsOnlyLinearChains) {
   merge.nodes = {
       BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0}, {}, RcString("b")),
       BlurPathNode(filter_primitive::Merge{}, {FilterInput(FilterInput::Named{RcString("b")})})};
-  Transform2d skew;
-  skew.data[2] = 1.0;  // matrix(1 0 1 1 0 0)
-  const Transform2d identity;
+  Transform2d skewedDeviceFromFilter;
+  skewedDeviceFromFilter.data[2] = 1.0;  // matrix(1 0 1 1 0 0)
+  const Transform2d deviceFromFilter;
   const std::optional<Box2d> region = Box2d({0, 0}, {64, 64});
   for (const bool fits : {true, false}) {
     SCOPED_TRACE(fits ? "fits" : "over budget");
-    EXPECT_THAT(UsesTransformedBlurPath(chain, region, skew, fits), testing::IsTrue());
-    EXPECT_THAT(UsesTransformedBlurPath(merge, region, skew, fits), testing::IsTrue());
+    EXPECT_THAT(UsesTransformedBlurPath(chain, region, skewedDeviceFromFilter, fits),
+                testing::IsTrue());
+    EXPECT_THAT(UsesTransformedBlurPath(merge, region, skewedDeviceFromFilter, fits),
+                testing::IsTrue());
   }
-  EXPECT_THAT(UsesTransformedBlurPath(chain, region, identity, /*fullExecutionFits=*/true),
+  EXPECT_THAT(UsesTransformedBlurPath(chain, region, deviceFromFilter, /*fullExecutionFits=*/true),
               testing::IsFalse());
-  EXPECT_THAT(UsesTransformedBlurPath(chain, region, identity, /*fullExecutionFits=*/false),
+  EXPECT_THAT(UsesTransformedBlurPath(chain, region, deviceFromFilter, /*fullExecutionFits=*/false),
               testing::IsTrue());
-  EXPECT_THAT(UsesTransformedBlurPath(merge, region, identity, /*fullExecutionFits=*/true),
+  EXPECT_THAT(UsesTransformedBlurPath(merge, region, deviceFromFilter, /*fullExecutionFits=*/true),
               testing::IsFalse());
-  EXPECT_THAT(UsesTransformedBlurPath(merge, region, identity, /*fullExecutionFits=*/false),
+  EXPECT_THAT(UsesTransformedBlurPath(merge, region, deviceFromFilter, /*fullExecutionFits=*/false),
               testing::IsFalse());
-  EXPECT_THAT(UsesTransformedBlurPath(chain, std::nullopt, skew, true), testing::IsFalse());
-  EXPECT_THAT(UsesTransformedBlurPath(chain, Box2d({0, 0}, {0, 64}), skew, true),
+  EXPECT_THAT(UsesTransformedBlurPath(chain, std::nullopt, skewedDeviceFromFilter, true),
+              testing::IsFalse());
+  EXPECT_THAT(UsesTransformedBlurPath(chain, Box2d({0, 0}, {0, 64}), skewedDeviceFromFilter, true),
               testing::IsFalse());
   EXPECT_THAT(UsesTransformedBlurPath(chain, region, Transform2d::Scale(0.0), true),
               testing::IsFalse());
