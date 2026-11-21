@@ -516,12 +516,7 @@ bool isBackendAllowed(RendererBackend backend, const ImageComparisonParams& para
   switch (backend) {
     case RendererBackend::TinySkia: return params.allowTinySkia;
     case RendererBackend::Geode:
-#ifndef DONNER_TEXT_FULL
-      if (!params.allowGeodeSimpleText) {
-        return false;
-      }
-#endif
-      return params.allowGeode;
+      return params.allowGeode && (params.allowGeodeSimpleText || IsFullTextBuiltIn());
   }
 
   return false;

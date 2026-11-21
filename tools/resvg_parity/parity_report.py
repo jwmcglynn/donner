@@ -1899,7 +1899,8 @@ def _edge_coverage_lane_violation(
     """
 
     comparing = [entry for name, entry in case["lanes"].items()
-                 if CORPUS_LANES[name].backend == "geode" and entry["configured_state"] == "compare"]
+                 if CORPUS_LANES[name].backend == "geode"
+                 and entry["configured_state"] == "compare"]
     if not comparing:
         return (f"{path}: no Geode lane compares, so the quarter-pixel edge coverage rule has no "
                 "effect; remove it")
@@ -2798,12 +2799,12 @@ def _check_edge_coverage_rule(fixture: str) -> None:
 
 
 def _check_simple_text_geode_gate(fixture: str) -> None:
-    """Check that the harness disables Geode in the simple tier only, as the lane states model it."""
+    """Check that the harness disables Geode in the simple tier only, as the lane states model."""
 
     gated = re.search(
-        r"case RendererBackend::Geode:\s*#ifndef DONNER_TEXT_FULL\s*"
-        r"if \(!params\.allowGeodeSimpleText\) \{\s*return false;\s*\}\s*#endif\s*"
-        r"return params\.allowGeode;",
+        r"case RendererBackend::Geode:\s*"
+        r"return params\.allowGeode && "
+        r"\(params\.allowGeodeSimpleText \|\| IsFullTextBuiltIn\(\)\);",
         fixture,
     )
     if gated is None or fixture.count("allowGeodeSimpleText") != 1:

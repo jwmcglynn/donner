@@ -1414,8 +1414,8 @@ class ParityReportTests(unittest.TestCase):
                 (".acceptQuarterPixelEdgeCoverage = acceptsQuarterPixelEdgeCoverage(params, mode)}",
                  ".acceptQuarterPixelEdgeCoverage = true}",
                  "quarter-pixel edge coverage rule differs"),
-                ("#ifndef DONNER_TEXT_FULL\n      if (!params.allowGeodeSimpleText)",
-                 "#ifdef DONNER_TEXT_FULL\n      if (!params.allowGeodeSimpleText)",
+                ("(params.allowGeodeSimpleText || IsFullTextBuiltIn())",
+                 "(params.allowGeodeSimpleText || !IsFullTextBuiltIn())",
                  "simple-tier Geode gate differs"),
                 ("static_cast<int>(std::max(width, height))",
                  "static_cast<int>(std::min(width, height))", "reference canvas rule differs"),
@@ -1936,8 +1936,8 @@ class RealTreeParityReportTests(unittest.TestCase):
             self.assertEqual(summary[metric],
                              sum(flag in case["exception_types"] for case in cases), metric)
         self.assertEqual(summary["backend_disabled_cases"],
-                         sum(bool(case["disabled_backends"] or case["simple_text_disabled_backends"])
-                             for case in cases))
+                         sum(bool(case["disabled_backends"]
+                                  or case["simple_text_disabled_backends"]) for case in cases))
 
     def test_live_head_to_head_partitions_both_engines_passes(self) -> None:
         repo_root = parity_report._default_repo_root()

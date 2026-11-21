@@ -134,8 +134,8 @@ struct ImageComparisonParams {
   bool allowTinySkia = true;
   /// If false, skip the test when the active backend is Geode.
   bool allowGeode = true;
-  /// If false, skip the test when the active backend is Geode in the simple text tier
-  /// (DONNER_TEXT_FULL not defined). Set it through \ref disableGeodeForSimpleText.
+  /// If false, skip the test when the active backend is Geode and \ref BuiltTextTier is not
+  /// \ref TextTier::Full. Set it through \ref disableGeodeForSimpleText.
   bool allowGeodeSimpleText = true;
   /// Bitmask of required backend features, built from \ref RendererBackendFeatureMask.
   uint32_t requiredFeatures = 0;
