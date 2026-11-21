@@ -76,8 +76,9 @@ common --incompatible_default_to_explicit_init_py
 # selected C++ toolchain and left hosted/default lanes on a different launcher.
 common --@rules_python//python/config_settings:bootstrap_impl=script
 
-# Force clang to be the default compiler for all Bazel C/C++ actions.
-# Propagates CC/CXX so every action (including host tools) uses clang/clang++.
+# rules_cc reads CC while configuring the host toolchain. Bazel 9 keeps that
+# repository environment separate from the compile and host action environments.
+build --repo_env=CC=clang
 build --action_env=CC=clang
 build --action_env=CXX=clang++
 build --host_action_env=CC=clang

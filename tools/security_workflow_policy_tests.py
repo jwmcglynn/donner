@@ -2762,6 +2762,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path in sorted(shared) + general + provenance:
             self.assertFalse(matches(path), f"{path} starts the preflight")
 
+    def test_linux_release_provisions_the_default_clang_toolchain(self):
+        # Bazel 9 configures the compiler before applying action_env to build actions.
+        self.assertIn("build --repo_env=CC=clang", _read(".bazelrc").splitlines())
+        workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        install = _named_step(_jobs(workflow)["cli-linux"], "Install CLI build dependencies")
+        command = shlex.split(_step_identity_value(install, "run") or "")
+        self.assertEqual(command[:3], ["sudo", "apt-get", "install"])
+        self.assertLessEqual({"clang", "lld"}, set(command[3:]))
+
     def test_bcr_preflight_has_no_publication_credentials(self):
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         self.assertIn("workflow_dispatch:", preflight)
