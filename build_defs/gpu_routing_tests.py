@@ -138,7 +138,8 @@ class GpuRoutingTest(unittest.TestCase):
 
     def test_rc_inclusion_of_the_config_is_rejected(self):
         for line in ("build:ci --config=ci-linux-gpu", "test --config=ci-linux-gpu",
-                     "common:lane --config=ci-linux-gpu", "build --config ci-linux-gpu"):
+                     "common:lane --config=ci-linux-gpu", "build --config ci-linux-gpu",
+                     'test --config="ci-linux-gpu"'):
             with self.subTest(line=line):
                 self.assert_problem({".bazelrc": self.tree[".bazelrc"] + line + "\n"}, ".bazelrc",
                                     "includes `--config=ci-linux-gpu`")
@@ -161,6 +162,13 @@ class GpuRoutingTest(unittest.TestCase):
         workflow = ".github/workflows/main.yml"
         for command in ("bazelisk test --config=ci --config=ci-linux-gpu //x",
                         "bazel coverage --config=ci-linux-gpu //x",
+                        'bazel test --config="ci-linux-gpu" //x',
+                        "bazel test --config 'ci-linux-gpu' //x",
+                        "bazel test --config=ci-linux-gpu --remote_instance_name= //x",
+                        'bazel test --config=ci-linux-gpu --remote_instance_name="" //x',
+                        'bazel test --config=ci-linux-gpu --remote_instance_name "" //x',
+                        'bazel test --config=ci-linux-gpu --remote_instance_name=first '
+                        '--remote_instance_name= //x',
                         "bazelisk --output_base=/o test --config=ci-linux-gpu \\\n  //x",
                         "cd x && bazelisk test --config=ci-linux-gpu //x"):
             with self.subTest(command=command):
@@ -171,6 +179,7 @@ class GpuRoutingTest(unittest.TestCase):
                                      "--config=ci-linux-gpu //x\n"}, script,
                             "Bazel verb cannot be read")
         for command in ("bazelisk build --config=ci --config=ci-linux-gpu //x",
+                        'bazel test --config="ci-linux-gpu" --remote_instance_name "hardware" //x',
                         "bazelisk test --config=ci --config=ci-linux-gpu \\\n"
                         "  --remote_instance_name=\"$GPU_INSTANCE\" //x"):
             with self.subTest(command=command):

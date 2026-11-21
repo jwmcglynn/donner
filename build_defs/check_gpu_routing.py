@@ -43,6 +43,7 @@ With no arguments it checks every tracked file of those kinds; run it from the r
 
 import ast
 import re
+import shlex
 import subprocess
 import sys
 
@@ -56,7 +57,7 @@ REVIEWED_GPU_PLATFORMS = ("remote_macos_aarch64_gpu", LINUX_GPU_PLATFORM)
 LINUX_GPU_CONFIG_LINE = "build:%s --platforms=//tools/ci:%s" % (GPU_CONFIG, LINUX_GPU_PLATFORM)
 STARLARK_NAMES = ("BUILD", "BUILD.bazel", "MODULE.bazel", "WORKSPACE", "WORKSPACE.bazel")
 
-_CONFIG_USE = re.compile(r"--config(?:=|\s+)%s\b" % re.escape(GPU_CONFIG))
+_CONFIG_USE = re.compile(r"""--config(?:=|\s+)["']?%s\b""" % re.escape(GPU_CONFIG))
 _DEFAULT_PROPERTIES = re.compile(r"remote_default_(?:exec|platform)_properties")
 _PLATFORM_FLAG = re.compile(
     r"--(?:extra_execution_platforms|host_platform)(?:=|\s+)[\"']?([^\s\"']+)")
@@ -237,6 +238,23 @@ def _rc_problems(path, text):
     return problems
 
 
+def _has_instance(command):
+    """Whether the final instance option supplies a nonempty argument after shell quoting."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    value = ""
+    for index, word in enumerate(words):
+        if word == "--":
+            break
+        if word.startswith("--remote_instance_name="):
+            value = word.partition("=")[2]
+        elif word == "--remote_instance_name":
+            value = words[index + 1] if index + 1 < len(words) else ""
+    return bool(value) and not value.startswith("--")
+
+
 def _command_problems(path, number, command):
     if not _CONFIG_USE.search(command):
         return []
@@ -244,7 +262,7 @@ def _command_problems(path, number, command):
     if verb is None:
         return ["%s:%d: `--config=%s` in a command whose Bazel verb cannot be read"
                 % (path, number, GPU_CONFIG)]
-    if verb.group(1) == "build" or "--remote_instance_name" in command:
+    if verb.group(1) == "build" or _has_instance(command):
         return []
     return ["%s:%d: `bazel %s --config=%s` without `--remote_instance_name` would queue its tests "
             "where no Linux GPU executor runs" % (path, number, verb.group(1), GPU_CONFIG)]
