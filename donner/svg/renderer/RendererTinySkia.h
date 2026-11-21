@@ -66,6 +66,8 @@ struct RendererTinySkiaFrameCounters {
  * text; filters and text are compiled in when the build enables them, which it
  * does by default.
  */
+struct TransformedShadowGraphs;
+
 class RendererTinySkia : public RendererInterface {
 public:
   /**
@@ -514,6 +516,11 @@ private:
       const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
       const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight);
   bool initializeFilterSurface(SurfaceFrame& frame, const FilterAdmission& admission);
+  bool assembleTransformedShadow(SurfaceFrame& frame, tiny_skia::Pixmap& localPixmap,
+                                 const TransformedShadowGraphs& graphs,
+                                 const Transform2d& localFromFilter, const Box2d& localFilterRegion,
+                                 const Transform2d& deviceFromLocal);
+  void drawFilterCapture(const SurfaceFrame& frame);
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
   /// Forward unfiltered paint captures to containing stages before executing this stage.
