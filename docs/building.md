@@ -599,17 +599,6 @@ an rc file that includes this config, and a workflow or script command that uses
 but `build` without naming the instance. Its docstring lists what a static check cannot see.
 `//tools:linux_gpu_config_tests` keeps the config free of private runner configuration.
 
-`tools/ci/linux_gpu_lane.py` selects the tests and checks the test invocation. `query` and `select`
-pick the GPU-opening transitioned test wrappers in the reviewed scope (the Geode backend's tests and
-the Geode golden suite), leaving out reviewed tests that build only for another OS and tests whose
-environment chooses a Vulkan driver, which compare against that driver on purpose.
-`//tools/ci:linux_gpu_lane_scope_tests` pins the scope to the BUILD files it names. `check` reads
-the test invocation's JSON execution log and build events. It is the lane's status gate as well as
-its venue check: it fails unless every executed spawn is a selected test's runner carrying the GPU
-request, no result came from a cache, each selected test has a fresh remote result and a GPU test
-run for every run and shard and a passing summary, and at least one test ran. A skipped or aborted
-selected test fails it.
-
 ### Linux CI test selection
 
 The Linux Test step runs the affected native tests, the deterministic fuzzer wrapper probe,

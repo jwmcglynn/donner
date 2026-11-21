@@ -1,5 +1,6 @@
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("//build_defs:ci_linux_gpu.bzl", "linux_gpu_package_suite")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load(
     "//build_defs:rules.bzl",
@@ -12,12 +13,6 @@ load(
     "donner_transitioned_cc_test",
     "donner_variant_cc_test",
     "renderer_backend_compatible_with",
-)
-
-# Read by //tools/ci:linux_gpu_lane_scope_tests, which pins the Linux GPU lane's scope.
-exports_files(
-    ["BUILD.bazel"],
-    visibility = ["//tools/ci:__pkg__"],
 )
 
 filegroup(
@@ -1421,6 +1416,7 @@ donner_cc_test(
 # target is reachable from `bazel test //...` without --config=geode.
 donner_multi_transitioned_test(
     name = "renderer_geode_golden_tests",
+    linux_hardware_gpu = True,
     # Software WebGPU (llvmpipe) rendering is slow in fastbuild; the Lion
     # golden alone can exceed 300 s on aarch64 runners. Cap explicitly at
     # 900 s so a driver hang (e.g., Intel Arc + Mesa 25.2.8 Xe-KMD) gets
@@ -2478,3 +2474,5 @@ donner_perf_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+linux_gpu_package_suite()

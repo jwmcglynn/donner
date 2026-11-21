@@ -14,6 +14,7 @@ To enable:
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
+load("//build_defs:ci_linux_gpu.bzl", "linux_gpu_package_suite")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load(
@@ -54,7 +55,6 @@ exports_files(
     visibility = [
         "//build_defs:__pkg__",
         "//donner/svg/renderer/geode/boundary_tests:__pkg__",
-        "//tools/ci:__pkg__",
     ],
 )
 
@@ -684,6 +684,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_device_tests",
+    linux_hardware_gpu = True,
     # Tight timeout — device-creation tests should never take more than
     # a few seconds on a healthy driver. If we hit 60s here, the driver
     # is almost certainly hung and should be killed before it wastes
@@ -711,6 +712,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_idle_retirement_native_test",
+    linux_hardware_gpu = True,
     dep = ":geode_idle_retirement_native_test_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
@@ -765,6 +767,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_shaders_tests",
+    linux_hardware_gpu = True,
     timeout = "short",
     testonly = 1,
     dep = ":geode_shaders_tests_impl",
@@ -908,6 +911,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geo_encoder_tests",
+    linux_hardware_gpu = True,
     testonly = 1,
     dep = ":geo_encoder_tests_impl",
     opens_gpu_device = True,
@@ -941,6 +945,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_perf_tests",
+    linux_hardware_gpu = True,
     testonly = 1,
     dep = ":geode_perf_tests_impl",
     opens_gpu_device = True,
@@ -994,6 +999,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_counter_corpus_tests",
+    linux_hardware_gpu = True,
     # Same budget as the impl. Deliberately unsharded: every scene shares one
     # device, so extra shards would each repay the device-init cost for no
     # parallelism, since GPU-opening targets are serialized anyway.
@@ -1034,6 +1040,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_glyph_instancing_tests",
+    linux_hardware_gpu = True,
     timeout = "moderate",
     testonly = 1,
     dep = ":geode_glyph_instancing_tests_impl",
@@ -1061,6 +1068,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_target_texture_tests",
+    linux_hardware_gpu = True,
     size = "small",
     testonly = 1,
     dep = ":geode_target_texture_tests_impl",
@@ -1087,6 +1095,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_snapshot_readback_tests",
+    linux_hardware_gpu = True,
     size = "small",
     testonly = 1,
     dep = ":geode_snapshot_readback_tests_impl",
@@ -1151,6 +1160,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_debug_overlay_tests",
+    linux_hardware_gpu = True,
     testonly = 1,
     dep = ":geode_debug_overlay_tests_impl",
     opens_gpu_device = True,
@@ -1181,6 +1191,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_shared_device_frame_tests",
+    linux_hardware_gpu = True,
     size = "small",
     testonly = 1,
     dep = ":geode_shared_device_frame_tests_impl",
@@ -1256,6 +1267,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_document_residency_tests",
+    linux_hardware_gpu = True,
     size = "medium",
     testonly = 1,
     dep = ":geode_document_residency_tests_impl",
@@ -1289,6 +1301,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_filter_engine_tests",
+    linux_hardware_gpu = True,
     # This timeout, not the size above, is what governs on the sanitizer lane: that lane runs
     # the package without --config=geode, so the implementation target is skipped there.
     timeout = "moderate",
@@ -1297,3 +1310,5 @@ donner_multi_transitioned_test(
     opens_gpu_device = True,
     renderer_backend = "geode",
 )
+
+linux_gpu_package_suite()

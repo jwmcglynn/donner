@@ -4,6 +4,7 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_features//:features.bzl", "bazel_features")
 load("//build_defs:ci_darwin.bzl", "declare_darwin_variants")
+load("//build_defs:ci_linux_gpu.bzl", "linux_gpu_variant")
 load("//build_defs:ci_xcode.bzl", "ci_xcode_identity")
 load("//build_defs:wasm_profiles.bzl", "WASM_OPTION_INPUTS", "WASM_OPTION_OUTPUTS", "wasm_profile_options")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
@@ -330,8 +331,8 @@ exec "$impl" {fixed_args} "$@"
     # the resvg suite's per-case watchdog override) - the symlinked binary
     # would run with a bare environment.
     profile = getattr(ctx.attr, "darwin_profile", "")
+    fixed = getattr(ctx.attr, "fixed_test_env", {})
     if getattr(ctx.attr, "metal_validation", False) or profile:
-        environment = dep_target[RunEnvironmentInfo] if RunEnvironmentInfo in dep_target else None
         fixed = {
             "DONNER_AUTOMATED_LANE": "1",
             "DONNER_CI_MACOS_LANE": "native-metal",
@@ -341,6 +342,8 @@ exec "$impl" {fixed_args} "$@"
         if profile:
             fixed["DONNER_CI_MACOS_LANE"] = "native-desktop-browser" if profile == "desktop" else "self-hosted-vm"
             fixed["MTL_SHADER_VALIDATION_TEXTURE_USAGE"] = "0"
+    if fixed:
+        environment = dep_target[RunEnvironmentInfo] if RunEnvironmentInfo in dep_target else None
         providers.append(RunEnvironmentInfo(
             environment = (environment.environment if environment else {}) | fixed,
             inherited_environment = [k for k in environment.inherited_environment if k not in fixed] if environment else [],
@@ -470,6 +473,7 @@ def donner_multi_transitioned_test(
         renderer_backend,
         opens_gpu_device = False,
         remote_parallel_ci = False,
+        linux_hardware_gpu = False,
         **kwargs):
     """Create a transitioned test with an honest short-runtime default.
 
@@ -494,10 +498,16 @@ def donner_multi_transitioned_test(
         ordinary wrapper keeps local device-loss isolation; the remote wrapper
         shares its transitioned executable and test attributes but carries
         `ci-remote-gpu` and `no-local` instead of the local GPU tags.
+      linux_hardware_gpu: Also register this GPU-opening test on the Linux hardware platform.
       **kwargs: Additional arguments for the underlying test rule.
     """
     if "size" not in kwargs and "timeout" not in kwargs:
         kwargs["size"] = "small"
+    if linux_hardware_gpu:
+        if not opens_gpu_device or renderer_backend != "geode":
+            fail("Linux hardware requires a GPU-opening Geode test: " + name)
+        kwargs["tags"] = kwargs.get("tags", []) + ["ci-linux-hardware-gpu-source"]
+        linux_gpu_variant(ci_platform_test, name, kwargs)
     if renderer_backend == "geode" and opens_gpu_device:
         tags = kwargs.get("tags", [])
         if remote_parallel_ci and "local-gpu-isolated" not in tags:
@@ -1393,6 +1403,7 @@ ci_platform_test = rule(
     attrs = {
         "darwin": attr.bool(),
         "darwin_profile": attr.string(values = ["", "ordinary", "desktop", "geode"]),
+        "fixed_test_env": attr.string_dict(),
         "data": attr.label_list(allow_files = True),
         "metal_validation": attr.bool(),
         "dep": attr.label(mandatory = True, executable = True, cfg = "target"),
