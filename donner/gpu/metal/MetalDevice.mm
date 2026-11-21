@@ -524,9 +524,9 @@ void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSE
   if (bufferError != nil) {
     std::lock_guard<std::mutex> lock(outcome.mutex);
     if (outcome.firstError == nil) {
-      NSString* detail = [NSString stringWithFormat:@"submission %llu, command buffer %zu: %@",
-                                                    static_cast<unsigned long long>(serial),
-                                                    bufferIndex, bufferError.localizedDescription];
+      NSString* detail =
+          [NSString stringWithFormat:@"submission %@, command buffer %zu: %@", @(serial),
+                                     bufferIndex, bufferError.localizedDescription];
       outcome.firstError = [NSError errorWithDomain:bufferError.domain
                                                code:bufferError.code
                                            userInfo:@{
