@@ -87,6 +87,32 @@ class CheckBannedPatternsTests(unittest.TestCase):
                 )
                 self.assertIn("compositor depends on presentation handoff policy", descriptions)
 
+    def test_blocks_bare_abort_in_browser_runtime_sources(self):
+        paths = [
+            path + "NewBridge.cc" if path.endswith("/") else path
+            for path in check_banned_patterns._NAMED_ABORT_PATHS
+        ]
+        for call in ("std::abort();", "abort ( );", "::abort();"):
+            for path in paths:
+                with self.subTest(call=call, path=path):
+                    self.assertIn(
+                        "bare abort in browser runtime code",
+                        self._descriptions_at_path(f"void Fail() {{ {call} }}\n", path),
+                    )
+
+    def test_allows_named_aborts_and_bare_aborts_elsewhere(self):
+        cases = (
+            ("donner/gpu/browser/BrowserGpuOwner.cc",
+             'void Fail() { FatalAbort("gpu-owner.stop", {{"stopped", 1}}); }'),
+            ("donner/gpu/browser/BrowserGpuOwner.cc",
+             '// std::abort();\nconst char* text = "abort()";\n'),
+            ("donner/gpu/browser/BrowserGpuOwner.cc", "void Fail() { controller.abort(); }"),
+            ("donner/editor/AsyncRenderer.cc", "void Fail() { std::abort(); }"),
+        )
+        for path, source in cases:
+            with self.subTest(path=path, source=source):
+                self.assertEqual([], self._descriptions_at_path(source, path))
+
     def test_allows_compositor_gpu_capability_and_policy_test_fixtures(self):
         cases = (
             ("donner/svg/compositor/CompositorControllerRasterize.cc",

@@ -10,6 +10,8 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "donner/base/FatalAbort.h"
+
 namespace donner::editor {
 namespace {
 struct PendingDialog {
@@ -86,7 +88,7 @@ BrowserFileDialog::BrowserFileDialog(std::function<void()> wake) {
   const std::lock_guard lock(dialogsMutex);
   id_ = nextId++;
   if (id_ == 0) {
-    std::abort();
+    FatalAbort("file-dialog.id-wrap", {{"pending", static_cast<std::int64_t>(dialogs.size())}});
   }
   dialogs.emplace(id_, PendingDialog{.wake = std::move(wake)});
 }

@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/FatalAbort.h"
 #include "donner/base/StringUtils.h"
 #include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/gpu/browser/EmscriptenBrowserBridge.h"
@@ -134,7 +135,8 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
       ResolveGpuBackendKind(options, request, BuildDefaultGpuBackendKind());
   if (kind.hasError()) {
     std::fprintf(stderr, "[Geode] %s\n", kind.error().message.c_str());
-    std::abort();
+    FatalAbort("geode-root.backend-request",
+               {{"requestBytes", static_cast<std::int64_t>(request.size())}});
   }
   if (kind.result() != GpuBackendKind::Browser) {
     if (!request.empty()) {
@@ -142,7 +144,8 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
                    "[Geode] DONNER_GPU_BACKEND=%.*s asked for a backend this WebAssembly "
                    "build cannot select\n",
                    static_cast<int>(request.size()), request.data());
-      std::abort();
+      FatalAbort("geode-root.backend-unavailable",
+                 {{"requestedKind", static_cast<std::int64_t>(kind.result())}});
     }
     return nullptr;
   }

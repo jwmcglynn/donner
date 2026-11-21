@@ -547,6 +547,7 @@ donner_cc_library(
     ],
     deps = _GEODE_DEVICE_COMMON_DEPS + select({
         ":browser_backend_enabled": [
+            "//donner/base:fatal_abort",
             "//donner/gpu/browser:browser_device",
             "//donner/gpu/browser:emscripten_browser_bridge",
         ],
