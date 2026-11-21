@@ -169,10 +169,11 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # request definitions}. Any edit to the step, or a difference in another scenario, changes the
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
+    # Both entry points include the complete determine_targets.sh in their rendered view.
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "fc1df02d3e583667"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7a2d0a037845f458"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "96ce14bae02729c9"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "07bbcb8b292699e8"),
 }
 
 SHARED_STEP_ALLOWLIST = {
