@@ -1,0 +1,42 @@
+Keep directory-based LLVM builtin includes separate from file-valued extras
+in the system module map. The extra inputs are already in compiler-components.
+Treat additional sysroot headers as textual headers, including in Bazel 9's
+Merkle-cache mode. Preserve the existing compile/link input partition.
+
+diff --git a/toolchain/internal/configure.bzl b/toolchain/internal/configure.bzl
+--- a/toolchain/internal/configure.bzl
++++ b/toolchain/internal/configure.bzl
+@@ -869,3 +869,2 @@
+         "{target_toolchain_root}:{cxx_builtin_include_label}",
+-        {extra_compiler_files}
+     ],
+@@ -920,2 +919,3 @@
+     cxx_builtin_include_files = ":cxx_builtin_include_files-{suffix}",
++    extra_compiler_files = [{extra_compiler_files}],
+     cxx_builtin_include_directories = {cxx_builtin_include_directories},
+diff --git a/toolchain/internal/system_module_map.bzl b/toolchain/internal/system_module_map.bzl
+--- a/toolchain/internal/system_module_map.bzl
++++ b/toolchain/internal/system_module_map.bzl
+@@ -81 +81,11 @@
++    # Extra compiler inputs can be individual sysroot headers even when the
++    # LLVM distribution provides directory inputs. Only include actual headers
++    # under builtin include directories; link/runtime objects are not headers.
++    template_dict.add_joined(
++        "%extra_compiler_headers%",
++        depset(transitive = [target[DefaultInfo].files for target in ctx.attr.extra_compiler_files]),
++        join_with = "\n",
++        map_each = textual_header_closure,
++        allow_closure = True,
++    )
+     # We don't have a good way to detect a source directory, so check if it's a single File...
+@@ -122,2 +132,3 @@
+         "cxx_builtin_include_files": attr.label(mandatory = True),
++        "extra_compiler_files": attr.label_list(allow_files = True),
+         "cxx_builtin_include_directories": attr.string_list(mandatory = True),
+diff --git a/toolchain/internal/template.modulemap b/toolchain/internal/template.modulemap
+--- a/toolchain/internal/template.modulemap
++++ b/toolchain/internal/template.modulemap
+@@ -2,2 +2,3 @@
+ %cxx_builtin_include_files%
++%extra_compiler_headers%
+ %sysroot%

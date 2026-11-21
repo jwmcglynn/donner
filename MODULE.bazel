@@ -403,12 +403,14 @@ use_repo(python, "python_3_12")
 bazel_dep(name = "toolchains_llvm", version = "1.13.0", dev_dependency = True)
 
 # Declare only the libc++ headers, not all of the LLVM distribution's include/, as compile inputs.
-# Only Bazel releases before 9 read the patched filegroup. No version is set here, so the patch
-# applies to whichever release the bazel_dep above resolves to.
+# On Bazel 9 the builtins are directories, but extra sysroot headers are still individual files.
 single_version_override(
     module_name = "toolchains_llvm",
     patch_strip = 1,
-    patches = ["//third_party/patches:toolchains_llvm-libcxx-compile-headers.patch"],
+    patches = [
+        "//third_party/patches:toolchains_llvm-libcxx-compile-headers.patch",
+        "//third_party/patches:toolchains_llvm-extra-compiler-module-headers.patch",
+    ],
 )
 
 # To use a local copy of the toolchains_llvm repository, comment out the single_version_override
