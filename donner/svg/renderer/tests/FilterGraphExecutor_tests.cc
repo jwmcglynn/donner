@@ -2955,6 +2955,30 @@ TEST(TransformedBlurPathTest, BudgetFallbackAdmitsOnlyLinearChains) {
               testing::IsFalse());
 }
 
+TEST(TransformedBlurPathTest, OnlyMaskedFloodIsABlurredShadow) {
+  using namespace components;
+  using namespace filter_primitive;
+  const FilterInput source(FilterStandardInput::SourceGraphic);
+  const FilterInput alpha(FilterStandardInput::SourceAlpha);
+  const FilterInput blurredAlpha(FilterInput::Named{RcString("a")});
+  const FilterNode blur = BlurPathNode(GaussianBlur{2.0, 2.0}, {alpha}, RcString("a"));
+  const FilterNode flood = BlurPathNode(Flood{});
+  const FilterNode masked =
+      BlurPathNode(Composite{Composite::Operator::In}, {FilterInput(), blurredAlpha});
+  const FilterNode merge = BlurPathNode(Merge{}, {FilterInput(), source});
+  Transform2d deviceFromFilter;
+  deviceFromFilter.data[2] = 0.5;
+
+  FilterGraph graph;
+  graph.nodes = {blur, flood, merge};
+  EXPECT_FALSE(TransformedShadowForeground(graph, deviceFromFilter).has_value());
+  graph.nodes = {blur, flood, masked, merge};
+  EXPECT_EQ(TransformedShadowForeground(graph, deviceFromFilter),
+            FilterStandardInput::SourceGraphic);
+  graph.nodes.back().inputs = {source, FilterInput()};
+  EXPECT_FALSE(TransformedShadowForeground(graph, deviceFromFilter).has_value());
+}
+
 TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
   using namespace components;
   FilterGraph graph;
