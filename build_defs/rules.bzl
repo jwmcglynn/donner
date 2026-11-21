@@ -528,7 +528,7 @@ def donner_multi_transitioned_test(
         remote_tags = [
             tag
             for tag in remote_kwargs.get("tags", [])
-            if tag not in [LOCAL_GPU_TEST_TAG, "local-gpu-isolated"]
+            if tag not in [LOCAL_GPU_TEST_TAG, "local-gpu-isolated", "ci-linux-hardware-gpu-source"]
         ]
         remote_kwargs["tags"] = remote_tags + ["ci-remote-gpu", "no-local"]
         _donner_multi_transitioned_test(
