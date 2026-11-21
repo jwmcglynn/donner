@@ -2787,17 +2787,30 @@ components::FilterNode BlurPathNode(components::FilterPrimitive primitive,
 }
 
 // The local raster admits a linear chain of blurs, drop shadows and offsets over SourceGraphic, as
-// before merges were admitted. A graph with merges, named results or SourceAlpha is admitted only
-// when everything it outputs passed through a Gaussian blur: an unblurred SourceGraphic branch
-// would be resampled onto the local raster and back.
+// before merges were admitted, whatever their deviations. A graph with merges, named results or
+// SourceAlpha is admitted only when everything it outputs passed through a Gaussian blur of at
+// least kMinimumBlurringDeviationPixels on both axes: an unblurred branch would be resampled onto
+// the local raster and back.
 TEST(TransformedBlurPathTest, EligibilityTable) {
   using namespace components;
   const FilterInput source(FilterStandardInput::SourceGraphic);
   const FilterInput alpha(FilterStandardInput::SourceAlpha);
-  const FilterInput named(FilterInput::Named{RcString("b")});
-  const FilterNode blur = BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0});
-  const FilterNode namedBlur =
-      BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0}, {}, RcString("b"));
+  const auto name = [](const char* value) {
+    return FilterInput(FilterInput::Named{RcString(value)});
+  };
+  const auto gaussian = [](double x, double y, std::vector<FilterInput> inputs = {},
+                           std::optional<RcString> result = std::nullopt) {
+    return BlurPathNode(filter_primitive::GaussianBlur{x, y}, std::move(inputs), std::move(result));
+  };
+  const auto merge = [](std::vector<FilterInput> inputs) {
+    return BlurPathNode(filter_primitive::Merge{}, std::move(inputs));
+  };
+  const auto offset = [](std::vector<FilterInput> inputs = {},
+                         std::optional<RcString> result = std::nullopt) {
+    return BlurPathNode(filter_primitive::Offset{3.0, 4.0}, std::move(inputs), std::move(result));
+  };
+  const FilterNode blur = gaussian(2.0, 2.0);
+  const FilterNode namedBlur = gaussian(2.0, 2.0, {}, RcString("b"));
   const auto graphOf = [](std::vector<FilterNode> nodes) {
     FilterGraph graph;
     graph.nodes = std::move(nodes);
@@ -2807,60 +2820,100 @@ TEST(TransformedBlurPathTest, EligibilityTable) {
   subregionBlur.x = Lengthd(4);
   FilterGraph objectBoundingBox = graphOf({blur});
   objectBoundingBox.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
+  const double floor = kMinimumBlurringDeviationPixels;
   struct Case {
     std::string_view label;
     FilterGraph graph;
     bool eligible;
   };
   const std::vector<Case> cases = {
+      // Linear chains keep their eligibility.
       {"plain blur", graphOf({blur}), true},
-      {"merge of a named blur",
-       graphOf({namedBlur, BlurPathNode(filter_primitive::Merge{}, {named})}), true},
-      {"blur of SourceAlpha",
-       graphOf({BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0}, {alpha})}), true},
-      {"offset after a blur", graphOf({blur, BlurPathNode(filter_primitive::Offset{3.0, 4.0})}),
+      {"zero-deviation blur chain", graphOf({gaussian(0.0, 0.0)}), true},
+      {"offset after a blur", graphOf({blur, offset()}), true},
+      {"drop shadow of SourceGraphic", graphOf({BlurPathNode(filter_primitive::DropShadow{})}),
        true},
       {"drop shadow after a blur", graphOf({blur, BlurPathNode(filter_primitive::DropShadow{})}),
        true},
-      {"drop shadow of SourceGraphic", graphOf({BlurPathNode(filter_primitive::DropShadow{})}),
-       true},
+      // Newly admitted graphs need a blurred output.
+      {"merge of a named blur", graphOf({namedBlur, merge({name("b")})}), true},
+      {"blur of SourceAlpha", graphOf({gaussian(2.0, 2.0, {alpha})}), true},
+      {"named result on an otherwise linear chain", graphOf({namedBlur, offset()}), true},
+      {"unused unblurred named node",
+       graphOf({offset({source}, RcString("u")), namedBlur, merge({name("b")})}), true},
+      {"empty merge", graphOf({namedBlur, merge({})}), true},
+      {"name defined twice, blurred last",
+       graphOf({offset({source}, RcString("b")), namedBlur, merge({name("b")})}), true},
+      {"name defined twice, unblurred last",
+       graphOf({namedBlur, offset({source}, RcString("b")), merge({name("b")})}), false},
       {"shadow merge with SourceGraphic",
-       graphOf({BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0}, {alpha}, RcString("b")),
-                BlurPathNode(filter_primitive::Merge{}, {named, source})}),
+       graphOf({gaussian(2.0, 2.0, {alpha}, RcString("b")), merge({name("b"), source})}), false},
+      {"drop shadow merged from its result",
+       graphOf(
+           {BlurPathNode(filter_primitive::DropShadow{}, {}, RcString("s")), merge({name("s")})}),
        false},
-      {"offset of SourceGraphic only", graphOf({BlurPathNode(filter_primitive::Offset{3.0, 4.0})}),
+      {"unblurred named offset merged with a blur",
+       graphOf({offset({source}, RcString("o")), namedBlur, merge({name("o"), name("b")})}), false},
+      {"merge node without in after an unblurred node",
+       graphOf({namedBlur, offset({source}), merge({name("b"), FilterInput()})}), false},
+      {"forward reference",
+       graphOf({offset({name("b")}, RcString("o")), namedBlur, merge({name("o")})}), false},
+      {"missing name", graphOf({blur, merge({name("b")})}), false},
+      {"zero-deviation blur merged",
+       graphOf({gaussian(0.0, 0.0, {}, RcString("b")), merge({name("b")})}), false},
+      {"one axis zero", graphOf({gaussian(4.0, 0.0, {}, RcString("b")), merge({name("b")})}),
        false},
-      {"missing name", graphOf({blur, BlurPathNode(filter_primitive::Merge{}, {named})}), false},
-      {"FillPaint",
-       graphOf({BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0},
-                             {FilterInput(FilterStandardInput::FillPaint)})}),
+      {"deviation below the floor",
+       graphOf({gaussian(floor * 0.5, 2.0, {}, RcString("b")), merge({name("b")})}), false},
+      {"deviation at the floor",
+       graphOf({gaussian(floor, floor, {}, RcString("b")), merge({name("b")})}), true},
+      {"sharp blur merged with a blurred SourceAlpha",
+       graphOf({gaussian(3.0, 3.0, {alpha}, RcString("a")),
+                gaussian(0.0, 0.0, {source}, RcString("g")), merge({name("a"), name("g")})}),
+       false},
+      // Unsupported inputs, primitives and units.
+      {"offset of SourceGraphic only", graphOf({offset()}), false},
+      {"FillPaint", graphOf({gaussian(2.0, 2.0, {FilterInput(FilterStandardInput::FillPaint)})}),
        false},
       {"StrokePaint",
-       graphOf({BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0},
-                             {FilterInput(FilterStandardInput::StrokePaint)})}),
-       false},
+       graphOf({gaussian(2.0, 2.0, {FilterInput(FilterStandardInput::StrokePaint)})}), false},
       {"BackgroundImage",
-       graphOf({BlurPathNode(filter_primitive::GaussianBlur{2.0, 2.0},
-                             {FilterInput(FilterStandardInput::BackgroundImage)})}),
-       false},
+       graphOf({gaussian(2.0, 2.0, {FilterInput(FilterStandardInput::BackgroundImage)})}), false},
+      {"BackgroundAlpha",
+       graphOf({gaussian(2.0, 2.0, {FilterInput(FilterStandardInput::BackgroundAlpha)})}), false},
       {"explicit subregion", graphOf({subregionBlur}), false},
       {"objectBoundingBox primitive units", objectBoundingBox, false},
       {"lighting inside a merge",
        graphOf({namedBlur,
-                BlurPathNode(filter_primitive::DiffuseLighting{}, {named}, RcString("l")),
-                BlurPathNode(filter_primitive::Merge{},
-                             {named, FilterInput(FilterInput::Named{RcString("l")})})}),
+                BlurPathNode(filter_primitive::DiffuseLighting{}, {name("b")}, RcString("l")),
+                merge({name("b"), name("l")})}),
        false},
   };
+  const Transform2d identity;
   for (const Case& entry : cases) {
     SCOPED_TRACE(entry.label);
-    EXPECT_THAT(IsEligibleForTransformedBlurPath(entry.graph), testing::Eq(entry.eligible));
+    EXPECT_THAT(IsEligibleForTransformedBlurPath(entry.graph, identity),
+                testing::Eq(entry.eligible));
   }
+}
+
+// The blurring floor is measured in local raster pixels, so a deviation below it in user units
+// counts once the transform scales the local raster past it.
+TEST(TransformedBlurPathTest, BlurringFloorIsInLocalRasterPixels) {
+  using namespace components;
+  FilterGraph graph;
+  graph.nodes = {
+      BlurPathNode(filter_primitive::GaussianBlur{0.5 * kMinimumBlurringDeviationPixels,
+                                                  0.5 * kMinimumBlurringDeviationPixels},
+                   {}, RcString("b")),
+      BlurPathNode(filter_primitive::Merge{}, {FilterInput(FilterInput::Named{RcString("b")})})};
+  EXPECT_THAT(IsEligibleForTransformedBlurPath(graph, Transform2d()), testing::IsFalse());
+  EXPECT_THAT(IsEligibleForTransformedBlurPath(graph, Transform2d::Scale(4.0)), testing::IsTrue());
 }
 
 // A skew requires the local raster for any eligible graph. Without one, only a linear blur chain
 // may fall back to it when its full execution does not fit the device budget; a graph with a merge
-// or named result is not admitted there.
+// or named result is not admitted there. An empty region or a singular transform never uses it.
 TEST(TransformedBlurPathTest, BudgetFallbackAdmitsOnlyLinearChains) {
   using namespace components;
   FilterGraph chain;
@@ -2873,18 +2926,24 @@ TEST(TransformedBlurPathTest, BudgetFallbackAdmitsOnlyLinearChains) {
   Transform2d skew;
   skew.data[2] = 1.0;  // matrix(1 0 1 1 0 0)
   const Transform2d identity;
+  const std::optional<Box2d> region = Box2d({0, 0}, {64, 64});
   for (const bool fits : {true, false}) {
     SCOPED_TRACE(fits ? "fits" : "over budget");
-    EXPECT_THAT(UsesTransformedBlurPath(chain, skew, fits), testing::IsTrue());
-    EXPECT_THAT(UsesTransformedBlurPath(merge, skew, fits), testing::IsTrue());
+    EXPECT_THAT(UsesTransformedBlurPath(chain, region, skew, fits), testing::IsTrue());
+    EXPECT_THAT(UsesTransformedBlurPath(merge, region, skew, fits), testing::IsTrue());
   }
-  EXPECT_THAT(UsesTransformedBlurPath(chain, identity, /*fullExecutionFits=*/true),
+  EXPECT_THAT(UsesTransformedBlurPath(chain, region, identity, /*fullExecutionFits=*/true),
               testing::IsFalse());
-  EXPECT_THAT(UsesTransformedBlurPath(chain, identity, /*fullExecutionFits=*/false),
+  EXPECT_THAT(UsesTransformedBlurPath(chain, region, identity, /*fullExecutionFits=*/false),
               testing::IsTrue());
-  EXPECT_THAT(UsesTransformedBlurPath(merge, identity, /*fullExecutionFits=*/true),
+  EXPECT_THAT(UsesTransformedBlurPath(merge, region, identity, /*fullExecutionFits=*/true),
               testing::IsFalse());
-  EXPECT_THAT(UsesTransformedBlurPath(merge, identity, /*fullExecutionFits=*/false),
+  EXPECT_THAT(UsesTransformedBlurPath(merge, region, identity, /*fullExecutionFits=*/false),
+              testing::IsFalse());
+  EXPECT_THAT(UsesTransformedBlurPath(chain, std::nullopt, skew, true), testing::IsFalse());
+  EXPECT_THAT(UsesTransformedBlurPath(chain, Box2d({0, 0}, {0, 64}), skew, true),
+              testing::IsFalse());
+  EXPECT_THAT(UsesTransformedBlurPath(chain, region, Transform2d::Scale(0.0), true),
               testing::IsFalse());
 }
 

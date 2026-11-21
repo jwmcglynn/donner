@@ -300,22 +300,40 @@ struct FilterInputMarginBuilder {
   }
 };
 
+/// Index of the closest node before \p index whose `result` is \p name, the node a reference to
+/// that name resolves to, or `std::nullopt` when no earlier node defines it.
+/// @param graph Filter graph. @param index The reading node. @param name The referenced name.
+inline std::optional<size_t> PrecedingResultIndex(const components::FilterGraph& graph,
+                                                  size_t index, const RcString& name) {
+  for (size_t prior = index; prior-- > 0;) {
+    if (graph.nodes[prior].result.has_value() && *graph.nodes[prior].result == name) {
+      return prior;
+    }
+  }
+  return std::nullopt;
+}
+
 /// The node a primitive's first input names, or `nullptr` when it reads a standard input.
 inline const components::FilterNode* FilterFirstInputNode(const components::FilterGraph& graph,
                                                           size_t index) {
   using namespace components;
   const FilterInput input = FilterInputOrDefault(graph.nodes[index], 0);
   if (const auto* name = std::get_if<FilterInput::Named>(&input.value)) {
-    for (size_t prior = index; prior-- > 0;) {
-      if (graph.nodes[prior].result.has_value() && *graph.nodes[prior].result == name->name) {
-        return &graph.nodes[prior];
-      }
+    if (const std::optional<size_t> prior = PrecedingResultIndex(graph, index, name->name)) {
+      return &graph.nodes[*prior];
     }
   }
   if (std::holds_alternative<FilterStandardInput>(input.value) || index == 0) {
     return nullptr;
   }
   return &graph.nodes[index - 1];
+}
+
+/// Scale of the transformed path's local raster along each filter axis: the axis's device length,
+/// at least 1. @param deviceFromFilter Filter user space to device pixels.
+inline Vector2d TransformedPathLocalScale(const Transform2d& deviceFromFilter) {
+  return Vector2d(std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length()),
+                  std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length()));
 }
 
 /// Whether \p node is a Gaussian blur or drop shadow. @param node Filter node.
@@ -343,8 +361,28 @@ inline bool IsTransformedBlurPathNode(const components::FilterNode& node) {
   });
 }
 
+/**
+ * Smallest Gaussian deviation, in local raster pixels along each axis, that counts as blurring
+ * for \ref FilterOutputIsBlurred. The local raster is resampled from the device and back with
+ * bilinear filtering. Against the exact device-raster result for a hard-edged square and bar under
+ * `rotate(30)`, that double resample changed 270 to 340 pixels at a pixelmatch threshold of 0.02
+ * for deviations up to 0.5 pixel on both renderers, 150 to 180 at 0.75, 77 to 79 at 1, and 23 to
+ * 28 at 1.5. One pixel is the smallest measured deviation within the 100 pixels the resvg suite
+ * allows at its default settings.
+ */
+inline constexpr double kMinimumBlurringDeviationPixels = 1.0;
+
+/// Whether \p node is a Gaussian blur whose deviation along both axes, in local raster pixels at
+/// \p localScale, is at least \ref kMinimumBlurringDeviationPixels.
+/// @param node Filter node. @param localScale Local raster pixels per user unit along each axis.
+inline bool IsBlurringNode(const components::FilterNode& node, const Vector2d& localScale) {
+  const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(&node.primitive);
+  return blur != nullptr && blur->stdDeviationX * localScale.x >= kMinimumBlurringDeviationPixels &&
+         blur->stdDeviationY * localScale.y >= kMinimumBlurringDeviationPixels;
+}
+
 /// Whether input \p input of node \p index carries only blurred content, given \p blurred for the
-/// nodes before it: a standard input or an unresolved name does not.
+/// nodes before it: a standard input, an unresolved name or a forward reference does not.
 /// @param graph Filter graph. @param blurred Per-node results so far. @param input The input.
 /// @param index The reading node.
 inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
@@ -355,31 +393,34 @@ inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
     return index > 0 && blurred[index - 1];
   }
   const auto* name = std::get_if<FilterInput::Named>(&input.value);
-  for (size_t prior = index; name != nullptr && prior-- > 0;) {
-    if (graph.nodes[prior].result.has_value() && *graph.nodes[prior].result == name->name) {
-      return blurred[prior];
-    }
-  }
-  return false;
+  const std::optional<size_t> prior =
+      name != nullptr ? PrecedingResultIndex(graph, index, name->name) : std::nullopt;
+  return prior.has_value() && blurred[*prior];
 }
 
 /**
  * Whether every path from SourceGraphic or SourceAlpha to the output of \p graph passes through a
- * Gaussian blur. Content that reaches the output unblurred, such as the SourceGraphic node of a
- * shadow merge, would be resampled onto the local raster and back, softening its edges.
+ * Gaussian blur (\ref IsBlurringNode). Content that reaches the output unblurred, such as the
+ * SourceGraphic node of a shadow merge, would be resampled onto the local raster and back,
+ * softening its edges. A merge reads exactly its inputs, so an empty merge carries nothing
+ * unblurred; every other node reads its first input slot, the previous result when unset.
  *
  * @param graph Filter graph.
+ * @param localScale Local raster pixels per user unit along each axis.
  */
-inline bool FilterOutputIsBlurred(const components::FilterGraph& graph) {
+inline bool FilterOutputIsBlurred(const components::FilterGraph& graph,
+                                  const Vector2d& localScale) {
   std::vector<bool> blurred(graph.nodes.size(), false);
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     const components::FilterNode& node = graph.nodes[index];
+    const size_t slots = std::holds_alternative<components::filter_primitive::Merge>(node.primitive)
+                             ? node.inputs.size()
+                             : std::max<size_t>(FilterInputSlotCount(node), 1);
     bool all = true;
-    for (size_t slot = 0; slot < std::max<size_t>(node.inputs.size(), 1); ++slot) {
+    for (size_t slot = 0; slot < slots; ++slot) {
       all = all && FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(node, slot), index);
     }
-    blurred[index] =
-        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) || all;
+    blurred[index] = IsBlurringNode(node, localScale) || all;
   }
   return !blurred.empty() && blurred.back();
 }
@@ -409,15 +450,17 @@ inline bool IsLinearBlurChain(const components::FilterGraph& graph) {
  * SourceAlpha is eligible only when it blurs everything it outputs (\ref FilterOutputIsBlurred).
  *
  * @param graph Filter graph.
+ * @param deviceFromFilter Filter user space to device pixels.
  */
-inline bool IsEligibleForTransformedBlurPath(const components::FilterGraph& graph) {
+inline bool IsEligibleForTransformedBlurPath(const components::FilterGraph& graph,
+                                             const Transform2d& deviceFromFilter) {
   if (graph.nodes.empty() || graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox ||
       !std::all_of(graph.nodes.begin(), graph.nodes.end(), IsTransformedBlurPathNode)) {
     return false;
   }
   return (IsLinearBlurChain(graph) &&
           std::any_of(graph.nodes.begin(), graph.nodes.end(), IsBlurFilterNode)) ||
-         FilterOutputIsBlurred(graph);
+         FilterOutputIsBlurred(graph, TransformedPathLocalScale(deviceFromFilter));
 }
 
 /// Whether any blur or drop shadow of \p graph has unequal X and Y deviations. @param graph Graph.
@@ -459,18 +502,24 @@ inline bool ShouldUseTransformedBlurPath(const components::FilterGraph& graph,
 }
 
 /**
- * Whether a filter runs on the transformed path's local raster: an eligible graph does when the
- * transform requires it (\ref ShouldUseTransformedBlurPath). When its full execution does not fit
- * the device raster's budget, a linear blur chain also runs there at any transform rather than
- * being refused; graphs with merges or named results are not admitted to that fallback.
+ * Whether a filter runs on the transformed path's local raster, the one decision both renderers
+ * share. It needs a nonempty filter region and an invertible transform. An eligible graph then runs
+ * there when the transform requires it (\ref ShouldUseTransformedBlurPath). When its full
+ * execution does not fit the device raster's budget, a linear blur chain also runs there at any
+ * transform rather than being refused; graphs with merges or named results are not admitted to
+ * that fallback.
  *
  * @param graph Filter graph.
+ * @param filterRegion Filter region in user space.
  * @param deviceFromFilter Filter user space to device pixels.
  * @param fullExecutionFits Whether the graph fits the execution budget on the device raster.
  */
 inline bool UsesTransformedBlurPath(const components::FilterGraph& graph,
+                                    const std::optional<Box2d>& filterRegion,
                                     const Transform2d& deviceFromFilter, bool fullExecutionFits) {
-  if (!IsEligibleForTransformedBlurPath(graph)) {
+  if (!filterRegion.has_value() || filterRegion->width() <= 0.0 || filterRegion->height() <= 0.0 ||
+      NearZero(deviceFromFilter.determinant(), 1e-12) ||
+      !IsEligibleForTransformedBlurPath(graph, deviceFromFilter)) {
     return false;
   }
   return ShouldUseTransformedBlurPath(graph, deviceFromFilter) ||
@@ -508,10 +557,7 @@ inline FilterInputMargin ComputeFilterSamplingReach(const components::FilterGrap
   const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                             graph.elementBoundingBox.has_value();
   const double scaleX = FilterDeviceScaleX(deviceFromFilter);
-  // The transformed path's local raster scales each filter axis by its length, at least 1.
-  const Vector2d localScale(
-      std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length()),
-      std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length()));
+  const Vector2d localScale = TransformedPathLocalScale(deviceFromFilter);
   FilterInputMarginBuilder builder{
       deviceFromFilter, Vector2d(scaleX, FilterDeviceScaleY(deviceFromFilter, scaleX)),
       localScale,       objectBounds ? graph.elementBoundingBox->size() : Vector2d(1.0, 1.0),

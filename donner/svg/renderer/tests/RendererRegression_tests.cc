@@ -1184,45 +1184,63 @@ TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredW
       "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
 }
 
-/// Renders a seagreen square and a thin black bar in a `skewX(30)` group at 96x48, each filtered by
-/// \p primitives when they are not empty, through a user-space filter region holding the whole
-/// element.
-RendererBitmap RenderSkewedFilterScene(std::string_view primitives) {
-  const std::string filterAttribute = primitives.empty() ? "" : R"svg( filter="url(#f)")svg";
-  const std::string body =
-      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-20" y="-20" width="140" height="160">)svg" +
-      std::string(primitives) +
-      R"svg(</filter><g transform="skewX(30)"><rect x="8" y="8" width="24" height="24" fill="seagreen")svg" +
-      filterAttribute + R"svg(/><rect x="40" y="10.5" width="6" height="20.3")svg" +
-      filterAttribute + "/></g>";
-  SVGDocument document = instantiateSubtree(body, {}, Vector2i(96, 48));
+/**
+ * Renders \p content, inside a group transformed by \p transform, on a \p size canvas with the
+ * hermetic defaults. The document defines filter `f` in user space over \p region
+ * (`x y width height`) with \p primitives; content elements reference it as `url(#f)`.
+ */
+RendererBitmap RenderTransformedFilterScene(std::string_view region, std::string_view primitives,
+                                            std::string_view transform, std::string_view content,
+                                            Vector2i size) {
+  std::istringstream regionValues{std::string(region)};
+  std::string x, y, width, height;
+  regionValues >> x >> y >> width >> height;
+  const std::string body = "<filter id=\"f\" filterUnits=\"userSpaceOnUse\" x=\"" + x + "\" y=\"" +
+                           y + "\" width=\"" + width + "\" height=\"" + height + "\">" +
+                           std::string(primitives) + "</filter><g transform=\"" +
+                           std::string(transform) + "\">" + std::string(content) + "</g>";
+  SVGDocument document = instantiateSubtree(body, {}, size);
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// A seagreen square and a thin black bar, each filtered by `f` when \p filtered.
+std::string SquareAndBar(bool filtered) {
+  const std::string filter = filtered ? R"svg( filter="url(#f)")svg" : "";
+  return R"svg(<rect x="8" y="8" width="24" height="24" fill="seagreen")svg" + filter +
+         R"svg(/><rect x="40" y="10.5" width="6" height="20.3")svg" + filter + "/>";
+}
+
+/// \ref SquareAndBar in `skewX(30)` at 96x48, filtered by \p primitives when they are not empty,
+/// through a region holding the whole element.
+RendererBitmap RenderSkewedSquareAndBar(std::string_view primitives) {
+  return RenderTransformedFilterScene("-20 -20 140 160", primitives, "skewX(30)",
+                                      SquareAndBar(!primitives.empty()), Vector2i(96, 48));
 }
 
 // A shadow merge draws SourceGraphic unblurred over its shadow. Under a skew that branch must not
 // be resampled onto the filter-aligned raster and back: with the shadow 60 units below, off the
 // canvas, the filtered render equals the element drawn without the filter.
 TEST_F(RendererRegressionTests, SkewedShadowMergeKeepsSourceGraphicSharp) {
-  const RendererBitmap plain = RenderSkewedFilterScene("");
+  const RendererBitmap plain = RenderSkewedSquareAndBar("");
   ExpectVisibleBitmap(plain, "skewed_shadow_plain_visible");
   editor::tests::CompareBitmapToBitmap(
-      RenderSkewedFilterScene(
+      RenderSkewedSquareAndBar(
           R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="2 1"/><feOffset dy="60" result="s"/>
                 <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>)svg"),
       plain, "skewed_shadow_merge_source", editor::tests::PixelmatchIdentityParams());
 }
 
-// feDropShadow under a skew runs on the filter-aligned raster, which shears its blur and resamples
-// its source there and back. With an invisible shadow and a negligible deviation it therefore draws
-// its source exactly as a plain blur of that deviation does on the same raster.
-TEST_F(RendererRegressionTests, SkewedDropShadowRunsOnTheLocalRaster) {
-  const RendererBitmap localRaster =
-      RenderSkewedFilterScene(R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg");
-  ExpectVisibleBitmap(localRaster, "skewed_drop_shadow_local_raster_visible");
+// feDropShadow under a skew takes the same filter-aligned raster as a plain blur, so with an
+// invisible shadow and the same negligible deviation the two draw their source identically.
+// TransformedBlurPathTest.EligibilityTable pins the rule itself.
+TEST_F(RendererRegressionTests, SkewedDropShadowTakesThePlainBlurPath) {
+  const RendererBitmap plainBlur =
+      RenderSkewedSquareAndBar(R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg");
+  ExpectVisibleBitmap(plainBlur, "skewed_drop_shadow_plain_blur_visible");
   editor::tests::CompareBitmapToBitmap(
-      RenderSkewedFilterScene(
+      RenderSkewedSquareAndBar(
           R"svg(<feDropShadow dx="0" dy="0" stdDeviation="0.01" flood-opacity="0"/>)svg"),
-      localRaster, "skewed_drop_shadow_local_raster", editor::tests::PixelmatchIdentityParams());
+      plainBlur, "skewed_drop_shadow_plain_blur_path", editor::tests::PixelmatchIdentityParams());
 }
 
 // Under a skew a blur keeps its user-space shape by running on a raster aligned with the filter's
@@ -1231,13 +1249,11 @@ TEST_F(RendererRegressionTests, SkewedDropShadowRunsOnTheLocalRaster) {
 // same rect in black.
 TEST_F(RendererRegressionTests, SkewedBlurThroughMergeOrSourceAlphaMatchesThePlainBlur) {
   const auto render = [](std::string_view primitives, std::string_view fill) {
-    const std::string body =
-        R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-40" y="0" width="140" height="64">)svg" +
-        std::string(primitives) +
-        R"svg(</filter><g transform="skewX(40)"><rect x="8" y="16" width="24" height="32" fill=")svg" +
-        std::string(fill) + R"svg(" filter="url(#f)"/></g>)svg";
-    SVGDocument document = instantiateSubtree(body, {}, Vector2i(96, 64));
-    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+    return RenderTransformedFilterScene(
+        "-40 0 140 64", primitives, "skewX(40)",
+        R"svg(<rect x="8" y="16" width="24" height="32" fill=")svg" + std::string(fill) +
+            R"svg(" filter="url(#f)"/>)svg",
+        Vector2i(96, 64));
   };
   constexpr std::string_view kBlur = R"svg(<feGaussianBlur stdDeviation="3 1"/>)svg";
   constexpr std::string_view kBlurThroughMerge =
@@ -1252,6 +1268,32 @@ TEST_F(RendererRegressionTests, SkewedBlurThroughMergeOrSourceAlphaMatchesThePla
       render(R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 1"/>)svg", "seagreen"),
       render(kBlur, "black"), "skewed_source_alpha_blur",
       editor::tests::PixelmatchIdentityParams());
+}
+
+// When the filter-aligned raster would not fit the execution budget, both renderers draw the filter
+// on the device raster rather than compositing an unfiltered source. The large region makes the
+// local raster about 1500 x 1750 pixels, past the budget for eight named float results, while the
+// device capture stays canvas sized. A trailing pass-through offset with an explicit subregion
+// keeps the reference graph on the device raster.
+TEST_F(RendererRegressionTests, SkewedFilterOverTheLocalRasterBudgetUsesTheDeviceRaster) {
+  std::string blurs;
+  std::string merge = "<feMerge>";
+  for (int i = 0; i < 8; ++i) {
+    blurs += "<feGaussianBlur stdDeviation=\"" + std::to_string(1 + i % 2) + "\" result=\"b" +
+             std::to_string(i) + "\"/>";
+    merge += "<feMergeNode in=\"b" + std::to_string(i) + "\"/>";
+  }
+  merge += "</feMerge>";
+  constexpr std::string_view kRegion = "-700 -700 1500 1500";
+  const auto render = [&](std::string_view tail) {
+    return RenderTransformedFilterScene(kRegion, blurs + merge + std::string(tail), "skewX(30)",
+                                        SquareAndBar(true), Vector2i(96, 48));
+  };
+  const RendererBitmap deviceRaster =
+      render(R"svg(<feOffset dx="0" dy="0" x="-700" y="-700" width="1500" height="1500"/>)svg");
+  ExpectVisibleBitmap(deviceRaster, "skewed_over_budget_device_raster_visible");
+  editor::tests::CompareBitmapToBitmap(render(""), deviceRaster, "skewed_over_budget",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Group layers drawn inside an feOffset filter whose region starts above and left of the canvas:

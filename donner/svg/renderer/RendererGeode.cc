@@ -1241,18 +1241,6 @@ std::optional<GeodeFilterBuffer> MakeGeodeFilterBuffer(const std::optional<Box2d
   return result;
 }
 
-/// Whether the transformed blur path applies. It resamples the capture from device space, placing
-/// the capture's texel (0, 0) at its buffer offset, so a capture with input margins also works.
-bool ShouldPlanGeodeLocalRaster(const components::FilterGraph& filterGraph,
-                                const std::optional<Box2d>& filterRegion,
-                                const Transform2d& deviceFromFilter, bool fullExecutionFits) {
-  if (!filterRegion.has_value() || filterRegion->width() <= 0.0 || filterRegion->height() <= 0.0 ||
-      NearZero(deviceFromFilter.determinant(), 1e-12)) {
-    return false;
-  }
-  return UsesTransformedBlurPath(filterGraph, deviceFromFilter, fullExecutionFits);
-}
-
 struct GeodeLocalRasterGeometry {
   double scaleX = 1.0;
   double scaleY = 1.0;
@@ -1262,16 +1250,18 @@ struct GeodeLocalRasterGeometry {
   uint32_t height = 0;
 };
 
+/// The local raster for a filter that takes the transformed path. It resamples the capture from
+/// device space, placing the capture's texel (0, 0) at its buffer offset, so a capture with input
+/// margins also works.
 std::optional<GeodeLocalRasterGeometry> ComputeGeodeLocalRasterGeometry(
     const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
     const Transform2d& deviceFromFilter, bool fullExecutionFits) {
-  if (!ShouldPlanGeodeLocalRaster(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits)) {
+  if (!UsesTransformedBlurPath(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits)) {
     return std::nullopt;
   }
-  const double scaleX =
-      std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
-  const double scaleY =
-      std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+  const Vector2d localScale = TransformedPathLocalScale(deviceFromFilter);
+  const double scaleX = localScale.x;
+  const double scaleY = localScale.y;
   const double blurPadding = ComputeTransformedBlurPadding(filterGraph);
   const Box2d paddedRegion(filterRegion->topLeft - Vector2d(blurPadding, blurPadding),
                            filterRegion->bottomRight + Vector2d(blurPadding, blurPadding));

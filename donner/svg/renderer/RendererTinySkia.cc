@@ -1580,16 +1580,6 @@ std::optional<int> CheckedFilterRasterDimension(double value) {
   return std::max(1, static_cast<int>(std::ceil(value)));
 }
 
-bool CanUseLocalFilterRaster(const components::FilterGraph& filterGraph,
-                             const std::optional<Box2d>& filterRegion,
-                             const Transform2d& deviceFromFilter, bool fullExecutionFits) {
-  if (!filterRegion.has_value() || filterRegion->width() <= 0.0 || filterRegion->height() <= 0.0 ||
-      NearZero(deviceFromFilter.determinant())) {
-    return false;
-  }
-  return UsesTransformedBlurPath(filterGraph, deviceFromFilter, fullExecutionFits);
-}
-
 struct LocalFilterRasterGeometry {
   double scaleX = 1.0;
   double scaleY = 1.0;
@@ -1602,13 +1592,12 @@ struct LocalFilterRasterGeometry {
 std::optional<LocalFilterRasterGeometry> ComputeLocalFilterRasterGeometry(
     const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
     const Transform2d& deviceFromFilter, bool fullExecutionFits) {
-  if (!CanUseLocalFilterRaster(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits)) {
+  if (!UsesTransformedBlurPath(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits)) {
     return std::nullopt;
   }
-  const double scaleX =
-      std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
-  const double scaleY =
-      std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+  const Vector2d localScale = TransformedPathLocalScale(deviceFromFilter);
+  const double scaleX = localScale.x;
+  const double scaleY = localScale.y;
   const double blurPadding = ComputeTransformedBlurPadding(filterGraph);
   const Box2d paddedRegion(filterRegion->topLeft - Vector2d(blurPadding, blurPadding),
                            filterRegion->bottomRight + Vector2d(blurPadding, blurPadding));
@@ -2092,6 +2081,8 @@ struct TinySkiaFilterPlan {
   std::uint64_t executionPixelCount = 0;  ///< Pixels the graph executes over.
   std::uint64_t captureBytes = 0;         ///< Capture surface bytes.
   bool fullExecutionFits = false;         ///< Whether the whole raster fits execution limits.
+  bool localRasterReserved =
+      false;  ///< Whether the transformed path's local raster fits and is used.
 };
 
 /// Plan a filter layer over \p buffer without reserving anything, or `std::nullopt` when the
@@ -2117,7 +2108,8 @@ std::optional<TinySkiaFilterPlan> PlanTinySkiaFilter(const components::FilterGra
   if (!fullExecutionFits && !localPixelCount.has_value()) {
     return std::nullopt;
   }
-  TinySkiaFilterPlan plan{buffer, pixelCount, pixelCount * 4u * surfaceCount, fullExecutionFits};
+  TinySkiaFilterPlan plan{buffer, pixelCount, pixelCount * 4u * surfaceCount, fullExecutionFits,
+                          localPixelCount.has_value()};
   if (localPixelCount.has_value()) {
     plan.executionPixelCount =
         fullExecutionFits ? std::max(pixelCount, *localPixelCount) : *localPixelCount;
@@ -2165,10 +2157,16 @@ std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLa
   if (!reservation.has_value()) {
     return std::nullopt;
   }
-  return FilterAdmission{
-      plan->buffer.width, plan->buffer.height, plan->buffer.offsetX, plan->buffer.offsetY,
-      usesFillPaint,      usesStrokePaint,     readsBackdrop,        !plan->fullExecutionFits,
-      *reservation};
+  return FilterAdmission{plan->buffer.width,
+                         plan->buffer.height,
+                         plan->buffer.offsetX,
+                         plan->buffer.offsetY,
+                         usesFillPaint,
+                         usesStrokePaint,
+                         readsBackdrop,
+                         !plan->fullExecutionFits,
+                         plan->localRasterReserved,
+                         *reservation};
 }
 
 bool RendererTinySkia::initializeFilterSurface(SurfaceFrame& frame,
@@ -2270,6 +2268,7 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   }
   frame.filterReservation = admission->reservation;
   frame.localRasterRequiredForBudget = admission->localRasterRequired;
+  frame.localRasterReserved = admission->localRasterReserved;
   frame.filterBufferOffsetX = admission->bufferOffsetX;
   frame.filterBufferOffsetY = admission->bufferOffsetY;
   filterLayerStack_.push_back(true);
@@ -2320,6 +2319,11 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
 
 #ifdef DONNER_FILTERS_ENABLED
 bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
+  // Admission planned and budgeted the local raster only when it fits; otherwise the filter runs
+  // on the device raster it reserved, as it does on Geode.
+  if (!frame.localRasterReserved) {
+    return false;
+  }
   const std::optional<LocalFilterRasterGeometry> geometry =
       ComputeLocalFilterRasterGeometry(frame.filterGraph, frame.filterRegion,
                                        frame.deviceFromFilter, !frame.localRasterRequiredForBudget);
