@@ -840,3 +840,38 @@ test:ci-platforms --test_tag_filters=
 build:ci-platforms --xcode_version_config=//tools/ci:remote_macos_xcodes
 build:ci-platforms --xcode_version=27.2
 build:ci-platforms --macos_minimum_os=13.3
+
+# Linux tests on a remote execution instance with a hardware GPU. Test actions run on the Linux
+# GPU platform of tools/ci/BUILD.bazel, the Linux CI platform that also asks for `gpu=present`,
+# because --use_target_platform_for_tests (from ci-platforms) runs each test on its target
+# platform. Every other action keeps //tools/ci:linux_ci as its execution platform, so it keeps its
+# action key and the cache entries of the mixed CI invocation. Execution properties are part of an
+# action's key, so hardware test results also never share an entry with software-rendered ones.
+#
+# The config never names the remote instance. The instance, the endpoint and the credentials are
+# private runner configuration, and the instance belongs only on the command line of the test
+# invocation: build the selected tests with this config first, on the default instance, then test
+# them with the same flags and the instance added, so the second invocation runs only test
+# actions. A Linux `gpu` request on an instance with no Linux GPU executor is queued without an
+# error, so build_defs/check_gpu_routing.py keeps `gpu` execution properties in reviewed platforms,
+# keeps this platform out of execution platforms and transitions, keeps rc files from including
+# this config, and rejects a workflow or script command that uses it for anything but `build`
+# without naming the instance. A `coverage` or `test` command with this config and no instance
+# would queue its tests.
+#
+# The driver environment is declared here rather than inherited, so the test key states what
+# runs: a software-rendering test environment from an earlier rc file would otherwise stay in the
+# key while a hardware driver renders. Tests load any driver manifest from the distribution's
+# standard directory except the software rasterizer's; a runner may name its own manifest by
+# repeating these --test_env names after the config. Older Vulkan loaders ignore the driver filter,
+# so DONNER_REQUIRE_HARDWARE_GPU also makes Donner's Vulkan device selection refuse a CPU-type
+# device: a test that would fall back to a software rasterizer fails instead. Every result is
+# fresh, because a hardware result is evidence only for the run that produced it.
+build:ci-linux-gpu --config=ci-platforms
+build:ci-linux-gpu --platforms=//tools/ci:linux_ci_gpu
+build:ci-linux-gpu --test_env=VK_DRIVER_FILES=/usr/share/vulkan/icd.d
+build:ci-linux-gpu --test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d
+build:ci-linux-gpu --test_env=VK_LOADER_DRIVERS_DISABLE=*lvp*
+build:ci-linux-gpu --test_env=XDG_RUNTIME_DIR=/tmp
+build:ci-linux-gpu --test_env=DONNER_REQUIRE_HARDWARE_GPU=1
+test:ci-linux-gpu --nocache_test_results

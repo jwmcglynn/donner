@@ -602,6 +602,7 @@ py_test(
     srcs = ["lint_changes.py", "lint_changes_tests.py"],
     imports = ["."],
     deps = [
+        "//build_defs:check_gpu_routing",
         "//build_defs:check_text_tier_defines",
         "//tools/rust_boundary:rust_scopes",
     ],
@@ -945,6 +946,15 @@ platform(
     name = "linux_ci",
     constraint_values = ["@platforms//os:linux", "@platforms//cpu:aarch64"],
     exec_properties = {"OSFamily": "linux", "ISA": "aarch64", "container-image": "none"},
+    visibility = ["//visibility:public"],
+)
+
+# The Linux CI platform on an executor with a hardware GPU. Only `--config=ci-linux-gpu` names it,
+# as the top-level target platform, so only test actions ask for the GPU (see .bazelrc).
+platform(
+    name = "linux_ci_gpu",
+    exec_properties = {"gpu": "present"},
+    parents = [":linux_ci"],
     visibility = ["//visibility:public"],
 )
 

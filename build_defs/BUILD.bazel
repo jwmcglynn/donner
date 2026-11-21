@@ -49,6 +49,12 @@ py_test(
 )
 
 py_library(
+    name = "check_gpu_routing",
+    srcs = ["check_gpu_routing.py"],
+    visibility = ["//tools/ci:__pkg__"],
+)
+
+py_library(
     name = "check_text_tier_defines",
     srcs = ["check_text_tier_defines.py"],
     visibility = ["//tools/ci:__pkg__"],
@@ -79,6 +85,27 @@ py_test(
     ],
     main = "geode_test_scheduling_tests.py",
     deps = ["//tools/ci:lane_view"],
+)
+
+# Keeps remote GPU requests in the reviewed target platforms (build_defs/check_gpu_routing.py).
+py_test(
+    name = "gpu_routing_tests",
+    size = "small",
+    srcs = ["gpu_routing_tests.py"],
+    data = [
+        ":rules.bzl",
+        "//:.bazelrc",
+        "//:.github/workflows/main.yml",
+        "//donner/editor/tests:BUILD.bazel",
+        "//donner/svg/renderer/geode:BUILD.bazel",
+        "//tools/ci:BUILD.bazel",
+        "//tools/ci:lanes.py",
+    ],
+    main = "gpu_routing_tests.py",
+    deps = [
+        ":check_gpu_routing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(

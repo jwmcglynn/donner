@@ -92,5 +92,14 @@ class BazelrcConfigsTest(unittest.TestCase):
         self.assertEqual(commands[2][2], ["//b"])
 
 
+    def test_private_runner_flags_name_executor_instance_and_host_settings(self):
+        private = ["--remote_executor=grpcs://executor.example:443", "--remote_instance_name=x",
+                   "--tls_client_certificate=client.pem", "--jobs=8", "--local_resources=cpu=4",
+                   "--remote_execution_priority=1", "--noremote_cache"]
+        public = ["--local_resources=local_gpu=4", "--remote_timeout=60s",
+                  "--remote_download_outputs=minimal", "--platforms=//p:p"]
+        self.assertEqual(private, bazelrc_configs.private_runner_flags(private + public))
+
+
 if __name__ == "__main__":
     unittest.main()
