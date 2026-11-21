@@ -864,17 +864,14 @@ INSTANTIATE_TEST_SUITE_P(
                 {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
                 {"with-a-text-child.svg", GeodeUnresolvedEdgeCoverageGate(Params().requireFeature(
                                               RendererBackendFeature::Text, "text rendering"))},
-                // The image draws the nested SVG at 0.8x, so its 0.5035-unit black letter strokes
-                // are about 0.4 device pixels wide. Geode's analytic coverage of those strokes and
-                // of the small shape boundaries differs from the reference only on pixels adjacent
-                // to a color boundary (on Metal: median channel delta 7, max 102). Measured counts:
-                // 442 on macOS Metal (Apple Silicon); 449 on Linux Vulkan lavapipe, both arm64 and
-                // x86_64, in the native Geode and wgpu-native reference lanes. The same SVG at 1x
-                // and larger (structure/image/external-svg) matches at default parameters.
+                // Geode-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-an-image-child.svg",
-                 Params().withGeodeMaxPixelsDifferent(500).withReason(
-                     "Geode coverage of the 0.4 device px letter strokes in the 0.8x nested image "
-                     "differs on color-boundary pixels: 442 px on Metal, 449 px on Vulkan")},
+                 Params().withGeodeGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/geode/"
+                     "painting_marker_with-an-image-child.png",
+                     "Accepted rasterization difference: the reference draws the 0.40 device px "
+                     "letter strokes as 1 px hairlines with alpha scaled by the width, and Geode "
+                     "covers their exact geometry; total dark ink agrees within 0.2%")},
                 {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
             })),
         ValuesIn(ActiveComparisonModes())),
