@@ -10,6 +10,7 @@ py_binary(
         "//donner/svg/renderer/testdata:resvg_golden_documentation",
         "//donner/svg/renderer/tests:resvg_test_policy_sources",
         "//donner/svg/renderer/tests:resvg_test_registration_source",
+        "//third_party/resvg-test-suite:BUILD.bazel",
         "//third_party/resvg-test-suite:results.csv",
         "//third_party/resvg-test-suite:tests",
     ],

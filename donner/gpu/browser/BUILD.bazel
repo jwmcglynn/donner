@@ -61,6 +61,7 @@ donner_cc_library(
     deps = [
         ":browser_device",
         "//donner/base",
+        "//donner/base:fatal_abort",
         "//donner/gpu",
     ],
 )

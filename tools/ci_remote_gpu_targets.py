@@ -12,6 +12,8 @@ REMOTE_TARGETS = {
         "//donner/editor/tests:rnr_replay_tests_geode_ci_remote",
     "//donner/svg/renderer/tests:resvg_test_suite_geode":
         "//donner/svg/renderer/tests:resvg_test_suite_geode_ci_remote",
+    "//donner/svg/renderer/tests:resvg_test_suite_geode_max_text":
+        "//donner/svg/renderer/tests:resvg_test_suite_geode_max_text_ci_remote",
 }
 
 
@@ -27,7 +29,7 @@ def select_remote_targets(labels):
     return result
 
 
-def linux_native_patterns(lines):
+def linux_native_patterns(lines, hardware_gpu=False):
     """Build the selected Linux rules, running only the tests selected on the trusted lane."""
     labels = set()
     for line in lines:
@@ -35,6 +37,9 @@ def linux_native_patterns(lines):
         label = rule["name"]
         tags = next((item.get("stringListValue", []) for item in rule.get("attribute", [])
                      if item["name"] == "tags"), [])
+        if hardware_gpu and "ci-linux-hardware-gpu-source" in tags:
+            package, name = label.split(":", 1)
+            labels.add(f"{package}:ci_linux_gpu_{name}")
         if set(tags).intersection(("perf", "local-gpu-isolated", "fuzz_soak")):
             package, name = label.split(":", 1)
             labels.add(f"{package}:ci_linux_build_{name}")
@@ -152,7 +157,7 @@ def main():
     mode.add_argument("--check-reference-results", metavar="BEP")
     args = parser.parse_args()
     if args.native_linux_patterns:
-        for label in linux_native_patterns(sys.stdin):
+        for label in linux_native_patterns(sys.stdin, os.environ.get("DONNER_CI_LINUX_HARDWARE_GPU") == "true"):
             print(label)
         return
     if args.reference_reported:

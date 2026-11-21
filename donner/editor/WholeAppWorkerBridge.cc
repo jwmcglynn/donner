@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "donner/base/AsyncifySuspendProbe.h"
+#include "donner/base/FatalAbort.h"
 #include "donner/base/HeapSizeHistogram.h"
 #include "donner/base/MemoryAttribution.h"
 #include "donner/editor/FrameCallbackAdmission.h"
@@ -703,7 +704,8 @@ void CompleteProxiedFrame(std::uint32_t generation) {
   FrameDriverState& state = Driver();
   // Release: a reader that sees the count drop has also seen this frame finish.
   if (state.pendingFrames.fetch_sub(1, std::memory_order_release) == 0) {
-    std::abort();
+    FatalAbort("frame-driver.pending-underflow",
+               {{"generation", generation}, {"current", state.admission.generation()}});
   }
   state.admission.complete(generation);
 }
@@ -781,7 +783,7 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
   }
   if (state.proxyQueue) {
     if (!emscripten_proxy_async(state.proxyQueue, state.appThread, [](void*) {}, nullptr)) {
-      std::abort();
+      FatalAbort("frame-driver.proxy-prewarm");
     }
     emscripten_proxy_execute_queue(state.proxyQueue);
   }
@@ -855,7 +857,7 @@ void RequestPresentationProgress() {
     return;
   }
   if (!pthread_equal(state.appThread, pthread_self())) {
-    std::abort();
+    FatalAbort("frame-driver.progress-off-app-thread", {{"generation", generation}});
   }
   if (state.progressAdmission.acquire(generation)) {
     // The original submission age remains authoritative; a busy UI cannot grow this timer forever.

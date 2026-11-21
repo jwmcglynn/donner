@@ -71,11 +71,11 @@ def _non_bcr_deps_impl(_mctx):
     http_archive(
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
-        sha256 = "3c2a9006a7e1bf58737e557014d7882c554c628fb379a9f00008f5ea53dbbdfb",
-        strip_prefix = "harfbuzz-14.2.1",
+        sha256 = "4e0a74d85b38a5ade5e4556e00d07fbfb9fa6b0ef24816949d46518fea89e2df",
+        strip_prefix = "harfbuzz-15.2.0",
         patches = ["//third_party:harfbuzz_vertical_no_var_guard.patch"],
         patch_args = ["-p1"],
-        urls = ["https://github.com/harfbuzz/harfbuzz/archive/refs/tags/14.2.1.tar.gz"],
+        urls = ["https://github.com/harfbuzz/harfbuzz/archive/refs/tags/15.2.0.tar.gz"],
         patch_cmds = [
             """cat > src/config-override.h << 'HBEOF'
 // Re-enable file I/O (hb_face_create_from_file_or_fail references

@@ -15,6 +15,7 @@
 #include <emscripten/threading.h>
 
 #include "donner/base/AsyncifySuspendProbe.h"
+#include "donner/base/FatalAbort.h"
 #include "donner/editor/FrameCallbackAdmission.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/editor/wasm/BrowserGpuOwnerWait.h"
@@ -300,7 +301,8 @@ bool PollWasmPresentationProgress(void* userdata) {
   }
   auto* state = static_cast<WasmEditorLoopState*>(userdata);
   WasmFrameScope callbackScope(*state);
-  switch (state->window->pollDeferredPresentation()) {
+  const auto progress = state->window->pollDeferredPresentation();
+  switch (progress) {
     case donner::editor::gui::EditorWindow::PresentationProgress::Pending: return true;
     case donner::editor::gui::EditorWindow::PresentationProgress::Ready:
     case donner::editor::gui::EditorWindow::PresentationProgress::Deadline:
@@ -309,7 +311,8 @@ bool PollWasmPresentationProgress(void* userdata) {
       return false;
     case donner::editor::gui::EditorWindow::PresentationProgress::Idle: return false;
   }
-  std::abort();
+  donner::FatalAbort("editor.presentation-progress",
+                     {{"progress", static_cast<std::int64_t>(progress)}});
 }
 
 void RunWasmEditorFrame(void* userdata, bool forceFrame) {

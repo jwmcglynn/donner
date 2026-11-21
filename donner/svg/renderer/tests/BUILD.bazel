@@ -1,5 +1,6 @@
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("//build_defs:ci_linux_gpu.bzl", "linux_gpu_package_suite")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load(
     "//build_defs:rules.bzl",
@@ -1415,6 +1416,7 @@ donner_cc_test(
 # target is reachable from `bazel test //...` without --config=geode.
 donner_multi_transitioned_test(
     name = "renderer_geode_golden_tests",
+    linux_hardware_gpu = True,
     # Software WebGPU (llvmpipe) rendering is slow in fastbuild; the Lion
     # golden alone can exceed 300 s on aarch64 runners. Cap explicitly at
     # 900 s so a driver hang (e.g., Intel Arc + Mesa 25.2.8 Xe-KMD) gets
@@ -1825,6 +1827,28 @@ donner_variant_cc_test(
     "text",
     "nontext",
 ]]
+
+# Geode with full text shaping, over the cases that render text: only their output depends on the
+# text tier, and resvg_test_suite_geode compares the rest on Geode already. As there, the build
+# registers a TinyGolden and a GeodeGolden param per case and this wrapper runs the GeodeGolden
+# half; resvg_test_suite_max_text runs the TinyGolden comparisons of the same cases.
+donner_multi_transitioned_test(
+    name = "resvg_test_suite_geode_max_text",
+    size = "enormous",
+    timeout = "long",
+    testonly = True,
+    args = ["--gtest_filter=-*_TinyGolden"],
+    dep = ":resvg_test_suite_max_text_impl",
+    opens_gpu_device = True,
+    remote_parallel_ci = True,
+    renderer_backend = "geode",
+    # About 100 cases per shard, as in resvg_test_suite_geode. A shard takes about 14 s on software
+    # Vulkan and 4 s on Metal, close to a resvg_test_suite_geode shard (12 s and 3.4 s); 8 shards
+    # saved no total time and doubled the device startups.
+    shard_count = 4,
+    text = "true",
+    text_full = "true",
+)
 
 # An explicit Linux-only comparison lane that renders the production Geode context through the
 # test-only wgpu-native reference. It compiles the same resvg registrations and image-comparison
@@ -2433,11 +2457,15 @@ donner_cc_test(
 # manual perf lane.
 donner_perf_cc_test(
     name = "sprite_field_prepare_tests",
+    size = "small",
     # Five cases of up to 16 s each under ASan on the hosted nightly runner, which timed the
     # unsharded correctness target out at its 60 s `size = "small"` limit. One case per shard.
     correctness_shard_count = 5,
     correctness_srcs = ["SpriteFieldPrepareCorrectness_tests.cc"],
     wallclock_srcs = ["SpriteFieldPrepareWallclock_tests.cc"],
+    # The paired measurements draw 88 full frames outside the timed prepare calls. On hosted
+    # macOS that took up to 49 s in passing runs and exhausted a 60 s timeout in the nightly.
+    wallclock_timeout = "moderate",
     deps = [
         ":sprite_field_scene",
         "//donner/base",
@@ -2472,3 +2500,5 @@ donner_perf_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+linux_gpu_package_suite()

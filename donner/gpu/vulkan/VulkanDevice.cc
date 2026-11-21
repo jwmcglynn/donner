@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <functional>
@@ -427,8 +428,31 @@ std::vector<const char*> EnumerateDebugUtilsExtension(const VulkanApi& api,
   return enabledExtensions;
 }
 
+/// Environment variable that, when set to `1`, makes device selection refuse software (CPU-type)
+/// physical devices. A lane that exists to test a hardware GPU sets it, so a test that silently
+/// fell back to a software rasterizer fails instead of passing on the wrong adapter.
+constexpr const char* kRequireHardwareGpuEnv = "DONNER_REQUIRE_HARDWARE_GPU";
+
+/// Whether \p candidate may serve this process: always, unless the environment requires a hardware
+/// adapter and the candidate is a CPU-type device. A refusal is reported on stderr with the device
+/// name, so a failing lane names the adapter it refused.
+bool CandidateMeetsAdapterRequirement(const VulkanApi& api, VkPhysicalDevice candidate) {
+  const char* required = std::getenv(kRequireHardwareGpuEnv);
+  if (required == nullptr || std::string_view(required) != "1") {
+    return true;
+  }
+  VkPhysicalDeviceProperties properties = {};
+  api.vkGetPhysicalDeviceProperties(candidate, &properties);
+  if (properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU) {
+    return true;
+  }
+  std::fprintf(stderr, "[donner::gpu::vulkan] %s=1 refuses the software Vulkan device \"%s\"\n",
+               kRequireHardwareGpuEnv, properties.deviceName);
+  return false;
+}
+
 /// Selects the first enumerated physical device with the target API version and a graphics queue
-/// family. Returns false when none qualifies.
+/// family that meets the adapter requirement. Returns false when none qualifies.
 /// @param instance Instance to enumerate.
 /// @param selectedDevice Set to the chosen physical device on success.
 /// @param selectedQueueFamily Set to the chosen graphics queue family index on success.
@@ -448,7 +472,8 @@ bool SelectGraphicsPhysicalDevice(const VulkanApi& api, VkInstance instance,
   for (VkPhysicalDevice candidate : physicalDevices) {
     VkPhysicalDeviceProperties properties = {};
     api.vkGetPhysicalDeviceProperties(candidate, &properties);
-    if (properties.apiVersion < kTargetApiVersion) {
+    if (properties.apiVersion < kTargetApiVersion ||
+        !CandidateMeetsAdapterRequirement(api, candidate)) {
       continue;
     }
 
@@ -598,7 +623,8 @@ bool SelectPresentablePhysicalDevice(const VulkanApi& api, VkInstance instance,
     return false;
   }
   for (VkPhysicalDevice candidate : EnumeratePhysicalDevicesForSurface(api, instance)) {
-    if (!CandidateHasPresentationFeatures(api, instanceExtensions, candidate)) {
+    if (!CandidateMeetsAdapterRequirement(api, candidate) ||
+        !CandidateHasPresentationFeatures(api, instanceExtensions, candidate)) {
       continue;
     }
     uint32_t queueFamily = 0;

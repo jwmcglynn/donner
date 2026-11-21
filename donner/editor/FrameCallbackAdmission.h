@@ -6,8 +6,9 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <cstdlib>
 #include <optional>
+
+#include "donner/base/FatalAbort.h"
 
 namespace donner::editor {
 
@@ -62,7 +63,7 @@ public:
   /// Start a new callback generation. A wrapped generation is rejected rather than reused.
   uint32_t start() {
     if (++nextGeneration_ == 0) {
-      std::abort();
+      FatalAbort("frame-admission.generation-wrap", {{"current", generation_.load()}});
     }
     pending_.store(0);
     generation_.store(nextGeneration_);
@@ -101,6 +102,8 @@ public:
   void complete(uint32_t generation) { pending_.compare_exchange_strong(generation, 0); }
 
 private:
+  friend class FrameCallbackAdmissionTestAccess;
+
   uint32_t nextGeneration_ = 0;
   std::atomic<uint32_t> generation_{0};
   std::atomic<uint32_t> pending_{0};

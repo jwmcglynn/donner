@@ -147,6 +147,15 @@ class LintChangesTest(unittest.TestCase):
                                  command)
         self.assertNotIn("Check variant transitions", dict(lint.commands(["shared.txt"], self.base)))
 
+    def test_changed_routing_file_rechecks_gpu_routing(self):
+        command = [sys.executable, "build_defs/check_gpu_routing.py"]
+        for path in (".bazelrc", "build_defs/rules.bzl", ".github/workflows/main.yml",
+                     "build_defs/check_gpu_routing.py"):
+            with self.subTest(path=path):
+                self.assertEqual(dict(lint.commands([path], self.base)).get("Check remote GPU routing"),
+                                 command)
+        self.assertNotIn("Check remote GPU routing", dict(lint.commands(["shared.txt"], self.base)))
+
     def test_changed_gitlink_name_is_checked_without_following_it(self):
         git("config", "user.email", "tests@example.invalid")
         git("config", "user.name", "Test")

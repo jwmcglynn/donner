@@ -210,6 +210,8 @@ struct CreationRecorder {
   std::vector<std::vector<const char*>> deviceOffersByPhysical;
   std::vector<VkBool32> robustAccessByPhysical;
   std::vector<VkBool32> maintenanceByPhysical;
+  /// Device type per physical device; a missing entry reports a discrete GPU.
+  std::vector<VkPhysicalDeviceType> deviceTypes;
   VkPhysicalDevice selectedPhysicalDevice = VK_NULL_HANDLE;
   uint32_t selectedQueueFamily = UINT32_MAX;
   std::vector<std::string_view> selectionCalls;
@@ -278,9 +280,16 @@ VKAPI_ATTR VkResult VKAPI_CALL CapturePhysicalDevices(VkInstance, uint32_t* coun
   return VK_SUCCESS;
 }
 
-VKAPI_ATTR void VKAPI_CALL CapturePhysicalProperties(VkPhysicalDevice,
+VKAPI_ATTR void VKAPI_CALL CapturePhysicalProperties(VkPhysicalDevice physicalDevice,
                                                      VkPhysicalDeviceProperties* properties) {
   properties->apiVersion = VK_API_VERSION_1_1;
+  const size_t physicalIndex = reinterpret_cast<uintptr_t>(physicalDevice) - 81;
+  properties->deviceType = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+  if (gCreationRecorder != nullptr && physicalIndex < gCreationRecorder->deviceTypes.size()) {
+    properties->deviceType = gCreationRecorder->deviceTypes[physicalIndex];
+  }
+  std::snprintf(properties->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "fake device %zu",
+                physicalIndex);
 }
 
 VKAPI_ATTR void VKAPI_CALL CaptureQueueFamilies(VkPhysicalDevice physicalDevice, uint32_t* count,
@@ -785,6 +794,89 @@ TEST(VulkanPresentationCreationTest, ForwardsARequiredPlatformCompanionExtension
                                    testing::StrEq(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME),
                                    testing::StrEq(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME),
                                    testing::StrEq(kXcbSurfaceExtension)));
+}
+
+/// Sets or clears one environment variable for the lifetime of the object, then restores it.
+class ScopedEnvironmentVariable {
+public:
+  ScopedEnvironmentVariable(const char* name, const char* value) : name_(name) {
+    if (const char* previous = std::getenv(name)) {
+      previous_ = previous;
+    }
+    if (value != nullptr) {
+      setenv(name, value, 1);
+    } else {
+      unsetenv(name);
+    }
+  }
+  ~ScopedEnvironmentVariable() {
+    if (previous_) {
+      setenv(name_, previous_->c_str(), 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+  ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+  ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
+
+private:
+  const char* name_;
+  std::optional<std::string> previous_;
+};
+
+/// A software device enumerated before a hardware one, both with a graphics queue.
+CreationRecorder SoftwareThenHardwareDevices() {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT}, {VK_QUEUE_GRAPHICS_BIT}};
+  recorder.deviceTypes = {VK_PHYSICAL_DEVICE_TYPE_CPU, VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU};
+  return recorder;
+}
+
+TEST(VulkanAdapterRequirementTest, SelectsTheFirstGraphicsDeviceWithoutTheRequirement) {
+  const ScopedEnvironmentVariable unset("DONNER_REQUIRE_HARDWARE_GPU", nullptr);
+  CreationRecorder recorder = SoftwareThenHardwareDevices();
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), false),
+              testing::IsTrue());
+  EXPECT_THAT(recorder.selectedPhysicalDevice, FakeHandle<VkPhysicalDevice>(81));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanAdapterRequirementTest, RequiredHardwareAdapterSkipsASoftwareDevice) {
+  const ScopedEnvironmentVariable required("DONNER_REQUIRE_HARDWARE_GPU", "1");
+  CreationRecorder recorder = SoftwareThenHardwareDevices();
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), false),
+              testing::IsTrue());
+  EXPECT_THAT(recorder.selectedPhysicalDevice, FakeHandle<VkPhysicalDevice>(82));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanAdapterRequirementTest, RequiredHardwareAdapterRefusesOnlySoftwareDevices) {
+  const ScopedEnvironmentVariable required("DONNER_REQUIRE_HARDWARE_GPU", "1");
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT}};
+  recorder.deviceTypes = {VK_PHYSICAL_DEVICE_TYPE_CPU};
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), false),
+              testing::IsFalse());
+  EXPECT_THAT(recorder.deviceCreated, testing::IsFalse());
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanAdapterRequirementTest, RequiredHardwareAdapterAppliesToPresentationSelection) {
+  const ScopedEnvironmentVariable required("DONNER_REQUIRE_HARDWARE_GPU", "1");
+  CreationRecorder recorder = SoftwareThenHardwareDevices();
+  recorder.presentSupport = {{VK_TRUE}, {VK_TRUE}};
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83),
+              testing::IsTrue());
+  EXPECT_THAT(recorder.selectedPhysicalDevice, FakeHandle<VkPhysicalDevice>(82));
+  gCreationRecorder = nullptr;
 }
 
 TEST(VulkanPresentationCreationTest, SelectsLaterGraphicsQueueThatPresentsToActualSurface) {

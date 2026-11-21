@@ -56,6 +56,35 @@ std::vector<uint8_t> LoadTrustedBitmapSeed() {
                               std::istreambuf_iterator<char>());
 }
 
+/// The corpus Noto Sans face, whose GSUB table has an smcp feature, read once.
+const std::vector<uint8_t>& NativeSmallCapsSeed() {
+  static const std::vector<uint8_t> bytes = [] {
+    const std::string path =
+        Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf");
+    std::ifstream file(path, std::ios::binary);
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
+                                std::istreambuf_iterator<char>());
+  }();
+  return bytes;
+}
+
+/// The small-caps seed with each three-byte group of \p mutations (a big-endian position, taken
+/// modulo the table size, and an XOR mask) applied inside its GSUB table only, so the trusted face
+/// keeps loading and every mutation reaches the GSUB reader.
+std::vector<uint8_t> MutateSmallCapsSeed(std::span<const uint8_t> mutations) {
+  std::vector<uint8_t> bytes = NativeSmallCapsSeed();
+  const auto gsub = fonts::FindSfntTable(bytes, "GSUB");
+  if (!gsub || gsub->empty()) {
+    return bytes;
+  }
+  const size_t offset = static_cast<size_t>(gsub->data() - bytes.data());
+  for (size_t i = 0; i + 3 <= mutations.size(); i += 3) {
+    const size_t position = ((size_t{mutations[i]} << 8) | mutations[i + 1]) % gsub->size();
+    bytes[offset + position] ^= mutations[i + 2];
+  }
+  return bytes;
+}
+
 std::vector<uint8_t> MakeSfnt(std::vector<TableSpec> tables, uint32_t magic = 0x00010000) {
   const size_t directorySize = 12 + tables.size() * 16;
   std::vector<uint8_t> result(directorySize, 0);
@@ -318,6 +347,7 @@ void ExerciseLoadedFont(FontManager& fontManager, Registry& registry, FontHandle
   (void)backend.glyphOutline(font, outlineGlyph, 1.0f);
 
   constexpr std::string_view kText = "Az\xF0\x9F\x98\x81";
+  (void)backend.shapeRun(font, 16.0f, kText, 0, kText.size(), false, FontVariant::SmallCaps, false);
   const TextBackend::ShapedRun shaped =
       backend.shapeRun(font, 16.0f, kText, 0, kText.size(), false, FontVariant::Normal, false);
   constexpr size_t kMaximumDecodedGlyphs = 8;
@@ -373,7 +403,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const bool isTrustedBitmapMutationSeed = size >= 1 && data[0] == 'Y';
   const bool isTrustedBitmapOracle =
       isTrustedBitmapMutationSeed && (size == 1 || (size == 2 && data[1] == '\n'));
-  if (isTrustedBitmapMutationSeed) {
+  // 'G' selects the trusted small-caps face with the remaining bytes as GSUB mutations; the
+  // unmutated seed must report its smcp feature.
+  const bool isTrustedSmallCapsSeed = size >= 1 && data[0] == 'G';
+  const bool isTrustedSmallCapsOracle = isTrustedSmallCapsSeed && isStructuredSeed;
+  if (isTrustedSmallCapsSeed) {
+    structured.bytes = MutateSmallCapsSeed(std::span<const uint8_t>(data, size).subspan(1));
+    fontBytes = structured.bytes;
+    trust = FontDataTrust::Trusted;
+  } else if (isTrustedBitmapMutationSeed) {
     structured.bytes = LoadTrustedBitmapSeed();
     const size_t mutationEnd = isTrustedBitmapOracle ? 1 : size;
     for (size_t index = 1; index < mutationEnd && !structured.bytes.empty(); ++index) {
@@ -407,6 +445,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   Registry registry;
   FontManager fontManager(registry);
   const FontHandle font = fontManager.loadFontData(fontBytes, trust);
+  if (isTrustedSmallCapsOracle &&
+      (!font || !FuzzTextBackend(fontManager, registry).hasSmallCapsFeature(font))) {
+    std::abort();
+  }
 #ifdef DONNER_TEXT_FULL
   if (isTrustedBitmapOracle) {
     if (!font || !fontManager.isTrustedFont(font)) {

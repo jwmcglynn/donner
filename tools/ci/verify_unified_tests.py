@@ -191,11 +191,14 @@ def verify(events, suites, ordinary=(), output_root=None, linux=(), full_graph=F
     fresh.update(selected & {ARCHIVE})
     _qualification_runs(evidence)
     linux_built = _ordinary_built(evidence, set(linux))
+    hardware = {label for label in linux if ":ci_linux_gpu_" in label}
+    mandatory.update(hardware)
+    fresh.update(hardware)
     expected = _expected_tests(mandatory, compatible | linux_built, evidence.test_rules, full_graph)
     summary_labels = {label for label, _ in evidence.summaries}
     # The Linux venue verifier and its analysis aspect restrict local actions to the Xvfb roots.
     local = evidence.passed["local"]
-    if any(shard[0] not in linux_built for shard in local):
+    if {shard[0] for shard in local} - (linux_built - hardware):
         raise ValueError("incomplete remote shards: unexpected local execution outside Linux selection")
     passed = evidence.passed["remote"] | evidence.passed["cached"] | local
     _check_summary_shards(evidence.summaries, passed)

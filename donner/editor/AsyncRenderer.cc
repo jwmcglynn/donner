@@ -15,6 +15,7 @@
 #include "donner/gpu/browser/EmscriptenBrowserBridge.h"
 #endif
 
+#include "donner/base/FatalAbort.h"
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/OverlayRenderer.h"
@@ -612,6 +613,7 @@ void AsyncRenderer::start() {
   }
   workerExited_.store(false, std::memory_order_release);
   thread_ = std::thread([this] {
+    SetFatalAbortThreadRole("render-worker");
     workerLoop();
 #ifdef __EMSCRIPTEN__
     // Send held calls while the owner still services this thread: once it sees the worker exited
