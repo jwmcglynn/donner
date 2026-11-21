@@ -97,6 +97,9 @@ public:
   /// Unicode L4 mirror; characters without a paired mirror remain unchanged.
   static char32_t Mirror(char32_t codepoint);
 
+  /// Four-letter ISO 15924 tag of a strong script, or zero for script-neutral scalars.
+  static uint32_t StrongScript(char32_t codepoint);
+
 private:
   /// Number of scalars, excluding injected controls.
   uint32_t scalarCount() const;

@@ -80,6 +80,15 @@ license(
 )
 
 license(
+    name = "harfbuzz-language-data",
+    package_name = "HarfBuzz OpenType language data",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "//third_party/harfbuzz-language-data:COPYING",
+    package_url = "https://github.com/harfbuzz/harfbuzz",
+    package_version = "15.2.0",
+)
+
+license(
     name = "harfbuzz",
     package_name = "HarfBuzz",
     # HarfBuzz uses the "Old MIT" license; SPDX lists it as MIT with a
@@ -251,6 +260,7 @@ license(
 # correlate cquery results with the aggregated manifest.
 
 DEFAULT_LICENSES = [
+    ":harfbuzz-language-data",
     ":sheenbidi",
     ":entt",
     ":public-sans",
@@ -270,6 +280,7 @@ TEXT_FULL_LICENSES = DEFAULT_LICENSES + [
 SKIA_TEXT_FULL_LICENSES = []  # Removed: full-Skia backend no longer exists.
 
 ALL_KNOWN_LICENSES = [
+    ":harfbuzz-language-data",
     ":sheenbidi",
     ":entt",
     ":stb",

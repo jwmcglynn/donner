@@ -420,4 +420,11 @@ uint32_t BidiParagraph::scalarCount() const {
                                                 : state_->codepoints.size());
 }
 
+uint32_t BidiParagraph::StrongScript(char32_t codepoint) {
+  const SBScript script = SBCodepointGetScript(ValidScalar(codepoint));
+  return script == SBScriptZINH || script == SBScriptZYYY || script == SBScriptZZZZ
+             ? 0
+             : SBScriptGetUnicodeTag(script);
+}
+
 }  // namespace donner::svg

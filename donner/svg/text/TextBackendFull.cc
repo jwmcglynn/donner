@@ -918,21 +918,76 @@ bool TextBackendFull::isCursive(uint32_t codepoint) const {
   return isCursiveScript(codepoint);
 }
 
+namespace {
+
+bool HasRunSmallCaps(hb_font_t* font, hb_script_t script, hb_language_t language) {
+  if (!font) {
+    return false;
+  }
+  std::array<hb_tag_t, HB_OT_MAX_TAGS_PER_SCRIPT> scripts{};
+  std::array<hb_tag_t, HB_OT_MAX_TAGS_PER_LANGUAGE> languages{};
+  unsigned scriptCount = scripts.size();
+  unsigned languageCount = languages.size();
+  hb_ot_tags_from_script_and_language(script, language, &scriptCount, scripts.data(),
+                                      &languageCount, languages.data());
+  hb_face_t* face = hb_font_get_face(font);
+  unsigned scriptIndex = HB_OT_LAYOUT_NO_SCRIPT_INDEX;
+  hb_ot_layout_table_select_script(face, HB_OT_TAG_GSUB, scriptCount, scripts.data(), &scriptIndex,
+                                   nullptr);
+  if (scriptIndex == HB_OT_LAYOUT_NO_SCRIPT_INDEX) {
+    return false;
+  }
+  unsigned languageIndex = HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX;
+  hb_ot_layout_script_select_language(face, HB_OT_TAG_GSUB, scriptIndex, languageCount,
+                                      languages.data(), &languageIndex);
+  constexpr hb_tag_t kSmallCaps = HB_TAG('s', 'm', 'c', 'p');
+  hb_tag_t required = HB_TAG_NONE;
+  hb_ot_layout_language_get_required_feature(face, HB_OT_TAG_GSUB, scriptIndex, languageIndex,
+                                             nullptr, &required);
+  return required == kSmallCaps ||
+         hb_ot_layout_language_find_feature(face, HB_OT_TAG_GSUB, scriptIndex, languageIndex,
+                                            kSmallCaps, nullptr);
+}
+
+hb_language_t RunLanguage(hb_font_t* font, hb_script_t script, hb_language_t fallback,
+                          const TextBackend::ShapingContext* context) {
+  if (!font || !context || context->openTypeLanguageTags.front() == 0) {
+    return fallback;
+  }
+  std::array<hb_tag_t, HB_OT_MAX_TAGS_PER_SCRIPT> scripts{};
+  unsigned scriptCount = scripts.size();
+  hb_ot_tags_from_script_and_language(script, HB_LANGUAGE_INVALID, &scriptCount, scripts.data(),
+                                      nullptr, nullptr);
+  hb_face_t* face = hb_font_get_face(font);
+  unsigned scriptIndex = HB_OT_LAYOUT_NO_SCRIPT_INDEX;
+  hb_ot_layout_table_select_script(face, HB_OT_TAG_GSUB, scriptCount, scripts.data(), &scriptIndex,
+                                   nullptr);
+  unsigned index = HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX;
+  const auto& tags = context->openTypeLanguageTags;
+  const unsigned count =
+      static_cast<unsigned>(std::find(tags.begin(), tags.end(), 0) - tags.begin());
+  if (!hb_ot_layout_script_select_language(face, HB_OT_TAG_GSUB, scriptIndex, count, tags.data(),
+                                           &index)) {
+    return HB_LANGUAGE_INVALID;
+  }
+  unsigned one = 1;
+  hb_tag_t selected = HB_TAG_NONE;
+  hb_ot_layout_script_get_language_tags(face, HB_OT_TAG_GSUB, scriptIndex, index, &one, &selected);
+
+  // HarfBuzz interprets this private language form as one exact OpenType tag. Values come only
+  // from the finite generated registry, so authored strings never enter HarfBuzz's intern table.
+  constexpr std::string_view kHex = "0123456789abcdef";
+  char exact[] = "x-hbot-00000000";
+  for (size_t nibble = 0; nibble < 8; ++nibble) {
+    exact[7 + nibble] = kHex[(selected >> ((7 - nibble) * 4)) & 0xf];
+  }
+  return hb_language_from_string(exact, sizeof(exact) - 1);
+}
+
+}  // namespace
+
 bool TextBackendFull::hasSmallCapsFeature(FontHandle font) const {
-  hb_font_t* hbFont = getOrCreateHbFont(font);
-  if (!hbFont) {
-    return false;
-  }
-
-  hb_face_t* hbFace = hb_font_get_face(hbFont);
-  if (!hbFace) {
-    return false;
-  }
-
-  unsigned int featureIndex = 0;
-  return hb_ot_layout_language_find_feature(hbFace, HB_OT_TAG_GSUB, 0,
-                                            HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX,
-                                            HB_TAG('s', 'm', 'c', 'p'), &featureIndex);
+  return HasRunSmallCaps(getOrCreateHbFont(font), HB_SCRIPT_LATIN, HB_LANGUAGE_INVALID);
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,26 +1214,29 @@ int64_t AddShapingRange(hb_buffer_t* buf, const char* text, size_t rangeStart, s
 
 struct SmallCapsPreparation {
   bool useFeature;
+  hb_language_t language;
   std::string text;
   std::vector<bool> smallCapBytes;
 };
 
 /// Selects native small caps or prepares the existing ASCII synthesis and byte flags.
-SmallCapsPreparation PrepareSmallCaps(hb_font_t* hbFont, const char* chunkData, size_t byteLength,
+SmallCapsPreparation PrepareSmallCaps(hb_font_t* font, const RunScriptProperties& properties,
+                                      const TextBackend::ShapingContext* context,
+                                      const char* chunkData, size_t byteLength,
                                       FontVariant fontVariant) {
-  // Small-caps handling.
-  bool useSmcpFeature = false;
+  // With no explicit language, both tiers use the OpenType default language system for small caps.
+  // Ordinary shaping keeps the backend's existing detected language.
+  const auto fallback =
+      fontVariant == FontVariant::SmallCaps ? HB_LANGUAGE_INVALID : properties.language;
+  const auto language = fontVariant == FontVariant::SmallCaps
+                            ? RunLanguage(font, properties.script, fallback, context)
+                            : fallback;
+  const bool useSmcpFeature =
+      fontVariant == FontVariant::SmallCaps && HasRunSmallCaps(font, properties.script, language);
   std::string smallCapsText;
   std::vector<bool> isSmallCap;
 
   if (fontVariant == FontVariant::SmallCaps) {
-    // Check for native OpenType small-caps feature.
-    hb_face_t* hbFace = hb_font_get_face(hbFont);
-    unsigned int featureIndex = 0;
-    useSmcpFeature = hbFace && hb_ot_layout_language_find_feature(
-                                   hbFace, HB_OT_TAG_GSUB, 0, HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX,
-                                   HB_TAG('s', 'm', 'c', 'p'), &featureIndex);
-
     if (!useSmcpFeature) {
       // Synthesize: convert lowercase to uppercase and track which bytes changed.
       const std::string_view chunk(chunkData, byteLength);
@@ -1196,7 +1254,7 @@ SmallCapsPreparation PrepareSmallCaps(hb_font_t* hbFont, const char* chunkData, 
     }
   }
 
-  return {useSmcpFeature, std::move(smallCapsText), std::move(isSmallCap)};
+  return {useSmcpFeature, language, std::move(smallCapsText), std::move(isSmallCap)};
 }
 
 }  // namespace
@@ -1570,6 +1628,23 @@ ShapingFeatures MakeShapingFeatures(bool smallCaps, bool kerning,
 
 }  // namespace
 
+bool TextBackendFull::hasSmallCapsFeatureForRun(FontHandle font, std::string_view text,
+                                                size_t offset, size_t length, bool vertical,
+                                                TextOrientation orientation,
+                                                const ShapingContext* context) const {
+  if (offset > text.size() || length > text.size() - offset ||
+      (context && context->work && !AdmitContextualShaping(context, length))) {
+    return false;
+  }
+  const ShapingContext* detection =
+      context && ContextAddsShapingInformation(*context, length) ? context : nullptr;
+  const auto properties = DetectShapingScript(text, detection, offset, length, vertical,
+                                              orientation, detectedContextBytes_);
+  hb_font_t* hbFont = getOrCreateHbFont(font);
+  return HasRunSmallCaps(hbFont, properties.script,
+                         RunLanguage(hbFont, properties.script, HB_LANGUAGE_INVALID, context));
+}
+
 TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
     size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
@@ -1612,9 +1687,9 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
   const bool useVerticalShaping = scriptProperties.vertical;
   const auto detectedDirection = scriptProperties.direction;
   const auto detectedScript = scriptProperties.script;
-  const auto detectedLanguage = scriptProperties.language;
-
-  const auto smallCaps = PrepareSmallCaps(hbFont, chunkData, byteLength, fontVariant);
+  const auto smallCaps = PrepareSmallCaps(hbFont, scriptProperties, featureContext, chunkData,
+                                          byteLength, fontVariant);
+  const auto detectedLanguage = smallCaps.language;
   const bool useSmcpFeature = smallCaps.useFeature;
   // Synthesized small caps shape an uppercased copy of the range, which has no context.
   const ShapingContext* const shapingContext = smallCaps.text.empty() ? context : nullptr;

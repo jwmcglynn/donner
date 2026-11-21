@@ -2,6 +2,8 @@
 #include "donner/svg/components/text/TextSystem.h"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -29,6 +31,166 @@
 namespace donner::svg::components {
 
 namespace {
+
+using LanguageTags = std::array<uint32_t, 3>;
+
+constexpr bool IsAsciiLetter(char ch) {
+  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+}
+
+constexpr bool IsAsciiAlnum(char ch) {
+  return IsAsciiLetter(ch) || (ch >= '0' && ch <= '9');
+}
+
+constexpr uint32_t PackTag(std::string_view text) {
+  uint32_t tag = 0;
+  for (size_t i = 0; i < 4; ++i) {
+    tag = (tag << 8) | static_cast<uint8_t>(i < text.size() ? text[i] : ' ');
+  }
+  return tag;
+}
+
+bool SubtagMatches(const char* start, const char* limit, const char* tag, size_t size) {
+  if (start > limit) {
+    return false;
+  }
+  std::string_view text(start, limit - start);
+  for (size_t i = text.find(std::string_view(tag, size)); i != std::string_view::npos;
+       i = text.find(std::string_view(tag, size), i + size)) {
+    if (i + size == text.size() || text[i + size] == '-') {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool LanguageMatches(const char* start, const char* limit, const char* tag, size_t size) {
+  if (start > limit) {
+    return false;
+  }
+  const std::string_view text(start, limit - start);
+  return text.starts_with(std::string_view(tag, size)) &&
+         (text.size() == size || text[size] == '-');
+}
+
+struct LangTag {
+  uint32_t language;
+  uint32_t tag;
+};
+struct LangTagRange {
+  uint32_t language;
+  uint16_t offset;
+  uint8_t count;
+};
+
+#include "third_party/harfbuzz-language-data/OpenTypeLanguageData.inc"
+
+std::string_view PrimaryOrExtendedSubtag(std::string_view language) {
+  const size_t firstEnd = language.find('-');
+  const auto primary = language.substr(0, firstEnd);
+  if (firstEnd != std::string_view::npos && primary.size() <= 3) {
+    const auto remaining = language.substr(firstEnd + 1);
+    const auto extended = remaining.substr(0, remaining.find('-'));
+    if (extended.size() == 3 && std::all_of(extended.begin(), extended.end(), IsAsciiLetter)) {
+      return extended;
+    }
+  }
+  return primary;
+}
+
+/// Find the registered OpenType language candidates for a primary or extended subtag.
+LanguageTags PrimaryLanguageTags(std::string_view language) {
+  const auto primary = PrimaryOrExtendedSubtag(language);
+  LanguageTags tags{};
+  if (primary.size() != 2 && primary.size() != 3) {
+    return tags;
+  }
+  const uint32_t key = PackTag(primary);
+  const auto less = [key](const auto& value) { return value.language < key; };
+  const auto matches = primary.size() == 2 ? std::span<const LangTag>(ot_languages2)
+                                           : std::span<const LangTag>(ot_languages3);
+  auto it = std::partition_point(matches.begin(), matches.end(), less);
+  for (size_t i = 0; i < tags.size() && it != matches.end() && it->language == key; ++i, ++it) {
+    tags[i] = it->tag;
+  }
+  if (primary.size() == 3 && tags.front() == 0) {
+    const auto* range =
+        std::partition_point(std::begin(ot_languages3_multi), std::end(ot_languages3_multi), less);
+    if (range != std::end(ot_languages3_multi) && range->language == key) {
+      std::copy_n(ot_languages3_multi_values + range->offset,
+                  std::min(static_cast<size_t>(range->count), tags.size()), tags.begin());
+    }
+  }
+  return tags;
+}
+
+std::optional<size_t> NormalizeLanguageTag(std::string_view value, std::span<char> normalized) {
+  size_t length = 0;
+  while (!value.empty()) {
+    const size_t separator = value.find('-');
+    const auto subtag = value.substr(0, separator);
+    if (subtag.empty() || subtag.size() > 8 ||
+        !std::all_of(subtag.begin(), subtag.end(), IsAsciiAlnum)) {
+      return std::nullopt;
+    }
+    if (subtag.size() == 1) {
+      break;  // Extensions and private-use subtags do not choose a GSUB language.
+    }
+    if (length != 0) {
+      normalized[length++] = '-';
+    }
+    for (const char ch : subtag) {
+      normalized[length++] = ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch;
+    }
+    if (separator == std::string_view::npos) {
+      break;
+    }
+    value.remove_prefix(separator + 1);
+  }
+  return length;
+}
+
+/// A bounded BCP 47 tag maps to a finite set of registered OpenType language-system tags.
+LanguageTags AuthoredLanguageTags(std::string_view value) {
+  constexpr size_t kMaxLanguageBytes = 255;
+  if (value.empty() || value.size() > kMaxLanguageBytes) {
+    return {};
+  }
+  // The generated rules inspect short subtag prefixes. Keep trailing zero padding.
+  std::array<char, kMaxLanguageBytes + 5> normalized{};
+  const auto length = NormalizeLanguageTag(value, normalized);
+  if (!length) {
+    return {};
+  }
+  LanguageTags tags{};
+  unsigned count = tags.size();
+  const char* start = normalized.data();
+  if (ComplexLanguageTags(start, start + *length, &count, tags.data())) {
+    return tags;
+  }
+  return PrimaryLanguageTags(std::string_view(start, *length));
+}
+
+std::optional<LanguageTags> AuthoredLanguage(Registry& registry, Entity entity) {
+  if (const auto* attrs = registry.try_get<donner::components::AttributesComponent>(entity)) {
+    if (auto value =
+            attrs->getAttribute(xml::XMLQualifiedNameRef(RcString("xml"), RcString("lang")))) {
+      return AuthoredLanguageTags(*value);
+    }
+  }
+  return std::nullopt;
+}
+
+LanguageTags InheritedLanguage(Registry& registry, Entity entity) {
+  while (entity != entt::null) {
+    if (auto language = AuthoredLanguage(registry, entity)) {
+      return *language;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    entity = tree ? tree->parent() : entt::null;
+  }
+  return {};
+}
 
 size_t countCodepoints(std::string_view utf8) {
   size_t count = 0;
@@ -333,6 +495,7 @@ struct PendingTextSpan {
   bool preserveSpaces;
   WhiteSpace whiteSpace;
   bool hidden = false;
+  LanguageTags languageTags{};
 };
 
 bool IsHiddenByStyle(EntityHandle handle) {
@@ -546,7 +709,7 @@ public:
     computed_.ownerSpanRanges.clear();
 
     collectUserLanguages();
-    collectSpans(rootHandle_, 0, false);
+    collectSpans(rootHandle_, 0, false, InheritedLanguage(registry_, rootHandle_.entity()));
     NormalizePendingSpaces(pendingSpans_);
     materializeSpans();
     ResolveSpanWhitespaceBoundaries(registry_, computed_);
@@ -563,7 +726,8 @@ private:
     }
   }
 
-  void collectSpans(EntityHandle handle, size_t depth, bool parentHidden) {
+  void collectSpans(EntityHandle handle, size_t depth, bool parentHidden,
+                    LanguageTags inheritedLanguage) {
     if (!CanCollectTextSpan(handle)) {
       return;
     }
@@ -575,7 +739,8 @@ private:
     const size_t firstSpan = pendingSpans_.size();
     recordOwnerFontSize(handle);
     const bool isHidden = IsTextHidden(handle, parentHidden, userLanguages_);
-    emitTextChunks(handle, depth, isHidden);
+    const auto language = AuthoredLanguage(registry_, handle.entity()).value_or(inheritedLanguage);
+    emitTextChunks(handle, depth, isHidden, language);
     computed_.ownerSpanRanges[handle.entity()] = {firstSpan, pendingSpans_.size()};
   }
 
@@ -587,7 +752,7 @@ private:
     }
   }
 
-  void emitTextChunks(EntityHandle handle, size_t depth, bool isHidden) {
+  void emitTextChunks(EntityHandle handle, size_t depth, bool isHidden, LanguageTags language) {
     const auto& text = handle.get<TextComponent>();
     const auto* style = handle.try_get<ComputedStyleComponent>();
     const auto* property = style && style->properties ? &style->properties->whiteSpace : nullptr;
@@ -602,14 +767,14 @@ private:
       if (!emittedFirstChunk || !chunk.empty()) {
         pendingSpans_.push_back(
             PendingTextSpan{handle, collapseTextWhitespace(chunk, mode, legacyPreserve),
-                            !emittedFirstChunk, depth, preserveSpaces, mode, isHidden});
+                            !emittedFirstChunk, depth, preserveSpaces, mode, isHidden, language});
         emittedFirstChunk = true;
       }
     };
 
     emitChunk(text.textChunks.empty() ? text.text : text.textChunks[0]);
     donner::components::ForAllChildren(handle, [&](EntityHandle child) {
-      collectSpans(child, depth + 1, isHidden);
+      collectSpans(child, depth + 1, isHidden, language);
       ++chunkIndex;
       if (chunkIndex < text.textChunks.size()) {
         emitChunk(text.textChunks[chunkIndex]);
@@ -703,6 +868,7 @@ private:
   void appendVisibleSpan(const PendingTextSpan& pending) {
     ComputedTextComponent::TextSpan span;
     span.text = pending.text;
+    span.openTypeLanguageTags = pending.languageTags;
     span.whiteSpace = pending.whiteSpace;
     span.preservesSpaces = pending.preserveSpaces;
     span.start = 0;

@@ -265,6 +265,8 @@ struct ComputedTextComponent {
 
     /// Resolved policy for synthesizing small caps when the drawing face lacks them.
     FontSynthesisSmallCaps fontSynthesisSmallCaps = FontSynthesisSmallCaps::Auto;
+    /// Preferred OpenType language systems resolved from the inherited XML language.
+    std::array<uint32_t, 3> openTypeLanguageTags{};
 
     /// Resolved kerning policy; absent values use the text root layout parameters.
     std::optional<FontKerning> fontKerning;
