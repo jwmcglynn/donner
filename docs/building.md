@@ -575,10 +575,11 @@ non-CPU adapter, and runs uncached on a remote executor. The Geode golden tests 
 the exact radial-gradient comparisons in `renderer_geode_tests` remain on the ordinary route
 pending [#2541](https://github.com/jwmcglynn/donner/issues/2541).
 
-Trusted provisioning sets `DONNER_CI_LINUX_HARDWARE_GPU=true` on coordinators whose existing
-remote execution instance serves both ordinary builds and Linux hardware GPU tests. The mixed
-CI job then includes the hardware variants of affected tests in its existing Bazel invocation.
-Coordinators with separate instances leave the capability unset. To select the whole suite on
+Set the repository variable `DONNER_CI_LINUX_HARDWARE_GPU=true` once every trusted mixed CI
+coordinator's existing remote execution instance serves both ordinary builds and Linux hardware
+GPU tests. The admitted mixed job then includes the hardware variants of affected tests in its
+existing Bazel invocation. Leave the variable unset or false while the instances are separate.
+To select the whole suite on
 a qualified shared instance, run
 `bazel test --config=ci --config=ci-platforms //tools/ci:linux_hardware_gpu_tests`.
 

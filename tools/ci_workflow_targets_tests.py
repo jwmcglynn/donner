@@ -97,6 +97,9 @@ class WorkflowTargetsTest(unittest.TestCase):
         native = source.split("      - name: Test Linux and macOS with native platform transitions", 1)[1]
         native = native.split("      - name:", 1)[0]
         self.assertIn("if: needs.gatekeeper.outputs.unified_macos == 'true'", native)
+        capability = "DONNER_CI_LINUX_HARDWARE_GPU: ${{ vars.DONNER_CI_LINUX_HARDWARE_GPU == 'true' }}"
+        self.assertIn(capability, native)
+        self.assertEqual(source.count("vars.DONNER_CI_LINUX_HARDWARE_GPU"), 1)
         # Queries select affected labels. All configured build and test work shares one invocation.
         commands = re.findall(r"\bbazel(?:isk)?\s+(?:--[^\s]+\s+)*(build|test)\b",
                               native.replace("\\\n", " "))
