@@ -111,8 +111,8 @@ row that is gated or capability-gated on one lane is not counted among that lane
 | --- | ---: | ---: | ---: | ---: |
 | `default_text` | 1,554 | 98 | 26 | 1 |
 | `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 0 | 0 | 0 | 0 |
-| `geode_max_text` | 0 | 0 | 0 | 0 |
+| `geode` | 1,545 | 98 | 21 | 1 |
+| `geode_max_text` | 358 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->
 

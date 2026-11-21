@@ -194,11 +194,11 @@ accepted and their largest alpha difference; the diff image draws them in blue. 
 comparison passes without the rule leaves the list.
 
 The opt-in applies to both Geode lanes, `resvg_test_suite_geode` (simple text tier) and
-`resvg_test_suite_geode_max_text` (full shaping). The list holds 184 rows: the 171 that need the
-rule on the simple tier, which need it on the full tier too, and 13 bidirectional, Arabic and
-complex-script rows that only the full tier renders. On the full tier the rule accepts 54,723
-pixels across those 184 rows on software Vulkan (54,727 on Metal), and the largest count it leaves
-is 91 of 100.
+`resvg_test_suite_geode_max_text` (full shaping). The list holds 187 rows: the 173 that need the
+rule on the simple tier, which need it on the full tier too, and 14 rows that only the full tier
+renders (13 bidirectional, Arabic and complex-script rows, and `text/text/emojis` against its
+recorded Donner golden). On the full tier the rule accepts 55,653 pixels across those 187 rows on
+software Vulkan (55,657 on Metal), and the largest count it leaves is 91 of 100.
 
 ### Geode gates {#ResvgGeodeGates}
 
