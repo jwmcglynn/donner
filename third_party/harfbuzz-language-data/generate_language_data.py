@@ -14,6 +14,55 @@ HEADER = """// Derived from HarfBuzz {version} src/hb-ot-tag-table.hh, generated
 TAG = re.compile(r"HB_TAG\('(.?)','(.?)','(.?)','(.?)'\)")
 
 
+def compact_complex_language(data: str) -> str:
+    """Keep the upstream predicates and replace each terminal action with a table index."""
+    begin = data.index("static inline bool\nComplexLanguageTags")
+    prefix, rules = data[:begin], data[begin:]
+    if re.search(r"\breturn\b(?! (?:true|false);)", rules):
+        raise ValueError("unexpected return in the upstream complex language rules")
+    outcomes = [()]
+    tag = r'PackTag\("[^"\\]{4}"\)'
+    single = r'tags\[0\] = PackTag\("([^"\\]{4})"\);\s*\*count = 1;\s*return true;'
+    multiple = (
+        rf'unsigned int i;\s*uint32_t possible_tags\[\] = \{{((?:\s*{tag},)+\s*)\}};\s*'
+        r'for \(i = 0; i < (\d+) && i < \*count; i\+\+\)\s*'
+        r'tags\[i\] = possible_tags\[i\];\s*\*count = i;\s*return true;'
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        if match[1] is not None:
+            tags = (match[1],)
+        else:
+            tags = tuple(re.findall(r'PackTag\("([^"]{4})"\)', match[2]))
+            if not 1 <= len(tags) == int(match[3]) <= 3:
+                raise ValueError("unexpected complex language initializer size")
+        if tags not in outcomes:
+            if len(outcomes) == 256:
+                raise ValueError("complex language outcomes no longer fit the index type")
+            outcomes.append(tags)
+        return f"return {outcomes.index(tags)};"
+
+    rules = re.sub(f"{single}|{multiple}", replace, rules, flags=re.S)
+    rules, signatures = re.subn(
+        r'static inline bool\nComplexLanguageTags \(const char +\*lang_str,\s*'
+        r'const char +\*limit,\s*unsigned int \*count *,\s*uint32_t +\*tags *\)',
+        "static uint8_t ComplexLanguageIndex(const char* lang_str, const char* limit)",
+        rules,
+    )
+    rules = rules.replace("return false;", "return 0;")
+    if signatures != 1 or re.search(r"\b(tags|count|possible_tags)\b", rules):
+        raise ValueError("unrecognized complex language output action")
+    if re.search(r"\breturn\b(?! [0-9]+;)", rules):
+        raise ValueError("unrecognized complex language return")
+    payloads = "\n".join(
+        "  {" + ", ".join(f'PackTag("{tag}")' for tag in tags) + "}," for tags in outcomes
+    )
+    return (
+        prefix + "static const LanguageTags kComplexLanguageOutcomes[] = {\n"
+        + payloads + "\n};\n\n" + rules
+    )
+
+
 def language_data(source: str, version: str) -> str:
     start = source.index("static const LangTag ot_languages2")
     end = source.index("/**\n * hb_ot_ambiguous_tag_to_language", start)
@@ -37,7 +86,7 @@ def language_data(source: str, version: str) -> str:
         raise ValueError("unrecognized dependency in the upstream generated language data")
     data = re.sub(r"[ \t]+\n", "\n", data)
     data = re.sub(r"\n\s*\n\s*\n", "\n\n", data).expandtabs(2).strip()
-    return HEADER.format(version=version) + data + "\n"
+    return HEADER.format(version=version) + compact_complex_language(data) + "\n"
 
 
 def main() -> None:

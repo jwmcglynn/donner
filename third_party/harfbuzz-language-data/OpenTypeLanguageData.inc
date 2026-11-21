@@ -1422,11 +1422,33 @@ static const LangTagRange ot_languages3_multi[] = {
   {PackTag("zgh "), 286,  2},
 };
 
-static inline bool
-ComplexLanguageTags (const char   *lang_str,
-          const char   *limit,
-          unsigned int *count ,
-          uint32_t     *tags )
+static const LanguageTags kComplexLanguageOutcomes[] = {
+  {},
+  {PackTag("APPH")},
+  {PackTag("PGR ")},
+  {PackTag("HYE ")},
+  {PackTag("PRO ")},
+  {PackTag("IPPH")},
+  {PackTag("UPPH")},
+  {PackTag("KGE ")},
+  {PackTag("SYRE")},
+  {PackTag("SYRJ")},
+  {PackTag("SYRN")},
+  {PackTag("JBO ")},
+  {PackTag("ZHH ")},
+  {PackTag("ZHTM"), PackTag("ZHH ")},
+  {PackTag("ZHS ")},
+  {PackTag("ZHT ")},
+  {PackTag("IRT ")},
+  {PackTag("NAV "), PackTag("ATH ")},
+  {PackTag("LTZ ")},
+  {PackTag("MONT")},
+  {PackTag("NOR ")},
+  {PackTag("NYN ")},
+  {PackTag("MOL "), PackTag("ROM ")},
+};
+
+static uint8_t ComplexLanguageIndex(const char* lang_str, const char* limit)
 {
   if (limit - lang_str >= 7)
   {
@@ -1435,72 +1457,52 @@ ComplexLanguageTags (const char   *lang_str,
     if (SubtagMatches (p, limit, "-fonnapa", 8))
     {
 
-      tags[0] = PackTag("APPH");
-      *count = 1;
-      return true;
+      return 1;
     }
     if (SubtagMatches (p, limit, "-polyton", 8))
     {
 
-      tags[0] = PackTag("PGR ");
-      *count = 1;
-      return true;
+      return 2;
     }
     if (SubtagMatches (p, limit, "-arevmda", 8))
     {
 
-      tags[0] = PackTag("HYE ");
-      *count = 1;
-      return true;
+      return 3;
     }
     if (SubtagMatches (p, limit, "-provenc", 8))
     {
 
-      tags[0] = PackTag("PRO ");
-      *count = 1;
-      return true;
+      return 4;
     }
     if (SubtagMatches (p, limit, "-fonipa", 7))
     {
 
-      tags[0] = PackTag("IPPH");
-      *count = 1;
-      return true;
+      return 5;
     }
     if (SubtagMatches (p, limit, "-fonupa", 7))
     {
 
-      tags[0] = PackTag("UPPH");
-      *count = 1;
-      return true;
+      return 6;
     }
     if (SubtagMatches (p, limit, "-geok", 5))
     {
 
-      tags[0] = PackTag("KGE ");
-      *count = 1;
-      return true;
+      return 7;
     }
     if (SubtagMatches (p, limit, "-syre", 5))
     {
 
-      tags[0] = PackTag("SYRE");
-      *count = 1;
-      return true;
+      return 8;
     }
     if (SubtagMatches (p, limit, "-syrj", 5))
     {
 
-      tags[0] = PackTag("SYRJ");
-      *count = 1;
-      return true;
+      return 9;
     }
     if (SubtagMatches (p, limit, "-syrn", 5))
     {
 
-      tags[0] = PackTag("SYRN");
-      *count = 1;
-      return true;
+      return 10;
     }
   }
 out:
@@ -1510,1046 +1512,632 @@ out:
     if (0 == strcmp (&lang_str[1], "rt-lojban"))
     {
 
-      tags[0] = PackTag("JBO ");
-      *count = 1;
-      return true;
+      return 11;
     }
     break;
   case 'c':
     if (LanguageMatches (&lang_str[1], limit, "do-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "do-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "jy-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "jy-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "mn-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "mn-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "np-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "np-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "px-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "px-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "sp-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "sp-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "zh-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "zh-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "zo-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "zo-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "do-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "do-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "jy-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "jy-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "mn-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "mn-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "np-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "np-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "px-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "px-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "sp-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "sp-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "zh-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "zh-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "zo-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "zo-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "do-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "do-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "do-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "jy-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "jy-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "jy-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "mn-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "mn-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "mn-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "np-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "np-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "np-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "px-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "px-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "px-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "sp-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "sp-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "sp-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "zh-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "zh-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "zh-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "zo-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "zo-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "zo-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     break;
   case 'g':
     if (LanguageMatches (&lang_str[1], limit, "an-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "an-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "an-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "an-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "a-latg", 6))
     {
 
-      tags[0] = PackTag("IRT ");
-      *count = 1;
-      return true;
+      return 16;
     }
     if (0 == std::strncmp(&lang_str[1], "an-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "an-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "an-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     break;
   case 'h':
     if (LanguageMatches (&lang_str[1], limit, "ak-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "ak-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "nm-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "nm-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "sn-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "sn-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "ak-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "ak-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "nm-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "nm-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "sn-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "sn-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "ak-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "ak-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "ak-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "nm-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "nm-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "nm-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "sn-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "sn-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "sn-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     break;
   case 'i':
     if (0 == strcmp (&lang_str[1], "-navajo"))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("NAV "),
-  PackTag("ATH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 17;
     }
     if (0 == strcmp (&lang_str[1], "-hak"))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (0 == strcmp (&lang_str[1], "-lux"))
     {
 
-      tags[0] = PackTag("LTZ ");
-      *count = 1;
-      return true;
+      return 18;
     }
     break;
   case 'l':
     if (LanguageMatches (&lang_str[1], limit, "uh-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "uh-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "uh-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "uh-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (LanguageMatches (&lang_str[1], limit, "zh-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (0 == std::strncmp(&lang_str[1], "uh-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "uh-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "uh-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     break;
   case 'm':
     if (LanguageMatches (&lang_str[1], limit, "np-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "np-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "np-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "np-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "np-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "np-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "np-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "nw-", 3)
   && SubtagMatches (lang_str, limit, "-th", 3))
     {
 
-      tags[0] = PackTag("MONT");
-      *count = 1;
-      return true;
+      return 19;
     }
     break;
   case 'n':
     if (LanguageMatches (&lang_str[1], limit, "an-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "an-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "an-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "an-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "an-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "an-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "an-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == strcmp (&lang_str[1], "o-bok"))
     {
 
-      tags[0] = PackTag("NOR ");
-      *count = 1;
-      return true;
+      return 20;
     }
     if (0 == strcmp (&lang_str[1], "o-nyn"))
     {
 
-      tags[0] = PackTag("NYN ");
-      *count = 1;
-      return true;
+      return 21;
     }
     break;
   case 'r':
@@ -2557,238 +2145,146 @@ out:
   && SubtagMatches (lang_str, limit, "-md", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("MOL "),
-  PackTag("ROM "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 22;
     }
     break;
   case 's':
     if (LanguageMatches (&lang_str[1], limit, "jc-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "jc-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "jc-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "jc-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "jc-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "jc-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "jc-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     break;
   case 'w':
     if (LanguageMatches (&lang_str[1], limit, "uu-hant-hk", 10))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "uu-hant-mo", 10))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (LanguageMatches (&lang_str[1], limit, "uu-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "uu-hant", 7))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == std::strncmp(&lang_str[1], "uu-", 3)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "uu-", 3)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "uu-", 3)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     break;
   case 'y':
     if (LanguageMatches (&lang_str[1], limit, "ue-hans", 7))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     break;
   case 'z':
     if (LanguageMatches (&lang_str[1], limit, "h-hant-hk", 9))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (LanguageMatches (&lang_str[1], limit, "h-hant-mo", 9))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == strcmp (&lang_str[1], "h-min-nan"))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "h-hans", 6))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (LanguageMatches (&lang_str[1], limit, "h-hant", 6))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     if (0 == strcmp (&lang_str[1], "h-min"))
     {
 
-      tags[0] = PackTag("ZHS ");
-      *count = 1;
-      return true;
+      return 14;
     }
     if (0 == std::strncmp(&lang_str[1], "h-", 2)
   && SubtagMatches (lang_str, limit, "-hk", 3))
     {
 
-      tags[0] = PackTag("ZHH ");
-      *count = 1;
-      return true;
+      return 12;
     }
     if (0 == std::strncmp(&lang_str[1], "h-", 2)
   && SubtagMatches (lang_str, limit, "-mo", 3))
     {
 
-      unsigned int i;
-      uint32_t possible_tags[] = {
-  PackTag("ZHTM"),
-  PackTag("ZHH "),
-      };
-      for (i = 0; i < 2 && i < *count; i++)
-  tags[i] = possible_tags[i];
-      *count = i;
-      return true;
+      return 13;
     }
     if (0 == std::strncmp(&lang_str[1], "h-", 2)
   && SubtagMatches (lang_str, limit, "-tw", 3))
     {
 
-      tags[0] = PackTag("ZHT ");
-      *count = 1;
-      return true;
+      return 15;
     }
     break;
   }
-  return false;
+  return 0;
 }
