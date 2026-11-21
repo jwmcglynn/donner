@@ -182,39 +182,38 @@ ImageComparisonParams GeodeSimpleTextCpuAllowanceGate(ImageComparisonParams para
 }
 
 /// \p params, with the Geode comparison disabled: the text sits on the reference's crosshair, so
-/// the crosshair's quarter-pixel edge rows border glyph ink, which the quarter-pixel edge coverage
-/// rule counts.
+/// the crosshair's quarter-pixel quantized rows border glyph ink, and the quarter-pixel edge
+/// coverage rule's vertical-neighbor condition rejects those pixels.
 ImageComparisonParams GeodeCrosshairUnderTextGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Reference disagreement: the crosshair's quarter-pixel edge rows run through the glyphs, "
-      "beside partially covered rows (Geode counts 121 px with the edge coverage rule and 329 "
-      "without; the CPU comparison counts 100 of 100)");
+      "Harness mismatch: the crosshair's quarter-pixel rows run through the glyphs, and the edge "
+      "coverage rule refuses the crosshair pixels that border glyph ink (Geode counts 121 px with "
+      "the rule and 329 without; the CPU comparison counts 100 of 100)");
 }
 
 /// \p params, with the Geode comparison disabled: Geode differs from this Donner software rendering
-/// only on the crosshair's two quarter-pixel quantized rows, but the golden is not shown to be
-/// quarter-pixel quantized elsewhere (its edges are resampled bitmap glyphs), so the golden README
-/// does not record it and the edge coverage rule does not apply.
+/// only on one quarter-pixel quantized crosshair row, but elsewhere the golden is not shown to be
+/// quarter-pixel quantized, so the golden README does not record it and the edge coverage rule
+/// does not apply.
 ImageComparisonParams GeodeCrosshairOnlyGoldenGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Harness mismatch: Geode differs only on the crosshair's quarter-pixel rows (309 px for "
-      "compound-emojis, 341 for compound-emojis-and-coordinates-list), but outside the crosshair "
-      "the golden measures 0.00 of 15 and 0.07 of 84 px quarter-pixel quantized, so it is not "
-      "recorded as quantized");
+      "Harness mismatch: every pixel Geode counts is on the crosshair row y = 250 (309 px for "
+      "compound-emojis, 341 for compound-emojis-and-coordinates-list, 384 for japanese-with-tb), "
+      "but the golden measures 0.00 of 15, 0.07 of 84 and 0.19 of 396 px quarter-pixel "
+      "quantized, so it is not recorded as quantized");
 }
 
-/// \p params, with the Geode comparison disabled: the vertical row compares against a Donner
-/// software rendering whose glyph edges are not shown to be quarter-pixel quantized by the golden
-/// README's measurement, so the edge coverage rule does not apply.
-ImageComparisonParams GeodeVerticalGoldenGate(ImageComparisonParams params) {
+/// \p params, with the Geode comparison disabled: Geode's glyph edges differ from this Donner
+/// software rendering by more than the pixel budget even with the quarter-pixel edge coverage
+/// rule, and the golden is not shown to be quarter-pixel quantized.
+ImageComparisonParams GeodeGlyphEdgeGoldenGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Harness mismatch: the golden measures 0.19 (japanese-with-tb, 396 px) and 0.30 "
-      "(tb-and-punctuation, 558 px) quarter-pixel quantized, below the 0.55 and 0.66 of the "
-      "recorded goldens; Geode counts 384 and 128 px without the edge coverage rule, and "
-      "tb-and-punctuation still counts 104 with it");
+      "Harness mismatch: Geode counts 128 px on glyph edges against this golden, 104 with the edge "
+      "coverage rule; 10 differ by more than quantization allows, and the golden measures 0.30 of "
+      "558 px quarter-pixel quantized, so it is not recorded as quantized");
 }
 
 /// Params for a drop-shadow() row compared against the Donner golden at \p path for \p reason
@@ -1895,7 +1894,7 @@ INSTANTIATE_TEST_SUITE_P(
                  Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
                      "Arabic shaping needs HarfBuzz")},
                 {"japanese-with-tb.svg",
-                 GeodeVerticalGoldenGate(
+                 GeodeCrosshairOnlyGoldenGate(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png")
                          .onlyTextFull()
@@ -1916,7 +1915,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
                                  "origin CSS Writing Modes 3 5.1.1 requires (golden README)")},
                 {"tb-and-punctuation.svg",
-                 GeodeVerticalGoldenGate(
+                 GeodeGlyphEdgeGoldenGate(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png")
                          .onlyTextFull()

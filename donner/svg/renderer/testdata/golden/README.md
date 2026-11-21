@@ -1560,12 +1560,13 @@ Geode difference lies on the crosshair beside the partially covered blurred text
 counts, so its row does not opt in.
 
 Four more Donner software renderings, compared only with full shaping, are not recorded. Geode
-differs from `donner-compound-emojis.png` and `donner-compound-emojis-and-coordinates-list.png`
-only on the crosshair's two quantized rows (309 and 341 pixels), but the measurement above, which
-leaves out the crosshair, finds too few quantized pixels in them to show it (0.00 of 15 and 0.07 of
-84): their other edges are resampled bitmap glyphs. The vertical rows' `resvg-japanese-with-tb.png`
-and `resvg-tb-and-punctuation.png` measure 0.19 of 396 and 0.30 of 558, against Geode's 0.010 and
-0.016. Their rows keep their Geode comparison disabled.
+differs from `donner-compound-emojis.png`, `donner-compound-emojis-and-coordinates-list.png` and
+`resvg-japanese-with-tb.png` only on the crosshair's quantized row y = 250 (309, 341 and 384
+pixels), but the measurement above, which leaves out the crosshair, does not show them quantized:
+0.00 of 15, 0.07 of 84 and 0.19 of 396 (Geode 0.010 on the last). The emoji goldens' other edges
+are resampled bitmap glyphs. `resvg-tb-and-punctuation.png` measures 0.30 of 558 (Geode 0.016),
+and Geode differs from it on glyph edges by 128 pixels, 104 with the rule. Their rows keep their
+Geode comparison disabled.
 
 ## Geode painting/marker/with-an-image-child golden
 
