@@ -367,6 +367,22 @@ testing::TestParamInfo<ImageComparisonTestParam> MakeParamInfo(ImageComparisonPa
       ImageComparisonTestParam{testcase, ComparisonMode::TinyGolden}, 0);
 }
 
+TEST(ImageComparisonTestFixtureTests, SimpleTextGeodeGateKeepsTheFullTextComparison) {
+  // Whether each comparison runs: TinySkia in the simple and full text tiers, then Geode in both.
+  const auto allowed = [](const ImageComparisonParams& params) {
+    return std::vector<bool>{params.allowsBackend(RendererBackend::TinySkia, false),
+                             params.allowsBackend(RendererBackend::TinySkia, true),
+                             params.allowsBackend(RendererBackend::Geode, false),
+                             params.allowsBackend(RendererBackend::Geode, true)};
+  };
+
+  EXPECT_THAT(allowed(ImageComparisonParams().disableGeodeForSimpleText("simple tier only")),
+              testing::ElementsAre(true, true, false, true));
+  EXPECT_THAT(allowed(ImageComparisonParams().disableBackend(RendererBackend::Geode, "both")),
+              testing::ElementsAre(true, true, false, false));
+  EXPECT_THAT(allowed(ImageComparisonParams()), testing::ElementsAre(true, true, true, true));
+}
+
 TEST(ImageComparisonTestFixtureTests, ExplicitSkipsUseDisabledGtestName) {
   const std::string name =
       TestNameFromFilename(MakeParamInfo(ImageComparisonParams::Skip("triaged gap")));

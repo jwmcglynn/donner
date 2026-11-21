@@ -168,6 +168,7 @@ cc_binary(
     ],
     additional_linker_inputs = [
         ":_geode_only_guard",
+        "editor-abort-diagnostics.js",
         "//donner/gpu/browser:library_donner_gpu.js",
     ],
     copts = [
@@ -176,6 +177,8 @@ cc_binary(
     # The browser backend's bridge calls into its own JavaScript library.
     linkopts = _EDITOR_LINKOPTS + [
         "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
+        # Every thread records its own abort reason and stack before the runtime tears down.
+        "--pre-js=$(execpath editor-abort-diagnostics.js)",
     ],
     tags = [
         "manual",
@@ -191,6 +194,7 @@ cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = _EDITOR_WASM_BINARY_DEPS + [
+        "//donner/base:fatal_abort",
         "//donner/base:packaged_resource",
         "//donner/editor:editor_build_info",
         "//donner/editor:notice",
@@ -214,6 +218,80 @@ wasm_cc_binary(
         ":wasm_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+)
+
+# A threaded module that reaches two browser GPU owner abort sites on its application pthread, with
+# the editor's abort hook linked in. Built in the editor's own configuration by the transition below.
+cc_binary(
+    name = "owner_abort_site_probe_module",
+    testonly = True,
+    srcs = ["OwnerAbortSiteProbe.cc"],
+    additional_linker_inputs = ["editor-abort-diagnostics.js"],
+    copts = ["-pthread"],
+    linkopts = [
+        "-pthread",
+        "-sPROXY_TO_PTHREAD",
+        "-sEXIT_RUNTIME=1",
+        "-sENVIRONMENT=node,worker",
+        "--pre-js=$(execpath editor-abort-diagnostics.js)",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base:fatal_abort",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+)
+
+wasm_cc_binary(
+    name = "_owner_abort_site_probe_wasm",
+    testonly = True,
+    cc_target = ":owner_abort_site_probe_module",
+    # The glue loads the module by the linked binary's name.
+    outputs = [
+        "owner_abort_site_probe_module.js",
+        "owner_abort_site_probe_module.wasm",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+editor_wasm_geode_transitioned_target(
+    name = "_owner_abort_site_probe",
+    testonly = True,
+    browser_backend = True,
+    dep = ":_owner_abort_site_probe_wasm",
+    visibility = ["//visibility:private"],
+)
+
+py_test(
+    name = "owner_abort_site_probe_test",
+    size = "small",
+    srcs = ["owner_abort_site_probe_test.py"],
+    args = [
+        "$(rlocationpath //donner/editor/wasm/tests:owner-abort-site-probe-driver.mjs)",
+        "$(rlocationpaths :_owner_abort_site_probe)",
+    ],
+    data = [
+        ":_owner_abort_site_probe",
+        "//donner/editor/wasm/tests:owner-abort-site-probe-driver.mjs",
+        "@rules_nodejs//nodejs:current_node_runtime",
+    ],
+    env = {"DONNER_NODE_PATH": "$(NODE_PATH)"},
+    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 exports_files(
@@ -438,6 +516,11 @@ py_test(
         "13600000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
+        # The abort hook's page record and the thread role it reads from C++.
+        "--expected-js-property",
+        "__donnerAbortRecords",
+        "--expected-js-property",
+        "__donnerThreadRole",
         # The WebGPU readback diagnostic the browser pixel suites read, published by
         # `donner/editor/WholeAppWorkerBridge.cc`.
         "--expected-js-property",

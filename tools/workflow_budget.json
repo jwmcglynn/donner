@@ -1,6 +1,6 @@
 {
   "tree": {
-    "lines": 5145,
+    "lines": 5156,
     "comment_lines": 536,
     "multiline_runs": 66,
     "longest_run": 194,
@@ -97,7 +97,7 @@
       "longest_if": 166
     },
     ".github/workflows/main.yml": {
-      "lines": 856,
+      "lines": 857,
       "comment_lines": 136,
       "multiline_runs": 7,
       "longest_run": 47,
@@ -225,7 +225,7 @@
       "longest_if": 21
     },
     ".github/actions/re-turnstile/action.yml": {
-      "lines": 137,
+      "lines": 147,
       "comment_lines": 0,
       "multiline_runs": 0,
       "longest_run": 0,

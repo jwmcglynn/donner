@@ -105,7 +105,7 @@ excluded from v1, **OOS** = out of scope (deprecated or not applicable).
 | `font-weight` (100-900, bold/normal) | Shipped | font matching |
 | `font-style` (normal, italic, oblique) | Shipped | font matching |
 | `font-stretch` | Shipped | font matching |
-| `font-variant: small-caps` | Shipped | synthesized (base), native smcp (full) |
+| `font-variant: small-caps` | Shipped | native smcp (both tiers), synthesized without smcp |
 | `@font-face` with `src: url()` | Shipped | `a-font-*` |
 | TTF, OTF (CFF), WOFF1, WOFF2 | Shipped | font loading tests |
 | Generic font families | Shipped | `a-font-family-*` |

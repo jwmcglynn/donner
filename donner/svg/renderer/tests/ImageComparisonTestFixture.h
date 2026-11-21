@@ -134,6 +134,9 @@ struct ImageComparisonParams {
   bool allowTinySkia = true;
   /// If false, skip the test when the active backend is Geode.
   bool allowGeode = true;
+  /// If false, skip the test when the active backend is Geode and \ref BuiltTextTier is not
+  /// \ref TextTier::Full. Set it through \ref disableGeodeForSimpleText.
+  bool allowGeodeSimpleText = true;
   /// Bitmask of required backend features, built from \ref RendererBackendFeatureMask.
   uint32_t requiredFeatures = 0;
   /// Human-readable reason used when backend restrictions cause a skip.
@@ -357,6 +360,34 @@ struct ImageComparisonParams {
     }
 
     return *this;
+  }
+
+  /**
+   * @brief Disables the Geode comparison in the simple text tier only, for a cause that tier alone
+   * has; the Geode comparison with full text shaping still runs.
+   *
+   * @param reason Human-readable skip reason.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& disableGeodeForSimpleText(std::string_view reason) {
+    allowGeodeSimpleText = false;
+    backendRequirementReason = reason;
+    return *this;
+  }
+
+  /**
+   * @brief Returns true if the comparison with \p backend runs, in a build whose text tier is full
+   * (\p fullText) or simple.
+   *
+   * @param backend The backend the comparison renders with.
+   * @param fullText True when \ref BuiltTextTier is \ref TextTier::Full.
+   */
+  bool allowsBackend(RendererBackend backend, bool fullText) const {
+    switch (backend) {
+      case RendererBackend::TinySkia: return allowTinySkia;
+      case RendererBackend::Geode: return allowGeode && (allowGeodeSimpleText || fullText);
+    }
+    return false;
   }
 
   /**

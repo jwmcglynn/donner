@@ -22,6 +22,7 @@ _CHECKS = [
     ["python3", "tools/rust_boundary/check_no_rust_dependencies.py", "--blocking", "default"],
     ["python3", "tools/ci/fuzz_lane_coverage.py"],
     ["python3", "build_defs/check_local_gpu_tags.py"],
+    ["python3", "build_defs/check_gpu_routing.py"],
     ["python3", "build_defs/check_text_tier_defines.py"],
     ["python3", "build_defs/check_variant_transitions.py"],
 ]

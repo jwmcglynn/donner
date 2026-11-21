@@ -10,9 +10,9 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
 
+#include "donner/base/FatalAbort.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/browser/BrowserDevice.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
@@ -38,7 +38,9 @@ std::shared_ptr<OwnerWaitProbe> gOwnerWaitProbe;
 
 void CheckOwnerProbeDeadline() {
   if (gOwnerWaitProbe && emscripten_get_now() >= gOwnerWaitProbe->ownerDeadline) {
-    std::abort();
+    donner::FatalAbort("owner-wait-probe.owner-deadline",
+                       {{"sliceReturned", gOwnerWaitProbe->sliceReturned.load()},
+                        {"complete", gOwnerWaitProbe->complete.load()}});
   }
 }
 
@@ -109,13 +111,14 @@ void* RunOwnerWaitProbeProducer(void* context) {
   while (!request->sliceReturned.load(std::memory_order_acquire)) {
     const double remaining = deadline - emscripten_get_now();
     if (remaining <= 0.0) {
-      std::abort();
+      donner::FatalAbort("owner-wait-probe.producer-deadline",
+                         {{"sliceReturned", request->sliceReturned.load()}});
     }
     emscripten_futex_wait(&request->sliceReturned, 0, std::min(remaining, 1.0));
   }
   request->producerIsGpuOwner = donner::gpu::browser::IsBrowserGpuOwnerThread();
   if (request->producerIsGpuOwner) {
-    std::abort();
+    donner::FatalAbort("owner-wait-probe.producer-is-owner");
   }
   // A real browser call, not the published serial, so this round trip has to run on the owner.
   request->serial = request->device->completedSerialFromBrowserForTesting();
@@ -136,7 +139,8 @@ double JoinOwnerWaitProbe(pthread_t producer, OwnerWaitProbe& request, double de
     }
     const double remaining = deadline - emscripten_get_now();
     if (joined != ETIMEDOUT || remaining <= 0.0) {
-      std::abort();
+      donner::FatalAbort("owner-wait-probe.join",
+                         {{"joined", joined}, {"complete", request.complete.load()}});
     }
     emscripten_futex_wait(&request.complete, 1, std::min(remaining, 1.0));
   }
@@ -153,7 +157,7 @@ std::atomic<bool> gDispatchProbeRunning{false};
 void* RunOwnerDispatchProbeProducer(void* context) {
   std::unique_ptr<OwnerDispatchProbe> run(static_cast<OwnerDispatchProbe*>(context));
   if (donner::gpu::browser::IsBrowserGpuOwnerThread()) {
-    std::abort();
+    donner::FatalAbort("owner-dispatch-probe.producer-is-owner", {{"count", run->count}});
   }
   for (uint32_t i = 0; i < run->count; ++i) {
     // A real browser call, not the published serial: each one is a synchronous owner round trip.
@@ -203,9 +207,14 @@ OwnerDispatchProbeProgress ReadGpuOwnerDispatchProbeForTesting() {
 
 OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(
     const std::shared_ptr<gpu::browser::BrowserDevice>& device) {
-  if (!device || !gpu::browser::IsBrowserGpuOwnerThread() ||
-      gpu::browser::IsBrowserGpuOwnerDispatchActive() || gOwnerWaitProbe) {
-    std::abort();
+  if (!gpu::browser::IsBrowserGpuOwnerThread()) {
+    FatalAbort("owner-wait-probe.off-owner");
+  }
+  if (!device || gpu::browser::IsBrowserGpuOwnerDispatchActive() || gOwnerWaitProbe) {
+    FatalAbort("owner-wait-probe.preconditions",
+               {{"device", device != nullptr},
+                {"dispatchActive", gpu::browser::IsBrowserGpuOwnerDispatchActive()},
+                {"probeRunning", gOwnerWaitProbe != nullptr}});
   }
   static_assert(std::atomic<uint32_t>::is_always_lock_free);
   static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
@@ -217,20 +226,26 @@ OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(
   request->ownerDeadline = deadline;
   gOwnerWaitProbe = request;
   pthread_t producer;
-  if (pthread_create(&producer, nullptr, RunOwnerWaitProbeProducer, start.get()) != 0) {
-    std::abort();
+  if (const int created =
+          pthread_create(&producer, nullptr, RunOwnerWaitProbeProducer, start.get());
+      created != 0) {
+    FatalAbort("owner-wait-probe.create-producer", {{"error", created}});
   }
   start.release();
   while (!request->complete.load(std::memory_order_acquire)) {
     const double remaining = deadline - emscripten_get_now();
     if (remaining <= 0.0) {
-      std::abort();
+      FatalAbort("owner-wait-probe.complete-deadline",
+                 {{"sliceReturned", request->sliceReturned.load()}});
     }
     emscripten_futex_wait(&request->complete, 0, remaining);
   }
   const double joinElapsedMs = JoinOwnerWaitProbe(producer, *request, deadline);
   if (request->serial < initialSerial || request->sliceMs <= 0.0) {
-    std::abort();
+    FatalAbort("owner-wait-probe.result",
+               {{"serial", static_cast<std::int64_t>(request->serial)},
+                {"initialSerial", static_cast<std::int64_t>(initialSerial)},
+                {"sliceUs", static_cast<std::int64_t>(request->sliceMs * 1000.0)}});
   }
   gOwnerWaitProbe.reset();
   return {request->serial, request->sliceMs, request->producerIsGpuOwner, joinElapsedMs};
