@@ -440,6 +440,15 @@ inline bool IsBlurredShadowColor(const components::FilterGraph& graph,
          FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(node, 1), index);
 }
 
+/// Input slots contributing to a blur analysis. A shadow split leaves its foreground off-raster.
+/// @param node Filter primitive. @param omitForeground Whether to skip a final merge slot.
+inline size_t BlurPathInputCount(const components::FilterNode& node, bool omitForeground) {
+  if (!std::holds_alternative<components::filter_primitive::Merge>(node.primitive)) {
+    return std::max<size_t>(FilterInputSlotCount(node), 1);
+  }
+  return node.inputs.size() - static_cast<size_t>(omitForeground && !node.inputs.empty());
+}
+
 /**
  * Whether every path from SourceGraphic or SourceAlpha to the output of \p graph passes through a
  * Gaussian blur (\ref IsBlurringNode). Content that reaches the output unblurred, such as the
@@ -460,11 +469,7 @@ inline bool FilterOutputIsBlurred(const components::FilterGraph& graph, const Ve
       // A generator does not inherit the previous node's blur.
       continue;
     }
-    const bool omitForeground =
-        splitShadow && index + 1 == graph.nodes.size() && !node.inputs.empty();
-    const size_t slots = std::holds_alternative<components::filter_primitive::Merge>(node.primitive)
-                             ? node.inputs.size() - static_cast<size_t>(omitForeground)
-                             : std::max<size_t>(FilterInputSlotCount(node), 1);
+    const size_t slots = BlurPathInputCount(node, splitShadow && index + 1 == graph.nodes.size());
     bool all = true;
     for (size_t slot = 0; slot < slots; ++slot) {
       all = all && FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(node, slot), index);
