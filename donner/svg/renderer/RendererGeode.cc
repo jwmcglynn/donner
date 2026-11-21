@@ -2174,6 +2174,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameCommandBuffers.empty()) {
       return true;
     }
+    if (!device->waitForFrameSubmissionRoom()) {
+      return false;
+    }
     gpu::Result<uint64_t> submitted = device->runtimeDevice().submit(frameCommandBuffers);
     frameCommandBuffers.clear();
     if (submitted.hasError()) {

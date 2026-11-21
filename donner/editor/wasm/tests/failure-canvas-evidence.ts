@@ -310,6 +310,8 @@ export async function captureFailureCanvasEvidence(
         overlay: w.__donnerOverlayStats ?? null,
         interaction: w.__donnerInteractionStats ?? null,
         firstFramePresented: w.__donnerFirstFramePresented ?? null,
+        // Abort and uncaught worker error records, with the failing thread's stack.
+        abortRecords: w.__donnerAbortRecords ?? null,
         visibility: document.visibilityState,
       };
     }).catch((error: unknown) => ({ error: String(error) })),
@@ -412,6 +414,7 @@ async function snapshotGpuState(page: EvidencePage, stepMs: number): Promise<unk
       timeOrigin: performance.timeOrigin,
       nowMs: performance.now(),
       rasterPhases: (window as unknown as Record<string, unknown>).__donnerRasterWorkPhases ?? null,
+      abortRecords: (window as unknown as Record<string, unknown>).__donnerAbortRecords ?? null,
     })).catch((error: unknown) => ({ error: String(error) })),
     stepMs,
   );

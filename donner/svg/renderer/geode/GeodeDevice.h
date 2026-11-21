@@ -287,6 +287,11 @@ public:
   GpuWaitResult waitForQueueIdle(
       std::chrono::milliseconds stallBound = kDefaultGpuWaitTimeout) const;
 
+  /// On native Metal, admit frame work only when fewer than three submissions remain outstanding.
+  /// Waits only for the oldest serial needed to make room. Other backends keep their own pacing.
+  /// @return False if the queue reported a failure or stopped progressing.
+  bool waitForFrameSubmissionRoom() const;
+
   /// Overrides one queue-idle result while preserving its loss side effects. Test seam.
   void setQueueWaitResultForTesting(std::optional<GpuWaitResult> result) {
     queueWaitResultForTesting_ = result;
@@ -934,6 +939,10 @@ public:
   gpu::DeviceObserver& runtimeCounterObserverForTesting() const UTILS_LIFETIME_BOUND;
 
 private:
+  /// Wait for the given submission, recording a stalled queue through the normal loss path.
+  /// @param serial Submission to retire. @param stallBound Longest interval without progress.
+  GpuWaitResult waitForQueueSerial(uint64_t serial, std::chrono::milliseconds stallBound) const;
+
   friend class svg::RendererGeodeTextureSnapshot;
 
   /// Forwards a runtime device's notifications to this context's counters.

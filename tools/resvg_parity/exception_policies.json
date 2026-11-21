@@ -644,18 +644,21 @@
         "painting/marker/with-an-image-child.svg"
       ],
       "kinds": [
-        "geode_threshold"
+        "geode_golden"
       ],
       "classification": "accepted-rasterization-difference",
-      "disposition": "Keep the measured 442 Metal and 449 Vulkan edge residual within the Geode-only bound.",
+      "disposition": "Keep Geode's exact coverage of the 0.40 device px letter strokes in the 0.8x nested image.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
         "donner/svg/renderer/testdata/golden/README.md"
       ],
-      "removal_criteria": "Remove when the same 0.8x thin-stroke image matches both independent coverage and the ordinary shared allowance.",
-      "reference_provenance": "Adjacent reference with analytic sampling differences on nested SVG boundaries; explicit placements and a half-unit shift control isolate the residual from marker placement.",
+      "removal_criteria": "Remove the Geode override when a shared reference covers sub-pixel strokes by their geometry rather than as width-scaled hairlines.",
+      "reference_provenance": "Backend golden; the adjacent reference and the CPU renderer draw the strokes as width-scaled 1 px hairlines and snap or halve the nested image's half-pixel edges. A 16x16 supersampled exact-geometry model of the letter V is recorded in the golden README.",
       "max_threshold": 0.02,
-      "max_pixels": 500
+      "max_pixels": 100,
+      "references": {
+        "geode_golden": "donner/svg/renderer/testdata/golden/geode/painting_marker_with-an-image-child.png"
+      }
     },
     {
       "id": "strict-dash-seam",

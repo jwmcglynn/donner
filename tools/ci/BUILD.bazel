@@ -294,11 +294,15 @@ test_suite(
 # sanitizer lane it forces a sanitizer-flagged Emscripten build of the whole editor that nothing
 # executes. Main CI runs the full test, including its native versus deferred notice comparison, in
 # the normal configuration. The Editor WASM workflow also runs the validator on its staged
-# deployment candidate, without the notice comparison.
+# deployment candidate, without the notice comparison. The owner abort-site probe is a small module
+# built in the editor's configuration; sanitizer flags would reach its Emscripten build the same way.
 test_suite(
     name = "sanitizer_wasm_package_exclusions",
     tags = ["manual"],
-    tests = ["//donner/editor/wasm:catalog_package_integrity_test"],
+    tests = [
+        "//donner/editor/wasm:catalog_package_integrity_test",
+        "//donner/editor/wasm:owner_abort_site_probe_test",
+    ],
 )
 
 test_suite(
