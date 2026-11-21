@@ -1840,7 +1840,10 @@ donner_multi_transitioned_test(
     opens_gpu_device = True,
     remote_parallel_ci = True,
     renderer_backend = "geode",
-    shard_count = 8,
+    # About 100 cases per shard, as in resvg_test_suite_geode. A shard takes about 14 s on software
+    # Vulkan and 4 s on Metal, close to a resvg_test_suite_geode shard (12 s and 3.4 s); 8 shards
+    # saved no total time and doubled the device startups.
+    shard_count = 4,
     text = "true",
     text_full = "true",
 )
