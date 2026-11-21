@@ -172,7 +172,9 @@ def gpu_test_runs(spawns):
     return runs
 
 
-def _result_problems(label, result):
+def _result_problems(label, result, selection):
+    if label not in selection:
+        return ["%s reported a result but was not selected" % label]
     info = result.get("executionInfo", {})
     if result.get("cachedLocally") or info.get("cachedRemotely"):
         return ["%s reported a cached result" % label]
@@ -182,24 +184,19 @@ def _result_problems(label, result):
 
 
 def _read_events(events, selection):
-    """(problems, finished, {label: {(run, shard)}}, {label: summary}, skipped labels)."""
+    """(problems, finish event payload, {label: {(run, shard)}}, {label: summary}, skipped)."""
     problems = []
-    finished = False
+    finished = None
     shards = {}
     summaries = {}
     skipped = set()
     for event in events:
         identity = event.get("id", {})
         if "buildFinished" in identity:
-            finished = True
-            exit_code = event.get("finished", {}).get("exitCode", {})
-            if exit_code.get("name") != "SUCCESS" or exit_code.get("code", 0) != 0:
-                problems.append("the build-finished event does not record a successful invocation")
+            finished = event.get("finished", {})
         elif "testResult" in event:
             label = identity["testResult"]["label"]
-            if label not in selection:
-                problems.append("%s reported a result but was not selected" % label)
-            problems += _result_problems(label, event["testResult"])
+            problems += _result_problems(label, event["testResult"], selection)
             shards.setdefault(label, set()).add(
                 (identity["testResult"].get("run", 1), identity["testResult"].get("shard", 1)))
         elif "testSummary" in event:
@@ -209,11 +206,19 @@ def _read_events(events, selection):
     return problems, finished, shards, summaries, skipped
 
 
+def _finish_problems(finished):
+    if finished is None:
+        return ["the build event stream has no build-finished event"]
+    exit_code = finished.get("exitCode", {})
+    if exit_code.get("name") != "SUCCESS" or exit_code.get("code", 0) != 0:
+        return ["the build-finished event does not record a successful invocation"]
+    return []
+
+
 def result_problems(events, selection, runs):
     """Problems of the build events, given the GPU test runs counted from the execution log."""
     problems, finished, shards, summaries, skipped = _read_events(events, selection)
-    if not finished:
-        problems.append("the build event stream has no build-finished event")
+    problems += _finish_problems(finished)
     if not sum(runs.values()):
         problems.append("no selected test ran on the remote executor with the GPU request")
     for label in sorted(selection & skipped):
