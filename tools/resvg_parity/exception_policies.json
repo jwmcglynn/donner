@@ -930,48 +930,37 @@
       }
     },
     {
-      "id": "emoji-list",
+      "id": "emoji-guide",
       "paths": [
-        "text/text/compound-emojis-and-coordinates-list.svg"
-      ],
-      "kinds": [
-        "shared_golden",
-        "threshold"
-      ],
-      "classification": "reference-disagreement",
-      "disposition": "Keep the authored codepoint addressing of the joined cluster.",
-      "evidence": [
-        "donner/svg/renderer/testdata/golden/README.md",
-        "https://github.com/jwmcglynn/donner/issues/1176"
-      ],
-      "removal_criteria": "Switch to an unchanged-input reference with complete emoji clusters at the independently verified baselines and ordinary limits.",
-      "reference_provenance": "Independent resvg v0.47 with explicit cluster spans and bundled Noto Color Emoji.",
-      "max_threshold": 0.1,
-      "max_pixels": 100,
-      "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png"
-      }
-    },
-    {
-      "id": "emoji-bitmap",
-      "paths": [
+        "text/text/compound-emojis-and-coordinates-list.svg",
         "text/text/compound-emojis.svg",
         "text/text/emojis.svg"
       ],
       "kinds": [
-        "threshold"
+        "shared_golden"
       ],
-      "classification": "accepted-rasterization-difference",
-      "disposition": "Keep full text and the independently reproduced image sampling allowance.",
+      "classification": "reference-disagreement",
+      "disposition": "Compare with Donner renderings: the resvg renders match the glyphs and shift the vertical guide 1/8 px right of its exact coverage.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
-        "third_party/resvg-test-suite/BUILD.bazel",
-        "https://github.com/jwmcglynn/donner/pull/2406"
+        "donner/svg/renderer/tests/RendererRegression_tests.cc",
+        "https://github.com/jwmcglynn/donner/issues/1176"
       ],
-      "removal_criteria": "Remove the allowance after the pinned bitmap font rendering agrees at ordinary threshold across supported CPU builds.",
-      "reference_provenance": "Official resvg v0.49 render of unchanged corpus SVG with the bundled Noto Color Emoji face.",
-      "max_threshold": 0.1,
-      "max_pixels": 100
+      "removal_criteria": "Switch to an independent reference that draws the guide at its exact coverage and places the emoji clusters at the codepoint-indexed baselines.",
+      "reference_provenance": "Donner full-text CPU renderings; outside the guide no premultiplied channel differs from resvg v0.49 (two rows) and v0.47 (coordinate list) by more than 2 levels.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references_by_fixture": {
+        "text/text/compound-emojis-and-coordinates-list.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-compound-emojis-and-coordinates-list.png"
+        },
+        "text/text/compound-emojis.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-compound-emojis.png"
+        },
+        "text/text/emojis.svg": {
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-emojis.png"
+        }
+      }
     },
     {
       "id": "path-boundary-coverage",

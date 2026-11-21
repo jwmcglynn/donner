@@ -6651,7 +6651,8 @@ SVGDocument BitmapGlyphDocument(std::string_view body) {
  * font reports for that glyph. The placement is composed here, independently of the renderers:
  * the glyph origin comes from the text layout, and the strike's bearings and scale from the font,
  * so each image is `translate(origin) rotate(r) translate(-origin)` applied after
- * `translate(origin.x + bearingX, origin.y - bearingY) scale(strikeScale)`.
+ * `translate(origin.x + bearingX, origin.y - bearingY) scale(strikeScale)`, resampled as an image
+ * with `image-rendering: auto` is.
  */
 std::vector<std::string> BitmapGlyphImages(std::string_view body) {
   SVGDocument document = BitmapGlyphDocument(body);
@@ -6683,7 +6684,7 @@ std::vector<std::string> BitmapGlyphImages(std::string_view body) {
           bitmap->rgbaPixels, bitmap->width, bitmap->height);
       std::ostringstream image;
       image << std::setprecision(17) << "<image width='" << bitmap->width << "' height='"
-            << bitmap->height << "' preserveAspectRatio='none' image-rendering='smooth' "
+            << bitmap->height << "' preserveAspectRatio='none' image-rendering='auto' "
             << "transform='translate(" << glyph.xPosition << " " << glyph.yPosition << ") rotate("
             << glyph.rotateDegrees << ") translate(" << -glyph.xPosition << " " << -glyph.yPosition
             << ") translate(" << glyph.xPosition + bitmap->bearingX << " "
@@ -6758,7 +6759,8 @@ TEST_F(RendererRegressionTests, BitmapGlyphUnderSpanOpacityMatchesSoftwareRender
 
 // Color emoji in the vendored Noto Color Emoji are bitmap strikes. Each scene renders the emoji
 // text and, on the same renderer, the same strikes drawn as `<image>` elements placed from the
-// font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside.
+// font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside. Both the
+// active renderer and the software renderer must draw them identically.
 TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
   DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   struct Scene {
@@ -6784,6 +6786,10 @@ TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
   const std::vector<Scene> scenes = {
       {"scaled_strike",
        R"svg(<text id="emoji" x="12" y="120" font-family="Noto Color Emoji" font-size="48">&#x1F600;&#x1F601;&#x1F602;</text>)svg",
+       all},
+      // Well above the 109 ppem strike, so the strike is upscaled.
+      {"upscaled_strike",
+       R"svg(<text id="emoji" x="8" y="160" font-family="Noto Color Emoji" font-size="140">&#x1F600;</text>)svg",
        all},
       {"rotated_under_transform",
        R"svg(<g transform="translate(15 9) scale(1.25 0.75)"><text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="40" rotate="30 -15">&#x1F600;&#x1F923;</text></g>)svg",
@@ -6816,13 +6822,15 @@ TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
     SCOPED_TRACE(scene.label);
     const std::vector<std::string> images = BitmapGlyphImages(scene.text);
     ASSERT_THAT(images, testing::Not(testing::IsEmpty()));
-    const RendererBitmap actual = RenderTextOpacityCase(scene.text);
-    editor::tests::CompareBitmapToBitmap(actual, RenderTextOpacityCase(scene.reference(images)),
-                                         "bitmap_glyph_" + std::string(scene.label),
-                                         editor::tests::PixelmatchIdentityParams());
     const std::string withoutEmoji = scene.reference({});
     for (const RendererBackend backend : {ActiveRendererBackend(), RendererBackend::TinySkia}) {
       SCOPED_TRACE(RendererBackendName(backend));
+      editor::tests::CompareBitmapToBitmap(RenderBitmapGlyphScene(scene.text, backend),
+                                           RenderBitmapGlyphScene(scene.reference(images), backend),
+                                           "bitmap_glyph_" +
+                                               std::string(RendererBackendName(backend)) + "_" +
+                                               std::string(scene.label),
+                                           editor::tests::PixelmatchIdentityParams());
       EXPECT_THAT(IdentityMismatchCount(RenderBitmapGlyphScene(scene.text, backend),
                                         RenderBitmapGlyphScene(withoutEmoji, backend),
                                         "bitmap_glyph_removed_" + std::string(scene.label)),

@@ -3729,8 +3729,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
           const Transform2d deviceFromBitmap =
               ComputeDeviceFromBitmapGlyph(glyph, *bitmap, deviceFromLocalTransform_);
-          tiny_skia::PixmapPaint paint =
-              makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
+          // No specification governs resampling a glyph strike: `image-rendering` applies to
+          // images, not glyphs. Strikes use the kernel of an `<image>` with the default
+          // `image-rendering: auto`, a fixed choice that keeps glyphs independent of an image
+          // property they may inherit; it also matches resvg's color emoji renders.
+          tiny_skia::PixmapPaint paint = makePixmapPaint(
+              currentPixmap(), FilterQualityForImageRendering(ImageRendering::Auto));
           paint.opacity = NarrowToFloat(spanOpacity);
           paint.blendMode = tiny_skia::BlendMode::SourceOver;
 

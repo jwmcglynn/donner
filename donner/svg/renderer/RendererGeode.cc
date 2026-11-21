@@ -4739,10 +4739,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         text_engine_detail::computeLocalFromBitmapGlyph(glyph, bitmap) * deviceFromLocalTransform;
     const Box2d bitmapRect(Vector2d::Zero(), Vector2d(bitmap.width, bitmap.height));
     encoder->setTransform(deviceFromBitmap);
-    // tiny-skia draws bitmap glyphs with bilinear filtering.
+    // No specification governs resampling a glyph strike: `image-rendering` applies to images,
+    // not glyphs. Strikes use the kernel of an `<image>` with the default `image-rendering:
+    // auto`, as the software renderer does.
     encoder->drawPremultipliedImage(
         ImageResource{std::move(bitmap.rgbaPixels), bitmap.width, bitmap.height}, bitmapRect,
-        opacity, ImageRendering::Smooth);
+        opacity, ImageRendering::Auto);
     encoder->setTransform(deviceFromLocalTransform);
   }
 #endif  // DONNER_TEXT_ENABLED

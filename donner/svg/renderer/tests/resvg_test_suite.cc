@@ -206,6 +206,17 @@ ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path) {
       "Donner's glyph ink equals the outline's area (GlyphInkAreaTest)");
 }
 
+/// Params for a color emoji row compared against the Donner golden at \p path (see
+/// testdata/golden/README.md): its resvg reference matches the glyphs and draws the 1.25 px
+/// vertical guide 1/8 px right of its exact coverage. The params keep a view of \p path, so it must
+/// be a string literal.
+ImageComparisonParams EmojiGuideGolden(std::string_view path) {
+  return Params::WithGoldenOverride(
+             path, kDefaultThreshold,
+             "Reference disagreement: the vertical guide is drawn 1/8 px right of its coverage")
+      .onlyTextFull();
+}
+
 /// The CPU comparison of a gradient-stroked text row uses \p firefoxPath; the Geode comparison uses
 /// \p geodePath, Geode's own rendering, so the Geode lane is a regression check against itself
 /// while the CPU lane keeps the independent Firefox comparison. Firefox, like the CPU renderer,
@@ -1502,20 +1513,13 @@ INSTANTIATE_TEST_SUITE_P(
                     {"complex-graphemes.svg",
                      Params().onlyTextFull().withReason("Combining mark needs HarfBuzz")},
                     {"compound-emojis-and-coordinates-list.svg",
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
-                                                "resvg-compound-emojis-and-coordinates-list.png",
-                                                0.1f)
-                         .onlyTextFull()
-                         .withReason(
-                             "Codepoint positioning reference preserves complete emoji clusters")},
-                    // resvg v0.49.0 with the bundled Noto Color Emoji face at 500x500.
-                    // Glyph placement agrees; bitmap resampling requires a higher threshold.
-                    {"compound-emojis.svg", Params::WithThreshold(0.10f, kDefaultMismatchedPixels,
-                                                                  "Color emoji bitmap resampling")
-                                                .onlyTextFull()},
-                    {"emojis.svg", Params::WithThreshold(0.10f, kDefaultMismatchedPixels,
-                                                         "Color emoji bitmap resampling")
-                                       .onlyTextFull()},
+                     EmojiGuideGolden("donner/svg/renderer/testdata/golden/"
+                                      "donner-compound-emojis-and-coordinates-list.png")},
+                    {"compound-emojis.svg",
+                     EmojiGuideGolden(
+                         "donner/svg/renderer/testdata/golden/donner-compound-emojis.png")},
+                    {"emojis.svg",
+                     EmojiGuideGolden("donner/svg/renderer/testdata/golden/donner-emojis.png")},
                     {"fill-rule=evenodd.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
                     {"rotate-on-Arabic.svg",
