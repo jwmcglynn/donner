@@ -207,11 +207,12 @@ OwnerDispatchProbeProgress ReadGpuOwnerDispatchProbeForTesting() {
 
 OwnerWaitProbeResult ExerciseGpuOwnerLibcWaitForTesting(
     const std::shared_ptr<gpu::browser::BrowserDevice>& device) {
-  if (!device || !gpu::browser::IsBrowserGpuOwnerThread() ||
-      gpu::browser::IsBrowserGpuOwnerDispatchActive() || gOwnerWaitProbe) {
+  if (!gpu::browser::IsBrowserGpuOwnerThread()) {
+    FatalAbort("owner-wait-probe.off-owner");
+  }
+  if (!device || gpu::browser::IsBrowserGpuOwnerDispatchActive() || gOwnerWaitProbe) {
     FatalAbort("owner-wait-probe.preconditions",
                {{"device", device != nullptr},
-                {"isOwner", gpu::browser::IsBrowserGpuOwnerThread()},
                 {"dispatchActive", gpu::browser::IsBrowserGpuOwnerDispatchActive()},
                 {"probeRunning", gOwnerWaitProbe != nullptr}});
   }

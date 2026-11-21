@@ -117,6 +117,14 @@ test("a hook installed before this one still receives the abort reason", () => {
   assert.equal(context.__donnerAbortRecords.length, 2);
 });
 
+test("a worker bounds the reason before forwarding and logging it", () => {
+  const { context, posted, errors } = loadHook({ pthread: true });
+  const prefix = "x".repeat(1000);
+  context.Module.onAbort(prefix + "discarded suffix");
+  assert.equal(posted[0].args[0].what, prefix);
+  assert.ok(!errors[0].includes("discarded suffix"));
+});
+
 test("the hooks never throw and keep at most eight page records", () => {
   const { context, listeners } = loadHook({ pthread: false });
   for (let index = 0; index < 10; ++index) context.Module.onAbort(`reason ${index}`);

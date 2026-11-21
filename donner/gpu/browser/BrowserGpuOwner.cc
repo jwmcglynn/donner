@@ -493,10 +493,12 @@ bool IsBrowserGpuOwnerDispatchActive() {
 
 void SetBrowserGpuOwnerCanvasFrameActive([[maybe_unused]] bool active) {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gCanvasFrameActive == active || (active && gProcessingBatch)) {
-    FatalAbort("gpu-owner.canvas-frame", {{"isOwner", IsBrowserGpuOwnerThread()},
-                                          {"stopped", gStopped.load()},
-                                          {"active", active},
+  if (!IsBrowserGpuOwnerThread()) {
+    FatalAbort("gpu-owner.canvas-frame-off-owner",
+               {{"stopped", gStopped.load()}, {"active", active}});
+  }
+  if (gCanvasFrameActive == active || (active && gProcessingBatch)) {
+    FatalAbort("gpu-owner.canvas-frame", {{"active", active},
                                           {"wasActive", gCanvasFrameActive},
                                           {"processingBatch", gProcessingBatch}});
   }
@@ -516,11 +518,12 @@ void SetBrowserGpuOwnerCanvasFrameActive([[maybe_unused]] bool active) {
 
 void StopBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gCanvasFrameActive || !gReady.empty() ||
+  if (!IsBrowserGpuOwnerThread()) {
+    FatalAbort("gpu-owner.stop-off-owner", {{"stopped", gStopped.load()}});
+  }
+  if (gProcessingBatch || gCanvasFrameActive || !gReady.empty() ||
       gOwnerWaitStats[kRequested].load() != gOwnerWaitStats[kFinished].load()) {
-    FatalAbort("gpu-owner.stop", {{"isOwner", IsBrowserGpuOwnerThread()},
-                                  {"stopped", gStopped.load()},
-                                  {"processingBatch", gProcessingBatch},
+    FatalAbort("gpu-owner.stop", {{"processingBatch", gProcessingBatch},
                                   {"canvasFrameActive", gCanvasFrameActive},
                                   {"readyEmpty", gReady.empty()},
                                   {"requested", gOwnerWaitStats[kRequested].load()},

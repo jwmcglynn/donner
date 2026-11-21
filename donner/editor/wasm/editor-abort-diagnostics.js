@@ -8,6 +8,7 @@
 // semicolon, which a leading parenthesis would call.
 {
   const kPrefix = "[donner-fatal] ";
+  const kMaxReasonChars = 1000;
   const kMaxStackChars = 4000;
   const kMaxRecords = 8;
   // Marks a record a worker forwarded; the runtime passes only the reason.
@@ -30,7 +31,7 @@
     const record = {
       "kind": kind,
       "thread": threadRole(),
-      "what": String(what),
+      "what": String(what).slice(0, kMaxReasonChars),
       "stack": String(stack || "").slice(0, kMaxStackChars),
       "atMs": performance.timeOrigin + performance.now(),
     };
