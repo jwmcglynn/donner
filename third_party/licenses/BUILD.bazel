@@ -5,10 +5,8 @@ Provides one `license()` target per embedded third-party component plus a
 application authors consume to obtain a legally-sufficient attribution file
 they can embed into their binary (e.g. via `cc_embed_data`).
 
-Only dependencies whose upstream BUILD files do not already declare a
-`license()` target are redeclared here. `libpng` and `zlib` ship
-their own `license()` in their module overlays, so we reference them
-directly in the variant lists below.
+The NOTICE rules consume rules_license providers. Dependencies using another
+metadata provider are represented here with their upstream license text.
 
 Keep the variant lists below in sync with
 `tools/generate_build_report.py`'s `_DEPENDENCY_VARIANTS`.
@@ -57,6 +55,22 @@ license(
     license_kinds = ["@rules_license//licenses/spdx:BSD-3-Clause"],
     license_text = "@tiny-skia-cpp//:LICENSE",
     package_url = "https://github.com/jwmcglynn/tiny-skia-cpp",
+)
+
+# The libpng and zlib overlays export the upstream license files. Their newer
+# license rules use package_metadata, which has a different provider.
+license(
+    name = "libpng",
+    package_name = "libpng",
+    license_kinds = ["@rules_license//licenses/spdx:libpng-2.0"],
+    license_text = "@libpng//:LICENSE",
+)
+
+license(
+    name = "zlib",
+    package_name = "zlib",
+    license_kinds = ["@rules_license//licenses/spdx:Zlib"],
+    license_text = "@zlib//:LICENSE",
 )
 
 # Brotli ships `@brotli//:LICENSE` as an exported source file but no
@@ -256,8 +270,8 @@ DEFAULT_LICENSES = [
     ":public-sans",
     ":stb",
     ":tiny-skia-cpp",
-    "@libpng//:license",
-    "@zlib//:license",
+    ":libpng",
+    ":zlib",
 ]
 
 TEXT_FULL_LICENSES = DEFAULT_LICENSES + [
@@ -290,8 +304,8 @@ ALL_KNOWN_LICENSES = [
     ":generic_sans_faces",
     ":glad",
     ":vulkan_headers",
-    "@libpng//:license",
-    "@zlib//:license",
+    ":libpng",
+    ":zlib",
 ]
 
 GEODE_EDITOR_LICENSES = [
