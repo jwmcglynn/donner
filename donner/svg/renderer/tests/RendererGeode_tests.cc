@@ -684,6 +684,33 @@ TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
   EXPECT_THAT(device->counters()->submits, testing::Eq(0u));
 }
 
+TEST_F(RendererGeodeTest, TransformedShadowMergeAbandonsWhenItsEncoderCannotClose) {
+  using namespace components;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  FilterGraph graph;
+  graph.nodes = {FilterNode{.primitive = filter_primitive::DropShadow{
+                                .dx = 10, .dy = 6, .stdDeviationX = 3, .stdDeviationY = 2}}};
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({8, 8}, {38, 40}), StrokeParams{});
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const uint64_t submitsBefore = device->counters()->submits;
+  // The local shadow pass closes successfully. Fail the close of the projection pass.
+  renderer.injectFrameEncoderCloseFailureForTesting(/*successfulCloses=*/1);
+  renderer.popFilterLayer();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Gt(0u));
+  renderer.endFrame();
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  EXPECT_TRUE(renderer.takeSnapshot().empty());
+}
+
 TEST_F(RendererGeodeTest, TransformedResampleArenaRefusalSkipsFilterAndRecovers) {
   using namespace components;
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();

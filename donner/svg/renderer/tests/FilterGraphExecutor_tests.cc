@@ -2955,6 +2955,52 @@ TEST(TransformedBlurPathTest, BudgetFallbackAdmitsOnlyLinearChains) {
               testing::IsFalse());
 }
 
+TEST(TransformedBlurPathTest, OnlyMaskedFloodIsABlurredShadow) {
+  using namespace components;
+  using namespace filter_primitive;
+  const FilterInput source(FilterStandardInput::SourceGraphic);
+  const FilterInput alpha(FilterStandardInput::SourceAlpha);
+  const FilterInput blurredAlpha(FilterInput::Named{RcString("a")});
+  const FilterNode blur = BlurPathNode(GaussianBlur{2.0, 2.0}, {alpha}, RcString("a"));
+  const FilterNode flood = BlurPathNode(Flood{});
+  const FilterNode masked =
+      BlurPathNode(Composite{Composite::Operator::In}, {FilterInput(), blurredAlpha});
+  const FilterNode merge = BlurPathNode(Merge{}, {FilterInput(), source});
+  Transform2d deviceFromFilter;
+  deviceFromFilter.data[2] = 0.5;
+
+  FilterGraph graph;
+  graph.nodes = {blur, flood, merge};
+  EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
+  graph.nodes = {blur, flood, masked, merge};
+  EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter),
+              testing::Optional(FilterStandardInput::SourceGraphic));
+  graph.nodes.back().inputs = {source, FilterInput()};
+  EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
+}
+
+TEST(TransformedBlurPathTest, ShadowColorRejectsUncapturedStandardInputs) {
+  using namespace components;
+  using namespace filter_primitive;
+  const FilterInput source(FilterStandardInput::SourceGraphic);
+  const FilterInput alpha(FilterStandardInput::SourceAlpha);
+  const FilterNode blur = BlurPathNode(GaussianBlur{2.0, 2.0});
+  const FilterNode merge = BlurPathNode(Merge{}, {FilterInput(), source});
+  Transform2d deviceFromFilter;
+  deviceFromFilter.data[2] = 0.5;
+  for (const auto kind :
+       {FilterStandardInput::BackgroundImage, FilterStandardInput::BackgroundAlpha,
+        FilterStandardInput::FillPaint, FilterStandardInput::StrokePaint}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    FilterGraph graph;
+    graph.nodes = {BlurPathNode(Composite{Composite::Operator::In}, {FilterInput(kind), alpha}),
+                   blur, merge};
+    EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
+    graph.nodes.front().inputs = {alpha, FilterInput(kind)};
+    EXPECT_THAT(TransformedShadowForeground(graph, deviceFromFilter), testing::Eq(std::nullopt));
+  }
+}
+
 TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
   using namespace components;
   FilterGraph graph;

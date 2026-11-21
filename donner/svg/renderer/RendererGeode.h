@@ -611,6 +611,8 @@ public:
   void injectDeviceLossForTesting();
 
   /// Inject transformed-filter suspension and following encoder-restoration failure once.
+  void injectFilterLocalRasterAllocationFailureForTesting() override;
+
   void injectFilterFrameSuspensionAndRestoreFailureForTesting();
 
   /// Refuse the next active encoder arena upload without touching the GPU buffer.

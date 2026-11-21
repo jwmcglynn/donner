@@ -30,8 +30,9 @@ namespace donner::svg {
  * @param backgroundInput Optional `BackgroundImage` input pixmap with \p pixmap's dimensions, or
  *   nullptr when the graph reads no backdrop. `BackgroundImage` and `BackgroundAlpha` read
  *   transparent black without it.
+ * @return Whether the graph executed successfully.
  */
-void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
+bool ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transform2d& deviceFromFilter,
                               const std::optional<Box2d>& filterRegion,
                               bool clipSourceToFilterRegion = false,

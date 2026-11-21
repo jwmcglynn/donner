@@ -57,6 +57,8 @@ struct RendererTinySkiaFrameCounters {
   uint64_t limitedStrokes = 0;
 };
 
+struct TransformedShadowGraphs;
+
 /**
  * Rendering backend using tiny-skia-cpp.
  *
@@ -272,6 +274,10 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
+  void injectFilterLocalRasterAllocationFailureForTesting() override {
+    failNextLocalFilterRasterAllocationForTesting_ = true;
+  }
+
   [[nodiscard]] RendererResourceStats resourceStats() const override;
   [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
   void setMaximumGlyphs(std::size_t maximumGlyphs) override;
@@ -514,6 +520,11 @@ private:
       const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
       const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight);
   bool initializeFilterSurface(SurfaceFrame& frame, const FilterAdmission& admission);
+  bool assembleTransformedShadow(SurfaceFrame& frame, tiny_skia::Pixmap& localPixmap,
+                                 const TransformedShadowGraphs& graphs,
+                                 const Transform2d& localFromFilter, const Box2d& localFilterRegion,
+                                 const Transform2d& deviceFromLocal);
+  void drawFilterCapture(const SurfaceFrame& frame);
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
   /// Forward unfiltered paint captures to containing stages before executing this stage.
@@ -634,6 +645,7 @@ private:
   std::shared_ptr<RendererTextMaterializationBudget> textMaterializationBudget_ =
       std::make_shared<RendererTextMaterializationBudget>();
   bool ownsTextMaterializationBudget_ = true;
+  bool failNextLocalFilterRasterAllocationForTesting_ = false;
   std::size_t frameResourceScopeDepth_ = 0;
   std::shared_ptr<DashedPathWorkBudget> dashedPathWorkBudget_;
   /// Most outline points one stroke expansion may emit; a stroke past it rejects the draw budget.

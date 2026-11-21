@@ -808,7 +808,7 @@ tiny_skia::filter::GraphNode ConvertNode(const components::FilterNode& node,
 
 }  // namespace
 
-void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
+bool ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transform2d& deviceFromFilter,
                               const std::optional<Box2d>& filterRegion,
                               bool clipSourceToFilterRegion,
@@ -826,7 +826,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
           : components::FilterGraphFitsExecutionBudget(
                 filterGraph, pixelCount, components::FilterMemoryModel::CpuFloatNamedResults);
   if (!fitsBudget) {
-    return;
+    return false;
   }
   const bool samplesRegions =
       std::any_of(filterGraph.nodes.begin(), filterGraph.nodes.end(),
@@ -837,7 +837,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
         if (executionBudget) {
           executionBudget->reject();
         }
-        return;
+        return false;
       }
     }
   }
@@ -864,7 +864,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
     regions.recordRasterSubregion(node, RasterNodeRegion(graph.nodes.back()));
   }
 
-  tiny_skia::filter::executeFilterGraph(pixmap, graph);
+  return tiny_skia::filter::executeFilterGraph(pixmap, graph);
 }
 
 void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box2d>& filterRegion,
