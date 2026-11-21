@@ -98,7 +98,6 @@ LEGACY_GIT_COMMIT_PINS = {
 # digest is missing here was added or changed after the review, which this test rejects. Keep
 # this set paired with the active entries: delete its digest when retiring a pin.
 REVIEWED_LEGACY_PIN_DIGESTS = frozenset({
-    "00f2be3717e043f6027cbc15859850cb9a18778482660fab2f90521c6f87bba5",
     "50aec4cd196a494b72acc67da399119ef2ca77444c7799b6cff38acdbc83532f",
     "64ac4c7c678752a5c4a3a7a357ca3dc2f43abd7e0a6704c85da429bac3a37200",
     "936153b5d9f4423c45408fd82747e8c28d8e6801a73d1c7337f3bc7935a311fd",
