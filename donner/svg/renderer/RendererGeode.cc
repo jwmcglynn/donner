@@ -3431,7 +3431,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         PlanGeodeFilter(graphs.shadow, localRegion, localFromFilter, localBuffer, *filterEngine);
     const GeodeFilterPlan merge = PlanGeodeFilter(graphs.merge, frame.filterRegion,
                                                   bufferFromFilter, deviceBuffer, *filterEngine);
-    if (!shadow.fullExecutionFits || !merge.fullExecutionFits) {
+    if (!shadow.fullExecutionFits || !merge.fullExecutionFits || !shadow.costKnown ||
+        !merge.costKnown) {
       return std::nullopt;
     }
 
@@ -3530,6 +3531,54 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         kWholeTextureUv, 1.0, /*pixelated=*/true,
         /*sourceIsPremultiplied=*/true);
     syncTransform();
+  }
+
+  void beginFilterComposite(const FilterStackFrame& frame) {
+    target = aliasOf(frame.savedTarget);
+    auto compositeEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            frame.savedTarget, targetExtent(), *frameGpuEncoder);
+    configurePathEncoder(*compositeEncoder);
+    compositeEncoder->setLoadPreserve();
+    replaceActiveEncoder(std::move(compositeEncoder));
+    updateEncoderScissor();
+  }
+
+  TransformedFilterResult compositeSharpShadow(FilterStackFrame& frame, SharpShadowPass& sharp,
+                                               geode::FilterExecutionResult localFiltered,
+                                               gpu::Texture localTexture,
+                                               const gpu::TextureDescriptor& localDesc,
+                                               const GeodeLocalRasterGeometry& geometry,
+                                               const Transform2d& bufferFromLocal,
+                                               const Transform2d& bufferFromFilter) {
+    if (localFiltered.kind != geode::FilterExecutionResult::Kind::Output) {
+      releaseSharpShadow(sharp);
+      releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
+      releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
+      return TransformedFilterResult::NotApplicable;
+    }
+
+    auto merged = mergeTransformedShadow(frame, sharp, localFiltered.texture, geometry,
+                                         bufferFromLocal, bufferFromFilter);
+    if (!merged) {
+      retainTextureAfterAbandonedFrame(std::move(localFiltered.texture), localFiltered.desc);
+      retainTextureAfterAbandonedFrame(std::move(localTexture), localDesc);
+      retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      releaseSharpShadow(sharp);
+      return TransformedFilterResult::FrameAbandoned;
+    }
+
+    releaseSharpShadow(sharp);
+    releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
+    releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
+    if (merged->kind != geode::FilterExecutionResult::Kind::Output) {
+      return TransformedFilterResult::NotApplicable;
+    }
+    beginFilterComposite(frame);
+    drawDeviceFilterOutput(frame, merged->texture, merged->desc);
+    releaseTextureAtFrameEnd(std::move(merged->texture), merged->desc);
+    return TransformedFilterResult::Composited;
   }
 
   TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
@@ -3642,44 +3691,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
         Transform2d::Translate(geometry->paddedRegion.topLeft.x, geometry->paddedRegion.topLeft.y) *
         frame.deviceFromFilter;
-    std::optional<geode::FilterExecutionResult> merged;
     if (sharp) {
-      if (localFiltered.kind == geode::FilterExecutionResult::Kind::Output) {
-        merged = mergeTransformedShadow(frame, *sharp, localFiltered.texture, *geometry,
-                                        deviceFromLocal * bufferFromDevice, bufferFromFilter);
-      } else {
-        releaseSharpShadow(*sharp);
-        releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
-        releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
-        return TransformedFilterResult::NotApplicable;
-      }
-      if (!merged) {
-        retainTextureAfterAbandonedFrame(std::move(localFiltered.texture), localFiltered.desc);
-        retainTextureAfterAbandonedFrame(std::move(localTexture), localDesc);
-        retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
-        abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
-        releaseSharpShadow(*sharp);
-        return TransformedFilterResult::FrameAbandoned;
-      }
-      releaseSharpShadow(*sharp);
-      if (merged->kind != geode::FilterExecutionResult::Kind::Output) {
-        releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
-        releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
-        return TransformedFilterResult::NotApplicable;
-      }
+      return compositeSharpShadow(frame, *sharp, std::move(localFiltered), std::move(localTexture),
+                                  localDesc, *geometry, deviceFromLocal * bufferFromDevice,
+                                  bufferFromFilter);
     }
-    target = aliasOf(frame.savedTarget);
-    auto compositeEncoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            frame.savedTarget, targetExtent(), *frameGpuEncoder);
-    configurePathEncoder(*compositeEncoder);
-    compositeEncoder->setLoadPreserve();
-    replaceActiveEncoder(std::move(compositeEncoder));
-    updateEncoderScissor();
-    if (merged) {
-      drawDeviceFilterOutput(frame, merged->texture, merged->desc);
-      releaseTextureAtFrameEnd(std::move(merged->texture), merged->desc);
-    } else if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
+    beginFilterComposite(frame);
+    if (const gpu::Texture* composited = filterOutput(localFiltered, localTexture)) {
       drawLocalRasterComposite(*encoder, *composited, *geometry, deviceFromLocal);
     }
     releaseTextureAtFrameEnd(std::move(localFiltered.texture), localFiltered.desc);
@@ -7896,18 +7914,7 @@ void RendererGeode::popFilterLayer() {
   const gpu::Texture* filteredTexture = Impl::filterOutput(filtered, frame.layerTexture);
   const gpu::TextureDescriptor& filteredDesc = Impl::filterOutputDesc(filtered, frame.layerDesc);
 
-  // Restore outer target and create a fresh encoder that preserves its
-  // existing contents. Composite the filtered texture back with full
-  // opacity (filter results are already premultiplied).
-  impl_->target = Impl::aliasOf(frame.savedTarget);
-  const gpu::Extent2d outerExtent = impl_->targetExtent();
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, outerExtent, *impl_->frameGpuEncoder);
-  impl_->configurePathEncoder(*newEncoder);
-  newEncoder->setLoadPreserve();
-  impl_->replaceActiveEncoder(std::move(newEncoder));
-  impl_->updateEncoderScissor();
+  impl_->beginFilterComposite(frame);
   if (filteredTexture == nullptr) {
     impl_->filterExecutionBudget->release(frame.filterReservation);
     impl_->releaseTextureAtFrameEnd(std::move(filtered.texture), filtered.desc);

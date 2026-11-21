@@ -1274,6 +1274,43 @@ TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSour
   }
 }
 
+TEST_F(RendererRegressionTests, TransformedShadowOverlapKeepsTheMergeColorSpace) {
+  constexpr std::string_view kContent =
+      R"svg(<rect x="8" y="8" width="48" height="48" fill="red" fill-opacity="0.5" filter="url(#f)"/>)svg";
+  for (const std::string_view colorSpace : {"linearRGB", "sRGB"}) {
+    SCOPED_TRACE(colorSpace);
+    const std::string interpolation =
+        " color-interpolation-filters=\"" + std::string(colorSpace) + "\"";
+    const std::string drop =
+        R"svg(<feDropShadow dx="3" dy="5" stdDeviation="3 2" flood-color="blue")svg" +
+        interpolation + "/>";
+    const std::string coloredMerge =
+        R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 2"/>
+              <feOffset dx="3" dy="5" result="offset"/>
+              <feFlood flood-color="blue"/>
+              <feComposite in2="offset" operator="in" result="shadow"/>
+              <feMerge)svg" +
+        interpolation +
+        R"svg(><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>)svg";
+    const auto render = [&](std::string_view primitives, std::string_view transform) {
+      return RenderTransformedFilterScene("-18 -18 130 110", primitives, transform, kContent,
+                                          Vector2i(112, 96));
+    };
+    // Well inside both shapes, the blur's input is constant. The ordinary device graph
+    // is therefore an independent reference for composition in the specified color space.
+    const RendererBitmap expected =
+        editor::tests::CropBitmap(render(drop, "translate(0)"), Vector2i(32, 32), Vector2i(4, 4));
+    ExpectVisibleBitmap(expected, "shadow_overlap_reference_visible");
+    for (const std::string_view primitives :
+         {std::string_view(drop), std::string_view(coloredMerge)}) {
+      const RendererBitmap actual = editor::tests::CropBitmap(
+          render(primitives, "matrix(1 0 0.5 1 0 0)"), Vector2i(48, 32), Vector2i(4, 4));
+      editor::tests::CompareBitmapToBitmap(actual, expected, "transformed_shadow_overlap",
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
 // Under a skew a blur keeps its user-space shape by running on a raster aligned with the filter's
 // axes. A blur read through a named result and a merge, or of SourceAlpha, must take the same path
 // as the plain blur: merging one input reproduces it, and SourceAlpha of an opaque rect is the

@@ -58,6 +58,8 @@ struct RendererTinySkiaFrameCounters {
   uint64_t limitedStrokes = 0;
 };
 
+struct TransformedShadowGraphs;
+
 /**
  * Rendering backend using tiny-skia-cpp.
  *
@@ -67,8 +69,6 @@ struct RendererTinySkiaFrameCounters {
  * text; filters and text are compiled in when the build enables them, which it
  * does by default.
  */
-struct TransformedShadowGraphs;
-
 class RendererTinySkia : public RendererInterface {
 public:
   /**

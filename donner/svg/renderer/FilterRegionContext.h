@@ -398,7 +398,8 @@ inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
   return prior.has_value() && blurred[*prior];
 }
 
-/// Whether a node fills the shadow color or masks a flood with blurred alpha.
+/// Whether \p node fills the shadow color or masks a flood with blurred alpha.
+/// @param node Filter primitive.
 inline bool IsShadowColorNode(const components::FilterNode& node) {
   using namespace components;
   using namespace filter_primitive;
@@ -411,16 +412,25 @@ inline bool IsShadowColorNode(const components::FilterNode& node) {
 }
 
 /// Whether the color input of an In composite is a flood and its mask was blurred.
+/// @param graph Filter graph. @param blurred Per-node results so far. @param index Composite node.
 inline bool IsBlurredShadowColor(const components::FilterGraph& graph,
                                  const std::vector<bool>& blurred, size_t index) {
-  const auto* composite =
-      std::get_if<components::filter_primitive::Composite>(&graph.nodes[index].primitive);
-  if (!composite || composite->op != components::filter_primitive::Composite::Operator::In) {
+  using namespace components;
+  const FilterNode& node = graph.nodes[index];
+  const auto* composite = std::get_if<filter_primitive::Composite>(&node.primitive);
+  if (!composite || composite->op != filter_primitive::Composite::Operator::In) {
     return false;
   }
-  const components::FilterNode* color = FilterFirstInputNode(graph, index);
-  return color && std::holds_alternative<components::filter_primitive::Flood>(color->primitive) &&
-         FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(graph.nodes[index], 1), index);
+  const FilterInput color = FilterInputOrDefault(node, 0);
+  std::optional<size_t> colorIndex;
+  if (const auto* name = std::get_if<FilterInput::Named>(&color.value)) {
+    colorIndex = PrecedingResultIndex(graph, index, name->name);
+  } else if (index > 0 && std::holds_alternative<FilterInput::Previous>(color.value)) {
+    colorIndex = index - 1;
+  }
+  return colorIndex &&
+         std::holds_alternative<filter_primitive::Flood>(graph.nodes[*colorIndex].primitive) &&
+         FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(node, 1), index);
 }
 
 /**
@@ -439,8 +449,10 @@ inline bool FilterOutputIsBlurred(const components::FilterGraph& graph, const Ve
   std::vector<bool> blurred(graph.nodes.size(), false);
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     const components::FilterNode& node = graph.nodes[index];
+    const bool omitForeground =
+        splitShadow && index + 1 == graph.nodes.size() && !node.inputs.empty();
     const size_t slots = std::holds_alternative<components::filter_primitive::Merge>(node.primitive)
-                             ? node.inputs.size() - (splitShadow && index + 1 == graph.nodes.size())
+                             ? node.inputs.size() - static_cast<size_t>(omitForeground)
                              : std::max<size_t>(FilterInputSlotCount(node), 1);
     bool all = true;
     for (size_t slot = 0; slot < slots; ++slot) {
@@ -529,6 +541,7 @@ inline bool ShouldUseTransformedBlurPath(const components::FilterGraph& graph,
 }
 
 /// Identify the sharp foreground of a transformed drop shadow or shadow merge.
+/// @param graph Filter graph. @param deviceFromFilter Filter user space to device pixels.
 inline std::optional<components::FilterStandardInput> TransformedShadowForeground(
     const components::FilterGraph& graph, const Transform2d& deviceFromFilter) {
   using namespace components;
@@ -575,6 +588,7 @@ struct TransformedShadowGraphs {
 
 /// Split an eligible shadow into two graphs. BackgroundImage in the merge is the projected
 /// shadow texture supplied by the renderer, independent of the document's backdrop.
+/// @param graph Filter graph. @param foreground Sharp input from \ref TransformedShadowForeground.
 inline TransformedShadowGraphs SplitTransformedShadow(const components::FilterGraph& graph,
                                                       components::FilterStandardInput foreground) {
   using namespace components;
