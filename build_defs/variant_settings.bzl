@@ -46,14 +46,16 @@ def variant_neutral_default(package):
             return False
     return True
 
-# Options that select the platform a variant runs on. Libraries keep them, apart from the Darwin
-# canonicalization below.
+# Options that select or configure the platform a variant runs on. Libraries keep its linker
+# options, including caller overrides, after the Darwin transition removes the Linux runtime block.
 PLATFORM_OPTIONS = [
+    "//build_defs:linux_ci_runtime_link_dirs",
     "//build_defs:llvm_latest",
     "//command_line_option:action_env",
     "//command_line_option:extra_execution_platforms",
     "//command_line_option:host_action_env",
     "//command_line_option:host_platform",
+    "//command_line_option:linkopt",
     "//command_line_option:platforms",
     "//command_line_option:test_env",
 ]

@@ -4,6 +4,7 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
+load("//build_defs:ci_link_options_tests.bzl", "ci_link_options_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:performance_tests.bzl", "performance_tests")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_multi_transitioned_test", "fuzzer_compatible_with")
@@ -275,6 +276,15 @@ config_setting(
 config_setting(
     name = "debug_compilation",
     values = {"compilation_mode": "dbg"},
+    visibility = ["//visibility:public"],
+)
+
+ci_link_options_test(name = "ci_link_options_test")
+
+# Ordered directories added by the Linux coordinator as adjacent -L/rpath pairs.
+string_flag(
+    name = "linux_ci_runtime_link_dirs",
+    build_setting_default = "",
     visibility = ["//visibility:public"],
 )
 

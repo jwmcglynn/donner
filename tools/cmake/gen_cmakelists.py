@@ -281,7 +281,7 @@ _MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, str, str]] = {
     ),
     "rules_cc": (
         "rules_cc", "https://github.com/bazelbuild/rules_cc.git",
-        "0.2.26", "213bf5578f7e5b71a5fb941f34f50edd3f44a2c5",
+        "0.2.28", "4a09ba66f7b1426625be6db8e090c241981a95a6",
     ),
     "pixelmatch-cpp17": (
         "pixelmatch-cpp17",

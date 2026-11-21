@@ -14,6 +14,8 @@ user-local, and a policy test must not depend on them.
 
 import re
 import shlex
+import sys
+from pathlib import Path
 
 # Each command's rc sections, in the order Bazel applies them. `fetch` reads `test` options, as
 # Bazel's `--announce_rc` shows for `bazel fetch --config=ci`.
@@ -41,6 +43,34 @@ def parse(text):
             configs.setdefault(match.group(2), []).append(
                 (match.group(1), shlex.split(match.group(3), comments=True)))
     return configs
+
+
+def _paired_directories(options):
+    """Directories in a complete declaration of adjacent -L and rpath pairs."""
+    if len(options) % 2:
+        return []
+    dirs = []
+    for search, rpath in zip(options[::2], options[1::2]):
+        if not search.startswith("--linkopt=-L/"):
+            return []
+        directory = search.removeprefix("--linkopt=-L")
+        if ":" in directory or rpath != "--linkopt=-Wl,-rpath," + directory:
+            return []
+        dirs.append(directory)
+    return dirs
+
+
+def linux_runtime_link_dirs(text):
+    """Identify a single complete build:linux runtime search/rpath declaration."""
+    blocks = []
+    for line in text.replace("\\\n", "").splitlines():
+        match = _RC_LINE.match(line.lstrip())
+        if match and match.group(1, 2) == ("build", "linux"):
+            options = shlex.split(match.group(3), comments=True)
+            dirs = _paired_directories(options)
+            if dirs:
+                blocks.append(dirs)
+    return ":".join(blocks[0]) if len(blocks) == 1 else ""
 
 
 def sections(command):
@@ -133,3 +163,13 @@ def last_value(options, name):
     values = [option.split("=", 1)[1] for option in options
               if option.startswith("--%s=" % name)]
     return values[-1] if values else None
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3 or sys.argv[1] != "linux-runtime-link-dirs":
+        sys.exit("usage: bazelrc_configs.py linux-runtime-link-dirs SYSTEM_RC")
+    try:
+        rc_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        rc_text = ""
+    print(linux_runtime_link_dirs(rc_text))
