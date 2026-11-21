@@ -184,7 +184,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: >-
-            ninja-build pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
+            ninja-build binutils-gold pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
             libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
             libgl1-mesa-dev libosmesa6 clang-tidy-19 xvfb xauth
 
