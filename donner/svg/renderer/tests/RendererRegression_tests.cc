@@ -1254,6 +1254,12 @@ TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSour
       Shadow{"shadow merge", R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 2"/>
           <feOffset dx="3" dy="27" result="s"/>
           <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>)svg"},
+      Shadow{"flood masked by blurred alpha",
+             R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 2"/>
+                   <feOffset dx="3" dy="27" result="offset"/>
+                   <feFlood flood-color="black"/>
+                   <feComposite in2="offset" operator="in" result="shadow"/>
+                   <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>)svg"},
   };
   for (const std::string_view transform :
        {"translate(6 4) skewX(35)", "translate(28 4) rotate(22)"}) {

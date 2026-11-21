@@ -2508,18 +2508,15 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
       Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
       Transform2d::Translate(geometry->paddedRegion.topLeft.x, geometry->paddedRegion.topLeft.y) *
       frame.deviceFromFilter;
-  if (!frame.localRasterRequiredForBudget &&
-      ShouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter)) {
-    if (const auto foreground =
-            TransformedShadowForeground(frame.filterGraph, frame.deviceFromFilter)) {
-      if (!assembleTransformedShadow(frame, localPixmap,
-                                     SplitTransformedShadow(frame.filterGraph, *foreground),
-                                     localFromFilter, localFilterRegion, deviceFromLocal)) {
-        return false;
-      }
-      drawFilterCapture(frame);
-      return true;
+  if (const auto foreground = ApplicableTransformedShadow(frame.filterGraph, frame.deviceFromFilter,
+                                                          !frame.localRasterRequiredForBudget)) {
+    if (!assembleTransformedShadow(frame, localPixmap,
+                                   SplitTransformedShadow(frame.filterGraph, *foreground),
+                                   localFromFilter, localFilterRegion, deviceFromLocal)) {
+      return false;
     }
+    drawFilterCapture(frame);
+    return true;
   }
   // The padded local raster holds source content beyond the filter region. The filter region
   // bounds SourceGraphic, so crop it before the blur reads that padding. In this local space the

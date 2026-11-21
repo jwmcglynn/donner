@@ -540,12 +540,45 @@ inline bool ShouldUseTransformedBlurPath(const components::FilterGraph& graph,
   return hasRotation && GraphHasAnisotropicBlur(graph);
 }
 
+/// Return the standard source preserved as a sharp foreground, when \p input selects one.
+/// @param input Filter input.
+inline std::optional<components::FilterStandardInput> SharpShadowSource(
+    const components::FilterInput& input) {
+  using components::FilterStandardInput;
+  const auto* standard = std::get_if<FilterStandardInput>(&input.value);
+  if (standard && (*standard == FilterStandardInput::SourceGraphic ||
+                   *standard == FilterStandardInput::SourceAlpha)) {
+    return *standard;
+  }
+  return std::nullopt;
+}
+
+/// Return the sharp layer above the blurred input layers of a shadow merge.
+/// @param graph Filter graph with a final node. @param deviceScale Device pixels per filter unit.
+inline std::optional<components::FilterStandardInput> ShadowMergeForeground(
+    const components::FilterGraph& graph, const Vector2d& deviceScale) {
+  const auto& last = graph.nodes.back();
+  if (!std::holds_alternative<components::filter_primitive::Merge>(last.primitive) ||
+      last.inputs.size() < 2) {
+    return std::nullopt;
+  }
+  const auto foreground = SharpShadowSource(last.inputs.back());
+  if (!foreground ||
+      !std::all_of(graph.nodes.begin(), graph.nodes.end(),
+                   [](const auto& node) {
+                     return IsTransformedBlurPathNode(node) || IsShadowColorNode(node);
+                   }) ||
+      !FilterOutputIsBlurred(graph, deviceScale, /*splitShadow=*/true)) {
+    return std::nullopt;
+  }
+  return foreground;
+}
+
 /// Identify the sharp foreground of a transformed drop shadow or shadow merge.
 /// @param graph Filter graph. @param deviceFromFilter Filter user space to device pixels.
 inline std::optional<components::FilterStandardInput> TransformedShadowForeground(
     const components::FilterGraph& graph, const Transform2d& deviceFromFilter) {
   using namespace components;
-  using namespace filter_primitive;
   if (graph.nodes.empty() || graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
     return std::nullopt;
   }
@@ -553,31 +586,27 @@ inline std::optional<components::FilterStandardInput> TransformedShadowForegroun
   if (last.hasExplicitRegion() || last.hasAnimatedRegion()) {
     return std::nullopt;
   }
-  const auto source = [](const FilterInput& input) -> std::optional<FilterStandardInput> {
-    const auto* standard = std::get_if<FilterStandardInput>(&input.value);
-    return standard && (*standard == FilterStandardInput::SourceGraphic ||
-                        *standard == FilterStandardInput::SourceAlpha)
-               ? std::optional(*standard)
-               : std::nullopt;
-  };
-  if (graph.nodes.size() == 1 && std::holds_alternative<DropShadow>(last.primitive)) {
+  if (graph.nodes.size() == 1 &&
+      std::holds_alternative<filter_primitive::DropShadow>(last.primitive)) {
     const FilterInput input = FilterInputOrDefault(last, 0);
     if (std::holds_alternative<FilterInput::Previous>(input.value)) {
       return FilterStandardInput::SourceGraphic;
     }
-    return source(input);
+    return SharpShadowSource(input);
   }
-  if (!std::holds_alternative<Merge>(last.primitive) || last.inputs.size() < 2 ||
-      !std::all_of(graph.nodes.begin(), graph.nodes.end(), [](const FilterNode& node) {
-        return IsTransformedBlurPathNode(node) || IsShadowColorNode(node);
-      })) {
+  return ShadowMergeForeground(graph, FilterDeviceAxisScale(deviceFromFilter));
+}
+
+/// Return the sharp foreground when the transformed split can use the ordinary device fallback.
+/// @param graph Filter graph. @param deviceFromFilter Filter user space to device pixels.
+/// @param deviceFallbackFits Whether the device graph also fits the execution budget.
+inline std::optional<components::FilterStandardInput> ApplicableTransformedShadow(
+    const components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+    bool deviceFallbackFits) {
+  if (!deviceFallbackFits || !ShouldUseTransformedBlurPath(graph, deviceFromFilter)) {
     return std::nullopt;
   }
-  const auto foreground = source(last.inputs.back());
-  if (!foreground || !FilterOutputIsBlurred(graph, FilterDeviceAxisScale(deviceFromFilter), true)) {
-    return std::nullopt;
-  }
-  return foreground;
+  return TransformedShadowForeground(graph, deviceFromFilter);
 }
 
 /// The shadow executed on the filter-aligned raster and its merge with the untouched capture.

@@ -3581,6 +3581,79 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return TransformedFilterResult::Composited;
   }
 
+  void resampleFilterCapture(const FilterStackFrame& frame, const gpu::Texture& localTexture,
+                             const gpu::TextureDescriptor& localDesc,
+                             const Transform2d& localFromDevice, const Box2d& localRegionPixels) {
+    auto resampleEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            localTexture, localDesc.size, *frameGpuEncoder);
+    configureEncoder(*resampleEncoder);
+    if (std::exchange(failNextTransformedResampleArenaWriteForTesting, false)) {
+      resampleEncoder->injectNextArenaWriteFailureForTesting();
+    }
+    // The filter region bounds SourceGraphic, so the capture beyond it must not reach the padding
+    // the blur reads. The region is axis-aligned in this local space even when the device
+    // transform skews or rotates it; round outward like the CPU executor's source crop.
+    const auto regionX0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.x));
+    const auto regionY0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.y));
+    resampleEncoder->setScissorRect(
+        regionX0, regionY0,
+        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.x)) - regionX0,
+        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.y)) - regionY0);
+    resampleEncoder->setTransform(localFromDevice);
+    // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
+    // past the viewport's top-left corner. The local raster follows the filter region while the
+    // capture follows the device grid, so a whole-pixel device move shifts the capture under the
+    // raster; anchoring the mapping at the raster origin keeps every bilinear weight unchanged.
+    resampleEncoder->drawTextureAnchored(
+        frame.layerTexture,
+        Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
+                        -static_cast<double>(frame.filterBufferOffsetY),
+                        static_cast<double>(frame.layerDesc.size.width),
+                        static_cast<double>(frame.layerDesc.size.height)),
+        kWholeTextureUv, 1.0, /*sourceIsPremultiplied=*/true, Vector2i::Zero());
+    resampleEncoder->finish();
+    retireFinishedEncoder(std::move(resampleEncoder));
+  }
+
+  std::optional<geode::FilterExecutionResult> executeLocalRasterFilter(
+      FilterStackFrame& frame, gpu::Texture& localTexture, const gpu::TextureDescriptor& localDesc,
+      const Box2d& localFilterRegion, const Transform2d& localDeviceFromFilter,
+      SharpShadowPass* sharp) {
+    if (!suspendFrameForFilter()) {
+      if (!frameArenaWriteFailed) {
+        device->markDeviceLost("frame commands could not be submitted before filter execution");
+      }
+      retainTextureAfterAbandonedFrame(std::move(localTexture), localDesc);
+      retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
+      frame.localRasterRequiredForBudget = true;
+      if (frameGpuEncoder == nullptr && !frameArenaWriteFailed && !restoreFrameAfterFilter()) {
+        device->markDeviceLost("frame encoder could not be restored after filter suspension");
+      }
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      if (sharp) {
+        releaseSharpShadow(*sharp);
+      }
+      return std::nullopt;
+    }
+    geode::FilterExecutionResult localFiltered = filterEngine->execute(
+        sharp ? sharp->graphs.shadow : frame.filterGraph, localTexture, localDesc,
+        localFilterRegion, localDeviceFromFilter, *this, nullptr,
+        sharp ? std::optional(sharp->localPlan) : frame.localFilterPlan, this);
+    if (!restoreFrameAfterFilter()) {
+      device->markDeviceLost("frame encoder could not be restored after filter execution");
+      retainTextureWithoutCompletionProof(std::move(localFiltered.texture), localFiltered.desc);
+      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
+      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
+      if (sharp) {
+        releaseSharpShadow(*sharp);
+      }
+      return std::nullopt;
+    }
+    return localFiltered;
+  }
+
   TransformedFilterResult tryCompositeTransformedFilter(FilterStackFrame& frame) {
     const std::optional<GeodeLocalRasterGeometry> geometry = transformedFilterGeometry(frame);
     if (!geometry.has_value()) {
@@ -3611,81 +3684,23 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
     const Transform2d bufferFromFilter = frame.deviceFromFilter * bufferFromDevice;
     std::optional<SharpShadowPass> sharp;
-    if (!frame.localRasterRequiredForBudget &&
-        ShouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter)) {
-      if (const auto foreground =
-              TransformedShadowForeground(frame.filterGraph, frame.deviceFromFilter)) {
-        sharp = prepareSharpShadow(frame, *foreground, *geometry, localFilterRegion,
-                                   localDeviceFromFilter, bufferFromFilter);
-        if (!sharp) {
-          releaseTextureWithinFrame(std::move(localTexture), localDesc);
-          return TransformedFilterResult::NotApplicable;
-        }
+    if (const auto foreground = ApplicableTransformedShadow(
+            frame.filterGraph, frame.deviceFromFilter, !frame.localRasterRequiredForBudget)) {
+      sharp = prepareSharpShadow(frame, *foreground, *geometry, localFilterRegion,
+                                 localDeviceFromFilter, bufferFromFilter);
+      if (!sharp) {
+        releaseTextureWithinFrame(std::move(localTexture), localDesc);
+        return TransformedFilterResult::NotApplicable;
       }
     }
-    auto resampleEncoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            localTexture, localDesc.size, *frameGpuEncoder);
-    configureEncoder(*resampleEncoder);
-    if (std::exchange(failNextTransformedResampleArenaWriteForTesting, false)) {
-      resampleEncoder->injectNextArenaWriteFailureForTesting();
-    }
-    // The filter region bounds SourceGraphic, so the capture beyond it must not reach the padding
-    // the blur reads. The region is axis-aligned in this local space even when the device
-    // transform skews or rotates it; round outward like the CPU executor's source crop.
-    const Box2d localRegionPixels = localDeviceFromFilter.transformBox(localFilterRegion);
-    const auto regionX0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.x));
-    const auto regionY0 = static_cast<int32_t>(std::floor(localRegionPixels.topLeft.y));
-    resampleEncoder->setScissorRect(
-        regionX0, regionY0,
-        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.x)) - regionX0,
-        static_cast<int32_t>(std::ceil(localRegionPixels.bottomRight.y)) - regionY0);
-    resampleEncoder->setTransform(localFromDevice);
-    // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
-    // past the viewport's top-left corner. The local raster follows the filter region while the
-    // capture follows the device grid, so a whole-pixel device move shifts the capture under the
-    // raster; anchoring the mapping at the raster origin keeps every bilinear weight unchanged.
-    resampleEncoder->drawTextureAnchored(
-        frame.layerTexture,
-        Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
-                        -static_cast<double>(frame.filterBufferOffsetY),
-                        static_cast<double>(frame.layerDesc.size.width),
-                        static_cast<double>(frame.layerDesc.size.height)),
-        kWholeTextureUv, 1.0, /*sourceIsPremultiplied=*/true, Vector2i::Zero());
-    resampleEncoder->finish();
-    retireFinishedEncoder(std::move(resampleEncoder));
-
-    if (!suspendFrameForFilter()) {
-      if (!frameArenaWriteFailed) {
-        device->markDeviceLost("frame commands could not be submitted before filter execution");
-      }
-      retainTextureAfterAbandonedFrame(std::move(localTexture), localDesc);
-      retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
-      frame.localRasterRequiredForBudget = true;
-      if (frameGpuEncoder == nullptr && !frameArenaWriteFailed && !restoreFrameAfterFilter()) {
-        device->markDeviceLost("frame encoder could not be restored after filter suspension");
-      }
-      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
-      if (sharp) {
-        releaseSharpShadow(*sharp);
-      }
+    resampleFilterCapture(frame, localTexture, localDesc, localFromDevice,
+                          localDeviceFromFilter.transformBox(localFilterRegion));
+    auto filtered = executeLocalRasterFilter(frame, localTexture, localDesc, localFilterRegion,
+                                             localDeviceFromFilter, sharp ? &*sharp : nullptr);
+    if (!filtered) {
       return TransformedFilterResult::FrameAbandoned;
     }
-    geode::FilterExecutionResult localFiltered = filterEngine->execute(
-        sharp ? sharp->graphs.shadow : frame.filterGraph, localTexture, localDesc,
-        localFilterRegion, localDeviceFromFilter, *this, nullptr,
-        sharp ? std::optional(sharp->localPlan) : frame.localFilterPlan, this);
-    if (!restoreFrameAfterFilter()) {
-      device->markDeviceLost("frame encoder could not be restored after filter execution");
-      retainTextureWithoutCompletionProof(std::move(localFiltered.texture), localFiltered.desc);
-      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
-      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
-      abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
-      if (sharp) {
-        releaseSharpShadow(*sharp);
-      }
-      return TransformedFilterResult::FrameAbandoned;
-    }
+    geode::FilterExecutionResult localFiltered = std::move(*filtered);
 
     const Transform2d deviceFromLocal =
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
