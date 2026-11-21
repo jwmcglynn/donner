@@ -32,23 +32,6 @@ _INHERITANCE = {
 _RC_LINE = re.compile(r"^([a-z_-]+):([A-Za-z0-9_.+-]+)\s+(.*?)\s*$")
 
 
-# Private runner configuration: where the remote executor and cache are, which remote instance a
-# lane uses, how to authenticate to them, queue priority and per-host concurrency. None of it
-# belongs in the repository's .bazelrc. The number of GPU test slots
-# (`--local_resources=local_gpu=`) is public scheduling policy for local GPU tests, which a CI
-# config may set, and has no effect under remote execution; CPU and memory budgets describe a
-# particular host and stay private.
-PRIVATE_RUNNER_FLAG = re.compile(
-    r"^--(?:no)?(?:remote_executor|remote_cache|remote_instance_name|remote_header|"
-    r"remote_cache_header|remote_exec_header|remote_downloader_header|remote_execution_priority|"
-    r"remote_proxy|tls_|credential_helper|google_|bes_|jobs|local_resources(?!=local_gpu=))")
-
-
-def private_runner_flags(options):
-    """The options that carry private runner configuration, in order."""
-    return [option for option in options if PRIVATE_RUNNER_FLAG.match(option)]
-
-
 def parse(text):
     """{config: [(rc command, [flags])]} for every `<command>:<config>` line, in file order."""
     configs = {}

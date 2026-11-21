@@ -1,5 +1,6 @@
 """Tests for build_defs/check_gpu_routing.py: each rule passes the tree and fails its mutation."""
 
+import ast
 from pathlib import Path
 import unittest
 
@@ -29,7 +30,6 @@ donner_multi_transitioned_test(
 )
 """
 _PLATFORM_MESSAGE = "outside the reviewed GPU platforms"
-_CONFIG_RC = "build:ci-linux-gpu --platforms=//tools/ci:linux_ci_gpu"
 
 
 def _read(path):
@@ -51,13 +51,16 @@ class GpuRoutingTest(unittest.TestCase):
 
     def test_tree_passes(self):
         self.assert_clean(self.tree)
-        # The exemptions are exercised: both reviewed platforms carry the property in the real
-        # BUILD file, and the config's one platform line is in the real rc file.
-        platforms = self.tree[routing.PLATFORMS_BUILD]
-        for name in routing.REVIEWED_GPU_PLATFORMS:
-            with self.subTest(platform=name):
-                self.assertIn('name = "%s"' % name, platforms)
-        self.assertIn(routing.LINUX_GPU_CONFIG_LINE, self.tree[".bazelrc"].splitlines())
+        platforms = ast.parse(self.tree[routing.PLATFORMS_BUILD])
+        definitions = [node for node in ast.walk(platforms) if isinstance(node, ast.Call)
+                       and getattr(node.func, "id", None) == "platform"]
+        attributes = [{kw.arg: kw.value for kw in call.keywords}
+                      for call in definitions]
+        gpu, = [attrs for attrs in attributes if getattr(attrs.get("name"), "value", None)
+                == "linux_ci_gpu"]
+        self.assertEqual(ast.literal_eval(gpu["parents"]), [":linux_ci"])
+        self.assertEqual(ast.literal_eval(gpu["exec_properties"]), {"gpu": "present"})
+        self.assertNotIn("constraint_values", gpu)
 
     def test_gpu_property_spellings_on_a_target_are_rejected(self):
         path = "donner/svg/renderer/geode/BUILD.bazel"
@@ -136,63 +139,29 @@ class GpuRoutingTest(unittest.TestCase):
                 self.assert_problem({".bazelrc": self.tree[".bazelrc"] + line + "\n"}, ".bazelrc",
                                     "names a GPU platform or a target pattern")
 
-    def test_rc_inclusion_of_the_config_is_rejected(self):
-        for line in ("build:ci --config=ci-linux-gpu", "test --config=ci-linux-gpu",
-                     "common:lane --config=ci-linux-gpu", "build --config ci-linux-gpu",
-                     'test --config="ci-linux-gpu"'):
-            with self.subTest(line=line):
-                self.assert_problem({".bazelrc": self.tree[".bazelrc"] + line + "\n"}, ".bazelrc",
-                                    "includes `--config=ci-linux-gpu`")
-        other = "examples/.bazelrc"
-        self.assert_problem({other: "test --config=ci-linux-gpu\n"}, other,
-                            "includes `--config=ci-linux-gpu`")
+    def test_only_the_native_test_registration_can_select_the_platform(self):
+        registration = "build_defs/ci_linux_gpu.bzl"
+        platform = '"//tools/ci:linux_ci_gpu"'
+        invocation = "ci_platform_test(name=name, target_platform=%s)" % platform
+        self.assert_clean({registration: invocation})
+        for path, source in [
+            ("other.bzl", invocation),
+            (registration, invocation.replace("ci_platform_test", "ci_platform_build")),
+            (registration, invocation.replace("target_platform=", "dep=")),
+            (registration, "some_call(%s)" % platform),
+        ]:
+            with self.subTest(path=path, source=source):
+                self.assert_problem({path: source}, path, "named outside its definition")
 
-    def test_linux_gpu_platform_outside_its_config_line_is_rejected(self):
-        rc = self.tree[".bazelrc"]
-        for line in ("build:ci-linux-gpu --extra_execution_platforms=//tools/ci:linux_ci_gpu",
-                     "build:ci --platforms=//tools/ci:linux_ci_gpu",
-                     "test --platforms=//tools/ci:linux_ci_gpu"):
-            with self.subTest(line=line):
-                self.assert_problem({".bazelrc": rc + line + "\n"}, ".bazelrc",
-                                    "may only be the target platform")
-        self.assert_problem({"examples/.bazelrc": _CONFIG_RC + "\n"}, "examples/.bazelrc",
-                            "may only be the target platform")
-
-    def test_command_using_the_config_needs_the_instance(self):
-        workflow = ".github/workflows/main.yml"
-        for command in ("bazelisk test --config=ci --config=ci-linux-gpu //x",
-                        "bazel coverage --config=ci-linux-gpu //x",
-                        'bazel test --config="ci-linux-gpu" //x',
-                        "bazel test --config 'ci-linux-gpu' //x",
-                        "bazel test --config=ci-linux-gpu --remote_instance_name= //x",
-                        'bazel test --config=ci-linux-gpu --remote_instance_name="" //x',
-                        'bazel test --config=ci-linux-gpu --remote_instance_name "" //x',
-                        'bazel test --config=ci-linux-gpu --remote_instance_name=first '
-                        '--remote_instance_name= //x',
-                        "bazelisk --output_base=/o test --config=ci-linux-gpu \\\n  //x",
-                        "cd x && bazelisk test --config=ci-linux-gpu //x"):
-            with self.subTest(command=command):
-                self.assert_problem({workflow: "      run: %s\n" % command}, workflow,
-                                    "without `--remote_instance_name`")
-        script = "tools/ci/run_gpu.sh"
-        self.assert_problem({script: 'tools/ci/bazel_watchdog.sh log "$BAZEL" '
-                                     "--config=ci-linux-gpu //x\n"}, script,
-                            "Bazel verb cannot be read")
-        for command in ("bazelisk build --config=ci --config=ci-linux-gpu //x",
-                        'bazel test --config="ci-linux-gpu" --remote_instance_name "hardware" //x',
-                        "bazelisk test --config=ci --config=ci-linux-gpu \\\n"
-                        "  --remote_instance_name=\"$GPU_INSTANCE\" //x"):
-            with self.subTest(command=command):
-                self.assert_clean({workflow: "      run: %s\n" % command})
-
-    def test_lane_python_naming_the_config_or_platform_is_rejected(self):
-        path = "tools/ci/lanes.py"
-        for literal in ('"--config=ci-linux-gpu"', '"--platforms=//tools/ci:linux_ci_gpu"'):
-            with self.subTest(literal=literal):
-                mutated = self.tree[path] + "\nGPU = (%s,)\n" % literal
-                self.assert_problem({path: mutated}, path, "names the Linux GPU config or platform")
-        documented = '"""Runs tests with --config=ci-linux-gpu."""\n'
-        self.assert_clean({"tools/ci/gpu_lane.py": documented})
+    def test_command_cannot_make_the_linux_gpu_platform_global(self):
+        option = "--platforms=//tools/ci:linux_ci_gpu"
+        for path, text in [(".bazelrc", "build:ci-platforms " + option),
+                           ("examples/.bazelrc", "test " + option),
+                           (".github/workflows/main.yml", "    run: bazel test " + option + " //..."),
+                           ("ci/test.sh", "bazel test " + option + " //..."),
+                           ("tools/ci/lanes.py", "OPTIONS = [%r]" % option)]:
+            with self.subTest(path=path):
+                self.assert_problem({path: text}, path, "only native test registration")
 
     def test_full_check_reads_routing_files_only(self):
         for path in (".bazelrc", "examples/.bazelrc", "BUILD.bazel", "a/BUILD", "a/b.bzl",

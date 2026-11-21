@@ -561,43 +561,17 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
 
-### Linux GPU executors
+### Linux hardware GPU tests
 
-`--config=ci-linux-gpu` runs Linux tests on a remote execution instance with a hardware GPU. It is
-`--config=ci-platforms` with `//tools/ci:linux_ci_gpu`, the Linux CI platform also asking for
-`gpu=present`, as the target platform. With `--use_target_platform_for_tests` only the test
-actions run on it; every other action keeps `//tools/ci:linux_ci` as its execution platform, so it
-keeps its key and shares cache entries with the mixed CI invocation. The two platforms have the
-same constraints, so constraint-based `select()` and target compatibility are unchanged; a
-`config_setting` on the `--platforms` value itself, such as `//tools/ci:on_mixed_ci_linux`, does
-not match under the GPU platform.
+The mixed CI configuration (`--config=ci-platforms`) runs each test on its target platform.
+`//tools/ci:linux_ci_gpu` inherits the Linux CI platform and adds the execution property
+`gpu=present`. A native test wrapper can select this platform so that its TestRunner requests a
+GPU while its build actions use the ordinary execution platforms. Select hardware tests by
+target. Setting the GPU platform globally makes unrelated tests request GPU capacity.
 
-The config declares the test driver environment itself (any Vulkan driver manifest in the
-distribution's standard directory except the software rasterizer's), so a software-rendering
-environment from another rc file never stays in a hardware test's key. Older Vulkan loaders ignore
-that driver filter, so the config also sets `DONNER_REQUIRE_HARDWARE_GPU=1`, which makes Donner's
-Vulkan device selection refuse a CPU-type device: a test that would have fallen back to a software
-rasterizer fails and names the device it refused. The config never reuses a cached test result.
-
-A remote instance name applies to every action of a Bazel invocation, so it never appears in the
-config: the instance, endpoint and credentials are private runner configuration. Run two
-invocations with the same flags and the same output base:
-
-```sh
-bazel build --config=ci --config=ci-linux-gpu <tests>
-bazel test --config=ci --config=ci-linux-gpu --remote_instance_name=<GPU instance> <tests>
-```
-
-The first builds everything on the default instance; the second finds every build action in the
-action cache and executes only the tests. Do not add `--noremote_accept_cached` to the second
-command: it would execute the build actions again, on the GPU instance. A Linux `gpu` request
-reaching an instance without a Linux GPU executor is queued with no error and no timeout, and so
-are the tests of a `test` or `coverage` command that uses this config without the instance.
-`build_defs/check_gpu_routing.py` therefore rejects, in tracked files, a `gpu` execution property
-outside the reviewed platforms, the GPU platform as an execution platform or a transition target,
-an rc file that includes this config, and a workflow or script command that uses it for anything
-but `build` without naming the instance. Its docstring lists what a static check cannot see.
-`//tools:linux_gpu_config_tests` keeps the config free of private runner configuration.
+A test that requires hardware can set `DONNER_REQUIRE_HARDWARE_GPU=1` in its own environment.
+Donner then excludes CPU-type Vulkan devices from both headless and presentation device
+selection and reports the name of each refused adapter.
 
 ### Linux CI test selection
 

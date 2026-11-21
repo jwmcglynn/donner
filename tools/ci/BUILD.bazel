@@ -949,8 +949,8 @@ platform(
     visibility = ["//visibility:public"],
 )
 
-# The Linux CI platform on an executor with a hardware GPU. Only `--config=ci-linux-gpu` names it,
-# as the top-level target platform, so only test actions ask for the GPU (see .bazelrc).
+# Native hardware-test wrappers select this as their target platform under ci-platforms.
+# The ordinary execution platforms still handle their build actions.
 platform(
     name = "linux_ci_gpu",
     exec_properties = {"gpu": "present"},
