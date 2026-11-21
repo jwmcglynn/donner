@@ -2418,12 +2418,10 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
 }
 
 #ifdef DONNER_FILTERS_ENABLED
-bool RendererTinySkia::assembleTransformedShadow(SurfaceFrame& frame,
-                                                 tiny_skia::Pixmap& localPixmap,
-                                                 const TransformedShadowGraphs& graphs,
-                                                 const Transform2d& localFromFilter,
-                                                 const Box2d& localFilterRegion,
-                                                 const Transform2d& deviceFromLocal) {
+bool RendererTinySkia::assembleTransformedShadow(
+    SurfaceFrame& frame, tiny_skia::Pixmap& localPixmap, const TransformedShadowGraphs& graphs,
+    const Transform2d& localFromFilter, const Box2d& localFilterRegion, const Vector2d& paddedSize,
+    const Transform2d& deviceFromLocal) {
   constexpr auto kMemory = components::FilterMemoryModel::CpuFloatNamedResults;
   const uint64_t devicePixels = uint64_t{frame.pixmap.width()} * frame.pixmap.height();
   const uint64_t localPixels = uint64_t{localPixmap.width()} * localPixmap.height();
@@ -2442,12 +2440,10 @@ bool RendererTinySkia::assembleTransformedShadow(SurfaceFrame& frame,
   const Transform2d bufferFromDevice =
       Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
   const Transform2d bufferFromFilter = frame.deviceFromFilter * bufferFromDevice;
-  const bool shadowReady =
-      ApplyFilterGraphToPixmap(localPixmap, graphs.shadow, localFromFilter, localFilterRegion,
-                               /*clipSourceToFilterRegion=*/true);
+  const bool shadowReady = ApplyTransformedShadowToPixmap(localPixmap, graphs, localFromFilter,
+                                                          localFilterRegion, paddedSize);
   bool merged = false;
   if (shadowReady) {
-    ClipFilterOutputToRegion(localPixmap, localFilterRegion, localFromFilter);
     auto paint = makePixmapPaint(deviceShadow, tiny_skia::FilterQuality::Bilinear);
     paint.blendMode = tiny_skia::BlendMode::Source;
     auto output = deviceShadow.mutableView();
@@ -2513,9 +2509,9 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
       frame.deviceFromFilter;
   if (const auto foreground = ApplicableTransformedShadow(frame.filterGraph, frame.deviceFromFilter,
                                                           !frame.localRasterRequiredForBudget)) {
-    if (!assembleTransformedShadow(frame, localPixmap,
-                                   SplitTransformedShadow(frame.filterGraph, *foreground),
-                                   localFromFilter, localFilterRegion, deviceFromLocal)) {
+    if (!assembleTransformedShadow(
+            frame, localPixmap, SplitTransformedShadow(frame.filterGraph, *foreground),
+            localFromFilter, localFilterRegion, geometry->paddedRegion.size(), deviceFromLocal)) {
       return false;
     }
     drawFilterCapture(frame);

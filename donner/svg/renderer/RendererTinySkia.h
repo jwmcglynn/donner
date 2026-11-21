@@ -538,7 +538,7 @@ private:
   bool assembleTransformedShadow(SurfaceFrame& frame, tiny_skia::Pixmap& localPixmap,
                                  const TransformedShadowGraphs& graphs,
                                  const Transform2d& localFromFilter, const Box2d& localFilterRegion,
-                                 const Transform2d& deviceFromLocal);
+                                 const Vector2d& paddedSize, const Transform2d& deviceFromLocal);
   void drawFilterCapture(const SurfaceFrame& frame);
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);

@@ -41,6 +41,23 @@ bool ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                               components::FilterExecutionBudget* executionBudget = nullptr,
                               const tiny_skia::Pixmap* backgroundInput = nullptr);
 
+struct TransformedShadowGraphs;
+
+/**
+ * Execute the shadow branch in its aligned raster, keeping the native source and final crops.
+ *
+ * @param pixmap Premultiplied input in the padded local raster.
+ * @param graphs Split shadow graphs.
+ * @param localFromFilter Transform to local raster pixels.
+ * @param localFilterRegion Authored filter region in local user units.
+ * @param paddedSize Size of the padded raster in local user units.
+ * @return Whether the shadow is ready to project.
+ */
+bool ApplyTransformedShadowToPixmap(tiny_skia::Pixmap& pixmap,
+                                    const TransformedShadowGraphs& graphs,
+                                    const Transform2d& localFromFilter,
+                                    const Box2d& localFilterRegion, const Vector2d& paddedSize);
+
 /**
  * Clears pixels outside the transformed filter region.
  *

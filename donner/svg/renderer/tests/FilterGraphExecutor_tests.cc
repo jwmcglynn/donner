@@ -93,6 +93,45 @@ tiny_skia::Pixmap CreateBlurredDotPixmap(const Transform2d& deviceFromFilterTran
   return pixmap;
 }
 
+TEST(FilterGraphExecutorTest, ExplicitShadowRetainsTheNativePaddedTail) {
+  using namespace components;
+  using namespace filter_primitive;
+  auto native = tiny_skia::Pixmap::fromSize(64, 64);
+  auto padded = tiny_skia::Pixmap::fromSize(64, 64);
+  auto authored = tiny_skia::Pixmap::fromSize(64, 64);
+  ASSERT_THAT(native, testing::Optional(_));
+  ASSERT_THAT(padded, testing::Optional(_));
+  ASSERT_THAT(authored, testing::Optional(_));
+  for (int y = 20; y < 40; ++y) {
+    for (int x = 10; x < 13; ++x) {
+      for (tiny_skia::Pixmap* image : {&*native, &*padded, &*authored}) {
+        SetPixel(*image, x, y, Pixel{0, 0, 0, 255});
+      }
+    }
+  }
+  FilterGraph explicitShadow;
+  explicitShadow.nodes = {FilterNode{
+      .primitive = DropShadow{.dx = 10, .dy = 0, .stdDeviationX = 3, .stdDeviationY = 2}}};
+  const Box2d region = Box2d::FromXYWH(10, 10, 50, 40);
+  ASSERT_TRUE(ApplyFilterGraphToPixmap(*native, explicitShadow, Transform2d(), region, true));
+  ASSERT_TRUE(ApplyTransformedShadowToPixmap(
+      *padded, SplitTransformedShadow(explicitShadow, FilterStandardInput::SourceGraphic),
+      Transform2d(), region, Vector2d(64, 64)));
+  FilterGraph authoredShadow;
+  authoredShadow.nodes = {
+      FilterNode{.primitive = GaussianBlur{3, 2},
+                 .inputs = {FilterInput(FilterStandardInput::SourceAlpha)}},
+      FilterNode{.primitive = Offset{10, 0}},
+  };
+  ASSERT_TRUE(ApplyFilterGraphToPixmap(*authored, authoredShadow, Transform2d(), region, true));
+  EXPECT_THAT(GetPixel(*native, 15, 30), Rgba(0, 0, 0, Gt(0)));
+  EXPECT_THAT(GetPixel(*authored, 15, 30), Rgba(0, 0, 0, 0));
+  for (int x = 15; x < 24; ++x) {
+    SCOPED_TRACE(x);
+    EXPECT_THAT(GetPixel(*padded, x, 30), testing::Eq(GetPixel(*native, x, 30)));
+  }
+}
+
 TEST(FilterGraphExecutorTest, AnimatedDefaultRegionUsesExecutedRasterHistory) {
   for (const bool shear : {false, true}) {
     SCOPED_TRACE(shear);

@@ -629,6 +629,7 @@ inline std::optional<components::FilterStandardInput> ApplicableTransformedShado
 struct TransformedShadowGraphs {
   components::FilterGraph shadow;
   components::FilterGraph merge;
+  bool preservePaddedBlur = false;  ///< Internal stages of an explicit feDropShadow.
 };
 
 /// Split an eligible shadow into two graphs. BackgroundImage in the merge is the projected
@@ -646,6 +647,7 @@ inline TransformedShadowGraphs SplitTransformedShadow(const components::FilterGr
       .primitive = Merge{},
       .inputs = {FilterInput(FilterStandardInput::BackgroundImage), FilterInput(foreground)}}};
   if (const auto* drop = std::get_if<DropShadow>(&last.primitive)) {
+    split.preservePaddedBlur = true;
     const RcString alpha("shadow-alpha");
     split.shadow.colorInterpolationFilters = colorSpace;
     split.shadow.nodes = {

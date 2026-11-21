@@ -867,6 +867,29 @@ bool ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   return tiny_skia::filter::executeFilterGraph(pixmap, graph);
 }
 
+bool ApplyTransformedShadowToPixmap(tiny_skia::Pixmap& pixmap,
+                                    const TransformedShadowGraphs& graphs,
+                                    const Transform2d& localFromFilter,
+                                    const Box2d& localFilterRegion, const Vector2d& paddedSize) {
+  Box2d workRegion = localFilterRegion;
+  if (graphs.preservePaddedBlur) {
+    // Crop the input to the native touched-pixel region. The synthetic primitive stages of an
+    // explicit drop shadow can then retain the blur in the padding until the offset moves it.
+    const Box2d source = localFromFilter.transformBox(localFilterRegion);
+    const Box2d touchedPixels(
+        Vector2d(std::floor(source.topLeft.x), std::floor(source.topLeft.y)),
+        Vector2d(std::ceil(source.bottomRight.x), std::ceil(source.bottomRight.y)));
+    ClipFilterOutputToRegion(pixmap, touchedPixels, Transform2d());
+    workRegion = Box2d(Vector2d::Zero(), paddedSize);
+  }
+  if (!ApplyFilterGraphToPixmap(pixmap, graphs.shadow, localFromFilter, workRegion,
+                                /*clipSourceToFilterRegion=*/true)) {
+    return false;
+  }
+  ClipFilterOutputToRegion(pixmap, localFilterRegion, localFromFilter);
+  return true;
+}
+
 void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box2d>& filterRegion,
                               const Transform2d& deviceFromFilter) {
   if (!filterRegion.has_value()) {

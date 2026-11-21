@@ -1285,6 +1285,39 @@ TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSour
   }
 }
 
+TEST_F(RendererRegressionTests, TransformedDropShadowKeepsBlurTailUntilOffset) {
+  constexpr std::string_view kRegion = "10 10 50 40";
+  constexpr std::string_view kSeparateShadow =
+      R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 2"/>
+            <feOffset dx="10" dy="0"/>)svg";
+  constexpr std::string_view kShadowShape =
+      R"svg(<rect x="12" y="20" width="3" height="20" filter="url(#f)"/>)svg";
+  constexpr std::string_view kSource =
+      R"svg(<rect x="12" y="20" width="3" height="20" fill="seagreen")svg";
+  const auto render = [](std::string_view region, std::string_view primitives,
+                         std::string_view content) {
+    return RenderTransformedFilterScene(region, primitives, "skewX(30)", content, Vector2i(96, 64));
+  };
+  const RendererBitmap expected = render("0 10 60 40", kSeparateShadow, kShadowShape);
+  const RendererBitmap drop =
+      render(kRegion, R"svg(<feDropShadow dx="10" dy="0" stdDeviation="3 2"/>)svg",
+             std::string(kSource) + R"svg( filter="url(#f)"/>)svg");
+  const RendererBitmap authored =
+      render(kRegion, R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 2"/>
+          <feOffset dx="10" dy="0" result="shadow"/>
+          <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>)svg",
+             std::string(kSource) + R"svg( filter="url(#f)"/>)svg");
+  // The source is inset so both regions admit the same resampled input. The crop holds only
+  // shadow pixels moved in from beyond the original left edge. The authored multi-primitive
+  // form clips its Gaussian result before applying the offset, so the sample remains clear.
+  EXPECT_THAT(PixelAt(expected, 34, 30), testing::ElementsAre(0, 0, 0, testing::Gt(0)));
+  EXPECT_THAT(PixelAt(authored, 34, 30), testing::ElementsAre(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(
+      editor::tests::CropBitmap(drop, Vector2i(34, 28), Vector2i(6, 5)),
+      editor::tests::CropBitmap(expected, Vector2i(34, 28), Vector2i(6, 5)),
+      "explicit_drop_shadow_moves_padded_blur_inward", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, TransformedShadowAllocationFailureUsesTheDeviceRaster) {
   constexpr std::string_view kDrop = R"svg(<feDropShadow dx="3" dy="27" stdDeviation="3 2"/>)svg";
   // An explicit primitive subregion equal to the filter region selects the device raster.

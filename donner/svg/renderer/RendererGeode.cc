@@ -3407,6 +3407,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   struct SharpShadowPass {
     TransformedShadowGraphs graphs;
+    Box2d shadowRegion;
     geode::FilterTilePlan localPlan;
     geode::FilterTilePlan mergePlan;
     components::FilterExecutionBudget::Reservation shadowReservation;
@@ -3422,14 +3423,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                                     const Transform2d& localFromFilter,
                                                     const Transform2d& bufferFromFilter) {
     auto graphs = SplitTransformedShadow(frame.filterGraph, foreground);
-    const GeodeFilterBuffer localBuffer{localRegion, static_cast<int>(geometry.width),
+    const Box2d shadowRegion = graphs.preservePaddedBlur
+                                   ? Box2d(Vector2d::Zero(), geometry.paddedRegion.size())
+                                   : localRegion;
+    const GeodeFilterBuffer localBuffer{shadowRegion, static_cast<int>(geometry.width),
                                         static_cast<int>(geometry.height), 0, 0};
     const GeodeFilterBuffer deviceBuffer{frame.filterRegion,
                                          static_cast<int>(frame.layerDesc.size.width),
                                          static_cast<int>(frame.layerDesc.size.height),
                                          frame.filterBufferOffsetX, frame.filterBufferOffsetY};
     const GeodeFilterPlan shadow =
-        PlanGeodeFilter(graphs.shadow, localRegion, localFromFilter, localBuffer, *filterEngine);
+        PlanGeodeFilter(graphs.shadow, shadowRegion, localFromFilter, localBuffer, *filterEngine);
     const GeodeFilterPlan merge = PlanGeodeFilter(graphs.merge, frame.filterRegion,
                                                   bufferFromFilter, deviceBuffer, *filterEngine);
     if (!shadow.fullExecutionFits || !merge.fullExecutionFits || !shadow.costKnown ||
@@ -3468,8 +3472,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return std::nullopt;
     }
     *filterExecutionBudget = budget;
-    return SharpShadowPass{std::move(graphs),  shadow.plan,       merge.plan,
-                           *shadowReservation, *mergeReservation, std::move(projectedShadow),
+    return SharpShadowPass{std::move(graphs),
+                           shadowRegion,
+                           shadow.plan,
+                           merge.plan,
+                           *shadowReservation,
+                           *mergeReservation,
+                           std::move(projectedShadow),
                            std::move(desc)};
   }
 
@@ -3617,6 +3626,23 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     retireFinishedEncoder(std::move(resampleEncoder));
   }
 
+  geode::FilterExecutionResult evaluateTransformedFilter(const FilterStackFrame& frame,
+                                                         const gpu::Texture& localTexture,
+                                                         const gpu::TextureDescriptor& localDesc,
+                                                         const Box2d& localFilterRegion,
+                                                         const Transform2d& localFromFilter,
+                                                         const SharpShadowPass* sharp) {
+    if (!sharp) {
+      return filterEngine->execute(frame.filterGraph, localTexture, localDesc, localFilterRegion,
+                                   localFromFilter, *this, nullptr, frame.localFilterPlan, this);
+    }
+    // The source resample already uses the authored clip. An explicit drop shadow can work over
+    // the padding so its blur crosses the authored region until the offset has moved it.
+    return filterEngine->execute(sharp->graphs.shadow, localTexture, localDesc, sharp->shadowRegion,
+                                 localFromFilter, *this, nullptr, sharp->localPlan, this, nullptr,
+                                 nullptr, &localFilterRegion);
+  }
+
   std::optional<geode::FilterExecutionResult> executeLocalRasterFilter(
       FilterStackFrame& frame, gpu::Texture& localTexture, const gpu::TextureDescriptor& localDesc,
       const Box2d& localFilterRegion, const Transform2d& localDeviceFromFilter,
@@ -3637,10 +3663,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
       return std::nullopt;
     }
-    geode::FilterExecutionResult localFiltered = filterEngine->execute(
-        sharp ? sharp->graphs.shadow : frame.filterGraph, localTexture, localDesc,
-        localFilterRegion, localDeviceFromFilter, *this, nullptr,
-        sharp ? std::optional(sharp->localPlan) : frame.localFilterPlan, this);
+    geode::FilterExecutionResult localFiltered = evaluateTransformedFilter(
+        frame, localTexture, localDesc, localFilterRegion, localDeviceFromFilter, sharp);
     if (!restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
       retainTextureWithoutCompletionProof(std::move(localFiltered.texture), localFiltered.desc);
