@@ -54,6 +54,7 @@ exports_files(
     visibility = [
         "//build_defs:__pkg__",
         "//donner/svg/renderer/geode/boundary_tests:__pkg__",
+        "//tools/ci:__pkg__",
     ],
 )
 

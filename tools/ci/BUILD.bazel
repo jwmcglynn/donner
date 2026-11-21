@@ -385,6 +385,34 @@ alias(
     tags = ["manual"],
 )
 
+# Selects the Linux tests for the hardware GPU instance and checks that the test invocation ran
+# only them, remotely, fresh and with the GPU request (see "Linux GPU executors" in
+# docs/building.md).
+py_binary(
+    name = "linux_gpu_lane",
+    srcs = ["linux_gpu_lane.py"],
+)
+
+py_test(
+    name = "linux_gpu_lane_tests",
+    size = "small",
+    srcs = ["linux_gpu_lane.py", "linux_gpu_lane_tests.py"],
+    imports = ["."],
+)
+
+# Pins the lane's scope to the BUILD files it names, so a renamed or emptied suite fails review.
+py_test(
+    name = "linux_gpu_lane_scope_tests",
+    size = "small",
+    srcs = ["linux_gpu_lane.py", "linux_gpu_lane_scope_tests.py"],
+    data = [
+        "//donner/svg/renderer/geode:BUILD.bazel",
+        "//donner/svg/renderer/tests:BUILD.bazel",
+    ],
+    imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
+)
+
 py_test(
     name = "darwin_selection_tests",
     size = "small",
