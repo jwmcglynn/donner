@@ -326,7 +326,10 @@ class LaneCommandTest(unittest.TestCase):
         settings = [words for words in rc_lines
                     if any("repo_env_ignores_action_env" in word for word in words)]
         self.assertEqual([["build:ci-platforms", lane.CLIENT_REPO_ENV]], settings)
-        self.assertIn(["build:ci-platforms", "--config=latest_llvm"], rc_lines)
+        mixed = [words[1] for words in rc_lines if words[:1] == ["build:ci-platforms"]]
+        self.assertNotIn("--config=latest_llvm", mixed)
+        self.assertEqual(["--extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux"],
+                         [option for option in mixed if option.startswith("--extra_toolchains=")])
 
     def test_remote_execution_messages_of_failures_are_printed(self):
         # Bazel's default prints the messages a backend attaches to a failed remote action, which

@@ -479,11 +479,6 @@ jobs:
           name: bazel-test-failure-unified-${{ github.run_attempt }}
           testlogs: ${{ runner.temp }}/unified/test-artifacts/mixed
 
-      - name: Fetch Bazel LLVM toolchain
-        if: steps.unified.outcome == 'skipped'
-        shell: bash
-        run: python3 tools/ci/lane.py phase linux-self-hosted fetch
-
       - name: Build
         id: build
         if: steps.unified.outcome == 'skipped'

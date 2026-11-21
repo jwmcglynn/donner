@@ -227,7 +227,8 @@ def _counterpart_entries(main_job, counterpart, entries, reason):
 
 COUNTERPART_ALLOWLIST = {
     **_counterpart_entries("linux", "linux-self-hosted", [
-        *[("*", "flag-main-only", flag) for flag in _config_flags("buildbuddy-re")],
+        *[("*", "flag-main-only", flag) for flag in _config_flags("buildbuddy-re")
+          if flag != "--spawn_strategy=remote"],
     ], "Where actions run, not what they build: both lanes use the declared LLVM toolchain, and "
        "hosted Linux runs its compiles on the cloud executor while the self-hosted lane has its "
        "own executor. Tests remain on the hosted runner for its display dependencies."),
@@ -261,6 +262,16 @@ COUNTERPART_ALLOWLIST = {
        "reverse. The two Xvfb rules select local execution in the shared test graph."),
 }
 
+_linux_compilers = _counterpart_entries("linux", "linux-self-hosted", [
+    ("*", "flag-main-only", "--extra_toolchains=@llvm_toolchain_linux_aarch64//:all"),
+    ("*", "flag-main-only", "--extra_toolchains=@llvm_toolchain_linux_x86_64//:all"),
+    ("*", "flag-pr-only", "--extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux"),
+    ("*", "flag-pr-only", "--extra_execution_platforms=//tools/ci:linux_ci"),
+], "Hosted CI downloads its LLVM toolchain. Trusted Linux selects the worker's LLVM toolchain "
+   "and execution platform.")
+COUNTERPART_ALLOWLIST.update(_linux_compilers)
+INVOCATION_ALLOWLIST.update(_linux_compilers)
+
 _cloud_tree = _counterpart_entries("linux", "linux-self-hosted", [
     ("Build", "target-main-only", "//..."),
 ], _CLOUD_TREE_REASON)
@@ -269,7 +280,8 @@ INVOCATION_ALLOWLIST.update(_cloud_tree)
 
 # The replacement still compares portable phases; x86_64 execution stays on main.
 INVOCATION_ALLOWLIST.update(_counterpart_entries("linux", "linux-self-hosted", [
-    *[("*", "flag-main-only", flag) for flag in _config_flags("buildbuddy-re", "test")],
+    *[("*", "flag-main-only", flag) for flag in _config_flags("buildbuddy-re", "test")
+      if flag != "--spawn_strategy=remote"],
     *[("*", "flag-pr-only", flag) for flag in (
         "--remote_local_fallback=false",
         "--incompatible_remote_local_fallback_for_remote_cache=false", "--remote_timeout=60s")],
@@ -2290,7 +2302,7 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 self.assertEqual(runs(steps["Test Linux and macOS with native platform transitions"]["if"],
                                       scenario), mixed)
-                for name in ("Fetch Bazel LLVM toolchain", "Build", "Test"):
+                for name in ("Build", "Test"):
                     self.assertEqual(runs(steps[name]["if"], scenario), not mixed)
 
     def test_unified_re_canary_default_and_rollback(self):
