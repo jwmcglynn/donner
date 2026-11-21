@@ -449,6 +449,10 @@ inline bool FilterOutputIsBlurred(const components::FilterGraph& graph, const Ve
   std::vector<bool> blurred(graph.nodes.size(), false);
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     const components::FilterNode& node = graph.nodes[index];
+    if (std::holds_alternative<components::filter_primitive::Flood>(node.primitive)) {
+      // A generator does not inherit the previous node's blur.
+      continue;
+    }
     const bool omitForeground =
         splitShadow && index + 1 == graph.nodes.size() && !node.inputs.empty();
     const size_t slots = std::holds_alternative<components::filter_primitive::Merge>(node.primitive)
