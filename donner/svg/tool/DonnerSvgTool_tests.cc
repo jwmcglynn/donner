@@ -21,6 +21,7 @@
 #include "donner/base/PackagedResource.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/GifTestDecoder.h"
+#include "donner/svg/text/TextTier.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -172,13 +173,9 @@ constexpr std::string_view kSimpleSvg =
 TEST_F(DonnerSvgToolFileTest, ResourceStartupRequiresOnlyEnabledTextResources) {
   const auto input = WriteSvg("input.svg", kSimpleSvg);
   const auto output = tmpDir_ / "output.png";
-#ifdef DONNER_TEXT_ENABLED
-  constexpr int kExpectedExitCode = 2;
-  constexpr char kExpectedError[] = "Failed to load packaged resources:";
-#else
-  constexpr int kExpectedExitCode = 0;
-  constexpr char kExpectedError[] = "";
-#endif
+  const bool textBuiltIn = IsTextBuiltIn();
+  const int expectedExitCode = textBuiltIn ? 2 : 0;
+  const char* expectedError = textBuiltIn ? "Failed to load packaged resources:" : "";
   EXPECT_EXIT(
       {
         auto unavailable = std::make_shared<PackagedResourceSession>(
@@ -193,11 +190,11 @@ TEST_F(DonnerSvgToolFileTest, ResourceStartupRequiresOnlyEnabledTextResources) {
         (void)write(STDERR_FILENO, message.data(), message.size());
         std::_Exit(result);
       },
-      testing::ExitedWithCode(kExpectedExitCode), kExpectedError);
-#ifndef DONNER_TEXT_ENABLED
-  EXPECT_THAT(ReadPngMagic(output),
-              testing::ElementsAre(0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A));
-#endif
+      testing::ExitedWithCode(expectedExitCode), expectedError);
+  if (!textBuiltIn) {
+    EXPECT_THAT(ReadPngMagic(output),
+                testing::ElementsAre(0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A));
+  }
 }
 
 TEST(DonnerSvgTool, HelpFlagPrintsPreviewAndReturnsZero) {

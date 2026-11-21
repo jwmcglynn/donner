@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -129,12 +130,22 @@ class LintChangesTest(unittest.TestCase):
     def test_changed_policy_rechecks_its_governed_inventory(self):
         docs = "docs/design_docs/0001-edited.md"
         paths = [docs, "tools/check_design_doc_index.py", "tools/check_design_doc_provenance.py",
-                 "build_defs/check_local_gpu_tags.py", "tools/check_private_details.py"]
+                 "build_defs/check_local_gpu_tags.py", "tools/check_private_details.py",
+                 "build_defs/check_text_tier_defines.py"]
         checks = dict(lint.commands(paths, self.base))
         self.assertNotIn(docs, checks["Check design document provenance"])
         self.assertNotIn(docs, checks["Check design document index"])
         self.assertIn("Check GPU scheduling policy", checks)
+        self.assertIn("Check text tier macro policy", checks)
         self.assertIn("Check tracked files against changed privacy rules", checks)
+
+    def test_changed_starlark_rechecks_variant_transitions(self):
+        command = [sys.executable, "build_defs/check_variant_transitions.py"]
+        for path in ("build_defs/rules.bzl", "build_defs/check_variant_transitions.py"):
+            with self.subTest(path=path):
+                self.assertEqual(dict(lint.commands([path], self.base)).get("Check variant transitions"),
+                                 command)
+        self.assertNotIn("Check variant transitions", dict(lint.commands(["shared.txt"], self.base)))
 
     def test_changed_gitlink_name_is_checked_without_following_it(self):
         git("config", "user.email", "tests@example.invalid")

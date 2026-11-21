@@ -26,6 +26,8 @@ tool for `:renderer_geode` (a pure geode library that must never reach
 includes.
 """
 
+load("//build_defs:variant_settings.bzl", "variant_transition")
+
 def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
     """Test that `target` has no transitive dependency path to `forbidden`.
 
@@ -193,7 +195,7 @@ def _audit_configuration_impl(settings, attr):
         "//build_defs:disable_backend_test_transition": True if attr.disable_backend_transitions else settings["//build_defs:disable_backend_test_transition"],
     }
 
-_audit_configuration = transition(
+_audit_configuration = variant_transition(
     implementation = _audit_configuration_impl,
     inputs = [
         "//donner/svg/renderer:text",

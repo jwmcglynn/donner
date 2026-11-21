@@ -72,6 +72,7 @@ editor_cc_binary(
         ":editor_control_session",
         "//donner/base",
         "//donner/base:packaged_resource",
+        "//donner/svg/text:text_tier",
         "@nlohmann_json//:json",
     ],
 )

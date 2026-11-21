@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "ci_darwin_targets")
+load("//build_defs:rules.bzl", "ci_darwin_targets", "donner_multi_transitioned_test")
 load(":native_delivery_fixture.bzl", "native_delivery_fixture")
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
@@ -419,6 +419,25 @@ py_test(
     ],
     main = "check_js_lint_coverage_tests.py",
     deps = [":test_timing"],
+)
+
+# The editor NOTICE in the full text configuration attributes every text dependency, including
+# those the text libraries reach only through `implementation_deps`.
+py_test(
+    name = "editor_notice_text_tests_impl",
+    size = "small",
+    srcs = ["editor_notice_text_tests.py"],
+    data = ["//third_party/licenses:notice_editor"],
+    main = "editor_notice_text_tests.py",
+    tags = ["manual"],
+)
+
+donner_multi_transitioned_test(
+    name = "editor_notice_text_tests",
+    dep = ":editor_notice_text_tests_impl",
+    renderer_backend = "geode",
+    text = "true",
+    text_full = "true",
 )
 
 # Large: its git and shell fixtures take longer than ci_runtime_workflow_tests, and on a slow host

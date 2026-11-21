@@ -93,11 +93,6 @@ donner_cc_test(
         "//third_party/public-sans:public-sans_resource_files",
         "//third_party/resvg-test-suite:fonts",
     ],
-    # Bidi reordering is compiled out of the tier without the text engine.
-    defines = select({
-        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }),
     opens_gpu_device = True,
     shard_count = 10,
     # Run these wrappers with the ordinary suite so `bazel test //...` exercises
@@ -118,6 +113,7 @@ donner_cc_test(
         "//donner/svg/renderer",
         "//donner/svg/renderer/tests:renderer_test_utils",
         "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -150,6 +146,8 @@ donner_cc_library(
         "//donner/svg/parser",
         "@com_google_gtest//:gtest",
     ],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -164,4 +162,6 @@ donner_cc_library(
         "//donner/svg/components/resources:resource_manager_context",
         "@com_google_gtest//:gtest",
     ],
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )

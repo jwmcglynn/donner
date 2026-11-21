@@ -36,6 +36,7 @@
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -190,8 +191,8 @@ TEST(RendererAnimationPresentation, MarkerAngleUnitsInterpolateContinuously) {
   }
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, ToOnlyTextPositionUsesTypedBase) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='t' x='2' y='12' font-size='10'>H"
       "<animate attributeName='x' to='10' dur='2s'/></text>");
@@ -210,6 +211,7 @@ TEST(RendererAnimationPresentation, ToOnlyTextPositionUsesTypedBase) {
 }
 
 TEST(RendererAnimationPresentation, ToOnlyTextXUsesFullTypedCoordinateList) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='t' x='2 14' y='12' font-size='10'>HH"
       "<animate attributeName='x' to='10 18' dur='2s'/></text>");
@@ -228,6 +230,7 @@ TEST(RendererAnimationPresentation, ToOnlyTextXUsesFullTypedCoordinateList) {
 }
 
 TEST(RendererAnimationPresentation, EmptyChildDeltaListsUseNeutralBaseAndRestoreAncestorLayout) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   struct Case {
     const char* attribute;
     double base;
@@ -256,6 +259,7 @@ TEST(RendererAnimationPresentation, EmptyChildDeltaListsUseNeutralBaseAndRestore
 }
 
 TEST(RendererAnimationPresentation, MultiValueAncestorListDoesNotBecomeChildBase) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const std::string source =
       "<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan id='s'>B"
       "<animate attributeName='dx' to='8' begin='1s' dur='2s'/></tspan></text>";
@@ -274,6 +278,7 @@ TEST(RendererAnimationPresentation, MultiValueAncestorListDoesNotBecomeChildBase
 }
 
 TEST(RendererAnimationPresentation, RootTextLengthUsesNaturalLengthAcrossNestedContent) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='t' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>"
       "<tspan>H</tspan><a><tspan>H</tspan></a>"
@@ -294,6 +299,7 @@ TEST(RendererAnimationPresentation, RootTextLengthUsesNaturalLengthAcrossNestedC
 }
 
 TEST(RendererAnimationPresentation, NestedTextLengthUsesOwnerAggregateAndFontMetrics) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text x='1' y='12' font-size='10'><tspan id='owner' font-size='20' "
       "lengthAdjust='spacingAndGlyphs'>H<a><tspan>H</tspan></a>"
@@ -315,6 +321,7 @@ TEST(RendererAnimationPresentation, NestedTextLengthUsesOwnerAggregateAndFontMet
 }
 
 TEST(RendererAnimationPresentation, SharedTextLengthUsesEachOccurrenceFontMetrics) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<defs><text id='source' lengthAdjust='spacingAndGlyphs'><tspan><a><tspan>HH</tspan></a>"
       "</tspan><animate attributeName='textLength' to='1em' dur='2s'/></text></defs>"
@@ -345,6 +352,7 @@ TEST(RendererAnimationPresentation, SharedTextLengthUsesEachOccurrenceFontMetric
 }
 
 TEST(RendererAnimationPresentation, TextPathTextLengthUsesNaturalOwnerScope) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const std::string prefix =
       "<defs><path id='p' d='M0 12H100'/></defs><text font-size='10'><textPath id='owner' "
       "href='#p' lengthAdjust='spacingAndGlyphs'";
@@ -365,6 +373,7 @@ TEST(RendererAnimationPresentation, TextPathTextLengthUsesNaturalOwnerScope) {
 }
 
 TEST(RendererAnimationPresentation, TextLengthWorkRefusalKeepsNestedStaticTargetsAtomic) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>H"
       "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan>"
@@ -400,6 +409,7 @@ TEST(RendererAnimationPresentation, TextLengthWorkRefusalKeepsNestedStaticTarget
 }
 
 TEST(RendererAnimationPresentation, NaturalTextLengthSpacingMovesGlyphsWithoutScalingThem) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='t' x='1' y='12' font-size='10' lengthAdjust='spacing'>HH"
       "<animate attributeName='textLength' to='14' dur='2s'/></text>");
@@ -420,6 +430,7 @@ TEST(RendererAnimationPresentation, NaturalTextLengthSpacingMovesGlyphsWithoutSc
 }
 
 TEST(RendererAnimationPresentation, NegativeAnimatedTextLengthPreservesNaturalLayout) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const std::string base = "<text x='1' y='12' font-size='10'>HH</text>";
   auto document = ParsePresentation(
       "<text x='1' y='12' font-size='10'>HH"
@@ -432,6 +443,7 @@ TEST(RendererAnimationPresentation, NegativeAnimatedTextLengthPreservesNaturalLa
 }
 
 TEST(RendererAnimationPresentation, InvalidAnimatedTextLengthPreservesExplicitBase) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const std::string base =
       "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' "
       "textLength='8'>HH</text>";
@@ -446,6 +458,7 @@ TEST(RendererAnimationPresentation, InvalidAnimatedTextLengthPreservesExplicitBa
 }
 
 TEST(RendererAnimationPresentation, MixedFlatAndPathTextLengthMatchesStaticTargetAcrossSeeks) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const std::string paths =
       "<defs><path id='p1' d='M1 12H30'/><path id='p2' d='M32 12H62'/></defs>";
   const std::string text =
@@ -476,6 +489,7 @@ TEST(RendererAnimationPresentation, MixedFlatAndPathTextLengthMatchesStaticTarge
 }
 
 TEST(RendererAnimationPresentation, NestedFixedOwnerDoesNotCreateParentScalingGap) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>"
       "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan>H"
@@ -498,6 +512,7 @@ TEST(RendererAnimationPresentation, NestedFixedOwnerDoesNotCreateParentScalingGa
 }
 
 TEST(RendererAnimationPresentation, NestedOwnerAbsoluteResetStopsPriorLengthCarry) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text y='12' font-size='10'><tspan lengthAdjust='spacingAndGlyphs' "
       "textLength='40'>AB</tspan><tspan x='100' textLength='20'>C</tspan></text>");
@@ -510,6 +525,7 @@ TEST(RendererAnimationPresentation, NestedOwnerAbsoluteResetStopsPriorLengthCarr
 }
 
 TEST(RendererAnimationPresentation, InvalidNestedTextLengthKeepsOwnBaseOnly) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>H"
       "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
@@ -534,6 +550,7 @@ TEST(RendererAnimationPresentation, InvalidNestedTextLengthKeepsOwnBaseOnly) {
 }
 
 TEST(RendererAnimationPresentation, VerticalNaturalTextLengthMatchesStaticTarget) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' x='12' y='1' font-size='10' writing-mode='vertical-rl' "
       "lengthAdjust='spacingAndGlyphs'>HH"
@@ -556,6 +573,7 @@ TEST(RendererAnimationPresentation, VerticalNaturalTextLengthMatchesStaticTarget
 }
 
 TEST(RendererAnimationPresentation, NaturalTextLengthRecomputesAfterSourceMutation) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>HH</text>"
       "<animate href='#owner' attributeName='textLength' to='30' dur='2s'/>");
@@ -577,6 +595,7 @@ TEST(RendererAnimationPresentation, NaturalTextLengthRecomputesAfterSourceMutati
 }
 
 TEST(RendererAnimationPresentation, InvalidUpperTextLengthKeepsValidLowerLayer) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
       "<animate attributeName='textLength' from='10' to='20' dur='2s'/>"
@@ -591,6 +610,7 @@ TEST(RendererAnimationPresentation, InvalidUpperTextLengthKeepsValidLowerLayer) 
 }
 
 TEST(RendererAnimationPresentation, TextLengthValuesIgnoreInvalidFromOperand) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
       "<animate attributeName='textLength' from='-1' values='10;20' dur='2s'/></text>");
@@ -604,6 +624,7 @@ TEST(RendererAnimationPresentation, TextLengthValuesIgnoreInvalidFromOperand) {
 }
 
 TEST(RendererAnimationPresentation, TextPositionBaseUsesAnimatedListArity) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
       "<animate href='#owner' attributeName='dx' to='10' dur='2s'/>");
@@ -615,6 +636,7 @@ TEST(RendererAnimationPresentation, TextPositionBaseUsesAnimatedListArity) {
 }
 
 TEST(RendererAnimationPresentation, AnimatedTextPositionListReplacesAuthoredTail) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='1 2'>AB</text>"
       "<animate href='#owner' attributeName='dx' from='10' to='10' dur='2s'/>");
@@ -626,6 +648,7 @@ TEST(RendererAnimationPresentation, AnimatedTextPositionListReplacesAuthoredTail
 }
 
 TEST(RendererAnimationPresentation, NonemptyDeltaListIsNotTruncatedForInterpolation) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='1 2'>AB</text>"
       "<animate href='#owner' attributeName='dx' to='10' dur='2s'/>");
@@ -637,6 +660,7 @@ TEST(RendererAnimationPresentation, NonemptyDeltaListIsNotTruncatedForInterpolat
 }
 
 TEST(RendererAnimationPresentation, InvalidUpperTextPositionKeepsValidLowerLayer) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
       "<animate href='#owner' attributeName='dx' from='2' to='6' dur='2s'/>"
@@ -649,6 +673,7 @@ TEST(RendererAnimationPresentation, InvalidUpperTextPositionKeepsValidLowerLayer
 }
 
 TEST(RendererAnimationPresentation, TextPositionValuesIgnoreInvalidFromOperand) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
       "<animate href='#owner' attributeName='dx' from='invalid' values='10;14' dur='2s'/>");
@@ -660,6 +685,7 @@ TEST(RendererAnimationPresentation, TextPositionValuesIgnoreInvalidFromOperand) 
 }
 
 TEST(RendererAnimationPresentation, TextPositionToIgnoresInactiveInvalidByOperand) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
       "<animate href='#owner' attributeName='dx' from='2' to='6' by='invalid' dur='2s'/>");
@@ -671,6 +697,7 @@ TEST(RendererAnimationPresentation, TextPositionToIgnoresInactiveInvalidByOperan
 }
 
 TEST(RendererAnimationPresentation, EmptyDeltaBaseIsPaddedPerAnimationLayer) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10'>AB</text>"
       "<animate href='#owner' attributeName='dx' to='8' dur='2s'/>"
@@ -683,6 +710,7 @@ TEST(RendererAnimationPresentation, EmptyDeltaBaseIsPaddedPerAnimationLayer) {
 }
 
 TEST(RendererAnimationPresentation, FrozenPartialTextLengthKeepsBoundaryLowerLayer) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
       "<animate attributeName='textLength' from='10' to='20' dur='10s'/>"
@@ -707,6 +735,7 @@ TEST(RendererAnimationPresentation, FrozenPartialTextLengthKeepsBoundaryLowerLay
 }
 
 TEST(RendererAnimationPresentation, FrozenPartialTextPositionKeepsBoundaryLowerLayer) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='2'>HH</text>"
       "<animate href='#owner' attributeName='dx' from='2' to='12' dur='10s'/>"
@@ -729,6 +758,7 @@ TEST(RendererAnimationPresentation, FrozenPartialTextPositionKeepsBoundaryLowerL
 }
 
 TEST(RendererAnimationPresentation, RtlTextLengthMatchesEquivalentStaticTarget) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const auto fontFile =
       donner::tests::ReadRequiredRunfile("third_party/resvg-test-suite/fonts/Amiri-Regular.ttf");
   ASSERT_THAT(fontFile.error, testing::IsEmpty());
@@ -780,7 +810,6 @@ TEST(RendererAnimationPresentation, RtlTextLengthMatchesEquivalentStaticTarget) 
                                          editor::tests::PixelmatchIdentityParams());
   }
 }
-#endif
 
 TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {
   const std::string prefix =
@@ -801,8 +830,8 @@ TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {
   }
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TypedTextFieldsRestoreAndAcceptEdits) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   struct Case {
     const char* attribute;
     const char* opening;
@@ -848,7 +877,6 @@ TEST(RendererAnimationPresentation, TypedTextFieldsRestoreAndAcceptEdits) {
     }
   }
 }
-#endif
 
 TEST(RendererAnimationPresentation, ToOnlyViewBoxUsesTypedBase) {
   auto document = ParsePresentation(
@@ -977,8 +1005,8 @@ TEST(RendererAnimationPresentation, FilterPrimitiveWidthRendersAndRestores) {
               testing::StartsWith("@@@@............"));
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TextPositionMatchesAnIndependentStaticSample) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(R"svg(
     <text x="0" y="12" font-size="12">H<set attributeName="x" to="8" dur="1s"/></text>)svg");
   auto expected = ParsePresentation(R"(<text x="8" y="12" font-size="12">H</text>)");
@@ -991,7 +1019,6 @@ TEST(RendererAnimationPresentation, TextPositionMatchesAnIndependentStaticSample
   EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
             RendererTestUtils::renderToAsciiImage(base).generated);
 }
-#endif
 
 TEST(RendererAnimationPresentation, EditedPatternWidthRestoresAuthorCascadePriority) {
   auto document = ParsePresentation(R"svg(
@@ -1018,8 +1045,8 @@ TEST(RendererAnimationPresentation, MotionUsesCssDefinedPathGeometry) {
             RendererTestUtils::renderToAsciiImage(expected).generated);
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TextLengthAndRotationMatchStaticSamples) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   struct Case {
     std::string_view attribute;
     std::string_view value;
@@ -1044,7 +1071,6 @@ TEST(RendererAnimationPresentation, TextLengthAndRotationMatchStaticSamples) {
               RendererTestUtils::renderToAsciiImage(base).generated);
   }
 }
-#endif
 
 TEST(RendererAnimationPresentation, UseHrefSwitchesAndRestoresWithoutChangingSource) {
   auto document = ParsePresentation(R"svg(
@@ -1103,8 +1129,8 @@ TEST(RendererAnimationPresentation, AnimatedMpathHrefChangesTheSameMotionSample)
             RendererTestUtils::renderToAsciiImage(expected).generated);
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TextPathHrefSwitchesLayout) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(R"svg(
     <defs><path id="a" d="M0 12H16"/><path id="b" d="M0 16H16"/></defs>
     <text font-size="12"><textPath id="t" href="#a">H</textPath></text>
@@ -1118,7 +1144,6 @@ TEST(RendererAnimationPresentation, TextPathHrefSwitchesLayout) {
               testing::Contains(testing::Not(testing::AnyOf(testing::Eq('.'), testing::Eq('\n')))));
   EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, expectedAscii);
 }
-#endif
 
 TEST(RendererAnimationPresentation, ConstantImageReferenceKeepsItsDecodedResource) {
   auto document = ParsePresentation(R"svg(
@@ -1514,8 +1539,8 @@ TEST(RendererAnimationPresentation, PathLengthAnimatesDashCalibration) {
               test::Rgba(0, 0, 0, 0));
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TextPathOffsetAnimatesAndRestores) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(R"svg(
     <defs><path id="p" d="M0 12H16"/></defs>
     <text font-size="12"><textPath id="t" href="#p" startOffset="0">H</textPath></text>
@@ -1532,7 +1557,6 @@ TEST(RendererAnimationPresentation, TextPathOffsetAnimatesAndRestores) {
   document.setTime(2);
   EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, base);
 }
-#endif
 
 TEST(RendererAnimationPresentation, ToOnlyGeometryStartsFromTypedWidth) {
   auto document = ParsePresentation(R"svg(
@@ -1615,8 +1639,8 @@ TEST(RendererAnimationPresentation, MixedGradientUnitsUseTheirCoordinateSystem) 
   }
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, RemovingAnimatedTextPathHrefPreservesInlineGeometry) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(R"svg(
     <defs><path id="a" d="M0 8H16"/><path id="b" d="M0 16H16"/></defs>
     <text font-size="12"><textPath id="t" href="#a" path="M0 12H16" startOffset="4">H</textPath></text>
@@ -1632,6 +1656,7 @@ TEST(RendererAnimationPresentation, RemovingAnimatedTextPathHrefPreservesInlineG
 }
 
 TEST(RendererAnimationPresentation, TextPathSourceRestorationHasAnIndependentWorkBudget) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   auto document = ParsePresentation(R"svg(
     <text font-size="12"><textPath id="t" path="M0 12H16">H</textPath></text>
     <set href="#t" attributeName="path" to="M0 8H16" dur="1s"/>)svg");
@@ -1646,7 +1671,6 @@ TEST(RendererAnimationPresentation, TextPathSourceRestorationHasAnIndependentWor
   EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
             RendererTestUtils::renderToAsciiImage(expected).generated);
 }
-#endif
 
 TEST(RendererAnimationPresentation, RemovingAnimatedFilterImageHrefPreservesAspectRatio) {
   auto document = ParsePresentation(R"svg(

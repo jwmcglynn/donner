@@ -63,6 +63,13 @@ class Fixture:
         self._temporary_directory.cleanup()
 
 
+# The compile-time form the text capabilities used before the text macros became private.
+_MACRO_GATED_TEXT = (
+    "#ifdef DONNER_TEXT_ENABLED\n    case RendererBackendFeature::Text: return true;\n#else\n"
+    "    case RendererBackendFeature::Text: return false;\n#endif"
+)
+
+
 class ParityReportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = Fixture()
@@ -643,8 +650,8 @@ class ParityReportTests(unittest.TestCase):
         self.assertIn("README_resvg_test_suite.md", parity_report.SKIP_RULE)
 
     def _edge_coverage_report(self) -> dict[str, object]:
-        for name in ("listed.svg", "new.svg", "golden.svg", "shared.svg", "aa.svg", "cpu.svg",
-                     "plain.svg"):
+        for name in ("listed.svg", "new.svg", "golden.svg", "shared.svg", "quantized.svg", "aa.svg",
+                     "cpu.svg", "plain.svg"):
             self.fixture.add_case(f"painting/fill/{name}")
         return parity_report.build_report(
             _registration(
@@ -655,6 +662,8 @@ class ParityReportTests(unittest.TestCase):
                 '{"golden.svg", Params().withGeodeGoldenOverride("gpu.png", "Geode golden")'
                 '.withGeodeQuarterPixelEdgeCoverage()},'
                 '{"shared.svg", Params::WithGoldenOverride("cpu.png", 0.02f, "Donner golden")'
+                '.withGeodeQuarterPixelEdgeCoverage()},'
+                '{"quantized.svg", Params::WithGoldenOverride("quantized.png", 0.02f, "Donner")'
                 '.withGeodeQuarterPixelEdgeCoverage()},'
                 '{"aa.svg", Params().includeAntiAliasingDifferences()'
                 '.withGeodeQuarterPixelEdgeCoverage()},'
@@ -676,30 +685,36 @@ class ParityReportTests(unittest.TestCase):
             {"default_text": False, "max": False, "geode": True},
         )
         self.assertIn("geode_edge_coverage", listed["exception_types"])
-        for golden in ("golden.svg", "shared.svg"):
-            self.assertFalse(
-                by_path["painting/fill/" + golden]["lanes"]["geode"]["settings"][
-                    "quarter_pixel_edge_coverage"])
+        # The fixture applies the rule against a shared golden, never against a Geode golden;
+        # quarter_pixel_edge_violations limits shared goldens to quantized ones.
+        self.assertFalse(by_path["painting/fill/golden.svg"]["lanes"]["geode"]["settings"][
+            "quarter_pixel_edge_coverage"])
+        self.assertTrue(by_path["painting/fill/shared.svg"]["lanes"]["geode"]["settings"][
+            "quarter_pixel_edge_coverage"])
         plain = by_path["painting/fill/plain.svg"]
         self.assertEqual(plain["exception_types"], [])
         self.assertFalse(plain["lanes"]["geode"]["settings"]["quarter_pixel_edge_coverage"])
-        self.assertEqual(report["summary"]["geode_quarter_pixel_edge_cases"], 6)
+        self.assertEqual(report["summary"]["geode_quarter_pixel_edge_cases"], 7)
         self.assertIn("geode_edge_coverage", parity_report._LOOSENING_EXCEPTIONS)
 
     def test_quarter_pixel_edge_allowlist_rejects_unlisted_inert_and_stale_rows(self) -> None:
         report = self._edge_coverage_report()
 
-        violations = parity_report.quarter_pixel_edge_violations(report, {
+        violations = parity_report.quarter_pixel_edge_violations(report, {"quantized.png"}, {
             "painting/fill/listed.svg", "painting/fill/golden.svg", "painting/fill/shared.svg",
-            "painting/fill/aa.svg", "painting/fill/cpu.svg", "painting/fill/fixed.svg",
+            "painting/fill/quantized.svg", "painting/fill/aa.svg", "painting/fill/cpu.svg",
+            "painting/fill/fixed.svg",
         })
 
         self.assertEqual(violations, sorted([
             "painting/fill/new.svg: not in QUARTER_PIXEL_EDGE_ALLOWLIST; "
             + parity_report.QUARTER_PIXEL_EDGE_RULE,
-            *(f"painting/fill/{golden}: the Geode lane compares against a custom golden, not the "
-              "vendored quarter-pixel quantized resvg reference; remove the quarter-pixel edge "
-              "coverage rule" for golden in ("golden.svg", "shared.svg")),
+            "painting/fill/golden.svg: the Geode lane compares against a Geode golden, which is "
+            "not quarter-pixel quantized; remove the quarter-pixel edge coverage rule",
+            "painting/fill/shared.svg: the Geode lane compares against cpu.png, which the "
+            "'## Quarter-pixel quantized goldens' table in "
+            "donner/svg/renderer/testdata/golden/README.md does not record as a quarter-pixel "
+            "quantized Donner software rendering; remove the quarter-pixel edge coverage rule",
             "painting/fill/aa.svg: the quarter-pixel edge coverage rule needs anti-aliasing "
             "detection, which includeAntiAliasingDifferences() turns off",
             "painting/fill/cpu.svg: the Geode lane does not compare, so the quarter-pixel edge "
@@ -708,6 +723,32 @@ class ParityReportTests(unittest.TestCase):
             "opts into the quarter-pixel edge coverage rule, so remove it",
         ]))
         self.assertIn("README_resvg_test_suite.md", parity_report.QUARTER_PIXEL_EDGE_RULE)
+
+    def test_quantized_goldens_come_from_the_golden_readme_table(self) -> None:
+        readme = "\n".join([
+            "## Earlier section",
+            "| `firefox-elsewhere.png` | Firefox 153 | x |",
+            parity_report.QUANTIZED_GOLDEN_HEADING,
+            "",
+            "| Golden | Renderer | Measured |",
+            "| --- | --- | --- |",
+            "| `donner-a.png` | Donner software renderer | 0.55 |",
+            "| `sub/donner-b.png` | Donner software renderer | 0.66 |",
+            "",
+            "## Later section",
+            "| `donner-c.png` | Donner software renderer | x |",
+        ])
+        self.assertEqual(parity_report.quantized_goldens_from_readme(readme), {
+            "donner/svg/renderer/testdata/golden/donner-a.png",
+            "donner/svg/renderer/testdata/golden/sub/donner-b.png",
+        })
+        with self.assertRaisesRegex(parity_report.ParityReportError, "only 'Donner software"):
+            parity_report.quantized_goldens_from_readme(
+                readme.replace("`sub/donner-b.png` | Donner software renderer",
+                               "`sub/donner-b.png` | Firefox 153"))
+        with self.assertRaisesRegex(parity_report.ParityReportError, "needs one"):
+            parity_report.quantized_goldens_from_readme(
+                readme.replace(parity_report.QUANTIZED_GOLDEN_HEADING, "## Renamed"))
 
     def test_quarter_pixel_edge_rows_carry_a_named_policy(self) -> None:
         self.fixture.add_case("painting/fill/listed.svg")
@@ -1272,8 +1313,12 @@ class ParityReportTests(unittest.TestCase):
                  "corpus canvas rule differs"),
             ],
             "RendererTestBackendGeode.cc": [
-                ("#ifdef DONNER_TEXT_ENABLED\n    case RendererBackendFeature::Text: return true;",
-                 "#ifdef DONNER_TEXT_FULL\n    case RendererBackendFeature::Text: return true;",
+                ("return IsTextBuiltIn();", "return true;", "Geode capability Text differs"),
+                ("return IsFullTextBuiltIn();", "return IsTextBuiltIn();",
+                 "Geode capability TextFull differs"),
+                # The macro form no longer follows the build: the macros are private.
+                ("    case RendererBackendFeature::Text: return IsTextBuiltIn();",
+                 _MACRO_GATED_TEXT,
                  "Geode capability Text differs"),
                 ("    case RendererBackendFeature::FilterEffects: return true;",
                  "    case RendererBackendFeature::FilterEffects: return false;",
@@ -1283,9 +1328,11 @@ class ParityReportTests(unittest.TestCase):
                 ("mode == ComparisonMode::GeodeGolden &&\n",
                  "mode != ComparisonMode::TinyGolden &&\n",
                  "quarter-pixel edge coverage rule differs"),
-                ("params.overrideGoldenFilename.empty() && ", "",
+                ("params.geodeOverrideGoldenFilename.empty();", "true;",
                  "quarter-pixel edge coverage rule differs"),
-                (" && params.geodeOverrideGoldenFilename.empty();", ";",
+                ("params.geodeOverrideGoldenFilename.empty();",
+                 "params.overrideGoldenFilename.empty() && "
+                 "params.geodeOverrideGoldenFilename.empty();",
                  "quarter-pixel edge coverage rule differs"),
                 (".acceptQuarterPixelEdgeCoverage = acceptsQuarterPixelEdgeCoverage(params, mode)}",
                  ".acceptQuarterPixelEdgeCoverage = true}",
@@ -1305,6 +1352,14 @@ class ParityReportTests(unittest.TestCase):
                  "reference canvas rule differs"),
                 ('if (getenv("UPDATE_GOLDEN_IMAGES_DIR") == nullptr) {', "if (false) {",
                  "reference canvas rule differs"),
+            ],
+            "RendererTestBackendTinySkia.cc": [
+                ("return IsTextBuiltIn();", "return true;", "TinySkia capability Text differs"),
+                ("return IsFullTextBuiltIn();", "return IsTextBuiltIn();",
+                 "TinySkia capability TextFull differs"),
+                ("    case RendererBackendFeature::Text: return IsTextBuiltIn();",
+                 _MACRO_GATED_TEXT,
+                 "TinySkia capability Text differs"),
             ],
         }
         for name, replacements in edits.items():
@@ -1894,7 +1949,8 @@ class RealTreeParityReportTests(unittest.TestCase):
                 parity_report.skip_ratchet_violations(report),
             "QUARTER_PIXEL_EDGE_ALLOWLIST equals the rows whose Geode comparison accepts "
             "quarter-pixel edge coverage differences":
-                parity_report.quarter_pixel_edge_violations(report),
+                parity_report.quarter_pixel_edge_violations(
+                    report, parity_report.quantized_goldens(repo_root)),
             "GEODE_GATE_ALLOWLIST equals the rows that disable their Geode comparison, each with a "
             "reason":
                 parity_report.geode_gate_violations(report),

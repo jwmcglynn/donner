@@ -1,12 +1,13 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:performance_tests.bzl", "performance_tests")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
+load("//build_defs:variant_neutral_tests.bzl", "variant_neutral_test_suite")
 
 exports_files(
     ["ci_darwin.bzl", "ci_metal.bzl"],
@@ -47,6 +48,20 @@ py_test(
     deps = ["//tools:test_executable_fixtures"],
 )
 
+py_library(
+    name = "check_text_tier_defines",
+    srcs = ["check_text_tier_defines.py"],
+    visibility = ["//tools/ci:__pkg__"],
+)
+
+py_test(
+    name = "check_text_tier_defines_tests",
+    size = "small",
+    srcs = ["check_text_tier_defines_tests.py"],
+    main = "check_text_tier_defines_tests.py",
+    deps = [":check_text_tier_defines"],
+)
+
 py_test(
     name = "geode_test_scheduling_tests",
     size = "small",
@@ -64,6 +79,18 @@ py_test(
     ],
     main = "geode_test_scheduling_tests.py",
     deps = ["//tools/ci:lane_view"],
+)
+
+py_test(
+    name = "check_variant_transitions_tests",
+    size = "small",
+    srcs = [
+        "check_variant_transitions.py",
+        "check_variant_transitions_tests.py",
+    ],
+    data = [":variant_settings.bzl"],
+    main = "check_variant_transitions_tests.py",
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_test(
@@ -206,6 +233,30 @@ bool_flag(
     name = "disable_backend_test_transition",
     build_setting_default = False,
 )
+
+# Compile donner_cc_library sources once per platform instead of once per product variant (see
+# variant_neutral.bzl). On by default; set it to false to compile every library in place, for
+# example to rule sharing out while debugging. The config settings below also keep sharing off on
+# other platforms (WebAssembly objects follow the threading ABI of each profile) and under coverage
+# collection, whose per-configuration compiles carry the coverage notes of their sources.
+bool_flag(
+    name = "share_variant_neutral_compiles",
+    build_setting_default = True,
+    visibility = ["//visibility:public"],
+)
+
+[
+    config_setting(
+        name = "share_variant_neutral_compiles_" + os,
+        constraint_values = ["@platforms//os:" + os],
+        flag_values = {":share_variant_neutral_compiles": "true"},
+        values = {"collect_code_coverage": "false"},
+        visibility = ["//visibility:public"],
+    )
+    for os in ["linux", "macos"]
+]
+
+variant_neutral_test_suite(name = "variant_neutral_tests")
 
 # Compatibility flag for existing callers; native speed flags apply only to a target
 # itself and never transition dependency configurations.

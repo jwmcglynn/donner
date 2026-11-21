@@ -225,6 +225,12 @@ for the external-consumer setup.
 | `DONNER_TEXT_WOFF2`       | `ON`          | Enable WOFF2 web font loading; requires `DONNER_TEXT`             |
 | `DONNER_FILTERS`          | `ON`          | Enable SVG filter effects                                         |
 
+The text options, and the matching Bazel settings below, select what the Donner libraries compile;
+they do not define preprocessor macros for code that uses Donner. To branch on the text support a
+program was linked with, call `donner::svg::BuiltTextTier()`, `IsWoff2BuiltIn()` or the other
+queries in `donner/svg/text/TextTier.h`, and prepare the packaged fonts with
+`donner::svg::PrepareTextResources()`.
+
 The CMake build does not build the Geode GPU backend or the native GPU runtime yet
 ([#1721](https://github.com/jwmcglynn/donner/issues/1721)); use Bazel for Geode.
 

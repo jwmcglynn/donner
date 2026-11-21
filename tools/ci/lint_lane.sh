@@ -14,6 +14,9 @@
 #   - the lexical no-Rust-dependency verifier, which also scans paths .bazelignore hides
 #   - tools/ci/fuzz_lane_coverage.py: a Fuzz workflow phase soaks every fuzzer (a Bazel query)
 #   - build_defs/check_local_gpu_tags.py: GPU test scheduling tags in every tracked BUILD file
+#   - build_defs/check_text_tier_defines.py: text tier macros only in reviewed `local_defines`
+#   - build_defs/check_variant_transitions.py: every raw transition() that writes a variant setting
+#     is reviewed
 #
 # Usage: tools/ci/lint_lane.sh [--changed BASE]
 # Each check is a `::group::` in the Actions log and a row in the job summary; the first failing
@@ -49,3 +52,5 @@ lane_phase "No-Rust-dependency verifier (blocking)" \
   python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default
 lane_phase "Check every fuzzer is soaked by the Fuzz workflow" python3 tools/ci/fuzz_lane_coverage.py
 lane_phase "Check GPU test scheduling tags" python3 build_defs/check_local_gpu_tags.py
+lane_phase "Check text tier macros stay private" python3 build_defs/check_text_tier_defines.py
+lane_phase "Check variant transitions" python3 build_defs/check_variant_transitions.py

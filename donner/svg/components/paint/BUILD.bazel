@@ -64,6 +64,8 @@ donner_cc_library(
         "//donner/svg/properties:property_parsing",
     ],
     alwayslink = True,  # link-order independence (#665)
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_test(

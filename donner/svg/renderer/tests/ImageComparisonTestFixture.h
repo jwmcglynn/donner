@@ -18,6 +18,7 @@
 #include "donner/svg/renderer/TerminalImageViewer.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace donner::svg {
 
@@ -92,7 +93,8 @@ struct ImageComparisonParams {
   /// Maximum number of pixels that can exceed the threshold.
   int maxMismatchedPixels = kDefaultMismatchedPixels;
   /// Override for maxMismatchedPixels when running without HarfBuzz text shaping
-  /// (DONNER_TEXT_FULL not defined). -1 means use maxMismatchedPixels for all configs.
+  /// (\ref BuiltTextTier is not \ref TextTier::Full). -1 means use maxMismatchedPixels for all
+  /// configs.
   int simpleTextMaxMismatchedPixels = -1;
   /// Override for maxMismatchedPixels when rendering with Geode. -1 means use
   /// the active text-config maxMismatchedPixels budget.
@@ -101,10 +103,11 @@ struct ImageComparisonParams {
   bool skipSimpleText = false;
   /// If true, count anti-aliased pixels as mismatches instead of suppressing them.
   bool includeAntiAliasing = false;
-  /// If true, the `GeodeGolden` comparison against the vendored resvg reference accepts edge
-  /// pixels whose coverage differs from that quarter-pixel quantized reference by no more than the
-  /// quantization allows (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage`). Set it
-  /// through \ref withGeodeQuarterPixelEdgeCoverage.
+  /// If true, the `GeodeGolden` comparison against the vendored resvg reference, or the shared
+  /// golden, accepts edge pixels whose coverage differs from that quarter-pixel quantized image by
+  /// no more than the quantization allows
+  /// (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage`). Set it through
+  /// \ref withGeodeQuarterPixelEdgeCoverage.
   bool geodeQuarterPixelEdgeCoverage = false;
   /// If true, skip this test case.
   bool skip = false;
@@ -284,10 +287,14 @@ struct ImageComparisonParams {
    *
    * For a row whose vendored resvg reference samples coverage on four sub-scanlines per pixel, so
    * its horizontal edges sit on quarter-pixel boundaries while Geode renders exact coverage. The
-   * comparison then accepts an edge pixel that both images cover partially, whose alphas differ by
-   * at most `svg_suite::kQuarterPixelEdgeCoverageMaxAlphaDelta` and whose colors match when both
-   * carry the smaller alpha (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage`).
-   * Other comparison modes, and a comparison against a custom golden, are unaffected.
+   * comparison then accepts an edge pixel that both images cover partially, whose upper or lower
+   * neighbor in the reference is empty or fully covered (and neither the pixel above nor the pixel
+   * below has its alpha), whose alphas differ by at most
+   * `svg_suite::kQuarterPixelEdgeCoverageMaxAlphaDelta` and whose colors match when both carry the
+   * smaller alpha (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage`).
+   * Other comparison modes, and a comparison against a Geode golden, are unaffected. A shared
+   * golden (\ref WithGoldenOverride) is compared under the rule too, so it must be quarter-pixel
+   * quantized: in the resvg suite, a Donner software rendering recorded in the golden README.
    * In the resvg suite every such row must be listed in `QUARTER_PIXEL_EDGE_ALLOWLIST` in
    * `tools/resvg_parity/parity_report.py`; `//tools/resvg_parity:parity_report_tests` checks that
    * the list equals the opted-in rows.
@@ -372,7 +379,8 @@ struct ImageComparisonParams {
   /**
    * @brief Sets a separate maxMismatchedPixels for simple text (without HarfBuzz shaping).
    *
-   * When DONNER_TEXT_FULL is not defined, this value is used instead of maxMismatchedPixels.
+   * When \ref BuiltTextTier is not \ref TextTier::Full, this value is used instead of
+   * maxMismatchedPixels.
    * This allows tests that require text shaping (combining marks, ligatures, etc.) to have
    * a looser threshold for simple text while keeping a strict threshold for HarfBuzz.
    *
@@ -426,12 +434,9 @@ struct ImageComparisonParams {
    * @return Max mismatched pixels for the active configuration.
    */
   int effectiveMaxMismatchedPixels(ComparisonMode mode = ComparisonMode::TinyGolden) const {
-#ifdef DONNER_TEXT_FULL
-    const int textConfigMaxMismatchedPixels = maxMismatchedPixels;
-#else
     const int textConfigMaxMismatchedPixels =
-        simpleTextMaxMismatchedPixels >= 0 ? simpleTextMaxMismatchedPixels : maxMismatchedPixels;
-#endif
+        !IsFullTextBuiltIn() && simpleTextMaxMismatchedPixels >= 0 ? simpleTextMaxMismatchedPixels
+                                                                   : maxMismatchedPixels;
     if (BackendForMode(mode) == RendererBackend::Geode && geodeMaxMismatchedPixels >= 0) {
       return geodeMaxMismatchedPixels;
     }
@@ -446,12 +451,7 @@ struct ImageComparisonParams {
     if (skip) {
       return true;
     }
-#ifndef DONNER_TEXT_FULL
-    if (skipSimpleText) {
-      return true;
-    }
-#endif
-    return false;
+    return skipSimpleText && !IsFullTextBuiltIn();
   }
 
   /// True if the case renders without a pixel comparison, which only \ref UndefinedBehavior and

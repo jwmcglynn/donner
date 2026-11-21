@@ -220,17 +220,9 @@ donner_cc_library(
     hdrs = [
         "RendererTestBackend.h",
     ],
-    # `DONNER_TEXT_ENABLED` flips the feature bit for `RendererBackendFeature::Text`
-    # -- Phase 4 text rendering is compiled into the renderers only when the build
-    # is configured with `--config=text` / `--config=text-full`, and the feature
-    # flag here needs to agree so the resvg test gate doesn't incorrectly skip
-    # text tests. `DONNER_GEODE_BACKEND_AVAILABLE` (geode build only) makes the
-    # dispatcher link + register the geode backend and report it as the primary
-    # backend via `ActiveRendererBackend()`.
+    # `DONNER_GEODE_BACKEND_AVAILABLE` (geode build only) makes the dispatcher link + register the
+    # geode backend and report it as the primary backend via `ActiveRendererBackend()`.
     defines = select({
-        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }) + select({
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GEODE_BACKEND_AVAILABLE"],
         "//conditions:default": [],
     }),
@@ -238,6 +230,7 @@ donner_cc_library(
         "//donner/svg/renderer",
         # The tiny-skia renderer is linked in every build (pure CPU, no wgpu).
         "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/text:text_tier",
         "@com_google_gtest//:gtest",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
@@ -263,10 +256,7 @@ donner_cc_library(
     defines = [
         "DONNER_GEODE_BACKEND_AVAILABLE",
         "DONNER_GEODE_WGPU_REFERENCE=1",
-    ] + select({
-        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }),
+    ],
     target_compatible_with = ["@platforms//os:linux"] + select({
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -277,8 +267,11 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "//donner/svg/text:text_tier",
         "@com_google_gtest//:gtest",
     ],
+    # Compatible only in the wgpu reference configuration, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -310,9 +303,12 @@ donner_cc_library(
         "//donner/svg/resources:font_metadata",
         "//donner/svg/resources:resource_loader_interface",
         "//donner/svg/resources:sandboxed_file_resource_loader",
+        "//donner/svg/text:text_tier",
         "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
     ],
+    # Sees the text-only placed text geometry headers through its deps only in the text tiers.
+    variant_neutral = False,
 )
 
 # Same image-comparison source and golden rules as the native fixture, but with only the explicit
@@ -343,9 +339,12 @@ donner_cc_library(
         "//donner/svg/resources:font_metadata",
         "//donner/svg/resources:resource_loader_interface",
         "//donner/svg/resources:sandboxed_file_resource_loader",
+        "//donner/svg/text:text_tier",
         "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
     ],
+    # Compatible only in the wgpu reference configuration, so its neutral compile would be incompatible.
+    variant_neutral = False,
 )
 
 donner_cc_test(
@@ -462,6 +461,7 @@ donner_cc_test(
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_tier_test_utils",
     ],
 )
 
@@ -470,10 +470,6 @@ donner_cc_test(
     srcs = [
         "RendererSnapshot_tests.cc",
     ],
-    defines = select({
-        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }),
     deps = [
         ":mock_renderer_interface",
         "//donner/svg",
@@ -482,6 +478,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/resources:font_manager",
         "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_tier_test_utils",
         "//third_party/public-sans",
         "//third_party/roboto",
         "@com_google_gtest//:gtest_main",
@@ -594,10 +591,6 @@ donner_cc_test(
         "//third_party/public-sans:public-sans_resource_files",
         "//third_party/resvg-test-suite:fonts",
     ],
-    defines = select({
-        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }),
     opens_gpu_device = True,
     # About 330 cases. Unsharded under ASan on the hosted nightly runner, the base target timed out
     # at the 60 s `size = "small"` limit and the text_full and geode variants took 58 s and 50 s.
@@ -621,6 +614,7 @@ donner_cc_test(
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:font_manager",
         "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -801,6 +795,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_tier",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -858,6 +854,12 @@ donner_cc_test(
     name = "font_synthesis_snapshot_tests",
     srcs = ["FontSynthesisSnapshot_tests.cc"],
     data = ["//third_party/resvg-test-suite:fonts"],
+    # One case reads the font catalog, which only the full text configuration links, so the case is
+    # compiled only there.
+    local_defines = select({
+        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
+        "//conditions:default": [],
+    }),
     variants = ["text_full"],
     deps = [
         ":mock_renderer_interface",
@@ -886,6 +888,7 @@ donner_cc_test(
         "//donner/svg/renderer:placed_text_geometry",
         "//donner/svg/resources:font_manager",
         "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -908,6 +911,7 @@ donner_cc_test(
         "//donner/svg/text:text_backend_simple",
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_layout_params",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -985,6 +989,7 @@ donner_cc_test(
         "//donner/svg/resources:font_manager",
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_tier",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1159,6 +1164,7 @@ donner_cc_test(
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_layout_params",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1232,6 +1238,7 @@ donner_cc_test(
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
+        "//donner/svg/text:text_tier",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1641,6 +1648,8 @@ donner_cc_test(
         "//donner/svg/resources:font_manager",
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_tier",
+        "//donner/svg/text:text_tier_test_utils",
         "//third_party/public-sans",
         "@com_google_gtest//:gtest_main",
     ],
@@ -1678,6 +1687,8 @@ donner_cc_library(
     ],
     # The translation unit registers GoogleTest cases through static initializers.
     alwayslink = True,
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 [donner_cc_test(
@@ -1970,6 +1981,7 @@ donner_cc_binary(
     deps = [
         ":svg_suite_render",
         "//donner/base:packaged_resource",
+        "//donner/svg/text:text_tier",
         "//tools/svg_suite:image_compare",
         "@nlohmann_json//:json",
     ],
@@ -2091,6 +2103,8 @@ donner_cc_library(
         "//tools/svg_suite:image_compare",
         "@picosha2",
     ],
+    # Sees the text-only placed text geometry headers through its deps only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_binary(
@@ -2105,6 +2119,7 @@ donner_cc_binary(
     deps = [
         ":svg_suite_render",
         "//donner/base:packaged_resource",
+        "//donner/svg/text:text_tier",
         "//tools/svg_suite:image_compare",
     ],
 )
@@ -2146,6 +2161,7 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -2241,6 +2257,8 @@ donner_cc_library(
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
     ],
+    # Sees the WOFF2 parser headers through its deps only in the full text tier.
+    variant_neutral = False,
 )
 
 donner_cc_test(
@@ -2359,6 +2377,8 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(
@@ -2374,6 +2394,8 @@ donner_cc_library(
         "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest",
     ],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
 )
 
 # Retained render-tree updates: every frame of a DOM edit sequence must match the full rebuild of

@@ -8,6 +8,7 @@ import subprocess
 import sys
 from urllib.parse import quote
 
+from build_defs.check_text_tier_defines import is_governed as text_tier_governed
 from tools.rust_boundary.rust_scopes import is_build_graph_path, is_rust_source_path
 
 CPP = (".cc", ".h", ".cpp", ".hpp", ".mm")
@@ -184,6 +185,9 @@ def relationship_commands(paths):
     if any(fuzz_input(p) for p in paths):
         yield "Check fuzzer soak coverage", [py, "tools/ci/fuzz_lane_coverage.py"]
     yield from gpu_commands(paths)
+    yield from text_tier_commands(paths)
+    if any(p.endswith(".bzl") or p == "build_defs/check_variant_transitions.py" for p in paths):
+        yield "Check variant transitions", [sys.executable, "build_defs/check_variant_transitions.py"]
 
 
 def gpu_commands(paths):
@@ -194,6 +198,16 @@ def gpu_commands(paths):
         yield "Check GPU scheduling policy", [py, "build_defs/check_local_gpu_tags.py"]
     else:
         yield from file_commands("Check changed GPU scheduling tags", [py, "build_defs/check_local_gpu_tags.py"], builds)
+
+
+def text_tier_commands(paths):
+    py = sys.executable
+    if "build_defs/check_text_tier_defines.py" in paths:
+        yield "Check text tier macro policy", [py, "build_defs/check_text_tier_defines.py"]
+        return
+    governed = [p for p in paths if text_tier_governed(p) and Path(p).is_file() and not Path(p).is_symlink()]
+    yield from file_commands("Check changed text tier macros", [py, "build_defs/check_text_tier_defines.py"],
+                             governed)
 
 
 def rust_commands(paths):

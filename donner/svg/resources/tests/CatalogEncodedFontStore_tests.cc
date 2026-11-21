@@ -5,6 +5,7 @@
 
 #include "donner/svg/resources/EmbeddedFontProvider.h"
 #include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -150,7 +151,6 @@ TEST(CatalogEncodedFontStoreTest, AdmissionReleaseWakesWithoutARequestOrManagerL
   store->setWakeCallback({});
 }
 
-#ifdef DONNER_TEXT_WOFF2_ENABLED
 class AlteredCatalogProvider final : public FontFamilyProvider {
 public:
   std::vector<FontFamilyInfo> families() const override { return native_.families(); }
@@ -179,6 +179,7 @@ private:
 };
 
 TEST(CatalogEncodedFontStoreTest, TerminalDecodeFailureIsMemoizedPerContentGeneration) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   AlteredCatalogProvider provider;
   Registry registry;
   FontManager manager(registry);
@@ -202,6 +203,7 @@ TEST(CatalogEncodedFontStoreTest, TerminalDecodeFailureIsMemoizedPerContentGener
 // A catalog face's new content generation reaches every resolution cache, whichever of them
 // notices it first: the document's own answers and those cached while a host lends fonts.
 TEST(CatalogEncodedFontStoreTest, GenerationChangeReachesEveryResolutionCache) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   Registry hostRegistry;
   FontManager host(hostRegistry);
   host.setGenericFamilyMapping("fantasy", "Inter");
@@ -234,6 +236,7 @@ TEST(CatalogEncodedFontStoreTest, GenerationChangeReachesEveryResolutionCache) {
 }
 
 TEST(CatalogEncodedFontStoreTest, ConsumerBudgetPressureDefersWithoutPoisoningTheAsset) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   EmbeddedFontProvider provider;
   Registry registry;
   FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes, 1);
@@ -264,6 +267,7 @@ TEST(CatalogEncodedFontStoreTest, ConsumerBudgetPressureDefersWithoutPoisoningTh
 
 // A face retained only for a host that no longer lends it does not hold a catalog face back.
 TEST(CatalogEncodedFontStoreTest, IdleLentFacesYieldTheBudgetToACatalogFace) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   EmbeddedFontProvider provider;
   Registry registry;
   FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes, 1);
@@ -288,6 +292,7 @@ TEST(CatalogEncodedFontStoreTest, IdleLentFacesYieldTheBudgetToACatalogFace) {
 }
 
 TEST(CatalogEncodedFontStoreTest, FamilyMetadataPressureDefersAndRecoversAfterRelease) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   Registry measurementRegistry;
   FontManager measurement(measurementRegistry);
   const auto measured = measurement.loadFontData(InterBytes(), FontDataTrust::Trusted);
@@ -329,6 +334,7 @@ TEST(CatalogEncodedFontStoreTest, FamilyMetadataPressureDefersAndRecoversAfterRe
 }
 
 TEST(CatalogEncodedFontStoreTest, FamilyMetadataBeyondWholeBudgetRemainsTerminal) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   Registry measurementRegistry;
   FontManager measurement(measurementRegistry);
   ASSERT_EQ(measurement.isValidatedFont(measurement.loadFontData(InterBytes())), true);
@@ -350,6 +356,7 @@ TEST(CatalogEncodedFontStoreTest, FamilyMetadataBeyondWholeBudgetRemainsTerminal
 }
 
 TEST(CatalogEncodedFontStoreTest, ReadyAssetDeferredDecodeWakesWithoutAnotherFetch) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   auto store = std::make_shared<CatalogEncodedFontStore>();
   EmbeddedFontProvider provider(store);
   const auto& id = InterAsset().contentId;
@@ -392,6 +399,7 @@ TEST(CatalogEncodedFontStoreTest, ReadyAssetDeferredDecodeWakesWithoutAnotherFet
 }
 
 TEST(CatalogEncodedFontStoreTest, ArrivalDuringRenderWaitsForExplicitResourceAdoption) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   auto store = std::make_shared<CatalogEncodedFontStore>();
   EmbeddedFontProvider provider(store);
   Registry registry;
@@ -418,6 +426,7 @@ TEST(CatalogEncodedFontStoreTest, ArrivalDuringRenderWaitsForExplicitResourceAdo
 }
 
 TEST(CatalogEncodedFontStoreTest, PendingManagerRefreshesAndCapturesCachedDependencies) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   auto store = std::make_shared<CatalogEncodedFontStore>();
   EmbeddedFontProvider provider(store);
   Registry registry;
@@ -450,6 +459,7 @@ TEST(CatalogEncodedFontStoreTest, PendingManagerRefreshesAndCapturesCachedDepend
 class NativeCatalogDecoderTest : public testing::TestWithParam<const char*> {};
 
 TEST_P(NativeCatalogDecoderTest, EmbeddedWoff2DecodesAndReusesTheFullFace) {
+  DONNER_SKIP_UNLESS_WOFF2_BUILT_IN();
   EmbeddedFontProvider provider;
   Registry registry;
   FontManager manager(registry);
@@ -473,7 +483,6 @@ INSTANTIATE_TEST_SUITE_P(AllTwelveFamilies, NativeCatalogDecoderTest,
                          testing::Values("Bebas Neue", "Bitter", "Inter", "JetBrains Mono", "Lato",
                                          "Lora", "Montserrat", "Open Sans", "Oswald", "Pacifico",
                                          "Playfair Display", "Roboto Mono"));
-#endif
 
 }  // namespace
 }  // namespace donner::svg

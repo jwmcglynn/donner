@@ -65,6 +65,9 @@ struct ComparisonOptions {
    *
    * A pixel pixelmatch counts is accepted instead when all of these hold:
    * - both images cover it partially (alpha strictly between 0 and 255 in each);
+   * - in the expected image, the pixel directly above or below it is empty or fully covered (a
+   *   pixel outside the image does not count), and neither the pixel above nor the pixel below
+   *   has its alpha;
    * - the alphas differ by at most \ref kQuarterPixelEdgeCoverageMaxAlphaDelta;
    * - the colors agree at the coverage the two pixels share: pixelmatch, at the same threshold and
    *   background, finds no difference between the two straight colors when both carry the smaller
@@ -76,6 +79,15 @@ struct ComparisonOptions {
    * very low alpha a color difference can fall under the threshold and the pixel is accepted.
    * Blending at the smaller alpha also scales the 8-bit rounding of a straight color stored for a
    * low-alpha pixel down to about one level.
+   *
+   * The vertical-neighbor condition keeps the rule near the pixels quantization moves: a
+   * quarter-pixel quantized edge row lies between the shape's inside and outside, so a pixel above
+   * or below it is empty or fully covered and differs from it. It still accepts a feature one row
+   * tall at any opacity, each row of a two-row band whose rows differ in alpha and border an empty
+   * or fully covered row, the single partial pixel in a column of a shallow slanted or curved edge,
+   * and thin horizontal strokes of translucent text. It rejects a uniform partially covered region
+   * two or more rows tall, the first row of a translucent shape directly below an opaque one, pure
+   * vertical edges, and the interior of a vertical alpha gradient.
    */
   bool acceptQuarterPixelEdgeCoverage = false;
 };
@@ -98,6 +110,9 @@ struct ComparisonResult {
 /// may differ. Padding is ignored, with at most one bounded input normalization buffer. With
 /// ComparisonOptions::acceptQuarterPixelEdgeCoverage, one more pixelmatch pass over two
 /// image-sized scratch buffers decides the color condition of the edge pixels it reclassifies.
+/// ComparisonOptions::acceptQuarterPixelEdgeCoverage evaluates its vertical-neighbor condition on
+/// \p expected, which must be the quarter-pixel quantized reference; swapping the arguments
+/// changes the result.
 /// @param expected Expected pixels; borrowed for this call only.
 /// @param actual Actual pixels; borrowed for this call only.
 /// @param options Reviewed comparison policy.

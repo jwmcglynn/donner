@@ -84,9 +84,12 @@ Regenerate this inventory with
 `//tools/resvg_parity:parity_report_tests` checks the generated block against this document.
 The lane counts below are eligibility from source. The normal Geode corpus compares text in the
 simple text tier. Rows that exceed their Geode budget only because of the references' quarter-pixel
-edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), and the rows in
-`GEODE_GATE_ALLOWLIST` disable their Geode comparison with a recorded reason; both lists are in
-`parity_report.py` and described in `README_resvg_test_suite.md`. Full-shaping rows stay
+edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), which accepts
+only partially covered pixels whose upper or lower neighbor in the reference is empty or fully
+covered, and neither of which has the pixel's alpha. A row whose custom golden is a Donner software
+rendering, recorded as quarter-pixel quantized in the golden README, may opt in the same way. The
+rows in `GEODE_GATE_ALLOWLIST` disable their Geode comparison with a recorded reason. Both lists
+are in `parity_report.py` and described in `README_resvg_test_suite.md`. Full-shaping rows stay
 capability-gated on Geode because the corpus has no Geode full-shaping wrapper; the `*_text_full`
 unit test variants run on Geode with full shaping.
 
@@ -106,7 +109,7 @@ unit test variants run on Geode with full shaping.
 | --- | ---: | ---: | ---: | ---: |
 | `default_text` | 1,554 | 98 | 26 | 1 |
 | `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,538 | 98 | 26 | 1 |
+| `geode` | 1,545 | 98 | 26 | 1 |
 
 <!-- END RESVG INVENTORY -->
 
@@ -591,6 +594,12 @@ external fetch; its conflicting corpus image is skipped. The
 `//donner/svg/renderer/tests:renderer_public_api_tests` and
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and a
 resource loader that records requests.
+
+`closed-path.svg` compares its CPU lanes against a Donner-rendered reference and its Geode lane
+against a copy of the resvg v0.50.0 reference: the vendored image predates resvg's arc-length
+placement, and the release reference inverts arc length to within 0.5 user units, which leaves
+its glyphs up to 0.82 px from Donner's placement (see the
+[golden README](../../donner/svg/renderer/testdata/golden/README.md)).
 
 `mixed-children-2.svg` compares against a Donner-rendered reference: SVG 2 continues the text
 after a `textPath` from the path's end point, while the vendored image continues from the end of

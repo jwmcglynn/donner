@@ -39,6 +39,7 @@
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 using ::testing::_;
 using ::testing::AllOf;
@@ -859,8 +860,8 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
   EXPECT_GE(drawPathInPattern, 1) << "Pattern content should be drawn between begin and end";
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST_F(RendererDriverTest, TextStagesATileOnlyForASpansOwnPattern) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Text whose spans paint only the text's own paint stages no span tile and records no span
   // pattern; a span pattern is staged once for every span that references it, as the instance's
   // entry 0. A span that the text system hides, by its own state or an ancestor's, paints no
@@ -953,7 +954,6 @@ TEST_F(RendererDriverTest, TextStagesATileOnlyForASpansOwnPattern) {
     ::testing::Mock::VerifyAndClearExpectations(&renderer);
   }
 }
-#endif  // DONNER_TEXT_ENABLED
 
 TEST_F(RendererDriverTest, RejectedPatternTileSkipsContentAndEndCommand) {
   SVGDocument document = makeDocument(R"svg(
@@ -1689,8 +1689,8 @@ TEST_F(RendererDriverTest, DrawPreservesDegenerateShapeObjectBoundingBoxForFilte
   driver.draw(document);
 }
 
-#ifdef DONNER_TEXT_ENABLED
 TEST_F(RendererDriverTest, DrawConvertsTextClipChildrenToPlacedGlyphOutlines) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = makeDocument(R"svg(
     <defs>
       <clipPath id="clip" clip-rule="evenodd">
@@ -1719,6 +1719,7 @@ TEST_F(RendererDriverTest, DrawConvertsTextClipChildrenToPlacedGlyphOutlines) {
 }
 
 TEST_F(RendererDriverTest, DrawRejectsNestedClipOnTextChildWithoutLeakingLayerRecords) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = makeDocument(R"svg(
     <defs>
       <clipPath id="inner">
@@ -1742,6 +1743,7 @@ TEST_F(RendererDriverTest, DrawRejectsNestedClipOnTextChildWithoutLeakingLayerRe
 }
 
 TEST_F(RendererDriverTest, DrawUsesTextObjectBoundingBoxForClipPathUnits) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = makeDocument(R"svg(
     <defs>
       <clipPath id="clip" clipPathUnits="objectBoundingBox">
@@ -1769,6 +1771,7 @@ TEST_F(RendererDriverTest, DrawUsesTextObjectBoundingBoxForClipPathUnits) {
 }
 
 TEST_F(RendererDriverTest, DrawUsesTextObjectBoundingBoxForFilterRegion) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = makeDocument(R"svg(
     <defs>
       <filter id="flood" x="0" y="0" width="1" height="1"
@@ -1823,6 +1826,7 @@ const components::ComputedTextComponent::TextSpan* FindSpanWithText(
 }
 
 TEST_F(RendererDriverTest, TextOpacityIsOwnedByTheLayerOfTheElementThatDeclaresIt) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   struct Case {
     std::string_view name;
     std::string_view markup;
@@ -1891,6 +1895,7 @@ TEST_F(RendererDriverTest, TextOpacityIsOwnedByTheLayerOfTheElementThatDeclaresI
 }
 
 TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   std::string body =
       R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
                          <text x="10" y="60" font-family="sans-serif" font-size="48">)svg";
@@ -1910,6 +1915,7 @@ TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
 }
 
 TEST_F(RendererDriverTest, TextSpansShareOneFontFamilyListPerStyle) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Each text node, and each empty child element, becomes a span, and every one of them takes the
   // text's font-family list, by inheritance for the children. The spans of the text element hold
   // one copy of that list between them, however many spans the text has. A tspan that sets its
@@ -1957,6 +1963,7 @@ TEST_F(RendererDriverTest, TextSpansShareOneFontFamilyListPerStyle) {
 }
 
 TEST_F(RendererDriverTest, TextSpansShareOneResolvedDashListPerStyle) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   // Each text node, and each empty child element, becomes a span, and every one of them takes the
   // text's dash list, by inheritance for the children. The spans hold one resolved copy of that
   // list between them, so the retained dash payload stays at one list however many spans the text
@@ -2000,6 +2007,7 @@ TEST_F(RendererDriverTest, TextSpansShareOneResolvedDashListPerStyle) {
 }
 
 TEST_F(RendererDriverTest, FilteredTextSpansBoundObjectBoxWorkPerRoot) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   constexpr int kSpanCount = 16;
   std::string body = R"svg(
     <defs><filter id="f" filterUnits="objectBoundingBox"><feFlood/></filter></defs>
@@ -2019,6 +2027,7 @@ TEST_F(RendererDriverTest, FilteredTextSpansBoundObjectBoxWorkPerRoot) {
 }
 
 TEST_F(RendererDriverTest, NestedTextSpanObjectBoxesIncludeOnlyTheirSubtrees) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   SVGDocument document = makeDocument(R"svg(
     <text x="10" y="60" font-family="sans-serif" font-size="20"><tspan id="outer">A<tspan
       id="inner">B</tspan></tspan><tspan id="sibling" x="200">C</tspan><tspan
@@ -2048,6 +2057,7 @@ TEST_F(RendererDriverTest, NestedTextSpanObjectBoxesIncludeOnlyTheirSubtrees) {
 }
 
 TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   std::string body = R"svg(
     <defs>
       <pattern id="tile" width="8" height="8" patternUnits="userSpaceOnUse">
@@ -2068,7 +2078,6 @@ TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation)
   EXPECT_EQ(driver.textPreparationStatsForTesting().fullElementStylePasses, 1u);
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 13u);
 }
-#endif  // DONNER_TEXT_ENABLED
 
 TEST_F(RendererDriverTest, DrawEntityRangePreservesReferencedFilterStages) {
   SVGDocument document = makeDocument(R"svg(

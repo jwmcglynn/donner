@@ -47,6 +47,7 @@
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/Pixmap.h"
 
@@ -2270,8 +2271,8 @@ TEST_F(RendererRegressionTests, FeImageFragmentsWithLargeRegionsShareFrameFilter
       << "a later filtered element must still render";
 }
 
-#ifdef DONNER_TEXT_FULL
 TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultipliedAlpha) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   SVGDocument document = ParseSvg(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="220" height="180">
       <text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="109">&#x1F600;</text>
@@ -2336,10 +2337,9 @@ TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultiplied
   editor::tests::CompareBitmapToBitmap(actual, expected, "bitmap_glyph_native_alpha",
                                        editor::tests::PixelmatchIdentityParams());
 }
-#endif
 
-#ifdef DONNER_TEXT_FULL
 TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphRotationMatchesGroupRotation) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   for (const int angle : {90, -90, 30}) {
     SCOPED_TRACE(angle);
     const std::string text =
@@ -2394,7 +2394,6 @@ TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphRotationMatchesGroupRotation)
                                          editor::tests::PixelmatchIdentityParams());
   }
 }
-#endif
 
 TEST_F(RendererRegressionTests, MiterClipMatchesClippedJoinPolygon) {
   SVGDocument expectedDocument = ParseSvg(R"svg(
@@ -3946,8 +3945,8 @@ TEST_F(RendererRegressionTests, FinalInternalRotationRepeatsOnFollowingGroup) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-#ifdef DONNER_TEXT_FULL
 TEST_F(RendererRegressionTests, JoinedOutlineGlyphsPreserveSourceIndicesAcrossSpans) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   const RendererBitmap actual = RenderTextOpacityCase(R"svg(
     <text font-family="Noto Sans Devanagari" font-size="20" x="15 99 99 85" y="80 99 99 130"
           dx="1 2 3 4" dy="1 2 3 4" rotate="0 10 20 30">&#x915;&#x200D;&#x93F;<tspan>B</tspan></text>
@@ -3959,7 +3958,6 @@ TEST_F(RendererRegressionTests, JoinedOutlineGlyphsPreserveSourceIndicesAcrossSp
   editor::tests::CompareBitmapToBitmap(actual, expected, "joined_outline_glyphs_positions",
                                        editor::tests::PixelmatchIdentityParams());
 }
-#endif
 
 TEST_F(RendererRegressionTests, EmptyTextSpansDoNotConsumeRelativePositioning) {
   const RendererBitmap actual = RenderTextOpacityCase(
@@ -6641,7 +6639,6 @@ TEST_F(RendererRegressionTests, RemovedFillPresentationAttributeInheritsAgain) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-#ifdef DONNER_TEXT_FULL
 /// Parses \p body into a 200x200 document with the hermetic test fonts.
 SVGDocument BitmapGlyphDocument(std::string_view body) {
   SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
@@ -6712,6 +6709,7 @@ constexpr int kMinimumEmojiPixels = 1000;
 // At its native strike size and an integer origin, a bitmap glyph's texels land on whole pixels,
 // so both renderers draw it pixel for pixel.
 TEST_F(RendererRegressionTests, BitmapGlyphAtItsNativeStrikeMatchesSoftwareRenderer) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
     GTEST_SKIP() << "Requires the Geode backend";
   }
@@ -6726,6 +6724,7 @@ TEST_F(RendererRegressionTests, BitmapGlyphAtItsNativeStrikeMatchesSoftwareRende
 
 // A span's opacity scales the premultiplied texels of the bitmap glyphs drawn over it.
 TEST_F(RendererRegressionTests, BitmapGlyphUnderSpanOpacityMatchesSoftwareRenderer) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
     GTEST_SKIP() << "Requires the Geode backend";
   }
@@ -6763,6 +6762,7 @@ TEST_F(RendererRegressionTests, BitmapGlyphUnderSpanOpacityMatchesSoftwareRender
 // font's metrics (\ref BitmapGlyphImages), with the scene's other content alongside. Both the
 // active renderer and the software renderer must draw them identically.
 TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   struct Scene {
     std::string_view label;
     std::string text;
@@ -6842,6 +6842,7 @@ TEST_F(RendererRegressionTests, BitmapGlyphsMatchTheirStrikesDrawnAsImages) {
 // A draw budget that the gradient's stops reject partway through a text draw stops the draw before
 // the next bitmap glyph is decoded, as it stops every other glyph.
 TEST_F(RendererRegressionTests, TinySkiaGradientRejectionStopsBitmapGlyphDecode) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   SVGDocument document = BitmapGlyphDocument(
       R"svg(<linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
             <text x="12" y="120" font-family="Noto Color Emoji" font-size="48" fill="url(#g)">&#x1F600;&#x1F601;&#x1F602;</text>)svg");
@@ -6856,6 +6857,7 @@ TEST_F(RendererRegressionTests, TinySkiaGradientRejectionStopsBitmapGlyphDecode)
 // A bitmap-only fallback face draws an emoji inside a run of outline glyphs; the outline glyphs
 // keep their positions, which the reference repeats with text elements of their own.
 TEST_F(RendererRegressionTests, BitmapGlyphOfAFallbackFaceMatchesItsStrikeDrawnAsAnImage) {
+  DONNER_SKIP_UNLESS_FULL_TEXT_BUILT_IN();
   constexpr std::string_view kScene =
       R"svg(<text id="emoji" x="10" y="120" font-family="Noto Sans, Noto Color Emoji" font-size="40" fill="#208040">A&#x1F600;B</text>)svg";
   const std::vector<std::string> images = BitmapGlyphImages(kScene);
@@ -6892,7 +6894,6 @@ TEST_F(RendererRegressionTests, BitmapGlyphOfAFallbackFaceMatchesItsStrikeDrawnA
                 testing::Gt(500));
   }
 }
-#endif  // DONNER_TEXT_FULL
 
 }  // namespace
 }  // namespace donner::svg

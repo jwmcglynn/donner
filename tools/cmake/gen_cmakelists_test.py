@@ -461,17 +461,19 @@ class BidiRuntimeFeatureBoundaryTest(unittest.TestCase):
             for name, source in (("text_engine", "TextEngine.cc"),
                                  ("text_backend_simple", "TextBackendSimple.cc")):
                 attrs = {"srcs": [f"//{package}:{source}"],
-                         "deps": [f"//{package}:bidi_types"], "defines": []}
+                         "deps": [f"//{package}:bidi_types"], "implementation_deps": [],
+                         "local_defines": []}
                 if config.text:
-                    attrs["deps"].append(f"//{package}:bidi_paragraph")
-                    attrs["defines"].append("DONNER_TEXT_ENABLED")
+                    attrs["implementation_deps"].append(f"//{package}:bidi_paragraph")
+                    attrs["local_defines"].append("DONNER_TEXT_ENABLED")
                 if name == "text_engine" and config.text_full:
-                    attrs["defines"].append("DONNER_TEXT_FULL")
+                    attrs["local_defines"].append("DONNER_TEXT_FULL")
                 attrs_by_name[name] = attrs
             if config.text:
                 attrs_by_name["bidi_paragraph"] = {
                     "srcs": [f"//{package}:BidiParagraph.cc"],
-                    "deps": [f"//{package}:bidi_types", "@sheenbidi//:sheenbidi"],
+                    "deps": [f"//{package}:bidi_types"],
+                    "implementation_deps": ["@sheenbidi//:sheenbidi"],
                 }
             for name, attrs in attrs_by_name.items():
                 info = g.ConfiguredTargetInfo(
@@ -518,9 +520,10 @@ class BidiRuntimeFeatureBoundaryTest(unittest.TestCase):
                 )
                 self.assertIn(
                     "if(DONNER_TEXT)\n"
-                    f"  target_compile_definitions({cmake_name} PUBLIC DONNER_TEXT_ENABLED)\n"
+                    f"  target_compile_definitions({cmake_name} PRIVATE DONNER_TEXT_ENABLED)\n"
                     "endif()", text,
                 )
+                self.assertNotRegex(text, r"target_compile_definitions\([^\n]* PUBLIC DONNER_TEXT")
                 self.assertIn(
                     "if(DONNER_TEXT)\n"
                     f"  target_link_libraries({cmake_name} PUBLIC donner_svg_text_bidi_paragraph)\n"
@@ -529,7 +532,7 @@ class BidiRuntimeFeatureBoundaryTest(unittest.TestCase):
                 if name == "text_engine":
                     self.assertIn(
                         "if(DONNER_TEXT_FULL)\n"
-                        f"  target_compile_definitions({cmake_name} PUBLIC DONNER_TEXT_FULL)\n"
+                        f"  target_compile_definitions({cmake_name} PRIVATE DONNER_TEXT_FULL)\n"
                         "endif()", text,
                     )
 

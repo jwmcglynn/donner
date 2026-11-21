@@ -63,6 +63,8 @@ donner_cc_library(
         "//donner/svg/components/text:text_positioning_presentation",
         "//donner/svg/parser:parser_core",
     ],
+    # Sees the text engine's headers and include paths through its deps only in the text tiers.
+    variant_neutral = False,
 )
 
 donner_cc_library(

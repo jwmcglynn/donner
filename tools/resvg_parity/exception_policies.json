@@ -679,23 +679,26 @@
         "painting/stroke/radial-gradient-on-text.svg"
       ],
       "kinds": [
+        "geode_golden",
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Map paint through SVG glyph cells.",
+      "disposition": "Map paint through SVG glyph cells. Geode compares with its own rendering as a regression check, because its coverage is closer to an area-coverage control than the Firefox references' and the CPU renderer's sub-scanline coverage; the CPU lane keeps the independent Firefox comparison.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "https://github.com/jwmcglynn/donner/pull/2354"
       ],
       "removal_criteria": "Retire the browser reference when upstream preserves glyph-cell mapping and passes at default settings.",
-      "reference_provenance": "Firefox renders qualified with the pinned Noto Sans glyph cell geometry.",
+      "reference_provenance": "Firefox renders qualified with the pinned Noto Sans glyph cell geometry; Geode goldens written by the resvg suite harness on software Vulkan.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references_by_fixture": {
         "painting/stroke/linear-gradient-on-text.svg": {
+          "geode_golden": "donner/svg/renderer/testdata/golden/geode/painting_stroke_linear-gradient-on-text.png",
           "shared_golden": "donner/svg/renderer/testdata/golden/firefox-stroke-linear-gradient-on-text.png"
         },
         "painting/stroke/radial-gradient-on-text.svg": {
+          "geode_golden": "donner/svg/renderer/testdata/golden/geode/painting_stroke_radial-gradient-on-text.png",
           "shared_golden": "donner/svg/renderer/testdata/golden/firefox-stroke-radial-gradient-on-text.png"
         }
       }
@@ -962,7 +965,6 @@
     {
       "id": "path-boundary-coverage",
       "paths": [
-        "text/textPath/closed-path.svg",
         "text/textPath/side=right.svg"
       ],
       "kinds": [
@@ -977,16 +979,30 @@
       "removal_criteria": "Remove the allowance when an independently placed reference passes unchanged at ordinary limits.",
       "reference_provenance": "Adjacent archive with a different glyph-boundary and gray-guide coverage model.",
       "max_threshold": 0.05,
-      "max_pixels": 400,
-      "bounds_by_fixture": {
-        "text/textPath/closed-path.svg": [
-          0.02,
-          400
-        ],
-        "text/textPath/side=right.svg": [
-          0.05,
-          100
-        ]
+      "max_pixels": 100
+    },
+    {
+      "id": "text-path-arc-length-precision",
+      "paths": [
+        "text/textPath/closed-path.svg"
+      ],
+      "kinds": [
+        "geode_golden",
+        "shared_golden"
+      ],
+      "classification": "reference-disagreement",
+      "disposition": "Compare the CPU lanes with Donner's arc-length placement and Geode with the release reference.",
+      "evidence": [
+        "donner/svg/renderer/tests/resvg_test_suite.cc",
+        "donner/svg/renderer/testdata/golden/README.md"
+      ],
+      "removal_criteria": "Compare with the vendored reference when it places glyph midpoints at their exact distance along the path.",
+      "reference_provenance": "Donner TinySkia rendering for the CPU lanes; the resvg v0.50.0 release reference, which inverts arc length to within 0.5 user units, for Geode.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-closed-path.png",
+        "geode_golden": "donner/svg/renderer/testdata/golden/resvg-closed-path.png"
       }
     },
     {

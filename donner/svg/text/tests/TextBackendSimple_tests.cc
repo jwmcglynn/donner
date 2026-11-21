@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "donner/svg/text/tests/TextTierTestUtils.h"
+
 namespace donner::svg {
 namespace {
 
@@ -688,7 +690,6 @@ TEST_F(TextBackendSimpleTest, SmallCapsSynthesisUppercasesAndScalesLowercase) {
                                                GlyphXKernIs(DoubleNear(-10.0, 1e-4)))));
 }
 
-#ifdef DONNER_TEXT_ENABLED
 std::vector<uint8_t> MakeBracketFontData() {
   return MakeSfnt({
       {"cmap", CmapTable({{'(', '(', 1},
@@ -706,6 +707,7 @@ std::vector<uint8_t> MakeBracketFontData() {
 }
 
 TEST_F(TextBackendSimpleTest, SidewaysRtlBracketsKeepHorizontalMirroringAndSourceOrder) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const FontHandle font = loadFont(MakeBracketFontData());
   ASSERT_THAT(font, testing::Not(testing::Eq(FontHandle())));
   constexpr std::string_view text = "(A)";
@@ -741,6 +743,7 @@ TEST_F(TextBackendSimpleTest, SidewaysRtlBracketsKeepHorizontalMirroringAndSourc
 }
 
 TEST_F(TextBackendSimpleTest, UprightAndMixedCjkContextRetainTheirVerticalShapingProfile) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   const FontHandle font = loadFont(MakeBracketFontData());
   ASSERT_THAT(font, testing::Not(testing::Eq(FontHandle())));
   for (const auto& [text, orientation, clusters] :
@@ -768,7 +771,6 @@ TEST_F(TextBackendSimpleTest, UprightAndMixedCjkContextRetainTheirVerticalShapin
     }
   }
 }
-#endif
 
 // -- Cross-span kerning -------------------------------------------------------
 

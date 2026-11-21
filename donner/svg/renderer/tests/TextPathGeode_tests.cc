@@ -5,6 +5,7 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/text/TextTier.h"
 
 namespace donner::svg {
 namespace {
@@ -19,7 +20,7 @@ protected:
                                    Runfiles::instance().Rlocation("third_party/resvg-test-suite/"));
     ImageComparisonParams params =
         ImageComparisonParams::WithThreshold(kDefaultThreshold, maxMismatchedPixels);
-    params.setCanvasSize(500, 500);
+    params.enableCanvasSizeFromReference();
     const std::string golden = Runfiles::instance().Rlocation(goldenPath);
     renderAndCompare(document, source, golden.c_str(), params, ComparisonMode::GeodeGolden);
   }
@@ -32,15 +33,11 @@ TEST_F(TextPathGeodeTest, RelativeOffsets) {
 }
 
 TEST_F(TextPathGeodeTest, TinyRelativeOffsets) {
-#ifdef DONNER_TEXT_FULL
   // Preserve the corpus budget for the remaining full-text small-font placement residual.
-  constexpr int kPixelBudget = 1100;
-#else
-  constexpr int kPixelBudget = kDefaultMismatchedPixels;
-#endif
+  const int pixelBudget = IsFullTextBuiltIn() ? 1100 : kDefaultMismatchedPixels;
   compareTextPath("third_party/resvg-test-suite/tests/text/textPath/dy-with-tiny-coordinates.svg",
                   "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png",
-                  kPixelBudget);
+                  pixelBudget);
 }
 
 TEST_F(TextPathGeodeTest, LengthPlacement) {
