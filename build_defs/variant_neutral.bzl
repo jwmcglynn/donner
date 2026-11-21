@@ -45,6 +45,8 @@ _ZLIB_COPIES = str(Label("@zlib//:copy_public_header_")) + "*"
 # A key ending in `*` matches every target name with that prefix.
 GENERATED_HEADER_ALLOWLIST = {
     _ZLIB_COPIES: "Byte copies of zlib's own source headers.",
+    # zlib 1.4 puts the same copy_file rules under its versioned source package.
+    str(Label("@zlib//zlib-1.4:copy_public_header_")) + "*": "Byte copies of zlib 1.4's own source headers.",
 }
 
 _COMPILED_EXTENSIONS = ["c", "cc", "cpp", "cxx", "S"]
