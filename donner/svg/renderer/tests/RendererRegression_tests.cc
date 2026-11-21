@@ -1230,17 +1230,48 @@ TEST_F(RendererRegressionTests, SkewedShadowMergeKeepsSourceGraphicSharp) {
       plain, "skewed_shadow_merge_source", editor::tests::PixelmatchIdentityParams());
 }
 
-// feDropShadow under a skew takes the same filter-aligned raster as a plain blur, so with an
-// invisible shadow and the same negligible deviation the two draw their source identically.
-// TransformedBlurPathTest.EligibilityTable pins the rule itself.
-TEST_F(RendererRegressionTests, SkewedDropShadowTakesThePlainBlurPath) {
-  const RendererBitmap plainBlur =
-      RenderSkewedSquareAndBar(R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg");
-  ExpectVisibleBitmap(plainBlur, "skewed_drop_shadow_plain_blur_visible");
+TEST_F(RendererRegressionTests, SkewedDropShadowKeepsSourceGraphicSharp) {
+  const RendererBitmap plain = RenderSkewedSquareAndBar("");
+  ExpectVisibleBitmap(plain, "skewed_drop_shadow_plain_visible");
   editor::tests::CompareBitmapToBitmap(
-      RenderSkewedSquareAndBar(
-          R"svg(<feDropShadow dx="0" dy="0" stdDeviation="0.01" flood-opacity="0"/>)svg"),
-      plainBlur, "skewed_drop_shadow_plain_blur_path", editor::tests::PixelmatchIdentityParams());
+      RenderSkewedSquareAndBar(R"svg(<feDropShadow dx="0" dy="60" stdDeviation="2 1"/>)svg"), plain,
+      "skewed_drop_shadow_source", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSource) {
+  constexpr std::string_view kShape =
+      R"svg(<rect x="8" y="12" width="21" height="16" fill="seagreen")svg";
+  constexpr std::string_view kBlackShape =
+      R"svg(<rect x="8" y="12" width="21" height="16" fill="black" filter="url(#f)"/>)svg";
+  constexpr std::string_view kBlur =
+      R"svg(<feGaussianBlur stdDeviation="3 2"/><feOffset dx="3" dy="27"/>)svg";
+  struct Shadow {
+    std::string_view name;
+    std::string_view primitives;
+  };
+  const std::array shadows{
+      Shadow{"drop shadow", R"svg(<feDropShadow dx="3" dy="27" stdDeviation="3 2"/>)svg"},
+      Shadow{"shadow merge", R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 2"/>
+          <feOffset dx="3" dy="27" result="s"/>
+          <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>)svg"},
+  };
+  for (const std::string_view transform :
+       {"translate(6 4) skewX(35)", "translate(28 4) rotate(22)"}) {
+    SCOPED_TRACE(transform);
+    const auto render = [&](std::string_view primitives, std::string_view content) {
+      return RenderTransformedFilterScene("-28 -18 112 99", primitives, transform, content,
+                                          Vector2i(112, 94));
+    };
+    const RendererBitmap expected =
+        render(kBlur, std::string(kBlackShape) + std::string(kShape) + "/>");
+    ExpectVisibleBitmap(expected, "transformed_shadow_reference_visible");
+    for (const Shadow& shadow : shadows) {
+      SCOPED_TRACE(shadow.name);
+      editor::tests::CompareBitmapToBitmap(
+          render(shadow.primitives, std::string(kShape) + R"svg( filter="url(#f)"/>)svg"), expected,
+          "transformed_shadow_and_sharp_source", editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 // Under a skew a blur keeps its user-space shape by running on a raster aligned with the filter's
