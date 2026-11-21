@@ -567,8 +567,8 @@ bazel_dep(name = "zstd", version = "1.5.7.bcr.3", dev_dependency = True)
 #
 
 bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
-# This release loads its C++ rules and providers explicitly for Bazel 9.
-bazel_dep(name = "protobuf", version = "33.6", dev_dependency = True)
+# Bloaty and rules_cc own their Protobuf imports. Pin the release whose C++ rules
+# and providers load on Bazel 9 without adding Protobuf to Donner's repository map.
 single_version_override(
     module_name = "protobuf",
     version = "33.6",
