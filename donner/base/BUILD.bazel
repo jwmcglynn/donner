@@ -268,6 +268,18 @@ donner_cc_library(
 )
 
 donner_cc_test(
+    name = "failure_signal_handler_tests",
+    srcs = ["tests/FailureSignalHandler_tests.cc"],
+    # The handler reads the interrupted registers only on Linux, where glibc's `backtrace` drops
+    # a frame at program counter 0 and leaves the stack trace of a null function call empty.
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":failure_signal_handler",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "base_tests_ndebug",
     srcs = [
         "tests/UtilsStandaloneNdebug_tests.cc",
