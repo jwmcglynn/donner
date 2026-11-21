@@ -6,6 +6,12 @@ burst of waiting runs used to poll every 30 seconds, each poll listing every act
 pool workflows and fetching each one's job list, so the cost grew with waiters times active
 runs and exhausted the budget for unrelated steps. The loop now:
 
+  * Confirms free capacity after the short confirmation interval rather than a base interval.
+    A clear poll is followed by exactly one confirming poll (see _after_admit) wherever the
+    run is in the queue, so the usual clear, clear, admit path makes the same requests as
+    before, only sooner. A confirming poll that finds the pool blocked again now comes after
+    the short interval too, so a run flapping between clear and blocked polls more often than
+    before, but each such cycle is still one short wait followed by a full blocked interval.
   * Polls at the base interval only at the head of the queue. A run that needs N slot releases
     before it can be admitted waits N base intervals between polls, up to the maximum
     interval. This trades a little admission latency far back in the queue (several runners
@@ -26,6 +32,7 @@ Inputs arrive through TURNSTILE_* environment variables set by action.yml.
 from __future__ import annotations
 
 import importlib.util
+import math
 import os
 from pathlib import Path
 import random
@@ -76,6 +83,24 @@ def poll_interval(base: float, maximum: float, deficit: int) -> float:
     return float(min(maximum, base * max(1, deficit)))
 
 
+DEFAULT_CONFIRM_SECONDS = 10.0
+
+
+def confirm_seconds(value: str | None, base: float) -> float:
+    """The confirmation interval: a positive number of seconds, never longer than `base`.
+
+    A missing, unparsable, non-finite or non-positive value takes the default, so a typo in a
+    caller cannot turn the confirming poll into an immediate one.
+    """
+    try:
+        seconds = float(value or DEFAULT_CONFIRM_SECONDS)
+    except ValueError:
+        seconds = DEFAULT_CONFIRM_SECONDS
+    if not math.isfinite(seconds) or seconds <= 0:
+        seconds = DEFAULT_CONFIRM_SECONDS
+    return min(seconds, base)
+
+
 class Turnstile:
     def __init__(self, environ: Mapping[str, str], client, *,
                  sleep: Callable[[float], None] = time.sleep,
@@ -96,6 +121,7 @@ class Turnstile:
         self.capacity = int(environ.get("TURNSTILE_CAPACITY") or "1")
         self.base = float(environ.get("TURNSTILE_POLL_SECONDS") or "60")
         self.maximum = max(self.base, float(environ.get("TURNSTILE_MAX_POLL_SECONDS") or "300"))
+        self.confirm = confirm_seconds(environ.get("TURNSTILE_CONFIRM_SECONDS"), self.base)
         self.deadline = clock() + float(environ.get("TURNSTILE_TIMEOUT_MINUTES") or "150") * 60
         # "skip" fails closed for an advisory lane: a timeout reports admitted=false, which its
         # dependent job reads. The default keeps the gating lanes' fail-open behavior.
@@ -115,6 +141,11 @@ class Turnstile:
     def _wait(self, seconds: float) -> None:
         """Sleeps, but never past the safety deadline."""
         self.sleep(max(0.0, min(seconds, self.deadline - self.clock())))
+
+    def _poll_wait(self, delay: float) -> None:
+        """Waits `delay` plus jitter. The jitter is sized for the base interval, so a shorter
+        wait gets a proportionally smaller share of it rather than one that rivals the wait."""
+        self._wait(delay + self.jitter() * min(1.0, delay / self.base))
 
     def _expired(self) -> bool:
         return self.clock() >= self.deadline
@@ -258,9 +289,12 @@ class Turnstile:
         if state.clear_observations >= 2:
             self.log(f"turnstile: {occupancy}/{self.capacity} pool slots held, proceeding")
             return self._done()
+        # The confirmation interval, not the base interval: the confirming poll is the one
+        # extra poll every admission already pays, so waiting less for it adds no requests on
+        # the clear, clear, admit path (see the module docstring for a flapping pool).
         self.log(f"turnstile: {occupancy}/{self.capacity} pool slots held; confirming in "
-                 f"{int(self.base)}s")
-        self._wait(self.base + self.jitter())
+                 f"{int(self.confirm)}s")
+        self._poll_wait(self.confirm)
         return None
 
     def _after_blocked(self, decision: dict, state: "_WaitState") -> int | None:
@@ -274,7 +308,7 @@ class Turnstile:
         self.log(f"turnstile: {occupancy}/{self.capacity} pool slots held by "
                  f"{state.last_blockers}; {deficit} must release first; re-checking in "
                  f"{int(delay)}s")
-        self._wait(delay + self.jitter())
+        self._poll_wait(delay)
         return None
 
     def _resolve(self) -> list[int] | None:
