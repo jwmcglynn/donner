@@ -127,6 +127,9 @@ var LibraryDonnerGpu = {
     readbackCopies: 0,
     cpuTextureWrites: 0,
     surfacePresents: 0,
+    // Canvas contexts belong to the canvas and this worker, independently of any surface or
+    // device configuration. A replacement canvas under the same selector has a different key.
+    canvasContexts: null,
     completionProgressKicks: 0,
     completionProgressKickMs: 0,
     // Compiled pipelines of the browser device, by what they compile; see compilePipeline.
@@ -305,6 +308,7 @@ var LibraryDonnerGpu = {
       if (DonnerGpu.logical === null) {
         DonnerGpu.logical = new Map();
         DonnerGpu.shares = new Map();
+        DonnerGpu.canvasContexts = new WeakMap();
         DonnerGpu.pipelines = new Map();
         DonnerGpu.shaderSources = new Map();
         globalThis["__donnerReadGpuObjectStats"] = DonnerGpu.debugStatistics;
@@ -2548,9 +2552,15 @@ var LibraryDonnerGpu = {
       if (!canvas) {
         return null;
       }
-      var context = canvas.getContext("webgpu");
+      // Firefox may refuse a second getContext call on an OffscreenCanvas after a surface
+      // loss. Reconfigure the context we already own when rebuilding the surface.
+      var context = DonnerGpu.canvasContexts.get(canvas);
       if (!context) {
-        return null;
+        context = canvas.getContext("webgpu");
+        if (!context) {
+          return null;
+        }
+        DonnerGpu.canvasContexts.set(canvas, context);
       }
       globalThis["__donnerApplicationGpuSurfaceWorker"] = true;
       return { canvas: canvas, context: context, frame: null };

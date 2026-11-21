@@ -209,99 +209,99 @@ playwright = use_extension(
 )
 playwright.repo(
     name = "playwright",
-    browsers_json = "//donner/editor/wasm/tests:browsers.1.64.0.json",
+    browsers_json = "//donner/editor/wasm/tests:browsers.1.65.1.json",
     integrity_path_map = {
         "builds/ffmpeg/1013/ffmpeg-linux-arm64.zip": "sha256-RXNg6AOn2NX49/Xs9WKy0zj2tPf4YznQwxk4pFHoh4s=",
         "builds/ffmpeg/1013/ffmpeg-linux.zip": "sha256-7phkNNFY90+12cX/EJICbO7bY/Mk/pC1volGCSa3tnk=",
         "builds/ffmpeg/1013/ffmpeg-mac-arm64.zip": "sha256-Y+SM6NSm2dSWOD5axVeyZGbnGfopEmu71fX3AWrJIpw=",
         "builds/ffmpeg/1013/ffmpeg-mac.zip": "sha256-/98IqxPe8rY+ge2XguOd68W9SYIg6OE0+aNumE222ds=",
-        "builds/firefox/1555/firefox-debian-12-arm64.zip": "sha256-zITjtDVNnNg5ig+dIoHXi/SpF1B/M2GbLq4Gb59Z8t4=",
-        "builds/firefox/1555/firefox-debian-12.zip": "sha256-6eN+vDIeSBz1Fi+TXK7J9TMrFLMIUsbX9dFPxgysZVo=",
-        "builds/firefox/1555/firefox-mac-arm64.zip": "sha256-cusyKJ82h4l4bRbSUujk/ve2Kuch1X+C09bZIh0/0q8=",
-        "builds/firefox/1555/firefox-mac.zip": "sha256-rixuR31MX1nna+OcoNtsAD6bz5u5s8ThPPVFJ11r44g=",
-        "builds/firefox/1555/firefox-ubuntu-22.04-arm64.zip": "sha256-3YBnRQFHGZlBjlheD+rI1+Vo8fiNUou0RrnldAkan4k=",
-        "builds/firefox/1555/firefox-ubuntu-22.04.zip": "sha256-CjLx+NfkFwVzQ1tCGe/4MX5Vh1BhK2NV8Y6aTLJ+WUs=",
-        "builds/firefox/1555/firefox-ubuntu-24.04-arm64.zip": "sha256-/i4f1JBIhm6bkknRuTlLSYn1j1iaNbGe3LzoqrFQH4w=",
-        "builds/firefox/1555/firefox-ubuntu-24.04.zip": "sha256-Vk90+jxGy4PGJSFFzxVpyVI2yMQE1qWoDMc2zzImXww=",
+        "builds/firefox/1572/firefox-debian-12-arm64.zip": "sha256-hlmQRcp8s6Omg0Z7FtMklY4IlmaOTfBit6dtZyhrERo=",
+        "builds/firefox/1572/firefox-debian-12.zip": "sha256-U+UiPcocvKat/szYroiOhRl/+pq357NybAGas7Sovfc=",
+        "builds/firefox/1572/firefox-mac-arm64.zip": "sha256-lpG0oHQF2Pr4pE9jeNZttIDTYVnZ6cTtHWBmaHaX4fI=",
+        "builds/firefox/1572/firefox-mac.zip": "sha256-8xrEHmRQxckED8cpDz2opqX1ZysAdfGLN8vSj7+VrTY=",
+        "builds/firefox/1572/firefox-ubuntu-22.04-arm64.zip": "sha256-PB6i3gEXJEHJFfev9cN7gLYnjjhBL6E8DFC9Z0jkKhU=",
+        "builds/firefox/1572/firefox-ubuntu-22.04.zip": "sha256-nNlR4YgnPqfwR4oxEWSZ7GADcugisZRkui2KLZdqMxg=",
+        "builds/firefox/1572/firefox-ubuntu-24.04-arm64.zip": "sha256-DGDpTzCV61UD3aSQqwrl0zh4OpRRHtb7QQwtf9y+Kfk=",
+        "builds/firefox/1572/firefox-ubuntu-24.04.zip": "sha256-GJzj4Jxhd2AQq4p8v/qgFrixkU08m1DLWrbQxdtMNo8=",
         "builds/webkit/2251/webkit-mac-14-arm64.zip": "sha256-J1Tspbq4dzprExVSjn2PNCl3rOeZs6kTFOG+DLMk7kk=",
         "builds/webkit/2251/webkit-mac-14.zip": "sha256-UM5dcAQnSwGxBt2lzu5nAwE7e9DQOERXzZOlJM7TQgI=",
-        "builds/webkit/2370/webkit-debian-12-arm64.zip": "sha256-qAVS1owNvZCaG9d+PKu2A2AQGO+lBKwSUD40UuoBckU=",
-        "builds/webkit/2370/webkit-debian-12.zip": "sha256-TusMYi4pjqravIIqLIfuNulvssZZXAWY6ZHnYy+3jw8=",
-        "builds/webkit/2370/webkit-mac-15-arm64.zip": "sha256-Kb4r6D4aLUwuqfrSbtV8dwBJkfGR+oZct+YSsJfjRVc=",
-        "builds/webkit/2370/webkit-mac-15.zip": "sha256-K0PIZdssOkCHNv9Kgi8GBXCm4+Ut9+0l0u1bwjG+fkE=",
-        "builds/webkit/2370/webkit-ubuntu-22.04-arm64.zip": "sha256-b+lRfKY8+8DICuxbvaIQKBgqo0KgyRhMLwTEMTWzJaU=",
-        "builds/webkit/2370/webkit-ubuntu-22.04.zip": "sha256-R8Xm3a4DSgotFe+OhSEAiTijWSXUvSBZZtOvMOC9SZ8=",
-        "builds/webkit/2370/webkit-ubuntu-24.04-arm64.zip": "sha256-khy0HayFids3bb31KZHDqbnYUTbbG7zpNY+9g0pknYc=",
-        "builds/webkit/2370/webkit-ubuntu-24.04.zip": "sha256-Y7MaXWjZCNmu4uRFuI7cTB4dHrpIj1vX41Zo+RMVuWg=",
+        "builds/webkit/2388/webkit-debian-12-arm64.zip": "sha256-AM8Hz1ssGTiHrfax8VcvGuDG/gYcwobVbcmef8QeN54=",
+        "builds/webkit/2388/webkit-debian-12.zip": "sha256-tL0ErVDem0G3VeTCURKsNOfROop9L9teY/qROqUskLo=",
+        "builds/webkit/2388/webkit-mac-15-arm64.zip": "sha256-ULQjjhRbgBjkiqzvwV6bOkP6/Rju5C7Uyymi5cWi44U=",
+        "builds/webkit/2388/webkit-mac-15.zip": "sha256-wSIMc5otu2RQBZv9Z41fUFfoB9HQBEZO+JDuHmqdtyc=",
+        "builds/webkit/2388/webkit-ubuntu-22.04-arm64.zip": "sha256-2+37Yl1L7plwM9UAyD2aahrx+YUQDSPwhBBy0zZBIdI=",
+        "builds/webkit/2388/webkit-ubuntu-22.04.zip": "sha256-F1H+JYRJsM5MjlQY1V2afyn+znQqhHlY89rr+XF9htE=",
+        "builds/webkit/2388/webkit-ubuntu-24.04-arm64.zip": "sha256-dFsuzhLsSTT9XzwfRUJon6Z2hjZ6xJbmqIOoT8HYrJc=",
+        "builds/webkit/2388/webkit-ubuntu-24.04.zip": "sha256-Q3XKVmINkvS8hxC28M3civ0vUMTMphalA1XWPXFceAM=",
     },
 )
 
 # rules_playwright 0.5.3 still generates the retired legacy macOS Chromium
-# archive path. Playwright 1.64.0 uses Chrome for Testing for supported macOS
+# archive path. Playwright 1.65.1 uses Chrome for Testing for supported macOS
 # releases, so provide that exact pinned archive to the generated repositories.
 http_file(
     name = "playwright_webkit_mac_arm64",
     dev_dependency = True,
-    integrity = "sha256-ZTOLeCNR9+Kv9SK9yr6BNaYAQYOGIyvMgIHRI6f5oZM=",
-    urls = ["https://cdn.playwright.dev/builds/webkit/2370/webkit-mac-26-arm64.zip"],
+    integrity = "sha256-08xzACcQWgFNDL9TklvX6rq73428y7SjoXE8X2MdvK8=",
+    urls = ["https://cdn.playwright.dev/builds/webkit/2388/webkit-mac-26-arm64.zip"],
 )
 
 http_file(
     name = "playwright_chromium_mac_arm64",
     dev_dependency = True,
-    integrity = "sha256-mH0vhJnIfSFnb3gXhVDPy/sbtTeGgh4s/0bFp+mbWL4=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/mac-arm64/chrome-mac-arm64.zip"],
+    integrity = "sha256-Q2CWdqQeKdHHZnk165FKQi7KmLLkncv9bz6XlCAt4So=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/mac-arm64/chrome-mac-arm64.zip"],
 )
 
 # rules_playwright 0.5.3 also uses retired Chromium paths on Linux.
-# Playwright 1.64.0 fetches these Chrome for Testing archives instead.
+# Playwright 1.65.1 fetches these Chrome for Testing archives instead.
 http_file(
     name = "playwright_chromium_linux_x64",
     dev_dependency = True,
-    integrity = "sha256-Q/0xdmx1M6At2i3tWtUML4Yc1UAL51CcCrrXESn3nXk=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-linux64.zip"],
+    integrity = "sha256-NwYBEGwbVhmq5fBvej/cYINkhhNZNHeUYeKiCNd39ZY=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/linux64/chrome-linux64.zip"],
 )
 
 http_file(
     name = "playwright_chromium_headless_linux_x64",
     dev_dependency = True,
-    integrity = "sha256-w+UFlq71LFj4/aPGs0EcM9NMiLF3s+0cIkM1n9O4uiA=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip"],
+    integrity = "sha256-d6ZEL9PIrNO++eEGf8JvXvRkJ30i8OjLWNw+QHej5Fg=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/linux64/chrome-headless-shell-linux64.zip"],
 )
 
 http_file(
     name = "playwright_chromium_mac_x64",
     dev_dependency = True,
-    integrity = "sha256-TnXaloMCJBhd3dyAASrTcy1qKaT5K6xyjITI6OvWbDQ=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/mac-x64/chrome-mac-x64.zip"],
+    integrity = "sha256-aGQQmqQjeF1dXVL9BrwROOArAC/NQAlVogETWMWoMh8=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/mac-x64/chrome-mac-x64.zip"],
 )
 
 http_file(
     name = "playwright_chromium_headless_mac_arm64",
     dev_dependency = True,
-    integrity = "sha256-lOQze3DLxWOPCTX7xGufJCvHQW9lfj++kkuvNIQEtT0=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/mac-arm64/chrome-headless-shell-mac-arm64.zip"],
+    integrity = "sha256-sI576vAqGeLuXtaVX5w4U6uRds1btXuoevu4Lp+BzCk=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/mac-arm64/chrome-headless-shell-mac-arm64.zip"],
 )
 
 http_file(
     name = "playwright_chromium_headless_mac_x64",
     dev_dependency = True,
-    integrity = "sha256-ip5KMrpbGnlvixbQGJbjVc9mYlRNl0MpY5T9mZ14IzE=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/mac-x64/chrome-headless-shell-mac-x64.zip"],
+    integrity = "sha256-icVvsICrTpunZlbVZpryst/DE8EUNIcej041HAil/8o=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/mac-x64/chrome-headless-shell-mac-x64.zip"],
 )
 
 http_file(
     name = "playwright_chromium_linux_arm64",
     dev_dependency = True,
-    integrity = "sha256-kQoS//YXAgIZX3LvPTU4AccGPTAauAsfUbd9eR/aYM4=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux-arm64/chrome-linux-arm64.zip"],
+    integrity = "sha256-Sp6l+UIuJo//nfGZCDZbbR6S2hVGB9D5DHE4z2xCzjg=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/linux-arm64/chrome-linux-arm64.zip"],
 )
 
 http_file(
     name = "playwright_chromium_headless_linux_arm64",
     dev_dependency = True,
-    integrity = "sha256-gaudTTwwHcX9+2xUG55mMrFvyBmmqFRGD0Cnb+KyxHY=",
-    urls = ["https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux-arm64/chrome-headless-shell-linux-arm64.zip"],
+    integrity = "sha256-4SYun08kTEQdy1SqDpq+TPeyZqsC3GZv2XW9Vaups9w=",
+    urls = ["https://cdn.playwright.dev/builds/cft/159.0.8154.6/linux-arm64/chrome-headless-shell-linux-arm64.zip"],
 )
 
 override_repo(
