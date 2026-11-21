@@ -61,7 +61,7 @@ def _summary(label, shards=None):
     return {"id": {"testSummary": {"label": label}}, "testSummary": summary}
 
 
-FINISHED = {"id": {"buildFinished": {}}, "finished": {"overallSuccess": True}}
+FINISHED = {"id": {"buildFinished": {}}, "finished": {"exitCode": {"name": "SUCCESS"}}}
 
 
 class SelectTest(unittest.TestCase):
@@ -69,7 +69,7 @@ class SelectTest(unittest.TestCase):
         lines = [
             _rule(DEVICE, dep=DEVICE + "_impl"),
             _rule(DEVICE + "_impl", rule_class="cc_test", tags=()),
-            _rule(GOLDEN),
+            *_wrapped(GOLDEN),
             # Out of scope: GPU wrappers in suites the lane has not admitted on hardware.
             _rule("//donner/editor/tests:rnr_replay_tests_geode"),
             _rule("//donner/svg/renderer/tests:renderer_geode_tests"),
@@ -104,6 +104,11 @@ class SelectTest(unittest.TestCase):
         self.assertEqual([GOLDEN], lane.select(_wrapped(GOLDEN, env={"OTHER": "1"})))
         self.assertEqual([GOLDEN],
                          lane.select(_wrapped(GOLDEN, selected_env=[{"OTHER": "1"}, {}])))
+
+    def test_incomplete_implementation_query_fails(self):
+        for wrapper in (_rule(GOLDEN), _rule(GOLDEN, dep=GOLDEN + "_impl")):
+            with self.subTest(wrapper=wrapper), self.assertRaisesRegex(ValueError, GOLDEN):
+                lane.select([wrapper])
 
     def test_query_intersects_the_requested_patterns_with_the_scope(self):
         text = lane.query(["//donner/..."])
@@ -207,6 +212,14 @@ class CheckTest(unittest.TestCase):
         failed["testSummary"]["overallStatus"] = "FAILED"
         events[1] = failed
         self.assert_fails(spawns, events, "%s did not pass: FAILED" % DEVICE)
+
+    def test_failed_or_unknown_invocation_outcome_fails_after_green_tests(self):
+        spawns, events = self.passing()
+        for outcome in ({"exitCode": {"name": "BUILD_FAILURE", "code": 1}},
+                        {"exitCode": {"name": "SUCCESS", "code": 1}}, {}):
+            with self.subTest(outcome=outcome):
+                finished = {"id": {"buildFinished": {}}, "finished": outcome}
+                self.assert_fails(spawns, events[:-1] + [finished], "successful invocation")
 
     def test_cached_or_unselected_result_fails(self):
         spawns, events = self.passing()

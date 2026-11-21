@@ -19,7 +19,7 @@ exit code still fails. It fails unless:
     GPU request, and no test result came from a cache;
   - each selected test has, for every run and shard its summary reports, a fresh remote test
     runner spawn with the GPU request and a fresh remote result, and its summary passed;
-  - at least one test ran, and the build event stream finished.
+  - at least one test ran, and the build event stream records a successful invocation.
 The JSON execution log carries no invocation identifier, so the two files cannot be matched to one
 invocation; the per-test spawn and result counts must agree instead.
 """
@@ -114,7 +114,9 @@ def select(lines):
         if not _eligible(label, rule):
             continue
         # The wrapper rule has no env attribute of its own; it forwards its implementation's.
-        dep = rules.get(_attribute(rule, "dep", "stringValue"), {})
+        dep = rules.get(_attribute(rule, "dep", "stringValue"))
+        if dep is None:
+            raise ValueError("Missing implementation rule for %s in the query results" % label)
         if not _names_driver(dep):
             selected.append(label)
     return sorted(selected)
@@ -187,9 +189,13 @@ def _read_events(events, selection):
     summaries = {}
     skipped = set()
     for event in events:
-        finished |= "finished" in event
         identity = event.get("id", {})
-        if "testResult" in event:
+        if "buildFinished" in identity:
+            finished = True
+            exit_code = event.get("finished", {}).get("exitCode", {})
+            if exit_code.get("name") != "SUCCESS" or exit_code.get("code", 0) != 0:
+                problems.append("the build-finished event does not record a successful invocation")
+        elif "testResult" in event:
             label = identity["testResult"]["label"]
             if label not in selection:
                 problems.append("%s reported a result but was not selected" % label)
