@@ -1250,8 +1250,7 @@ bool ShouldPlanGeodeLocalRaster(const components::FilterGraph& filterGraph,
       NearZero(deviceFromFilter.determinant(), 1e-12)) {
     return false;
   }
-  return IsEligibleForTransformedBlurPath(filterGraph) &&
-         (ShouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
+  return UsesTransformedBlurPath(filterGraph, deviceFromFilter, fullExecutionFits);
 }
 
 struct GeodeLocalRasterGeometry {

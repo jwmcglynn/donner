@@ -1587,8 +1587,7 @@ bool CanUseLocalFilterRaster(const components::FilterGraph& filterGraph,
       NearZero(deviceFromFilter.determinant())) {
     return false;
   }
-  return IsEligibleForTransformedBlurPath(filterGraph) &&
-         (ShouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
+  return UsesTransformedBlurPath(filterGraph, deviceFromFilter, fullExecutionFits);
 }
 
 struct LocalFilterRasterGeometry {

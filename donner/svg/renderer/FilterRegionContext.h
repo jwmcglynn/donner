@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
@@ -324,8 +325,9 @@ inline bool IsBlurFilterNode(const components::FilterNode& node) {
 }
 
 /// Whether \p node may run on the transformed path's local raster: a blur, drop shadow, offset or
-/// merge without a primitive subregion that reads SourceGraphic, SourceAlpha or earlier results.
-/// @param node Filter node.
+/// merge without a primitive subregion whose standard inputs are SourceGraphic or SourceAlpha. Any
+/// named input is admitted, including forward or missing references, which the same executor
+/// resolves as it does on the device raster. @param node Filter node.
 inline bool IsTransformedBlurPathNode(const components::FilterNode& node) {
   using namespace components;
   const bool admitted = IsBlurFilterNode(node) ||
@@ -341,18 +343,81 @@ inline bool IsTransformedBlurPathNode(const components::FilterNode& node) {
   });
 }
 
+/// Whether input \p input of node \p index carries only blurred content, given \p blurred for the
+/// nodes before it: a standard input or an unresolved name does not.
+/// @param graph Filter graph. @param blurred Per-node results so far. @param input The input.
+/// @param index The reading node.
+inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
+                                 const std::vector<bool>& blurred,
+                                 const components::FilterInput& input, size_t index) {
+  using namespace components;
+  if (std::holds_alternative<FilterInput::Previous>(input.value)) {
+    return index > 0 && blurred[index - 1];
+  }
+  const auto* name = std::get_if<FilterInput::Named>(&input.value);
+  for (size_t prior = index; name != nullptr && prior-- > 0;) {
+    if (graph.nodes[prior].result.has_value() && *graph.nodes[prior].result == name->name) {
+      return blurred[prior];
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether every path from SourceGraphic or SourceAlpha to the output of \p graph passes through a
+ * Gaussian blur. Content that reaches the output unblurred, such as the SourceGraphic node of a
+ * shadow merge, would be resampled onto the local raster and back, softening its edges.
+ *
+ * @param graph Filter graph.
+ */
+inline bool FilterOutputIsBlurred(const components::FilterGraph& graph) {
+  std::vector<bool> blurred(graph.nodes.size(), false);
+  for (size_t index = 0; index < graph.nodes.size(); ++index) {
+    const components::FilterNode& node = graph.nodes[index];
+    bool all = true;
+    for (size_t slot = 0; slot < std::max<size_t>(node.inputs.size(), 1); ++slot) {
+      all = all && FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(node, slot), index);
+    }
+    blurred[index] =
+        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) || all;
+  }
+  return !blurred.empty() && blurred.back();
+}
+
+/// Whether \p graph is a chain of blurs, drop shadows and offsets in which each node reads only
+/// the previous result, the first reading SourceGraphic, with no named results.
+/// @param graph Filter graph.
+inline bool IsLinearBlurChain(const components::FilterGraph& graph) {
+  using namespace components;
+  return std::all_of(graph.nodes.begin(), graph.nodes.end(), [](const FilterNode& node) {
+    const bool linearInput =
+        node.inputs.empty() ||
+        (node.inputs.size() == 1 &&
+         (std::holds_alternative<FilterInput::Previous>(node.inputs[0].value) ||
+          node.inputs[0].value == FilterInput::Type(FilterStandardInput::SourceGraphic)));
+    return linearInput && !node.result.has_value() &&
+           !std::holds_alternative<filter_primitive::Merge>(node.primitive);
+  });
+}
+
 /**
  * Whether \p graph may run on the transformed path's local raster, whose axes are the filter's
  * user axes scaled to device resolution, so a blur keeps its user-space shape under rotation or
- * skew. Eligible graphs use user-space primitive units, contain at least one blur, and are built
- * only from nodes \ref IsTransformedBlurPathNode admits.
+ * skew. Eligible graphs use user-space primitive units and are built only from nodes
+ * \ref IsTransformedBlurPathNode admits. A linear chain of blurs, drop shadows and offsets with at
+ * least one blur is eligible (\ref IsLinearBlurChain); a graph with merges, named results or
+ * SourceAlpha is eligible only when it blurs everything it outputs (\ref FilterOutputIsBlurred).
  *
  * @param graph Filter graph.
  */
 inline bool IsEligibleForTransformedBlurPath(const components::FilterGraph& graph) {
-  return !graph.nodes.empty() && graph.primitiveUnits != PrimitiveUnits::ObjectBoundingBox &&
-         std::all_of(graph.nodes.begin(), graph.nodes.end(), IsTransformedBlurPathNode) &&
-         std::any_of(graph.nodes.begin(), graph.nodes.end(), IsBlurFilterNode);
+  if (graph.nodes.empty() || graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox ||
+      !std::all_of(graph.nodes.begin(), graph.nodes.end(), IsTransformedBlurPathNode)) {
+    return false;
+  }
+  return (IsLinearBlurChain(graph) &&
+          std::any_of(graph.nodes.begin(), graph.nodes.end(), IsBlurFilterNode)) ||
+         FilterOutputIsBlurred(graph);
 }
 
 /// Whether any blur or drop shadow of \p graph has unequal X and Y deviations. @param graph Graph.
@@ -391,6 +456,25 @@ inline bool ShouldUseTransformedBlurPath(const components::FilterGraph& graph,
   const bool hasRotation =
       !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
   return hasRotation && GraphHasAnisotropicBlur(graph);
+}
+
+/**
+ * Whether a filter runs on the transformed path's local raster: an eligible graph does when the
+ * transform requires it (\ref ShouldUseTransformedBlurPath). When its full execution does not fit
+ * the device raster's budget, a linear blur chain also runs there at any transform rather than
+ * being refused; graphs with merges or named results are not admitted to that fallback.
+ *
+ * @param graph Filter graph.
+ * @param deviceFromFilter Filter user space to device pixels.
+ * @param fullExecutionFits Whether the graph fits the execution budget on the device raster.
+ */
+inline bool UsesTransformedBlurPath(const components::FilterGraph& graph,
+                                    const Transform2d& deviceFromFilter, bool fullExecutionFits) {
+  if (!IsEligibleForTransformedBlurPath(graph)) {
+    return false;
+  }
+  return ShouldUseTransformedBlurPath(graph, deviceFromFilter) ||
+         (!fullExecutionFits && IsLinearBlurChain(graph));
 }
 
 /// User-space padding of the local raster: 3 sigma + 1 for the largest blur deviation.

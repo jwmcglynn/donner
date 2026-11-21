@@ -1184,6 +1184,47 @@ TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredW
       "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
 }
 
+/// Renders a seagreen square and a thin black bar in a `skewX(30)` group at 96x48, each filtered by
+/// \p primitives when they are not empty, through a user-space filter region holding the whole
+/// element.
+RendererBitmap RenderSkewedFilterScene(std::string_view primitives) {
+  const std::string filterAttribute = primitives.empty() ? "" : R"svg( filter="url(#f)")svg";
+  const std::string body =
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-20" y="-20" width="140" height="160">)svg" +
+      std::string(primitives) +
+      R"svg(</filter><g transform="skewX(30)"><rect x="8" y="8" width="24" height="24" fill="seagreen")svg" +
+      filterAttribute + R"svg(/><rect x="40" y="10.5" width="6" height="20.3")svg" +
+      filterAttribute + "/></g>";
+  SVGDocument document = instantiateSubtree(body, {}, Vector2i(96, 48));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// A shadow merge draws SourceGraphic unblurred over its shadow. Under a skew that branch must not
+// be resampled onto the filter-aligned raster and back: with the shadow 60 units below, off the
+// canvas, the filtered render equals the element drawn without the filter.
+TEST_F(RendererRegressionTests, SkewedShadowMergeKeepsSourceGraphicSharp) {
+  const RendererBitmap plain = RenderSkewedFilterScene("");
+  ExpectVisibleBitmap(plain, "skewed_shadow_plain_visible");
+  editor::tests::CompareBitmapToBitmap(
+      RenderSkewedFilterScene(
+          R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="2 1"/><feOffset dy="60" result="s"/>
+                <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>)svg"),
+      plain, "skewed_shadow_merge_source", editor::tests::PixelmatchIdentityParams());
+}
+
+// feDropShadow under a skew runs on the filter-aligned raster, which shears its blur and resamples
+// its source there and back. With an invisible shadow and a negligible deviation it therefore draws
+// its source exactly as a plain blur of that deviation does on the same raster.
+TEST_F(RendererRegressionTests, SkewedDropShadowRunsOnTheLocalRaster) {
+  const RendererBitmap localRaster =
+      RenderSkewedFilterScene(R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg");
+  ExpectVisibleBitmap(localRaster, "skewed_drop_shadow_local_raster_visible");
+  editor::tests::CompareBitmapToBitmap(
+      RenderSkewedFilterScene(
+          R"svg(<feDropShadow dx="0" dy="0" stdDeviation="0.01" flood-opacity="0"/>)svg"),
+      localRaster, "skewed_drop_shadow_local_raster", editor::tests::PixelmatchIdentityParams());
+}
+
 // Under a skew a blur keeps its user-space shape by running on a raster aligned with the filter's
 // axes. A blur read through a named result and a merge, or of SourceAlpha, must take the same path
 // as the plain blur: merging one input reproduces it, and SourceAlpha of an opaque rect is the
