@@ -167,7 +167,7 @@ public:
 
   /// Resolves a GSUB language system for the requested Unicode script and OpenType language.
   static size_t LanguageSystem(std::span<const uint8_t> table, uint32_t scriptTag,
-                               uint32_t languageTag) {
+                               std::span<const uint32_t> languageTags) {
     const SfntTableReader reader(table);
     const auto scripts = reader.u16(4);
     if (!scripts || *scripts == 0) {
@@ -186,7 +186,13 @@ public:
       return 0;
     }
     const auto languageCount = reader.u16(scriptOffset + 2).value_or(0);
-    auto offset = FindTaggedOffset(reader, scriptOffset + 4, languageCount, languageTag);
+    uint16_t offset = 0;
+    for (const uint32_t tag : languageTags) {
+      offset = FindTaggedOffset(reader, scriptOffset + 4, languageCount, tag);
+      if (offset != 0) {
+        break;
+      }
+    }
     if (offset == 0) {
       offset = FindTaggedOffset(reader, scriptOffset + 4, languageCount, LayoutTag("dflt"));
     }
@@ -407,7 +413,8 @@ struct StbFontComponent {
   bool intrinsicItalic = false;
   /// Small-cap lookups keyed by the selected language-system offset within this face's GSUB.
   std::unordered_map<size_t, SimpleSmallCapsSubstitution> smallCaps;
-  size_t smallCapsReadSteps = SimpleSmallCapsSubstitution::kMaximumReadSteps;
+  std::array<size_t, 32> smallCapsOrder{};
+  size_t smallCapsNext = 0;
 };
 
 bool AdmitSimpleSmallCapsScript(const TextBackend::ShapingContext& context, size_t length) {
@@ -451,10 +458,10 @@ uint32_t ShapingScript(std::string_view text, size_t offset, size_t length,
 /// Reuses the selected language system's bounded lookup parse across runs of this face.
 const SimpleSmallCapsSubstitution* CachedSmallCaps(Registry& registry, const FontManager& manager,
                                                    FontHandle font, uint32_t script,
-                                                   uint32_t language) {
+                                                   std::span<const uint32_t> languages) {
   const auto gsub = manager.sfntTable(font, "GSUB");
   const size_t langSys =
-      gsub ? SimpleSmallCapsSubstitution::LanguageSystem(*gsub, script, language) : 0;
+      gsub ? SimpleSmallCapsSubstitution::LanguageSystem(*gsub, script, languages) : 0;
   if (langSys == 0) {
     return nullptr;
   }
@@ -463,12 +470,14 @@ const SimpleSmallCapsSubstitution* CachedSmallCaps(Registry& registry, const Fon
   if (found != cached.smallCaps.end()) {
     return &found->second;
   }
-  constexpr size_t kMaximumCachedLanguageSystems = 32;
-  if (cached.smallCaps.size() >= kMaximumCachedLanguageSystems || cached.smallCapsReadSteps == 0) {
-    return nullptr;
-  }
-  const auto it = cached.smallCaps.emplace(
-      langSys, SimpleSmallCapsSubstitution::Read(*gsub, langSys, cached.smallCapsReadSteps));
+  // Keep cache capacity independent of which scripts have already been requested. Eviction changes
+  // the cost of reusing a language system, but the same bounded parse always selects its result.
+  cached.smallCaps.erase(cached.smallCapsOrder[cached.smallCapsNext]);
+  cached.smallCapsOrder[cached.smallCapsNext] = langSys;
+  cached.smallCapsNext = (cached.smallCapsNext + 1) % cached.smallCapsOrder.size();
+  size_t steps = SimpleSmallCapsSubstitution::kMaximumReadSteps;
+  const auto it =
+      cached.smallCaps.emplace(langSys, SimpleSmallCapsSubstitution::Read(*gsub, langSys, steps));
   return &it.first->second;
 }
 
@@ -480,7 +489,8 @@ const SimpleSmallCapsSubstitution* SmallCapsForRun(Registry& registry, const Fon
   return variant == FontVariant::SmallCaps
              ? CachedSmallCaps(registry, manager, font,
                                ShapingScript(text, offset, length, context),
-                               context ? context->openTypeLanguage : 0)
+                               context ? std::span<const uint32_t>(context->openTypeLanguageTags)
+                                       : std::span<const uint32_t>())
              : nullptr;
 }
 

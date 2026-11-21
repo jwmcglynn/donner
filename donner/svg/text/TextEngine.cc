@@ -5273,7 +5273,7 @@ public:
   ChunkShaper(const TextBackend& backend, const TextRun& run, std::string_view text, bool vertical,
               TextOrientation orientation, FontVariant variant, FontSynthesisSmallCaps synthesis,
               bool kerning, const ClusterFallback& fallback, NormalBidiPlan* bidi = nullptr,
-              size_t sourceSpan = 0)
+              size_t sourceSpan = 0, std::array<uint32_t, 3> languageTags = {})
       : backend_(backend),
         run_(run),
         text_(text),
@@ -5284,7 +5284,8 @@ public:
         kerning_(kerning),
         fallback_(fallback),
         bidi_(bidi),
-        sourceSpan_(sourceSpan) {}
+        sourceSpan_(sourceSpan),
+        languageTags_(languageTags) {}
 
   /// Shapes \p chunk, recording each glyph's fallback face in \p faces, which stays empty when the
   /// primary face draws every glyph.
@@ -5428,6 +5429,24 @@ private:
   TextBackend::ShapedRun shapeWith(FontHandle font, const ChunkRange& chunk,
                                    const TextBackend::ShapingContext* context,
                                    TextOrientation orientation) const {
+    if (variant_ != FontVariant::SmallCaps || languageTags_.front() == 0) {
+      return shapeWithContext(font, chunk, context, orientation);
+    }
+    TextBackend::ShapingContext authored =
+        context ? *context
+                : TextBackend::ShapingContext{chunk.byteStart, chunk.byteEnd - chunk.byteStart};
+    authored.openTypeLanguageTags = languageTags_;
+    auto result = shapeWithContext(font, chunk, &authored, orientation);
+    if (context) {
+      context->detected = authored.detected;
+      context->simpleUnicodeScript = authored.simpleUnicodeScript;
+    }
+    return result;
+  }
+
+  TextBackend::ShapedRun shapeWithContext(FontHandle font, const ChunkRange& chunk,
+                                          const TextBackend::ShapingContext* context,
+                                          TextOrientation orientation) const {
     const size_t length = chunk.byteEnd - chunk.byteStart;
     const bool useBidiContext = context && bidi_;
     const size_t offset = useBidiContext ? bidi_->spans[sourceSpan_].byte : 0;
@@ -5540,6 +5559,7 @@ private:
   const ClusterFallback& fallback_;
   NormalBidiPlan* bidi_ = nullptr;
   size_t sourceSpan_ = 0;
+  std::array<uint32_t, 3> languageTags_{};
   /// Resolved faces keyed by cluster text, which views the span text.
   mutable std::unordered_map<std::string_view, FontHandle> clusterFaces_;
   mutable std::vector<FontHandle> candidates_;
@@ -7130,7 +7150,7 @@ private:
                              span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
                              fallback,
                              normalBidi_.appliesToSpan(*state.span) ? &normalBidi_ : nullptr,
-                             state.span - text_.spans.data());
+                             state.span - text_.spans.data(), span.openTypeLanguageTags);
     EmergencyWrapOptions* emergency = emergencyOptions(state);
     state.shaping =
         PrepareSpanShaping(shaper, state.text, state.chunkRanges, state.indexMappings, emergency);
@@ -7234,6 +7254,8 @@ private:
     size_t firstByte = chunk.byteStart;
     const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
     const FontHandle firstFace = state.shaping.chunks.front().drawingFace(0, state.font);
+    TextBackend::ShapingContext context{chunk.byteStart, chunk.byteEnd - chunk.byteStart};
+    context.openTypeLanguageTags = state.span->openTypeLanguageTags;
     const bool compatible =
         previousSpanOrientation_ == state.orientation &&
         CompatibleKerningRuns(
@@ -7241,7 +7263,7 @@ private:
             EffectiveSmallCapsVariant(backend_, firstFace, state.span->fontVariant,
                                       state.span->fontSynthesisSmallCaps, state.text,
                                       chunk.byteStart, chunk.byteEnd - chunk.byteStart,
-                                      state.vertical, state.orientation, nullptr),
+                                      state.vertical, state.orientation, &context),
             previousSpanFont_, previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
             previousSpanKerning_);
     const double value =
@@ -7578,10 +7600,12 @@ private:
     previousSpanKerning_ = state.fontKerning;
     if (state.lastCodepoint != 0 && !state.chunkRanges.empty()) {
       const ChunkRange& chunk = state.chunkRanges.back();
+      TextBackend::ShapingContext context{chunk.byteStart, chunk.byteEnd - chunk.byteStart};
+      context.openTypeLanguageTags = state.span->openTypeLanguageTags;
       previousSpanFontVariant_ = EffectiveSmallCapsVariant(
           backend_, previousSpanFont_, state.span->fontVariant, state.span->fontSynthesisSmallCaps,
           state.text, chunk.byteStart, chunk.byteEnd - chunk.byteStart, state.vertical,
-          state.orientation, nullptr);
+          state.orientation, &context);
     }
     previousSpanOrientation_ = state.orientation;
     previousSpanPathSource_ = SpanKerningPathSource(*state.span);

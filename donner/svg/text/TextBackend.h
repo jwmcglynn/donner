@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <ostream>
@@ -296,8 +297,8 @@ public:
     WorkBudget* work = nullptr;
     /// Resolved horizontal embedding parity; overrides every guessed shaping direction.
     std::optional<bool> rightToLeft;
-    /// An explicit OpenType language-system tag in big-endian byte order, when known.
-    uint32_t openTypeLanguage = 0;
+    /// Preferred OpenType language-system tags for the authored language, when resolved.
+    std::array<uint32_t, 3> openTypeLanguageTags{};
     /// Context script cached by the simple backend, independently of HarfBuzz properties.
     mutable std::optional<uint32_t> simpleUnicodeScript;
   };

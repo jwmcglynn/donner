@@ -949,10 +949,39 @@ bool HasRunSmallCaps(hb_font_t* font, hb_script_t script, hb_language_t language
                                             kSmallCaps, nullptr);
 }
 
-hb_language_t RunLanguage(hb_language_t fallback, const TextBackend::ShapingContext* context) {
-  return context && context->openTypeLanguage != 0
-             ? hb_ot_tag_to_language(context->openTypeLanguage)
-             : fallback;
+hb_language_t RunLanguage(hb_font_t* font, hb_script_t script, hb_language_t fallback,
+                          const TextBackend::ShapingContext* context) {
+  if (!font || !context || context->openTypeLanguageTags.front() == 0) {
+    return fallback;
+  }
+  std::array<hb_tag_t, HB_OT_MAX_TAGS_PER_SCRIPT> scripts{};
+  unsigned scriptCount = scripts.size();
+  hb_ot_tags_from_script_and_language(script, HB_LANGUAGE_INVALID, &scriptCount, scripts.data(),
+                                      nullptr, nullptr);
+  hb_face_t* face = hb_font_get_face(font);
+  unsigned scriptIndex = HB_OT_LAYOUT_NO_SCRIPT_INDEX;
+  hb_ot_layout_table_select_script(face, HB_OT_TAG_GSUB, scriptCount, scripts.data(), &scriptIndex,
+                                   nullptr);
+  unsigned index = HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX;
+  const auto& tags = context->openTypeLanguageTags;
+  const unsigned count =
+      static_cast<unsigned>(std::find(tags.begin(), tags.end(), 0) - tags.begin());
+  if (!hb_ot_layout_script_select_language(face, HB_OT_TAG_GSUB, scriptIndex, count, tags.data(),
+                                           &index)) {
+    return HB_LANGUAGE_INVALID;
+  }
+  unsigned one = 1;
+  hb_tag_t selected = HB_TAG_NONE;
+  hb_ot_layout_script_get_language_tags(face, HB_OT_TAG_GSUB, scriptIndex, index, &one, &selected);
+
+  // HarfBuzz interprets this private language form as one exact OpenType tag. Values come only
+  // from the finite generated registry, so authored strings never enter HarfBuzz's intern table.
+  constexpr std::string_view kHex = "0123456789abcdef";
+  char exact[] = "x-hbot-00000000";
+  for (size_t nibble = 0; nibble < 8; ++nibble) {
+    exact[7 + nibble] = kHex[(selected >> ((7 - nibble) * 4)) & 0xf];
+  }
+  return hb_language_from_string(exact, sizeof(exact) - 1);
 }
 
 }  // namespace
@@ -1199,7 +1228,9 @@ SmallCapsPreparation PrepareSmallCaps(hb_font_t* font, const RunScriptProperties
   // Ordinary shaping keeps the backend's existing detected language.
   const auto fallback =
       fontVariant == FontVariant::SmallCaps ? HB_LANGUAGE_INVALID : properties.language;
-  const auto language = RunLanguage(fallback, context);
+  const auto language = fontVariant == FontVariant::SmallCaps
+                            ? RunLanguage(font, properties.script, fallback, context)
+                            : fallback;
   const bool useSmcpFeature =
       fontVariant == FontVariant::SmallCaps && HasRunSmallCaps(font, properties.script, language);
   std::string smallCapsText;
@@ -1609,8 +1640,9 @@ bool TextBackendFull::hasSmallCapsFeatureForRun(FontHandle font, std::string_vie
       context && ContextAddsShapingInformation(*context, length) ? context : nullptr;
   const auto properties = DetectShapingScript(text, detection, offset, length, vertical,
                                               orientation, detectedContextBytes_);
-  return HasRunSmallCaps(getOrCreateHbFont(font), properties.script,
-                         RunLanguage(HB_LANGUAGE_INVALID, context));
+  hb_font_t* hbFont = getOrCreateHbFont(font);
+  return HasRunSmallCaps(hbFont, properties.script,
+                         RunLanguage(hbFont, properties.script, HB_LANGUAGE_INVALID, context));
 }
 
 TextBackend::ShapedRun TextBackendFull::shapeRunImpl(

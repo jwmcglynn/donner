@@ -1492,7 +1492,7 @@ TEST(TextBackendSimpleCapabilities, NativeSmallCapsUseTheSelectedLanguage) {
   ASSERT_THAT(expected.glyphs, ElementsAre(GlyphFontSizeScaleIs(FloatEq(1.0f))));
 
   TextBackend::ShapingContext context{0, 1};
-  context.openTypeLanguage = 0x43415420;  // CAT: Noto Sans has a Catalan language system.
+  context.openTypeLanguageTags = {0x43415420};  // CAT: Noto Sans has a Catalan language system.
   for (const TextBackend* backend : std::array<const TextBackend*, 2>{&simple, &full}) {
     EXPECT_FALSE(backend->hasSmallCapsFeature(modified));
     EXPECT_TRUE(backend->hasSmallCapsFeatureForRun(modified, "a", 0, 1, false,
@@ -1545,6 +1545,52 @@ TEST(TextBackendSimpleCapabilities, SvgSmallCapsSynthesisNoneUsesTheRunScript) {
       editor::tests::CompareBitmapToBitmap(actual, expected, label,
                                            editor::tests::PixelmatchIdentityParams());
     }
+  }
+}
+
+TEST(TextBackendSimpleCapabilities, SvgSmallCapsUsesInheritedAndOverriddenXmlLanguage) {
+  const auto render = [](bool reference, bool fullTier) {
+    const std::string_view actual = R"svg(
+      <g xml:lang="CA-es">
+        <text x="8" y="50" font-family="CapsScriptControl" font-size="64"
+              font-variant="small-caps" style="font-synthesis-small-caps:none">
+          <tspan>a</tspan><tspan x="78" xml:lang="en">a</tspan><tspan x="148" xml:lang="">a</tspan>
+        </text>
+      </g>)svg";
+    const std::string_view expected = R"svg(
+      <text x="8" y="50" font-family="CapsScriptControl" font-size="64"
+            font-variant="small-caps" style="font-synthesis-small-caps:none">
+        <tspan>a</tspan><tspan x="78" font-variant="normal">a</tspan><tspan x="148" font-variant="normal">a</tspan>
+      </text>)svg";
+    auto document = instantiateSubtree(reference ? expected : actual, {}, {220, 64});
+    auto& registry = document.registry();
+    auto& manager = registry.ctx().emplace<FontManager>(registry);
+    const FontHandle font =
+        reference ? LoadResvgFont(manager, "NotoSans-Regular.ttf", "CapsScriptControl")
+                  : RegisterCapsFaceWithoutScriptFeatures(manager, 0x6C61746Eu, true);
+    if (!font) {
+      return RendererBitmap{};
+    }
+    std::unique_ptr<TextBackend> backend;
+    if (fullTier) {
+      backend = std::make_unique<TextBackendFull>(manager, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(manager, registry);
+    }
+    registry.ctx().emplace<TextEngine>(manager, registry, std::move(backend));
+    return RenderDocumentWithActiveBackend(document);
+  };
+
+  for (bool fullTier : {false, true}) {
+    SCOPED_TRACE(fullTier ? "full tier" : "simple tier");
+    const auto expected = render(true, fullTier);
+    const auto actual = render(false, fullTier);
+    ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(220, 64)));
+    ASSERT_THAT(actual.dimensions, testing::Eq(expected.dimensions));
+    ASSERT_THAT(expected.pixels, Not(Each(testing::Eq(0))));
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, fullTier ? "small_caps_lang_full" : "small_caps_lang_simple",
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 

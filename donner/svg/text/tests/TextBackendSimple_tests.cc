@@ -920,6 +920,52 @@ TEST_F(TextBackendSimpleTest, NativeSmallCapsUseTheSelectedScript) {
               ElementsAre(AllOf(GlyphIndexIs(2), GlyphFontSizeScaleIs(FloatEq(1.0f)))));
 }
 
+TEST_F(TextBackendSimpleTest, NativeSmallCapsSelectionDoesNotDependOnCacheOrder) {
+  std::vector<uint8_t> gsub =
+      GsubTable({{}}, {{"smcp", {0}}}, {GposLookup(1, SingleSubstGlyph(3, 2))}, {"latn"});
+  // This fixture has one script with a default LangSys with no features, at the table end.
+  constexpr uint16_t kLanguages = 40;
+  gsub.resize(gsub.size() - 10);
+  AppendBE16(&gsub, 4 + kLanguages * 6);
+  AppendBE16(&gsub, kLanguages);
+  size_t offset = 4 + kLanguages * 6 + 6;  // Follow the default language system.
+  for (uint16_t i = 0; i < kLanguages; ++i) {
+    AppendBE16(&gsub, 0x4130);  // A0
+    AppendBE16(&gsub, static_cast<uint16_t>(0x3030 + (i / 10) * 256 + i % 10));
+    AppendBE16(&gsub, static_cast<uint16_t>(offset));
+    offset += 6 + (i % 2 == 0 ? 2 : 0);
+  }
+  AppendBE16(&gsub, 0);
+  AppendBE16(&gsub, 0xFFFF);
+  AppendBE16(&gsub, 0);  // Default language has no features.
+  for (uint16_t i = 0; i < kLanguages; ++i) {
+    AppendBE16(&gsub, 0);
+    AppendBE16(&gsub, 0xFFFF);
+    AppendBE16(&gsub, i % 2 == 0 ? 1 : 0);
+    if (i % 2 == 0) {
+      AppendBE16(&gsub, 0);
+    }
+  }
+
+  const FontHandle font = loadFont(MakeGsubTestFont(gsub));
+  const auto check = [&](uint16_t i) {
+    TextBackend::ShapingContext context{0, 1};
+    context.openTypeLanguageTags = {0x41303030u + (i / 10) * 256u + i % 10};
+    const auto shaped =
+        backend_.shapeRunInContext(font, 100.f, "a", context, 0, 1, false, TextOrientation::Mixed,
+                                   FontVariant::SmallCaps, false);
+    const bool native = i % 2 == 0;
+    EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphIndexIs(native ? 2 : 1),
+                                                 GlyphFontSizeScaleIs(FloatEq(native ? 1 : .8f)))))
+        << i;
+  };
+  for (uint16_t i = 0; i < kLanguages; ++i) {
+    check(i);
+  }
+  check(0);
+  check(1);
+}
+
 // A format-2 coverage range's startCoverageIndex selects the substitute.
 TEST_F(TextBackendSimpleTest, NativeSmallCapsUseTheRangeStartCoverageIndex) {
   const FontHandle font = loadFont(MakeGsubTestFont(

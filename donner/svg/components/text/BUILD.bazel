@@ -103,6 +103,7 @@ cc_library(
         "//donner/svg/graph",
         "//donner/svg/parser:parser_core",
         "//donner/svg/text:bidi_control",
+        "//third_party/harfbuzz-language-data",
     ],
 )
 
