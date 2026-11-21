@@ -19,6 +19,17 @@ test:loop --config=loop
 
 
 class BazelrcConfigsTest(unittest.TestCase):
+    def test_only_an_unambiguous_complete_system_declaration_is_forwarded(self):
+        args = "--linkopt=-L/a --linkopt=-Wl,-rpath,/a '--linkopt=-L/b c' '--linkopt=-Wl,-rpath,/b c'"
+        declaration = "build:linux " + args
+        rc = "\n".join(["build:ci " + args, "build:linux --copt=-O2", declaration + " # runtime"])
+        self.assertEqual(bazelrc_configs.linux_runtime_link_dirs(rc), "/a:/b c")
+        for other in ("build:macos " + args, declaration + " --linkopt=-lm",
+                      declaration.replace("-rpath,/a", "-rpath,/different"),
+                      declaration.replace("/a", "/a:b"), declaration + "\n" + declaration):
+            with self.subTest(other=other):
+                self.assertEqual(bazelrc_configs.linux_runtime_link_dirs(other), "")
+
     def setUp(self):
         self.configs = bazelrc_configs.parse(_RC)
 
