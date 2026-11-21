@@ -955,10 +955,25 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+constraint_setting(name = "worker_cpp_toolchain")
+
+constraint_value(
+    name = "worker_llvm",
+    constraint_setting = ":worker_cpp_toolchain",
+    visibility = ["//visibility:public"],
+)
+
 platform(
-    name = "linux_ci",
+    name = "linux_aarch64_ci_base",
     constraint_values = ["@platforms//os:linux", "@platforms//cpu:aarch64"],
     exec_properties = {"OSFamily": "linux", "ISA": "aarch64", "container-image": "none"},
+)
+
+platform(
+    name = "linux_ci",
+    constraint_values = [":worker_llvm"],
+    exec_properties = {"donner-toolchain": "511ed431ff4dce8de84ea266c0dfcddeec9b118977be79e75d34c42a8e50c4c1"},
+    parents = [":linux_aarch64_ci_base"],
     visibility = ["//visibility:public"],
 )
 
@@ -967,7 +982,7 @@ platform(
 platform(
     name = "linux_ci_gpu",
     exec_properties = {"gpu": "present"},
-    parents = [":linux_ci"],
+    parents = [":linux_aarch64_ci_base"],
     visibility = ["//visibility:public"],
 )
 

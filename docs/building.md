@@ -561,11 +561,20 @@ wrapper rule, which every `opens_gpu_device` test runs through, returns none, an
 - A Linux client and a macOS client share action keys with each other; sharing them with the
   macOS CI lanes, which discover their Xcode locally, is not established.
 
+### Linux C++ toolchain for remote CI
+
+The mixed Linux/Darwin build selects `@llvm_worker_linux_aarch64` for Linux C++ actions.
+The coordinator loads the toolchain declaration. The Linux worker supplies the pinned compiler,
+its host runtime, and the target sysroot. The `donner-toolchain` execution property on
+`//tools/ci:linux_ci` binds the worker selection and action cache to that installation. When one
+of those inputs changes, update the installation identity and qualify a compile and link from a
+cold coordinator. Hosted Linux uses the downloadable LLVM toolchain. Darwin uses Xcode.
+
 ### Linux hardware GPU tests
 
 The mixed CI configuration (`--config=ci-platforms`) runs each test on its target platform.
-`//tools/ci:linux_ci_gpu` inherits the Linux CI platform and adds the execution property
-`gpu=present`. A native test wrapper can select this platform so that its TestRunner requests a
+`//tools/ci:linux_ci_gpu` inherits the common Linux ARM64 platform and adds `gpu=present`.
+Linux compilation uses `//tools/ci:linux_ci`, which carries the worker toolchain requirement. A native test wrapper can select this platform so that its TestRunner requests a
 GPU while its build actions use the ordinary execution platforms. Select hardware tests by
 target. Setting the GPU platform globally makes unrelated tests request GPU capacity.
 

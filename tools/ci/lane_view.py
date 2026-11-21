@@ -37,7 +37,7 @@ def split_placeholders():
     """Each run-time flag variable a phase splits into words, standing for itself."""
     return {item.name: "$" + item.name for entry in lanes.LANES.values()
             for phase in entry.phases.values() for action in phase.actions
-            for item in getattr(getattr(action, "fetch", action), "args", ())
+            for item in getattr(action, "args", ())
             if isinstance(item, lanes.Split)}
 
 
