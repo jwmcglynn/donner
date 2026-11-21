@@ -145,7 +145,10 @@ class Turnstile:
     def _poll_wait(self, delay: float) -> None:
         """Waits `delay` plus jitter. The jitter is sized for the base interval, so a shorter
         wait gets a proportionally smaller share of it rather than one that rivals the wait."""
-        self._wait(delay + self.jitter() * min(1.0, delay / self.base))
+        jitter = self.jitter()
+        if 0 < delay < self.base:
+            jitter *= delay / self.base
+        self._wait(delay + jitter)
 
     def _expired(self) -> bool:
         return self.clock() >= self.deadline

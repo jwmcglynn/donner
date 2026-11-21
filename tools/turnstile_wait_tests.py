@@ -217,6 +217,14 @@ class WaitLoopTests(unittest.TestCase):
                             jitter=lambda: 4, log=self.logged.append).run()
         self.assertEqual(self.clock.slept[:2], [64, 64])
 
+    def test_zero_base_interval_retains_jitter_and_admits(self):
+        api = FakeActions(self.clock, {_ME: (1, "queued")})
+        waiter = turnstile.Turnstile(_environ(TURNSTILE_POLL_SECONDS="0"), api,
+                                    sleep=self.clock.sleep, clock=self.clock, jitter=lambda: 4,
+                                    log=self.logged.append)
+        self.assertEqual(waiter.run(), 0)
+        self.assertEqual(self.clock.slept, [4])
+
     def test_spacing_is_capped_at_the_maximum_interval(self):
         self.assertEqual(turnstile.poll_interval(60, 300, 1), 60)
         self.assertEqual(turnstile.poll_interval(60, 300, 0), 60)
