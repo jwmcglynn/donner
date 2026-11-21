@@ -1188,10 +1188,11 @@ TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredW
  * Renders \p content, inside a group transformed by \p transform, on a \p size canvas with the
  * hermetic defaults. The document defines filter `f` in user space over \p region
  * (`x y width height`) with \p primitives; content elements reference it as `url(#f)`.
+ * Pass \p renderer to render on an existing instance.
  */
 RendererBitmap RenderTransformedFilterScene(std::string_view region, std::string_view primitives,
                                             std::string_view transform, std::string_view content,
-                                            Vector2i size) {
+                                            Vector2i size, RendererInterface* renderer = nullptr) {
   std::istringstream regionValues{std::string(region)};
   std::string x, y, width, height;
   regionValues >> x >> y >> width >> height;
@@ -1200,6 +1201,10 @@ RendererBitmap RenderTransformedFilterScene(std::string_view region, std::string
                            std::string(primitives) + "</filter><g transform=\"" +
                            std::string(transform) + "\">" + std::string(content) + "</g>";
   SVGDocument document = instantiateSubtree(body, {}, size);
+  if (renderer) {
+    renderer->draw(document);
+    return renderer->takeSnapshot();
+  }
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
@@ -1278,6 +1283,28 @@ TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSour
           "transformed_shadow_and_sharp_source", editor::tests::PixelmatchIdentityParams());
     }
   }
+}
+
+TEST_F(RendererRegressionTests, TransformedShadowAllocationFailureUsesTheDeviceRaster) {
+  constexpr std::string_view kDrop = R"svg(<feDropShadow dx="3" dy="27" stdDeviation="3 2"/>)svg";
+  // An explicit primitive subregion equal to the filter region selects the device raster.
+  constexpr std::string_view kDeviceDrop =
+      R"svg(<feDropShadow dx="3" dy="27" stdDeviation="3 2" x="-28" y="-18" width="112" height="99"/>)svg";
+  const auto render = [](std::string_view primitives, RendererInterface* renderer = nullptr) {
+    return RenderTransformedFilterScene("-28 -18 112 99", primitives, "translate(6 4) skewX(35)",
+                                        SquareAndBar(true), Vector2i(112, 94), renderer);
+  };
+  const RendererBitmap device = render(kDeviceDrop);
+  ExpectVisibleBitmap(device, "transformed_shadow_device_fallback_visible");
+  auto renderer = CreateActiveRendererInstance();
+  ASSERT_TRUE(renderer);
+  renderer->injectFilterLocalRasterAllocationFailureForTesting();
+  editor::tests::CompareBitmapToBitmap(render(kDrop, renderer.get()), device,
+                                       "transformed_shadow_device_fallback",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(render(kDrop, renderer.get()), render(kDrop),
+                                       "transformed_shadow_recovers_after_fallback",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, TransformedShadowOverlapKeepsTheMergeColorSpace) {

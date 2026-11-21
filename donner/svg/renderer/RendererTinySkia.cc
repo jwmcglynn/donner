@@ -2478,6 +2478,9 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
     return false;
   }
 
+  if (std::exchange(failNextLocalFilterRasterAllocationForTesting_, false)) {
+    return false;
+  }
   tiny_skia::Pixmap localPixmap = createTransparentPixmap(geometry->width, geometry->height);
   if (localPixmap.width() == 0 || localPixmap.height() == 0) {
     return false;
