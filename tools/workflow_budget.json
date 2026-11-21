@@ -1,6 +1,6 @@
 {
   "tree": {
-    "lines": 5145,
+    "lines": 5155,
     "comment_lines": 536,
     "multiline_runs": 66,
     "longest_run": 194,
@@ -225,7 +225,7 @@
       "longest_if": 21
     },
     ".github/actions/re-turnstile/action.yml": {
-      "lines": 137,
+      "lines": 147,
       "comment_lines": 0,
       "multiline_runs": 0,
       "longest_run": 0,
