@@ -410,6 +410,7 @@ single_version_override(
     patches = [
         "//third_party/patches:toolchains_llvm-libcxx-compile-headers.patch",
         "//third_party/patches:toolchains_llvm-extra-compiler-module-headers.patch",
+        "//third_party/patches:toolchains_llvm-worker-paths.patch",
     ],
 )
 
@@ -438,6 +439,28 @@ llvm.toolchain(
     exec_os = "linux",
     llvm_version = "23.1.5",
 )
+
+# The remote execution platform advertises this immutable compiler/sysroot bundle.
+# The ordinary Linux toolchains above and below still support local and hosted builds.
+worker_root = "/opt/donner/toolchains/511ed431ff4dce8de84ea266c0dfcddeec9b118977be79e75d34c42a8e50c4c1"
+llvm.toolchain(
+    name = "llvm_worker_linux_aarch64",
+    exec_arch = "aarch64",
+    exec_os = "linux",
+    llvm_version = "23.1.5",
+    worker_builtin_include_directories = {"linux-aarch64": [
+        worker_root + "/llvm/include/aarch64-unknown-linux-gnu/c++/v1",
+        worker_root + "/llvm/include/c++/v1",
+        worker_root + "/llvm/lib/clang/23/include",
+        worker_root + "/llvm/lib/clang/23/share",
+        worker_root + "/llvm/include/aarch64-unknown-linux-gnu",
+        worker_root + "/sysroot/usr/include/aarch64-linux-gnu",
+        worker_root + "/sysroot/usr/include",
+    ]},
+)
+llvm.toolchain_root(name = "llvm_worker_linux_aarch64", path = worker_root + "/llvm")
+llvm.sysroot(name = "llvm_worker_linux_aarch64", path = worker_root + "/sysroot", targets = ["linux-aarch64"])
+llvm.extra_exec_compatible_with(name = "llvm_worker_linux_aarch64", constraints = ["//tools/ci:worker_llvm"])
 
 # Keep the Linux x86_64 variant ready for future workers and local parity.
 llvm.toolchain(
@@ -548,6 +571,7 @@ llvm.extra_linker_files(
 
 use_repo(
     llvm,
+    "llvm_worker_linux_aarch64",
     "llvm_toolchain",
     "llvm_toolchain_linux_aarch64",
     "llvm_toolchain_linux_x86_64",

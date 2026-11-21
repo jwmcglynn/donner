@@ -34,7 +34,7 @@ jobs:
     if: >-
       github.repository == 'jwmcglynn/donner' &&
       github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       actions: read
@@ -71,7 +71,7 @@ jobs:
   promote-entry:
     needs: validate
     if: needs.validate.outputs.prepare == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       actions: read
@@ -143,7 +143,7 @@ jobs:
   prepare-fork:
     needs: [validate, promote-entry]
     if: needs.validate.outputs.prepare == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       actions: read
@@ -206,7 +206,7 @@ jobs:
   publish-fork:
     needs: [validate, promote-entry, prepare-fork]
     if: needs.validate.outputs.prepare == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: bcr-fork-preparation
     steps:
       - name: Download and reverify the entry without a fork token

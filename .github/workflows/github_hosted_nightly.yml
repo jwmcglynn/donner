@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   gatekeeper:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       should_run: ${{ steps.decide.outputs.should_run }}
     steps:
@@ -68,7 +68,7 @@ jobs:
           fi
 
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
@@ -94,7 +94,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: >-
-            pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
+            binutils-gold pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
             libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
             libgl1-mesa-dev libosmesa6
 

@@ -1,0 +1,7 @@
+exports_files(["COPYING"])
+
+cc_library(
+    name = "harfbuzz-language-data",
+    textual_hdrs = ["OpenTypeLanguageData.inc"],
+    visibility = ["//donner/svg/components/text:__pkg__"],
+)

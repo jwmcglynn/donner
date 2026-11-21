@@ -192,8 +192,8 @@
     "actions": [
      {
       "action": "bazel",
-      "argv": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/build/console.log' bazelisk build --config=ci --config=latest_llvm --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--profile=$DIAG_DIR/build/profile.gz' '--build_event_json_file=$DIAG_DIR/build/bep.json' '--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst' @selected_targets",
-      "expanded": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/build/console.log' bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--profile=$DIAG_DIR/build/profile.gz' '--build_event_json_file=$DIAG_DIR/build/bep.json' '--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst' @selected_targets"
+      "argv": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/build/console.log' bazelisk build --config=ci --extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:linux_ci --spawn_strategy=remote --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--profile=$DIAG_DIR/build/profile.gz' '--build_event_json_file=$DIAG_DIR/build/bep.json' '--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst' @selected_targets",
+      "expanded": "tools/ci/bazel_watchdog.sh '$DIAG_DIR/build/console.log' bazelisk build --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:linux_ci --spawn_strategy=remote --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --remote_download_outputs=minimal '--profile=$DIAG_DIR/build/profile.gz' '--build_event_json_file=$DIAG_DIR/build/bep.json' '--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst' @selected_targets"
      }
     ],
     "scenarios": [
@@ -208,30 +208,6 @@
   ],
   "runs_in": [],
   "step": "Build"
- },
- "linux-self-hosted fetch": {
-  "actions": [
-   {
-    "actions": [
-     {
-      "action": "bazel",
-      "argv": "bazelisk fetch --config=ci --config=latest_llvm --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s @selected_targets",
-      "expanded": "bazelisk fetch --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s @selected_targets",
-      "retry_after_reset": "llvm_toolchain_linux_aarch64_llvm"
-     }
-    ],
-    "scenarios": [
-     "main-push",
-     "trusted-pr",
-     "trusted-pr-native-only",
-     "trusted-pr-fallback",
-     "untrusted-pr",
-     "renovate-pr"
-    ]
-   }
-  ],
-  "runs_in": [],
-  "step": "Fetch Bazel LLVM toolchain"
  },
  "linux-self-hosted test": {
   "actions": [
@@ -259,8 +235,8 @@
      },
      {
       "action": "bazel",
-      "argv": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --config=ci --config=latest_llvm --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak",
-      "expanded": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_toolchain_linux_aarch64//:all --extra_toolchains=@llvm_toolchain_linux_x86_64//:all --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak"
+      "argv": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --config=ci --extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:linux_ci --spawn_strategy=remote --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak",
+      "expanded": "tools/ci_bazel_test.sh tools/ci/bazel_watchdog.sh '$DIAG_DIR/test/console.log' bazelisk '--invocation_policy=flag_policies {flag_name:\"remote_executor\" commands:\"test\" disallow_values {disallowed_values:\"\"}} flag_policies {flag_name:\"experimental_remote_scrubbing_config\" commands:\"test\" use_default {}}' test --//build_defs:enable_tracy=false --//build_defs:release_source_commit=0000000000000000000000000000000000000000 --nobuild_event_json_file_path_conversion --nobuild_event_binary_file_path_conversion --nobuild_event_text_file_path_conversion --verbose_failures '--repository_cache=~/.cache/bazel-repo' --skip_incompatible_explicit_targets --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak --extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux --//build_defs:llvm_latest=1 --copt=-Qunused-arguments --extra_execution_platforms=//tools/ci:linux_ci --spawn_strategy=remote --test_output=errors --strategy=TestRunner=remote,local --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --aspects=//tools/ci:linux_test_venue.bzl%linux_test_venue --noexperimental_merged_skyframe_analysis_execution --nokeep_going --build_tests_only --remote_download_outputs=minimal '--remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$' --test_tag_filters= '--profile=$DIAG_DIR/test/profile.gz' '--build_event_json_file=$DIAG_DIR/test/bep.json' '--execution_log_compact_file=$DIAG_DIR/test/exec.log.zst' @selected_linux_tests //tools/ci:deterministic_fuzzer_soak"
      },
      {
       "action": "run",

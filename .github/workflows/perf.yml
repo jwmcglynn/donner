@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   gatekeeper:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       should_run: ${{ steps.decide.outputs.should_run }}
     steps:

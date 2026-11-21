@@ -58,7 +58,11 @@ class GpuRoutingTest(unittest.TestCase):
                       for call in definitions]
         gpu, = [attrs for attrs in attributes if getattr(attrs.get("name"), "value", None)
                 == "linux_ci_gpu"]
-        self.assertEqual(ast.literal_eval(gpu["parents"]), [":linux_ci"])
+        self.assertEqual(ast.literal_eval(gpu["parents"]), [":linux_aarch64_ci_base"])
+        base, = [attrs for attrs in attributes if getattr(attrs.get("name"), "value", None)
+                 == "linux_aarch64_ci_base"]
+        self.assertNotIn("donner-toolchain", ast.literal_eval(base["exec_properties"]))
+        self.assertNotIn(":worker_llvm", ast.literal_eval(base["constraint_values"]))
         self.assertEqual(ast.literal_eval(gpu["exec_properties"]), {"gpu": "present"})
         self.assertNotIn("constraint_values", gpu)
 

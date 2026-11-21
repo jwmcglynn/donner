@@ -48,7 +48,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: donner
@@ -169,7 +169,7 @@ jobs:
 
   cli-linux:
     needs: prepare
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
     steps:
@@ -238,7 +238,7 @@ jobs:
   attest-artifacts:
     if: github.ref == 'refs/heads/main'
     needs: [prepare, cli-linux, cli-macos]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       actions: read
@@ -292,7 +292,7 @@ jobs:
 
   qualify:
     needs: [prepare, consumer, cli-linux, cli-macos]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
     steps:

@@ -77,7 +77,7 @@ permissions:
 jobs:
   # Only the base revision may admit a PR to the BuildBuddy write environment.
   trust:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
@@ -103,7 +103,7 @@ jobs:
     # deployment credentials, and no verdict can affect runner trust.
     if: github.event_name == 'pull_request' && needs.trust.outputs.unified_macos != 'true'
     needs: trust
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     continue-on-error: true
     outputs:

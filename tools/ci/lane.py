@@ -21,7 +21,6 @@ Standard library only: this runs under each runner's system python3 (3.9 or late
 """
 
 import argparse
-import glob
 import json
 import os
 import re
@@ -156,37 +155,6 @@ def _check(argv, **kwargs):
     return output
 
 
-def _ignoring_failure(argv, quiet=False, **kwargs):
-    """`command || true`, or with `quiet` `command 2>/dev/null || true`: the output of a command
-    whose failure is ignored."""
-    try:
-        return subprocess.run(argv, stderr=subprocess.DEVNULL if quiet else None, check=False,
-                              universal_newlines=True, **kwargs).stdout
-    except OSError as error:
-        if not quiet:
-            print("lane.py: %s: %s" % (argv[0], error.strerror), file=sys.stderr, flush=True)
-        return None
-
-
-def _reset_repository(context, repository):
-    """Removes a partially fetched repository from the output base before a retry."""
-    # As the step script did: only `info`, `du` and `find` ran with standard error discarded.
-    output_base = (_ignoring_failure(["bazelisk", "info", "output_base"], quiet=True,
-                                     stdout=subprocess.PIPE) or "").rstrip("\n")
-    _ignoring_failure(["bazelisk", "shutdown"])
-    pattern = "*%s*" % repository
-    external = os.path.join(output_base, "external")
-    print("::group::Bazel disk state before LLVM fetch retry", flush=True)
-    _ignoring_failure(["df", "-h", "/var/cache/bazel", context.variable("GITHUB_WORKSPACE")])
-    if output_base and os.path.isdir(external):
-        _ignoring_failure(["du", "-sh"] + (sorted(glob.glob(os.path.join(external, pattern)))
-                                           or [os.path.join(external, pattern)]), quiet=True)
-    print("::endgroup::", flush=True)
-    if output_base and os.path.isdir(external):
-        _ignoring_failure(["find", external, "-maxdepth", "1", "-name", pattern, "-print",
-                           "-exec", "rm", "-rf", "{}", "+"], quiet=True)
-
-
 class _Done(Exception):
     """Ends a phase successfully before its remaining actions."""
 
@@ -268,14 +236,6 @@ def _run_query_tag(context, action, deferred):
         raise _Done()
 
 
-def _run_retry_after_reset(context, action, deferred):
-    status, _ = _run(context.bazel(action.fetch))
-    if status:
-        _reset_repository(context, action.repository)
-        status, _ = _run(context.bazel(action.fetch))
-    _settle(action, status, deferred)
-
-
 _RECEIPT = "$RUNNER_TEMP/coverage-receipt/coverage-receipt.json"
 
 
@@ -308,9 +268,6 @@ _ACTIONS = {
         "action": "select_linux_tests", "exclude": list(action.excluded), "roots": context.selection()[1]}),
     lanes.QueryTag: (_run_query_tag, lambda context, action: {
         "action": "query", "argv": context.query(action.tag), "when_empty": _NO_BROWSER_TARGETS}),
-    lanes.RetryAfterReset: (_run_retry_after_reset, lambda context, action: {
-        "action": "bazel", "argv": context.bazel(action.fetch),
-        "retry_after_reset": action.repository}),
     lanes.RequireExecuted: (_run_require_executed, lambda context, action: {
         "action": "require_executed", "step": action.step, "count": action.count,
         "receipt": context.word(_RECEIPT)}),
@@ -335,10 +292,11 @@ def _finish_selected_reference(context, lane_name):
     if _run(helper + ["--reference-reported", context.word(source)])[0] == 0:
         return 0
     print("The failed graph omitted selected reference results; running only the reference suite.", flush=True)
+    platform = lanes.WORKER_LINUX if remote else lanes.LINUX
     flags = lanes.SELF_HOSTED_REMOTE + lanes.DIAG_TEST if remote else ()
     result_file = context.word("$RUNNER_TEMP/reference-recovery.bep.json")
     wrappers = ("tools/ci/bazel_watchdog.sh", "$RUNNER_TEMP/reference-recovery.log") if remote else ()
-    command = lanes.bazel("test", *lanes.LINUX, *flags, "--test_output=errors", lanes.NO_TAG_FILTER,
+    command = lanes.bazel("test", *platform, *flags, "--test_output=errors", lanes.NO_TAG_FILTER,
                           "--noskip_incompatible_explicit_targets", "--build_event_json_file=" + result_file,
                           "//tools/ci:linux_wgpu_resvg_reference", wrappers=wrappers)
     status, _ = _run(context.bazel(command))

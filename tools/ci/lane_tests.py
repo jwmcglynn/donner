@@ -68,7 +68,7 @@ class LaneTest(unittest.TestCase):
         cls.stubs = ExecutableFixtureDirectory()
         cls.stubs.write_python3()
         recorder = cls.stubs.write("recorder.py", _RECORDER)
-        for tool in ("bazelisk", "jq", "df", "du"):
+        for tool in ("bazelisk", "jq"):
             write_python_stand_in(cls.stubs.path / tool, recorder, tool)
         cls.recorder = recorder
 
@@ -100,6 +100,9 @@ class LaneTest(unittest.TestCase):
         self.runner_temp.mkdir()
 
     def run_phase(self, lane, phase, config=None, *, dry_run=False, **environment):
+        return self.run_entry(["phase", lane, phase], config, dry_run=dry_run, **environment)
+
+    def run_entry(self, arguments, config=None, *, dry_run=False, **environment):
         self.config.write_text(json.dumps(config or {}), encoding="utf-8")
         env = {"PATH": "%s:%s" % (self.stubs.path, os.environ["PATH"]),
                "CAPTURE": str(self.capture), "STUB_CONFIG": str(self.config),
@@ -107,7 +110,7 @@ class LaneTest(unittest.TestCase):
                "GITHUB_WORKSPACE": str(self.checkout)}
         env.update(environment)
         env = {key: value for key, value in env.items() if value is not None}
-        argv = [str(self.stubs.path / "python3"), "tools/ci/lane.py", "phase", lane, phase]
+        argv = [str(self.stubs.path / "python3"), "tools/ci/lane.py", *arguments]
         if dry_run:
             argv.append("--dry-run")
         result = subprocess.run(argv, cwd=self.checkout, env=env, capture_output=True,
@@ -350,42 +353,29 @@ class LaneTest(unittest.TestCase):
                 self.assertIn("::error::" + message, result.stdout)
                 self.assertEqual(self.bazel_calls(calls), [])
 
-    def test_failed_toolchain_fetch_resets_the_partial_repository_and_retries_once(self):
-        output_base = self.root / "output-base"
-        partial = output_base / "external" / "rules+llvm_toolchain_linux_aarch64_llvm"
-        partial.mkdir(parents=True)
-        kept = output_base / "external" / "other"
-        kept.mkdir()
-        config = {"bazelisk fetch": [["", 1], ["", 0]],
-                  "bazelisk info": [[str(output_base) + "\n", 0, "info-stderr\n"]],
-                  "bazelisk shutdown": [["", 3, "shutdown-stderr\n"]],
-                  "df": [["df-stdout\n", 1, "df-stderr\n"]],
-                  "du": [["du-stdout\n", 1, "du-stderr\n"]]}
-        result, calls = self.run_phase("linux-self-hosted", "fetch", config,
-                                       TARGETS_FALLBACK="true")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call[1] for call in self.bazel_calls(calls)],
-                         ["fetch", "info", "shutdown", "fetch"])
-        # Standard error is discarded only where the step script discarded it: `info` and `du`
-        # (and `find`); `shutdown` and `df` failures are ignored but still report.
-        for shown in ("shutdown-stderr", "df-stderr"):
-            self.assertIn(shown, result.stderr)
-        for hidden in ("info-stderr", "du-stderr"):
-            self.assertNotIn(hidden, result.stderr)
-        self.assertIn("df-stdout", result.stdout)
-        self.assertIn("du-stdout", result.stdout)
-        self.assertEqual(["df", "-h", "/var/cache/bazel", str(self.checkout)],
-                         next(call for call in calls if call[0] == "df"))
-        self.assertEqual(["du", "-sh", str(partial)],
-                         next(call for call in calls if call[0] == "du"))
-        self.assertFalse(partial.exists())
-        self.assertTrue(kept.exists())
-        self.assertIn("::group::Bazel disk state before LLVM fetch retry", result.stdout)
-        self.reset()
-        config["bazelisk fetch"] = [["", 5], ["", 6]]
-        result, calls = self.run_phase("linux-self-hosted", "fetch", config,
-                                       TARGETS_FALLBACK="true")
-        self.assertEqual(result.returncode, 6)
+    def test_worker_compiler_is_selected_in_every_trusted_linux_invocation(self):
+        for arguments, verb in [
+            (["phase", "linux-self-hosted", "build"], "build"),
+            (["phase", "linux-self-hosted", "test"], "test"),
+            (["finish-reference"], "test"),
+        ]:
+            with self.subTest(arguments=arguments):
+                self.reset()
+                config = {"bazelisk query": [["//pkg:example\n", 0]],
+                          "remote_gpu": [["//pkg:example\n", 0], ["", 0]]}
+                if arguments == ["finish-reference"]:
+                    config["remote_gpu"] = [["", 1], ["", 0]]
+                result, calls = self.run_entry(arguments, config, WGPU_REFERENCE="true",
+                                               TARGETS_FALLBACK="false", TARGETS_AFFECTED="//pkg:example")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                command, = [call for call in self.bazel_calls(calls) if verb in call]
+                self.assertIn("--extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux", command)
+                self.assertFalse(any(flag.startswith("--platforms=") for flag in command), command)
+                self.assertIn("--extra_execution_platforms=//tools/ci:linux_ci", command)
+                self.assertIn("--spawn_strategy=remote", command)
+                self.assertNotIn("--config=latest_llvm", command)
+                if arguments == ["finish-reference"]:
+                    self.assertEqual(command[-1], "//tools/ci:linux_wgpu_resvg_reference")
 
     def test_vm_qualification_requires_exactly_four_executed_tests(self):
         receipt = self.runner_temp / "coverage-receipt" / "coverage-receipt.json"
