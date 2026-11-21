@@ -1160,6 +1160,7 @@ struct VulkanSharedRoot::Impl {
   uint32_t queueFamilyIndex = 0;
   VkPhysicalDeviceMemoryProperties memoryProperties = {};
   uint32_t maxTextureDimension2D = 0;
+  bool isDiscreteGpu = false;
   bool fullDrawIndexUint32 = false;
   bool debugMessengerAvailable = false;
   bool presentationEnabled = false;
@@ -1247,6 +1248,10 @@ VulkanSharedRoot::VulkanSharedRoot(std::unique_ptr<Impl> impl) : impl_(std::move
 VulkanSharedRoot::~VulkanSharedRoot() = default;
 uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
   return impl_->maxTextureDimension2D;
+}
+
+bool VulkanSharedRoot::isDiscreteGpu() const {
+  return impl_->isDiscreteGpu;
 }
 
 const std::shared_ptr<DeviceLostState>& VulkanSharedRoot::lostState() const {
@@ -2829,6 +2834,7 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CompletePresentationRoot(
   api.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &native->memoryProperties);
   VkPhysicalDeviceProperties properties = {};
   api.vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+  native->isDiscreteGpu = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
   native->maxTextureDimension2D =
       std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
   native->instance = setup.instance;
@@ -2901,6 +2907,7 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateRootImpl(
   api.vkGetPhysicalDeviceMemoryProperties(native->physicalDevice, &native->memoryProperties);
   VkPhysicalDeviceProperties properties = {};
   api.vkGetPhysicalDeviceProperties(native->physicalDevice, &properties);
+  native->isDiscreteGpu = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
   native->maxTextureDimension2D =
       std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
   return std::shared_ptr<VulkanSharedRoot>(new VulkanSharedRoot(std::move(native)));
@@ -3103,7 +3110,8 @@ void VulkanDevice::setBeforeQueueSubmitHookForTest(std::function<void()> hook) {
 }
 
 VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {
-  return {impl_->api, impl_->instance, impl_->device, impl_->queue, impl_->queueFamilyIndex};
+  return {impl_->api,   impl_->instance,         impl_->device,
+          impl_->queue, impl_->queueFamilyIndex, impl_->physicalDevice};
 }
 
 uint64_t VulkanDevice::completedSerial() const {

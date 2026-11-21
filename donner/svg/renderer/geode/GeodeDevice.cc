@@ -355,7 +355,7 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds stallBound
 }
 
 bool GeodeDevice::waitForFrameSubmissionRoom() const {
-  if (physicalDevice_->root().capabilities().backend != GpuBackendKind::NativeMetal) {
+  if (!physicalDevice_->root().limitsFrameSubmissions()) {
     return true;
   }
   if (isDeviceLost()) {

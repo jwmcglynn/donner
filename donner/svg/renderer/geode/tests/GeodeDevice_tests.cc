@@ -39,6 +39,7 @@
 #endif
 #if defined(__linux__)
 #include "donner/gpu/vulkan/VulkanDevice.h"
+#include "donner/gpu/vulkan/VulkanLoader.h"
 #endif
 
 namespace donner::geode {
@@ -977,6 +978,35 @@ std::unique_ptr<GeodeDevice> CreateGatedVulkanContext() {
 /// extension: VK_KHR_timeline_semaphore is optional on a conforming Vulkan 1.1 driver.
 constexpr const char* kNoQueueGate =
     "Device lacks VK_KHR_timeline_semaphore; holding command buffers needs it";
+
+TEST(GeodeNativeVulkanRoot, DiscreteFrameAdmissionRetiresOnlyTheOldestSubmission) {
+  std::unique_ptr<GeodeDevice> context = CreateGatedVulkanContext();
+  if (context == nullptr) {
+    ASSERT_THAT(CreateNativeVulkanContext(), NotNull()) << kNoVulkanDevice;
+    GTEST_SKIP() << kNoQueueGate;
+  }
+  auto& runtime = static_cast<gpu::vulkan::VulkanDevice&>(context->runtimeDevice());
+  const auto native = runtime.nativeContextForTest();
+  VkPhysicalDeviceProperties properties{};
+  native.api->vkGetPhysicalDeviceProperties(static_cast<VkPhysicalDevice>(native.physicalDevice),
+                                            &properties);
+  const bool discrete = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+  ASSERT_THAT(context->waitForQueueIdle(), Eq(GpuWaitResult::Complete));
+  const uint64_t baseline = runtime.completedSerial();
+  ASSERT_THAT(runtime.pauseSubmissionsForTest(), gpu::IsOk());
+  for (uint64_t i = 1; i <= 3; ++i) {
+    EXPECT_THAT(SubmitEmptyCommandBuffer(runtime), Eq(baseline + i));
+  }
+  runtime.setFenceWaitStepHookForTest(
+      [&runtime] { runtime.releasePausedCommandBuffersForTest(1); });
+  const bool admitted = context->waitForFrameSubmissionRoom();
+  const uint64_t retired = runtime.completedSerial() - baseline;
+  runtime.setFenceWaitStepHookForTest({});
+  runtime.resumeSubmissionsForTest();
+
+  EXPECT_THAT(admitted, IsTrue());
+  EXPECT_THAT(retired, Eq(discrete ? 1u : 0u));
+}
 
 TEST(GeodeNativeVulkanRoot, QueueIdleWaitsOutABacklogThatKeepsProgressing) {
   std::unique_ptr<GeodeDevice> context = CreateGatedVulkanContext();
