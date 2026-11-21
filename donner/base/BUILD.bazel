@@ -138,6 +138,7 @@ donner_cc_library(
 donner_cc_library(
     name = "base_test_utils",
     testonly = 1,
+    srcs = ["tests/ScopedCommaDecimalGlobalLocale.cc"],
     hdrs = [
         "tests/BaseTestUtils.h",
         "tests/ContinuousIntegrationMarkers.h",
@@ -151,6 +152,7 @@ donner_cc_library(
         "tests/ScopedCommaDecimalNumericLocale.h",
         "tests/TestTempDir.h",
     ],
+    copts = ["-frtti"],
     # //tools tests (MCP servers, build tooling) share the same test-hygiene
     # helpers (TestTempDir) as //donner tests.
     visibility = donner_internal_visibility() + ["//tools:__subpackages__"],
