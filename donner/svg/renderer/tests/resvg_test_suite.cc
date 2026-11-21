@@ -119,14 +119,15 @@ ImageComparisonParams GeodeOpaqueEdgeCoverageGate(ImageComparisonParams params) 
 }
 
 /// \p params, with the Geode comparison disabled: an edge lies under a translucent layer, so the
-/// reference's quarter-pixel edge coverage changes the composite's straight color, which the
-/// quarter-pixel edge coverage rule's color condition counts.
+/// reference's quarter-pixel edge coverage changes the composite's straight color, and the layer
+/// covers the rows beside the edge partially, which the quarter-pixel edge coverage rule counts.
 ImageComparisonParams GeodeTranslucentEdgeColorGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
       "Reference disagreement: the crosshair's quarter-pixel edge coverage under the half-"
-      "transparent masked text changes the composite color (94 of the 99 px Geode counts with "
-      "the edge coverage rule, against a CPU count of 19)");
+      "transparent masked text changes the composite color and lies beside partially covered "
+      "rows (109 of the 120 px Geode counts with the edge coverage rule, against a CPU count of "
+      "19)");
 }
 
 /// \p params, with the Geode comparison disabled: the row compares against a custom golden, which
