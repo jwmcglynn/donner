@@ -403,12 +403,14 @@ use_repo(python, "python_3_12")
 bazel_dep(name = "toolchains_llvm", version = "1.13.0", dev_dependency = True)
 
 # Declare only the libc++ headers, not all of the LLVM distribution's include/, as compile inputs.
-# Only Bazel releases before 9 read the patched filegroup. No version is set here, so the patch
-# applies to whichever release the bazel_dep above resolves to.
+# On Bazel 9 the builtins are directories, but extra sysroot headers are still individual files.
 single_version_override(
     module_name = "toolchains_llvm",
     patch_strip = 1,
-    patches = ["//third_party/patches:toolchains_llvm-libcxx-compile-headers.patch"],
+    patches = [
+        "//third_party/patches:toolchains_llvm-libcxx-compile-headers.patch",
+        "//third_party/patches:toolchains_llvm-extra-compiler-module-headers.patch",
+    ],
 )
 
 # To use a local copy of the toolchains_llvm repository, comment out the single_version_override
@@ -564,26 +566,20 @@ bazel_dep(name = "zstd", version = "1.5.7.bcr.3", dev_dependency = True)
 # Devtools
 #
 
-# Hedron's Compile Commands Extractor for Bazel
-# https://github.com/hedronvision/bazel-compile-commands-extractor
-bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
-git_override(
-    module_name = "hedron_compile_commands",
-    commit = "abb61a688167623088f8768cc9264798df6a9d10",
-    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor",
-)
-
 bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
-bazel_dep(name = "protobuf", version = "30.2", dev_dependency = True)
+# Bloaty and rules_cc own their Protobuf imports. Pin the release whose C++ rules
+# and providers load on Bazel 9 without adding Protobuf to Donner's repository map.
 single_version_override(
     module_name = "protobuf",
-    version = "30.2",
+    version = "33.6",
 )
 
 bazel_dep(name = "bloaty", version = "0.0.0", dev_dependency = True)
 git_override(
     module_name = "bloaty",
     commit = "a655c418811ef5097e37a562ce62f925bda72d88",
+    patch_strip = 1,
+    patches = ["//third_party/patches:bloaty_explicit_cc_rules.patch"],
     remote = "https://github.com/jwmcglynn/bloaty",
 )
 

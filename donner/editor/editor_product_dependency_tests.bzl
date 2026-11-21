@@ -1,5 +1,6 @@
 """Configured product audits: full-text editors can coexist with smaller core SVG builds."""
 
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load(":editor_product_config.bzl", "editor_full_text_guard")

@@ -12,6 +12,8 @@ tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
 graphs via `dev_dependency = True` in `MODULE.bazel`.
 """
 
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle", "packaged_resources")

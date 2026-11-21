@@ -2,6 +2,8 @@
 Helper rules, such as for building fuzzers.
 """
 
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@bazel_features//:features.bzl", "bazel_features")
 load("//build_defs:ci_darwin.bzl", "declare_darwin_variants")
 load("//build_defs:ci_linux_gpu.bzl", "linux_gpu_variant")

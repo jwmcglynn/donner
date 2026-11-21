@@ -34,7 +34,9 @@ With sharing on, the objects of a library live under its `_<name>_neutral_compil
 under the library, so they do not share cache entries with builds that turn sharing off.
 """
 
+load("@bazel_features//:features.bzl", "bazel_features")
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//build_defs:variant_settings.bzl", "variant_neutral_transition")
 
@@ -218,12 +220,22 @@ _CompileActionsInfo = provider(
 )
 
 _CPP_TOOLCHAIN_TYPE = "@bazel_tools//tools/cpp:toolchain_type"
+# Bazel 9 exposes the resolved toolchain target through aspect propagation.
+# Bazel 7 does not accept toolchains_aspects; the older toolchain path supports 7 and 8.
+_PROJECT_TOOLCHAIN = bazel_features.rules.aspect_propagation_context
+_CompileToolchainInfo = provider(fields = {"cc": "The target's resolved C++ toolchain."})
 
 def _toolchain_lines(ctx):
     toolchain = None
     toolchains = getattr(ctx.rule, "toolchains", None)
     if toolchains != None and _CPP_TOOLCHAIN_TYPE in toolchains:
-        toolchain = getattr(toolchains[_CPP_TOOLCHAIN_TYPE], "cc", None)
+        selected = toolchains[_CPP_TOOLCHAIN_TYPE]
+        if _PROJECT_TOOLCHAIN:
+            # Bazel 9 exposes providers contributed by aspects on this actual toolchain target.
+            # Resolving a separate toolchain for the aspect would not prove what the rule used.
+            toolchain = selected[_CompileToolchainInfo].cc
+        else:
+            toolchain = getattr(selected, "cc", None)
     legacy = getattr(ctx.rule.attr, "_cc_toolchain", None)
     if toolchain == None and legacy != None and cc_common.CcToolchainInfo in legacy:
         toolchain = legacy[cc_common.CcToolchainInfo]
@@ -233,6 +245,9 @@ def _toolchain_lines(ctx):
     return lines + ["toolchain file: " + path for path in _sorted_paths(toolchain.all_files.to_list())]
 
 def _compile_actions_impl(target, ctx):
+    if _PROJECT_TOOLCHAIN and platform_common.ToolchainInfo in target:
+        selected = target[platform_common.ToolchainInfo]
+        return [_CompileToolchainInfo(cc = getattr(selected, "cc", selected))]
     commands = {}
     for action in target.actions:
         if action.mnemonic in _COMPILE_MNEMONICS:
@@ -246,7 +261,10 @@ def _compile_actions_impl(target, ctx):
     declared += ["header: " + path for path in _sorted_paths(target[CcInfo].compilation_context.headers.to_list())]
     return [_CompileActionsInfo(commands = commands, declared = declared + _toolchain_lines(ctx))]
 
-_compile_actions = aspect(implementation = _compile_actions_impl)
+_compile_actions = aspect(
+    implementation = _compile_actions_impl,
+    **({"toolchains_aspects": [_CPP_TOOLCHAIN_TYPE]} if _PROJECT_TOOLCHAIN else {})
+)
 
 def _difference(left, right):
     remaining = {line: True for line in right}
