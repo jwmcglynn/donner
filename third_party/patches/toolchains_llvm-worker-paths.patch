@@ -1,0 +1,66 @@
+diff --git a/toolchain/internal/repo.bzl b/toolchain/internal/repo.bzl
+--- a/toolchain/internal/repo.bzl
++++ b/toolchain/internal/repo.bzl
+@@ -189,6 +189,9 @@
+                "`/usr/lib/gcc/<multiarch>/<ver>`; `yocto`: " +
+                "`/usr/include/c++/<ver>/<multiarch>` and `/usr/lib/<multiarch>/<ver>`."),
+     ),
++    "worker_builtin_include_directories": attr.string_list_dict(
++        doc = "Exact builtin include directories on a preinstalled worker per target. These paths are not inspected on the Bazel host.",
++    ),
+     "cxx_builtin_include_directories": attr.string_list_dict(
+         mandatory = False,
+         doc = ("Additional builtin include directories to be added to the default system " +
+diff --git a/toolchain/internal/configure.bzl b/toolchain/internal/configure.bzl
+--- a/toolchain/internal/configure.bzl
++++ b/toolchain/internal/configure.bzl
+@@ -382,11 +382,18 @@
+     rctx.file("toolchain_manifest.json", json.encode(registrations))
+-
++
+-    convenience_targets_str = _convenience_targets_str(
+-        rctx,
+-        use_absolute_paths_llvm,
+-        llvm_dist_rel_path,
+-        llvm_dist_label_prefix,
+-        exec_dl_ext,
+-    )
++    if rctx.attr.worker_builtin_include_directories:
++        if not system_llvm:
++            fail("worker_builtin_include_directories requires an absolute worker toolchain root")
++        # The remote tools are absent on the coordinator. Exposing convenience
++        # symlinks here would give the generated package dangling action inputs.
++        convenience_targets_str = ""
++    else:
++        convenience_targets_str = _convenience_targets_str(
++            rctx,
++            use_absolute_paths_llvm,
++            llvm_dist_rel_path,
++            llvm_dist_label_prefix,
++            exec_dl_ext,
++        )
+-
++
+     # Convenience macro to register all generated toolchains.
+@@ -945,10 +952,15 @@
+     # result in a -Wincomplete-umbrella warning when mentioned in the
+     # system module map. Note that this filtering is skipped for remote
+     # execution because it is not possible to check directory existence.
+-    filtered_cxx_builtin_include_directories = cxx_builtin_include_directories if _is_remote(rctx, exec_os, exec_arch) else [
+-        dir
+-        for dir in cxx_builtin_include_directories
+-        if _is_hermetic_or_exists(rctx, dir, sysroot_path)
+-    ]
++    if rctx.attr.worker_builtin_include_directories:
++        filtered_cxx_builtin_include_directories = rctx.attr.worker_builtin_include_directories.get(target_pair)
++        if not filtered_cxx_builtin_include_directories:
++            return ""
++    else:
++        filtered_cxx_builtin_include_directories = cxx_builtin_include_directories if _is_remote(rctx, exec_os, exec_arch) else [
++            dir
++            for dir in cxx_builtin_include_directories
++            if _is_hermetic_or_exists(rctx, dir, sysroot_path)
++        ]
+-
++
+     # On macOS the sanitizer runtimes are dynamic-only and referenced as

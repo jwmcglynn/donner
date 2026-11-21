@@ -47,9 +47,6 @@ LINUX_FIXED = Selected("linux-fixed")
 MapRemoteGpu = collections.namedtuple("MapRemoteGpu", "")
 # Ends the phase successfully when no selected test carries `tag`.
 QueryTag = collections.namedtuple("QueryTag", "tag")
-# Runs `fetch`; when it fails, removes the partially fetched repositories matching `repository`
-# from the output base and fetches again.
-RetryAfterReset = collections.namedtuple("RetryAfterReset", "fetch repository")
 # Fails with `message` unless the coverage receipt records exactly `count` tests and executed tests
 # for `step`.
 RequireExecuted = collections.namedtuple("RequireExecuted", "step count message")
@@ -99,6 +96,14 @@ FIXED_SUITE = ("--nocache_test_results", "--noskip_incompatible_explicit_targets
 # --- Linux. --------------------------------------------------------------------------------------
 
 LINUX = ("--config=ci", "--config=latest_llvm")
+# The fallback selects the worker only for execution. Its ordinary Linux target platform
+# keeps the mixed graph's additional Wasm tests out of the fallback selection.
+WORKER_LINUX = (
+    "--config=ci",
+    "--extra_toolchains=@llvm_worker_linux_aarch64//:cc-toolchain-aarch64-linux",
+    "--//build_defs:llvm_latest=1", "--copt=-Qunused-arguments",
+    "--extra_execution_platforms=//tools/ci:linux_ci", "--spawn_strategy=remote",
+)
 BUILDBUDDY = Split("BUILDBUDDY_FLAGS")
 # The self-hosted runner host may add a remote Bazel cache from its own rc files. Use it when
 # healthy, but never fall back to local execution when remote execution is down or degraded: a
@@ -159,14 +164,8 @@ LINUX_LANES = {
         )),
     }),
     "linux-self-hosted": Lane(startup=(), phases={
-        # Keeps the server alive afterwards, so Build reuses this invocation's loading and
-        # analysis instead of a fresh server start and about 30 s of analysis.
-        "fetch": Phase("Fetch Bazel LLVM toolchain", (
-            RetryAfterReset(bazel("fetch", *LINUX, *SELF_HOSTED_REMOTE, SELECTED),
-                            "llvm_toolchain_linux_aarch64_llvm"),
-        )),
         "build": Phase("Build", (
-            bazel("build", *LINUX, *SELF_HOSTED_REMOTE, *DIAG_BUILD, *diagnostics("build"),
+            bazel("build", *WORKER_LINUX, *SELF_HOSTED_REMOTE, *DIAG_BUILD, *diagnostics("build"),
                   SELECTED, wrappers=watchdog("build")),
         )),
         # The paired targets share the same transitioned implementation and shard count. Their
@@ -175,7 +174,7 @@ LINUX_LANES = {
             RequireSelection("the test step"),
             MapRemoteGpu(),
             LinuxTestSelection(("manual", "perf", "local-gpu-isolated", "fuzz_soak")),
-            bazel("test", *LINUX, "--test_output=errors", REMOTE_OR_DISPLAY,
+            bazel("test", *WORKER_LINUX, "--test_output=errors", REMOTE_OR_DISPLAY,
                   *REMOTE_TRANSPORT, *VENUE_ANALYSIS, *DIAG_TEST, NO_TAG_FILTER,
                   *diagnostics("test"), LINUX_TESTS, LINUX_FIXED,
                   wrappers=TEST_WRAPPER + watchdog("test"), startup=(REQUIRE_EXECUTOR,)),
