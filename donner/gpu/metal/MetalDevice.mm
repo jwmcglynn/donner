@@ -502,10 +502,12 @@ void PublishCompletion(CompletionState& state, uint64_t serial, NSError* executi
 /// an error, or parks it when a test holds it.
 /// @param state Completion state of the device. @param outcome Outcome of the buffer's submission.
 /// @param bufferError Error this buffer reported, or nil. @param serial Serial of the submission.
+/// @param bufferIndex Zero-based position in the submission.
 /// @param held Whether a test holds this submission's completion.
 /// @param uploadBytes Staging bytes to return. @param payloadBytes Payload bytes to return.
 void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSError* bufferError,
-                         uint64_t serial, bool held, uint64_t uploadBytes, uint64_t payloadBytes) {
+                         uint64_t serial, size_t bufferIndex, bool held, uint64_t uploadBytes,
+                         uint64_t payloadBytes) {
   {
     std::lock_guard<std::mutex> lock(state.watermarkMutex);
     // Every buffer is counted in before it is committed, so none can finish uncounted. A debug
@@ -522,7 +524,15 @@ void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSE
   if (bufferError != nil) {
     std::lock_guard<std::mutex> lock(outcome.mutex);
     if (outcome.firstError == nil) {
-      outcome.firstError = bufferError;
+      NSString* detail = [NSString stringWithFormat:@"submission %llu, command buffer %zu: %@",
+                                                    static_cast<unsigned long long>(serial),
+                                                    bufferIndex, bufferError.localizedDescription];
+      outcome.firstError = [NSError errorWithDomain:bufferError.domain
+                                               code:bufferError.code
+                                           userInfo:@{
+                                             NSLocalizedDescriptionKey : detail,
+                                             NSUnderlyingErrorKey : bufferError
+                                           }];
     }
   }
   if (outcome.buffersRemaining.fetch_sub(1, std::memory_order_acq_rel) != 1) {
@@ -2649,7 +2659,7 @@ void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
         if (bufferError == nil && injectedFailureIndex == index) {
           bufferError = InjectedCommandBufferFailure();
         }
-        FinishCommandBuffer(*sharedState, *outcome, bufferError, submissionSerial, held,
+        FinishCommandBuffer(*sharedState, *outcome, bufferError, submissionSerial, index, held,
                             uploadBytes, payloadBytes);
       }
     }];

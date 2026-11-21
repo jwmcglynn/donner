@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <format>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -174,15 +175,18 @@ TEST_F(MetalDeviceLossTest, AFailedEarlierCommandBufferFailsItsWholeSubmission) 
   const std::unique_ptr<MetalDevice> sibling = openDeviceOverTheRoot();
   ASSERT_THAT(sibling, NotNull());
 
-  // A frame submits several command buffers at once; the first one fails and the last does not.
-  device_->failNextSubmissionForTest(/*commandBufferIndex=*/0);
-  std::array<CommandBuffer, 2> frame{emptyCommandBuffer(), emptyCommandBuffer()};
+  // The failing buffer is neither the first nor the last in the submission.
+  device_->failNextSubmissionForTest(/*commandBufferIndex=*/1);
+  std::array<CommandBuffer, 3> frame{emptyCommandBuffer(), emptyCommandBuffer(),
+                                     emptyCommandBuffer()};
   const uint64_t serial = GetResultOrFail(device_->submit(frame));
   ASSERT_THAT(device_->waitForCompletionHandlersForTest(1, 30.0), IsTrue());
 
   EXPECT_THAT(device_->waitForSerial(serial, 30.0), IsFalse())
       << "a submission whose earlier buffer failed must not read as finished";
-  EXPECT_THAT(device_->lastErrorForTest(), HasSubstr("injected command buffer failure"));
+  EXPECT_THAT(device_->lastErrorForTest(),
+              HasSubstr(std::format(
+                  "submission {}, command buffer 1: injected command buffer failure", serial)));
   EXPECT_THAT(device_->isLost(), IsTrue());
   EXPECT_THAT(sibling->isLost(), IsTrue());
 }

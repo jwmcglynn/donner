@@ -94,8 +94,10 @@ The maintainer decided:
   measure DPR2 thumbnail workloads against the 256 MiB native and 128 MiB WebAssembly working-set
   caps and DPR2 filter workloads in the browser editor against the 128 MiB cap, keeping them under
   their caps with the measured peaks recorded on the issue.
-- [#1697](https://github.com/jwmcglynn/donner/issues/1697): keep a 64-frame overlapped zoom-8
-  drain on Metal from tripping the system GPU timeout.
+- Native Metal admits frame work with at most three outstanding submissions per Geode context.
+  At capacity the next frame submission waits for the oldest serial needed to make room.
+  The 64-frame zoom-8 DPR2 splash workload drains within this bound on Apple silicon.
+  [#1697](https://github.com/jwmcglynn/donner/issues/1697)
 - [#1719](https://github.com/jwmcglynn/donner/issues/1719): find why a discrete Vulkan GPU's
   driver reported device loss in the same drain.
 - [#1721](https://github.com/jwmcglynn/donner/issues/1721): build Geode and the native GPU runtime
