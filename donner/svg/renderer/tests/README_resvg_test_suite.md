@@ -182,8 +182,8 @@ condition is not limited to horizontal edges. It still accepts:
 
 It rejects a uniform partially covered region two or more rows tall, the first row of a translucent
 shape directly below an opaque one, pure vertical edges, and the interior of a vertical alpha
-gradient. Across the 173 opted-in rows the rule accepts 51,612 pixels on Metal and 51,610 on
-software Vulkan, and every row passes its unchanged budget.
+gradient. On `resvg_test_suite_geode`, across the 173 rows opted in there, the rule accepts 51,612
+pixels on Metal and 51,610 on software Vulkan, and every row passes its unchanged budget.
 
 The rule is part of the canonical comparison
 (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage` in
@@ -194,10 +194,10 @@ accepted and their largest alpha difference; the diff image draws them in blue. 
 comparison passes without the rule leaves the list.
 
 The opt-in applies to both Geode lanes, `resvg_test_suite_geode` (simple text tier) and
-`resvg_test_suite_geode_max_text` (full shaping). The list holds 185 rows: the 172 that need the
+`resvg_test_suite_geode_max_text` (full shaping). The list holds 184 rows: the 171 that need the
 rule on the simple tier, which need it on the full tier too, and 13 bidirectional, Arabic and
-complex-script rows that only the full tier renders. On the full tier the rule accepts 54,757
-pixels across those 185 rows on software Vulkan (54,761 on Metal), and the largest count it leaves
+complex-script rows that only the full tier renders. On the full tier the rule accepts 54,723
+pixels across those 184 rows on software Vulkan (54,727 on Metal), and the largest count it leaves
 is 91 of 100.
 
 ### Geode gates {#ResvgGeodeGates}
