@@ -1539,7 +1539,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"x-and-y-with-multiple-values-and-tspan.svg", QuarterPixelEdgeReference()},
                     {"x-and-y-with-multiple-values.svg", QuarterPixelEdgeReference()},
                     {"xml-space.svg", QuarterPixelEdgeReference()},
-                    {"bidi-reordering.svg", Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason("Arabic shaping")},
+                    {"bidi-reordering.svg",
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic shaping")},
                     {"complex-grapheme-split-by-tspan.svg",
                      Params::UndefinedBehavior("grapheme split by tspan")},
                     {"complex-graphemes-and-coordinates-list.svg",
@@ -1548,7 +1550,8 @@ INSTANTIATE_TEST_SUITE_P(
                          .onlyTextFull()
                          .withReason("The composed Cyrillic cluster uses its first absolute y")},
                     {"complex-graphemes.svg",
-                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason("Combining mark needs HarfBuzz")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Combining mark needs HarfBuzz")},
                     {"compound-emojis-and-coordinates-list.svg",
                      GeodeCrosshairOnlyGoldenGate(
                          EmojiGuideGolden("donner/svg/renderer/testdata/golden/"
@@ -1560,11 +1563,13 @@ INSTANTIATE_TEST_SUITE_P(
                      EmojiGuideGolden("donner/svg/renderer/testdata/golden/donner-emojis.png")
                          .withGeodeQuarterPixelEdgeCoverage()},
                     {"fill-rule=evenodd.svg",
-                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason("Arabic text shaping requires text-full")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic text shaping requires text-full")},
                     {"rotate-on-Arabic.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
                     {"rotate-with-multiple-values-and-complex-text.svg",
-                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason("Complex diatrics requires text-full")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Complex diatrics requires text-full")},
                     {"x-and-y-with-multiple-values-and-arabic-text.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping")},
                     {"zalgo.svg",
