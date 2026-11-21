@@ -2110,6 +2110,23 @@ TEST_F(RendererDriverTest, FilterSpaceCaptureRequiresDeviceIndependentSource) {
   }
 }
 
+TEST_F(RendererDriverTest, NestedFilterOnlyBlocksTheEnclosingFilterSpaceCapture) {
+  SVGDocument document = makeDocument(R"svg(
+    <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+    <g transform="skewX(30)" filter="url(#f)">
+      <rect x="10" y="10" width="24" height="24" filter="url(#f)"/>
+    </g>
+    <rect x="40" y="10" width="24" height="24" transform="skewX(30)" filter="url(#f)"/>
+  )svg");
+  constexpr auto kEligible = &components::FilterGraph::canCaptureSourceInFilterSpace;
+  const testing::InSequence order;
+  EXPECT_CALL(renderer, pushFilterLayer(testing::Field(kEligible, false), _));
+  EXPECT_CALL(renderer, pushFilterLayer(testing::Field(kEligible, true), _)).Times(2);
+  driver.draw(document);
+}
+
 TEST_F(RendererDriverTest, DrawEntityRangePreservesReferencedFilterStages) {
   SVGDocument document = makeDocument(R"svg(
     <rect x="10" y="20" width="40" height="10" fill="red" />

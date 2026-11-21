@@ -3833,72 +3833,64 @@ bool SupportsFilterSpaceVectorCapture(Registry& registry,
          SupportsFilterSpacePaint(registry, instance);
 }
 
-/// Whether a sorted list includes a draw order in the inclusive subtree interval.
-bool IncludesDrawOrder(const std::vector<int>& orders, int first, int last,
-                       bool includeFirst = true) {
-  const auto it = includeFirst ? std::lower_bound(orders.begin(), orders.end(), first)
-                               : std::upper_bound(orders.begin(), orders.end(), first);
-  return it != orders.end() && *it <= last;
+/// Whether a single-stage transformed blur can paint its own source in filter space.
+bool IsFilterSpaceCaptureCandidate(Registry& registry, const Transform2d& surfaceFromCanvas,
+                                   Entity entity, const components::FilterGraph& graph) {
+  if (graph.keepsViewportAlignedCapture) {
+    return false;
+  }
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+  const Transform2d deviceFromFilter = instance.worldFromEntityTransform * surfaceFromCanvas;
+  return UsesTransformedBlurPath(graph, graph.filterRegion, deviceFromFilter,
+                                 /*fullExecutionFits=*/true) &&
+         FilterOutputIsBlurred(graph, FilterDeviceAxisScale(deviceFromFilter)) &&
+         SupportsFilterSpaceVectorCapture(registry, instance);
 }
 
-struct FilterSpaceCaptureCandidate {
-  components::FilterGraph* graph;
-  int firstDrawOrder;
-  int lastDrawOrder;
-};
-
-/// Reject ordinary device-raster filters before looking at the scene's source draw orders.
-std::vector<FilterSpaceCaptureCandidate> FindFilterSpaceCaptureCandidates(
-    Registry& registry, const Transform2d& surfaceFromCanvas,
+/// Validate tentative captures in draw order. A nested filter rules out the enclosing
+/// capture before its own range starts, so only one range can remain eligible at a time.
+void RejectBlockedFilterCaptureRanges(
+    Registry& registry,
     std::unordered_map<Entity, std::vector<components::FilterGraph>>& preparedGraphs) {
-  std::vector<FilterSpaceCaptureCandidate> result;
-  for (auto& [entity, stages] : preparedGraphs) {
-    if (stages.size() != 1) {
-      continue;
+  components::FilterGraph* active = nullptr;
+  int lastDrawOrder = 0;
+  // RenderingContext sorts this entire storage, including replayed content, by draw order.
+  // This pass only reads the storage. It must also see descendants outside any draw slice.
+  const auto& storage = registry.storage<components::RenderingInstanceComponent>();
+  for (const auto& instance : storage) {
+    if (active && instance.drawOrder > lastDrawOrder) {
+      active = nullptr;
     }
-    auto& graph = stages.front();
-    const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-    const Transform2d deviceFromFilter = instance.worldFromEntityTransform * surfaceFromCanvas;
-    if (graph.keepsViewportAlignedCapture ||
-        !UsesTransformedBlurPath(graph, graph.filterRegion, deviceFromFilter,
-                                 /*fullExecutionFits=*/true) ||
-        !FilterOutputIsBlurred(graph, FilterDeviceAxisScale(deviceFromFilter))) {
-      continue;
+    if (active &&
+        (instance.resolvedFilter || !SupportsFilterSpaceVectorCapture(registry, instance))) {
+      active->canCaptureSourceInFilterSpace = false;
+      active = nullptr;
     }
-    const auto* last =
-        registry.try_get<components::RenderingInstanceComponent>(instance.subtreeLastEntity);
-    result.push_back({&graph, instance.drawOrder, last ? last->drawOrder : instance.drawOrder});
+    if (instance.resolvedFilter) {
+      const auto it = preparedGraphs.find(entt::to_entity(storage, instance));
+      if (it != preparedGraphs.end() && it->second.size() == 1 &&
+          it->second.front().canCaptureSourceInFilterSpace) {
+        active = &it->second.front();
+        lastDrawOrder = SubtreeLastDrawOrder(registry, instance);
+      }
+    }
   }
-  return result;
 }
 
 void MarkFilterSpaceVectorCaptures(
     Registry& registry, const Transform2d& surfaceFromCanvas,
     std::unordered_map<Entity, std::vector<components::FilterGraph>>& preparedGraphs) {
-  const auto candidates =
-      FindFilterSpaceCaptureCandidates(registry, surfaceFromCanvas, preparedGraphs);
-  if (candidates.empty()) {
-    return;
-  }
-  std::vector<int> unsupported;
-  std::vector<int> filterOrders;
-  const auto instances = registry.view<components::RenderingInstanceComponent>();
-  for (const Entity entity : instances) {
-    const auto& instance = instances.get<components::RenderingInstanceComponent>(entity);
-    if (!SupportsFilterSpaceVectorCapture(registry, instance)) {
-      unsupported.push_back(instance.drawOrder);
-    }
-    if (instance.resolvedFilter) {
-      filterOrders.push_back(instance.drawOrder);
+  bool hasCandidate = false;
+  for (auto& [entity, stages] : preparedGraphs) {
+    if (stages.size() == 1) {
+      auto& graph = stages.front();
+      graph.canCaptureSourceInFilterSpace =
+          IsFilterSpaceCaptureCandidate(registry, surfaceFromCanvas, entity, graph);
+      hasCandidate |= graph.canCaptureSourceInFilterSpace;
     }
   }
-  std::sort(unsupported.begin(), unsupported.end());
-  std::sort(filterOrders.begin(), filterOrders.end());
-  for (const auto& candidate : candidates) {
-    candidate.graph->canCaptureSourceInFilterSpace =
-        !IncludesDrawOrder(unsupported, candidate.firstDrawOrder, candidate.lastDrawOrder) &&
-        !IncludesDrawOrder(filterOrders, candidate.firstDrawOrder, candidate.lastDrawOrder,
-                           /*includeFirst=*/false);
+  if (hasCandidate) {
+    RejectBlockedFilterCaptureRanges(registry, preparedGraphs);
   }
 }
 

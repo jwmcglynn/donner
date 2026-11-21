@@ -1938,9 +1938,7 @@ void RendererTinySkia::setTransform(const Transform2d& transform) {
           Vector2d(it->patternRasterFromTile.data[0], it->patternRasterFromTile.data[3]));
       break;
     }
-    const Transform2d captureFromParent = it->localCaptureFromParent.value_or(
-        Transform2d::Translate(it->filterBufferOffsetX, it->filterBufferOffsetY));
-    captureFromDevice = captureFromParent * captureFromDevice;
+    captureFromDevice = it->captureFromParent * captureFromDevice;
   }
   deviceFromLocalTransform_ = deviceFromLocalTransform_ * captureFromDevice;
 }
@@ -2371,12 +2369,15 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   frame.filterReservation = admission->reservation;
   frame.localRasterRequiredForBudget = admission->localRasterRequired;
   frame.localRasterReserved = admission->localRasterReserved;
+  frame.captureFromParent =
+      Transform2d::Translate(admission->bufferOffsetX, admission->bufferOffsetY);
   if (frame.localRasterReserved &&
       CanCaptureFilterSourceLocally(filterGraph, frame.deviceFromFilter)) {
     const auto geometry = ComputeLocalFilterRasterGeometry(
         filterGraph, filterRegion, frame.deviceFromFilter, !frame.localRasterRequiredForBudget);
     if (geometry) {
-      frame.localCaptureFromParent =
+      frame.capturedLocally = true;
+      frame.captureFromParent =
           FilterRasterFromDevice(frame.deviceFromFilter, geometry->paddedRegion.topLeft,
                                  Vector2d(geometry->scaleX, geometry->scaleY));
       admission->width = geometry->width;
@@ -2421,10 +2422,7 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   // setTransform ran before this capture opened. Later calls compose all the containing capture
   // transforms, including this one.
   const auto& pushedFrame = surfaceStack_.back();
-  deviceFromLocalTransform_ =
-      deviceFromLocalTransform_ *
-      pushedFrame.localCaptureFromParent.value_or(
-          Transform2d::Translate(pushedFrame.filterBufferOffsetX, pushedFrame.filterBufferOffsetY));
+  deviceFromLocalTransform_ = deviceFromLocalTransform_ * pushedFrame.captureFromParent;
 #else
   (void)filterGraph;
   (void)filterRegion;
@@ -2482,7 +2480,7 @@ bool RendererTinySkia::filterLocalCapture(const SurfaceFrame& frame, tiny_skia::
   const bool filtered =
       ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localFromFilter, localFilterRegion,
                                /*clipSourceToFilterRegion=*/true);
-  if (!filtered && frame.localCaptureFromParent) {
+  if (!filtered && frame.capturedLocally) {
     // A direct capture has no device raster to fall back to.
     return false;
   }
@@ -2504,7 +2502,7 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
   }
 
   tiny_skia::Pixmap localPixmap;
-  if (frame.localCaptureFromParent) {
+  if (frame.capturedLocally) {
     localPixmap = std::move(frame.pixmap);
   } else {
     if (std::exchange(failNextLocalFilterRasterAllocationForTesting_, false)) {
@@ -2685,15 +2683,15 @@ void RendererTinySkia::popFilterLayer() {
   clipEpochStack_ = std::move(frame.savedClipEpochStack);
 
   propagateFilterPaintInputs(frame);
-  if (frame.localCaptureFromParent) {
-    deviceFromLocalTransform_ = deviceFromLocalTransform_ * frame.localCaptureFromParent->inverse();
+  if (frame.capturedLocally) {
+    deviceFromLocalTransform_ = deviceFromLocalTransform_ * frame.captureFromParent.inverse();
   }
 
   if (compositeTransformedFilter(frame)) {
     filterExecutionBudget_->release(frame.filterReservation);
     return;
   }
-  if (frame.localRasterRequiredForBudget || frame.localCaptureFromParent) {
+  if (frame.localRasterRequiredForBudget || frame.capturedLocally) {
     // There is no usable device capture when the graph required or already captured its local
     // raster. Failing to execute there is a renderer failure, not a graph too large for the frame's
     // remaining work.

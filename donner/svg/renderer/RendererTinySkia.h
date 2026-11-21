@@ -403,7 +403,8 @@ private:
     components::FilterExecutionBudget::Reservation filterReservation;
     std::optional<Box2d> filterRegion;
     Transform2d deviceFromFilter;
-    std::optional<Transform2d> localCaptureFromParent;
+    Transform2d captureFromParent;
+    bool capturedLocally = false;
     bool localRasterRequiredForBudget = false;
     bool localRasterReserved = false;  ///< Whether admission budgeted the transformed local raster.
     int filterBufferOffsetX = 0;
