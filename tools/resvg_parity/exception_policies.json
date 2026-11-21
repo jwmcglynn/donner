@@ -521,18 +521,22 @@
         "filters/filter/in=BackgroundAlpha.svg"
       ],
       "kinds": [
-        "threshold"
+        "shared_golden"
       ],
-      "classification": "reference-precision",
-      "disposition": "Preserve equality of the live BackgroundImage and BackgroundAlpha coverage.",
+      "classification": "reference-disagreement",
+      "disposition": "Keep BackgroundAlpha equal to the alpha of BackgroundImage under the specified box-blur approximation.",
       "evidence": [
-        "donner/svg/renderer/tests/resvg_test_suite.cc",
-        "https://github.com/jwmcglynn/donner/issues/1185"
+        "donner/svg/renderer/testdata/golden/README.md",
+        "https://www.w3.org/TR/filter-effects-1/#attr-valuedef-in-backgroundalpha",
+        "https://www.w3.org/TR/filter-effects-1/#feGaussianBlurElement"
       ],
-      "removal_criteria": "Compare normally after independently regenerating the equal-alpha blur edge at default settings.",
-      "reference_provenance": "The archived alpha blur reaches full coverage two pixels later.",
+      "removal_criteria": "Use the adjacent reference when its blurred alpha equals the in=BackgroundImage reference's.",
+      "reference_provenance": "Donner rendering; the adjacent BackgroundAlpha and BackgroundImage references blur the same alpha with two different Gaussian approximations.",
       "max_threshold": 0.02,
-      "max_pixels": 1200
+      "max_pixels": 100,
+      "references": {
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-in-BackgroundAlpha.png"
+      }
     },
     {
       "id": "half-box-blur",

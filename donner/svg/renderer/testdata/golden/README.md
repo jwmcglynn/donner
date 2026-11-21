@@ -924,6 +924,60 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*complex_order_and_xlink_href*'
 ```
 
+### `filters/filter/in=BackgroundAlpha`
+
+Disposition: reference disagreement. `donner-in-BackgroundAlpha.png` is a Donner CPU rendering of
+the unchanged corpus file, at the 500x500 size of the vendored reference, rendered by the resvg
+suite harness at the commit that adds it. The software backend and Geode compare with it at default
+settings with no counted pixels.
+
+The row draws the same square twice in an isolation group, the second time through a filter that
+offsets and blurs `BackgroundAlpha`. Filter Effects 1 defines `BackgroundAlpha` as
+`BackgroundImage` with only the alpha channel used, so in one renderer the blurred alpha equals the
+`in=BackgroundImage` row's, whose fixture differs only in that keyword. The two vendored PNGs come
+from different blurs: in the filtered square's half of the canvas their alphas differ on 28,716
+pixels, by up to 5 levels. Filter Effects 1 makes the Gaussian (standard deviation 10 device pixels
+here) normative and permits three box blurs as an approximation within roughly 3%, so each PNG is
+a conforming rendering on its own, but no single conforming renderer can match both:
+
+- The `in=BackgroundImage` PNG's blurred alpha is within 1 level of the three box blurs of size 19
+  that Filter Effects 1 gives, which Donner implements (1,300 pixels of the right half differ by 1
+  level), and that row compares with its vendored PNG at default settings.
+- The `in=BackgroundAlpha` PNG's alpha equals, pixel for pixel, the blur resvg 0.47.0 draws for this
+  file. resvg 0.47.0 supports neither keyword: it warns and filters the source graphic, the same
+  square here, so it draws that alpha in the square's green; the vendored PNG is black. This is
+  the resvg release available where the golden was made; v0.49.0, the version the parent section
+  cites, was not run for this row.
+- Against an exact Gaussian of the square, the `in=BackgroundAlpha` PNG's alpha is off by a mean of
+  0.39 levels (at most 2.16), the `in=BackgroundImage` PNG's by 0.94 (at most 4.88) and Donner's by
+  0.93 (at most 4.52).
+
+Against the `in=BackgroundAlpha` PNG, the golden's blurred alpha differs by up to 4 levels across
+the blur ramp (15,485 pixels by 1, 13,248 by 2, 1,092 by 3 and 292 by 4); near black those
+differences exceed the perceptual threshold on 1,176 pixels on every backend.
+`RendererRegressionTests.FilterBackgroundAlphaMatchesBackgroundImageAlpha` requires Donner's
+`BackgroundAlpha` to equal its `BackgroundImage` alpha, on its own synthetic scene, including where
+a blur spreads the alpha. results.csv records resvg failing its own `in=BackgroundAlpha` reference
+and passing `in=BackgroundImage`.
+
+The golden also records a known CPU difference unrelated to the blur: the unfiltered seagreen square
+on the left has alpha 254 on all of its pixels, where Geode and both vendored PNGs have 255. The CPU
+renderer draws 254 for every opaque pixel of a group layer (an isolation group or an opacity group)
+that contains a filtered element, whatever the filter's region or output, and 255 without the layer
+or without the filtered element; Donner's CPU `in=BackgroundImage` render shows it too. The
+difference is below the comparison threshold, so it does not count against the vendored
+`in=BackgroundImage` reference or against this golden on Geode. When the CPU renderer stops
+producing it, regenerate this golden.
+
+PNG SHA-256: `6cedad0d7e211ac8b7bc1f553f30cd95aa59d44105b626edc4d6f46d3fc0dfdc`.
+
+To regenerate, delete the file and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*in_BackgroundAlpha'
+```
+
 ### `filters/feSpotLight/complex-transform`
 
 The 500x500 shared reference `resvg-complex-transform.png` uses the documented
@@ -1530,6 +1584,7 @@ regenerates or adds a golden.
 | `donner-emojis.png` | `dd0f1fe2b2c53a07e40c49b029e44d783dce9b2f2f54c87d33622711f7f4ffd6` | Donner renderings of the color emoji rows |
 | `donner-feColorMatrix-identity.png` | `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916` | `filters/feColorMatrix` identity rows |
 | `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` | Donner renderings of disputed rows |
+| `donner-in-BackgroundAlpha.png` | `6cedad0d7e211ac8b7bc1f553f30cd95aa59d44105b626edc4d6f46d3fc0dfdc` | `filters/filter/in=BackgroundAlpha` |
 | `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` | Donner renderings of disputed rows |
 | `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
 | `donner-named-value.png` | `52f758743a31018c94d2b16df37bdd4e8cf5c1b59237358a18c5f8e5f6234c12` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
