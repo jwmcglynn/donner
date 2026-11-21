@@ -163,9 +163,8 @@ condition is not limited to horizontal edges. It still accepts:
 
 It rejects a uniform partially covered region two or more rows tall, the first row of a translucent
 shape directly below an opaque one, pure vertical edges, and the interior of a vertical alpha
-gradient. Across the 172 opted-in rows the condition keeps 50,850 of the 51,771 pixels the rule
-accepted without it on Metal (50,848 on software Vulkan), and every row still passes its unchanged
-budget.
+gradient. Across the 173 opted-in rows the rule accepts 51,612 pixels on Metal and 51,610 on
+software Vulkan, and every row passes its unchanged budget.
 
 The rule is part of the canonical comparison
 (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage` in
