@@ -66,3 +66,13 @@ Legend: `☐` Not started, `🧩` Stub only, `🟡` Implemented/tested (Rust com
 | `fill_rect` | `scan::fillRect` | 🟢 | Line-by-line audited: Integer-rounding and clip intersection behavior |
 | `fill_rect_aa` | `scan::fillRectAa` | 🟢 | Line-by-line audited: Fractional-rect antialias path coverage |
 
+
+
+### Fractional rectangular clip for antialiased fills
+
+- [x] `Painter::fillPath` accepts an optional device-space rectangle on antialiased draws.
+      It translates the rectangle with the geometry when splitting the destination into tiles.
+- [x] `scan::path_aa::fillPath` intersects that rectangle with the viewport, clips the analytic
+      edges, and scans their coverage once. The existing mask is still available for other coverage.
+- [x] `PainterTest.FractionalDeviceClipBeforeAntialiasing` compares a transformed triangle clipped
+      through the painter with an independently authored intersection.

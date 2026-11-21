@@ -192,6 +192,9 @@ TEST(RendererRetainedSpans, FramesAreByteIdenticalToFreshRendering) {
        R"svg(<defs><clipPath id="c"><circle cx="48" cy="48" r="30"/></clipPath></defs>
           <g clip-path="url(#c)"><rect x="0" y="0" width="96" height="96" fill="#802020"/>
           <path d="M 0 96 L 96 0 L 96 96 Z" fill="#208020"/></g>)svg"},
+      {"fractional_rectangular_clip",
+       R"svg(<defs><clipPath id="c"><rect x="8.25" y="8.5" width="44" height="60"/></clipPath></defs>
+          <path d="M 0 8.5 H 75 L 35 70 Z" fill="#208020" clip-path="url(#c)"/>)svg"},
       {"nested_clips",
        R"svg(<defs><clipPath id="a"><rect x="10" y="10" width="70" height="70"/></clipPath>
           <clipPath id="b"><circle cx="48" cy="48" r="28"/></clipPath></defs>

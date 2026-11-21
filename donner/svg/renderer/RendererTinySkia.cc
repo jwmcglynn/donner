@@ -2874,11 +2874,9 @@ void RendererTinySkia::drawPathFill(const PathShape& path,
   std::optional<tiny_skia::Paint> fillPaint =
       paint_.drawFillComponent ? makeFillPaint(path.pathOrEmpty().bounds()) : std::nullopt;
   if (fillPaint) {
-    const auto intersection = intersectRectangularPathFill(path.pathOrEmpty());
-    const auto fillGeometry = [&]() -> const tiny_skia::Path& {
-      return intersection ? *intersection : tinyPath();
-    };
-    const tiny_skia::Mask* fillMask = intersection ? nullptr : currentClipCoverage();
+    const auto deviceClip = rectangularAaClip(*fillPaint);
+    const tiny_skia::Rect* aaClip = deviceClip ? &*deviceClip : nullptr;
+    const tiny_skia::Mask* fillMask = deviceClip ? nullptr : currentClipCoverage();
     auto pixmapView = currentPixmapView();
 
     RetainedSpanKey key;
@@ -2888,27 +2886,26 @@ void RendererTinySkia::drawPathFill(const PathShape& path,
     key.surfaceSize = pixmapView.size();
     key.fillRule = path.fillRule;
 
-    RetainedSpanSlot* slot = (retained && !intersection && !paintBorrowsPattern(*fillPaint))
+    RetainedSpanSlot* slot = (retained && !deviceClip && !paintBorrowsPattern(*fillPaint))
                                  ? &retained.entry->fill
                                  : nullptr;
     drawRetainablePass(
         slot, key, pixmapView, fillMask, retainedSpanStats_,
         [&] {
-          tiny_skia::Painter::fillPath(pixmapView, fillGeometry(), *fillPaint,
-                                       toTinyFillRule(path.fillRule),
-                                       toTinyTransform(deviceFromLocalTransform_), fillMask);
+          tiny_skia::Painter::fillPath(
+              pixmapView, tinyPath(), *fillPaint, toTinyFillRule(path.fillRule),
+              toTinyTransform(deviceFromLocalTransform_), fillMask, nullptr, aaClip);
         },
         [&](tiny_skia::SpanCapture& capture) {
-          return capture.fillPath(pixmapView, fillGeometry(), *fillPaint,
-                                  toTinyFillRule(path.fillRule),
+          return capture.fillPath(pixmapView, tinyPath(), *fillPaint, toTinyFillRule(path.fillRule),
                                   toTinyTransform(deviceFromLocalTransform_), fillMask);
         });
 
     if (fillPaintPixmap != nullptr) {
       auto fillPaintView = fillPaintPixmap->mutableView();
-      tiny_skia::Painter::fillPath(fillPaintView, fillGeometry(), *fillPaint,
-                                   toTinyFillRule(path.fillRule),
-                                   toTinyTransform(deviceFromLocalTransform_), fillMask);
+      tiny_skia::Painter::fillPath(
+          fillPaintView, tinyPath(), *fillPaint, toTinyFillRule(path.fillRule),
+          toTinyTransform(deviceFromLocalTransform_), fillMask, nullptr, aaClip);
     }
     if (usedPatternFill) {
       patternFillPaint_.reset();
@@ -4039,18 +4036,18 @@ const tiny_skia::Mask* RendererTinySkia::currentClipCoverage() const {
   return currentClipMask_ ? &currentClipMask_->coverage : nullptr;
 }
 
-std::optional<tiny_skia::Path> RendererTinySkia::intersectRectangularPathFill(
-    const Path& path) const {
-  if (!currentClipMask_ || !currentClipMask_->deviceRect) {
+std::optional<tiny_skia::Rect> RendererTinySkia::rectangularAaClip(
+    const tiny_skia::Paint& paint) const {
+  if (!paint.antiAlias || !currentClipMask_ || !currentClipMask_->deviceRect) {
     return std::nullopt;
   }
-  const auto bounds = SingleRectPath(path);
-  const auto intersection = bounds ? intersectRectangularFill(*bounds) : std::nullopt;
-  if (!intersection) {
+  const Box2d& rect = *currentClipMask_->deviceRect;
+  const std::array edges{rect.topLeft.x, rect.topLeft.y, rect.bottomRight.x, rect.bottomRight.y};
+  // Pixel-aligned clips have binary coverage, which the retained mask path can replay exactly.
+  if (std::ranges::all_of(edges, [](double edge) { return std::trunc(edge) == edge; })) {
     return std::nullopt;
   }
-  const auto rect = toTinyRect(*intersection);
-  return rect ? tiny_skia::Path::fromRect(*rect) : tiny_skia::Path();
+  return toTinyRect(rect);
 }
 
 std::optional<Box2d> RendererTinySkia::intersectRectangularFill(const Box2d& bounds) const {

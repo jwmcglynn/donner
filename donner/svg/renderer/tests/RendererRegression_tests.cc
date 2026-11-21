@@ -1964,6 +1964,64 @@ TEST_F(RendererRegressionTests, CoincidentClipAndFillEdgesHaveSingleCoverage) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST_F(RendererRegressionTests, CoincidentRectangularClipKeepsFilledPathCoverage) {
+  constexpr std::string_view kClip =
+      R"svg(<clipPath id="c"><rect x="8.25" y="8.5" width="13" height="15"/></clipPath>)svg";
+  struct Scene {
+    std::string_view label;
+    std::string_view clipped;
+    std::string_view expected;
+  };
+  const std::array scenes{
+      Scene{"triangle_crosses_both_vertical_clip_edges",
+            R"svg(<path d="M4 8.5 H24 L14 18.5 Z" clip-path="url(#c)"/>)svg",
+            R"svg(<path d="M8.25 8.5 H21.25 V11.25 L14 18.5 L8.25 12.75 Z"/>)svg"},
+      Scene{"curved_fill_crosses_left_clip_edge",
+            R"svg(<path d="M4 8.5 H20 V14.5 Q18 18.5 10 18.5 H4 Z" clip-path="url(#c)"/>)svg",
+            R"svg(<path d="M8.25 8.5 H20 V14.5 Q18 18.5 10 18.5 H8.25 Z"/>)svg"},
+      Scene{
+          "even_odd_hole_keeps_its_winding",
+          R"svg(<path fill-rule="evenodd" d="M4 8.5 H24 V18.5 H4 Z M12 10 H16 V16 H12 Z"
+                        clip-path="url(#c)"/>)svg",
+          R"svg(<path fill-rule="evenodd" d="M8.25 8.5 H21.25 V18.5 H8.25 Z M12 10 H16 V16 H12 Z"/>)svg"},
+  };
+  for (const Scene& scene : scenes) {
+    SCOPED_TRACE(scene.label);
+    editor::tests::CompareBitmapToBitmap(
+        RenderTinySkiaClipCase(std::string(kClip) + std::string(scene.clipped)),
+        RenderTinySkiaClipCase(scene.expected), scene.label,
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, RectangularAaClipFollowsTheRasterTile) {
+  const auto render = [](std::string_view body) {
+    SVGDocument document = instantiateSubtree(body, {}, Vector2i(8210, 32));
+    return RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  };
+  const RendererBitmap actual = render(R"svg(
+    <clipPath id="c"><rect x="8188.25" y="8.5" width="13" height="15"/></clipPath>
+    <path d="M8184 8.5 H8204 L8194 18.5 Z" clip-path="url(#c)"/>)svg");
+  const RendererBitmap expected = render(R"svg(
+    <path d="M8188.25 8.5 H8201.25 V11.25 L8194 18.5 L8188.25 12.75 Z"/>)svg");
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(8210, 32)));
+  EXPECT_THAT(PixelAt(expected, 8192, 8), testing::ElementsAre(0, 0, 0, 128));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "rectangular_clip_crosses_tile",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, RectangularViewportClipInsideOpacityLayerKeepsCoverage) {
+  const RendererBitmap expected = RenderTinySkiaClipCase(R"svg(
+    <g opacity="0.8"><rect x="8" y="8.5" width="24" height="17"/></g>)svg");
+  const RendererBitmap viewport = RenderTinySkiaClipCase(R"svg(
+    <g opacity="0.8"><svg x="8" y="8.5" width="24" height="17" overflow="hidden">
+      <rect width="24" height="17"/>
+    </svg></g>)svg");
+  EXPECT_THAT(PixelAt(expected, 16, 8), testing::ElementsAre(0, 0, 0, 102));
+  editor::tests::CompareBitmapToBitmap(viewport, expected, "coincident_clip_in_opacity_layer",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, FractionalRectangularClipUsesGeometricIntersection) {
   struct Scene {
     std::string_view label;
@@ -1979,6 +2037,17 @@ TEST_F(RendererRegressionTests, FractionalRectangularClipUsesGeometricIntersecti
             R"svg(<clipPath id="c"><rect x="8.625" y="8" width="0.25" height="4"/></clipPath>
                   <rect x="8.125" y="8" width="0.25" height="4" clip-path="url(#c)"/>)svg",
             ""},
+      Scene{"disjoint_path_inside_one_pixel",
+            R"svg(<clipPath id="c"><rect x="8.625" y="8" width="0.25" height="4"/></clipPath>
+                  <path d="M8.125 8 H8.375 V12 H8.125 Z" clip-path="url(#c)"/>)svg",
+            ""},
+      Scene{"object_bounding_box_under_reflection",
+            R"svg(<clipPath id="c" clipPathUnits="objectBoundingBox">
+                    <rect x="0.125" y="0.1875" width="0.5" height="0.5"/>
+                  </clipPath>
+                  <path d="M4.25 8.5 H36.25 V20.5 H4.25 Z" transform="matrix(-1 0 0 1 40.5 0)"
+                        clip-path="url(#c)"/>)svg",
+            R"svg(<path d="M16.25 10.75 H32.25 V16.75 H16.25 Z"/>)svg"},
       Scene{"crossed_nested_clips",
             R"svg(<clipPath id="a"><rect x="8.25" y="4" width="9.5" height="20"/></clipPath>
                   <clipPath id="b"><rect x="4" y="8.5" width="20" height="3"/></clipPath>

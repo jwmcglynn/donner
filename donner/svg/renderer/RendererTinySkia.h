@@ -517,7 +517,8 @@ private:
                     const RetainedTarget& retained, tiny_skia::Pixmap* fillPaintPixmap);
   void drawRectFill(const Box2d& rect, const tiny_skia::Rect& tinyRect,
                     tiny_skia::Pixmap* fillPaintPixmap);
-  [[nodiscard]] std::optional<tiny_skia::Path> intersectRectangularPathFill(const Path& path) const;
+  [[nodiscard]] std::optional<tiny_skia::Rect> rectangularAaClip(
+      const tiny_skia::Paint& paint) const;
   [[nodiscard]] std::optional<Box2d> intersectRectangularFill(const Box2d& bounds) const;
   [[nodiscard]] const tiny_skia::Mask* currentClipCoverage() const;
   [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);

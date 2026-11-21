@@ -1080,7 +1080,7 @@ std::size_t chopCubicAtYExtrema(const std::array<Point, 4>& src, std::array<Poin
   return rawCount;
 }
 
-std::vector<AnalyticEdge> buildAnalyticEdges(const Path& path, const ScreenIntRect* clipRect,
+std::vector<AnalyticEdge> buildAnalyticEdges(const Path& path, const Rect& edgeClip,
                                              bool pathContainedInClip) {
   std::vector<AnalyticEdge> edges;
 
@@ -1105,9 +1105,8 @@ std::vector<AnalyticEdge> buildAnalyticEdges(const Path& path, const ScreenIntRe
     }
   };
 
-  if (clipRect != nullptr && !pathContainedInClip) {
-    Rect clipRectF = clipRect->toRect();
-    for (auto iterator = EdgeClipperIter(path, clipRectF, false);;) {
+  if (!pathContainedInClip) {
+    for (auto iterator = EdgeClipperIter(path, edgeClip, false);;) {
       auto clippedEdges = iterator.next();
       if (!clippedEdges.has_value()) break;
 
@@ -1154,8 +1153,8 @@ std::vector<AnalyticEdge> buildAnalyticEdges(const Path& path, const ScreenIntRe
         }
         case PathEdgeType::CubicTo: {
           if (!isFinitePoint(edgeValue.points[2]) || !isFinitePoint(edgeValue.points[3])) continue;
-          std::array<Point, 4> pts = {edgeValue.points[0], edgeValue.points[1],
-                                      edgeValue.points[2], edgeValue.points[3]};
+          std::array<Point, 4> pts = {edgeValue.points[0], edgeValue.points[1], edgeValue.points[2],
+                                      edgeValue.points[3]};
           std::array<Point, 10> mono{};
           auto count = chopCubicAtYExtrema(pts, mono);
           for (std::size_t i = 0; i <= count; ++i) {
@@ -1173,8 +1172,9 @@ std::vector<AnalyticEdge> buildAnalyticEdges(const Path& path, const ScreenIntRe
 // ── Main fill function ───────────────────────────────────────────────────────
 
 void aaaFillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clipRect,
-                 AdditiveBlitter& blitter, int startY, int stopY, bool pathContainedInClip) {
-  auto edges = buildAnalyticEdges(path, &clipRect, pathContainedInClip);
+                 const Rect& edgeClip, AdditiveBlitter& blitter, int startY, int stopY,
+                 bool pathContainedInClip) {
+  auto edges = buildAnalyticEdges(path, edgeClip, pathContainedInClip);
 
   if (edges.size() < 2) return;
 
@@ -1235,7 +1235,8 @@ void aaaFillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clipR
 
 namespace scan::path_aa {
 
-void fillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clip, Blitter& blitter) {
+void fillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clip, Blitter& blitter,
+              const Rect* deviceAaClip) {
   const auto boundsOpt = path.bounds().roundOut();
   if (!boundsOpt) return;
 
@@ -1244,17 +1245,29 @@ void fillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clip, Bl
 
   if (clip.right() > 32767 || clip.bottom() > 32767) return;
 
+  const Rect viewport = clip.toRect();
+  const auto edgeClip = deviceAaClip
+                            ? Rect::fromLTRB(std::max(viewport.left(), deviceAaClip->left()),
+                                             std::max(viewport.top(), deviceAaClip->top()),
+                                             std::min(viewport.right(), deviceAaClip->right()),
+                                             std::min(viewport.bottom(), deviceAaClip->bottom()))
+                            : std::optional(viewport);
+  if (!edgeClip || edgeClip->width() <= 0 || edgeClip->height() <= 0) return;
+
   const auto pathContainedInClip = [&]() {
     const auto boundsScreen = boundsOpt->toScreenIntRect();
-    return boundsScreen.has_value() && clip.contains(boundsScreen.value());
+    if (!boundsScreen || !clip.contains(*boundsScreen)) return false;
+    if (!deviceAaClip) return true;
+    const auto& bounds = path.bounds();
+    return bounds.left() >= edgeClip->left() && bounds.top() >= edgeClip->top() &&
+           bounds.right() <= edgeClip->right() && bounds.bottom() <= edgeClip->bottom();
   }();
 
-  AdditiveBlitter additiveBlitter(blitter, static_cast<std::int32_t>(clip.x()),
-                                  static_cast<std::int32_t>(clip.width()),
-                                  static_cast<std::int32_t>(clip.y()),
-                                  static_cast<std::int32_t>(clip.height()));
+  AdditiveBlitter additiveBlitter(
+      blitter, static_cast<std::int32_t>(clip.x()), static_cast<std::int32_t>(clip.width()),
+      static_cast<std::int32_t>(clip.y()), static_cast<std::int32_t>(clip.height()));
 
-  aaaFillPath(path, fillRule, clip, additiveBlitter, static_cast<int>(boundsOpt->y()),
+  aaaFillPath(path, fillRule, clip, *edgeClip, additiveBlitter, static_cast<int>(boundsOpt->y()),
               static_cast<int>(boundsOpt->y() + boundsOpt->height()), pathContainedInClip);
 }
 
@@ -1262,12 +1275,12 @@ void fillPathImpl(const Path& path, FillRule fillRule, const IntRect& bounds,
                   const ScreenIntRect& clipRect, std::int32_t startY, std::int32_t stopY,
                   std::int32_t /*shiftEdgesUp*/, bool pathContainedInClip, Blitter& blitter) {
   // With AAA, we ignore shiftEdgesUp since we don't super-sample.
-  AdditiveBlitter additiveBlitter(blitter, static_cast<std::int32_t>(clipRect.x()),
-                                  static_cast<std::int32_t>(clipRect.width()),
-                                  static_cast<std::int32_t>(clipRect.y()),
-                                  static_cast<std::int32_t>(clipRect.height()));
+  AdditiveBlitter additiveBlitter(
+      blitter, static_cast<std::int32_t>(clipRect.x()), static_cast<std::int32_t>(clipRect.width()),
+      static_cast<std::int32_t>(clipRect.y()), static_cast<std::int32_t>(clipRect.height()));
 
-  aaaFillPath(path, fillRule, clipRect, additiveBlitter, startY, stopY, pathContainedInClip);
+  aaaFillPath(path, fillRule, clipRect, clipRect.toRect(), additiveBlitter, startY, stopY,
+              pathContainedInClip);
 }
 
 }  // namespace scan::path_aa

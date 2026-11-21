@@ -106,9 +106,13 @@ class Painter {
   /// Fills a path using the given fill rule.
   ///
   /// @param wrapper See fillRect.
+  /// @param deviceAaClip Optional fractional rectangular clip in surface pixels when antialiasing.
+  ///   The rectangle intersects the path before scan conversion. An ordinary coverage mask, if
+  ///   supplied, still applies to the resulting coverage.
   static void fillPath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                        FillRule fillRule, Transform transform = Transform::identity(),
-                       const Mask* mask = nullptr, BlitterWrapper* wrapper = nullptr);
+                       const Mask* mask = nullptr, BlitterWrapper* wrapper = nullptr,
+                       const Rect* deviceAaClip = nullptr);
 
   /// Composites a source pixmap onto a destination at offset (x, y).
   static void drawPixmap(MutablePixmapView& pixmap, std::int32_t x, std::int32_t y, PixmapView src,
