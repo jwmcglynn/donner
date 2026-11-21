@@ -43,10 +43,12 @@ generates self-transitioning variant targets that run under plain `bazel test //
 extra flags:
 
 - `:resvg_test_suite_default_text` — tiny-skia, simple text (Donner default build)
-- `:resvg_test_suite_max` — tiny-skia, full text (FreeType + HarfBuzz)
-- `:resvg_test_suite_geode` — Geode (WebGPU) backend
+- `:resvg_test_suite_max` - tiny-skia, full text (FreeType + HarfBuzz); manual. `bazel test //...`
+  runs it as the disjoint `:resvg_test_suite_max_text` and `:resvg_test_suite_max_nontext`
+- `:resvg_test_suite_geode` - Geode (WebGPU) backend, simple text
+- `:resvg_test_suite_geode_max_text` - Geode, full text, the text-rendering cases only
 
-So "make resvg green" means all three variants, and `bazel test //...` is the final gate
+So "make resvg green" means all of these lanes, and `bazel test //...` is the final gate
 (see the donner-build-test and donner-pr-ci skills). To point the _alias_ at a non-default config
 use `--config=text-full` or `--config=geode` (defined in `.bazelrc`); the variant targets need no
 config flag because they transition themselves.
