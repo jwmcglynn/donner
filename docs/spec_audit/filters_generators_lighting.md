@@ -277,7 +277,7 @@ All by code reading. Everything not listed here follows the same rule on both re
 | feTile input subregion past the raster edge | Origin clamped to the raster, transparent outside the raster | Origin not clamped, edge texel repeated outside the texture | `val:feTile/input-subregion` |
 | feMorphology erode at the raster border | Samples beyond the raster are ignored (window truncated) | Samples beyond the texture count as transparent | `feat:filter-effects-1/feMorphology-kernel` |
 
-Rules where both renderers share the same divergence from the TR: turbulence stitching, seed between 0 and 1, gradient setup and noise origin; lighting edge and corner factors; the SVG 1.1 specularExponent range; the expanded default subregion of feGaussianBlur and dilating feMorphology; a negative stdDeviation on one axis; integer snapping of feOffset, feMorphology and feTile; the resource limits.
+Rules where both renderers share the same divergence from the TR: turbulence stitching, seed between 0 and 1, gradient setup and noise origin; lighting edge and corner factors; the SVG 1.1 specularExponent range; the expanded default subregion of feGaussianBlur and dilating feMorphology; a negative stdDeviation on one axis; integer snapping of feMorphology and feTile (feOffset applies fractional offsets exactly); the resource limits.
 
 ## Tests to create
 
