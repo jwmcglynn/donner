@@ -31,7 +31,7 @@ permissions:
 jobs:
   # Only the base revision may admit a PR to the BuildBuddy write environment.
   trust:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
@@ -50,7 +50,7 @@ jobs:
 
   asan-geode:
     name: asan-geode
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: trust
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
     # runs allowed to write bind it, so other runs never receive that key.

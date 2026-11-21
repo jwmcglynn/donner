@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   resolve-candidate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       run_id: ${{ steps.record.outputs.run_id }}
       attempt: ${{ steps.record.outputs.attempt }}
@@ -48,7 +48,7 @@ jobs:
 
   publish-release-artifacts:
     needs: resolve-candidate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       RELEASE_ID: ${{ github.event.release.id }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}

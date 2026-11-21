@@ -49,7 +49,7 @@ permissions:
 
 jobs:
   gatekeeper:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
@@ -107,7 +107,7 @@ jobs:
 
   generator-check:
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -118,7 +118,7 @@ jobs:
         run: python3 tools/cmake/gen_cmakelists.py --check
 
   linux:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     env:

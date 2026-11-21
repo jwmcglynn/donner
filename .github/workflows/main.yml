@@ -49,7 +49,7 @@ permissions:
 
 jobs:
   gatekeeper:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
@@ -106,7 +106,7 @@ jobs:
           unified_re_canary: ${{ vars.UNIFIED_RE_CANARY }}
 
   determine-targets:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: gatekeeper
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     outputs:
@@ -162,7 +162,7 @@ jobs:
 
   linux:
     # One x86_64 workspace owns native, local-display, linker and closure checks.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
@@ -283,7 +283,7 @@ jobs:
   # releases dependent self-hosted jobs in submission order. The pool is sized
   # to the runner fleet, so up to four Linux jobs run at once.
   linux-self-hosted-turnstile:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     timeout-minutes: 165
@@ -829,7 +829,7 @@ jobs:
     # self-hosted Linux lane replaced hosted Linux; when hosted macOS ran (the ci:hosted-macos
     # label or a disabled mixed graph), the macOS lane needs no counterparts.
     # Receipt verification only reads the artifacts uploaded by this workflow run.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [gatekeeper, determine-targets, linux, linux-self-hosted]
     if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     timeout-minutes: 10
