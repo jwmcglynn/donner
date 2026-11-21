@@ -74,8 +74,9 @@ The same test also enforces these registration rules, each against a list in `pa
 - `QUARTER_PIXEL_EDGE_ALLOWLIST` equals the set of active rows that opt their Geode comparison into
   the quarter-pixel edge coverage rule (`withGeodeQuarterPixelEdgeCoverage()`, see
   [Quarter-pixel edge coverage on Geode](#ResvgQuarterPixelEdgeCoverage)). An opted-in row that is
-  not listed fails, as does one whose Geode lane does not compare, compares against a custom
-  golden, or counts anti-aliased pixels; an entry whose row no longer opts in is stale and fails.
+  not listed fails, as does one whose Geode lane does not compare, compares against a Geode golden
+  or against a custom golden that the golden README does not record as quarter-pixel quantized, or
+  counts anti-aliased pixels; an entry whose row no longer opts in is stale and fails.
 - `GEODE_GATE_ALLOWLIST` equals the set of active rows that disable their Geode comparison (see
   [Geode gates](#ResvgGeodeGates)). A row that disables another backend, disables Geode without a
   reason, or is not listed fails; an entry whose row no longer disables Geode is stale and fails.
@@ -131,8 +132,11 @@ A row whose Geode comparison against its vendored resvg reference exceeds its bu
 of that difference opts in with `QuarterPixelEdgeReference()` (or
 `.withGeodeQuarterPixelEdgeCoverage()` chained onto its other params) in `resvg_test_suite.cc` and
 is listed in `QUARTER_PIXEL_EDGE_ALLOWLIST`. Pixels the rule does not accept still count against
-the row's unchanged budget. A row that compares against a custom golden (a Donner or browser
-rendering) cannot opt in: that image is not quarter-pixel quantized.
+the row's unchanged budget. A row that compares against a custom golden may opt in only when the
+golden is a Donner software renderer rendering listed in the "Quarter-pixel quantized goldens"
+table of `donner/svg/renderer/testdata/golden/README.md`: that renderer samples coverage as resvg
+does, and the table records the measurement. A browser rendering, an area-averaged image or a Geode
+golden is not quarter-pixel quantized, so its row cannot opt in.
 
 For an opted-in row, the Geode comparison also accepts a pixel pixelmatch counts when:
 
@@ -159,14 +163,13 @@ condition is not limited to horizontal edges. It still accepts:
 
 It rejects a uniform partially covered region two or more rows tall, the first row of a translucent
 shape directly below an opaque one, pure vertical edges, and the interior of a vertical alpha
-gradient. Across the 172 opted-in rows the condition keeps 50,850 of the 51,771 pixels the rule
-accepted without it on Metal (50,848 on software Vulkan), and every row still passes its unchanged
-budget.
+gradient. Across the 173 opted-in rows the rule accepts 51,612 pixels on Metal and 51,610 on
+software Vulkan, and every row passes its unchanged budget.
 
 The rule is part of the canonical comparison
 (`svg_suite::ComparisonOptions::acceptQuarterPixelEdgeCoverage` in
 `tools/svg_suite/ImageCompare.h`) and is off by default. It never applies to the CPU comparisons,
-to a comparison against a custom golden, or to a pixel that is fully covered or empty in either
+to a comparison against a Geode golden, or to a pixel that is fully covered or empty in either
 image, and it does not change the pixel budget. The test log reports how many pixels it
 accepted and their largest alpha difference; the diff image draws them in blue. A row whose Geode
 comparison passes without the rule leaves the list.
@@ -183,9 +186,9 @@ capabilities.
 
 A row whose Geode comparison fails for a cause the edge coverage rule does not cover disables its
 Geode comparison with `disableBackend(RendererBackend::Geode, reason)` and is listed in
-`GEODE_GATE_ALLOWLIST`; its CPU comparisons are unchanged. The reason names the measured cause, and
-`resvg_test_suite.cc` keeps one helper per cause (for example `GeodeCustomGoldenGate`) so the
-reason is written once. `//tools/resvg_parity:parity_report_tests` enforces in CI that the list
+`GEODE_GATE_ALLOWLIST`; its CPU comparisons are unchanged. The reason names the measured cause,
+and `resvg_test_suite.cc` keeps one helper per cause (for example `GeodeUnquantizedGoldenGate`) so
+the reason is written once. `//tools/resvg_parity:parity_report_tests` enforces in CI that the list
 matches the gated rows and that no other backend is disabled; that the list only shrinks is a review
 rule.
 

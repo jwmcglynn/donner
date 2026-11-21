@@ -993,10 +993,11 @@ def _case_lanes(case: dict[str, object], repo_root: Path) -> dict[str, object]:
                 "canvas_size": _lane_canvas(case, config, reference["path"], repo_root),
                 "include_antialiasing": config["include_antialiasing"],
                 # The fixture applies the rule to the Geode comparison against the vendored
-                # resvg reference only, never against a custom golden.
+                # resvg reference or a shared golden, never against a Geode golden;
+                # quarter_pixel_edge_violations limits shared goldens to quantized ones.
                 "quarter_pixel_edge_coverage": (
                     geode and config["geode_quarter_pixel_edge_coverage"]
-                    and not config["geode_golden"] and not config["shared_golden"]
+                    and not config["geode_golden"]
                 ),
                 "max_pixels": _lane_budget(config, lane),
                 "threshold": config["threshold"],
@@ -1631,10 +1632,12 @@ def skip_ratchet_violations(
 
 
 # Every active row whose Geode comparison accepts quarter-pixel edge coverage differences
-# (`withGeodeQuarterPixelEdgeCoverage()`). Its reference samples coverage on four sub-scanlines per
-# pixel, so its horizontal edges sit on quarter-pixel boundaries, while Geode renders exact
-# coverage; a row joins only when that difference is what takes its Geode comparison over the pixel
-# budget, and pixels the rule does not accept still count against that budget.
+# (`withGeodeQuarterPixelEdgeCoverage()`). Its reference (the vendored resvg PNG, or a Donner
+# software rendering recorded in the golden README's quarter-pixel quantized table) samples
+# coverage on four sub-scanlines per pixel, so its horizontal edges sit on quarter-pixel
+# boundaries, while Geode renders exact coverage; a row joins only when that difference is what
+# takes its Geode comparison over the pixel budget, and pixels the rule does not accept still count
+# against that budget.
 # //tools/resvg_parity:parity_report_tests enforces in CI that this list equals the opted-in rows.
 # That it only shrinks is a review rule: a new entry needs maintainer approval in the pull request
 # that adds it, and a row whose Geode comparison passes without the rule leaves it.
@@ -1647,6 +1650,7 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/alignment-baseline/central.svg",
     "text/alignment-baseline/hanging-and-baseline-shift-eq-20-on-tspan.svg",
     "text/alignment-baseline/hanging-on-tspan.svg",
+    "text/alignment-baseline/hanging-on-vertical.svg",
     "text/alignment-baseline/hanging-with-underline.svg",
     "text/alignment-baseline/hanging.svg",
     "text/alignment-baseline/inherit.svg",
@@ -1701,6 +1705,7 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/letter-spacing/5percent.svg",
     "text/letter-spacing/mixed-spacing.svg",
     "text/letter-spacing/normal.svg",
+    "text/text-anchor/coordinates-list.svg",
     "text/text-anchor/end-on-text.svg",
     "text/text-anchor/end-with-letter-spacing.svg",
     "text/text-anchor/inheritance-1.svg",
@@ -1814,22 +1819,31 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
 
 QUARTER_PIXEL_EDGE_RULE = (
     "the quarter-pixel edge coverage rule applies only to the Geode comparison of a row whose "
-    "reference is quarter-pixel quantized, against that reference, with anti-aliasing detection "
-    "on; it needs maintainer approval to join QUARTER_PIXEL_EDGE_ALLOWLIST "
+    "reference is quarter-pixel quantized (its vendored resvg reference or a golden the golden "
+    "README records as a Donner software rendering), against that reference, with anti-aliasing "
+    "detection on; it needs maintainer approval to join QUARTER_PIXEL_EDGE_ALLOWLIST "
     "(donner/svg/renderer/tests/README_resvg_test_suite.md)"
 )
 
 
-def _edge_coverage_lane_violation(path: str, geode: dict[str, object]) -> str | None:
+def _edge_coverage_lane_violation(
+    path: str, geode: dict[str, object], quantized_goldens: frozenset[str]
+) -> str | None:
     """Return why an opted-in row's Geode lane cannot apply the edge coverage rule, if it cannot."""
 
     if geode["configured_state"] != "compare":
         return (f"{path}: the Geode lane does not compare, so the quarter-pixel edge coverage rule "
                 "has no effect; remove it")
     if not geode["settings"]["quarter_pixel_edge_coverage"]:
-        return (f"{path}: the Geode lane compares against a custom golden, not the vendored "
-                "quarter-pixel quantized resvg reference; remove the quarter-pixel edge coverage "
-                "rule")
+        return (f"{path}: the Geode lane compares against a Geode golden, which is not "
+                "quarter-pixel quantized; remove the quarter-pixel edge coverage rule")
+    reference = geode["settings"]["reference"]
+    if (reference["provenance_catalog"] == GOLDEN_README.as_posix()
+            and reference["path"] not in quantized_goldens):
+        return (f"{path}: the Geode lane compares against {reference['path']}, which the "
+                f"{QUANTIZED_GOLDEN_HEADING!r} table in {GOLDEN_README} does not record as a "
+                "quarter-pixel quantized Donner software rendering; remove the quarter-pixel edge "
+                "coverage rule")
     if geode["settings"]["include_antialiasing"]:
         return (f"{path}: the quarter-pixel edge coverage rule needs anti-aliasing detection, "
                 "which includeAntiAliasingDifferences() turns off")
@@ -1837,13 +1851,18 @@ def _edge_coverage_lane_violation(path: str, geode: dict[str, object]) -> str | 
 
 
 def quarter_pixel_edge_violations(
-    report: dict[str, object], allowlist: Iterable[str] = QUARTER_PIXEL_EDGE_ALLOWLIST
+    report: dict[str, object],
+    quantized_goldens: Iterable[str],
+    allowlist: Iterable[str] = QUARTER_PIXEL_EDGE_ALLOWLIST,
 ) -> list[str]:
     """Return rows whose quarter-pixel edge coverage opt-in breaks QUARTER_PIXEL_EDGE_ALLOWLIST.
 
-    An opted-in row must be listed, compare on the Geode lane with the rule in effect, and keep
+    An opted-in row must be listed, compare on the Geode lane with the rule in effect against its
+    vendored reference or a golden in \p quantized_goldens (see quantized_goldens()), and keep
     anti-aliasing detection on, which the rule extends. A listed row must still opt in.
     """
+
+    quantized = frozenset(quantized_goldens)
 
     allowed = set(allowlist)
     opted_in = {
@@ -1855,7 +1874,7 @@ def quarter_pixel_edge_violations(
         f"{path}: not in QUARTER_PIXEL_EDGE_ALLOWLIST; {QUARTER_PIXEL_EDGE_RULE}"
         for path in opted_in if path not in allowed
     ]
-    lane_violations = (_edge_coverage_lane_violation(path, case["lanes"]["geode"])
+    lane_violations = (_edge_coverage_lane_violation(path, case["lanes"]["geode"], quantized)
                        for path, case in opted_in.items())
     violations += [violation for violation in lane_violations if violation]
     violations += [
@@ -1874,13 +1893,9 @@ def quarter_pixel_edge_violations(
 # request that adds it.
 GEODE_GATE_ALLOWLIST: frozenset[str] = frozenset({
     "painting/marker/with-a-text-child.svg",
-    "painting/stroke/linear-gradient-on-text.svg",
-    "painting/stroke/radial-gradient-on-text.svg",
-    "text/alignment-baseline/hanging-on-vertical.svg",
     "text/font-size/named-value.svg",
     "text/font-variant/inherit.svg",
     "text/font-variant/small-caps.svg",
-    "text/text-anchor/coordinates-list.svg",
     "text/text-decoration/tspan-decoration.svg",
     "text/text-decoration/underline-with-dy-list-2.svg",
     "text/textPath/with-filter.svg",
@@ -1935,6 +1950,8 @@ def geode_gate_violations(
 GOLDEN_ROOT = Path("donner/svg/renderer/testdata/golden")
 GOLDEN_README = GOLDEN_ROOT / "README.md"
 GOLDEN_DIGEST_HEADING = "## Registered golden digests"
+QUANTIZED_GOLDEN_HEADING = "## Quarter-pixel quantized goldens"
+QUANTIZED_GOLDEN_RENDERER = "Donner software renderer"
 _SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
 
 
@@ -1981,6 +1998,48 @@ def _golden_digest_violation(
     if any(token in row and digest not in _SHA256.findall(row) for row in rows):
         return f"{golden}: a {GOLDEN_README} row names it without its current SHA-256 {digest}"
     return None
+
+
+def quantized_goldens_from_readme(readme: str) -> frozenset[str]:
+    """Return the goldens the README's quarter-pixel quantized table records, as repository paths.
+
+    Each table row names a golden relative to the golden directory in backticks in its first cell
+    and its renderer in the second. Only Donner's software renderer samples coverage on four
+    sub-scanlines per pixel as the resvg references do, so any other renderer is an error rather
+    than an entry.
+    """
+
+    lines = readme.splitlines()
+    if lines.count(QUANTIZED_GOLDEN_HEADING) != 1:
+        raise ParityReportError(f"{GOLDEN_README} needs one {QUANTIZED_GOLDEN_HEADING!r} section")
+    start = lines.index(QUANTIZED_GOLDEN_HEADING) + 1
+    end = next((index for index in range(start, len(lines)) if lines[index].startswith("## ")),
+               len(lines))
+    goldens: set[str] = set()
+    for line in lines[start:end]:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if not line.lstrip().startswith("|") or len(cells) < 2:
+            continue
+        match = re.fullmatch(r"`([^`]+\.png)`", cells[0])
+        if match is None:
+            continue
+        if cells[1] != QUANTIZED_GOLDEN_RENDERER:
+            raise ParityReportError(
+                f"{GOLDEN_README}: {cells[0]} in {QUANTIZED_GOLDEN_HEADING!r} names renderer "
+                f"{cells[1]!r}; only {QUANTIZED_GOLDEN_RENDERER!r} renderings are quarter-pixel "
+                "quantized")
+        goldens.add((GOLDEN_ROOT / match.group(1)).as_posix())
+    return frozenset(goldens)
+
+
+def quantized_goldens(repo_root: Path) -> frozenset[str]:
+    """Return the quarter-pixel quantized goldens recorded in the repository's golden README."""
+
+    try:
+        readme = (repo_root / GOLDEN_README).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read golden README: {error}") from error
+    return quantized_goldens_from_readme(readme)
 
 
 def golden_documentation_violations(report: dict[str, object], repo_root: Path) -> list[str]:
@@ -2622,8 +2681,7 @@ def _check_edge_coverage_rule(fixture: str) -> None:
         r"bool acceptsQuarterPixelEdgeCoverage\(const ImageComparisonParams& params, "
         r"ComparisonMode mode\) \{\s*"
         r"return params\.geodeQuarterPixelEdgeCoverage && mode == ComparisonMode::GeodeGolden &&"
-        r"\s*params\.overrideGoldenFilename\.empty\(\) && "
-        r"params\.geodeOverrideGoldenFilename\.empty\(\);\s*\}",
+        r"\s*params\.geodeOverrideGoldenFilename\.empty\(\);\s*\}",
         fixture,
     )
     passed = re.search(

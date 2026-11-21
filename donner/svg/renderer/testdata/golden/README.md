@@ -363,6 +363,52 @@ Corpus `fonts/NotoSans-Regular.ttf` SHA-256
 | Linear | `2f16b9c4f8c9023d3e1cc131514084d27da62e6c76ea918cba379766d2686a62` | `24b2bc34651ec46cdee7e49450e832916b1f0666bbb5cd20e3b543f93f55fdd4` |
 | Radial | `aaa4629608d0bba3aab4d50c8be80410f6c5d8038e56dc03c787330e2e61c45b` | `40695b1c5ff590b5367bd645e62dedb9855d4a3a8a7c1bafed16f424fb73dfd1` |
 
+### Geode goldens for the gradient strokes
+
+`geode/painting_stroke_linear-gradient-on-text.png` and
+`geode/painting_stroke_radial-gradient-on-text.png` are the Geode renderings of the two unchanged
+corpus files at 500 x 500, written by the resvg suite harness with simple text on software Vulkan
+(Mesa lavapipe). Only the `GeodeGolden` comparison uses them; the CPU comparison keeps the Firefox
+images above.
+
+Against the Firefox images Geode counts 511 (linear) and 497 (radial) pixels at the default
+settings, on both software Vulkan and Metal. They lie on glyph edges of the stroked text, and at all
+but one (linear) and two (radial) of them the straight colors agree within 8 levels: only the alpha
+differs. Firefox, like Donner's software renderer, samples coverage on sub-scanlines: at 474 of the
+511 linear pixels and 461 of the 497 radial pixels the software renderer's alpha is within 8 levels
+of Firefox's. A thin gap that the stroke leaves open by half a pixel, for example, is 192 and 192
+in both sampled renderings and 217 and 166 on Geode.
+
+An area-coverage control compares the two kinds of coverage. The software renderer draws each fixture
+at 4000 x 4000, and averaging each 8 x 8 block gives a coverage sampled on 32 sub-scanlines per
+output pixel instead of 4. At the pixels Geode counts, Geode's alpha is within 8 levels of the
+control at 365 of 511 (linear) and 347 of 497 (radial), with mean differences of 6.1 and 6.2
+levels. Firefox's is within 8 levels at 152 and 153, with a mean of 18.6, and the software
+renderer's at 162 and 170, with a mean of 17.8 and 17.1. Geode's coverage is closer to the control
+than either sub-scanline rendering.
+
+With these goldens the Geode lane of the two rows is a regression check against Geode's own
+rendering, not an independent comparison; the CPU lane keeps the independent comparison with the
+Firefox images.
+
+The Linux renderings are the goldens. Metal's renderings differ from them in 3 (linear) and 4
+(radial) pixels, by at most 2 and 5 levels, and its comparison against them counts 0 pixels at the
+default threshold and 100-pixel allowance, as software Vulkan's does.
+
+To regenerate, delete a file and run from the repository root on Linux with the lavapipe ICD:
+
+```sh
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run --config=geode \
+  //donner/svg/renderer/tests:resvg_test_suite_geode -- \
+  '--gtest_filter=PaintingStroke/*gradient_on_text_GeodeGolden'
+```
+
+| Golden | PNG SHA-256 |
+| --- | --- |
+| `geode/painting_stroke_linear-gradient-on-text.png` | `abb34a4510ae98c4c7545d8149d0a819e3f5fcd01037c4e08d8ac8e0a7c7ea5c` |
+| `geode/painting_stroke_radial-gradient-on-text.png` | `d80fc8c1d88df9e57484ebf839243fef522fcdd5872079903e1ce07046bc1891` |
+
 [svg2-bbox]: https://www.w3.org/TR/SVG2/coords.html#BoundingBoxes
 
 ## Gaussian blur primitive subregions
@@ -500,7 +546,9 @@ commit `21c59c75`. For `donner-named-value.png`, the black frame uses independen
 from `third_party/resvg-test-suite/reference-sources/named-value-frame.svg`. The source specifies
 an explicit outer rectangle and hole at eight times the final resolution. Averaging each 8x8
 block gives the frame coverage. Every pixel outside the frame preserves its original RGBA.
-Geode does not render these text rows.
+On Geode, `named-value-without-a-parent` compares with its golden at default settings, and
+`named-value` disables its Geode comparison (`GEODE_GATE_ALLOWLIST`): its area-averaged frame is
+not quarter-pixel quantized, so the edge coverage rule does not apply to it.
 
 Each row sizes rects of `10em` under the named `font-size` keywords. The em sizes in pixels,
 measured from the rect coverage (the SVG sets `font-size="12"` on the group):
@@ -692,8 +740,10 @@ background alone counts about 235,000 pixels. No resvg v0.49.0 reference fixes t
 upstream renderings at that release draw something different (see each row). The goldens are
 Donner renderings at commit `21c59c75`, made with the software renderer and simple text at
 default settings. Full text matches them within 1 pixel (0 on `coordinates-list`, 1 on each
-`with-path` row). Geode skips these rows ("Geode backend does not support text rendering"). A self-rendered golden cannot prove itself correct, so each row
-records the independent evidence.
+`with-path` row). On Geode, `coordinates-list` compares with its golden under the quarter-pixel
+edge coverage rule (see "Quarter-pixel quantized goldens"), and the two `with-path` rows compare at
+default settings. A self-rendered golden cannot prove itself correct, so each row records the
+independent evidence.
 
 ### `text/text-anchor/coordinates-list`
 
@@ -1065,7 +1115,7 @@ document's root styles, keep the canvas transparent, and match the same text wri
 `font` shorthand is not among them, so the attribute is ignored and the text draws in the initial
 font: the initial `font-family`, `serif`, which the suite harness maps to Noto Serif, at the initial
 font size. The vendored PNG applies the attribute as SVG 1.1 did and draws bold italic Noto Sans
-at 64 units. Geode does not run `text/` rows.
+at 64 units. Geode compares this row with the golden at default settings.
 
 Independent evidence: `RendererRegressionTests.ReferenceContractFontAttributeIsIgnored` requires
 text with a `font` attribute to match the same text without it.
@@ -1078,8 +1128,7 @@ glyphs to use the font's vertical metrics, and Mplus 1p has `vhea` and `vmtx`: e
 advances 1000 units and has its vertical origin 860 units below the top of its cell. SVG 2 section
 11.8.3 (text on a path layout rules) places each glyph on the path by that vertical advance. The
 vendored PNG puts upright glyphs elsewhere; it differs from Donner by 219 pixels (simple text) and
-221 (full text). Both text tiers compare with the golden at default settings; Geode does not run
-`text/` rows.
+221 (full text). Both text tiers and Geode compare with the golden at default settings.
 
 Independent evidence: `VerticalTextPathPrecision.CurvedCjkUsesIndependentArcFrames` renders this
 path and text and requires it to match each glyph drawn as horizontal text in an independently
@@ -1120,7 +1169,7 @@ the plain "Text" reference of `tspan/with-clip-path`, `tspan/with-mask` and othe
 9,168 pixels on simple text. The suite's results.csv records Chrome and Safari passing the vendored
 PNGs of both rows and Firefox and resvg failing them; those are visual grades, which cannot see a
 0.25 px edge offset. The full text tier matches both goldens with no differing pixel at default
-settings; Geode does not run `text/` rows.
+settings. Geode disables its comparison of both rows (`GEODE_GATE_ALLOWLIST` in `parity_report.py`).
 
 Independent evidence: `GlyphInkAreaTest.RenderedInkEqualsExactOutlineArea`
 (`//donner/svg/renderer/tests:glyph_ink_area_tests`, on both renderers and both text tiers) requires
@@ -1403,6 +1452,39 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
 
 PNG SHA-256: `871da8f754631be06f0c5dd6d81ac07b4ca10287845f67ecc29f3796a131a718`.
 
+## Quarter-pixel quantized goldens
+
+The goldens below are Donner software renderer (TinySkia) renderings. That renderer samples
+coverage on four sub-scanlines per pixel, as resvg does, so a horizontal edge lands on a
+quarter-pixel row and its edge pixel stores 64, 128 or 192 of 255. The Geode comparison of a row
+that compares against one of them may opt into the quarter-pixel edge coverage rule
+(`README_resvg_test_suite.md` in `donner/svg/renderer/tests`); `parity_report.py` reads this table
+and rejects an opted-in row whose golden is not listed here, so a Firefox, area-averaged or Geode
+golden cannot use the rule.
+
+The measurement takes the pixels where the golden and Geode's rendering differ and that both cover
+partially, that meet the rule's vertical-neighbor condition in the golden (the pixel above or
+below is empty or fully covered, and neither has its alpha), outside runs of 40 or more pixels
+of one alpha (the crosshair and guide lines). It counts how many of the golden's alphas, and of
+Geode's, are a multiple of 64. On the vendored references of five opted-in rows
+(`text/alignment-baseline/hanging`, `text/text-anchor/inheritance-1`,
+`text/text-decoration/line-through`, `text/tspan/xml-space-1`, `text/writing-mode/rl`) the share is
+0.43 to 0.63, and on Geode's renderings 0.002 to 0.008: an edge pixel of a slanted or curved edge
+is not quantized, a horizontal one is. Geode counts are on Metal.
+
+| Golden | Renderer | Quantized share (golden / Geode) | Geode pixels counted without and with the rule | PNG SHA-256 |
+| --- | --- | --- | --- | --- |
+| `donner-coordinates-list.png` | Donner software renderer | 0.55 / 0.005 of 608 | 392 / 0 | `f036660ed5d2f21cbbedbbba1f04c8aa94f31cc33958a3dd63e5cf13bb52f5bb` |
+| `resvg-hanging-on-vertical.png` | Donner software renderer | 0.66 / 0.003 of 1,186 | 415 / 12 | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
+
+Two custom goldens of rows whose Geode comparison is gated are not quantized:
+`donner-named-value.png`, whose frame is an exact 8x8 area average (0.10 / 0.039 of 1,088), and
+`donner-textPath-with-filter.png`, whose glyph edges are blurred (0.011 / 0.015 of 2,581). The
+Firefox gradient-stroke images are browser renderings, which this table does not admit; their rows
+compare Geode with Geode goldens instead (see "Geode goldens for the gradient strokes"). `donner-tspan-with-filter.png` is a Donner software rendering, but its
+Geode difference lies on the crosshair beside the partially covered blurred text, which the rule
+counts, so its row does not opt in.
+
 ## Registered golden digests
 
 Every golden that `donner/svg/renderer/tests/resvg_test_suite.cc` compares against is listed here
@@ -1449,6 +1531,8 @@ regenerates or adds a golden.
 | `geode/donner-color-adjust-functions-50percent.png` | `d17790f2c6ee6d19c152cc42f932ca44740f6076eb34a49248fb21ac9fdfa3bc` | Color-adjust filter references |
 | `geode/donner-color-adjust-functions-negative.png` | `21ac65ab93ac649542f122e75ea04b88db85a9abb11970da46729b14301014d8` | Color-adjust filter references |
 | `geode/filters_feGaussianBlur_complex-transform.png` | `871da8f754631be06f0c5dd6d81ac07b4ca10287845f67ecc29f3796a131a718` | Geode feGaussianBlur complex-transform golden |
+| `geode/painting_stroke_linear-gradient-on-text.png` | `abb34a4510ae98c4c7545d8149d0a819e3f5fcd01037c4e08d8ac8e0a7c7ea5c` | Gradient strokes on text |
+| `geode/painting_stroke_radial-gradient-on-text.png` | `d80fc8c1d88df9e57484ebf839243fef522fcdd5872079903e1ce07046bc1891` | Gradient strokes on text |
 | `resvg-all-types-inline-bands.png` | `4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911` | Inline text decoration |
 | `resvg-closed-path.png` | `284366764d62e3c5a25f43b30ee3b8f115761e3b03dac6f0257d44fa54d00706` | textPath/closed-path references |
 | `resvg-complex-graphemes-and-coordinates-list.png` | `0c37edfeafdd94c8a9b8414f1c5794fee897b933a0dbd6a3e1ad8087bcba6b83` | Cyrillic combining mark position |
