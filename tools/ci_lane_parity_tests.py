@@ -2743,7 +2743,7 @@ class CiLaneParityTest(unittest.TestCase):
         manifest = self._coverage_manifest()
         jobs = _jobs(self.workflows["main.yml"])
         contract = jobs["coverage-contract"]
-        self.assertEqual(contract["runs-on"], "ubuntu-24.04")
+        self.assertEqual(contract["runs-on"], "ubuntu-26.04")
         self.assertIn("!cancelled() &&", contract["if"])
         self.assertIn("needs.gatekeeper.outputs.use_self_hosted_linux == 'true'", contract["if"])
         declared = {(c["job"], c["step"]) for c in self._counterparts(manifest)}

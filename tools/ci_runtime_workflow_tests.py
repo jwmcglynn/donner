@@ -320,7 +320,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_lint_runs_changed_files_on_a_shallow_hosted_checkout(self):
         job = self._job_body("lint", self.lint)
-        self.assertIn("runs-on: ubuntu-24.04", job)
+        self.assertIn("runs-on: ubuntu-26.04", job)
         self.assertNotIn("self-hosted", self.lint)
         self.assertEqual(self.lint.count("uses: actions/checkout@"), 1)
         self.assertIn("fetch-depth: 2", job)
@@ -1077,7 +1077,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertNotIn("cmake_consumer.sh build", self.main)
         linux = self._job_body("linux", self.cmake)
         macos = self._job_body("macos", self.cmake)
-        self.assertIn("runs-on: ubuntu-24.04", linux)
+        self.assertIn("runs-on: ubuntu-26.04", linux)
         self.assertIn("run: tools/ci/cmake_consumer.sh build --check --ccache", linux)
         self.assertIn("runs-on: xcode-27", macos)
         self.assertIn("run: tools/ci_select_macos_xcode.sh", macos)
