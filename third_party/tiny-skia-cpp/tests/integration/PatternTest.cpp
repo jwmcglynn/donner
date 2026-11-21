@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <utility>
@@ -43,14 +44,15 @@ TEST(PatternTest, NearestSourceOverPreservesOpaqueDestinationAcrossBatches) {
   constexpr int width = 37;
   auto tile = Pixmap::fromSize(width, 1);
   auto destination = Pixmap::fromSize(width, 1);
-  ASSERT_TRUE(tile && destination);
+  ASSERT_THAT(tile, testing::Optional(testing::_));
+  ASSERT_THAT(destination, testing::Optional(testing::_));
   // Alternate transparent and half-transparent red texels so the opaque-copy shortcut cannot apply.
   for (int x = 1; x < width; x += 2) {
     tile->data()[x * 4] = 128;
     tile->data()[x * 4 + 3] = 128;
   }
   const auto rect = Rect::fromLTRB(0, 0, width, 1);
-  ASSERT_TRUE(rect);
+  ASSERT_THAT(rect, testing::Optional(testing::_));
   for (const SpreadMode mode : {SpreadMode::Pad, SpreadMode::Repeat}) {
     for (const auto [opacity, red] : {std::pair{1.0f, 128}, std::pair{0.5f, 64},
                                       std::pair{0.19f, 25}}) {
