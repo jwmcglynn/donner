@@ -801,7 +801,7 @@ def donner_cc_test(
                 **forwarded
             )
 
-def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linkopts = [], deps = [], tags = [], wallclock_tags = [], correctness_shard_count = None, **kwargs):
+def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linkopts = [], deps = [], tags = [], wallclock_tags = [], correctness_shard_count = None, wallclock_timeout = None, **kwargs):
     """
     Create paired correctness and wall-clock cc_tests with donner defaults.
 
@@ -821,6 +821,8 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
       wallclock_tags: Additional tags applied only to the wall-clock target.
       correctness_shard_count: Optional `shard_count` for the correctness target only, which
         leaves the wall-clock target in one process so its timings stay comparable.
+      wallclock_timeout: Optional timeout for the entire wall-clock test process, including
+        setup, warmup, and work between samples.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     if not correctness_srcs:
@@ -851,13 +853,16 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
         **correctness_kwargs
     )
 
+    wallclock_kwargs = dict(kwargs)
+    if wallclock_timeout != None:
+        wallclock_kwargs["timeout"] = wallclock_timeout
     donner_cc_test(
         name = name + "_wallclock",
         srcs = srcs + wallclock_srcs,
         linkopts = linkopts,
         deps = deps,
         tags = generated_wallclock_tags,
-        **kwargs
+        **wallclock_kwargs
     )
 
 def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, variant_neutral = None, **kwargs):
