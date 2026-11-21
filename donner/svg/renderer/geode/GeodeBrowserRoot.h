@@ -42,9 +42,6 @@ struct GeodeGpuRootCapabilities {
 /// Owns the browser GPU device and loss condition shared by logical Geode contexts.
 class GeodeGpuRoot {
 public:
-  /// Whether frame admission must bound the number of outstanding submissions on this backend.
-  [[nodiscard]] bool limitsFrameSubmissions() const { return false; }
-
   /// Retain the selected GPU root, its capabilities, and shared device-loss state.
   /// @param capabilities Capabilities exposed by the selected root.
   /// @param lostState Shared loss condition observed by logical devices.

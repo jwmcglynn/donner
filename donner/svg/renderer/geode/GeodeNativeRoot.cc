@@ -215,15 +215,6 @@ GeodeGpuRoot::GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
   capabilities_.backend = GpuBackendKind::External;
 }
 
-bool GeodeGpuRoot::limitsFrameSubmissions() const {
-#if defined(__linux__)
-  if (capabilities_.backend == GpuBackendKind::NativeVulkan) {
-    return vulkanRoot_ && vulkanRoot_->isDiscreteGpu();
-  }
-#endif
-  return capabilities_.backend == GpuBackendKind::NativeMetal;
-}
-
 bool GeodeGpuRoot::hasBackendDevice() const {
   if (capabilities_.backend == GpuBackendKind::NativeVulkan) {
     return vulkanRoot_ != nullptr;

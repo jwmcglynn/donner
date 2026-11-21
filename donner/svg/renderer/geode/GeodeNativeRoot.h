@@ -54,9 +54,6 @@ struct GeodeRuntimeDevice;
 /// Retains a native GPU owner and the loss condition shared by logical contexts.
 class GeodeGpuRoot {
 public:
-  /// Whether frame admission must bound the number of outstanding submissions on this backend.
-  [[nodiscard]] bool limitsFrameSubmissions() const;
-
   /// Retains a selected native backend; the external kind is refused, because only an adopted
   /// \ref GeodeRuntimeDeviceSource can open its devices.
   /// @param capabilities Capabilities of the selected native backend.

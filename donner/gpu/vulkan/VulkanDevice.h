@@ -59,9 +59,6 @@ public:
   /// Largest 2D texture dimension reported by this root's physical device.
   uint32_t maxTextureDimension2D() const;
 
-  /// Whether the selected physical device reports a discrete GPU.
-  bool isDiscreteGpu() const;
-
   /// Sticky loss condition shared by every runtime device opened over this root.
   const std::shared_ptr<DeviceLostState>& lostState() const;
 
@@ -497,7 +494,6 @@ public:
     void* device;               //!< Borrowed VkDevice.
     void* queue;                //!< Borrowed VkQueue.
     uint32_t queueFamilyIndex;  //!< Family of the borrowed queue.
-    void* physicalDevice;       //!< Selected adapter, for independent driver property checks.
   };
 
   /// Returns borrowed native objects solely for deterministic backend synchronization tests.

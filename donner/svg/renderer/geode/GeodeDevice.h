@@ -287,9 +287,8 @@ public:
   GpuWaitResult waitForQueueIdle(
       std::chrono::milliseconds stallBound = kDefaultGpuWaitTimeout) const;
 
-  /// On native Metal and discrete Vulkan GPUs, admit frame work below three outstanding
-  /// submissions. Waits only for the oldest serial needed to make room. Other backends keep their
-  /// own pacing.
+  /// On native Metal, admit frame work only when fewer than three submissions remain outstanding.
+  /// Waits only for the oldest serial needed to make room. Other backends keep their own pacing.
   /// @return False if the queue reported a failure or stopped progressing.
   bool waitForFrameSubmissionRoom() const;
 

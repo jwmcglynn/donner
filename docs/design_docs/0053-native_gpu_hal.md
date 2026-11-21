@@ -101,11 +101,7 @@ The maintainer decided:
   splash workload also drained within this bound on Apple silicon.
   [#1697](https://github.com/jwmcglynn/donner/issues/1697)
 - [#1719](https://github.com/jwmcglynn/donner/issues/1719): find why a discrete Vulkan GPU's
-  driver reported device loss in the same drain. Discrete Vulkan adapters now use the same
-  three-submission limit. The workload drained four times on a discrete Vulkan GPU.
-  `//donner/svg/renderer/geode:geode_device_tests` checks the selected adapter policy in
-  `GeodeNativeVulkanRoot.DiscreteFrameAdmissionRetiresOnlyTheOldestSubmission`. The original
-  driver-reported device loss remains unexplained.
+  driver reported device loss in the same drain.
 - [#1721](https://github.com/jwmcglynn/donner/issues/1721): build Geode and the native GPU runtime
   through the generated CMake build.
 - [#1634](https://github.com/jwmcglynn/donner/issues/1634): the Firefox Geode lane intermittently
