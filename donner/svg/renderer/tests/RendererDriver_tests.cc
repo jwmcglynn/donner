@@ -2079,6 +2079,37 @@ TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation)
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 13u);
 }
 
+TEST_F(RendererDriverTest, FilterSpaceCaptureRequiresDeviceIndependentSource) {
+  struct Scene {
+    std::string_view child;
+    bool eligible;
+  };
+  const std::array scenes{
+      Scene{R"svg(<rect x="10" y="10" width="24" height="24" fill="blue"/>)svg", true},
+      Scene{R"svg(<rect x="10" y="10" width="24" height="24" stroke-width="2" stroke="blue"
+                       vector-effect="non-scaling-stroke"/>)svg",
+            false},
+      Scene{R"svg(<rect x="10" y="10" width="24" height="24" fill="blue" opacity="0.5"/>)svg",
+            false},
+  };
+  for (const auto& scene : scenes) {
+    SCOPED_TRACE(scene.child);
+    SVGDocument document = makeDocument(std::string(R"svg(
+          <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+            <feGaussianBlur stdDeviation="2"/>
+          </filter>
+          <g transform="skewX(30)" filter="url(#f)">)svg") +
+                                        std::string(scene.child) + "</g>");
+    EXPECT_CALL(
+        renderer,
+        pushFilterLayer(
+            testing::Field(&components::FilterGraph::canCaptureSourceInFilterSpace, scene.eligible),
+            _));
+    driver.draw(document);
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&renderer));
+  }
+}
+
 TEST_F(RendererDriverTest, DrawEntityRangePreservesReferencedFilterStages) {
   SVGDocument document = makeDocument(R"svg(
     <rect x="10" y="20" width="40" height="10" fill="red" />
