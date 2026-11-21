@@ -97,6 +97,10 @@ class WorkflowTargetsTest(unittest.TestCase):
         native = source.split("      - name: Test Linux and macOS with native platform transitions", 1)[1]
         native = native.split("      - name:", 1)[0]
         self.assertIn("if: needs.gatekeeper.outputs.unified_macos == 'true'", native)
+        # Queries select affected labels. All configured build and test work shares one invocation.
+        commands = re.findall(r"\bbazel(?:isk)?\s+(?:--[^\s]+\s+)*(build|test)\b",
+                              native.replace("\\\n", " "))
+        self.assertEqual(commands, ["test"])
         self.assertIn("RUN_METAL: ${{ needs.determine-targets.outputs.metal_affected == 'true' || "
                       "needs.determine-targets.outputs.fallback == 'true' }}", native)
         self.assertIn('if [[ "$RUN_METAL" == true ]]; then', native)
