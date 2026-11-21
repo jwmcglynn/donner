@@ -226,6 +226,32 @@ test("destroying a surface unconfigures the canvas context it held", async () =>
   assert.equal(bridge.objects(kDevice).has(id), false);
 });
 
+test("rebuilding a surface reuses the context of that canvas only", async () => {
+  const { bridge, canvas, id } = await surfaceBridge();
+  const { entryPoints, state } = bridge;
+  const selector = bridge.string("#canvas");
+  const create = (surfaceId) =>
+    entryPoints.donner_gpu_create_surface(kDevice, surfaceId, selector.pointer, selector.length);
+
+  assert.equal(entryPoints.donner_gpu_destroy_object(kDevice, state.kSurface, id), state.kSuccess);
+  assert.equal(canvas.context.unconfigureCount, 1);
+  canvas.getContext = () => {
+    throw new Error("cannot obtain the existing OffscreenCanvas context again");
+  };
+  assert.equal(create(2), state.kSuccess);
+  assert.equal(bridge.objects(kDevice).get(2).object.context, canvas.context);
+  assert.equal(
+    configure(bridge, 2, { width: 8, height: 8 }, state.kAlphaModeOpaque),
+    state.kSuccess,
+  );
+  assert.equal(entryPoints.donner_gpu_destroy_object(kDevice, state.kSurface, 2), state.kSuccess);
+  assert.equal(canvas.context.unconfigureCount, 2);
+
+  const replacement = bridge.addCanvas("#canvas");
+  assert.equal(create(3), state.kSuccess);
+  assert.equal(bridge.objects(kDevice).get(3).object.context, replacement.context);
+});
+
 test("destroying a surface drops a frame identifier it still named", async () => {
   const { bridge, id } = await surfaceBridge();
   assert.equal(
