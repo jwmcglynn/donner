@@ -1493,7 +1493,6 @@ def golden_reason_violations(report: dict[str, object]) -> list[str]:
 # the row back from the change until it is fixed.
 PIXEL_BUDGET_RATCHET_LIMIT = DEFAULT_MAX_PIXELS
 PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
-    "painting/marker/with-an-image-child.svg": {"geode": 500},
     "text/font-variant/inherit.svg": {"default_text": 1200},
     "text/font-variant/small-caps.svg": {"default_text": 1200},
 }

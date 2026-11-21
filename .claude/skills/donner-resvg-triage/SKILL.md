@@ -141,14 +141,15 @@ divergence with, in order of preference:
 1. Fix the backend bug (default answer).
 2. `.disableBackend(RendererBackend::Geode, "reason")` — for features one backend doesn't
    implement yet; the other backend still gates.
-3. `.withGeodeMaxPixelsDifferent(px)` — a Geode-mode-only mismatch budget; `TinyGolden` keeps the
-   strict budget, so the healthy backend is not blinded (e.g. `with-an-image-child.svg` in the
-   `painting/marker` block: default shared budget, 500 px on Geode, with the measured counts per
-   Geode lane in its comment).
-4. `.withGeodeGoldenOverride("donner/svg/renderer/testdata/golden/geode/<name>.png", "reason")` —
+3. `.withGeodeMaxPixelsDifferent(px)` - a Geode-mode-only mismatch budget; `TinyGolden` keeps the
+   strict budget, so the healthy backend is not blinded. No resvg row uses one at present; a budget
+   above the default needs maintainer approval in `PIXEL_BUDGET_ALLOWLIST`, and a budget in the
+   hundreds is not an acceptable end state.
+4. `.withGeodeGoldenOverride("donner/svg/renderer/testdata/golden/geode/<name>.png", "reason")` -
    ONLY for a verified-correct Geode output that differs from the shared golden by a genuine
-   sub-pixel analytic difference (e.g. 8-bit filter-intermediate precision). TinyGolden still uses
-   the shared golden.
+   sub-pixel analytic difference (e.g. 8-bit filter-intermediate precision, or
+   `painting/marker/with-an-image-child.svg`, where the reference draws 0.4 px strokes as
+   width-scaled hairlines). TinyGolden still uses the shared golden.
 
 Never widen the shared threshold to absorb a one-backend diff — that blinds the healthy backend.
 
