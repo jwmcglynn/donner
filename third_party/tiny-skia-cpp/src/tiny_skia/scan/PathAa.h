@@ -11,7 +11,8 @@ namespace tiny_skia {
 namespace scan {
 namespace path_aa {
 
-void fillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clip, Blitter& blitter);
+void fillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clip, Blitter& blitter,
+              const Rect* deviceAaClip = nullptr);
 
 void fillPathImpl(const Path& path, FillRule fillRule, const IntRect& bounds,
                   const ScreenIntRect& clipRect, std::int32_t startY, std::int32_t stopY,

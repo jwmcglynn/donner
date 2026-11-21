@@ -250,7 +250,7 @@ void Painter::fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint&
 
 void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                        FillRule fillRule, Transform transform, const Mask* mask,
-                       BlitterWrapper* wrapper) {
+                       BlitterWrapper* wrapper, const Rect* deviceAaClip) {
   if (transform.isIdentity()) {
     // Skip empty paths and horizontal/vertical lines.
     const auto pathBounds = path.bounds();
@@ -267,6 +267,17 @@ void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint&
       auto paintCopy = paint;
 
       while (auto tile = tiler->next()) {
+        const auto tileLeft = static_cast<float>(tile->x());
+        const auto tileTop = static_cast<float>(tile->y());
+        const auto tileAaClip =
+            deviceAaClip
+                ? Rect::fromLTRB(deviceAaClip->left() - tileLeft, deviceAaClip->top() - tileTop,
+                                 deviceAaClip->right() - tileLeft, deviceAaClip->bottom() - tileTop)
+                : std::nullopt;
+        if (deviceAaClip && !tileAaClip) {
+          continue;
+        }
+
         const auto ts = Transform::fromTranslate(-static_cast<float>(tile->x()),
                                                  -static_cast<float>(tile->y()));
         auto transformed = pathCopy.transform(ts);
@@ -290,7 +301,8 @@ void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint&
 
         Blitter& target = selectBlitter(wrapper, *blitter, paintCopy);
         if (paintCopy.antiAlias) {
-          scan::path_aa::fillPath(pathCopy, fillRule, clipRect, target);
+          scan::path_aa::fillPath(pathCopy, fillRule, clipRect, target,
+                                  tileAaClip ? &*tileAaClip : nullptr);
         } else {
           scan::fillPath(pathCopy, fillRule, clipRect, target);
         }
@@ -315,7 +327,7 @@ void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint&
 
       Blitter& target = selectBlitter(wrapper, *blitter, paint);
       if (paint.antiAlias) {
-        scan::path_aa::fillPath(path, fillRule, clipRect, target);
+        scan::path_aa::fillPath(path, fillRule, clipRect, target, deviceAaClip);
       } else {
         scan::fillPath(path, fillRule, clipRect, target);
       }
@@ -330,7 +342,7 @@ void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint&
     transformShader(paintCopy.shader, transform);
 
     Painter::fillPath(pixmap, *transformed, paintCopy, fillRule, Transform::identity(), mask,
-                      wrapper);
+                      wrapper, deviceAaClip);
   }
 }
 
