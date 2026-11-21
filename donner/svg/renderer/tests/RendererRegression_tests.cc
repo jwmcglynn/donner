@@ -1942,6 +1942,92 @@ RendererBitmap RenderBackdropCase(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
+RendererBitmap RenderTinySkiaClipCase(std::string_view body) {
+  SVGDocument document = instantiateSubtree(body, {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+}
+
+TEST_F(RendererRegressionTests, CoincidentClipAndFillEdgesHaveSingleCoverage) {
+  const RendererBitmap expected =
+      RenderTinySkiaClipCase(R"svg(<rect x="8" y="8.5" width="24" height="17" fill="black"/>)svg");
+  const RendererBitmap clipPath = RenderTinySkiaClipCase(R"svg(
+    <clipPath id="box"><rect x="8" y="8.5" width="24" height="17"/></clipPath>
+    <g clip-path="url(#box)"><rect x="4" y="8.5" width="28" height="17"/></g>)svg");
+  const RendererBitmap viewport = RenderTinySkiaClipCase(R"svg(
+    <svg x="8" y="8.5" width="24" height="17" overflow="hidden">
+      <rect width="24" height="17"/>
+    </svg>)svg");
+  EXPECT_THAT(PixelAt(expected, 16, 8), testing::ElementsAre(0, 0, 0, 128));
+  editor::tests::CompareBitmapToBitmap(clipPath, expected, "coincident_clip_path",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(viewport, expected, "coincident_viewport_clip",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, FractionalRectangularClipUsesGeometricIntersection) {
+  struct Scene {
+    std::string_view label;
+    std::string_view clipped;
+    std::string_view expected;
+  };
+  const std::array scenes{
+      Scene{"partial",
+            R"svg(<clipPath id="c"><rect x="8.25" y="7.75" width="11" height="5"/></clipPath>
+                  <rect x="7.75" y="8.25" width="10.5" height="6" clip-path="url(#c)"/>)svg",
+            R"svg(<rect x="8.25" y="8.25" width="10" height="4.5"/>)svg"},
+      Scene{"disjoint_inside_one_pixel",
+            R"svg(<clipPath id="c"><rect x="8.625" y="8" width="0.25" height="4"/></clipPath>
+                  <rect x="8.125" y="8" width="0.25" height="4" clip-path="url(#c)"/>)svg",
+            ""},
+      Scene{"crossed_nested_clips",
+            R"svg(<clipPath id="a"><rect x="8.25" y="4" width="9.5" height="20"/></clipPath>
+                  <clipPath id="b"><rect x="4" y="8.5" width="20" height="3"/></clipPath>
+                  <g clip-path="url(#a)"><g clip-path="url(#b)">
+                  <rect x="8.25" y="8.5" width="9.5" height="8"/>
+                  </g></g>)svg",
+            R"svg(<rect x="8.25" y="8.5" width="9.5" height="3"/>)svg"},
+  };
+  for (const Scene& scene : scenes) {
+    SCOPED_TRACE(scene.label);
+    editor::tests::CompareBitmapToBitmap(RenderTinySkiaClipCase(scene.clipped),
+                                         RenderTinySkiaClipCase(scene.expected), scene.label,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, NonRectangularClipsKeepTheirGeometry) {
+  editor::tests::CompareBitmapToBitmap(RenderTinySkiaClipCase(R"svg(
+        <clipPath id="c"><rect x="8" y="8" width="8" height="8" transform="rotate(30 12 12)"/></clipPath>
+        <rect x="2" y="2" width="21" height="21" clip-path="url(#c)"/>)svg"),
+                                       RenderTinySkiaClipCase(R"svg(
+        <rect x="8" y="8" width="8" height="8" transform="rotate(30 12 12)"/>)svg"),
+                                       "rotated_rect_clip",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(RenderTinySkiaClipCase(R"svg(
+        <clipPath id="c"><rect x="8" y="8" width="4" height="8"/>
+        <rect x="16" y="8" width="4" height="8"/></clipPath>
+        <rect x="2" y="2" width="21" height="21" clip-path="url(#c)"/>)svg"),
+                                       RenderTinySkiaClipCase(R"svg(
+        <rect x="8" y="8" width="4" height="8"/>
+        <rect x="16" y="8" width="4" height="8"/>)svg"),
+                                       "compound_rect_clip",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, RectangularClipPreservesTheOriginalPaintCoordinates) {
+  const RendererBitmap actual = RenderTinySkiaClipCase(R"svg(
+    <linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+    <clipPath id="c"><rect x="8.25" y="7.75" width="12.5" height="10"/></clipPath>
+    <rect x="4" y="8.5" width="24" height="7" fill="url(#g)" clip-path="url(#c)"/>)svg");
+  const RendererBitmap expected = RenderTinySkiaClipCase(R"svg(
+    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="4" x2="28" y1="0" y2="0">
+      <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+    </linearGradient>
+    <rect x="8.25" y="8.5" width="12.5" height="7" fill="url(#g)"/>)svg");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "clipped_original_gradient_mapping",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // BackgroundAlpha is the alpha of what the enclosing isolation group painted before the filtered
 // element. The blue square painted outside the group is not part of that backdrop, and the
 // filtered element's own red square is replaced by the filter result.

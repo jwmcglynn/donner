@@ -1401,6 +1401,93 @@ void drawRectIntoMask(tiny_skia::Mask& mask, const Box2d& rect, const Transform2
   mask.fillPath(path, tiny_skia::FillRule::Winding, antialias, toTinyTransform(transform));
 }
 
+// Exact rectangle recognition is limited to one simple contour and its actual segment order.
+bool HasRectangleContour(const Path& path) {
+  constexpr std::array kRectVerbs{Path::Verb::MoveTo, Path::Verb::LineTo, Path::Verb::LineTo,
+                                  Path::Verb::LineTo};
+  const auto points = path.points();
+  const auto commands = path.commands();
+  if (points.size() != 4 || commands.size() != 5 || commands.back().verb != Path::Verb::ClosePath) {
+    return false;
+  }
+  for (size_t index = 0; index < kRectVerbs.size(); ++index) {
+    if (commands[index].verb != kRectVerbs[index] || commands[index].pointIndex != index) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<Box2d> SingleRectPath(const Path& path) {
+  if (!HasRectangleContour(path)) {
+    return std::nullopt;
+  }
+  const auto points = path.points();
+  const auto aligned = [](const Vector2d& a, const Vector2d& b, bool horizontal) {
+    return horizontal ? a.y == b.y && a.x != b.x : a.x == b.x && a.y != b.y;
+  };
+  const bool horizontal = points[0].y == points[1].y;
+  if (!aligned(points[0], points[1], horizontal) || !aligned(points[1], points[2], !horizontal) ||
+      !aligned(points[2], points[3], horizontal) || !aligned(points[3], points[0], !horizontal)) {
+    return std::nullopt;
+  }
+  return path.bounds();
+}
+
+std::optional<Box2d> ProjectAxisAlignedRect(const Box2d& rect, const Transform2d& deviceFromLocal) {
+  if (deviceFromLocal.data[1] != 0.0 || deviceFromLocal.data[2] != 0.0 ||
+      deviceFromLocal.data[0] == 0.0 || deviceFromLocal.data[3] == 0.0) {
+    return std::nullopt;
+  }
+  const Box2d projected = deviceFromLocal.transformBox(rect);
+  if (!toTinyRect(projected)) {
+    return std::nullopt;
+  }
+  return projected;
+}
+
+Box2d IntersectClipRects(const Box2d& lhs, const Box2d& rhs) {
+  const Vector2d topLeft(std::max(lhs.topLeft.x, rhs.topLeft.x),
+                         std::max(lhs.topLeft.y, rhs.topLeft.y));
+  return Box2d(topLeft,
+               Vector2d(std::max(topLeft.x, std::min(lhs.bottomRight.x, rhs.bottomRight.x)),
+                        std::max(topLeft.y, std::min(lhs.bottomRight.y, rhs.bottomRight.y))));
+}
+
+std::optional<Box2d> RectangularClipInDevice(const ResolvedClip& clip,
+                                             const Transform2d& deviceFromLocal) {
+  if (clip.mask) {
+    return std::nullopt;
+  }
+  if (clip.clipPaths.empty()) {
+    return clip.clipRect ? ProjectAxisAlignedRect(*clip.clipRect, deviceFromLocal) : std::nullopt;
+  }
+  const ClipPathShape& shape = clip.clipPaths.front();
+  if (clip.clipPaths.size() != 1 || shape.layer != 0 || shape.groupPathCount != 0) {
+    return std::nullopt;
+  }
+  const auto path = SingleRectPath(shape.path);
+  if (!path) {
+    return std::nullopt;
+  }
+  const auto devicePath = ProjectAxisAlignedRect(
+      *path, clip.clipPathUnitsTransform * shape.parentFromEntity * deviceFromLocal);
+  if (!clip.clipRect) {
+    return devicePath;
+  }
+  const auto deviceRect = ProjectAxisAlignedRect(*clip.clipRect, deviceFromLocal);
+  return devicePath && deviceRect ? std::optional(IntersectClipRects(*devicePath, *deviceRect))
+                                  : std::nullopt;
+}
+
+bool SameClipRect(const std::optional<Box2d>& a, const std::optional<Box2d>& b) {
+  if (!a || !b) {
+    return a.has_value() == b.has_value();
+  }
+  return a->topLeft.x == b->topLeft.x && a->topLeft.y == b->topLeft.y &&
+         a->bottomRight.x == b->bottomRight.x && a->bottomRight.y == b->bottomRight.y;
+}
+
 void LogClipMaskHeader(const ResolvedClip& clip, const Transform2d& deviceFromLocal) {
   std::cout << "[TinySkia::buildClipMask] clipRect=";
   if (clip.clipRect.has_value()) {
@@ -1880,6 +1967,7 @@ void RendererTinySkia::pushClip(const ResolvedClip& clip) {
 
   clipStack_.push_back(std::move(currentClipMask_));
   clipRestoreStack_.push_back(true);
+  currentClipMask_.reset();
 
   if (rejectedFilterDepth_ != 0) {
     return;
@@ -1891,11 +1979,21 @@ void RendererTinySkia::pushClip(const ResolvedClip& clip) {
     return;
   }
 
-  if (clipStack_.back().has_value()) {
-    intersectMaskInPlace(*clipMask, *clipStack_.back());
+  std::optional<Box2d> deviceRect = RectangularClipInDevice(clip, deviceFromLocalTransform_);
+  if (const auto& outer = clipStack_.back()) {
+    if (deviceRect && outer->deviceRect) {
+      deviceRect = IntersectClipRects(*deviceRect, *outer->deviceRect);
+    } else {
+      intersectMaskInPlace(*clipMask, outer->coverage);
+      deviceRect.reset();
+    }
+  }
+  if (deviceRect && (clip.clipRect.has_value() && !clip.clipPaths.empty() || clipStack_.back())) {
+    std::fill(clipMask->data().begin(), clipMask->data().end(), 0);
+    drawRectIntoMask(*clipMask, *deviceRect, Transform2d(), antialias_);
   }
 
-  currentClipMask_ = std::move(clipMask);
+  currentClipMask_ = ClipMask{std::move(*clipMask), deviceRect};
   // `clipEpochStack_` already holds the epoch this clip replaced, so the clip's own depth is
   // one below the stack's size, and the outermost clip is depth zero.
   clipEpoch_ = assignClipEpoch(clipEpochStack_.size() - 1);
@@ -1940,7 +2038,9 @@ std::uint64_t RendererTinySkia::assignClipEpoch(std::size_t depth) {
   }
 
   ClipEpochSlot& slot = clipEpochSlots_[depth];
-  if (slot.epoch != 0 && slot.mask.has_value() && masksEqual(*slot.mask, *currentClipMask_)) {
+  if (slot.epoch != 0 && slot.mask.has_value() &&
+      SameClipRect(slot.mask->deviceRect, currentClipMask_->deviceRect) &&
+      masksEqual(slot.mask->coverage, currentClipMask_->coverage)) {
     return slot.epoch;
   }
 
@@ -2372,7 +2472,7 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
       makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
   compositePaint.opacity = 1.0f;
   compositePaint.blendMode = tiny_skia::BlendMode::SourceOver;
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const tiny_skia::Mask* mask = currentClipCoverage();
   auto pixmapView = currentPixmapView();
   tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, localPixmap.view(), compositePaint,
                                  toTinyTransform(deviceFromLocal), mask);
@@ -2428,7 +2528,7 @@ void RendererTinySkia::compositeDeviceFilter(SurfaceFrame& frame) {
       makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Nearest);
   paint.opacity = 1.0f;
   paint.blendMode = tiny_skia::BlendMode::SourceOver;
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const tiny_skia::Mask* mask = currentClipCoverage();
   if (exceedsTarget) {
     tiny_skia::Pixmap viewport = extractFilterViewport(frame, static_cast<int>(pixmapView.width()),
                                                        static_cast<int>(pixmapView.height()));
@@ -2453,7 +2553,7 @@ void RendererTinySkia::propagateFilterPaintInputs(const SurfaceFrame& frame) {
     paint.opacity = 1.0f;
     paint.blendMode = tiny_skia::BlendMode::SourceOver;
     auto view = destination->mutableView();
-    const tiny_skia::Mask* mask = currentClipMask_ ? &*currentClipMask_ : nullptr;
+    const tiny_skia::Mask* mask = currentClipCoverage();
     tiny_skia::Painter::drawPixmap(view, -frame.filterBufferOffsetX, -frame.filterBufferOffsetY,
                                    source->view(), paint, tiny_skia::Transform::identity(), mask);
   };
@@ -2604,11 +2704,10 @@ void RendererTinySkia::restoreMaskClipAndApplyCoverage(SurfaceFrame& frame) {
   clipEpoch_ = frame.savedClipEpoch;
   clipEpochStack_ = std::move(frame.savedClipEpochStack);
   if (frame.maskAlpha.has_value() && currentClipMask_.has_value()) {
-    intersectMaskInPlace(*frame.maskAlpha, *currentClipMask_);
+    intersectMaskInPlace(*frame.maskAlpha, currentClipMask_->coverage);
   }
-  const std::optional<tiny_skia::Mask>& coverage =
-      frame.maskAlpha.has_value() ? frame.maskAlpha : currentClipMask_;
-  if (!coverage.has_value()) {
+  const tiny_skia::Mask* coverage = frame.maskAlpha ? &*frame.maskAlpha : currentClipCoverage();
+  if (!coverage) {
     return;
   }
   auto pixmapView = frame.pixmap.mutableView();
@@ -2767,6 +2866,56 @@ bool RendererTinySkia::applyPathLengthAdjustment(const Path& path, StrokeParams&
   return true;
 }
 
+void RendererTinySkia::drawPathFill(const PathShape& path,
+                                    const std::function<const tiny_skia::Path&()>& tinyPath,
+                                    const RetainedTarget& retained,
+                                    tiny_skia::Pixmap* fillPaintPixmap) {
+  const bool usedPatternFill = patternFillPaint_.has_value();
+  std::optional<tiny_skia::Paint> fillPaint =
+      paint_.drawFillComponent ? makeFillPaint(path.pathOrEmpty().bounds()) : std::nullopt;
+  if (fillPaint) {
+    const auto intersection = intersectRectangularPathFill(path.pathOrEmpty());
+    const auto fillGeometry = [&]() -> const tiny_skia::Path& {
+      return intersection ? *intersection : tinyPath();
+    };
+    const tiny_skia::Mask* fillMask = intersection ? nullptr : currentClipCoverage();
+    auto pixmapView = currentPixmapView();
+
+    RetainedSpanKey key;
+    key.deviceFromLocal = deviceFromLocalTransform_;
+    key.paint = *fillPaint;
+    key.clipEpoch = clipEpoch_;
+    key.surfaceSize = pixmapView.size();
+    key.fillRule = path.fillRule;
+
+    RetainedSpanSlot* slot = (retained && !intersection && !paintBorrowsPattern(*fillPaint))
+                                 ? &retained.entry->fill
+                                 : nullptr;
+    drawRetainablePass(
+        slot, key, pixmapView, fillMask, retainedSpanStats_,
+        [&] {
+          tiny_skia::Painter::fillPath(pixmapView, fillGeometry(), *fillPaint,
+                                       toTinyFillRule(path.fillRule),
+                                       toTinyTransform(deviceFromLocalTransform_), fillMask);
+        },
+        [&](tiny_skia::SpanCapture& capture) {
+          return capture.fillPath(pixmapView, fillGeometry(), *fillPaint,
+                                  toTinyFillRule(path.fillRule),
+                                  toTinyTransform(deviceFromLocalTransform_), fillMask);
+        });
+
+    if (fillPaintPixmap != nullptr) {
+      auto fillPaintView = fillPaintPixmap->mutableView();
+      tiny_skia::Painter::fillPath(fillPaintView, fillGeometry(), *fillPaint,
+                                   toTinyFillRule(path.fillRule),
+                                   toTinyTransform(deviceFromLocalTransform_), fillMask);
+    }
+    if (usedPatternFill) {
+      patternFillPaint_.reset();
+    }
+  }
+}
+
 void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
   const Path& pathGeometry = path.pathOrEmpty();
   (void)drawBudget_->reserve(
@@ -2775,7 +2924,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     return;
   }
 
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const tiny_skia::Mask* mask = currentClipCoverage();
   tiny_skia::Pixmap* fillPaintPixmap =
       !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
           ? &*surfaceStack_.back().fillPaintPixmap
@@ -2806,43 +2955,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
                                       ? retainedTargetFor(path.sourceEntity)
                                       : RetainedTarget();
 
-  const bool usedPatternFill = patternFillPaint_.has_value();
-  std::optional<tiny_skia::Paint> fillPaint =
-      paint_.drawFillComponent ? makeFillPaint(pathGeometry.bounds()) : std::nullopt;
-  if (fillPaint) {
-    auto pixmapView = currentPixmapView();
-
-    RetainedSpanKey key;
-    key.deviceFromLocal = deviceFromLocalTransform_;
-    key.paint = *fillPaint;
-    key.clipEpoch = clipEpoch_;
-    key.surfaceSize = pixmapView.size();
-    key.fillRule = path.fillRule;
-
-    RetainedSpanSlot* slot =
-        (retained && !paintBorrowsPattern(*fillPaint)) ? &retained.entry->fill : nullptr;
-    drawRetainablePass(
-        slot, key, pixmapView, mask, retainedSpanStats_,
-        [&] {
-          tiny_skia::Painter::fillPath(pixmapView, tinyPath(), *fillPaint,
-                                       toTinyFillRule(path.fillRule),
-                                       toTinyTransform(deviceFromLocalTransform_), mask);
-        },
-        [&](tiny_skia::SpanCapture& capture) {
-          return capture.fillPath(pixmapView, tinyPath(), *fillPaint, toTinyFillRule(path.fillRule),
-                                  toTinyTransform(deviceFromLocalTransform_), mask);
-        });
-
-    if (fillPaintPixmap != nullptr) {
-      auto fillPaintView = fillPaintPixmap->mutableView();
-      tiny_skia::Painter::fillPath(fillPaintView, tinyPath(), *fillPaint,
-                                   toTinyFillRule(path.fillRule),
-                                   toTinyTransform(deviceFromLocalTransform_), mask);
-    }
-    if (usedPatternFill) {
-      patternFillPaint_.reset();
-    }
-  }
+  drawPathFill(path, tinyPath, retained, fillPaintPixmap);
 
   StrokeParams adjustedStroke = stroke;
   if (!applyPathLengthAdjustment(pathGeometry, adjustedStroke)) {
@@ -2938,13 +3051,38 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   }
 }
 
+void RendererTinySkia::drawRectFill(const Box2d& rect, const tiny_skia::Rect& tinyRect,
+                                    tiny_skia::Pixmap* fillPaintPixmap) {
+  const bool usedPatternFill = patternFillPaint_.has_value();
+  std::optional<tiny_skia::Paint> fillPaint =
+      paint_.drawFillComponent ? makeFillPaint(rect) : std::nullopt;
+  if (fillPaint) {
+    const auto intersection = intersectRectangularFill(rect);
+    const auto fillRect = intersection ? toTinyRect(*intersection) : std::optional(tinyRect);
+    if (fillRect) {
+      const tiny_skia::Mask* fillMask = intersection ? nullptr : currentClipCoverage();
+      const auto draw = [&](tiny_skia::MutablePixmapView view) {
+        tiny_skia::Painter::fillRect(view, *fillRect, *fillPaint,
+                                     toTinyTransform(deviceFromLocalTransform_), fillMask);
+      };
+      draw(currentPixmapView());
+      if (fillPaintPixmap) {
+        draw(fillPaintPixmap->mutableView());
+      }
+    }
+    if (usedPatternFill) {
+      patternFillPaint_.reset();
+    }
+  }
+}
+
 void RendererTinySkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
   (void)drawBudget_->reserve({.drawCalls = 1, .pathCommands = 5});
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
   }
 
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const tiny_skia::Mask* mask = currentClipCoverage();
   const std::optional<tiny_skia::Rect> tinyRect = toTinyRect(rect);
   if (!tinyRect.has_value()) {
     return;
@@ -2959,22 +3097,7 @@ void RendererTinySkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
           ? &*surfaceStack_.back().strokePaintPixmap
           : nullptr;
 
-  const bool usedPatternFill = patternFillPaint_.has_value();
-  std::optional<tiny_skia::Paint> fillPaint =
-      paint_.drawFillComponent ? makeFillPaint(rect) : std::nullopt;
-  if (fillPaint) {
-    auto pixmapView = currentPixmapView();
-    tiny_skia::Painter::fillRect(pixmapView, *tinyRect, *fillPaint,
-                                 toTinyTransform(deviceFromLocalTransform_), mask);
-    if (fillPaintPixmap != nullptr) {
-      auto fillPaintView = fillPaintPixmap->mutableView();
-      tiny_skia::Painter::fillRect(fillPaintView, *tinyRect, *fillPaint,
-                                   toTinyTransform(deviceFromLocalTransform_), mask);
-    }
-    if (usedPatternFill) {
-      patternFillPaint_.reset();
-    }
-  }
+  drawRectFill(rect, *tinyRect, fillPaintPixmap);
 
   const bool usedPatternStroke = patternStrokePaint_.has_value();
   std::optional<tiny_skia::Paint> strokePaint =
@@ -3008,7 +3131,7 @@ void RendererTinySkia::drawEllipse(const Box2d& bounds, const StrokeParams& stro
     return;
   }
 
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const tiny_skia::Mask* mask = currentClipCoverage();
   tiny_skia::Pixmap* fillPaintPixmap =
       !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
           ? &*surfaceStack_.back().fillPaintPixmap
@@ -3077,7 +3200,7 @@ void RendererTinySkia::drawImagePixmap(const tiny_skia::PixmapView& source, int 
       tiny_skia::PixmapPaint paint =
           makePixmapPaint(destination, tiny_skia::FilterQuality::Nearest);
       paint.blendMode = tiny_skia::BlendMode::SourceOver;
-      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+      const tiny_skia::Mask* mask = currentClipCoverage();
       DrawProceduralPixelatedImage(source, sourceWidth, sourceHeight, plan.destFromSource,
                                    destination, paint, mask, verbose_);
       return;
@@ -3091,7 +3214,7 @@ void RendererTinySkia::drawImagePixmap(const tiny_skia::PixmapView& source, int 
       makePixmapPaint(currentPixmap(), FilterQualityForImageRendering(imageRendering));
   paint.blendMode = tiny_skia::BlendMode::SourceOver;
 
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const tiny_skia::Mask* mask = currentClipCoverage();
   auto pixmapView = currentPixmapView();
   tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, sampledSource, paint,
                                  toTinyTransform(destFromSampledSource), mask);
@@ -3338,7 +3461,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   }
 
   float scale = 0.0f;
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  const tiny_skia::Mask* mask = currentClipCoverage();
 
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
@@ -3604,7 +3727,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           paint.opacity = NarrowToFloat(spanOpacity);
           paint.blendMode = tiny_skia::BlendMode::SourceOver;
 
-          const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+          const tiny_skia::Mask* mask = currentClipCoverage();
           auto pixmapView = currentPixmapView();
           tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
                                          toTinyTransform(deviceFromBitmap), mask);
@@ -3910,6 +4033,34 @@ const tiny_skia::Pixmap& RendererTinySkia::currentPixmap() const {
 
 tiny_skia::MutablePixmapView RendererTinySkia::currentPixmapView() {
   return currentPixmap().mutableView();
+}
+
+const tiny_skia::Mask* RendererTinySkia::currentClipCoverage() const {
+  return currentClipMask_ ? &currentClipMask_->coverage : nullptr;
+}
+
+std::optional<tiny_skia::Path> RendererTinySkia::intersectRectangularPathFill(
+    const Path& path) const {
+  if (!currentClipMask_ || !currentClipMask_->deviceRect) {
+    return std::nullopt;
+  }
+  const auto bounds = SingleRectPath(path);
+  const auto intersection = bounds ? intersectRectangularFill(*bounds) : std::nullopt;
+  if (!intersection) {
+    return std::nullopt;
+  }
+  const auto rect = toTinyRect(*intersection);
+  return rect ? tiny_skia::Path::fromRect(*rect) : tiny_skia::Path();
+}
+
+std::optional<Box2d> RendererTinySkia::intersectRectangularFill(const Box2d& bounds) const {
+  if (!currentClipMask_ || !currentClipMask_->deviceRect ||
+      !ProjectAxisAlignedRect(bounds, deviceFromLocalTransform_)) {
+    return std::nullopt;
+  }
+  const Box2d localClip =
+      deviceFromLocalTransform_.inverse().transformBox(*currentClipMask_->deviceRect);
+  return IntersectClipRects(bounds, localClip);
 }
 
 std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedClip& clip) {

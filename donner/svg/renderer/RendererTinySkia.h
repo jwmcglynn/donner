@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -376,6 +377,12 @@ private:
     PatternTile,
   };
 
+  struct ClipMask {
+    tiny_skia::Mask coverage;
+    /// Present only while coverage represents a single device-space rectangle.
+    std::optional<Box2d> deviceRect;
+  };
+
   struct SurfaceFrame {
     SurfaceKind kind;
     tiny_skia::Pixmap pixmap;
@@ -403,8 +410,8 @@ private:
     Transform2d patternRasterFromTile;
     Transform2d savedTransform;
     std::vector<Transform2d> savedTransformStack;
-    std::optional<tiny_skia::Mask> savedClipMask;
-    std::vector<std::optional<tiny_skia::Mask>> savedClipStack;
+    std::optional<ClipMask> savedClipMask;
+    std::vector<std::optional<ClipMask>> savedClipStack;
     std::vector<bool> savedClipRestoreStack;
     /// Pattern paints pending at `beginPatternTile` time, saved so tile-content draws don't
     /// consume the outer element's pattern shaders (e.g. a `context-fill` pattern shared between
@@ -451,7 +458,7 @@ private:
   /// conversion clips to the surface and the mask reaches the blitter as per-blit pipeline
   /// state. The key is there to keep clip changes conservative, not to make them correct.
   struct ClipEpochSlot {
-    std::optional<tiny_skia::Mask> mask;
+    std::optional<ClipMask> mask;
     std::uint64_t epoch = 0;
   };
 
@@ -506,6 +513,13 @@ private:
   void resetOwnedFrameBudgets();
   void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
   [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);
+  void drawPathFill(const PathShape& path, const std::function<const tiny_skia::Path&()>& tinyPath,
+                    const RetainedTarget& retained, tiny_skia::Pixmap* fillPaintPixmap);
+  void drawRectFill(const Box2d& rect, const tiny_skia::Rect& tinyRect,
+                    tiny_skia::Pixmap* fillPaintPixmap);
+  [[nodiscard]] std::optional<tiny_skia::Path> intersectRectangularPathFill(const Path& path) const;
+  [[nodiscard]] std::optional<Box2d> intersectRectangularFill(const Box2d& bounds) const;
+  [[nodiscard]] const tiny_skia::Mask* currentClipCoverage() const;
   [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);
   /// Include parent paint captures in this stage's bounded surface reservation.
   components::FilterStandardInputUsage filterCaptureInputs(
@@ -610,8 +624,8 @@ private:
   tiny_skia::Pixmap frame_;
   Transform2d deviceFromLocalTransform_;
   std::vector<Transform2d> deviceFromLocalTransformStack_;
-  std::optional<tiny_skia::Mask> currentClipMask_;
-  std::vector<std::optional<tiny_skia::Mask>> clipStack_;
+  std::optional<ClipMask> currentClipMask_;
+  std::vector<std::optional<ClipMask>> clipStack_;
   std::vector<bool> clipRestoreStack_;
   bool clipMaskAllocationRejected_ = false;
   tiny_skia::Pixmap rejectedPixmap_;
