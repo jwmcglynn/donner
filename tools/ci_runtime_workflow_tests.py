@@ -54,6 +54,7 @@ WORKFLOW_LOGIC_MARKER = "          # Workflow logic kept in scripts"
 # target whose data lists it, so bazel-diff selects that test when the script changes. None marks
 # a script no target lists yet; the reason says why that is accepted.
 TRACKED_CI_SCRIPTS = {
+    "tools/bazelrc_configs.py": "//tools:bazelrc_configs",
     "tools/browser_gpu_test_summary.py": "//tools:browser_gpu_test_summary_tests",
     "tools/ci/darwin_selection.py": "//tools/ci:darwin_selection_tests",
     "tools/ci/free_hosted_macos_disk.sh": "//tools/ci:free_hosted_macos_disk_tests",

@@ -562,8 +562,8 @@ py_library(
     ],
 )
 
-# Expands `--config=<name>` from the repository's .bazelrc the way Bazel does, for the CI policy
-# tests that read Bazel command lines.
+# The mixed CI step runs this source to read the coordinator's Linux link options. Its Bazel
+# library is shared by the rc parser tests and the workflow policy tests.
 py_library(
     name = "bazelrc_configs",
     testonly = 1,

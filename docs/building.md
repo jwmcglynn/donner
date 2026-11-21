@@ -610,6 +610,9 @@ runs the Linux tests, and builds and tests the Darwin selection when enabled. Fi
 binaries still compile through build-only targets. The two Vulkan display tests use the
 coordinator's Xvfb. The venue check requires remote execution for other uncached tests.
 The deterministic soak joins every run, and affected WebGPU changes select the reference suite.
+The mixed job reads the Linux coordinator's system Bazel rc for a single `build:linux` line of
+paired library search paths and rpaths. The Darwin transition removes the matching block from
+its target links. Linux keeps its original options, as do additional caller-supplied link flags.
 
 The invocation also runs a kernel probe and C++ test on each platform. Geode editor coverage,
 the pinned archive preflight, and affected headed or headless browser tests run under the Darwin

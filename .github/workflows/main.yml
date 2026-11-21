@@ -425,7 +425,7 @@ jobs:
           if [[ "$RUN_METAL" == true ]]; then
             suites+=(//tools/ci:unified_metal_{full_validation,preflight,offline_compiler,native})
           fi
-          options=()
+          options=("--//build_defs:linux_ci_runtime_link_dirs=$(python3 tools/bazelrc_configs.py linux-runtime-link-dirs /etc/bazel.bazelrc)")
           ordinary="$RUNNER_TEMP/darwin-targets.txt"
           linux="$RUNNER_TEMP/linux-targets.txt"
           : > "$ordinary"
