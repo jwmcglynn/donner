@@ -482,18 +482,16 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
                      kDefaultThreshold,
                      "Explicit half-box clip; opaque interior and exact crosshair")},
-                // The backdrop square and the filtered square coincide, so this row's alpha must
-                // equal in=BackgroundImage's, which compares with default parameters. Donner's two
-                // renders do share one alpha; the two references do not. This one reaches full
-                // alpha about 2 px further inside the blurred edge, so a ring 3 px wide, 25 px
-                // inside each edge, reads 254 where Donner and the BackgroundImage reference read
-                // 255. Near black that one level exceeds the perceptual threshold: 1,176 px on
-                // every backend, none differing by more than 4 levels (#1185).
+                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"in=BackgroundAlpha.svg",
-                 WithMaxPixels(1200,
-                               "Reference blur reaches full alpha 2 px later than the "
-                               "identical-alpha in=BackgroundImage reference; 1,176 px "
-                               "ring of one alpha level near black (#1185)")},
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/donner-in-BackgroundAlpha.png",
+                     kDefaultThreshold,
+                     "Reference disagreement: the PNG blurs with a different valid Gaussian "
+                     "approximation than its in=BackgroundImage sibling, so the two references "
+                     "cannot both match one conforming renderer; Donner uses the specified "
+                     "three-box approximation and keeps BackgroundAlpha equal to BackgroundImage's "
+                     "alpha")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
