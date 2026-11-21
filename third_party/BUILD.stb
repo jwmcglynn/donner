@@ -1,3 +1,4 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@donner//build_defs:performance.bzl", "native_speed_copts")
 load("@donner//third_party:stb.bzl", "stb_library")
 

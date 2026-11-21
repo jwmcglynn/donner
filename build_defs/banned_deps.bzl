@@ -1,5 +1,7 @@
 """Rule for verifying that no targets directly depend on banned external deps."""
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 def banned_deps_test(name, banned, allowed, scope, **kwargs):
     """
     Test that no target in `scope` directly depends on any label in `banned`,
@@ -75,7 +77,7 @@ def banned_deps_test(name, banned, allowed, scope, **kwargs):
         testonly = True,
     )
 
-    native.sh_test(
+    sh_test(
         name = name,
         srcs = [":" + checker_name],
         args = ["$(location :" + genquery_name + ")"],

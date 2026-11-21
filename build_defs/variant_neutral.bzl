@@ -34,6 +34,7 @@ With sharing on, the objects of a library live under its `_<name>_neutral_compil
 under the library, so they do not share cache entries with builds that turn sharing off.
 """
 
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//build_defs:variant_settings.bzl", "variant_neutral_transition")

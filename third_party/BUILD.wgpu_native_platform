@@ -12,6 +12,8 @@ The file is test-only and Linux-compatible. The resvg reference wrapper selects
 the matching CPU archive; a missing shared library fails analysis.
 """
 
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
 package(default_visibility = ["//visibility:public"])
 
 cc_library(

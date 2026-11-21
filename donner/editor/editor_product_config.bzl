@@ -1,5 +1,6 @@
 """Full-text editor products and tests, independent of the core SVG feature tier."""
 
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_fuzzer", "donner_cc_test", "donner_multi_transitioned_binary", "donner_multi_transitioned_test")
 
