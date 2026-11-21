@@ -82,16 +82,19 @@ a stronger pixel assertion.
 Regenerate this inventory with
 `python3 tools/resvg_parity/parity_report.py --inventory-markdown`.
 `//tools/resvg_parity:parity_report_tests` checks the generated block against this document.
-The lane counts below are eligibility from source. The normal Geode corpus compares text in the
-simple text tier. Rows that exceed their Geode budget only because of the references' quarter-pixel
-edge quantization opt into the edge coverage rule (`QUARTER_PIXEL_EDGE_ALLOWLIST`), which accepts
-only partially covered pixels whose upper or lower neighbor in the reference is empty or fully
-covered, and neither of which has the pixel's alpha. A row whose custom golden is a Donner software
-rendering, recorded as quarter-pixel quantized in the golden README, may opt in the same way. The
-rows in `GEODE_GATE_ALLOWLIST` disable their Geode comparison with a recorded reason. Both lists
-are in `parity_report.py` and described in `README_resvg_test_suite.md`. Full-shaping rows stay
-capability-gated on Geode because the corpus has no Geode full-shaping wrapper; the `*_text_full`
-unit test variants run on Geode with full shaping.
+The lane counts below are eligibility from source. `geode` compares the whole corpus on Geode in the
+simple text tier, and `geode_max_text` compares the text-rendering cases
+(`//third_party/resvg-test-suite:tests_with_text`) on Geode with full shaping; `default_text` and
+`max` are the CPU lanes of the two tiers. Rows that exceed their Geode budget only because of the
+references' quarter-pixel edge quantization opt into the edge coverage rule
+(`QUARTER_PIXEL_EDGE_ALLOWLIST`), which accepts only partially covered pixels whose upper or lower
+neighbor in the reference is empty or fully covered, and neither of which has the pixel's alpha. A
+row whose custom golden is a Donner software rendering, recorded as quarter-pixel quantized in the
+golden README, may opt in the same way. The rows in `GEODE_GATE_ALLOWLIST` disable their Geode
+comparison with a recorded reason. Both lists are in `parity_report.py` and described in
+`README_resvg_test_suite.md`. A gate disables the Geode comparison in both text tiers, or only in
+the simple tier when its cause is limited to that tier. A row that is gated or capability-gated on
+one lane is not counted among that lane's comparisons.
 
 <!-- BEGIN RESVG INVENTORY -->
 
@@ -109,7 +112,8 @@ unit test variants run on Geode with full shaping.
 | --- | ---: | ---: | ---: | ---: |
 | `default_text` | 1,554 | 98 | 26 | 1 |
 | `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,545 | 98 | 26 | 1 |
+| `geode` | 1,545 | 98 | 21 | 1 |
+| `geode_max_text` | 358 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->
 
@@ -124,7 +128,8 @@ rev=$(git rev-parse HEAD)
 python3 tools/resvg_parity/parity_report.py \
   --execution "$rev:default_text=reports/simple" \
   --execution "$rev:max=reports/full" \
-  --execution "$rev:geode=reports/geode"
+  --execution "$rev:geode=reports/geode" \
+  --execution "$rev:geode_max_text=reports/geode-full"
 ```
 
 Use `--revision` with a source archive or a dirty checkout to supply a caller
@@ -786,10 +791,10 @@ conformance.
 
 The focused regression targets are `renderer_regression_tests`, `renderer_regression_tests_geode`
 and `renderer_regression_tests_text_full`. The corpus targets are `resvg_test_suite_default_text`,
-`resvg_test_suite_geode` and `resvg_test_suite_max`. The Geode corpus compares the text rows its
-simple text tier supports; the independent Geode font contract test executes directly. Render-only
-corpus execution of the UB-marker cases establishes stability, not pixel agreement with the
-historical reference.
+`resvg_test_suite_max`, `resvg_test_suite_geode` and `resvg_test_suite_geode_max_text`. The Geode
+lanes compare the text rows in both text tiers; the independent Geode font contract test executes
+directly. Render-only corpus execution of the UB-marker cases establishes stability, not pixel
+agreement with the historical reference.
 
 ## Out of scope (correctly not compared; do not "fix")
 

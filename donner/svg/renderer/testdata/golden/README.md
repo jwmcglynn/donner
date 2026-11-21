@@ -486,7 +486,9 @@ unchanged corpus files `text/text/emojis`, `text/text/compound-emojis` and
 `text/text/compound-emojis-and-coordinates-list`, written by the resvg suite harness with the
 software backend and full text from the code of the change that adds them. The rows need full
 text for the font's color bitmap strikes and compare at default settings (0.02 threshold, 100
-pixels) on that lane; Geode does not run them.
+pixels) on that lane. With full shaping, Geode compares `emojis` against its golden with the
+quarter-pixel edge coverage rule (see "Quarter-pixel quantized goldens"); the other two rows
+disable their Geode comparison.
 
 Each golden was checked against an independent resvg render of the same scene: the vendored
 resvg v0.49.0 PNGs of the first two rows (the corpus
@@ -1547,6 +1549,7 @@ is not quantized, a horizontal one is. Geode counts are on Metal.
 | --- | --- | --- | --- | --- |
 | `donner-coordinates-list.png` | Donner software renderer | 0.55 / 0.005 of 608 | 392 / 0 | `f036660ed5d2f21cbbedbbba1f04c8aa94f31cc33958a3dd63e5cf13bb52f5bb` |
 | `resvg-hanging-on-vertical.png` | Donner software renderer | 0.66 / 0.003 of 1,186 | 415 / 12 | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
+| `donner-emojis.png` | Donner software renderer | 0.69 / 0.003 of 340 | 134 / 13 | `dd0f1fe2b2c53a07e40c49b029e44d783dce9b2f2f54c87d33622711f7f4ffd6` |
 
 Two custom goldens of rows whose Geode comparison is gated are not quantized:
 `donner-named-value.png`, whose frame is an exact 8x8 area average (0.10 / 0.039 of 1,088), and
@@ -1555,6 +1558,15 @@ Firefox gradient-stroke images are browser renderings, which this table does not
 compare Geode with Geode goldens instead (see "Geode goldens for the gradient strokes"). `donner-tspan-with-filter.png` is a Donner software rendering, but its
 Geode difference lies on the crosshair beside the partially covered blurred text, which the rule
 counts, so its row does not opt in.
+
+Four more Donner software renderings, compared only with full shaping, are not recorded. Geode
+differs from `donner-compound-emojis.png`, `donner-compound-emojis-and-coordinates-list.png` and
+`resvg-japanese-with-tb.png` only on the crosshair's quantized row y = 250 (309, 341 and 384
+pixels), but the measurement above, which leaves out the crosshair, does not show them quantized:
+0.00 of 15, 0.07 of 84 and 0.19 of 396 (Geode 0.010 on the last). The emoji goldens' other edges
+are resampled bitmap glyphs. `resvg-tb-and-punctuation.png` measures 0.30 of 558 (Geode 0.016),
+and Geode differs from it on glyph edges by 128 pixels, 104 with the rule. Their rows keep their
+Geode comparison disabled.
 
 ## Geode painting/marker/with-an-image-child golden
 

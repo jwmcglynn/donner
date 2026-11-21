@@ -1828,6 +1828,28 @@ donner_variant_cc_test(
     "nontext",
 ]]
 
+# Geode with full text shaping, over the cases that render text: only their output depends on the
+# text tier, and resvg_test_suite_geode compares the rest on Geode already. As there, the build
+# registers a TinyGolden and a GeodeGolden param per case and this wrapper runs the GeodeGolden
+# half; resvg_test_suite_max_text runs the TinyGolden comparisons of the same cases.
+donner_multi_transitioned_test(
+    name = "resvg_test_suite_geode_max_text",
+    size = "enormous",
+    timeout = "long",
+    testonly = True,
+    args = ["--gtest_filter=-*_TinyGolden"],
+    dep = ":resvg_test_suite_max_text_impl",
+    opens_gpu_device = True,
+    remote_parallel_ci = True,
+    renderer_backend = "geode",
+    # About 100 cases per shard, as in resvg_test_suite_geode. A shard takes about 14 s on software
+    # Vulkan and 4 s on Metal, close to a resvg_test_suite_geode shard (12 s and 3.4 s); 8 shards
+    # saved no total time and doubled the device startups.
+    shard_count = 4,
+    text = "true",
+    text_full = "true",
+)
+
 # An explicit Linux-only comparison lane that renders the production Geode context through the
 # test-only wgpu-native reference. It compiles the same resvg registrations and image-comparison
 # fixture as the native Geode lane, then runs only GeodeGolden params. Keeping the wrapper manual

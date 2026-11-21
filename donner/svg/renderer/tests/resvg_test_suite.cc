@@ -171,14 +171,49 @@ ImageComparisonParams GeodeUnresolvedBlurGate(ImageComparisonParams params) {
       "paths and their overlap");
 }
 
-/// \p params, with the Geode comparison disabled: the row's CPU comparison has a pixel budget above
-/// the default, and that budget is not approved for the Geode lane (PIXEL_BUDGET_ALLOWLIST has no
-/// Geode entry for it).
-ImageComparisonParams GeodeCpuAllowanceGate(ImageComparisonParams params) {
+/// \p params, with the Geode comparison disabled in the simple text tier: there the row's CPU
+/// comparison has a pixel budget above the default (`withSimpleTextMaxPixels`), which is not
+/// approved for the Geode lane. With full shaping the row has the default budget, so the Geode
+/// comparison runs.
+ImageComparisonParams GeodeSimpleTextCpuAllowanceGate(ImageComparisonParams params) {
+  return params.disableGeodeForSimpleText(
+      "Harness mismatch: the simple-tier CPU budget (1200 px for font-variant) is not approved for "
+      "Geode, and comparing would apply it to Geode, which differs by 1108 px in that tier");
+}
+
+/// \p params, with the Geode comparison disabled: the text sits on the reference's crosshair, so
+/// the crosshair's quarter-pixel quantized rows border glyph ink, and the quarter-pixel edge
+/// coverage rule's vertical-neighbor condition rejects those pixels.
+ImageComparisonParams GeodeCrosshairUnderTextGate(ImageComparisonParams params) {
   return params.disableBackend(
       RendererBackend::Geode,
-      "Harness mismatch: the 1200 px CPU budget for font-variant is not approved for Geode, and "
-      "comparing would apply a budget in the hundreds to it; Geode differs by 1108 px");
+      "Harness mismatch: the crosshair's quarter-pixel rows run through the glyphs, and the edge "
+      "coverage rule refuses the crosshair pixels that border glyph ink (Geode counts 121 px with "
+      "the rule and 329 without; the CPU comparison counts 100 of 100)");
+}
+
+/// \p params, with the Geode comparison disabled: Geode differs from this Donner software rendering
+/// only on one quarter-pixel quantized crosshair row, but elsewhere the golden is not shown to be
+/// quarter-pixel quantized, so the golden README does not record it and the edge coverage rule
+/// does not apply.
+ImageComparisonParams GeodeCrosshairOnlyGoldenGate(ImageComparisonParams params) {
+  return params.disableBackend(
+      RendererBackend::Geode,
+      "Harness mismatch: every pixel Geode counts is on the crosshair row y = 250 (309 px for "
+      "compound-emojis, 341 for compound-emojis-and-coordinates-list, 384 for japanese-with-tb), "
+      "but the golden measures 0.00 of 15, 0.07 of 84 and 0.19 of 396 px quarter-pixel "
+      "quantized, so it is not recorded as quantized");
+}
+
+/// \p params, with the Geode comparison disabled: Geode's glyph edges differ from this Donner
+/// software rendering by more than the pixel budget even with the quarter-pixel edge coverage
+/// rule, and the golden is not shown to be quarter-pixel quantized.
+ImageComparisonParams GeodeGlyphEdgeGoldenGate(ImageComparisonParams params) {
+  return params.disableBackend(
+      RendererBackend::Geode,
+      "Harness mismatch: Geode counts 128 px on glyph edges against this golden, 104 with the edge "
+      "coverage rule; 10 differ by more than quantization allows, and the golden measures 0.30 of "
+      "558 px quarter-pixel quantized, so it is not recorded as quantized");
 }
 
 /// Params for a drop-shadow() row compared against the Donner golden at \p path for \p reason
@@ -402,8 +437,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/feMerge",
                 {
                     {"complex-transform.svg",
-                     Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                           "Reference blurs inputs before skew")},
+                     Params::WithThreshold(0.085f, kDefaultMismatchedPixels,
+                                           "Reference snaps the skewed offset to whole pixels; "
+                                           "the remaining linearRGB mixing is #2526")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1240,7 +1276,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"rtl-with-vertical-writing-mode.svg",
                      Params::UndefinedBehavior("rtl with vertical writing-mode (svgwg#618)")},
                     {"rtl.svg",
-                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1321,8 +1358,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {{"as-property.svg", QuarterPixelEdgeReference()},
                  {"none.svg", QuarterPixelEdgeReference()},
                  {"arabic-script.svg",
-                  Params().onlyTextFull().withReason("Arabic contextual joining requires HarfBuzz; "
-                                                     "disabling kerning must preserve joining")}})),
+                  Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                      "Arabic contextual joining requires HarfBuzz; "
+                      "disabling kerning must preserve joining")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1376,17 +1414,18 @@ INSTANTIATE_TEST_SUITE_P(TextFontStyle, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontVariant, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/font-variant",
-                {
-                    {"inherit.svg",
-                     GeodeCpuAllowanceGate(Params().withSimpleTextMaxPixels(1200).withReason(
-                         "small-caps is emulated with simple text"))},
-                    {"small-caps.svg",
-                     GeodeCpuAllowanceGate(Params().withSimpleTextMaxPixels(1200).withReason(
-                         "small-caps is emulated with simple text"))},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "text/font-variant",
+            {
+                {"inherit.svg",
+                 GeodeSimpleTextCpuAllowanceGate(Params().withSimpleTextMaxPixels(1200).withReason(
+                     "small-caps is emulated with simple text"))},
+                {"small-caps.svg",
+                 GeodeSimpleTextCpuAllowanceGate(Params().withSimpleTextMaxPixels(1200).withReason(
+                     "small-caps is emulated with simple text"))},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextFontWeight, ImageComparisonTestFixture,
@@ -1454,8 +1493,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"mixed-spacing.svg", QuarterPixelEdgeReference()},
                     {"normal.svg", QuarterPixelEdgeReference()},
                     {"large-negative.svg", Params::UndefinedBehavior("negative letter-spacing")},
-                    {"mixed-scripts.svg", Params().onlyTextFull().withReason("Arabic shaping")},
+                    {"mixed-scripts.svg",
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic shaping")},
                     {"on-Arabic.svg", Params()
+                                          .withGeodeQuarterPixelEdgeCoverage()
                                           .requireFeature(RendererBackendFeature::TextFull)
                                           .withReason("Arabic text")},
                 })),
@@ -1497,7 +1539,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"x-and-y-with-multiple-values-and-tspan.svg", QuarterPixelEdgeReference()},
                     {"x-and-y-with-multiple-values.svg", QuarterPixelEdgeReference()},
                     {"xml-space.svg", QuarterPixelEdgeReference()},
-                    {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
+                    {"bidi-reordering.svg",
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic shaping")},
                     {"complex-grapheme-split-by-tspan.svg",
                      Params::UndefinedBehavior("grapheme split by tspan")},
                     {"complex-graphemes-and-coordinates-list.svg",
@@ -1506,21 +1550,26 @@ INSTANTIATE_TEST_SUITE_P(
                          .onlyTextFull()
                          .withReason("The composed Cyrillic cluster uses its first absolute y")},
                     {"complex-graphemes.svg",
-                     Params().onlyTextFull().withReason("Combining mark needs HarfBuzz")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Combining mark needs HarfBuzz")},
                     {"compound-emojis-and-coordinates-list.svg",
-                     EmojiGuideGolden("donner/svg/renderer/testdata/golden/"
-                                      "donner-compound-emojis-and-coordinates-list.png")},
+                     GeodeCrosshairOnlyGoldenGate(
+                         EmojiGuideGolden("donner/svg/renderer/testdata/golden/"
+                                          "donner-compound-emojis-and-coordinates-list.png"))},
                     {"compound-emojis.svg",
-                     EmojiGuideGolden(
-                         "donner/svg/renderer/testdata/golden/donner-compound-emojis.png")},
+                     GeodeCrosshairOnlyGoldenGate(EmojiGuideGolden(
+                         "donner/svg/renderer/testdata/golden/donner-compound-emojis.png"))},
                     {"emojis.svg",
-                     EmojiGuideGolden("donner/svg/renderer/testdata/golden/donner-emojis.png")},
+                     EmojiGuideGolden("donner/svg/renderer/testdata/golden/donner-emojis.png")
+                         .withGeodeQuarterPixelEdgeCoverage()},
                     {"fill-rule=evenodd.svg",
-                     Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic text shaping requires text-full")},
                     {"rotate-on-Arabic.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
                     {"rotate-with-multiple-values-and-complex-text.svg",
-                     Params().onlyTextFull().withReason("Complex diatrics requires text-full")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Complex diatrics requires text-full")},
                     {"x-and-y-with-multiple-values-and-arabic-text.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping")},
                     {"zalgo.svg",
@@ -1563,6 +1612,7 @@ INSTANTIATE_TEST_SUITE_P(
                          .withGeodeQuarterPixelEdgeCoverage()},
                     {"on-tspan-with-arabic.svg",
                      Params()
+                         .withGeodeQuarterPixelEdgeCoverage()
                          .requireFeature(RendererBackendFeature::TextFull)
                          .withReason("Arabic contextual joining requires HarfBuzz")},
                 })),
@@ -1631,9 +1681,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"on-a-single-tspan.svg", QuarterPixelEdgeReference()},
                     {"on-text-and-tspan.svg", QuarterPixelEdgeReference()},
                     {"arabic-with-lengthAdjust.svg",
-                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic shaping needs HarfBuzz")},
                     {"arabic.svg",
-                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1785,7 +1837,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"without-attributes.svg", QuarterPixelEdgeReference()},
                     {"xml-space-1.svg", QuarterPixelEdgeReference()},
                     {"xml-space-2.svg", QuarterPixelEdgeReference()},
-                    {"bidi-reordering.svg", Params().onlyTextFull().withReason("Arabic shaping")},
+                    {"bidi-reordering.svg",
+                     Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                         "Arabic shaping")},
                     // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                     {"with-filter.svg",
                      GeodeBlurredCrosshairGate(HeavyGlyphReferenceGolden(
@@ -1800,7 +1854,8 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/unicode-bidi",
                 {
                     {"bidi-override.svg",
-                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                     GeodeCrosshairUnderTextGate(
+                         Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz"))},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1823,52 +1878,56 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextWritingMode, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/writing-mode",
-                {
-                    {"horizontal-tb.svg", QuarterPixelEdgeReference()},
-                    {"invalid-value.svg", QuarterPixelEdgeReference()},
-                    {"lr-tb.svg", QuarterPixelEdgeReference()},
-                    {"lr.svg", QuarterPixelEdgeReference()},
-                    {"on-tspan.svg", QuarterPixelEdgeReference()},
-                    {"rl-tb.svg", QuarterPixelEdgeReference()},
-                    {"rl.svg", QuarterPixelEdgeReference()},
-                    {"vertical-lr.svg", QuarterPixelEdgeReference()},
-                    {"vertical-rl.svg", QuarterPixelEdgeReference()},
-                    {"arabic-with-rl.svg",
-                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
-                    {"japanese-with-tb.svg",
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "text/writing-mode",
+            {
+                {"horizontal-tb.svg", QuarterPixelEdgeReference()},
+                {"invalid-value.svg", QuarterPixelEdgeReference()},
+                {"lr-tb.svg", QuarterPixelEdgeReference()},
+                {"lr.svg", QuarterPixelEdgeReference()},
+                {"on-tspan.svg", QuarterPixelEdgeReference()},
+                {"rl-tb.svg", QuarterPixelEdgeReference()},
+                {"rl.svg", QuarterPixelEdgeReference()},
+                {"vertical-lr.svg", QuarterPixelEdgeReference()},
+                {"vertical-rl.svg", QuarterPixelEdgeReference()},
+                {"arabic-with-rl.svg",
+                 Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
+                     "Arabic shaping needs HarfBuzz")},
+                {"japanese-with-tb.svg",
+                 GeodeCrosshairOnlyGoldenGate(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png")
                          .onlyTextFull()
                          .withReason("Reference disagreement: the PNG places upright glyphs 5.6 px "
                                      "below the vmtx origin CSS Writing Modes 3 5.1.1 requires "
-                                     "(golden README)")},
-                    // CSS Text Decoration 3 leaves the position and thickness of an `auto`
-                    // underline to the user agent, and the underline is most of the difference from
-                    // any reference.
-                    {"mixed-languages-with-tb-and-underline.svg",
-                     Params::UndefinedBehavior(
-                         "underline position and thickness are user-agent defined (CSS Text "
-                         "Decoration 3)")},
-                    {"mixed-languages-with-tb.svg",
-                     Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
-                         .onlyTextFull()
-                         .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
-                                     "origin CSS Writing Modes 3 5.1.1 requires (golden README)")},
-                    {"tb-and-punctuation.svg",
+                                     "(golden README)"))},
+                // CSS Text Decoration 3 leaves the position and thickness of an `auto`
+                // underline to the user agent, and the underline is most of the difference from
+                // any reference.
+                {"mixed-languages-with-tb-and-underline.svg",
+                 Params::UndefinedBehavior(
+                     "underline position and thickness are user-agent defined (CSS Text "
+                     "Decoration 3)")},
+                {"mixed-languages-with-tb.svg",
+                 Params::WithGoldenOverride(
+                     "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
+                     .onlyTextFull()
+                     .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
+                                 "origin CSS Writing Modes 3 5.1.1 requires (golden README)")},
+                {"tb-and-punctuation.svg",
+                 GeodeGlyphEdgeGoldenGate(
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png")
                          .onlyTextFull()
                          .withReason("Reference disagreement: the PNG lacks the `vert` punctuation "
                                      "forms and vmtx origin CSS Writing Modes 3 5.1.1 requires "
-                                     "(golden README)")},
-                    {"tb-with-rotate-and-underline.svg",
-                     Params::UndefinedBehavior("tb with rotate and underline")},
-                    {"tb-with-rotate.svg", Params::UndefinedBehavior("tb with rotate")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+                                     "(golden README)"))},
+                {"tb-with-rotate-and-underline.svg",
+                 Params::UndefinedBehavior("tb with rotate and underline")},
+                {"tb-with-rotate.svg", Params::UndefinedBehavior("tb with rotate")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 }  // namespace donner::svg
