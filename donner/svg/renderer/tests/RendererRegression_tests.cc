@@ -2097,6 +2097,22 @@ TEST_F(RendererRegressionTests, RectangularClipPreservesTheOriginalPaintCoordina
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST_F(RendererRegressionTests, TransparentFilteredSiblingPreservesOpaqueLayerPixels) {
+  const RendererBitmap expected = RenderBackdropCase(R"svg(
+    <rect width="57" height="40" fill="seagreen"/>)svg");
+  const RendererBitmap actual = RenderBackdropCase(R"svg(
+    <filter id="transparent" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <feFlood flood-opacity="0"/>
+    </filter>
+    <g style="isolation:isolate">
+      <rect width="57" height="40" fill="seagreen"/>
+      <rect width="64" height="64" filter="url(#transparent)"/>
+    </g>)svg");
+  EXPECT_THAT(PixelAt(actual, 25, 20), testing::ElementsAre(46, 139, 87, 255));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "transparent_filtered_sibling",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // BackgroundAlpha is the alpha of what the enclosing isolation group painted before the filtered
 // element. The blue square painted outside the group is not part of that backdrop, and the
 // filtered element's own red square is replaced by the filter result.

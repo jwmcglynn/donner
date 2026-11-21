@@ -4221,11 +4221,8 @@ tiny_skia::PixmapPaint RendererTinySkia::makePixmapPaint(const tiny_skia::Pixmap
                                                          tiny_skia::FilterQuality quality) const {
   tiny_skia::PixmapPaint paint;
   paint.quality = quality;
-  // Composites landing on `frame_` stay on the float raster pipeline. The
-  // 8-bit compose path drifts a fully opaque source pixel to alpha 250 instead
-  // of 255, which an intermediate surface absorbs at its next composite but
-  // `frame_` cannot: it is what `takeSnapshot` hands to callers, so the drift
-  // would surface as a nominally opaque region reporting partial coverage.
+  // The final snapshot uses high-precision compositing. Intermediate surfaces may take the
+  // integer path, where a transparent source must also preserve every destination channel.
   paint.forceHqPipeline = &destination == &frame_;
   return paint;
 }

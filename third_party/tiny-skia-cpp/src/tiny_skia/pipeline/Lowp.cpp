@@ -1410,6 +1410,33 @@ inline float exclusiveReflect(float v, float limit, float invLimit) {
                   limit);
 }
 
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__aarch64__) && defined(__ARM_NEON)
+inline uint8x16_t multiplyBytes(uint8x16_t x, uint8x16_t y) {
+  const U16x16T product(vmull_u8(vget_low_u8(x), vget_low_u8(y)),
+                        vmull_u8(vget_high_u8(x), vget_high_u8(y)));
+  const U16x16T scaled = div255(product);
+  return vcombine_u8(vmovn_u16(scaled.neonLo()), vmovn_u16(scaled.neonHi()));
+}
+#endif
+
+inline void finishPattern(Pipeline& pipeline) {
+  const auto& ctx = pipeline.ctx->fusedBilinearPattern;
+  if (ctx.fuseSourceOverCoverage) {
+    const auto coverage = fromFloat(pipeline.ctx->currentCoverage);
+    pipeline.r = mulDiv255(pipeline.r, coverage);
+    pipeline.g = mulDiv255(pipeline.g, coverage);
+    pipeline.b = mulDiv255(pipeline.b, coverage);
+    pipeline.a = mulDiv255(pipeline.a, coverage);
+  }
+  if (!ctx.fuseSourceOver && !ctx.fuseSourceOverCoverage) {
+    pipeline.nextStage();
+  } else if (pipeline.tail >= kStageWidth) {
+    sourceOverRgba(pipeline);
+  } else {
+    sourceOverRgbaTail(pipeline);
+  }
+}
+
 void fusedBilinearPattern(Pipeline& pipeline) {
   const auto& ctx = pipeline.ctx->fusedBilinearPattern;
   if (!ctx.pixels || ctx.width == 0 || ctx.height == 0) {
@@ -1461,8 +1488,8 @@ void fusedBilinearPattern(Pipeline& pipeline) {
 
       const std::size_t scanWidth = pipeline.rect->right() - pipeline.rect->x();
       const bool needOpacity = ctx.opacity < 1.0f;
-      const uint8x16_t vopac8 = vdupq_n_u8(
-          static_cast<std::uint8_t>(std::min(255.0f, ctx.opacity * 255.0f + 0.5f)));
+      const auto opacity256 = static_cast<std::uint16_t>(ctx.opacity * 256.0f + 0.5f);
+      const uint8x8_t opacity8 = vdup_n_u8(static_cast<std::uint8_t>(opacity256));
       const uint8x16_t v255_8 = vdupq_n_u8(255);
 
       // One-time check: is the entire tile fully opaque (all alpha=255)?
@@ -1500,39 +1527,20 @@ void fusedBilinearPattern(Pipeline& pipeline) {
           // SourceOver blend path.
           while (run >= 16) {
             uint8x16x4_t src = vld4q_u8(row + tileX * 4);
-            if (needOpacity) {
-              auto sc = [&](uint8x16_t v) {
-                return vcombine_u8(
-                    vrshrn_n_u16(vmull_u8(vget_low_u8(v), vget_low_u8(vopac8)), 8),
-                    vrshrn_n_u16(vmull_u8(vget_high_u8(v), vget_high_u8(vopac8)), 8));
-              };
-              src.val[0] = sc(src.val[0]); src.val[1] = sc(src.val[1]);
-              src.val[2] = sc(src.val[2]); src.val[3] = sc(src.val[3]);
+            if (opacity256 < 256) {
+              for (auto& channel : src.val) {
+                channel = vcombine_u8(
+                    vrshrn_n_u16(vmull_u8(vget_low_u8(channel), opacity8), 8),
+                    vrshrn_n_u16(vmull_u8(vget_high_u8(channel), opacity8), 8));
+              }
             }
             auto* dp = dstRow + dstOff;
             const uint8x16x4_t d = vld4q_u8(dp);
             const uint8x16_t invA = vsubq_u8(v255_8, src.val[3]);
             uint8x16x4_t out;
-            out.val[0] = vcombine_u8(
-                vadd_u8(vget_low_u8(src.val[0]),
-                    vrshrn_n_u16(vmull_u8(vget_low_u8(d.val[0]), vget_low_u8(invA)), 8)),
-                vadd_u8(vget_high_u8(src.val[0]),
-                    vrshrn_n_u16(vmull_u8(vget_high_u8(d.val[0]), vget_high_u8(invA)), 8)));
-            out.val[1] = vcombine_u8(
-                vadd_u8(vget_low_u8(src.val[1]),
-                    vrshrn_n_u16(vmull_u8(vget_low_u8(d.val[1]), vget_low_u8(invA)), 8)),
-                vadd_u8(vget_high_u8(src.val[1]),
-                    vrshrn_n_u16(vmull_u8(vget_high_u8(d.val[1]), vget_high_u8(invA)), 8)));
-            out.val[2] = vcombine_u8(
-                vadd_u8(vget_low_u8(src.val[2]),
-                    vrshrn_n_u16(vmull_u8(vget_low_u8(d.val[2]), vget_low_u8(invA)), 8)),
-                vadd_u8(vget_high_u8(src.val[2]),
-                    vrshrn_n_u16(vmull_u8(vget_high_u8(d.val[2]), vget_high_u8(invA)), 8)));
-            out.val[3] = vcombine_u8(
-                vadd_u8(vget_low_u8(src.val[3]),
-                    vrshrn_n_u16(vmull_u8(vget_low_u8(d.val[3]), vget_low_u8(invA)), 8)),
-                vadd_u8(vget_high_u8(src.val[3]),
-                    vrshrn_n_u16(vmull_u8(vget_high_u8(d.val[3]), vget_high_u8(invA)), 8)));
+            for (int channel = 0; channel < 4; ++channel) {
+              out.val[channel] = vaddq_u8(src.val[channel], multiplyBytes(d.val[channel], invA));
+            }
             vst4q_u8(dp, out);
             tileX += 16;
             dstOff += 64;
@@ -1542,19 +1550,14 @@ void fusedBilinearPattern(Pipeline& pipeline) {
           while (run > 0) {
             const std::uint8_t* sp = row + tileX * 4;
             auto* dp = dstRow + dstOff;
-            std::uint16_t sr = sp[0], sg = sp[1], sb = sp[2], sa = sp[3];
-            if (needOpacity) {
-              const auto op = static_cast<std::uint16_t>(ctx.opacity * 255.0f + 0.5f);
-              sr = static_cast<std::uint16_t>((sr * op + 128) >> 8);
-              sg = static_cast<std::uint16_t>((sg * op + 128) >> 8);
-              sb = static_cast<std::uint16_t>((sb * op + 128) >> 8);
-              sa = static_cast<std::uint16_t>((sa * op + 128) >> 8);
+            const auto scaleOpacity = [opacity256](std::uint8_t c) {
+              return static_cast<std::uint8_t>((c * opacity256 + 128) >> 8);
+            };
+            const std::uint8_t inverseAlpha = 255 - scaleOpacity(sp[3]);
+            for (int channel = 0; channel < 4; ++channel) {
+              const unsigned destination = (dp[channel] * inverseAlpha + 127u) / 255u;
+              dp[channel] = static_cast<std::uint8_t>(scaleOpacity(sp[channel]) + destination);
             }
-            std::uint16_t inv = 255 - sa;
-            dp[0] = static_cast<std::uint8_t>(sr + ((dp[0] * inv + 128) >> 8));
-            dp[1] = static_cast<std::uint8_t>(sg + ((dp[1] * inv + 128) >> 8));
-            dp[2] = static_cast<std::uint8_t>(sb + ((dp[2] * inv + 128) >> 8));
-            dp[3] = static_cast<std::uint8_t>(sa + ((dp[3] * inv + 128) >> 8));
             ++tileX;
             dstOff += 4;
             --run;
@@ -1705,62 +1708,6 @@ void fusedBilinearPattern(Pipeline& pipeline) {
       aLo = scaleOpac(aLo); aHi = scaleOpac(aHi);
     }
 
-    // Fused SourceOver+Store: blend and write directly to pixmapDst.
-    if (ctx.fuseSourceOver || ctx.fuseSourceOverCoverage) {
-      // Scale by coverage if this is the AA edge pipeline.
-      if (ctx.fuseSourceOverCoverage) {
-        const uint16x8_t cov = vdupq_n_u16(
-            static_cast<std::uint16_t>(pipeline.ctx->currentCoverage * 255.0f + 0.5f));
-        const uint16x8_t v128 = vdupq_n_u16(128);
-        auto scaleCov = [&](uint16x8_t v) -> uint16x8_t {
-          return vshrq_n_u16(vaddq_u16(vmulq_u16(v, cov), v128), 8);
-        };
-        rLo = scaleCov(rLo); rHi = scaleCov(rHi);
-        gLo = scaleCov(gLo); gHi = scaleCov(gHi);
-        bLo = scaleCov(bLo); bHi = scaleCov(bHi);
-        aLo = scaleCov(aLo); aHi = scaleCov(aHi);
-      }
-
-      auto pixels = pixelsAtXY(*pipeline.pixmapDst, pipeline.dx, pipeline.dy);
-      if (pipeline.tail >= kStageWidth) {
-        const auto* dstPacked = reinterpret_cast<const std::uint8_t*>(pixels.data());
-        const uint8x16x4_t dstRgba = vld4q_u8(dstPacked);
-        const uint16x8_t v128 = vdupq_n_u16(128);
-        const uint16x8_t v255 = vdupq_n_u16(255);
-        const uint16x8_t invALo = vsubq_u16(v255, aLo);
-        const uint16x8_t invAHi = vsubq_u16(v255, aHi);
-        auto blendCh = [&](uint16x8_t srcLo, uint16x8_t srcHi, uint8x16_t dst8) {
-          uint16x8_t dLo = vmovl_u8(vget_low_u8(dst8));
-          uint16x8_t dHi = vmovl_u8(vget_high_u8(dst8));
-          uint16x8_t oLo = vaddq_u16(srcLo,
-              vshrq_n_u16(vaddq_u16(vmulq_u16(dLo, invALo), v128), 8));
-          uint16x8_t oHi = vaddq_u16(srcHi,
-              vshrq_n_u16(vaddq_u16(vmulq_u16(dHi, invAHi), v128), 8));
-          return vcombine_u8(vmovn_u16(oLo), vmovn_u16(oHi));
-        };
-        uint8x16x4_t outRgba;
-        outRgba.val[0] = blendCh(rLo, rHi, dstRgba.val[0]);
-        outRgba.val[1] = blendCh(gLo, gHi, dstRgba.val[1]);
-        outRgba.val[2] = blendCh(bLo, bHi, dstRgba.val[2]);
-        outRgba.val[3] = blendCh(aLo, aHi, dstRgba.val[3]);
-        auto* outPacked = reinterpret_cast<std::uint8_t*>(pixels.data());
-        vst4q_u8(outPacked, outRgba);
-      } else {
-        pipeline.r = U16x16T(rLo, rHi);
-        pipeline.g = U16x16T(gLo, gHi);
-        pipeline.b = U16x16T(bLo, bHi);
-        pipeline.a = U16x16T(aLo, aHi);
-        load8888Tail(pipeline.tail, pixels, pipeline.dr, pipeline.dg, pipeline.db, pipeline.da);
-        pipeline.r = sourceOverChannel(pipeline.r, pipeline.dr, pipeline.a);
-        pipeline.g = sourceOverChannel(pipeline.g, pipeline.dg, pipeline.a);
-        pipeline.b = sourceOverChannel(pipeline.b, pipeline.db, pipeline.a);
-        pipeline.a = sourceOverChannel(pipeline.a, pipeline.da, pipeline.a);
-        store8888Tail(pipeline.tail, pixels, pipeline.r, pipeline.g, pipeline.b, pipeline.a);
-      }
-      pipeline.nextStage();
-      return;
-    }
-
     pipeline.r = U16x16T(rLo, rHi);
     pipeline.g = U16x16T(gLo, gHi);
     pipeline.b = U16x16T(bLo, bHi);
@@ -1804,47 +1751,12 @@ void fusedBilinearPattern(Pipeline& pipeline) {
       }
     }
 
-    // Fused SourceOver+Store for scalar nearest path.
-    if (ctx.fuseSourceOver || ctx.fuseSourceOverCoverage) {
-      if (ctx.fuseSourceOverCoverage) {
-        const std::uint16_t cov =
-            static_cast<std::uint16_t>(pipeline.ctx->currentCoverage * 255.0f + 0.5f);
-        for (std::size_t i = 0; i < 16; ++i) {
-          rArr[i] = static_cast<std::uint16_t>((rArr[i] * cov + 128) >> 8);
-          gArr[i] = static_cast<std::uint16_t>((gArr[i] * cov + 128) >> 8);
-          bArr[i] = static_cast<std::uint16_t>((bArr[i] * cov + 128) >> 8);
-          aArr[i] = static_cast<std::uint16_t>((aArr[i] * cov + 128) >> 8);
-        }
-      }
-      pipeline.r = U16x16T(rArr);
-      pipeline.g = U16x16T(gArr);
-      pipeline.b = U16x16T(bArr);
-      pipeline.a = U16x16T(aArr);
-      auto pixels = pixelsAtXY(*pipeline.pixmapDst, pipeline.dx, pipeline.dy);
-      if (pipeline.tail >= kStageWidth) {
-        load8888Lowp(pixels, pipeline.dr, pipeline.dg, pipeline.db, pipeline.da);
-      } else {
-        load8888Tail(pipeline.tail, pixels, pipeline.dr, pipeline.dg, pipeline.db, pipeline.da);
-      }
-      pipeline.r = sourceOverChannel(pipeline.r, pipeline.dr, pipeline.a);
-      pipeline.g = sourceOverChannel(pipeline.g, pipeline.dg, pipeline.a);
-      pipeline.b = sourceOverChannel(pipeline.b, pipeline.db, pipeline.a);
-      pipeline.a = sourceOverChannel(pipeline.a, pipeline.da, pipeline.a);
-      if (pipeline.tail >= kStageWidth) {
-        store8888Lowp(pixels, pipeline.r, pipeline.g, pipeline.b, pipeline.a);
-      } else {
-        store8888Tail(pipeline.tail, pixels, pipeline.r, pipeline.g, pipeline.b, pipeline.a);
-      }
-      pipeline.nextStage();
-      return;
-    }
-
     pipeline.r = U16x16T(rArr);
     pipeline.g = U16x16T(gArr);
     pipeline.b = U16x16T(bArr);
     pipeline.a = U16x16T(aArr);
 #endif
-    pipeline.nextStage();
+    finishPattern(pipeline);
     return;
   }
 
@@ -1915,35 +1827,7 @@ void fusedBilinearPattern(Pipeline& pipeline) {
                     F32x8T({aArr[8], aArr[9], aArr[10], aArr[11], aArr[12], aArr[13], aArr[14], aArr[15]}));
   roundF32ToU16(rf, gf, bf, af, pipeline.r, pipeline.g, pipeline.b, pipeline.a);
 
-  // Fused SourceOver+Store for bilinear path.
-  if (ctx.fuseSourceOver || ctx.fuseSourceOverCoverage) {
-    if (ctx.fuseSourceOverCoverage) {
-      const auto cov = fromFloat(pipeline.ctx->currentCoverage);
-      pipeline.r = mulDiv255(pipeline.r, cov);
-      pipeline.g = mulDiv255(pipeline.g, cov);
-      pipeline.b = mulDiv255(pipeline.b, cov);
-      pipeline.a = mulDiv255(pipeline.a, cov);
-    }
-    auto pixels = pixelsAtXY(*pipeline.pixmapDst, pipeline.dx, pipeline.dy);
-    if (pipeline.tail >= kStageWidth) {
-      load8888Lowp(pixels, pipeline.dr, pipeline.dg, pipeline.db, pipeline.da);
-    } else {
-      load8888Tail(pipeline.tail, pixels, pipeline.dr, pipeline.dg, pipeline.db, pipeline.da);
-    }
-    pipeline.r = sourceOverChannel(pipeline.r, pipeline.dr, pipeline.a);
-    pipeline.g = sourceOverChannel(pipeline.g, pipeline.dg, pipeline.a);
-    pipeline.b = sourceOverChannel(pipeline.b, pipeline.db, pipeline.a);
-    pipeline.a = sourceOverChannel(pipeline.a, pipeline.da, pipeline.a);
-    if (pipeline.tail >= kStageWidth) {
-      store8888Lowp(pixels, pipeline.r, pipeline.g, pipeline.b, pipeline.a);
-    } else {
-      store8888Tail(pipeline.tail, pixels, pipeline.r, pipeline.g, pipeline.b, pipeline.a);
-    }
-    pipeline.nextStage();
-    return;
-  }
-
-  pipeline.nextStage();
+  finishPattern(pipeline);
 }
 
 }  // namespace

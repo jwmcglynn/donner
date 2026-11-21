@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <utility>
+
 #include "ImageComparisonTestFixture.h"
 #include "tiny_skia/Color.h"
 #include "tiny_skia/Geom.h"
@@ -35,6 +37,38 @@ Pixmap createTriangle() {
   auto mut = pixmap->mutableView();
   Painter::fillPath(mut, *path, paint, FillRule::Winding, Transform::identity());
   return std::move(*pixmap);
+}
+
+TEST(PatternTest, NearestSourceOverPreservesOpaqueDestinationAcrossBatches) {
+  constexpr int width = 37;
+  auto tile = Pixmap::fromSize(width, 1);
+  auto destination = Pixmap::fromSize(width, 1);
+  ASSERT_TRUE(tile && destination);
+  // Alternate transparent and half-transparent red texels so the opaque-copy shortcut cannot apply.
+  for (int x = 1; x < width; x += 2) {
+    tile->data()[x * 4] = 128;
+    tile->data()[x * 4 + 3] = 128;
+  }
+  const auto rect = Rect::fromLTRB(0, 0, width, 1);
+  ASSERT_TRUE(rect);
+  for (const SpreadMode mode : {SpreadMode::Pad, SpreadMode::Repeat}) {
+    for (const auto [opacity, red] : {std::pair{1.0f, 128}, std::pair{0.5f, 64},
+                                      std::pair{0.19f, 25}}) {
+      destination->fill(Color::fromRgba8(0, 255, 0, 255));
+      Paint paint;
+      paint.antiAlias = false;
+      paint.shader = Pattern(tile->view(), mode, FilterQuality::Nearest, opacity,
+                             Transform::identity());
+      auto view = destination->mutableView();
+      Painter::fillRect(view, *rect, paint, Transform::identity());
+      for (int x = 0; x < width; ++x) {
+        const int alpha = x % 2 ? red : 0;
+        EXPECT_EQ(destination->data()[x * 4], alpha) << x;
+        EXPECT_EQ(destination->data()[x * 4 + 1], 255 - alpha) << x;
+        EXPECT_EQ(destination->data()[x * 4 + 3], 255) << x;
+      }
+    }
+  }
 }
 
 TEST(PatternTest, PadNearest) {
