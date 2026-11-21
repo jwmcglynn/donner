@@ -1555,8 +1555,6 @@ def golden_reason_violations(report: dict[str, object]) -> list[str]:
 # the row back from the change until it is fixed.
 PIXEL_BUDGET_RATCHET_LIMIT = DEFAULT_MAX_PIXELS
 PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
-    "text/font-variant/inherit.svg": {"default_text": 1200},
-    "text/font-variant/small-caps.svg": {"default_text": 1200},
 }
 
 THRESHOLD_RATCHET_LIMIT = 0.05
@@ -1989,8 +1987,6 @@ SIMPLE_TIER = frozenset({"simple"})
 GEODE_GATE_ALLOWLIST: dict[str, frozenset[str]] = {
     "painting/marker/with-a-text-child.svg": BOTH_TIERS,
     "text/font-size/named-value.svg": BOTH_TIERS,
-    "text/font-variant/inherit.svg": SIMPLE_TIER,
-    "text/font-variant/small-caps.svg": SIMPLE_TIER,
     "text/text-decoration/tspan-decoration.svg": BOTH_TIERS,
     "text/text-decoration/underline-with-dy-list-2.svg": BOTH_TIERS,
     "text/text/compound-emojis-and-coordinates-list.svg": BOTH_TIERS,

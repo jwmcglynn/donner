@@ -171,16 +171,6 @@ ImageComparisonParams GeodeUnresolvedBlurGate(ImageComparisonParams params) {
       "paths and their overlap");
 }
 
-/// \p params, with the Geode comparison disabled in the simple text tier: there the row's CPU
-/// comparison has a pixel budget above the default (`withSimpleTextMaxPixels`), which is not
-/// approved for the Geode lane. With full shaping the row has the default budget, so the Geode
-/// comparison runs.
-ImageComparisonParams GeodeSimpleTextCpuAllowanceGate(ImageComparisonParams params) {
-  return params.disableGeodeForSimpleText(
-      "Harness mismatch: the simple-tier CPU budget (1200 px for font-variant) is not approved for "
-      "Geode, and comparing would apply it to Geode, which differs by 1108 px in that tier");
-}
-
 /// \p params, with the Geode comparison disabled: the text sits on the reference's crosshair, so
 /// the crosshair's quarter-pixel quantized rows border glyph ink, and the quarter-pixel edge
 /// coverage rule's vertical-neighbor condition rejects those pixels.
@@ -1412,21 +1402,10 @@ INSTANTIATE_TEST_SUITE_P(TextFontStyle, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    TextFontVariant, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/font-variant",
-            {
-                {"inherit.svg",
-                 GeodeSimpleTextCpuAllowanceGate(Params().withSimpleTextMaxPixels(1200).withReason(
-                     "small-caps is emulated with simple text"))},
-                {"small-caps.svg",
-                 GeodeSimpleTextCpuAllowanceGate(Params().withSimpleTextMaxPixels(1200).withReason(
-                     "small-caps is emulated with simple text"))},
-            })),
-        ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(TextFontVariant, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("text/font-variant")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextFontWeight, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("text/font-weight")),
