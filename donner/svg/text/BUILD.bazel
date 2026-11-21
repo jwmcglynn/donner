@@ -310,6 +310,7 @@ donner_cc_fuzzer(
     name = "font_decoder_fuzzer",
     srcs = ["tests/FontDecoder_fuzzer.cc"],
     corpus = ":font_decoder_fuzzer_corpus",
+    data = ["//third_party/resvg-test-suite:fonts/NotoSans-Regular.ttf"],
     local_defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],

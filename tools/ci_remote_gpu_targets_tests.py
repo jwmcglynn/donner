@@ -36,6 +36,10 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
                                       rule("//pkg:normal"), rule("//pkg:soak", "fuzz_soak")])
         self.assertEqual(set(roots), {REMOTE_TARGETS[local], "//donner/editor/tests:ci_linux_build_rnr_replay_tests_geode",
                                      "//pkg:ci_linux_build_perf", "//pkg:normal", "//pkg:ci_linux_build_soak"})
+        affected = [rule("//pkg:ordinary"), rule("//pkg:device", "ci-linux-hardware-gpu-source")]
+        self.assertEqual(linux_native_patterns(affected), ["//pkg:device", "//pkg:ordinary"])
+        self.assertEqual(linux_native_patterns(affected, hardware_gpu=True),
+                         ["//pkg:ci_linux_gpu_device", "//pkg:device", "//pkg:ordinary"])
 
     def test_mapping_is_limited_to_measured_sharded_suites(self):
         self.assertEqual(
@@ -44,6 +48,8 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
                     "//donner/editor/tests:rnr_replay_tests_geode_ci_remote",
                 "//donner/svg/renderer/tests:resvg_test_suite_geode":
                     "//donner/svg/renderer/tests:resvg_test_suite_geode_ci_remote",
+                "//donner/svg/renderer/tests:resvg_test_suite_geode_max_text":
+                    "//donner/svg/renderer/tests:resvg_test_suite_geode_max_text_ci_remote",
             },
             REMOTE_TARGETS,
         )

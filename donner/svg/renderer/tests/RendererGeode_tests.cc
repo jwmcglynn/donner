@@ -956,6 +956,57 @@ TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndStillRenders) {
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsFalse());
 }
 
+#ifdef __APPLE__
+TEST_F(RendererGeodeTest, NativeMetalBoundsOutstandingFrameSubmissions) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  if (device->runtimeDevice().shaderSourceKind() != gpu::ShaderSourceKind::Msl) {
+    GTEST_SKIP() << "requires native Metal";
+  }
+  RendererGeode renderer(device);
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(device->runtimeDevice());
+  const auto recordFrame = [&] {
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  };
+  recordFrame();
+  renderer.endFrame();
+  ASSERT_THAT(device->waitForQueueIdle(), testing::Eq(geode::GpuWaitResult::Complete));
+  const uint64_t baseline = metal.completedSerial();
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  recordFrame();
+  renderer.endFrame();
+  const uint64_t firstFrameBuffers = metal.commandBuffersInFlightForTest();
+  for (int frame = 0; frame < 2; ++frame) {
+    recordFrame();
+    renderer.endFrame();
+  }
+  EXPECT_THAT(metal.lastSubmittedSerial(), testing::Eq(baseline + 3));
+  EXPECT_THAT(metal.completedSerial(), testing::Eq(baseline));
+
+  recordFrame();
+  const auto previousWait = metal.lastPendingWaitLookForTest();
+  std::jthread releaseOldest([&](std::stop_token stop) {
+    while (!stop.stop_requested() && metal.lastPendingWaitLookForTest() == previousWait) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!stop.stop_requested()) {
+      metal.releasePausedCommandBuffersForTest(firstFrameBuffers);
+    }
+  });
+  renderer.endFrame();
+  releaseOldest.request_stop();
+  releaseOldest.join();
+  const uint64_t completedAtReturn = metal.completedSerial();
+  metal.resumeSubmissionsForTest();
+
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(completedAtReturn, testing::Eq(baseline + 1));
+  EXPECT_THAT(metal.lastSubmittedSerial(), testing::Eq(baseline + 4));
+}
+#endif
+
 TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());

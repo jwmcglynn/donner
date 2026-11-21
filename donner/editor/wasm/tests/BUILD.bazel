@@ -33,6 +33,7 @@ eslint_bin.eslint_test(
         ":node_modules/globals",
         "//donner/editor/wasm:browser-file-dialogs.js",
         "//donner/editor/wasm:catalog-fonts.js",
+        "//donner/editor/wasm:editor-abort-diagnostics.js",
         "//donner/editor/wasm:editor-bootstrap.js",
         "//donner/editor/wasm:enable-threads.js",
         "//donner/editor/wasm:packaged-resource-loader.js",
@@ -596,6 +597,17 @@ js_test(
         "//donner/gpu/browser:library_donner_gpu.js",
     ],
     entry_point = "browser-bridge-surface.spec.mjs",
+    node_options = ["--test"],
+)
+
+# Runs the editor's abort and worker-error hook against stub threads, so its records and forwarding
+# are checked under the normal test gate rather than only after a browser abort.
+js_test(
+    name = "editor_abort_diagnostics_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["//donner/editor/wasm:editor-abort-diagnostics.js"],
+    entry_point = "editor-abort-diagnostics.spec.mjs",
     node_options = ["--test"],
 )
 

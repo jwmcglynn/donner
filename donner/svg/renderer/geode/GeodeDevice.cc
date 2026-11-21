@@ -351,11 +351,29 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds stallBound
   if (!physicalDevice_->root().hasBackendDevice()) {
     return GpuWaitResult::Complete;
   }
-  // Every runtime device reports completion from its own submissions, so the queue is idle for
-  // this context exactly when its last submission has retired. That submission waits behind
-  // everything queued ahead of it, so the wait gives up only when that work stops progressing.
-  const gpu::SerialWaitResult wait =
-      runtimeDevice_->waitForSerialUnlessStalled(runtimeDevice_->lastSubmittedSerial(), stallBound);
+  return waitForQueueSerial(runtimeDevice_->lastSubmittedSerial(), stallBound);
+}
+
+bool GeodeDevice::waitForFrameSubmissionRoom() const {
+  if (physicalDevice_->root().capabilities().backend != GpuBackendKind::NativeMetal) {
+    return true;
+  }
+  if (isDeviceLost()) {
+    return false;
+  }
+  constexpr uint64_t kMaxOutstandingSubmissions = 3;
+  const uint64_t submitted = runtimeDevice_->lastSubmittedSerial();
+  if (submitted < kMaxOutstandingSubmissions) {
+    return true;
+  }
+  const uint64_t retireThrough = submitted - kMaxOutstandingSubmissions + 1;
+  return runtimeDevice_->completedSerial() >= retireThrough ||
+         waitForQueueSerial(retireThrough, kDefaultGpuWaitTimeout) == GpuWaitResult::Complete;
+}
+
+GpuWaitResult GeodeDevice::waitForQueueSerial(uint64_t serial,
+                                              std::chrono::milliseconds stallBound) const {
+  const gpu::SerialWaitResult wait = runtimeDevice_->waitForSerialUnlessStalled(serial, stallBound);
   if (wait.end == gpu::SerialWaitEnd::Completed) {
     return GpuWaitResult::Complete;
   }
@@ -364,10 +382,11 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds stallBound
   }
   // A backend failure that leaves the serial unable to complete is a queue that will never go
   // idle either, so it is declared the same way as a stall.
-  markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, wait.waited,
-                                 wait.end == gpu::SerialWaitEnd::Stalled
-                                     ? "GPU queue made no progress within the bounded wait deadline"
-                                     : "GPU queue failed before going idle");
+  markDeviceLostAfterWaitTimeout(
+      GpuWaitSite::QueueIdle, wait.waited,
+      wait.end == gpu::SerialWaitEnd::Stalled
+          ? "GPU queue made no progress within the bounded wait deadline"
+          : "GPU queue failed before the requested submission completed");
   return GpuWaitResult::TimedOut;
 }
 

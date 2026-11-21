@@ -106,6 +106,17 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "fatal_abort",
+    srcs = [
+        "FatalAbort.cc",
+    ],
+    hdrs = [
+        "FatalAbort.h",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+donner_cc_library(
     name = "packaged_resource_test_fixture",
     testonly = 1,
     srcs = ["tests/PackagedResourceTestProvider.cc"],
@@ -138,6 +149,7 @@ donner_cc_library(
 donner_cc_library(
     name = "base_test_utils",
     testonly = 1,
+    srcs = ["tests/ScopedCommaDecimalGlobalLocale.cc"],
     hdrs = [
         "tests/BaseTestUtils.h",
         "tests/ContinuousIntegrationMarkers.h",
@@ -151,6 +163,7 @@ donner_cc_library(
         "tests/ScopedCommaDecimalNumericLocale.h",
         "tests/TestTempDir.h",
     ],
+    copts = ["-frtti"],
     # //tools tests (MCP servers, build tooling) share the same test-hygiene
     # helpers (TestTempDir) as //donner tests.
     visibility = donner_internal_visibility() + ["//tools:__subpackages__"],
@@ -253,6 +266,15 @@ donner_cc_test(
         ":diagnostic_renderer",
         ":memory_attribution",
         ":stall_guard",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "fatal_abort_tests",
+    srcs = ["tests/FatalAbort_tests.cc"],
+    deps = [
+        ":fatal_abort",
         "@com_google_gtest//:gtest_main",
     ],
 )

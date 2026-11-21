@@ -413,6 +413,7 @@ jobs:
         env:
           WGPU_REFERENCE: ${{ needs.determine-targets.outputs.wgpu_reference }}
           RUN_METAL: ${{ needs.determine-targets.outputs.metal_affected == 'true' || needs.determine-targets.outputs.fallback == 'true' }}
+          DONNER_CI_LINUX_HARDWARE_GPU: ${{ vars.DONNER_CI_LINUX_HARDWARE_GPU == 'true' }}
           RUN_BROWSER: ${{ needs.determine-targets.outputs.browser_affected == 'true' || needs.determine-targets.outputs.fallback == 'true' }}
           WORKER_QUALIFICATION: ${{ contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
           BROWSER_DIAGNOSTIC: ${{ contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe') }}

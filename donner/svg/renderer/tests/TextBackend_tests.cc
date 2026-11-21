@@ -1020,6 +1020,21 @@ TEST(TextBackendFullVerticalOrigin, MixedPreservesUprightCombiningMarkPositionin
   EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), Gt(0u));
 }
 
+// Noto Sans has a GSUB smcp feature; MPLUS 1p and the Public Sans fallback do not.
+TEST_P(TextBackendTest, DetectsSmallCapsFeature) {
+  const FontHandle notoSans = loadFont("NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(notoSans));
+  EXPECT_TRUE(backend().hasSmallCapsFeature(notoSans));
+
+  const FontHandle mplus = loadFont("MPLUS1p-Regular.ttf", "MPLUS 1p");
+  ASSERT_TRUE(static_cast<bool>(mplus));
+  EXPECT_FALSE(backend().hasSmallCapsFeature(mplus));
+
+  const FontHandle fallback = fallbackFont();
+  ASSERT_TRUE(static_cast<bool>(fallback));
+  EXPECT_FALSE(backend().hasSmallCapsFeature(fallback));
+}
+
 TEST_P(TextBackendTest, SmallCapsSynthesizesScaleForFontWithoutSmcp) {
   // MPLUS 1p doesn't have native smcp - both backends synthesize.
   const FontHandle font = loadFont("MPLUS1p-Regular.ttf", "MPLUS 1p");
@@ -1076,16 +1091,6 @@ TEST(TextBackendSimpleCapabilities, IsCursiveAlwaysFalse) {
   EXPECT_FALSE(backend.isCursive('A'));
   EXPECT_FALSE(backend.isCursive(0x0627));  // Arabic alef
   EXPECT_FALSE(backend.isCursive(0x4E00));  // CJK
-}
-
-TEST(TextBackendSimpleCapabilities, HasSmallCapsFeatureAlwaysFalse) {
-  Registry registry;
-  FontManager fontManager(registry);
-  TextBackendSimple backend(fontManager, registry);
-
-  const FontHandle font = fontManager.fallbackFont();
-  ASSERT_TRUE(static_cast<bool>(font));
-  EXPECT_FALSE(backend.hasSmallCapsFeature(font));
 }
 
 TEST(TextBackendSimpleCapabilities, BitmapGlyphAlwaysNullopt) {
@@ -1310,6 +1315,107 @@ TEST(TextBackendFullCapabilities, SynthesizedSmallCapsShareTheTextFaceScale) {
   }
 }
 
+MATCHER_P(SameGlyphAndAdvanceAs, tolerance, "") {
+  const auto& [actual, expected] = arg;
+  return testing::ExplainMatchResult(
+      AllOf(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, expected.glyphIndex),
+            GlyphFontSizeScaleIs(FloatEq(expected.fontSizeScale)),
+            Field("xAdvance", &TextBackend::ShapedGlyph::xAdvance,
+                  DoubleNear(expected.xAdvance, tolerance))),
+      actual, result_listener);
+}
+
+// A face with native small caps draws its own small-cap glyphs at the full text size, so the
+// simple backend applies the face's smcp substitutions as HarfBuzz does for the full backend,
+// rather than drawing capitals at 0.8 of the size.
+TEST(TextBackendSimpleCapabilities, NativeSmallCapsMatchTheFullBackend) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendSimple simpleBackend(fontManager, registry);
+  TextBackendFull fullBackend(fontManager, registry);
+
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(font));
+  constexpr std::string_view kText = "Text Ab";
+  constexpr float kSize = 64.0f;
+  const auto full = fullBackend.shapeRunNoKerning(font, kSize, kText, 0, kText.size(), false,
+                                                  FontVariant::SmallCaps, false);
+  const auto normal = fullBackend.shapeRunNoKerning(font, kSize, kText, 0, kText.size(), false,
+                                                    FontVariant::Normal, false);
+  ASSERT_THAT(full.glyphs, SizeIs(kText.size()));
+  ASSERT_THAT(normal.glyphs, SizeIs(kText.size()));
+  // The lowercase letters take small-cap glyphs; the capitals and the space keep theirs.
+  for (size_t i : {1u, 2u, 3u, 6u}) {
+    EXPECT_THAT(full.glyphs[i].glyphIndex, Not(testing::Eq(normal.glyphs[i].glyphIndex)))
+        << "glyph " << i;
+  }
+  for (size_t i : {0u, 4u, 5u}) {
+    EXPECT_THAT(full.glyphs[i].glyphIndex, testing::Eq(normal.glyphs[i].glyphIndex))
+        << "glyph " << i;
+  }
+
+  const auto simple = simpleBackend.shapeRunNoKerning(font, kSize, kText, 0, kText.size(), false,
+                                                      FontVariant::SmallCaps, false);
+  EXPECT_THAT(simple.glyphs,
+              Pointwise(SameGlyphAndAdvanceAs(FullTierPrecisionPx(kSize)), full.glyphs));
+}
+
+/// Byte offset of the table tagged \p tag (big-endian) in the sfnt \p bytes, if present.
+std::optional<size_t> SfntTableOffset(std::span<const uint8_t> bytes, uint32_t tag) {
+  for (size_t i = 0; bytes.size() >= 12 && i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    if (entry + 16 <= bytes.size() && ReadBe32(bytes, entry) == tag) {
+      return ReadBe32(bytes, entry + 8);
+    }
+  }
+  return std::nullopt;
+}
+
+// Both backends decide whether a face has native small caps from the default language system of
+// the GSUB script list's first script (Noto Sans: DFLT). With smcp removed there, both report no
+// feature and synthesize, though the face's latn script still lists smcp.
+TEST(TextBackendSimpleCapabilities, SmallCapsFeatureFromTheFirstScriptAgreesWithTheFullBackend) {
+  std::vector<uint8_t> bytes = ReadResvgFontBytes("NotoSans-Regular.ttf");
+  const std::optional<size_t> gsub = SfntTableOffset(bytes, 0x47535542);  // GSUB
+  ASSERT_THAT(gsub, testing::Optional(Gt(0u)));
+  const size_t scriptList = *gsub + ReadBe16(bytes, *gsub + 4);
+  ASSERT_THAT(ReadBe32(bytes, scriptList + 2), testing::Eq(0x44464C54u));  // DFLT first
+  const size_t script = scriptList + ReadBe16(bytes, scriptList + 6);
+  const size_t defaultLangSys = script + ReadBe16(bytes, script);
+  WriteBe16(&bytes, defaultLangSys + 4, 0);  // DFLT's default language system lists no features.
+
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendSimple simpleBackend(fontManager, registry);
+  TextBackendFull fullBackend(fontManager, registry);
+  const FontHandle font = fontManager.loadFontData(bytes, FontDataTrust::Trusted);
+  ASSERT_TRUE(static_cast<bool>(font));
+  EXPECT_FALSE(fullBackend.hasSmallCapsFeature(font));
+  EXPECT_FALSE(simpleBackend.hasSmallCapsFeature(font));
+
+  const auto full =
+      fullBackend.shapeRunNoKerning(font, 64.0f, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  const auto simple =
+      simpleBackend.shapeRunNoKerning(font, 64.0f, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  ASSERT_THAT(full.glyphs, ElementsAre(GlyphFontSizeScaleIs(Lt(1.0f))));
+  EXPECT_THAT(simple.glyphs,
+              Pointwise(SameGlyphAndAdvanceAs(FullTierPrecisionPx(64.0)), full.glyphs));
+}
+
+// The simple backend reads only trusted faces, so the GSUB reader never sees document-supplied
+// bytes: an untrusted load of a face with smcp reports no feature and shapes nothing.
+TEST(TextBackendSimpleCapabilities, UntrustedFaceHasNoSmallCapsFeature) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendSimple backend(fontManager, registry);
+  const FontHandle font = fontManager.loadFontData(ReadResvgFontBytes("NotoSans-Regular.ttf"),
+                                                   FontDataTrust::Untrusted);
+  ASSERT_TRUE(static_cast<bool>(font));
+  EXPECT_FALSE(backend.hasSmallCapsFeature(font));
+  EXPECT_THAT(backend.shapeRun(font, 64.0f, "a", 0, 1, false, FontVariant::SmallCaps, false).glyphs,
+              IsEmpty());
+}
+
 // Glyph outlines at a fractional size are the font's outlines scaled linearly, as the simple
 // backend computes them in floating point, and so are outlines too large to oversample.
 TEST(TextBackendFullCapabilities, FractionalSizeOutlinesKeepFontUnitPrecision) {
@@ -1333,20 +1439,6 @@ TEST(TextBackendFullCapabilities, FractionalSizeOutlinesKeepFontUnitPrecision) {
                   BoxNear(expected, FullTierPrecisionPx(size)));
     }
   }
-}
-
-TEST(TextBackendFullCapabilities, DetectsSmallCapsFeature) {
-  Registry registry;
-  FontManager fontManager(registry);
-  TextBackendFull backend(fontManager, registry);
-
-  const FontHandle notoSans = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
-  ASSERT_TRUE(static_cast<bool>(notoSans));
-  EXPECT_TRUE(backend.hasSmallCapsFeature(notoSans));
-
-  const FontHandle mplus = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
-  ASSERT_TRUE(static_cast<bool>(mplus));
-  EXPECT_FALSE(backend.hasSmallCapsFeature(mplus));
 }
 
 TEST(TextBackendFullCapabilities, BitmapGlyphReturnsEmojiBitmap) {

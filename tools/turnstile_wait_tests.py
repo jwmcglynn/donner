@@ -120,7 +120,9 @@ class WaitLoopTests(unittest.TestCase):
     def test_free_pool_admits_after_two_confirming_polls(self):
         api = FakeActions(self.clock, {_ME: (1, "queued")})
         self.assertEqual(self._turnstile(api).run(), 0)
-        self.assertEqual(self.clock.slept, [60])
+        # A clear poll is confirmed after the confirmation interval, not the 60s base interval.
+        self.assertEqual(self.clock.slept, [10])
+        self.assertIn("0/4 pool slots held; confirming in 10s", self.logged[-3])
         self.assertIn("0/4 pool slots held, proceeding", self.logged[-2])
         self.assertRegex(self.logged[-1], r"API requests .*remaining=")
 
@@ -143,8 +145,85 @@ class WaitLoopTests(unittest.TestCase):
 
         api.on_request = release
         self.assertEqual(self._turnstile(api).run(), 0)
-        # 7 hold slots ahead of us -> 4 releases needed -> 240s, then 180, 120, 60, confirm.
-        self.assertEqual(self.clock.slept, [240, 180, 120, 60, 60])
+        # 7 hold slots ahead of us -> 4 releases needed -> 240s, then 180, 120, 60, then the
+        # 10s confirmation.
+        self.assertEqual(self.clock.slept, [240, 180, 120, 60, 10])
+
+    def _scripted(self, holders_per_poll):
+        """Capacity 1; on poll N, one other run executes when holders_per_poll[N - 1] is set."""
+        api = FakeActions(self.clock, {100: (1, "completed"), _ME: (1, "queued")})
+        polls = []
+
+        def script(fake):
+            if f"/{_MAIN}/runs?status=in_progress" in fake.urls[-1]:
+                polls.append(1)
+                index = min(len(polls), len(holders_per_poll)) - 1
+                fake.runs[100] = (1, "in_progress" if holders_per_poll[index] else "completed")
+                # The finished-run cache would otherwise hide the holder coming back.
+                self.waiter.finished.clear()
+        api.on_request = script
+        self.waiter = self._turnstile(api, TURNSTILE_CAPACITY="1")
+        return self.waiter
+
+    def test_first_look_blocked_waits_the_existing_blocked_interval(self):
+        # Guard (unchanged behavior): blocked, blocked, clear, clear. Both blocked waits keep
+        # the base interval; only the confirmation after them is short.
+        self.assertEqual(self._scripted([True, True, False]).run(), 0)
+        self.assertEqual(self.clock.slept[:2], [60, 60])
+        self.assertEqual(len(self.clock.slept), 3)
+
+    def test_clear_after_a_queue_wait_confirms_after_the_short_interval(self):
+        # Blocked once (base interval), then clear: confirmed after 10s.
+        self.assertEqual(self._scripted([True, False]).run(), 0)
+        self.assertEqual(self.clock.slept, [60, 10])
+        self.assertIn("confirming in 10s", self.logged[2])
+
+    def test_a_failed_confirmation_returns_to_the_blocked_interval(self):
+        # Clear, blocked on the confirming look, clear, clear: every confirmation waits 10s,
+        # the blocked poll waits the base interval, and the blocked look resets the count.
+        self.assertEqual(self._scripted([False, True, False]).run(), 0)
+        self.assertEqual(self.clock.slept, [10, 60, 10])
+        confirming = [line for line in self.logged if "confirming" in line]
+        self.assertEqual(["confirming in 10s", "confirming in 10s"],
+                         [line[line.index("confirming"):] for line in confirming])
+
+    def test_confirm_interval_falls_back_to_the_default(self):
+        cases = {None: 10, "": 10, "abc": 10, "0": 10, "-3": 10, "nan": 10, "inf": 10,
+                 "5": 5, "7.5": 7.5, "120": 60}
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(turnstile.confirm_seconds(value, 60), expected)
+
+    def test_confirm_input_sets_the_confirming_wait(self):
+        for value, expected in ((None, [10]), ("abc", [10]), ("5", [5]), ("600", [60])):
+            with self.subTest(value=value):
+                self.clock.slept.clear()
+                extra = {} if value is None else {"TURNSTILE_CONFIRM_SECONDS": value}
+                api = FakeActions(self.clock, {_ME: (1, "queued")})
+                self.assertEqual(self._turnstile(api, **extra).run(), 0)
+                self.assertEqual(self.clock.slept, expected)
+
+    def test_jitter_is_scaled_to_the_short_confirmation(self):
+        # The 0-4s jitter is sized for the 60s base interval; at the 10s confirmation it is
+        # scaled by 10/60 so it cannot rival the wait. Base-interval waits keep all of it.
+        api = FakeActions(self.clock, {_ME: (1, "queued")})
+        turnstile.Turnstile(_environ(), api, sleep=self.clock.sleep, clock=self.clock,
+                            jitter=lambda: 4, log=self.logged.append).run()
+        self.assertAlmostEqual(self.clock.slept[0], 10 + 4 * 10 / 60)
+        self.clock.slept.clear()
+        api = FakeActions(self.clock, {100: (1, "in_progress"), _ME: (1, "queued")})
+        turnstile.Turnstile(_environ(TURNSTILE_CAPACITY="1", TURNSTILE_TIMEOUT_MINUTES="3"),
+                            api, sleep=self.clock.sleep, clock=self.clock,
+                            jitter=lambda: 4, log=self.logged.append).run()
+        self.assertEqual(self.clock.slept[:2], [64, 64])
+
+    def test_zero_base_interval_retains_jitter_and_admits(self):
+        api = FakeActions(self.clock, {_ME: (1, "queued")})
+        waiter = turnstile.Turnstile(_environ(TURNSTILE_POLL_SECONDS="0"), api,
+                                    sleep=self.clock.sleep, clock=self.clock, jitter=lambda: 4,
+                                    log=self.logged.append)
+        self.assertEqual(waiter.run(), 0)
+        self.assertEqual(self.clock.slept, [4])
 
     def test_spacing_is_capped_at_the_maximum_interval(self):
         self.assertEqual(turnstile.poll_interval(60, 300, 1), 60)
@@ -192,7 +271,7 @@ class WaitLoopTests(unittest.TestCase):
         api.refuse_until = self.clock.now + 1200
         self.assertEqual(self._turnstile(api).run(), 0)
         # One refused request, one wait to the reset, then the ordinary confirmation.
-        self.assertEqual(self.clock.slept, [1200 + rate.RESET_MARGIN_SECONDS, 60])
+        self.assertEqual(self.clock.slept, [1200 + rate.RESET_MARGIN_SECONDS, 10])
         self.assertTrue(any("API rate limit reached (remaining=0 limit=1000" in line
                             for line in self.logged))
         self.assertTrue(self.logged[-2].endswith("proceeding"))
@@ -225,10 +304,11 @@ class WaitLoopTests(unittest.TestCase):
     def test_budget_reserve_is_left_for_other_steps(self):
         api = FakeActions(self.clock, {_ME: (1, "queued")}, limit=1000, remaining=103)
         self.assertEqual(self._turnstile(api).run(), 0)
-        # The first poll spends the budget below the reserve of 100, so the confirming poll
-        # waits for the reset before asking again.
+        # The first poll spends the budget below the reserve of 100. The short confirmation
+        # does not let the confirming poll spend the reserve: it waits for the reset first.
         self.assertTrue(any("API budget is at its reserve" in line for line in self.logged))
-        self.assertEqual(self.clock.slept[0], 60)
+        self.assertEqual(self.clock.slept[0], 10)
+        # The reset is 600s after the first poll's requests; nothing is asked before it.
         self.assertGreaterEqual(sum(self.clock.slept[:2]), 600)
 
     def test_reserve_is_a_tenth_of_the_limit_and_at_least_fifty(self):
@@ -247,7 +327,8 @@ class WaitLoopTests(unittest.TestCase):
 
         api.on_request = fail_lists
         self.assertEqual(self._turnstile(api).run(), 0)
-        self.assertEqual(self.clock.slept, [120, 240, 300, 60])
+        # The backoff is unchanged; the confirmation after it is the short interval.
+        self.assertEqual(self.clock.slept, [120, 240, 300, 10])
         self.assertTrue(any("retaining gate behind" in line for line in self.logged))
 
     def test_fail_open_at_the_safety_deadline_is_kept(self):
@@ -452,8 +533,11 @@ class WiringTests(unittest.TestCase):
         action = open(path, encoding="utf-8").read()
         self.assertIn('run: python3 "${TURNSTILE_ACTION_PATH}/turnstile.py"', action)
         self.assertNotIn("curl", action)
-        for name in ("TURNSTILE_POLL_SECONDS", "TURNSTILE_MAX_POLL_SECONDS"):
+        for name in ("TURNSTILE_POLL_SECONDS", "TURNSTILE_MAX_POLL_SECONDS",
+                     "TURNSTILE_CONFIRM_SECONDS: ${{ inputs.confirm-seconds }}"):
             self.assertIn(name, action)
+        self.assertRegex(action, r'confirm-seconds:\n(?:.*\n)*?\s+default: "10"')
+        self.assertRegex(action, r'(?m)^  poll-seconds:\n(?:.*\n)*?\s+default: "60"')
 
 
 if __name__ == "__main__":

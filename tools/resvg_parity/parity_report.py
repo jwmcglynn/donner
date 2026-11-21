@@ -390,7 +390,7 @@ PARAMS_BUILDER_METHODS = {
     "withReason", "withGeodeGoldenOverride", "includeAntiAliasingDifferences",
     "enableGoldenUpdateFromEnv", "setCanvasSize", "disableBackend", "requireFeature",
     "withSimpleTextMaxPixels", "withMaxPixelsDifferent", "withGeodeMaxPixelsDifferent",
-    "onlyTextFull", "withGeodeQuarterPixelEdgeCoverage",
+    "onlyTextFull", "withGeodeQuarterPixelEdgeCoverage", "disableGeodeForSimpleText",
 }
 _PARAMS_TOKEN_RE = re.compile(r"(\.\s*)?(?<![\w:])((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(\s*[({])?")
 _STATE_FIELD_RE = re.compile(r"\b(renderOnly\w*|skip\w*)\b")
@@ -666,11 +666,14 @@ def _params_facts(expression: str, category: str) -> dict[str, object]:
         expression, category
     )
     disabled_backends = _disabled_backends_from_params(expression)
+    simple_text_disabled = (
+        {"geode"} if _contains_call(expression, {"disableGeodeForSimpleText"}) else set()
+    )
 
     exception_types = _exception_types_from_params(
         expression,
         only_text_full,
-        has_required_feature or bool(disabled_backends),
+        has_required_feature or bool(disabled_backends | simple_text_disabled),
     )
 
     return {
@@ -679,6 +682,7 @@ def _params_facts(expression: str, category: str) -> dict[str, object]:
         "comparison_modes": _comparison_modes(disabled_backends),
         "disabled_backends": sorted(disabled_backends),
         "exception_types": exception_types,
+        "simple_text_disabled_backends": sorted(simple_text_disabled),
         "primary_state": primary_state,
         "reason": _reason_from_params(expression),
         "render_only_kind": _render_only_kind_from_params(expression),
@@ -783,7 +787,8 @@ def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[
 
     return {
         "active_cases": len(active_cases),
-        "backend_disabled_cases": count_active(lambda case: bool(case["disabled_backends"])),
+        "backend_disabled_cases": count_active(
+            lambda case: bool(case["disabled_backends"] or case["simple_text_disabled_backends"])),
         "compare_cases": count_state("compare"),
         "disabled_cases": len(disabled_cases),
         "effective_pixel_budget_cases": count_exception("threshold"),
@@ -810,12 +815,59 @@ def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[
     }
 
 
-# The normal Bazel corpus wrappers select these backend/text combinations.
+@dataclass(frozen=True)
+class CorpusLane:
+    """One backend and text tier that the normal Bazel corpus wrappers select."""
+
+    mode: str
+    backend: str
+    text_tier: str
+    capabilities: frozenset[str]
+    # "all" for every registered case, or "text" for the cases that render text
+    # (//third_party/resvg-test-suite:tests_with_text).
+    corpus: str = "all"
+
+    def runs(self, path: str, text_cases: frozenset[str]) -> bool:
+        """True when the lane's wrapper runs the case at `path`, relative to TESTS_ROOT."""
+        return self.corpus == "all" or path in text_cases
+
+
+_SIMPLE_TEXT = frozenset({"text", "filter-effects", "ascii-snapshot"})
+_FULL_TEXT = _SIMPLE_TEXT | {"text-full"}
+# The `max` lane is the union of the two disjoint full-shaping wrappers, resvg_test_suite_max_text
+# and resvg_test_suite_max_nontext. The `geode_max_text` lane runs the text cases only: the other
+# cases render the same on both text tiers, and the `geode` lane compares them.
 CORPUS_LANES = {
-    "default_text": ("tiny-golden", frozenset({"text", "filter-effects", "ascii-snapshot"})),
-    "max": ("tiny-golden", frozenset({"text", "text-full", "filter-effects", "ascii-snapshot"})),
-    "geode": ("geode-golden", frozenset({"text", "filter-effects", "ascii-snapshot"})),
+    "default_text": CorpusLane("tiny-golden", "tiny-skia", "simple", _SIMPLE_TEXT),
+    "max": CorpusLane("tiny-golden", "tiny-skia", "full", _FULL_TEXT),
+    "geode": CorpusLane("geode-golden", "geode", "simple", _SIMPLE_TEXT),
+    "geode_max_text": CorpusLane("geode-golden", "geode", "full", _FULL_TEXT, corpus="text"),
 }
+TEXT_CORPUS_BUILD = Path("third_party/resvg-test-suite/BUILD.bazel")
+# The list, one quoted `tests/` path per line, closed by `]` alone on its own line.
+_TEXT_CASES_OUTSIDE = re.compile(
+    r'^_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY = \[\n((?:    "tests/[^"\n]+",\n)*)\]\n', re.M)
+
+
+def text_cases(tests_root: Path, paths: Iterable[str]) -> frozenset[str]:
+    """Return the cases, relative to `tests_root`, in the text corpus partition.
+
+    The partition is `tests/text/` plus `_TEXT_CASES_OUTSIDE_TEXT_DIRECTORY` in the suite's
+    BUILD.bazel. A missing file, or a list that is not one quoted path per line closed by `]`,
+    fails.
+    """
+
+    build = tests_root.parent / "BUILD.bazel"
+    try:
+        source = build.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read the text corpus partition: {error}") from error
+    match = _TEXT_CASES_OUTSIDE.search(source)
+    if match is None:
+        raise ParityReportError(
+            f"{build}: no well-formed _TEXT_CASES_OUTSIDE_TEXT_DIRECTORY list")
+    outside = {path.removeprefix("tests/") for path in re.findall(r'"([^"]+)"', match.group(1))}
+    return frozenset(path for path in paths if path.startswith("text/") or path in outside)
 DEFAULT_THRESHOLD = 0.02
 DEFAULT_MAX_PIXELS = 100
 # A render-only case compares with no image, so the harness keeps the suite's original canvas.
@@ -929,25 +981,26 @@ def _settings_from_params(expression: str) -> dict[str, object]:
     return settings
 
 
-def _lane_state(case: dict[str, object], backend: str, missing: list[str]) -> str:
+def _lane_state(case: dict[str, object], lane: CorpusLane, missing: list[str]) -> str:
     if case["registration"] != "active":
         return "unregistered"
     if case["primary_state"] == "skip":
         return "skip"
-    if backend in case["disabled_backends"]:
+    if lane.backend in case["disabled_backends"] or (
+            lane.text_tier == "simple" and lane.backend in case["simple_text_disabled_backends"]):
         return "backend-disabled"
     if missing:
         return "capability-gated"
     return case["primary_state"]
 
 
-def _lane_budget(config: dict[str, object], lane: str) -> int | None:
+def _lane_budget(config: dict[str, object], lane: CorpusLane) -> int | None:
     max_pixels = config["max_pixels"]
     simple_pixels = config["simple_max_pixels"]
     geode_pixels = config["geode_max_pixels"]
-    if lane != "max" and (simple_pixels is None or simple_pixels >= 0):
+    if lane.text_tier == "simple" and (simple_pixels is None or simple_pixels >= 0):
         max_pixels = simple_pixels
-    if lane == "geode" and (geode_pixels is None or geode_pixels >= 0):
+    if lane.backend == "geode" and (geode_pixels is None or geode_pixels >= 0):
         max_pixels = geode_pixels
     return max_pixels
 
@@ -977,17 +1030,23 @@ def _lane_canvas(
     return reference_canvas_size(repo_root / reference)
 
 
-def _case_lanes(case: dict[str, object], repo_root: Path) -> dict[str, object]:
+def _case_lanes(
+    case: dict[str, object], repo_root: Path, text_corpus: frozenset[str]
+) -> dict[str, object]:
+    """Return the settings of each lane whose wrapper runs the case."""
+
     config = _settings_from_params(case["raw_params_expression"])
     lanes = {}
-    for lane, (mode, capabilities) in CORPUS_LANES.items():
-        geode = lane == "geode"
-        missing = sorted(set(case["backend_requirements"]) - capabilities)
+    for name, lane in CORPUS_LANES.items():
+        if not lane.runs(case["path"], text_corpus):
+            continue
+        geode = lane.backend == "geode"
+        missing = sorted(set(case["backend_requirements"]) - lane.capabilities)
         reference = _lane_reference(case["path"], config, geode)
-        lanes[lane] = {
-            "mode": mode,
-            "text_configuration": "full" if lane == "max" else "simple",
-            "configured_state": _lane_state(case, "geode" if geode else "tiny-skia", missing),
+        lanes[name] = {
+            "mode": lane.mode,
+            "text_configuration": lane.text_tier,
+            "configured_state": _lane_state(case, lane, missing),
             "missing_features": missing,
             "settings": {
                 "canvas_size": _lane_canvas(case, config, reference["path"], repo_root),
@@ -1010,10 +1069,11 @@ def _case_lanes(case: dict[str, object], repo_root: Path) -> dict[str, object]:
 
 def _runtime_name(case: dict[str, object], lane: str) -> tuple[str, str]:
     stem = re.sub(r"[^0-9A-Za-z]", "_", Path(case["path"]).stem)
-    if lane == "geode":
+    if CORPUS_LANES[lane].backend == "geode":
         stem += "_GeodeGolden"
+    simple = CORPUS_LANES[lane].text_tier == "simple"
     if (case["primary_state"] == "skip"
-            or (lane != "max" and _contains_call(case["raw_params_expression"], {"onlyTextFull"}))):
+            or (simple and _contains_call(case["raw_params_expression"], {"onlyTextFull"}))):
         stem = "DISABLED_" + stem
     return (f"{case['suite_name']}/ImageComparisonTestFixture", "ResvgTest/" + stem)
 
@@ -1105,7 +1165,7 @@ def _read_test_xml(path: Path) -> tuple[list[tuple[tuple[str, str], str]], str]:
 def _execution_summary(report: dict[str, object]) -> dict[str, object]:
     summary = {}
     for lane in CORPUS_LANES:
-        entries = [case["lanes"][lane] for case in report["cases"]]
+        entries = [case["lanes"][lane] for case in report["cases"] if lane in case["lanes"]]
         counts = Counter(
             (entry["configured_state"], entry["observed"]) for entry in entries
         )
@@ -1119,7 +1179,7 @@ def _execution_summary(report: dict[str, object]) -> dict[str, object]:
 def _execution_keys(report: dict[str, object], lane: str) -> dict[tuple[str, str], dict[str, object]]:
     keys = {}
     for case in report["cases"]:
-        if case["registration"] != "active":
+        if case["registration"] != "active" or lane not in case["lanes"]:
             continue
         name = _runtime_name(case, lane)
         if name in keys:
@@ -1228,14 +1288,16 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
         cases.extend(_registration_cases(registration, vendored[registration.category]))
     cases.sort(key=lambda item: str(item["path"]))
     repo_root = _repo_root_of_tests_root(tests_root)
+    text_corpus = text_cases(tests_root, (str(case["path"]) for case in cases))
     for case in cases:
-        case["lanes"] = _case_lanes(case, repo_root)
+        case["lanes"] = _case_lanes(case, repo_root, text_corpus)
 
     report = {
         "schema_version": SCHEMA_VERSION,
         "source": {
-            "normal_lanes": {name: {"mode": mode, "capabilities": sorted(capabilities)}
-                             for name, (mode, capabilities) in CORPUS_LANES.items()},
+            "normal_lanes": {name: {"mode": lane.mode, "capabilities": sorted(lane.capabilities),
+                                    "corpus": lane.corpus}
+                             for name, lane in CORPUS_LANES.items()},
             "active_mode_union": list(ACTIVE_MODE_UNION),
             "disabled_categories": [
                 item.category for item in registrations if item.registration == "disabled"
@@ -1493,10 +1555,6 @@ def golden_reason_violations(report: dict[str, object]) -> list[str]:
 # the row back from the change until it is fixed.
 PIXEL_BUDGET_RATCHET_LIMIT = DEFAULT_MAX_PIXELS
 PIXEL_BUDGET_ALLOWLIST: dict[str, dict[str, int]] = {
-    "filters/filter/in=BackgroundAlpha.svg": {"default_text": 1200, "max": 1200, "geode": 1200},
-    "painting/marker/with-an-image-child.svg": {"geode": 500},
-    "text/font-variant/inherit.svg": {"default_text": 1200},
-    "text/font-variant/small-caps.svg": {"default_text": 1200},
 }
 
 THRESHOLD_RATCHET_LIMIT = 0.05
@@ -1504,7 +1562,9 @@ THRESHOLD_ALLOWLIST: dict[str, dict[str, float]] = {
     "filters/feDiffuseLighting/complex-transform.svg": {
         "default_text": 0.11, "max": 0.11, "geode": 0.11,
     },
-    "filters/feMerge/complex-transform.svg": {"default_text": 0.14, "max": 0.14, "geode": 0.14},
+    "filters/feMerge/complex-transform.svg": {
+        "default_text": 0.085, "max": 0.085, "geode": 0.085,
+    },
     "filters/fePointLight/complex-transform.svg": {
         "default_text": 0.11, "max": 0.11, "geode": 0.11,
     },
@@ -1674,6 +1734,7 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/baseline-shift/sub.svg",
     "text/baseline-shift/super.svg",
     "text/baseline-shift/with-rotate.svg",
+    "text/direction/rtl.svg",
     "text/dominant-baseline/alignment-baseline-and-baseline-shift-on-tspans.svg",
     "text/dominant-baseline/alignment-baseline=baseline-on-tspan.svg",
     "text/dominant-baseline/alphabetic.svg",
@@ -1692,6 +1753,7 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/dominant-baseline/sequential.svg",
     "text/dominant-baseline/text-after-edge.svg",
     "text/dominant-baseline/text-before-edge.svg",
+    "text/font-kerning/arabic-script.svg",
     "text/font-kerning/as-property.svg",
     "text/font-kerning/none.svg",
     "text/lengthAdjust/spacingAndGlyphs.svg",
@@ -1700,8 +1762,10 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/letter-spacing/1mm.svg",
     "text/letter-spacing/3.svg",
     "text/letter-spacing/5percent.svg",
+    "text/letter-spacing/mixed-scripts.svg",
     "text/letter-spacing/mixed-spacing.svg",
     "text/letter-spacing/normal.svg",
+    "text/letter-spacing/on-Arabic.svg",
     "text/text-anchor/coordinates-list.svg",
     "text/text-anchor/end-on-text.svg",
     "text/text-anchor/end-with-letter-spacing.svg",
@@ -1711,6 +1775,7 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/text-anchor/invalid-value-on-text.svg",
     "text/text-anchor/middle-on-text.svg",
     "text/text-anchor/on-the-first-tspan.svg",
+    "text/text-anchor/on-tspan-with-arabic.svg",
     "text/text-anchor/on-tspan.svg",
     "text/text-anchor/start-on-text.svg",
     "text/text-anchor/text-anchor-not-on-text-chunk.svg",
@@ -1732,15 +1797,19 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/text-rendering/optimizeLegibility.svg",
     "text/text-rendering/optimizeSpeed.svg",
     "text/text-rendering/with-underline.svg",
+    "text/text/bidi-reordering.svg",
+    "text/text/complex-graphemes.svg",
     "text/text/dx-and-dy-instead-of-x-and-y.svg",
     "text/text/dx-and-dy-with-less-values-than-characters.svg",
     "text/text/dx-and-dy-with-more-values-than-characters.svg",
     "text/text/dx-and-dy-with-multiple-values.svg",
     "text/text/em-and-ex-coordinates.svg",
+    "text/text/emojis.svg",
     "text/text/escaped-text-1.svg",
     "text/text/escaped-text-2.svg",
     "text/text/escaped-text-3.svg",
     "text/text/escaped-text-4.svg",
+    "text/text/fill-rule=evenodd.svg",
     "text/text/mm-coordinates.svg",
     "text/text/nested.svg",
     "text/text/no-coordinates.svg",
@@ -1749,6 +1818,7 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/text/rotate-with-an-invalid-angle.svg",
     "text/text/rotate-with-less-values-than-characters.svg",
     "text/text/rotate-with-more-values-than-characters.svg",
+    "text/text/rotate-with-multiple-values-and-complex-text.svg",
     "text/text/rotate-with-multiple-values-underline-and-pattern.svg",
     "text/text/rotate-with-multiple-values.svg",
     "text/text/rotate.svg",
@@ -1766,12 +1836,15 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/textLength/150.svg",
     "text/textLength/40mm.svg",
     "text/textLength/75percent.svg",
+    "text/textLength/arabic-with-lengthAdjust.svg",
+    "text/textLength/arabic.svg",
     "text/textLength/inherit.svg",
     "text/textLength/negative.svg",
     "text/textLength/on-a-single-tspan.svg",
     "text/textLength/on-text-and-tspan.svg",
     "text/tref/link-to-a-non-SVG-element.svg",
     "text/tref/nested.svg",
+    "text/tspan/bidi-reordering.svg",
     "text/tspan/mixed-font-size.svg",
     "text/tspan/mixed-xml-space-1.svg",
     "text/tspan/mixed-xml-space-2.svg",
@@ -1803,6 +1876,7 @@ QUARTER_PIXEL_EDGE_ALLOWLIST: frozenset[str] = frozenset({
     "text/word-spacing/2mm.svg",
     "text/word-spacing/5percent.svg",
     "text/word-spacing/normal.svg",
+    "text/writing-mode/arabic-with-rl.svg",
     "text/writing-mode/horizontal-tb.svg",
     "text/writing-mode/invalid-value.svg",
     "text/writing-mode/lr-tb.svg",
@@ -1824,13 +1898,31 @@ QUARTER_PIXEL_EDGE_RULE = (
 
 
 def _edge_coverage_lane_violation(
+    path: str, case: dict[str, object], quantized_goldens: frozenset[str]
+) -> str | None:
+    """Return why an opted-in row's Geode lanes cannot apply the edge coverage rule, if they cannot.
+
+    The rule takes effect on every Geode lane that compares the row; at least one must.
+    """
+
+    comparing = [entry for name, entry in case["lanes"].items()
+                 if CORPUS_LANES[name].backend == "geode"
+                 and entry["configured_state"] == "compare"]
+    if not comparing:
+        return (f"{path}: no Geode lane compares, so the quarter-pixel edge coverage rule has no "
+                "effect; remove it")
+    for geode in comparing:
+        violation = _geode_lane_edge_coverage_violation(path, geode, quantized_goldens)
+        if violation:
+            return violation
+    return None
+
+
+def _geode_lane_edge_coverage_violation(
     path: str, geode: dict[str, object], quantized_goldens: frozenset[str]
 ) -> str | None:
-    """Return why an opted-in row's Geode lane cannot apply the edge coverage rule, if it cannot."""
+    """Return why one comparing Geode lane cannot apply the edge coverage rule, if it cannot."""
 
-    if geode["configured_state"] != "compare":
-        return (f"{path}: the Geode lane does not compare, so the quarter-pixel edge coverage rule "
-                "has no effect; remove it")
     if not geode["settings"]["quarter_pixel_edge_coverage"]:
         return (f"{path}: the Geode lane compares against a Geode golden, which is not "
                 "quarter-pixel quantized; remove the quarter-pixel edge coverage rule")
@@ -1871,7 +1963,7 @@ def quarter_pixel_edge_violations(
         f"{path}: not in QUARTER_PIXEL_EDGE_ALLOWLIST; {QUARTER_PIXEL_EDGE_RULE}"
         for path in opted_in if path not in allowed
     ]
-    lane_violations = (_edge_coverage_lane_violation(path, case["lanes"]["geode"], quantized)
+    lane_violations = (_edge_coverage_lane_violation(path, case, quantized)
                        for path, case in opted_in.items())
     violations += [violation for violation in lane_violations if violation]
     violations += [
@@ -1882,23 +1974,30 @@ def quarter_pixel_edge_violations(
     return sorted(violations)
 
 
-# Every active row that disables its Geode comparison (`disableBackend(RendererBackend::Geode,
-# reason)`). A row joins only when its Geode comparison fails for a recorded reason that the
-# quarter-pixel edge coverage rule does not cover; the reason names the cause.
-# //tools/resvg_parity:parity_report_tests enforces in CI that this list equals the Geode-gated
-# rows. That it only shrinks is a review rule: a new entry needs maintainer approval in the pull
-# request that adds it.
-GEODE_GATE_ALLOWLIST: frozenset[str] = frozenset({
-    "painting/marker/with-a-text-child.svg",
-    "text/font-size/named-value.svg",
-    "text/font-variant/inherit.svg",
-    "text/font-variant/small-caps.svg",
-    "text/text-decoration/tspan-decoration.svg",
-    "text/text-decoration/underline-with-dy-list-2.svg",
-    "text/textPath/with-filter.svg",
-    "text/tspan/with-filter.svg",
-    "text/tspan/with-mask.svg",
-})
+# Every active row that disables its Geode comparison, with the text tiers it disables it in:
+# `disableBackend(RendererBackend::Geode, reason)` disables both, and
+# `disableGeodeForSimpleText(reason)` only the simple tier, for a cause that tier alone has. A row
+# joins only when its Geode comparison fails for a recorded reason that the quarter-pixel edge
+# coverage rule does not cover; the reason names the cause. //tools/resvg_parity:parity_report_tests
+# enforces in CI that the list equals the Geode-gated rows and their tiers. That it only shrinks is
+# a review rule: a new entry, or a new tier for one, needs maintainer approval in the pull request
+# that adds it.
+BOTH_TIERS = frozenset({"simple", "full"})
+SIMPLE_TIER = frozenset({"simple"})
+GEODE_GATE_ALLOWLIST: dict[str, frozenset[str]] = {
+    "painting/marker/with-a-text-child.svg": BOTH_TIERS,
+    "text/font-size/named-value.svg": BOTH_TIERS,
+    "text/text-decoration/tspan-decoration.svg": BOTH_TIERS,
+    "text/text-decoration/underline-with-dy-list-2.svg": BOTH_TIERS,
+    "text/text/compound-emojis-and-coordinates-list.svg": BOTH_TIERS,
+    "text/text/compound-emojis.svg": BOTH_TIERS,
+    "text/textPath/with-filter.svg": BOTH_TIERS,
+    "text/tspan/with-filter.svg": BOTH_TIERS,
+    "text/tspan/with-mask.svg": BOTH_TIERS,
+    "text/unicode-bidi/bidi-override.svg": BOTH_TIERS,
+    "text/writing-mode/japanese-with-tb.svg": BOTH_TIERS,
+    "text/writing-mode/tb-and-punctuation.svg": BOTH_TIERS,
+}
 
 GEODE_GATE_RULE = (
     "a row may disable only its Geode comparison, with a reason, and needs maintainer approval to "
@@ -1907,39 +2006,74 @@ GEODE_GATE_RULE = (
 
 
 def _geode_disable_reason(expression: str) -> str | None:
-    for _, _, arguments in _iter_named_calls(expression, {"disableBackend"}):
+    for _, name, arguments in _iter_named_calls(
+            expression, {"disableBackend", "disableGeodeForSimpleText"}):
+        if name == "disableGeodeForSimpleText" and arguments:
+            return _parse_cpp_string_expression(arguments[0]) or None
         if len(arguments) >= 2 and "Geode" in arguments[0]:
             return _parse_cpp_string_expression(arguments[1]) or None
     return None
 
 
+def geode_gated_tiers(case: dict[str, object]) -> frozenset[str]:
+    """Return the text tiers in which the case disables its Geode comparison."""
+
+    if "geode" in case["disabled_backends"]:
+        return BOTH_TIERS
+    if "geode" in case["simple_text_disabled_backends"]:
+        return SIMPLE_TIER
+    return frozenset()
+
+
+def _geode_gate_case_violations(
+    case: dict[str, object], tiers: frozenset[str], allowlist: Mapping[str, frozenset[str]]
+) -> list[str]:
+    """Return why one Geode-gated row breaks GEODE_GATE_ALLOWLIST."""
+
+    path = str(case["path"])
+    violations = []
+    if case["disabled_backends"] not in ([], ["geode"]):
+        violations.append(f"{path}: disables {case['disabled_backends']}; {GEODE_GATE_RULE}")
+    elif not _geode_disable_reason(str(case["raw_params_expression"])):
+        violations.append(f"{path}: disables the Geode comparison without a reason")
+    recorded = allowlist.get(path)
+    if recorded is None:
+        violations.append(f"{path}: not in GEODE_GATE_ALLOWLIST; {GEODE_GATE_RULE}")
+    elif tiers and recorded != tiers:
+        violations.append(
+            f"{path}: disables its Geode comparison in the {', '.join(sorted(tiers))} text "
+            f"tier(s), but GEODE_GATE_ALLOWLIST records {', '.join(sorted(recorded))}; "
+            + GEODE_GATE_RULE)
+    full = case["lanes"].get("geode_max_text", {}).get("configured_state")
+    if tiers == SIMPLE_TIER and full != "compare":
+        violations.append(
+            f"{path}: disables its Geode comparison in the simple text tier only, but the Geode "
+            f"full-shaping lane does not compare it ({full or 'not in the text corpus'}), so the "
+            "row has no Geode comparison; disable it in both tiers")
+    return violations
+
+
 def geode_gate_violations(
-    report: dict[str, object], allowlist: Iterable[str] = GEODE_GATE_ALLOWLIST
+    report: dict[str, object], allowlist: Mapping[str, frozenset[str]] = GEODE_GATE_ALLOWLIST
 ) -> list[str]:
     """Return backend disables that break GEODE_GATE_ALLOWLIST.
 
-    Only the Geode comparison may be disabled, each with a reason; every such row must be listed,
-    and a listed row must still disable it.
+    Only the Geode comparison may be disabled, each with a reason; every such row must be listed
+    with the tiers it disables, and a listed row must still disable it.
     """
 
-    allowed = set(allowlist)
     gated: set[str] = set()
     violations: list[str] = []
     for case in report["cases"]:  # type: ignore[union-attr]
-        if case["registration"] != "active" or not case["disabled_backends"]:
+        tiers = geode_gated_tiers(case)
+        if case["registration"] != "active" or not (tiers or case["disabled_backends"]):
             continue
-        path = str(case["path"])
-        gated.add(path)
-        if case["disabled_backends"] != ["geode"]:
-            violations.append(f"{path}: disables {case['disabled_backends']}; {GEODE_GATE_RULE}")
-        elif not _geode_disable_reason(str(case["raw_params_expression"])):
-            violations.append(f"{path}: disables the Geode comparison without a reason")
-        if path not in allowed:
-            violations.append(f"{path}: not in GEODE_GATE_ALLOWLIST; {GEODE_GATE_RULE}")
+        gated.add(str(case["path"]))
+        violations += _geode_gate_case_violations(case, tiers, allowlist)
     violations += [
         f"{path}: stale GEODE_GATE_ALLOWLIST entry; the row no longer disables its Geode "
         "comparison, so remove it"
-        for path in sorted(allowed - gated)
+        for path in sorted(set(allowlist) - gated)
     ]
     return sorted(violations)
 
@@ -2354,8 +2488,8 @@ def _check_catalog_case(case: dict[str, object]) -> None:
         _check_dash_seam(case)
     if case["primary_state"] == "render-only" and not case["render_only_kind"]:
         raise ParityReportError(f"{path}: render-only case needs a named policy")
-    if case["disabled_backends"] and (case["disabled_backends"] != ["geode"]
-                                      or path not in GEODE_GATE_ALLOWLIST):
+    if (case["disabled_backends"] or geode_gated_tiers(case)) and (
+            case["disabled_backends"] not in ([], ["geode"]) or path not in GEODE_GATE_ALLOWLIST):
         raise ParityReportError(f"{path}: unexplained explicit backend disable")
     if case["primary_state"] != "compare" and not case["reason"]:
         raise ParityReportError(f"{path}: exceptional state needs a source reason")
@@ -2688,6 +2822,27 @@ def _check_edge_coverage_rule(fixture: str) -> None:
         raise ParityReportError("C++ quarter-pixel edge coverage rule differs from parity report")
 
 
+def _check_simple_text_geode_gate(header: str, fixture: str) -> None:
+    """Check that the harness disables Geode in the simple tier only, as the lane states model."""
+
+    setter = re.search(
+        r"ImageComparisonParams& disableGeodeForSimpleText\(std::string_view reason\) \{\s*"
+        r"allowGeodeSimpleText = false;\s*backendRequirementReason = reason;\s*"
+        r"return \*this;\s*\}",
+        header,
+    )
+    allowed = re.search(
+        r"case RendererBackend::Geode: return allowGeode && "
+        r"\(allowGeodeSimpleText \|\| fullText\);",
+        header,
+    )
+    applied = re.search(r"return params\.allowsBackend\(backend, IsFullTextBuiltIn\(\)\);",
+                        fixture)
+    if (setter is None or allowed is None or applied is None
+            or header.count("allowGeodeSimpleText") != 3 or "allowGeodeSimpleText" in fixture):
+        raise ParityReportError("C++ simple-tier Geode gate differs from parity report")
+
+
 _FEATURE_NAMES = {
     "Text": "text",
     "TextFull": "text-full",
@@ -2765,6 +2920,26 @@ def _check_corpus_wrappers(source: str) -> None:
     }
     if wrapper_modes != expected:
         raise ParityReportError("Bazel corpus wrappers differ from parity report")
+    _check_text_corpus_wrapper(build)
+
+
+def _check_text_corpus_wrapper(build: str) -> None:
+    """Check that the `geode_max_text` lane is Geode with full shaping over the text cases."""
+
+    corpus = re.search(r'\("resvg_test_suite_max_text_impl",\s*'
+                       r'"//third_party/resvg-test-suite:tests_with_text"\)', build)
+    start = build.find('name = "resvg_test_suite_geode_max_text"')
+    if corpus is None or start < 0:
+        raise ParityReportError("Bazel text corpus wrapper differs from parity report")
+    opening = build.rindex("(", 0, start)
+    block = build[opening:_find_matching(build, opening)]
+    settings = dict(re.findall(r'^\s*(\w+) = ("[^"]*"|\[[^\]]*\]|True|False),', block, re.M))
+    expected = {"name": '"resvg_test_suite_geode_max_text"',
+                "dep": '":resvg_test_suite_max_text_impl"', "renderer_backend": '"geode"',
+                "text": '"true"', "text_full": '"true"', "opens_gpu_device": "True",
+                "args": '["--gtest_filter=-*_TinyGolden"]'}
+    if {key: settings.get(key) for key in expected} != expected:
+        raise ParityReportError("Bazel text corpus wrapper differs from parity report")
 
 
 def check_renderer_contract(repo_root: Path) -> None:
@@ -2777,6 +2952,8 @@ def check_renderer_contract(repo_root: Path) -> None:
     _check_reference_canvas_rule(_mask_comments(read("ImageComparisonTestFixture.cc")))
     _check_geode_capabilities(_mask_comments(read("RendererTestBackendGeode.cc")))
     _check_edge_coverage_rule(_mask_comments(read("ImageComparisonTestFixture.cc")))
+    _check_simple_text_geode_gate(_mask_comments(read("ImageComparisonTestFixture.h")),
+                                  _mask_comments(read("ImageComparisonTestFixture.cc")))
     _check_tiny_capabilities(_mask_comments(read("RendererTestBackendTinySkia.cc")))
     _check_corpus_wrappers(read("BUILD.bazel"))
 

@@ -391,6 +391,7 @@ private:
     std::optional<Box2d> filterRegion;
     Transform2d deviceFromFilter;
     bool localRasterRequiredForBudget = false;
+    bool localRasterReserved = false;  ///< Whether admission budgeted the transformed local raster.
     int filterBufferOffsetX = 0;
     int filterBufferOffsetY = 0;
     std::optional<Box2d> maskBounds;
@@ -431,6 +432,7 @@ private:
     bool usesStrokePaint = false;
     bool readsBackdrop = false;
     bool localRasterRequired = false;
+    bool localRasterReserved = false;
     components::FilterExecutionBudget::Reservation reservation;
   };
 

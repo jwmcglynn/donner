@@ -486,7 +486,9 @@ unchanged corpus files `text/text/emojis`, `text/text/compound-emojis` and
 `text/text/compound-emojis-and-coordinates-list`, written by the resvg suite harness with the
 software backend and full text from the code of the change that adds them. The rows need full
 text for the font's color bitmap strikes and compare at default settings (0.02 threshold, 100
-pixels) on that lane; Geode does not run them.
+pixels) on that lane. With full shaping, Geode compares `emojis` against its golden with the
+quarter-pixel edge coverage rule (see "Quarter-pixel quantized goldens"); the other two rows
+disable their Geode comparison.
 
 Each golden was checked against an independent resvg render of the same scene: the vendored
 resvg v0.49.0 PNGs of the first two rows (the corpus
@@ -922,6 +924,60 @@ To regenerate, delete the file and run from the repository root:
 ```sh
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
   //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*complex_order_and_xlink_href*'
+```
+
+### `filters/filter/in=BackgroundAlpha`
+
+Disposition: reference disagreement. `donner-in-BackgroundAlpha.png` is a Donner CPU rendering of
+the unchanged corpus file, at the 500x500 size of the vendored reference, rendered by the resvg
+suite harness at the commit that adds it. The software backend and Geode compare with it at default
+settings with no counted pixels.
+
+The row draws the same square twice in an isolation group, the second time through a filter that
+offsets and blurs `BackgroundAlpha`. Filter Effects 1 defines `BackgroundAlpha` as
+`BackgroundImage` with only the alpha channel used, so in one renderer the blurred alpha equals the
+`in=BackgroundImage` row's, whose fixture differs only in that keyword. The two vendored PNGs come
+from different blurs: in the filtered square's half of the canvas their alphas differ on 28,716
+pixels, by up to 5 levels. Filter Effects 1 makes the Gaussian (standard deviation 10 device pixels
+here) normative and permits three box blurs as an approximation within roughly 3%, so each PNG is
+a conforming rendering on its own, but no single conforming renderer can match both:
+
+- The `in=BackgroundImage` PNG's blurred alpha is within 1 level of the three box blurs of size 19
+  that Filter Effects 1 gives, which Donner implements (1,300 pixels of the right half differ by 1
+  level), and that row compares with its vendored PNG at default settings.
+- The `in=BackgroundAlpha` PNG's alpha equals, pixel for pixel, the blur resvg 0.47.0 draws for this
+  file. resvg 0.47.0 supports neither keyword: it warns and filters the source graphic, the same
+  square here, so it draws that alpha in the square's green; the vendored PNG is black. This is
+  the resvg release available where the golden was made; v0.49.0, the version the parent section
+  cites, was not run for this row.
+- Against an exact Gaussian of the square, the `in=BackgroundAlpha` PNG's alpha is off by a mean of
+  0.39 levels (at most 2.16), the `in=BackgroundImage` PNG's by 0.94 (at most 4.88) and Donner's by
+  0.93 (at most 4.52).
+
+Against the `in=BackgroundAlpha` PNG, the golden's blurred alpha differs by up to 4 levels across
+the blur ramp (15,485 pixels by 1, 13,248 by 2, 1,092 by 3 and 292 by 4); near black those
+differences exceed the perceptual threshold on 1,176 pixels on every backend.
+`RendererRegressionTests.FilterBackgroundAlphaMatchesBackgroundImageAlpha` requires Donner's
+`BackgroundAlpha` to equal its `BackgroundImage` alpha, on its own synthetic scene, including where
+a blur spreads the alpha. results.csv records resvg failing its own `in=BackgroundAlpha` reference
+and passing `in=BackgroundImage`.
+
+The golden also records a known CPU difference unrelated to the blur: the unfiltered seagreen square
+on the left has alpha 254 on all of its pixels, where Geode and both vendored PNGs have 255. The CPU
+renderer draws 254 for every opaque pixel of a group layer (an isolation group or an opacity group)
+that contains a filtered element, whatever the filter's region or output, and 255 without the layer
+or without the filtered element; Donner's CPU `in=BackgroundImage` render shows it too. The
+difference is below the comparison threshold, so it does not count against the vendored
+`in=BackgroundImage` reference or against this golden on Geode. When the CPU renderer stops
+producing it, regenerate this golden.
+
+PNG SHA-256: `6cedad0d7e211ac8b7bc1f553f30cd95aa59d44105b626edc4d6f46d3fc0dfdc`.
+
+To regenerate, delete the file and run from the repository root:
+
+```sh
+UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
+  //donner/svg/renderer/tests:resvg_test_suite_default_text -- '--gtest_filter=*in_BackgroundAlpha'
 ```
 
 ### `filters/feSpotLight/complex-transform`
@@ -1493,6 +1549,7 @@ is not quantized, a horizontal one is. Geode counts are on Metal.
 | --- | --- | --- | --- | --- |
 | `donner-coordinates-list.png` | Donner software renderer | 0.55 / 0.005 of 608 | 392 / 0 | `f036660ed5d2f21cbbedbbba1f04c8aa94f31cc33958a3dd63e5cf13bb52f5bb` |
 | `resvg-hanging-on-vertical.png` | Donner software renderer | 0.66 / 0.003 of 1,186 | 415 / 12 | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
+| `donner-emojis.png` | Donner software renderer | 0.69 / 0.003 of 340 | 134 / 13 | `dd0f1fe2b2c53a07e40c49b029e44d783dce9b2f2f54c87d33622711f7f4ffd6` |
 
 Two custom goldens of rows whose Geode comparison is gated are not quantized:
 `donner-named-value.png`, whose frame is an exact 8x8 area average (0.10 / 0.039 of 1,088), and
@@ -1501,6 +1558,73 @@ Firefox gradient-stroke images are browser renderings, which this table does not
 compare Geode with Geode goldens instead (see "Geode goldens for the gradient strokes"). `donner-tspan-with-filter.png` is a Donner software rendering, but its
 Geode difference lies on the crosshair beside the partially covered blurred text, which the rule
 counts, so its row does not opt in.
+
+Four more Donner software renderings, compared only with full shaping, are not recorded. Geode
+differs from `donner-compound-emojis.png`, `donner-compound-emojis-and-coordinates-list.png` and
+`resvg-japanese-with-tb.png` only on the crosshair's quantized row y = 250 (309, 341 and 384
+pixels), but the measurement above, which leaves out the crosshair, does not show them quantized:
+0.00 of 15, 0.07 of 84 and 0.19 of 396 (Geode 0.010 on the last). The emoji goldens' other edges
+are resampled bitmap glyphs. `resvg-tb-and-punctuation.png` measures 0.30 of 558 (Geode 0.016),
+and Geode differs from it on glyph edges by 128 pixels, 104 with the rule. Their rows keep their
+Geode comparison disabled.
+
+## Geode painting/marker/with-an-image-child golden
+
+`geode/painting_marker_with-an-image-child.png` is the Geode rendering of the unchanged corpus file
+`painting/marker/with-an-image-child` at 500x500, written by the resvg suite harness on software
+Vulkan (Mesa 26.1.7 lavapipe, aarch64) at the commit that adds it. Only the `GeodeGolden`
+comparison uses it; the CPU renderer compares against the vendored reference and differs from it by
+61 pixels.
+
+The marker draws `resources/image.svg` at 0.8x with opacity 0.8. Geode differs from the vendored
+reference (442 counted pixels on Metal, 449 on software Vulkan) for two reasons:
+
+- The image's 0.5035-unit black letter strokes are 0.40 device pixels wide. The vendored reference
+  and Donner's CPU renderer draw a stroke under one device pixel as a one-pixel anti-aliased
+  hairline whose alpha is scaled by the width (102 of 255 levels), and Geode covers the stroke's
+  exact geometry. On Metal, 422 of the 442 counted pixels lie within 1 px of a letter stroke's
+  centerline on one of the five markers, and 7 more lie within 4 px, on the `#3f3f3f` band's top edge
+  beside the V.
+- The image's top and bottom edges fall on half-pixel rows (device y = 2.5 vy - 40, and 80 px
+  lower). Where one shape's edge lies on such a row, its exact coverage at opacity 0.8 is 102
+  (half coverage times 0.8); where two shapes' edges coincide, per-layer coverage with source-over
+  conflation is 153. Geode draws 102 and 153. The vendored reference draws 0 at the top edges and
+  51 or 89 at the bottom edges; the CPU renderer draws 90 or 86 at the top edges and 51 or 86 at the
+  bottom edges. Where the exact value is 102, the CPU renderer's 51 comes from a CPU defect: a shape
+  edge that lies on a clip edge gets the product of the two partial coverages (#2540). The
+  remaining 13 counted pixels, more than 4 px from any letter stroke, are on these edges and on
+  flower and fill edges of the image, and the largest channel difference of all, 102, is on a top
+  edge where the reference is the green path and Geode the image's edge.
+
+A supersampled control decides which rendering is closer to the geometry. A 16x16 supersampled
+exact-geometry model of the letter V on each marker composites, per sample, the image's shapes at
+opacity 0.8 over the green star path. Its strokes are the points within half the stroke width of
+the outline, so it rounds the letters' joins. Against it, over the 24x37 pixel region around each marker's V,
+the mean absolute error is 2.5 to 2.6 levels for Geode (Metal and software Vulkan alike), 2.8 to
+2.9 for the CPU renderer and 2.8 to 2.9 for the vendored reference. Over the 283 to 351 pixels
+the model's samples split, it is 5.9 to 7.1 for Geode, 6.1 to 7.4 for the CPU renderer and 6.2 to
+7.5 for the reference; Geode is the lowest on every marker. Around the V on the marker at (20, 75),
+every rendering's total darkness is within 0.3% of the model's. Geode's
+remaining difference matches per-layer analytic coverage with source-over conflation where a
+stroke edge and a fill edge coincide. The total dark ink of the vendored reference, the Metal
+rendering and the software Vulkan rendering agrees within 0.2%. `structure/image/external-svg`
+draws the same image at 4x, with 2.0 device pixel strokes that are not hairlines and whole-pixel
+edges, and Geode matches its vendored reference at default settings.
+
+Against this golden, at the default 0.02 threshold and 100-pixel allowance, software Vulkan and
+Metal (Apple Silicon) both differ by 0 counted pixels; the two Geode renderings differ by at most 6
+levels in any channel.
+
+To regenerate, delete the file and run from the repository root on Linux with the lavapipe ICD:
+
+```sh
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run --config=geode \
+  //donner/svg/renderer/tests:resvg_test_suite_geode -- \
+  '--gtest_filter=PaintingMarker/*with_an_image_child_GeodeGolden'
+```
+
+PNG SHA-256: `d61a148c5d254fd839e2c543fb38650169f177d30b80a61c174957b1617afaab`.
 
 ## Registered golden digests
 
@@ -1530,6 +1654,7 @@ regenerates or adds a golden.
 | `donner-emojis.png` | `dd0f1fe2b2c53a07e40c49b029e44d783dce9b2f2f54c87d33622711f7f4ffd6` | Donner renderings of the color emoji rows |
 | `donner-feColorMatrix-identity.png` | `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916` | `filters/feColorMatrix` identity rows |
 | `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` | Donner renderings of disputed rows |
+| `donner-in-BackgroundAlpha.png` | `6cedad0d7e211ac8b7bc1f553f30cd95aa59d44105b626edc4d6f46d3fc0dfdc` | `filters/filter/in=BackgroundAlpha` |
 | `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` | Donner renderings of disputed rows |
 | `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
 | `donner-named-value.png` | `52f758743a31018c94d2b16df37bdd4e8cf5c1b59237358a18c5f8e5f6234c12` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
@@ -1551,6 +1676,7 @@ regenerates or adds a golden.
 | `geode/donner-color-adjust-functions-50percent.png` | `d17790f2c6ee6d19c152cc42f932ca44740f6076eb34a49248fb21ac9fdfa3bc` | Color-adjust filter references |
 | `geode/donner-color-adjust-functions-negative.png` | `21ac65ab93ac649542f122e75ea04b88db85a9abb11970da46729b14301014d8` | Color-adjust filter references |
 | `geode/filters_feGaussianBlur_complex-transform.png` | `871da8f754631be06f0c5dd6d81ac07b4ca10287845f67ecc29f3796a131a718` | Geode feGaussianBlur complex-transform golden |
+| `geode/painting_marker_with-an-image-child.png` | `d61a148c5d254fd839e2c543fb38650169f177d30b80a61c174957b1617afaab` | Geode painting/marker/with-an-image-child golden |
 | `geode/painting_stroke_linear-gradient-on-text.png` | `abb34a4510ae98c4c7545d8149d0a819e3f5fcd01037c4e08d8ac8e0a7c7ea5c` | Gradient strokes on text |
 | `geode/painting_stroke_radial-gradient-on-text.png` | `d80fc8c1d88df9e57484ebf839243fef522fcdd5872079903e1ce07046bc1891` | Gradient strokes on text |
 | `resvg-all-types-inline-bands.png` | `4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911` | Inline text decoration |
