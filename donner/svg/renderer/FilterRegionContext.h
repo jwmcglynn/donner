@@ -398,6 +398,31 @@ inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
   return prior.has_value() && blurred[*prior];
 }
 
+/// Whether a node fills the shadow color or masks a flood with blurred alpha.
+inline bool IsShadowColorNode(const components::FilterNode& node) {
+  using namespace components;
+  using namespace filter_primitive;
+  if (node.hasExplicitRegion() || node.hasAnimatedRegion()) {
+    return false;
+  }
+  const auto* composite = std::get_if<Composite>(&node.primitive);
+  return std::holds_alternative<Flood>(node.primitive) ||
+         (composite && composite->op == Composite::Operator::In);
+}
+
+/// Whether the color input of an In composite is a flood and its mask was blurred.
+inline bool IsBlurredShadowColor(const components::FilterGraph& graph,
+                                 const std::vector<bool>& blurred, size_t index) {
+  const auto* composite =
+      std::get_if<components::filter_primitive::Composite>(&graph.nodes[index].primitive);
+  if (!composite || composite->op != components::filter_primitive::Composite::Operator::In) {
+    return false;
+  }
+  const components::FilterNode* color = FilterFirstInputNode(graph, index);
+  return color && std::holds_alternative<components::filter_primitive::Flood>(color->primitive) &&
+         FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(graph.nodes[index], 1), index);
+}
+
 /**
  * Whether every path from SourceGraphic or SourceAlpha to the output of \p graph passes through a
  * Gaussian blur (\ref IsBlurringNode). Content that reaches the output unblurred, such as the
@@ -407,20 +432,22 @@ inline bool FilterInputIsBlurred(const components::FilterGraph& graph,
  *
  * @param graph Filter graph.
  * @param deviceScale Device pixels per user unit along each axis.
+ * @param splitShadow Ignore the last merge input and permit a flood masked by blurred alpha.
  */
-inline bool FilterOutputIsBlurred(const components::FilterGraph& graph,
-                                  const Vector2d& deviceScale) {
+inline bool FilterOutputIsBlurred(const components::FilterGraph& graph, const Vector2d& deviceScale,
+                                  bool splitShadow = false) {
   std::vector<bool> blurred(graph.nodes.size(), false);
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     const components::FilterNode& node = graph.nodes[index];
     const size_t slots = std::holds_alternative<components::filter_primitive::Merge>(node.primitive)
-                             ? node.inputs.size()
+                             ? node.inputs.size() - (splitShadow && index + 1 == graph.nodes.size())
                              : std::max<size_t>(FilterInputSlotCount(node), 1);
     bool all = true;
     for (size_t slot = 0; slot < slots; ++slot) {
       all = all && FilterInputIsBlurred(graph, blurred, FilterInputOrDefault(node, slot), index);
     }
-    blurred[index] = IsBlurringNode(node, deviceScale) || all;
+    blurred[index] = IsBlurringNode(node, deviceScale) || all ||
+                     (splitShadow && IsBlurredShadowColor(graph, blurred, index));
   }
   return !blurred.empty() && blurred.back();
 }
@@ -501,6 +528,82 @@ inline bool ShouldUseTransformedBlurPath(const components::FilterGraph& graph,
   return hasRotation && GraphHasAnisotropicBlur(graph);
 }
 
+/// Identify the sharp foreground of a transformed drop shadow or shadow merge.
+inline std::optional<components::FilterStandardInput> TransformedShadowForeground(
+    const components::FilterGraph& graph, const Transform2d& deviceFromFilter) {
+  using namespace components;
+  using namespace filter_primitive;
+  if (graph.nodes.empty() || graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+    return std::nullopt;
+  }
+  const FilterNode& last = graph.nodes.back();
+  if (last.hasExplicitRegion() || last.hasAnimatedRegion()) {
+    return std::nullopt;
+  }
+  const auto source = [](const FilterInput& input) -> std::optional<FilterStandardInput> {
+    const auto* standard = std::get_if<FilterStandardInput>(&input.value);
+    return standard && (*standard == FilterStandardInput::SourceGraphic ||
+                        *standard == FilterStandardInput::SourceAlpha)
+               ? std::optional(*standard)
+               : std::nullopt;
+  };
+  if (graph.nodes.size() == 1 && std::holds_alternative<DropShadow>(last.primitive)) {
+    const FilterInput input = FilterInputOrDefault(last, 0);
+    if (std::holds_alternative<FilterInput::Previous>(input.value)) {
+      return FilterStandardInput::SourceGraphic;
+    }
+    return source(input);
+  }
+  if (!std::holds_alternative<Merge>(last.primitive) || last.inputs.size() < 2 ||
+      !std::all_of(graph.nodes.begin(), graph.nodes.end(), [](const FilterNode& node) {
+        return IsTransformedBlurPathNode(node) || IsShadowColorNode(node);
+      })) {
+    return std::nullopt;
+  }
+  const auto foreground = source(last.inputs.back());
+  if (!foreground || !FilterOutputIsBlurred(graph, FilterDeviceAxisScale(deviceFromFilter), true)) {
+    return std::nullopt;
+  }
+  return foreground;
+}
+
+/// The shadow executed on the filter-aligned raster and its merge with the untouched capture.
+struct TransformedShadowGraphs {
+  components::FilterGraph shadow;
+  components::FilterGraph merge;
+};
+
+/// Split an eligible shadow into two graphs. BackgroundImage in the merge is the projected
+/// shadow texture supplied by the renderer, independent of the document's backdrop.
+inline TransformedShadowGraphs SplitTransformedShadow(const components::FilterGraph& graph,
+                                                      components::FilterStandardInput foreground) {
+  using namespace components;
+  using namespace filter_primitive;
+  const FilterNode& last = graph.nodes.back();
+  const auto colorSpace = last.colorInterpolationFilters.value_or(graph.colorInterpolationFilters);
+  TransformedShadowGraphs split{graph, graph};
+  split.merge.colorInterpolationFilters = colorSpace;
+  split.merge.nodes = {FilterNode{
+      .primitive = Merge{},
+      .inputs = {FilterInput(FilterStandardInput::BackgroundImage), FilterInput(foreground)}}};
+  if (const auto* drop = std::get_if<DropShadow>(&last.primitive)) {
+    const RcString alpha("shadow-alpha");
+    split.shadow.colorInterpolationFilters = colorSpace;
+    split.shadow.nodes = {
+        FilterNode{.primitive = GaussianBlur{drop->stdDeviationX, drop->stdDeviationY},
+                   .inputs = {FilterInput(FilterStandardInput::SourceAlpha)}},
+        FilterNode{.primitive = Offset{drop->dx, drop->dy}, .result = alpha},
+        FilterNode{.primitive = Flood{drop->floodColor, drop->floodOpacity}},
+        FilterNode{.primitive = Composite{Composite::Operator::In},
+                   .inputs = {FilterInput(FilterInput::Previous{}),
+                              FilterInput(FilterInput::Named{alpha})}},
+    };
+  } else {
+    split.shadow.nodes.back().inputs.pop_back();
+  }
+  return split;
+}
+
 /**
  * Whether a filter runs on the transformed path's local raster, the one decision both renderers
  * share. It needs a nonempty filter region and an invertible transform. An eligible graph then runs
@@ -518,12 +621,15 @@ inline bool UsesTransformedBlurPath(const components::FilterGraph& graph,
                                     const std::optional<Box2d>& filterRegion,
                                     const Transform2d& deviceFromFilter, bool fullExecutionFits) {
   if (!filterRegion.has_value() || filterRegion->width() <= 0.0 || filterRegion->height() <= 0.0 ||
-      NearZero(deviceFromFilter.determinant(), 1e-12) ||
-      !IsEligibleForTransformedBlurPath(graph, deviceFromFilter)) {
+      NearZero(deviceFromFilter.determinant(), 1e-12)) {
     return false;
   }
-  return ShouldUseTransformedBlurPath(graph, deviceFromFilter) ||
-         (!fullExecutionFits && IsLinearBlurChain(graph));
+  const bool useLocal = ShouldUseTransformedBlurPath(graph, deviceFromFilter);
+  if (useLocal && fullExecutionFits && TransformedShadowForeground(graph, deviceFromFilter)) {
+    return true;
+  }
+  return IsEligibleForTransformedBlurPath(graph, deviceFromFilter) &&
+         (useLocal || (!fullExecutionFits && IsLinearBlurChain(graph)));
 }
 
 /// User-space padding of the local raster: 3 sigma + 1 for the largest blur deviation.
