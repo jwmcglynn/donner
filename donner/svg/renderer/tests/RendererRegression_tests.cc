@@ -1290,9 +1290,12 @@ TEST_F(RendererRegressionTests, TransformedShadowAllocationFailureUsesTheDeviceR
   // An explicit primitive subregion equal to the filter region selects the device raster.
   constexpr std::string_view kDeviceDrop =
       R"svg(<feDropShadow dx="3" dy="27" stdDeviation="3 2" x="-28" y="-18" width="112" height="99"/>)svg";
-  const auto render = [](std::string_view primitives, RendererInterface* renderer = nullptr) {
+  // Use one filter layer, since the injected allocation failure is consumed once.
+  constexpr std::string_view kShape =
+      R"svg(<rect x="8" y="12" width="21" height="16" fill="seagreen" filter="url(#f)"/>)svg";
+  const auto render = [&](std::string_view primitives, RendererInterface* renderer = nullptr) {
     return RenderTransformedFilterScene("-28 -18 112 99", primitives, "translate(6 4) skewX(35)",
-                                        SquareAndBar(true), Vector2i(112, 94), renderer);
+                                        kShape, Vector2i(112, 94), renderer);
   };
   const RendererBitmap device = render(kDeviceDrop);
   ExpectVisibleBitmap(device, "transformed_shadow_device_fallback_visible");
