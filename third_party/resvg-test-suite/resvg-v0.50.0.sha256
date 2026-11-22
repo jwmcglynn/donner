@@ -1,3 +1,5 @@
+4a1c2ab40d15ecb59f81e1bb09f9b05d7fba94c22c4dd5a0355aff5f7d425c8c  tests/filters/feComposite/operator=arithmetic-with-large-k1-4.png
+116759d59fe9d608bd1188e79624ac67bad596d8c71f989633102ff6731ec433  tests/filters/feComposite/operator=arithmetic-with-large-k1-4.svg
 c79ca487455cd40d69e1f06b4a2cac71b9503efc5f86d589fd92112aa72b76fb  tests/filters/feConvolveMatrix/edgeMode=none.png
 d44d434e3420f50fff8fbbe82f408ac38ab8c06647f44925f58118802202f43b  tests/filters/feConvolveMatrix/edgeMode=wrap.png
 7e286558bf9033b3bb26eff6fc469a9e27eacae21827f1670286e90e79d2ae08  tests/filters/feConvolveMatrix/order=4-2.png
@@ -16,6 +18,7 @@ a7be1ab161ba7770b8adb557c253d2bc4df78a51568f13a36175318a07122b74  tests/filters/
 6bc73f186df9748f6c11dd9c1e1b2d22ac1088425f1e76a4ff84d8307f765bf2  tests/filters/feSpecularLighting/with-feSpotLight-and-specular-and-exponent.png
 d36c7e4d895c1d274b89f191f751df376d218f34fd54ecff3050af632f6fa648  tests/filters/feSpecularLighting/with-feSpotLight-and-specularConstant=5.png
 4f697eef0322d6bf1080de51778debdb9c488493c31bbe0751c2627270b95b41  tests/filters/feTurbulence/color-interpolation-filters=sRGB.png
+25162d1763d3e15d6afe39b674ddbd5252f6e7640157500183bc0fd539e9877b  tests/filters/filter-functions/drop-shadow-function-comma-separated.svg
 19b0d994aa24fd2f70aa02394f46992424256599af7585fdf149e460473fa5b4  tests/filters/filter-functions/url-and-grayscale.png
 429a3cb156777d63f2666cbdaf8169104bc9a58b8e900eabcf93243a8d9a0541  tests/filters/filter/complex-order-and-xlink-href.png
 77334671067330ef3aeb621ec6a2bcf6dfdf67decf4da3cccd3e86e47ad62e3b  tests/filters/filter/negative-subregion.png
@@ -27,7 +30,11 @@ e79ae700c2b7a22479317822fabb88efddb7f684e113a31b47c0f6165826cd05  tests/filters/
 cc66a05f6451f1cbfdd3b2025dbc57915e41158133b3c033dc61027999b31abd  tests/painting/image-rendering/on-feImage.png
 c0b169a3f40ae0806ac5e5c96731ee260491534ca56a711dda41f0a4a16dcb2c  tests/painting/image-rendering/optimizeSpeed.png
 a57328003a3b7cfe151877cd1e8249f20b0c3b12eb59b7bad54999a158dbc4ac  tests/painting/marker/orient=auto-on-M-C-C-4.png
+a6609b63876a8c14b6877fe2d8f9eddeaf6034dca528def9ff013b633019be24  tests/painting/marker/with-viewBox-1.png
+9a5ad9c9b604c48ecfadf6ff2f4bcac152269987c7d26ef6cbc38f94d3a3fb75  tests/painting/marker/with-viewBox-1.svg
 933a85a34cee5b9f71462c51688406e651384867e29d6b0084290524800b4a43  tests/painting/visibility/bbox-impact-3.png
+867af70ceb7f14fce702512d0dc19b7a92b965b6e591e880aaf27cc8f89c18e6  tests/shapes/rect/ic-values.png
+d94898d49907f0ad8e62fd6df13b430341bc56b5fd957b12e042f8031dd50498  tests/shapes/rect/ic-values.svg
 657bee17d37f77e01d30d504cbf80a907c78ec134a5c82e7f600a00919899f61  tests/structure/image/embedded-16bit-png.png
 61975a60e53a1d07c00ddda152659e0b54a408eabfa0c7f6a8e52a0e8acf6e82  tests/structure/image/embedded-gif.png
 2ca7a8485ba638027ac559d809d997cbbe2d923fd65bd8acc57e2ee5fa50ce02  tests/structure/image/embedded-jpeg-as-image-jpeg.png
@@ -82,6 +89,7 @@ af8b09ceee9e5909262abfc13fc6af63216f35b5a103406aa99826bc7a020c4a  tests/text/len
 5fb5e5184ebeb3a9a1a495fcdabf9424ac7329e6a144c8772c89d279332354f4  tests/text/text/ligatures-handling-in-mixed-fonts-2.png
 5532664c71490b72f133403eaea9e52696105a25fe73bb5119c059659f11bb70  tests/text/text/real-text-height.png
 61b47f361522a1d784cf1d46c2b0264612fb65646b93a816bf97348fac8681c3  tests/text/text/rotate-on-Arabic.png
+3c65fd3fdad286660f3471648110f4787cb00c38f543a9a6970e4dfc88146b63  tests/text/text/rotate-on-Arabic.svg
 f0578759cc4026c0879acb669c3ab352063bdadf56d935ee1ea8b6b45a831a2f  tests/text/text/x-and-y-with-multiple-values-and-arabic-text.png
 11d07daae21545cbd73e20d6f90de474f6325ae70b2fe6bdcbc40e1d94386b23  tests/text/text/xml-lang=ja.png
 dd816a6fa99b97b08d22498267fe50dca75878803c24b481979a76b8d298069d  tests/text/text/zalgo.png

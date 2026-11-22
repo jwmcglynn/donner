@@ -101,18 +101,18 @@ one lane is not counted among that lane's comparisons.
 | Registered SVG fixtures | Count |
 | --- | ---: |
 | Total | 1,679 |
-| Pixel comparisons | 1,580 |
+| Pixel comparisons | 1,581 |
 | Comparisons with a numeric setting or custom golden | 78 |
-| Render-only, undefined-behavior registration | 55 |
+| Render-only, undefined-behavior registration | 54 |
 | Render-only, legacy feature | 43 |
 | Explicit skips | 1 |
 | Fixtures in disabled categories | 0 |
 
 | Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
 | --- | ---: | ---: | ---: | ---: |
-| `default_text` | 1,554 | 98 | 26 | 1 |
-| `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,547 | 98 | 21 | 1 |
+| `default_text` | 1,555 | 97 | 26 | 1 |
+| `max` | 1,581 | 97 | 0 | 1 |
+| `geode` | 1,548 | 97 | 21 | 1 |
 | `geode_max_text` | 358 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->

@@ -67,7 +67,7 @@ result permits this difference in the underlying clip coverage.
 References from the resvg release: these tests live in the resvg repository
 (https://github.com/linebender/resvg, crates/resvg/tests/tests/). resvg is licensed
 Apache-2.0 OR MIT; these files are used under MIT, with its notice in LICENSE-resvg-MIT.
-The 123 files listed in resvg-v0.50.0.sha256 (118 PNGs, each 300x300, and 5 SVGs) are
+The 131 files listed in resvg-v0.50.0.sha256 (121 PNGs, each 300x300, and 10 SVGs) are
 byte-identical to crates/resvg/tests/<path> at the resvg v0.50.0 release tag, revision
 5bdbae64eefadc4bf0caa56dcf91702037929086, where <path> is the tests/... path the list gives.
 The tag's source archive holds them under resvg-0.50.0/crates/resvg/tests/:
@@ -100,6 +100,42 @@ its command and SHA-256. Eleven render the vendored SVG, which is the snapshot's
 text-decoration/indirect-with-multiple-colors.png renders the independent scene in
 reference-sources/indirect-with-multiple-colors.svg. Two of them, the color emoji references,
 have no counterpart at v0.50.0.
+
+Upstream edited the SVGs of these tests after the snapshot, and both files of each are
+upstream's. ic-values.svg quotes its `'Mplus 1p'` font-family: unquoted, a token that starts
+with a digit is not a valid family name (CSS Fonts 4 section 2.1.1).
+operator=arithmetic-with-large-k1-4.svg changes only a
+repository link in its description. with-viewBox-1.svg drops "(UB)" from its title: SVG 2
+section 13.7.4 clips a marker at the bounds of its viewport, and the snapshot's reference was the
+UB marker image.
+
+  tests/filters/feComposite/operator=arithmetic-with-large-k1-4.svg
+  tests/filters/feComposite/operator=arithmetic-with-large-k1-4.png
+  tests/painting/marker/with-viewBox-1.svg
+  tests/painting/marker/with-viewBox-1.png
+  tests/shapes/rect/ic-values.svg
+  tests/shapes/rect/ic-values.png
+
+Upstream renamed the snapshot's drop-shadow-function-comma-spearated.svg to
+drop-shadow-function-comma-separated.svg and corrected the same typo in its title. The vendored
+SVG is upstream's; its PNG is the snapshot's, renamed.
+
+  tests/filters/filter-functions/drop-shadow-function-comma-separated.svg
+
+resvg v0.50.0 also edits the SVGs of five more vendored tests. Each edit is correct, but the
+row does not compare at default settings against the release's reference, so the vendored SVG
+and PNG deliberately stay as they are until the cause is known.
+
+  tests/text/textPath/complex.svg: quotes `'Mplus 1p'`, and the reference becomes a rendering
+    instead of the UB marker image; its vertical run differs (#2600).
+  tests/text/textPath/with-path-and-xlink-href.svg and with-invalid-path-and-xlink-href.svg:
+    make `xlink:href` resolvable, so `path` precedence and the fallback to `href` are tested;
+    glyph-edge differences along the run (#2601).
+  tests/text/textPath/dy-with-tiny-coordinates.svg: changes only a link in its description;
+    against the release's reference only the CPU full text lane fails (102 pixels; Geode full
+    shaping passes at 69) (#2601).
+  tests/text/writing-mode/japanese-with-tb.svg: quotes `'Mplus 1p'`; the release's reference
+    keeps the upright glyph offset that the row's golden records as a reference disagreement.
 
 Why the references below differ from the snapshot's, by group. Unless noted, each SVG input is
 byte-identical in the snapshot and in the release its PNG comes from.
@@ -303,8 +339,8 @@ matches only when composited over white.
   tests/text/textPath/link-to-rect.png
 
 Donner's full text tier matches upstream's references within 11 pixels. The snapshot's
-references differ on glyph and crosshair edge coverage. Upstream rotate-on-Arabic.svg
-changed only its title and a pull-request link; the vendored SVG keeps the snapshot's.
+references differ on glyph and crosshair edge coverage. The vendored rotate-on-Arabic.svg is
+upstream's, whose title drops the snapshot's "(UB)" and draws the same scene.
 
   tests/text/text/rotate-on-Arabic.png
   tests/text/text/x-and-y-with-multiple-values-and-arabic-text.png

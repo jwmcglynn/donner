@@ -897,7 +897,6 @@ INSTANTIATE_TEST_SUITE_P(
                      "Accepted rasterization difference: the reference draws the 0.40 device px "
                      "letter strokes as 1 px hairlines with alpha scaled by the width, and Geode "
                      "covers their exact geometry; total dark ink agrees within 0.2%")},
-                {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
