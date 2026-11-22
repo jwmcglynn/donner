@@ -5,6 +5,8 @@ import tempfile
 from pathlib import Path
 import sys
 import unittest
+import zipfile
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("generate_build_report.py")
@@ -691,7 +693,7 @@ class GenerateBuildReportTests(unittest.TestCase):
             (outputs / "test.log").write_text("ignore me")
 
             destination = tmp_path / "docs" / "reports" / "test-failures"
-            harvested = generate_build_report._harvest_failed_image_artifacts(
+            harvested, notes = generate_build_report._harvest_failed_image_artifacts(
                 [
                     failed_result(
                         "//donner/svg/renderer/tests:renderer_geode_golden_tests", testlogs
@@ -702,6 +704,7 @@ class GenerateBuildReportTests(unittest.TestCase):
             )
 
             target = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
+            self.assertEqual(notes, {})
             self.assertIn(target, harvested)
             rels = harvested[target]
             self.assertEqual(len(rels), 3)
@@ -728,12 +731,13 @@ class GenerateBuildReportTests(unittest.TestCase):
                 zf.writestr("some_other_log.txt", b"not an image")
 
             destination = tmp_path / "out"
-            harvested = generate_build_report._harvest_failed_image_artifacts(
+            harvested, notes = generate_build_report._harvest_failed_image_artifacts(
                 [failed_result("//donner/css/tests:css_tests", testlogs)],
                 destination,
                 testlogs,
             )
             target = "//donner/css/tests:css_tests"
+            self.assertEqual(notes, {})
             self.assertIn(target, harvested)
             self.assertEqual(len(harvested[target]), 2)
             for rel in harvested[target]:
@@ -874,6 +878,17 @@ _UNLOCATED_NOTE = (
     ": failure images, if any, could not be located; the test summary listed no log for it "
     "under this output tree."
 )
+_NO_TESTLOGS_NOTE = (
+    ": failure images, if any, could not be located; the Bazel testlogs directory could not "
+    "be determined."
+)
+_NO_OUTPUTS_NOTE = (
+    ": failure images, if any, could not be read; a failed run left no test outputs directory."
+)
+_OUTSIDE_RUN_NOTE = (
+    ": some test outputs were not read because they resolve outside the run's testlogs "
+    "directory."
+)
 
 _SHARDED_TARGET_DIR = "donner/example/sharded_image_tests"
 _SHARDED_REPORT_PREFIX = "reports/test-failures/" + _SHARDED_TARGET_DIR
@@ -903,7 +918,7 @@ class FailureImageLayoutTests(unittest.TestCase):
         for name, payload in images.items():
             (outputs / name).write_bytes(payload)
 
-    def render_tests_section(self, summary):
+    def render_tests_section(self, summary, bazel_testlogs=None):
         stderr = summary.replace("<testlogs>", str(self.testlogs)).replace(
             "<bazel-out>", str(self.bazel_out)
         )
@@ -920,7 +935,7 @@ class FailureImageLayoutTests(unittest.TestCase):
             }
         )
         return generate_build_report.make_tests_section(
-            runner, self.reports_root, bazel_testlogs=self.testlogs
+            runner, self.reports_root, bazel_testlogs=bazel_testlogs or self.testlogs
         )
 
     @staticmethod
@@ -929,7 +944,7 @@ class FailureImageLayoutTests(unittest.TestCase):
 
     @staticmethod
     def unlocated_notes(section):
-        return [line for line in section.content.splitlines() if "could not be located" in line]
+        return [line for line in section.content.splitlines() if line.startswith("- `")]
 
     def staged_bytes(self, href):
         return (self.reports_root.parent / href).read_bytes()
@@ -1129,6 +1144,82 @@ class FailureImageLayoutTests(unittest.TestCase):
         self.assertEqual(
             self.embedded_images(section),
             [f"![shard_2_of_2/diff_Ok.png]({_SHARDED_REPORT_PREFIX}/shard_2_of_2/diff_Ok.png)"],
+        )
+        self.assertEqual(
+            self.unlocated_notes(section),
+            ["- `//donner/example:sharded_image_tests`" + _OUTSIDE_RUN_NOTE],
+        )
+
+    def test_outputs_zip_resolving_outside_the_run_is_not_read(self):
+        outside = self.testlogs.parent / "outside"
+        outside.mkdir(parents=True)
+        with zipfile.ZipFile(outside / "outputs.zip", "w") as archive:
+            archive.writestr("diff_Zip.png", b"leak")
+        self.write_run("donner/example/image_tests", {})
+        outputs = self.testlogs / "donner/example/image_tests/test.outputs"
+        (outputs / "outputs.zip").symlink_to(outside / "outputs.zip")
+
+        section = self.render_tests_section(_UNSHARDED_SUMMARY)
+
+        self.assertEqual(self.embedded_images(section), [])
+        self.assertEqual(
+            self.unlocated_notes(section), ["- `//donner/example:image_tests`" + _OUTSIDE_RUN_NOTE]
+        )
+
+    def test_failed_run_without_test_outputs_is_named(self):
+        run = self.testlogs / "donner/example/image_tests"
+        run.mkdir(parents=True)
+        (run / "test.log").write_text("failure log\n")
+
+        section = self.render_tests_section(_UNSHARDED_SUMMARY)
+
+        self.assertEqual(
+            self.unlocated_notes(section), ["- `//donner/example:image_tests`" + _NO_OUTPUTS_NOTE]
+        )
+
+    def test_failed_run_without_images_is_not_named(self):
+        self.write_run("donner/example/image_tests", {})
+
+        section = self.render_tests_section(_UNSHARDED_SUMMARY)
+
+        self.assertNotIn("### Failed image comparisons", section.content)
+
+    def test_unresolved_testlogs_names_every_failed_target_with_that_cause(self):
+        self.write_run("donner/example/image_tests", {"diff_Case.png": b"diff"})
+
+        with mock.patch.object(generate_build_report, "_resolve_bazel_testlogs", return_value=None):
+            section = generate_build_report.make_tests_section(
+                FakeRunner(
+                    {
+                        TESTS_ARGS: generate_build_report.CommandResult(
+                            "tests", TESTS_ARGS, 3, "",
+                            _UNSHARDED_SUMMARY.replace("<testlogs>", str(self.testlogs)), 1.0,
+                        )
+                    }
+                ),
+                self.reports_root,
+                bazel_testlogs=None,
+            )
+
+        self.assertEqual(self.embedded_images(section), [])
+        self.assertEqual(
+            self.unlocated_notes(section), ["- `//donner/example:image_tests`" + _NO_TESTLOGS_NOTE]
+        )
+
+    def test_testlogs_of_an_unexpected_shape_is_not_used(self):
+        logs = self.bazel_out / "aarch64-fastbuild" / "logs"
+        outputs = logs / "donner/example/image_tests/test.outputs"
+        outputs.mkdir(parents=True)
+        (outputs.parent / "test.log").write_text("failure log\n")
+        (outputs / "diff_Case.png").write_bytes(b"diff")
+
+        section = self.render_tests_section(
+            _UNSHARDED_SUMMARY.replace("<testlogs>", str(logs)), bazel_testlogs=logs
+        )
+
+        self.assertEqual(self.embedded_images(section), [])
+        self.assertEqual(
+            self.unlocated_notes(section), ["- `//donner/example:image_tests`" + _NO_TESTLOGS_NOTE]
         )
 
     def test_parse_records_the_logs_listed_under_each_target(self):

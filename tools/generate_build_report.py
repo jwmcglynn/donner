@@ -844,24 +844,52 @@ def _failed_run_output_dirs(
     return runs
 
 
-def _contained_failure_images(run: _FailedRun) -> typing.List[Path]:
-    """Return the run's loose failure PNGs, refusing anything that resolves outside it."""
+# Why a failed target's images are missing or incomplete in the report.
+_NOTE_NO_TESTLOGS = (
+    "failure images, if any, could not be located; the Bazel testlogs directory could not "
+    "be determined."
+)
+_NOTE_NO_LOG = (
+    "failure images, if any, could not be located; the test summary listed no log for it "
+    "under this output tree."
+)
+_NOTE_NO_OUTPUTS = (
+    "failure images, if any, could not be read; a failed run left no test outputs directory."
+)
+_NOTE_OUTSIDE_RUN = (
+    "some test outputs were not read because they resolve outside the run's testlogs directory."
+)
+
+
+def _contained_failure_images(
+    run: _FailedRun,
+) -> tuple[typing.List[Path], typing.Optional[str]]:
+    """Return the run's loose failure PNGs and a note when any could not be read.
+
+    Outputs and images that resolve outside the run's directory are refused.
+    """
     outputs_dir = run.outputs_dir.resolve()
     if not outputs_dir.is_relative_to(run.log_dir):
-        return []
-    return [
-        path
-        for path in _collect_failure_images_for_target(outputs_dir)
-        if path.resolve().is_relative_to(outputs_dir)
-    ]
+        return [], _NOTE_OUTSIDE_RUN
+    if not outputs_dir.is_dir():
+        return [], _NOTE_NO_OUTPUTS
+    images = _collect_failure_images_for_target(outputs_dir)
+    contained = [path for path in images if path.resolve().is_relative_to(outputs_dir)]
+    return contained, _NOTE_OUTSIDE_RUN if len(contained) != len(images) else None
 
 
-def _stage_run_images(run: _FailedRun, unzip_dir: Path) -> typing.List[tuple[str, Path]]:
-    """Return ``(file name, path)`` for one run's loose and zipped failure PNGs."""
-    staged = [(path.name, path) for path in _contained_failure_images(run)]
-    zip_path = (run.outputs_dir / "outputs.zip").resolve()
-    if not zip_path.is_relative_to(run.log_dir) or not zip_path.is_file():
-        return staged
+def _stage_run_images(
+    run: _FailedRun, unzip_dir: Path
+) -> tuple[typing.List[tuple[str, Path]], typing.Optional[str]]:
+    """Return ``(file name, path)`` for one run's loose and zipped failure PNGs, and a note."""
+    images, note = _contained_failure_images(run)
+    staged = [(path.name, path) for path in images]
+    zip_link = run.outputs_dir / "outputs.zip"
+    if note is not None or not zip_link.is_file():
+        return staged, note
+    zip_path = zip_link.resolve()
+    if not zip_path.is_relative_to(run.log_dir):
+        return staged, _NOTE_OUTSIDE_RUN
     try:
         with zipfile.ZipFile(zip_path) as zf:
             for member in zf.namelist():
@@ -870,17 +898,20 @@ def _stage_run_images(run: _FailedRun, unzip_dir: Path) -> typing.List[tuple[str
                     staged.append((base, Path(zf.extract(member, unzip_dir))))
     except (OSError, zipfile.BadZipFile):
         pass
-    return staged
+    return staged, None
 
 
-def _copy_run_images(run: _FailedRun, run_destination: Path, destination: Path) -> set[str]:
+def _copy_run_images(
+    run: _FailedRun, run_destination: Path, destination: Path
+) -> tuple[set[str], typing.Optional[str]]:
     """Copy one run's failure PNGs into ``run_destination``.
 
-    Returns the copied paths relative to ``destination``.
+    Returns the copied paths relative to ``destination`` and a note when some
+    of the run's outputs could not be read.
     """
     unzip_dir = run_destination / "_unzip"
     try:
-        staged = _stage_run_images(run, unzip_dir)
+        staged, note = _stage_run_images(run, unzip_dir)
         if staged:
             run_destination.mkdir(parents=True, exist_ok=True)
         copied = set()
@@ -888,7 +919,7 @@ def _copy_run_images(run: _FailedRun, run_destination: Path, destination: Path) 
             dest_file = run_destination / name
             shutil.copyfile(source, dest_file)
             copied.add(dest_file.relative_to(destination).as_posix())
-        return copied
+        return copied, note
     finally:
         shutil.rmtree(unzip_dir, ignore_errors=True)
 
@@ -897,25 +928,34 @@ def _harvest_failed_image_artifacts(
     failed_results: typing.Sequence[TestCaseResult],
     destination: Path,
     bazel_testlogs: Path,
-) -> dict[str, typing.List[str]]:
+) -> tuple[dict[str, typing.List[str]], dict[str, str]]:
     """Copy SVG-vs-golden PNGs from failed targets into ``destination``.
 
     Each failed run's images land in its own directory, so same-named images
     from different shards, runs or attempts stay distinct. Returns
     ``{target: [relative_png_path, ...]}`` for every failed target that
-    produced image-comparison artifacts. Paths are relative to
-    ``destination`` so the report can build links from its ``reports/`` root.
-    Targets that produced no such PNGs (non-image failures) are omitted.
+    produced image-comparison artifacts, with paths relative to
+    ``destination`` so the report can build links from its ``reports/`` root,
+    and ``{target: note}`` for every failed target whose runs were not found
+    or whose outputs could not all be read. A target whose runs were all read
+    and left no PNGs (a non-image failure) appears in neither.
     """
     harvested: dict[str, typing.List[str]] = {}
+    notes: dict[str, str] = {}
     for result in failed_results:
+        runs = _failed_run_output_dirs(result, bazel_testlogs)
+        if not runs:
+            notes[result.target] = _NOTE_NO_LOG
         target_destination = destination / _target_to_testlogs_subpath(result.target)
         rel_paths: set[str] = set()
-        for label, run in _failed_run_output_dirs(result, bazel_testlogs).items():
-            rel_paths |= _copy_run_images(run, target_destination / label, destination)
+        for label, run in runs.items():
+            copied, note = _copy_run_images(run, target_destination / label, destination)
+            rel_paths |= copied
+            if note is not None:
+                notes.setdefault(result.target, note)
         if rel_paths:
             harvested[result.target] = sorted(rel_paths)
-    return harvested
+    return harvested, notes
 
 
 def _resolve_bazel_testlogs() -> typing.Optional[Path]:
@@ -937,9 +977,9 @@ def _render_failed_image_comparisons(
 
     When ``reports_root`` is set (docs-link mode) the PNGs are copied into
     ``reports/test-failures/`` and the report embeds them, and every failed
-    target whose runs could not be located is named. Returns an empty string
-    when there are no failed targets, or when every failed run was located
-    and none left image-comparison artifacts.
+    target whose runs could not be located or read is named with the reason.
+    Returns an empty string when there are no failed targets, or when every
+    failed run was read and none left image-comparison artifacts.
     """
     if not failed_results:
         return ""
@@ -961,33 +1001,35 @@ def _render_failed_image_comparisons(
     if destination.exists():
         shutil.rmtree(destination)
 
-    harvested, unlocated = _harvest_or_name_unlocated(failed_results, destination, bazel_testlogs)
+    harvested, notes = _harvest_with_notes(failed_results, destination, bazel_testlogs)
     if destination.exists() and not any(destination.iterdir()):
         destination.rmdir()
-    if not harvested and not unlocated:
-        # Every failed run was found and none left image-comparison artifacts
+    if not harvested and not notes:
+        # Every failed run was read and none left image-comparison artifacts
         # (the failures were non-visual), so there is nothing to show.
         return ""
-    return _format_failed_image_comparisons(harvested, unlocated)
+    return _format_failed_image_comparisons(harvested, notes)
 
 
-def _harvest_or_name_unlocated(
+def _harvest_with_notes(
     failed_results: typing.Sequence[TestCaseResult],
     destination: Path,
     bazel_testlogs: typing.Optional[Path],
-) -> tuple[dict[str, typing.List[str]], typing.List[str]]:
-    """Harvest failure images; also return the failed targets whose runs were not found."""
-    if bazel_testlogs is None:
-        return {}, [r.target for r in failed_results]
-    harvested = _harvest_failed_image_artifacts(failed_results, destination, bazel_testlogs)
-    unlocated = [r.target for r in failed_results if not _failed_run_output_dirs(r, bazel_testlogs)]
-    return harvested, unlocated
+) -> tuple[dict[str, typing.List[str]], dict[str, str]]:
+    """Harvest failure images, or name every failed target when testlogs is unknown.
+
+    The output tree is derived from ``bazel-out/<configuration>/testlogs``, so
+    a testlogs path of any other shape is treated as unknown.
+    """
+    if bazel_testlogs is None or bazel_testlogs.resolve().name != "testlogs":
+        return {}, {r.target: _NOTE_NO_TESTLOGS for r in failed_results}
+    return _harvest_failed_image_artifacts(failed_results, destination, bazel_testlogs)
 
 
 def _format_failed_image_comparisons(
-    harvested: dict[str, typing.List[str]], unlocated: typing.Sequence[str]
+    harvested: dict[str, typing.List[str]], notes: dict[str, str]
 ) -> str:
-    """Format the embedded images, then the failed targets whose runs were not found."""
+    """Format the embedded images, then each noted target with its reason."""
     lines = ["### Failed image comparisons", ""]
     if harvested:
         lines += [
@@ -1008,11 +1050,8 @@ def _format_failed_image_comparisons(
             caption = Path(rel).relative_to(target_subpath).as_posix()
             lines.append(f"![{caption}]({href})")
         lines.append("")
-    for target in sorted(unlocated):
-        lines.append(
-            f"- `{target}`: failure images, if any, could not be located; the test "
-            "summary listed no log for it under this output tree."
-        )
+    for target in sorted(notes):
+        lines.append(f"- `{target}`: {notes[target]}")
     return "\n".join(lines).rstrip()
 
 
