@@ -9338,15 +9338,13 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
       <path id="content" d="M0 0 L6 3 L0 6 Z" fill="context-stroke" stroke="context-fill"
             stroke-width="0.75"/>
     </marker>
-    <marker id="alt" markerWidth="4" markerHeight="4" refX="2" refY="2">
-      <rect width="4" height="4" fill="#00aa00"/>
-    </marker>
     <path id="host" d="M6 52 L18 10 L30 52 L42 10 L58 40" fill="#ffcc00" stroke="#cc0000"
           stroke-width="1.5" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
   </svg>)svg";
 
   const MarkerEdit edits[] = {
       {"path_vertices", SetAttributeEdit("host", "d", "M6 52 L18 14 L30 48 L42 14 L58 40")},
+      {"path_vertex_count", SetAttributeEdit("host", "d", "M6 52 L18 10 L58 40")},
       {"stroke_width_scales_markers", SetAttributeEdit("host", "stroke-width", "2.5")},
       {"marker_ref_x", MarkerElementEdit([](SVGMarkerElement& marker) {
          marker.setRefX(Lengthd(1, Lengthd::Unit::None));
@@ -9369,7 +9367,12 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
       {"marker_overflow", SetAttributeEdit("m", "overflow", "visible")},
       {"content_geometry", SetAttributeEdit("content", "d", "M0 0 L6 2 L0 6 Z")},
       {"content_stroke_width", SetAttributeEdit("content", "stroke-width", "1.5")},
-      {"marker_property", SetAttributeEdit("host", "marker-mid", "url(#alt)")},
+      {"marker_property",
+       [](SVGDocument& document) {
+         std::optional<SVGElement> host = document.querySelector("#host");
+         ASSERT_THAT(host, testing::Optional(testing::_));
+         host->removeAttribute(xml::XMLQualifiedNameRef("marker-mid"));
+       }},
       {"context_stroke", SetAttributeEdit("host", "stroke", "#0066ff")},
       {"context_fill", SetAttributeEdit("host", "fill", "#00ccff")},
   };
