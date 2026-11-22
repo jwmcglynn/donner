@@ -1,5 +1,6 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:rules.bzl", "ci_platform_test")
-load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -195,12 +196,12 @@ donner_cc_library(
     ],
 )
 
-# `gtest_main` replacement that aborts any single test case exceeding
-# `--donner_test_timeout_seconds=N` (or the `DONNER_TEST_TIMEOUT_SECONDS`
-# env var, default 60 s). Use in place of `@com_google_gtest//:gtest_main`
-# for test targets where a single hung test case could otherwise chew
-# through a 15-minute Bazel `test_timeout` (e.g., GPU-driver hangs on
-# the Geode backend under Intel Arc + Mesa 25.2.8 Xe-KMD).
+# `gtest_main` replacement that aborts a hung test case and names it. Each case gets a per-case
+# budget (`--donner_test_timeout_seconds=N`, else the `DONNER_TEST_TIMEOUT_SECONDS` env var, else
+# 60 s), and every alarm also ends a margin before Bazel's `TEST_TIMEOUT`, so the named failure
+# always beats the Bazel timeout. Use in place of `@com_google_gtest//:gtest_main` for test targets
+# where a single hung test case could otherwise run into the target timeout unnamed (for example
+# GPU-driver hangs on the Geode backend).
 donner_cc_library(
     name = "gtest_timeout_main",
     testonly = 1,
@@ -208,10 +209,70 @@ donner_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":failure_signal_handler",
+        ":gtest_timeout_budget",
         "@com_google_gtest//:gtest",
     ],
     alwayslink = 1,
 )
+
+donner_cc_library(
+    name = "gtest_timeout_budget",
+    testonly = 1,
+    srcs = ["tests/GtestTimeoutBudget.cc"],
+    hdrs = ["tests/GtestTimeoutBudget.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_test(
+    name = "gtest_timeout_budget_tests",
+    srcs = ["tests/GtestTimeoutBudget_tests.cc"],
+    deps = [
+        ":gtest_timeout_budget",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Test cases that stall on request, run in a subprocess by the watchdog tests below.
+donner_cc_binary(
+    name = "gtest_timeout_main_hang_fixture",
+    testonly = 1,
+    srcs = ["tests/GtestTimeoutMainHangFixture.cc"],
+    deps = [
+        ":gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+# Short simulated timeouts: the script sets TEST_TIMEOUT for the fixture and kills it when that
+# time runs out, as Bazel would.
+sh_test(
+    name = "gtest_timeout_main_watchdog_tests",
+    size = "small",
+    srcs = ["tests/gtest_timeout_main_watchdog_tests.sh"],
+    args = [
+        "$(rootpath :gtest_timeout_main_hang_fixture)",
+        "simulated",
+    ],
+    data = [":gtest_timeout_main_hang_fixture"],
+)
+
+# A stalled case under each test size's real Bazel timeout must fail with the watchdog message.
+# Manual: each one runs for most of its size's timeout (about 54 s, 270 s and 840 s).
+[sh_test(
+    name = "gtest_timeout_main_hang_%s_tests" % size,
+    size = size,
+    srcs = ["tests/gtest_timeout_main_watchdog_tests.sh"],
+    args = [
+        "$(rootpath :gtest_timeout_main_hang_fixture)",
+        "inherited",
+    ],
+    data = [":gtest_timeout_main_hang_fixture"],
+    tags = ["manual"],
+) for size in [
+    "small",
+    "medium",
+    "large",
+]]
 
 filegroup(
     name = "base_tests_testdata",
