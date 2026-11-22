@@ -328,8 +328,8 @@
         "https://github.com/jwmcglynn/donner/pull/2406",
         "https://github.com/jwmcglynn/donner/issues/2526"
       ],
-      "removal_criteria": "Use default settings after a reference applies the fractional feOffset exactly and the linearRGB mixing difference tracked in #2526 is resolved.",
-      "reference_provenance": "Archived reference snaps the 40-unit offset to 115 of 115.47 local raster pixels, about 0.4 device px, so alpha differs by 17 to 19 levels at the offset copies' horizontal blur edges; at 0.085 the row counts 25 pixels on both renderers. With an offset that lands on whole local pixels, alpha agrees within 2 levels and the remaining linearRGB color mixing in the blurred overlap needs 0.05 on both renderers.",
+      "removal_criteria": "Use default settings when the reference agrees with the fractional feOffset at the default threshold and pixel budget.",
+      "reference_provenance": "The archived reference snaps the authored offset to 115 local raster pixels instead of 115.47. At threshold 0.085 the unchanged fixture counts 91 pixels on TinySkia and 86 on Geode. With the offset aligned to 115 pixels, the default 0.02 threshold counts one pixel on TinySkia and zero on software Vulkan. The sampled opaque color in the blurred overlap agrees with the reference.",
       "max_threshold": 0.085,
       "max_pixels": 100
     },

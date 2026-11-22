@@ -403,6 +403,8 @@ private:
     components::FilterExecutionBudget::Reservation filterReservation;
     std::optional<Box2d> filterRegion;
     Transform2d deviceFromFilter;
+    Transform2d captureFromParent;
+    bool capturedLocally = false;
     bool localRasterRequiredForBudget = false;
     bool localRasterReserved = false;  ///< Whether admission budgeted the transformed local raster.
     int filterBufferOffsetX = 0;
@@ -540,6 +542,9 @@ private:
                                  const Transform2d& localFromFilter, const Box2d& localFilterRegion,
                                  const Vector2d& paddedSize, const Transform2d& deviceFromLocal);
   void drawFilterCapture(const SurfaceFrame& frame);
+  static bool filterLocalCapture(const SurfaceFrame& frame, tiny_skia::Pixmap& localPixmap,
+                                 const Transform2d& localFromFilter,
+                                 const Box2d& localFilterRegion);
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
   /// Forward unfiltered paint captures to containing stages before executing this stage.

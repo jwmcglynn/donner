@@ -734,6 +734,9 @@ struct FilterGraph {
   /// origin. Set by the renderer driver.
   bool keepsViewportAlignedCapture = false;
 
+  /// The prepared SourceGraphic is ordinary vector paint without device-space child effects.
+  bool canCaptureSourceInFilterSpace = false;
+
   /// Number of layers the filtered element itself pushed between its backdrop and this filter
   /// stage: its own isolated (opacity, blend or isolation) layer, its masks, and the filter stages
   /// that wrap this one. BackgroundImage and BackgroundAlpha read the target beneath those layers,

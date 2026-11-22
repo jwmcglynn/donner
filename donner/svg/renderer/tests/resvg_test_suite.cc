@@ -428,8 +428,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"complex-transform.svg",
                      Params::WithThreshold(0.085f, kDefaultMismatchedPixels,
-                                           "Reference snaps the skewed offset to whole pixels; "
-                                           "the remaining linearRGB mixing is #2526")},
+                                           "Reference snaps the skewed offset to whole pixels")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

@@ -693,6 +693,21 @@ inline bool UsesTransformedBlurPath(const components::FilterGraph& graph,
          (useLocal || (!fullExecutionFits && IsLinearBlurChain(graph)));
 }
 
+/// Map device pixels onto the filter-aligned raster, including its input padding.
+inline Transform2d FilterRasterFromDevice(const Transform2d& deviceFromFilter,
+                                          Vector2d paddedOrigin, Vector2d scale) {
+  return deviceFromFilter.inverse() * Transform2d::Translate(-paddedOrigin) *
+         Transform2d::Scale(scale.x, scale.y);
+}
+
+/// Whether the already-admitted local raster can receive SourceGraphic directly. Only wholly
+/// blurred outputs use this path, because a sharp branch still needs device coverage.
+inline bool CanCaptureFilterSourceLocally(const components::FilterGraph& graph,
+                                          const Transform2d& deviceFromFilter) {
+  return graph.canCaptureSourceInFilterSpace && !graph.keepsViewportAlignedCapture &&
+         FilterOutputIsBlurred(graph, FilterDeviceAxisScale(deviceFromFilter));
+}
+
 /// User-space padding of the local raster: 3 sigma + 1 for the largest blur deviation.
 /// @param graph Filter graph.
 inline double ComputeTransformedBlurPadding(const components::FilterGraph& graph) {

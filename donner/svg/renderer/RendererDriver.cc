@@ -3800,6 +3800,100 @@ void AddReplayedTurbulence(std::vector<int>& turbulenceDrawOrders,
   }
 }
 
+/// Whether a single draw uses a vector path and paint independent of the device raster.
+bool SupportsFilterSpacePaint(Registry& registry,
+                              const components::RenderingInstanceComponent& instance) {
+  if (std::holds_alternative<components::PaintResolvedReference>(instance.resolvedFill) ||
+      std::holds_alternative<components::PaintResolvedReference>(instance.resolvedStroke)) {
+    return false;
+  }
+  const EntityHandle styleHandle = instance.styleHandle(registry);
+  const auto* style = styleHandle.try_get<components::ComputedStyleComponent>();
+  return style != nullptr && style->properties.has_value() &&
+         style->properties->vectorEffect.getOr(VectorEffect::None) == VectorEffect::None &&
+         components::ShapeSystem::geometryHandle(styleHandle)
+             .all_of<components::ComputedPathComponent>();
+}
+
+/// Whether a draw replays or clips other geometry within the active capture.
+bool HasFilterCaptureSubtreeEffects(const components::RenderingInstanceComponent& instance) {
+  return instance.clipRect || instance.hasClipPath() || instance.mask || instance.markerStart ||
+         instance.markerMid || instance.markerEnd;
+}
+
+/// Complex layers, resource subtrees and device-dependent paint keep the existing capture.
+bool SupportsFilterSpaceVectorCapture(Registry& registry,
+                                      const components::RenderingInstanceComponent& instance) {
+  if (HasFilterCaptureSubtreeEffects(instance) || instance.isShadow(registry) ||
+      (instance.isolatedLayer && !instance.resolvedFilter)) {
+    return false;
+  }
+  const auto* type = instance.dataHandle(registry).try_get<components::ElementTypeComponent>();
+  return (type != nullptr && type->type() == ElementType::G) ||
+         SupportsFilterSpacePaint(registry, instance);
+}
+
+/// Whether a single-stage transformed blur can paint its own source in filter space.
+bool IsFilterSpaceCaptureCandidate(Registry& registry, const Transform2d& surfaceFromCanvas,
+                                   Entity entity, const components::FilterGraph& graph) {
+  if (graph.keepsViewportAlignedCapture) {
+    return false;
+  }
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+  const Transform2d deviceFromFilter = instance.worldFromEntityTransform * surfaceFromCanvas;
+  return UsesTransformedBlurPath(graph, graph.filterRegion, deviceFromFilter,
+                                 /*fullExecutionFits=*/true) &&
+         FilterOutputIsBlurred(graph, FilterDeviceAxisScale(deviceFromFilter)) &&
+         SupportsFilterSpaceVectorCapture(registry, instance);
+}
+
+/// Validate tentative captures in draw order. A nested filter rules out the enclosing
+/// capture before its own range starts, so only one range can remain eligible at a time.
+void RejectBlockedFilterCaptureRanges(
+    Registry& registry,
+    std::unordered_map<Entity, std::vector<components::FilterGraph>>& preparedGraphs) {
+  components::FilterGraph* active = nullptr;
+  int lastDrawOrder = 0;
+  // RenderingContext sorts this entire storage, including replayed content, by draw order.
+  // This pass only reads the storage. It must also see descendants outside any draw slice.
+  const auto& storage = registry.storage<components::RenderingInstanceComponent>();
+  for (const auto& instance : storage) {
+    if (active && instance.drawOrder > lastDrawOrder) {
+      active = nullptr;
+    }
+    if (active &&
+        (instance.resolvedFilter || !SupportsFilterSpaceVectorCapture(registry, instance))) {
+      active->canCaptureSourceInFilterSpace = false;
+      active = nullptr;
+    }
+    if (instance.resolvedFilter) {
+      const auto it = preparedGraphs.find(entt::to_entity(storage, instance));
+      if (it != preparedGraphs.end() && it->second.size() == 1 &&
+          it->second.front().canCaptureSourceInFilterSpace) {
+        active = &it->second.front();
+        lastDrawOrder = SubtreeLastDrawOrder(registry, instance);
+      }
+    }
+  }
+}
+
+void MarkFilterSpaceVectorCaptures(
+    Registry& registry, const Transform2d& surfaceFromCanvas,
+    std::unordered_map<Entity, std::vector<components::FilterGraph>>& preparedGraphs) {
+  bool hasCandidate = false;
+  for (auto& [entity, stages] : preparedGraphs) {
+    if (stages.size() == 1) {
+      auto& graph = stages.front();
+      graph.canCaptureSourceInFilterSpace =
+          IsFilterSpaceCaptureCandidate(registry, surfaceFromCanvas, entity, graph);
+      hasCandidate |= graph.canCaptureSourceInFilterSpace;
+    }
+  }
+  if (hasCandidate) {
+    RejectBlockedFilterCaptureRanges(registry, preparedGraphs);
+  }
+}
+
 /// Mark every prepared filter layer that contains feTurbulence, or encloses a filter layer that
 /// does, directly or through replayed mask or marker content, to keep its input capture aligned
 /// with the viewport. Both backends evaluate turbulence noise from raster pixel coordinates, so an
@@ -3873,6 +3967,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
     }
   }
   MarkViewportAlignedFilterCaptures(registry, preparedFilterGraphs_);
+  MarkFilterSpaceVectorCaptures(registry, surfaceFromCanvasTransform_, preparedFilterGraphs_);
 }
 
 void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {

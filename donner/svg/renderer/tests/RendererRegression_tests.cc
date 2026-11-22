@@ -1243,13 +1243,42 @@ TEST_F(RendererRegressionTests, SkewedDropShadowKeepsSourceGraphicSharp) {
       "skewed_drop_shadow_source", editor::tests::PixelmatchIdentityParams());
 }
 
+// Build the shadow from an independently device-rasterized silhouette. The separate blur-and-
+// offset graph has no special shadow assembly, and the unfiltered foreground is drawn afterward.
+RendererBitmap RenderDeviceCaptureBlurControl(const Transform2d& transform,
+                                              const Vector2d& viewport, const Box2d& region,
+                                              const Box2d& shape,
+                                              const components::filter_primitive::Offset& offset,
+                                              std::optional<css::RGBA> foreground = std::nullopt) {
+  using namespace components;
+  using namespace filter_primitive;
+  auto renderer = CreateActiveRendererInstance();
+  if (!renderer) {
+    return {};
+  }
+  const auto fill = [](const css::RGBA& color) {
+    return PaintParams{.fill = PaintServer::Solid{css::Color(color)}};
+  };
+  FilterGraph blur;
+  blur.nodes = {FilterNode{.primitive = GaussianBlur{3, 2}}, FilterNode{.primitive = offset}};
+  renderer->beginFrame(RenderViewport{.size = viewport});
+  renderer->setTransform(transform);
+  renderer->pushFilterLayer(blur, region);
+  renderer->setPaint(fill(css::RGBA(0, 0, 0, 255)));
+  renderer->drawRect(shape, StrokeParams{});
+  renderer->popFilterLayer();
+  if (foreground) {
+    renderer->setTransform(transform);
+    renderer->setPaint(fill(*foreground));
+    renderer->drawRect(shape, StrokeParams{});
+  }
+  renderer->endFrame();
+  return renderer->takeSnapshot();
+}
+
 TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSource) {
   constexpr std::string_view kShape =
       R"svg(<rect x="8" y="12" width="21" height="16" fill="seagreen")svg";
-  constexpr std::string_view kBlackShape =
-      R"svg(<rect x="8" y="12" width="21" height="16" fill="black" filter="url(#f)"/>)svg";
-  constexpr std::string_view kBlur =
-      R"svg(<feGaussianBlur stdDeviation="3 2"/><feOffset dx="3" dy="27"/>)svg";
   struct Shadow {
     std::string_view name;
     std::string_view primitives;
@@ -1266,15 +1295,23 @@ TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSour
                    <feComposite in2="offset" operator="in" result="shadow"/>
                    <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>)svg"},
   };
-  for (const std::string_view transform :
-       {"translate(6 4) skewX(35)", "translate(28 4) rotate(22)"}) {
+  constexpr double kDegrees = MathConstants<double>::kDegToRad;
+  const std::array placements{
+      std::pair{"translate(6 4) skewX(35)",
+                Transform2d::SkewX(35 * kDegrees) * Transform2d::Translate(6, 4)},
+      std::pair{"translate(28 4) rotate(22)",
+                Transform2d::Rotate(22 * kDegrees) * Transform2d::Translate(28, 4)},
+  };
+  for (const auto& [transform, matrix] : placements) {
     SCOPED_TRACE(transform);
     const auto render = [&](std::string_view primitives, std::string_view content) {
       return RenderTransformedFilterScene("-28 -18 112 99", primitives, transform, content,
                                           Vector2i(112, 94));
     };
-    const RendererBitmap expected =
-        render(kBlur, std::string(kBlackShape) + std::string(kShape) + "/>");
+    const RendererBitmap expected = RenderDeviceCaptureBlurControl(
+        matrix, Vector2d(112, 94), Box2d::FromXYWH(-28, -18, 112, 99),
+        Box2d::FromXYWH(8, 12, 21, 16), components::filter_primitive::Offset{3, 27},
+        css::RGBA(46, 139, 87, 255));
     ExpectVisibleBitmap(expected, "transformed_shadow_reference_visible");
     for (const Shadow& shadow : shadows) {
       SCOPED_TRACE(shadow.name);
@@ -1287,18 +1324,16 @@ TEST_F(RendererRegressionTests, TransformedShadowMatchesAnIndependentBlurAndSour
 
 TEST_F(RendererRegressionTests, TransformedDropShadowKeepsBlurTailUntilOffset) {
   constexpr std::string_view kRegion = "10 10 50 40";
-  constexpr std::string_view kSeparateShadow =
-      R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 2"/>
-            <feOffset dx="10" dy="0"/>)svg";
-  constexpr std::string_view kShadowShape =
-      R"svg(<rect x="12" y="20" width="3" height="20" filter="url(#f)"/>)svg";
   constexpr std::string_view kSource =
       R"svg(<rect x="12" y="20" width="3" height="20" fill="seagreen")svg";
   const auto render = [](std::string_view region, std::string_view primitives,
                          std::string_view content) {
     return RenderTransformedFilterScene(region, primitives, "skewX(30)", content, Vector2i(96, 64));
   };
-  const RendererBitmap expected = render("0 10 60 40", kSeparateShadow, kShadowShape);
+  const RendererBitmap expected = RenderDeviceCaptureBlurControl(
+      Transform2d::SkewX(30 * MathConstants<double>::kDegToRad), Vector2d(96, 64),
+      Box2d::FromXYWH(0, 10, 60, 40), Box2d::FromXYWH(12, 20, 3, 20),
+      components::filter_primitive::Offset{10, 0});
   const RendererBitmap drop =
       render(kRegion, R"svg(<feDropShadow dx="10" dy="0" stdDeviation="3 2"/>)svg",
              std::string(kSource) + R"svg( filter="url(#f)"/>)svg");
@@ -1405,6 +1440,47 @@ TEST_F(RendererRegressionTests, SkewedBlurThroughMergeOrSourceAlphaMatchesThePla
       render(R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3 1"/>)svg", "seagreen"),
       render(kBlur, "black"), "skewed_source_alpha_blur",
       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, SkewedLinearBlurKeepsTheOpaqueColorTransition) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 200 200">
+      <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="1"
+                        color-interpolation-filters="sRGB" result="bottom"/>
+        <feGaussianBlur in="SourceGraphic" stdDeviation="1"/>
+        <feOffset dx="40" dy="39.837168574084174" result="top"/>
+        <feMerge><feMergeNode in="bottom"/><feMergeNode in="top"/></feMerge>
+      </filter>
+      <g transform="skewX(30) translate(-40)" filter="url(#f)">
+        <rect x="40" y="40" width="40" height="40" fill="yellow"/>
+        <rect x="60" y="60" width="40" height="40" fill="blue"/>
+      </g>
+    </svg>)svg");
+  const RendererBitmap output = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  constexpr Vector2i kCropOrigin(306, 270);
+  constexpr Vector2i kCropSize(3, 1);
+  // Only the shifted blur contributes here. Its horizontal transition is the CDF of a unit
+  // Gaussian centered at x = 60, and the two opaque colors sum to one in linear light.
+  const auto encode = [](double value) {
+    return static_cast<uint8_t>(std::lround(255.0 * (1.055 * std::pow(value, 1.0 / 2.4) - 0.055)));
+  };
+  RendererBitmap expected;
+  expected.dimensions = kCropSize;
+  expected.rowBytes = kCropSize.x * 4;
+  for (int x = kCropOrigin.x; x < kCropOrigin.x + kCropSize.x; ++x) {
+    const double filterX = (x + 0.5) / 2.5 - ((kCropOrigin.y + 0.5) / 2.5) * 0.5773502691896258;
+    const double yellow = 0.5 * std::erfc((filterX - 60.0) / std::sqrt(2.0));
+    const uint8_t encodedYellow = encode(yellow);
+    expected.pixels.insert(expected.pixels.end(),
+                           {encodedYellow, encodedYellow, encode(1.0 - yellow), 255});
+  }
+  // The continuous Gaussian and the discrete raster can differ by a rounding level.
+  // Apply the normal perceptual threshold and require all pixels in the crop to pass.
+  editor::tests::CompareBitmapToBitmap(
+      editor::tests::CropBitmap(output, kCropOrigin, kCropSize), expected,
+      "skewed_linear_blur_color_transition",
+      editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true));
 }
 
 // When the filter-aligned raster would not fit the execution budget, both renderers draw the filter
