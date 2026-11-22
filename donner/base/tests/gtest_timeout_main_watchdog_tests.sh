@@ -72,6 +72,7 @@ expect() {
   if [[ "${status}" -eq "${expected_status}" ]] &&
     grep -qF -- "${expected_output}" "${output_file}"; then
     echo "PASS: ${scenario}"
+    grep -F "[donner]" "${output_file}" | sed 's/^/  | /'
     return
   fi
   failures=$((failures + 1))

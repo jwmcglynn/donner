@@ -12,6 +12,8 @@ namespace {
 using std::chrono::milliseconds;
 using std::chrono::seconds;
 using testing::Eq;
+using testing::Ge;
+using testing::Gt;
 using testing::Le;
 using testing::Lt;
 using testing::Optional;
@@ -67,10 +69,10 @@ TEST(GtestTimeoutBudgetTest, WatchdogMarginAlwaysLeavesTimeOnBothSides) {
     const milliseconds margin = WatchdogMargin(timeout);
     const milliseconds deadline = timeout - margin;
     ASSERT_THAT(margin, Lt(timeout)) << "TEST_TIMEOUT=" << timeoutSeconds;
-    ASSERT_THAT(milliseconds(0), Lt(margin)) << "TEST_TIMEOUT=" << timeoutSeconds;
+    ASSERT_THAT(margin, Gt(milliseconds(0))) << "TEST_TIMEOUT=" << timeoutSeconds;
     ASSERT_THAT(margin, Le(kMaxWatchdogMargin)) << "TEST_TIMEOUT=" << timeoutSeconds;
     // A longer timeout never yields an earlier deadline.
-    ASSERT_THAT(previousDeadline, Le(deadline)) << "TEST_TIMEOUT=" << timeoutSeconds;
+    ASSERT_THAT(deadline, Ge(previousDeadline)) << "TEST_TIMEOUT=" << timeoutSeconds;
     previousDeadline = deadline;
   }
 }
