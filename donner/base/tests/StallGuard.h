@@ -10,8 +10,9 @@
 ///
 /// Bounds, from inner to outer:
 /// - \ref donner::tests::kHangGuard bounds one wait.
-/// - The per-case watchdog in `//donner/base:gtest_timeout_main` bounds a whole case (60 s by
-///   default, and always ending before Bazel's test timeout) and names it when it fires.
+/// - The watchdog in `//donner/base:gtest_timeout_main` bounds a whole case at 60 s by default,
+///   and the whole run at a deadline 5 s before Bazel's test timeout (55 s after `main()` for a
+///   `small` test). It names the stalled case when it fires.
 /// - Bazel's test timeout bounds the whole target: 60 s for a `small` test.
 
 #include <chrono>
@@ -35,9 +36,9 @@ constexpr auto kPollInterval = std::chrono::milliseconds(1);
 /// with a message instead of running into the test runner's timeout. Latency belongs in a
 /// performance test.
 ///
-/// It must stay well below the 60 s outer bounds above, or a hang reaches the per-case watchdog or
-/// Bazel's timeout first and fails with no message. 30 s leaves the case that owns the wait as much
-/// time again for its setup and earlier waits.
+/// It must stay well below the outer bounds above (55 s for a `small` test), or a hang reaches the
+/// watchdog first and fails without the wait's own message. 30 s leaves the case that owns the wait
+/// as much time again for its setup and earlier waits.
 constexpr auto kHangGuard = std::chrono::seconds(30);
 
 /// A `kHangGuard` window that starts when the guard is constructed. Pump a wait loop while

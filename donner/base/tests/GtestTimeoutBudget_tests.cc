@@ -46,10 +46,10 @@ TEST(GtestTimeoutBudgetTest, WatchdogDeadlineIsAbsentWithoutUsableTestTimeout) {
 
 TEST(GtestTimeoutBudgetTest, WatchdogDeadlineForBazelSizes) {
   // small, medium, large/long and enormous/eternal default timeouts.
-  EXPECT_THAT(WatchdogDeadline("60"), Optional(Eq(milliseconds(seconds(54)))));
-  EXPECT_THAT(WatchdogDeadline("300"), Optional(Eq(milliseconds(seconds(270)))));
-  EXPECT_THAT(WatchdogDeadline("900"), Optional(Eq(milliseconds(seconds(840)))));
-  EXPECT_THAT(WatchdogDeadline("3600"), Optional(Eq(milliseconds(seconds(3540)))));
+  EXPECT_THAT(WatchdogDeadline("60"), Optional(Eq(milliseconds(seconds(55)))));
+  EXPECT_THAT(WatchdogDeadline("300"), Optional(Eq(milliseconds(seconds(295)))));
+  EXPECT_THAT(WatchdogDeadline("900"), Optional(Eq(milliseconds(seconds(895)))));
+  EXPECT_THAT(WatchdogDeadline("3600"), Optional(Eq(milliseconds(seconds(3595)))));
 }
 
 TEST(GtestTimeoutBudgetTest, WatchdogDeadlineForShortAndHugeTimeouts) {
@@ -58,8 +58,7 @@ TEST(GtestTimeoutBudgetTest, WatchdogDeadlineForShortAndHugeTimeouts) {
   EXPECT_THAT(WatchdogDeadline("9"), Optional(Eq(milliseconds(4500))));
   EXPECT_THAT(WatchdogDeadline("10"), Optional(Eq(milliseconds(seconds(5)))));
   EXPECT_THAT(WatchdogDeadline("12"), Optional(Eq(milliseconds(seconds(7)))));
-  EXPECT_THAT(WatchdogDeadline("99999999999"),
-              Optional(Eq(kMaxParsedSeconds - kMaxWatchdogMargin)));
+  EXPECT_THAT(WatchdogDeadline("99999999999"), Optional(Eq(kMaxParsedSeconds - kWatchdogMargin)));
 }
 
 TEST(GtestTimeoutBudgetTest, WatchdogMarginAlwaysLeavesTimeOnBothSides) {
@@ -70,7 +69,7 @@ TEST(GtestTimeoutBudgetTest, WatchdogMarginAlwaysLeavesTimeOnBothSides) {
     const milliseconds deadline = timeout - margin;
     ASSERT_THAT(margin, Lt(timeout)) << "TEST_TIMEOUT=" << timeoutSeconds;
     ASSERT_THAT(margin, Gt(milliseconds(0))) << "TEST_TIMEOUT=" << timeoutSeconds;
-    ASSERT_THAT(margin, Le(kMaxWatchdogMargin)) << "TEST_TIMEOUT=" << timeoutSeconds;
+    ASSERT_THAT(margin, Le(kWatchdogMargin)) << "TEST_TIMEOUT=" << timeoutSeconds;
     // A longer timeout never yields an earlier deadline.
     ASSERT_THAT(deadline, Ge(previousDeadline)) << "TEST_TIMEOUT=" << timeoutSeconds;
     previousDeadline = deadline;
@@ -83,19 +82,19 @@ TEST(GtestTimeoutBudgetTest, AlarmUsesPerCaseBudgetWithoutDeadline) {
 }
 
 TEST(GtestTimeoutBudgetTest, AlarmIsCappedByTimeLeftBeforeDeadline) {
-  // A small target: deadline 54 s. A case starting at 0 s gets 54 s, not its 60 s budget.
-  EXPECT_THAT(WatchdogAlarmInterval(seconds(60), seconds(54), seconds(0)), Eq(seconds(54)));
-  // Earlier cases spent 30 s, so a stalled case gets only the remaining 24 s.
-  EXPECT_THAT(WatchdogAlarmInterval(seconds(60), seconds(54), seconds(30)), Eq(seconds(24)));
+  // A small target: deadline 55 s. A case starting at 0 s gets 55 s, not its 60 s budget.
+  EXPECT_THAT(WatchdogAlarmInterval(seconds(60), seconds(55), seconds(0)), Eq(seconds(55)));
+  // Earlier cases spent 30 s, so a stalled case gets only the remaining 25 s.
+  EXPECT_THAT(WatchdogAlarmInterval(seconds(60), seconds(55), seconds(30)), Eq(seconds(25)));
   // A shorter per-case budget still wins.
-  EXPECT_THAT(WatchdogAlarmInterval(seconds(20), seconds(54), seconds(0)), Eq(seconds(20)));
+  EXPECT_THAT(WatchdogAlarmInterval(seconds(20), seconds(55), seconds(0)), Eq(seconds(20)));
   // Between cases only the deadline applies.
-  EXPECT_THAT(WatchdogAlarmInterval(std::nullopt, seconds(840), seconds(40)), Eq(seconds(800)));
+  EXPECT_THAT(WatchdogAlarmInterval(std::nullopt, seconds(895), seconds(40)), Eq(seconds(855)));
 }
 
 TEST(GtestTimeoutBudgetTest, AlarmFiresAlmostImmediatelyOncePastDeadline) {
-  EXPECT_THAT(WatchdogAlarmInterval(seconds(60), seconds(54), seconds(54)), Eq(milliseconds(1)));
-  EXPECT_THAT(WatchdogAlarmInterval(std::nullopt, seconds(54), seconds(70)), Eq(milliseconds(1)));
+  EXPECT_THAT(WatchdogAlarmInterval(seconds(60), seconds(55), seconds(55)), Eq(milliseconds(1)));
+  EXPECT_THAT(WatchdogAlarmInterval(std::nullopt, seconds(55), seconds(70)), Eq(milliseconds(1)));
 }
 
 }  // namespace

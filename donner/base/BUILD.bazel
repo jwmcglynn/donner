@@ -257,7 +257,7 @@ sh_test(
 )
 
 # A stalled case under each test size's real Bazel timeout must fail with the watchdog message.
-# Manual: each one runs for most of its size's timeout (about 54 s, 270 s and 840 s).
+# Manual: each one runs for most of its size's timeout (about 55 s, 295 s and 895 s).
 [sh_test(
     name = "gtest_timeout_main_hang_%s_tests" % size,
     size = size,
@@ -325,6 +325,7 @@ donner_cc_test(
         ":base",
         ":base_test_utils",
         ":diagnostic_renderer",
+        ":gtest_timeout_budget",
         ":memory_attribution",
         ":stall_guard",
         "@com_google_gtest//:gtest_main",

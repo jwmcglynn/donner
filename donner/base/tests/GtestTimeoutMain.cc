@@ -8,9 +8,10 @@
  * Two limits apply, and the earlier one wins:
  *   1. The per-case budget, from (highest wins) the `--donner_test_timeout_seconds=<N>` flag, the
  *      `DONNER_TEST_TIMEOUT_SECONDS` environment variable, or a default of 60 s.
- *   2. A deadline derived from Bazel's `TEST_TIMEOUT`, ending a margin before the Bazel timeout
- *      (see `GtestTimeoutBudget.h`). It bounds the whole process, including time spent in earlier
- *      cases and outside any case, so the watchdog fires first in every test size, shard and
+ *   2. A deadline derived from Bazel's `TEST_TIMEOUT`, ending a fixed margin before the Bazel
+ *      timeout and measured from `main()` entry (see `GtestTimeoutBudget.h`). It bounds the whole
+ *      run, including time spent in earlier cases and outside any case, so the watchdog fires first
+ * in every test size, shard and
  *      `--test_timeout` setting without per-target flags.
  *
  * On timeout, the process prints the stalled test-case name to stderr and exits with status 124
@@ -23,8 +24,11 @@
 #include <sys/types.h>  // IWYU pragma: keep - provides pid_t (clang-tidy-19 mapping)
 #include <unistd.h>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,9 +42,15 @@ using std::chrono::milliseconds;
 
 constexpr int kTimeoutExitCode = 124;
 
-// Written on the main thread only while the timer is disarmed, and read from the signal handler,
-// so the handler never observes a partially assigned string.
-std::string gTimeoutMessage;
+// The message for the armed alarm, in static storage so the handler never follows a pointer that
+// could be freed. SIGALRM is process-directed, so the handler can run on any thread. The main
+// thread rewrites the message only after disarming the timer; the one possible overlap is an alarm
+// that expired just before that disarm being handled on another thread, and then the text may mix
+// the old and new message. The handler still reads only inside this buffer and still exits 124.
+char gTimeoutMessage[1024];
+std::atomic<std::size_t> gTimeoutMessageSize{0};
+static_assert(std::atomic<std::size_t>::is_always_lock_free,
+              "the signal handler reads the message size");
 // pid_t canonical header differs between clang-tidy-18 (<sys/types.h>) and
 // clang-tidy-19 (which doesn't map it to anything currently included). The
 // trailing NOLINT suppresses the latter without chasing mapping deltas.
@@ -54,8 +64,14 @@ void TimeoutHandler(int /*sig*/) {
     return;
   }
 
-  (void)write(STDERR_FILENO, gTimeoutMessage.data(), gTimeoutMessage.size());
+  (void)write(STDERR_FILENO, gTimeoutMessage, gTimeoutMessageSize.load());
   _exit(kTimeoutExitCode);
+}
+
+void SetTimeoutMessage(const std::string& message) {
+  const std::size_t size = std::min(message.size(), sizeof(gTimeoutMessage));
+  std::memcpy(gTimeoutMessage, message.data(), size);
+  gTimeoutMessageSize.store(size);
 }
 
 void SetTimer(milliseconds interval) {
@@ -92,11 +108,12 @@ std::optional<milliseconds> ResolvePerCaseBudget(int argc, char** argv) {
 class Watchdog {
 public:
   Watchdog(milliseconds perCaseBudget, std::optional<milliseconds> deadline,
-           std::chrono::steady_clock::time_point processStart)
-      : perCaseBudget_(perCaseBudget), deadline_(deadline), processStart_(processStart) {}
+           std::chrono::steady_clock::time_point mainEntry)
+      : perCaseBudget_(perCaseBudget), deadline_(deadline), mainEntry_(mainEntry) {}
 
   /**
-   * Replaces the pending alarm.
+   * Replaces the pending alarm. The message records when the alarm was armed and for how long,
+   * so a deadline alarm reports `armed + interval == deadline`.
    *
    * @param where Names the stretch in the timeout message.
    * @param inTestCase Whether the per-case budget applies.
@@ -105,7 +122,7 @@ public:
     SetTimer(milliseconds(0));
 
     const auto elapsed =
-        std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - processStart_);
+        std::chrono::duration_cast<milliseconds>(std::chrono::steady_clock::now() - mainEntry_);
     const std::optional<milliseconds> budget =
         inTestCase ? std::optional<milliseconds>(perCaseBudget_) : std::nullopt;
     const milliseconds interval = donner::tests::WatchdogAlarmInterval(budget, deadline_, elapsed);
@@ -113,12 +130,14 @@ public:
       return;
     }
 
+    const std::string timing = " (alarm armed " + std::to_string(elapsed.count()) +
+                               " ms after main() for " + std::to_string(interval.count()) + " ms";
     if (budget && interval == *budget) {
-      gTimeoutMessage = "\n[donner] test exceeded per-case timeout: " + where + "\n";
+      SetTimeoutMessage("\n[donner] test exceeded per-case timeout: " + where + timing + ")\n");
     } else {
-      gTimeoutMessage = "\n[donner] test reached the watchdog deadline " +
-                        std::to_string(deadline_->count()) +
-                        " ms after start, ahead of Bazel's TEST_TIMEOUT: " + where + "\n";
+      SetTimeoutMessage(
+          "\n[donner] test reached the watchdog deadline ahead of Bazel's TEST_TIMEOUT: " + where +
+          timing + "; deadline " + std::to_string(deadline_->count()) + " ms after main())\n");
     }
     SetTimer(interval);
   }
@@ -126,7 +145,7 @@ public:
 private:
   milliseconds perCaseBudget_;
   std::optional<milliseconds> deadline_;
-  std::chrono::steady_clock::time_point processStart_;
+  std::chrono::steady_clock::time_point mainEntry_;
 };
 
 class TimeoutListener : public ::testing::EmptyTestEventListener {
@@ -155,7 +174,7 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
-  const auto processStart = std::chrono::steady_clock::now();
+  const auto mainEntry = std::chrono::steady_clock::now();
   donner::InstallFailureSignalHandler();
 
   // Compute the per-case budget BEFORE InitGoogleTest so our private flag gets
@@ -180,7 +199,7 @@ int main(int argc, char** argv) {
   sigaction(SIGALRM, &sa, nullptr);
 
   Watchdog watchdog(perCaseBudget, donner::tests::WatchdogDeadline(std::getenv("TEST_TIMEOUT")),
-                    processStart);
+                    mainEntry);
   watchdog.arm("outside any test case, before the first case", /*inTestCase=*/false);
   ::testing::UnitTest::GetInstance()->listeners().Append(new TimeoutListener(watchdog));
 

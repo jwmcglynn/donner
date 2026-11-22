@@ -8,6 +8,8 @@
  * - `DONNER_HANG_FIXTURE_SPEND_MS`: how long `HangFixture.SpendsTime` runs before passing.
  * - `DONNER_HANG_FIXTURE_HANG_IN_SUITE_SETUP=1`: `HangInSuiteSetup` stalls in `SetUpTestSuite`,
  *   outside any test case.
+ * - `DONNER_HANG_FIXTURE_HANG_IN_SUITE_TEARDOWN=1`: `HangInSuiteTeardown` stalls in
+ *   `TearDownTestSuite`, after its last case has ended.
  */
 
 #include <gtest/gtest.h>
@@ -19,6 +21,11 @@
 
 namespace donner::tests {
 namespace {
+
+bool EnvIsOne(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && std::string_view(value) == "1";
+}
 
 void StallForever() {
   for (;;) {
@@ -41,14 +48,24 @@ TEST(HangFixture, Hangs) {
 class HangInSuiteSetup : public ::testing::Test {
 protected:
   static void SetUpTestSuite() {
-    const char* hang = std::getenv("DONNER_HANG_FIXTURE_HANG_IN_SUITE_SETUP");
-    if (hang != nullptr && std::string_view(hang) == "1") {
+    if (EnvIsOne("DONNER_HANG_FIXTURE_HANG_IN_SUITE_SETUP")) {
       StallForever();
     }
   }
 };
 
 TEST_F(HangInSuiteSetup, Runs) {}
+
+class HangInSuiteTeardown : public ::testing::Test {
+protected:
+  static void TearDownTestSuite() {
+    if (EnvIsOne("DONNER_HANG_FIXTURE_HANG_IN_SUITE_TEARDOWN")) {
+      StallForever();
+    }
+  }
+};
+
+TEST_F(HangInSuiteTeardown, Runs) {}
 
 }  // namespace
 }  // namespace donner::tests

@@ -30,10 +30,10 @@ std::optional<milliseconds> ParsePositiveSeconds(std::string_view value) {
 }
 
 milliseconds WatchdogMargin(milliseconds testTimeout) {
-  if (testTimeout < 2 * kMinWatchdogMargin) {
+  if (testTimeout < 2 * kWatchdogMargin) {
     return testTimeout / 2;
   }
-  return std::clamp(testTimeout / 10, kMinWatchdogMargin, kMaxWatchdogMargin);
+  return kWatchdogMargin;
 }
 
 std::optional<milliseconds> WatchdogDeadline(const char* testTimeoutEnv) {
