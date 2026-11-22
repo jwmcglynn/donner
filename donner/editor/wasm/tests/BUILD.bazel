@@ -479,6 +479,8 @@ js_run_binary(
     ],
     chdir = package_name(),
     tool = ":esbuild",
+    # The esbuild entry point belongs to the execution platform.
+    use_execroot_entry_point = False,
 )
 
 js_test(
@@ -561,6 +563,8 @@ js_run_binary(
     ],
     chdir = package_name(),
     tool = ":esbuild",
+    # The esbuild entry point belongs to the execution platform.
+    use_execroot_entry_point = False,
 )
 
 # The page-free cases of browser-presentation-regression.spec.ts: fake pages, synthetic PNGs and
@@ -1370,6 +1374,8 @@ js_run_binary(
     ],
     chdir = package_name(),
     tool = ":esbuild",
+    # The esbuild entry point belongs to the execution platform.
+    use_execroot_entry_point = False,
 )
 
 js_test(
