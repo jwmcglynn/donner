@@ -684,8 +684,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   bool includeDisplayDiff = false;
   int maxFrameResults = kMaximumRetainedReplayFrameResults;
   int stopAfterMouseUps = 0;
-  int comparePresentedAfterLeftMouseDown = 0;
-  int comparePresentedFrameOffsetAfterLeftMouseDown = 0;
   CaptureOptions capture;
   if (!ReadRequiredString(arguments, "rnr_path", &rnrPathString, &error) ||
       !ReadOptionalString(arguments, "svg_path", "", &svgPathOverride, &error) ||
@@ -712,10 +710,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       !ReadOptionalInt(arguments, "max_frame_results", kMaximumRetainedReplayFrameResults,
                        &maxFrameResults, &error) ||
       !ReadOptionalInt(arguments, "stop_after_mouse_ups", 0, &stopAfterMouseUps, &error) ||
-      !ReadOptionalInt(arguments, "compare_presented_after_left_mouse_down", 0,
-                       &comparePresentedAfterLeftMouseDown, &error) ||
-      !ReadOptionalInt(arguments, "compare_presented_frame_offset_after_left_mouse_down", 0,
-                       &comparePresentedFrameOffsetAfterLeftMouseDown, &error) ||
       !ReadCaptureOptions(arguments, false, &capture, &error)) {
     return MakeErrorResult(error);
   }
@@ -885,8 +879,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
     int storedFrameResults = 0;
     int mouseUpCount = 0;
     int leftMouseDownCount = 0;
-    int targetLeftMouseDownFrameOffset = -1;
-    bool comparedTargetPresentedFrame = false;
     PresentationRenderScheduler renderScheduler;
 
     const auto pollRenderResult = [&]() {
@@ -900,21 +892,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
                                           result->rasterViewport);
       ++renderedFrameCount;
       return true;
-    };
-
-    const auto waitUntilIdleAndRecord = [&]() {
-      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-      while (std::chrono::steady_clock::now() < deadline) {
-        const bool polled = pollRenderResult();
-        if (!asyncRenderer_.isBusy()) {
-          while (pollRenderResult()) {}
-          return true;
-        }
-        if (!polled) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-      }
-      return false;
     };
 
     const auto maybeRequestGuiRender = [&]() {
@@ -1030,14 +1007,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
           };
         }
       }
-      if (comparePresentedAfterLeftMouseDown > 0 && !comparedTargetPresentedFrame) {
-        if (frameHadLeftMouseDown && leftMouseDownCount == comparePresentedAfterLeftMouseDown) {
-          targetLeftMouseDownFrameOffset = 0;
-        } else if (targetLeftMouseDownFrameOffset >= 0) {
-          ++targetLeftMouseDownFrameOffset;
-        }
-      }
-
       if (pendingClick.has_value() && !pendingClick->dispatched && asyncRenderer_.isBusy()) {
         asyncRenderer_.cancelInFlight();
         cancelledForPendingClick = true;
@@ -1089,9 +1058,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
           {"events", ReproEventsJson(frame.events)},
           {"had_action", frameHadAction},
           {"left_mouse_down_ordinal", frameHadLeftMouseDown ? leftMouseDownCount : 0},
-          {"left_mouse_down_compare_offset", targetLeftMouseDownFrameOffset >= 0
-                                                 ? json(targetLeftMouseDownFrameOffset)
-                                                 : json(nullptr)},
           {"worker_busy_after_frame", asyncRenderer_.isBusy()},
           {"pending_click",
            pendingClick.has_value()
@@ -1108,64 +1074,11 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
            presentedBitmap.has_value() ? BitmapSummary(*presentedBitmap) : json(nullptr)},
       };
 
-      const bool shouldComparePresentedFrame =
-          comparePresentedAfterLeftMouseDown > 0 && !comparedTargetPresentedFrame &&
-          targetLeftMouseDownFrameOffset == comparePresentedFrameOffsetAfterLeftMouseDown;
-      if (shouldComparePresentedFrame && includeDisplayDiff) {
-        if (!waitUntilIdleAndRecord()) {
-          return MakeErrorResult(
-              "timed out waiting for async renderer before presented-frame "
-              "comparison");
-        }
-        if (pendingClick.has_value() && !pendingClick->dispatched) {
-          selectTool_->onMouseDown(app_, pendingClick->documentPoint, pendingClick->modifiers);
-          pendingClick->dispatched = true;
-          (void)app_.flushFrame();
-        }
-
-        std::vector<CapturedRenderResult> renderResults;
-        if (!renderCurrentFrame(&renderResults, &error)) {
-          return MakeErrorResult("final render failed for presented-frame comparison: " + error);
-        }
-        ++renderedFrameCount;
-        const DisplayFrameSnapshot* finalDisplayFrame = nullptr;
-        for (const CapturedRenderResult& result : renderResults) {
-          finalDisplayFrame = &result.displayFrame;
-        }
-        if (finalDisplayFrame != nullptr) {
-          const std::optional<svg::RendererBitmap> finalPresentedBitmap =
-              displayTextures_.composeDisplayFrame(*finalDisplayFrame, viewBox,
-                                                   app_.document().document().canvasSize());
-          frameJson["eventual_final_presented_frame"] = DisplayFrameJson(*finalDisplayFrame);
-          frameJson["eventual_final_presented_frame_bitmap"] =
-              finalPresentedBitmap.has_value() ? BitmapSummary(*finalPresentedBitmap)
-                                               : json(nullptr);
-          if (finalPresentedBitmap.has_value()) {
-            json diff = BitmapDiffSummary(presentedBitmap, *finalPresentedBitmap);
-            AddBitmapDiffArtifacts(&diff, presentedBitmap, *finalPresentedBitmap,
-                                   "replay_rnr_gui_frame_" + std::to_string(frame.index));
-            frameJson["presented_frame_diff_from_eventual_final"] = std::move(diff);
-          } else {
-            frameJson["presented_frame_diff_from_eventual_final"] = json{
-                {"available", false},
-                {"actual_bitmap",
-                 presentedBitmap.has_value() ? BitmapSummary(*presentedBitmap) : json(nullptr)},
-                {"expected_bitmap", nullptr},
-            };
-          }
-        }
-        out.body["stopped_early"] = true;
-        comparedTargetPresentedFrame = true;
-      }
-
       if (includeFrameResults && storedFrameResults < maxFrameResults) {
         out.body["frames"].push_back(std::move(frameJson));
         ++storedFrameResults;
       }
 
-      if (shouldComparePresentedFrame) {
-        break;
-      }
       if (stopAfterMouseUps > 0 && mouseUpCount >= stopAfterMouseUps) {
         out.body["stopped_early"] = true;
         break;
