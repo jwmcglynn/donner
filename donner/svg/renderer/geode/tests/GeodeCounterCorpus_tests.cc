@@ -224,7 +224,7 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
   return out;
 }
 
-constexpr std::array<KnownViolation, 28> kKnownViolations = {{
+constexpr std::array<KnownViolation, 26> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kBufferWrites | kBindgroupCreates,
@@ -415,30 +415,6 @@ constexpr std::array<KnownViolation, 28> kKnownViolations = {{
         "clears when decoded images keep their texture and the image quad gains residency",
     },
     {
-        /*scene=*/"image_external_svg_par",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 36, 4},
-        /*reason=*/
-        "the same external SVG is drawn by two image elements at different sizes; one size "
-        "stays resident and the other re-uploads its geometry every frame (the single-image "
-        "image_external_svg_basic scene is clean)",
-        /*tracking=*/
-        "clears when the nested-document raster cache is keyed per destination size rather "
-        "than holding one entry per source",
-    },
-    {
-        /*scene=*/"image_external_svg_viewbox",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 36, 4},
-        /*reason=*/
-        "the same external SVG is drawn by two image elements at different sizes; one size "
-        "stays resident and the other re-uploads its geometry every frame (the single-image "
-        "image_external_svg_basic scene is clean)",
-        /*tracking=*/
-        "clears when the nested-document raster cache is keyed per destination size rather "
-        "than holding one entry per source",
-    },
-    {
         /*scene=*/"marker_segments",
         /*violated=*/kBufferWrites | kBindgroupCreates,
         /*ceiling=*/{0, 0, 23, 23},
@@ -464,7 +440,7 @@ constexpr std::array<KnownViolation, 28> kKnownViolations = {{
     },
     {
         /*scene=*/"nested_svg_aspectratio",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
+        /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{4, 0, 2357, 265},
         /*reason=*/
         "nested viewports carrying text and use instances re-encode and re-upload the whole "
@@ -478,7 +454,7 @@ constexpr std::array<KnownViolation, 28> kKnownViolations = {{
     },
     {
         /*scene=*/"poker_chips",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
+        /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{12, 0, 96, 20},
         /*reason=*/
         "use instances share one source path with differing stroke styles, so the per-entity "
@@ -493,7 +469,7 @@ constexpr std::array<KnownViolation, 28> kKnownViolations = {{
     },
     {
         /*scene=*/"stroking_complex",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
+        /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{8, 0, 16, 8},
         /*reason=*/
         "eight use instances share one source path with differing stroke styles (width, "

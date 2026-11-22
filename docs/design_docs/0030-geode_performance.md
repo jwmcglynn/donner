@@ -188,17 +188,19 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     rectangle carry the placement, so the `SlugFillInstance` layout is unchanged.
     `MarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame. Clears `marker`.
     `marker_segments` and `marker_spec_example` put `opacity` on the marker content, so each
-    placement also composites an isolated layer; they clear with 8.3.
+    placement also composites an isolated layer; they clear with 8.3. Repeats of other entities
+    hold the steady state the same way: `image_external_svg_par` and `image_external_svg_viewbox`,
+    which draw one external SVG's paths twice per frame, clear here too, and `poker_chips`,
+    `stroking_complex`, and `nested_svg_aspectratio` no longer build a bind group per repeated
+    `<use>` draw.
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
     group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Clears `Edzample_Anim3`. The
     corpus also records `donner_icon`, whose gradient-painted paths under an opacity group
     re-upload geometry and build bind groups per draw; why those draws miss gradient residency is
     not traced, so this item starts by tracing it.
   - [ ] 8.4: Image residency. Decoded images allocate a texture and re-upload their quad every
-    frame, and the nested-document raster cache holds one entry per source, so the same external
-    SVG drawn at two sizes re-uploads one of them. Clears `image_data_url_opacity`,
-    `image_data_url_pixelated`, `image_external_svg_par`, `image_external_svg_viewbox`. Depends on
-    8.3 for the opacity case.
+    frame. Clears `image_data_url_opacity`, `image_data_url_pixelated`. Depends on 8.3 for the
+    opacity case.
   - [ ] 8.5: Pattern residency. Cache each pattern tile per paint server across frames and give the
     tiled fill a resident slot. Clears `geode_pattern_checker`, `geode_pattern_nonrect`,
     `geode_pattern_offset`, `geode_pattern_solid`.
@@ -343,7 +345,7 @@ Steady-state invariants on an unchanged second frame, asserted per corpus scene:
 `kKnownViolations` lists the corpus scenes measured to miss one or more of these. An entry can
 carry a separate mask and ceilings for the build with ordered batching, and two entries
 (`svg2_e_use_003`, `svg2_e_use_004`) violate only with batching off; ordered batching is always
-compiled in, so they already meet the steady state. Milestone 8 covers the other 26.
+compiled in, so they already meet the steady state. Milestone 8 covers the other 24.
 
 ## Testing and Validation
 
