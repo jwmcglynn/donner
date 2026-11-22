@@ -10,8 +10,8 @@
 ///
 /// Bounds, from inner to outer:
 /// - \ref donner::tests::kHangGuard bounds one wait.
-/// - The per-case watchdog in `//donner/base:gtest_timeout_main` (60 s by default) bounds a whole
-///   case and names it when it fires.
+/// - The per-case watchdog in `//donner/base:gtest_timeout_main` bounds a whole case (60 s by
+///   default, and always ending before Bazel's test timeout) and names it when it fires.
 /// - Bazel's test timeout bounds the whole target: 60 s for a `small` test.
 
 #include <chrono>
