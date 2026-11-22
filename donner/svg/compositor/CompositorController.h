@@ -191,8 +191,8 @@ private:
 [[nodiscard]] std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(
     const SVGDocument& oldDoc, const SVGDocument& newDoc);
 
-/// Maximum total memory budget for compositor layer bitmaps, in bytes, on
-/// hosts with a large address space.
+/// Maximum total budget for retained compositor pixels, CPU bitmaps and GPU
+/// textures together, in bytes.
 ///
 /// Sized for high-DPI editor sessions with mandatory filter, mask, and
 /// isolated-layer promotions plus one active drag target. Scale-band caching
@@ -200,22 +200,27 @@ private:
 /// canvas resolution.
 inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 
-/// Effective compositor bitmap budget for the current process.
+/// Budget for all retained compositor pixels, CPU bitmaps and GPU textures
+/// together. A new promotion is refused once the retained total reaches it.
+[[nodiscard]] size_t EffectiveCompositorMemoryBudget();
+
+/// Budget for the retained compositor pixels that are held in CPU bitmaps.
 ///
 /// On wasm the linear memory is small and FIXED (growth is fatal on every
 /// browser engine, so the build links with equal initial and maximum
-/// memory), and a budget larger
-/// than the whole address space means admission can never refuse: full-canvas
-/// payloads accrue across zoom size-commit epochs until the module aborts
-/// (measured 2026-08-11: ~one 24.8MB surface per 250ms at DPR 2). Bound the
-/// budget to a third of the actual heap there. Native keeps the constant.
+/// memory), and a budget larger than the whole address space means admission
+/// can never refuse: full-canvas CPU payloads accrue across zoom size-commit
+/// epochs until the module aborts. CPU bitmaps are therefore bounded to a
+/// third of the actual heap there. GPU textures do not live in that heap, so
+/// they count only against \ref EffectiveCompositorMemoryBudget. Native keeps
+/// the constant.
 ///
 /// NOTE the measured caveat: refusing promotion is not free - an unpromoted
 /// heavy subtree re-rasterizes full-document per frame, which can cost MORE
 /// transient memory than the retained tile (a blind 96MB budget made storms
 /// OOM sooner). This bound therefore stays generous (heap/3, not heap/10);
 /// right-sizing below that requires measuring the demotion fallback path.
-[[nodiscard]] size_t EffectiveCompositorMemoryBudget();
+[[nodiscard]] size_t EffectiveCompositorHeapBitmapBudget();
 
 /**
  * Runtime feature gates for `CompositorController`.
@@ -289,6 +294,14 @@ struct CompositorConfig {
   /// compositor update. Backends with high per-draw submission overhead, notably browser WebGPU,
   /// disable this so a span is rasterized once and then reused as a cached tile.
   bool immediateStaticSpans = true;
+
+  /// Budget for all retained compositor pixels, in bytes. Unset uses
+  /// `EffectiveCompositorMemoryBudget()`.
+  std::optional<size_t> retainedMemoryBudgetBytes;
+
+  /// Budget for retained pixels held in CPU bitmaps, in bytes. Unset uses
+  /// `EffectiveCompositorHeapBitmapBudget()`.
+  std::optional<size_t> heapBitmapBudgetBytes;
 
   /// When true, a static segment that the deterministic cost heuristic would
   /// cache may additionally be promoted to an immediate (re-rasterized every
@@ -967,7 +980,8 @@ public:
     InvalidEntity,
     /// Too many entities already promoted (`kMaxCompositorLayers`).
     LayerLimit,
-    /// Total bitmap memory already at `kMaxCompositorMemoryBytes`.
+    /// Retained pixels already at the total budget, or retained CPU bitmaps already at the
+    /// heap bitmap budget.
     MemoryLimit,
     /// A descendant already has its own promoted layer (typically a
     /// mandatorily-detected filter / mask / isolated-layer). Allowing
@@ -1222,6 +1236,10 @@ private:
   void remapMaskedChildDrag(const std::unordered_map<Entity, Entity>& remap);
   /// Texture bytes held by the masked-child drag pieces.
   size_t maskedChildDragPieceBytes() const;
+
+  /// True when retained pixels have reached either admission budget: all retained pixels against
+  /// the total budget, or the CPU-bitmap share against the heap bitmap budget.
+  bool retainedMemoryAtBudget() const;
   /// The only layer containing @p entity, or null when there is none, several, or @p entity is a
   /// layer itself.
   CompositorLayer* soleLayerContaining(Entity entity);

@@ -564,6 +564,34 @@ TEST_F(CompositorControllerTest, M9DemoteIsLazyWithinHysteresisWindow) {
   EXPECT_TRUE(compositor.isPromoted(entity));
 }
 
+TEST_F(CompositorControllerTest, RetainedCpuBitmapsCountAgainstTheHeapBitmapBudget) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="first" width="10" height="10" fill="red" />
+    <rect id="second" x="20" width="10" height="10" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto first = document.querySelector("#first");
+  auto second = document.querySelector("#second");
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+
+  CompositorConfig config;
+  config.heapBitmapBudgetBytes = 1u;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(first->unsafeEntityHandle().entity(),
+                                       InteractionHint::Selection));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const CompositorController::BitmapMemoryBreakdown retained = compositor.bitmapMemoryBreakdown();
+  ASSERT_GT(retained.segmentBitmapBytes + retained.layerBitmapBytes, 0u);
+  ASSERT_LT(compositor.totalBitmapMemory(), EffectiveCompositorMemoryBudget());
+  EXPECT_EQ(compositor.promoteEntity(second->unsafeEntityHandle().entity(),
+                                     InteractionHint::Selection),
+            CompositorController::PromoteResult::MemoryLimit)
+      << "Retained CPU bitmaps at the heap bitmap budget must refuse a new promotion";
+}
+
 TEST_F(CompositorControllerTest, M9RepromoteSameEntityCancelsPendingDemote) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />

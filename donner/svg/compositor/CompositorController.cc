@@ -639,7 +639,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   if (activeHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
     return refusePromotion(entity, PromoteRefusalReason::LayerLimit);
   }
-  if (totalBitmapMemory() >= EffectiveCompositorMemoryBudget()) {
+  if (retainedMemoryAtBudget()) {
     return refusePromotion(entity, PromoteRefusalReason::MemoryLimit);
   }
 
@@ -2667,12 +2667,27 @@ size_t CompositorController::layerCount() const {
 }
 
 size_t EffectiveCompositorMemoryBudget() {
+  return kMaxCompositorMemoryBytes;
+}
+
+size_t EffectiveCompositorHeapBitmapBudget() {
 #ifdef __EMSCRIPTEN__
   const size_t heapBytes = emscripten_get_heap_size();
   return std::min(kMaxCompositorMemoryBytes, heapBytes / 3);
 #else
   return kMaxCompositorMemoryBytes;
 #endif
+}
+
+bool CompositorController::retainedMemoryAtBudget() const {
+  const BitmapMemoryBreakdown breakdown = bitmapMemoryBreakdown();
+  const size_t heapBitmapBytes = breakdown.segmentBitmapBytes + breakdown.layerBitmapBytes;
+  const size_t retainedBytes =
+      heapBitmapBytes + breakdown.segmentTextureBytes + breakdown.layerTextureBytes;
+  return retainedBytes >=
+             config_.retainedMemoryBudgetBytes.value_or(EffectiveCompositorMemoryBudget()) ||
+         heapBitmapBytes >=
+             config_.heapBitmapBudgetBytes.value_or(EffectiveCompositorHeapBitmapBudget());
 }
 
 size_t CompositorController::totalBitmapMemory() const {
