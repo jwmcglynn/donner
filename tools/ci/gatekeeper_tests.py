@@ -285,7 +285,11 @@ class GatekeeperTest(unittest.TestCase):
         # prefix names a top-level file, not a directory, and .gitattributes is a test input.
         for path in ("docs/BUILD.bazel", "docs/BUILD", "docs/rules.bzl", "docs/CMakeLists.txt",
                      "docs/deps.cmake", "docs/MODULE.bazel", "docs/WORKSPACE.bazel",
-                     "CHANGELOGx/BUILD.bazel", "CHANGELOG/foo.cc", ".gitattributes"):
+                     "CHANGELOGx/BUILD.bazel", "CHANGELOG/foo.cc", ".gitattributes",
+                     # A case-insensitive checkout (macOS) finds these as build-graph files.
+                     "docs/build.bazel", "docs/Build", "docs/Workspace.bazel",
+                     "docs/Module.bazel.lock", "docs/CMakeLists.TXT", "docs/rules.BZL",
+                     "docs/deps.CMake"):
             with self.subTest(path=path):
                 _git(self.repo, "checkout", "-q", "--detach", self.root)
                 head = _commit(self.repo, ["docs/guide.md", path], "change " + path)

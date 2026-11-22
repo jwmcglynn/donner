@@ -48,18 +48,23 @@ MAIN_REF = "refs/heads/main"
 _DOCS_ONLY_FILES = (".editorconfig", ".gitignore")
 
 # Bazel and CMake build-graph files, which are never documentation, even under docs/: docs/ is
-# part of the root package, so a BUILD file there would split it off. gatekeeper_tests checks
-# that these cover every file tools/ci/lint_changes.py's graph_input treats as a graph input;
-# this script cannot import it, since the admission checkout holds only its own pinned files.
-_BUILD_GRAPH_NAMES = ("BUILD", "BUILD.bazel", "REPO.bazel", "CMakeLists.txt", ".bazelignore",
+# part of the root package, so a BUILD file there would split it off. Matching ignores case
+# because a case-insensitive checkout (macOS) finds `docs/build.bazel` as `docs/BUILD.bazel`.
+# gatekeeper_tests probes paths built from the string constants of tools/ci/lint_changes.py's
+# graph_input and requires each one it accepts to be outside the documentation paths; this
+# script cannot import it, since the admission checkout holds only its own pinned files.
+_BUILD_GRAPH_NAMES = ("build", "build.bazel", "repo.bazel", "cmakelists.txt", ".bazelignore",
                       ".bazelrc", ".bazelversion")
-_BUILD_GRAPH_PREFIXES = ("WORKSPACE", "MODULE.bazel")
-_BUILD_GRAPH_SUFFIXES = (".bzl", ".BUILD", ".BUILD.bazel", ".cmake", ".cmake.in")
+_BUILD_GRAPH_PREFIXES = ("workspace", "module.bazel")
+_BUILD_GRAPH_SUFFIXES = (".bzl", ".build", ".build.bazel", ".cmake", ".cmake.in")
 
 
 def is_docs_only_path(path: str) -> bool:
-    """True for a changed path that cannot affect any build or test."""
-    name = path.rsplit("/", 1)[-1]
+    """True for a changed path that counts as documentation and needs no build or test run.
+
+    Some tests do read documentation files; a docs-only pull request skips them.
+    """
+    name = path.rsplit("/", 1)[-1].casefold()
     if (name in _BUILD_GRAPH_NAMES or name.startswith(_BUILD_GRAPH_PREFIXES)
             or name.endswith(_BUILD_GRAPH_SUFFIXES)):
         return False
