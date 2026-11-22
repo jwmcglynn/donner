@@ -21,7 +21,9 @@ status=0
 
 # run_child <kill after seconds|none> [VAR=value ...] -- [fixture args ...]
 # Runs the fixture with TEST_TIMEOUT cleared unless the assignments set it (in inherited mode the
-# caller's TEST_TIMEOUT is kept). Sets `status` to the fixture's exit status.
+# caller's TEST_TIMEOUT is kept). The fixture must not touch this target's own result files or
+# sharding protocol: its deliberate exit 124 would otherwise leave Bazel's premature-exit marker or
+# replace this target's XML. Sets `status` to the fixture's exit status.
 run_child() {
   local kill_after="$1"
   shift
@@ -32,11 +34,12 @@ run_child() {
   done
   shift
 
-  local -a clear=(-u TEST_TIMEOUT)
-  if [[ "${mode}" == inherited ]]; then
-    clear=()
+  local -a clear=(-u XML_OUTPUT_FILE -u TEST_PREMATURE_EXIT_FILE -u TEST_TOTAL_SHARDS
+    -u TEST_SHARD_INDEX -u TEST_SHARD_STATUS_FILE)
+  if [[ "${mode}" != inherited ]]; then
+    clear+=(-u TEST_TIMEOUT)
   fi
-  env ${clear[@]+"${clear[@]}"} ${assignments[@]+"${assignments[@]}"} "${fixture}" "$@" \
+  env "${clear[@]}" ${assignments[@]+"${assignments[@]}"} "${fixture}" "$@" \
     >"${output_file}" 2>&1 &
   local child=$!
 
@@ -81,7 +84,9 @@ expect() {
 echo "TEST_TIMEOUT for this target: ${TEST_TIMEOUT:-unset}"
 
 if [[ "${mode}" == inherited ]]; then
-  run_child none -- --gtest_filter=HangFixture.Hangs
+  # A per-case budget longer than any test size leaves the deadline derived from TEST_TIMEOUT as
+  # the only limit, so this checks that deadline against Bazel's real timeout for this size.
+  run_child none -- --gtest_filter=HangFixture.Hangs --donner_test_timeout_seconds=86400
   expect "stall under the target's own TEST_TIMEOUT" 124 \
     "${deadline_message}HangFixture.Hangs"
   exit $((failures > 0))
