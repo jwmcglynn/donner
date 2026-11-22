@@ -102,7 +102,7 @@ one lane is not counted among that lane's comparisons.
 | --- | ---: |
 | Total | 1,679 |
 | Pixel comparisons | 1,580 |
-| Comparisons with a numeric setting or custom golden | 78 |
+| Comparisons with a numeric setting or custom golden | 79 |
 | Render-only, undefined-behavior registration | 55 |
 | Render-only, legacy feature | 43 |
 | Explicit skips | 1 |
@@ -112,8 +112,8 @@ one lane is not counted among that lane's comparisons.
 | --- | ---: | ---: | ---: | ---: |
 | `default_text` | 1,554 | 98 | 26 | 1 |
 | `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,549 | 98 | 21 | 1 |
-| `geode_max_text` | 360 | 30 | 0 | 1 |
+| `geode` | 1,550 | 98 | 21 | 1 |
+| `geode_max_text` | 361 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->
 

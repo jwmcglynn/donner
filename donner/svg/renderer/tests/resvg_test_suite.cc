@@ -121,20 +121,6 @@ ImageComparisonParams GeodeUnresolvedEdgeCoverageGate(ImageComparisonParams para
       "quantization allows");
 }
 
-/// \p params, with the Geode comparison disabled: an edge lies under a translucent layer, so the
-/// reference's quarter-pixel edge coverage changes the composite's straight color, and the layer
-/// covers the rows beside the edge partially, which the quarter-pixel edge coverage rule counts.
-/// Part of the difference exceeds what quantization allows, so it is not shown to be the only
-/// cause.
-ImageComparisonParams GeodeTranslucentEdgeColorGate(ImageComparisonParams params) {
-  return params.disableBackend(
-      RendererBackend::Geode,
-      "Unresolved: the crosshair's quarter-pixel edge coverage under the half-transparent masked "
-      "text changes the composite color and lies beside partially covered rows (109 of the 120 "
-      "px Geode counts with the edge coverage rule, against a CPU count of 19), but 42 of the 120 "
-      "differ by more than quarter-pixel quantization allows");
-}
-
 /// \p params, with the Geode comparison disabled: the row compares against a custom golden that is
 /// not quarter-pixel quantized (its frame is an exact area average), so the quarter-pixel edge
 /// coverage rule does not apply, and Geode's edge coverage differs from it by more than the pixel
@@ -1724,7 +1710,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside "
                      "the outline; Donner's glyph ink equals the outline's area "
                      "(GlyphInkAreaTest). Geode compares with its own rendering: its blurred "
-                     "line matches the CPU renderer's (BlurredTextAcrossBackends), and "
+                     "line matches the CPU renderer's (TranslucentTextAcrossBackends), and "
                      "pixelmatch counts the guide and glyph edge coverage under the blur, "
                      "which it sets aside as anti-aliasing without it. Against an "
                      "area-coverage control neither matches: Geode is closer by mean error, "
@@ -1794,7 +1780,15 @@ INSTANTIATE_TEST_SUITE_P(
                     {"tspan-bbox-1.svg", QuarterPixelEdgeReference()},
                     {"with-clip-path.svg", QuarterPixelEdgeReference()},
                     {"with-dy.svg", QuarterPixelEdgeReference()},
-                    {"with-mask.svg", GeodeTranslucentEdgeColorGate(Params())},
+                    // Geode-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                    {"with-mask.svg",
+                     Params().withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/text_tspan_with-mask.png",
+                         "Accepted rasterization difference: the half-transparent masked text lies "
+                         "over the crosshair, whose rows the reference stores as 128 and 192 and "
+                         "Geode and an area-coverage control as 159; Geode's masked text over the "
+                         "CPU renderer's crosshair counts 18 px against the reference, the CPU "
+                         "renderer 19")},
                     {"with-opacity.svg", QuarterPixelEdgeReference()},
                     {"with-x-and-y.svg", QuarterPixelEdgeReference()},
                     {"without-attributes.svg", QuarterPixelEdgeReference()},
@@ -1811,7 +1805,7 @@ INSTANTIATE_TEST_SUITE_P(
                          "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px "
                          "outside the outline; Donner's glyph ink equals the outline's area "
                          "(GlyphInkAreaTest). Geode compares with its own rendering: its "
-                         "blurred text matches the CPU renderer's (BlurredTextAcrossBackends), "
+                         "blurred text matches the CPU renderer's (TranslucentTextAcrossBackends), "
                          "and every counted pixel is on the crosshair's two rows, where Geode "
                          "and an area-coverage control store 159 and the CPU golden 128 and "
                          "192")},

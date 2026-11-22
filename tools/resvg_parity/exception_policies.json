@@ -185,6 +185,28 @@
       }
     },
     {
+      "id": "text/tspan-mask-geode",
+      "paths": [
+        "text/tspan/with-mask.svg"
+      ],
+      "kinds": [
+        "geode_golden"
+      ],
+      "classification": "accepted-rasterization-difference",
+      "disposition": "Geode compares with its own rendering as a regression check: its masked text matches the CPU renderer's, and the counted pixels are the crosshair's two rows under the half-transparent text, where Geode's coverage equals an area-coverage control's and the reference's sub-scanline coverage does not; the CPU lanes keep the vendored reference.",
+      "evidence": [
+        "donner/svg/renderer/testdata/golden/README.md",
+        "donner/svg/renderer/tests/resvg_test_suite.cc"
+      ],
+      "removal_criteria": "Retire the Geode golden when a shared reference with area coverage on the crosshair passes both renderers at default settings.",
+      "reference_provenance": "Geode golden written by the resvg suite harness on software Vulkan.",
+      "max_threshold": 0.02,
+      "max_pixels": 100,
+      "references": {
+        "geode_golden": "donner/svg/renderer/testdata/golden/geode/text_tspan_with-mask.png"
+      }
+    },
+    {
       "id": "text/tspan-filter",
       "paths": [
         "text/tspan/with-filter.svg"
