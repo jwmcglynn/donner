@@ -171,9 +171,9 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 _SHARED_STEP_DIGESTS = {
     # Both entry points include the complete determine_targets.sh in their rendered view.
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "b3c09e2fcf301d27"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "e5c813ece142166b"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "6f095fe4c57861b7"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7437ba5f565e2f1b"),
 }
 
 SHARED_STEP_ALLOWLIST = {
