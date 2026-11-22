@@ -1850,6 +1850,42 @@ TEST(CompositorGeodeSplashTest, RetainedTexturesCountAgainstTheTotalBudget) {
   EXPECT_EQ(result, CompositorController::PromoteResult::MemoryLimit);
 }
 
+TEST(CompositorGeodeSplashTest, AdmissionReservesOneCanvasSizedSurface) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  // The helper renders a 1536x1024 canvas at device scale 1.
+  constexpr size_t kCanvasBytes = 1536u * 1024u * 4u;
+  const auto retainedTotal = [](const CompositorController::BitmapMemoryBreakdown& retained) {
+    return retained.segmentBitmapBytes + retained.segmentTextureBytes + retained.layerBitmapBytes +
+           retained.layerTextureBytes;
+  };
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+
+  CompositorController::BitmapMemoryBreakdown retained;
+  CompositorController::PromoteResult result{CompositorController::PromoteResult::InvalidEntity};
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+  ASSERT_EQ(result, CompositorController::PromoteResult::PromotedLayer);
+  const size_t retainedBytes = retainedTotal(retained);
+  ASSERT_GT(retainedBytes, 0u);
+
+  // The retained tiles fit under this threshold, but a canvas-sized surface beside them does not.
+  config.retainedMemoryBudgetBytes = retainedBytes + kCanvasBytes;
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+  ASSERT_EQ(retainedTotal(retained), retainedBytes);
+  EXPECT_EQ(result, CompositorController::PromoteResult::MemoryLimit)
+      << "A promotion needs room for one canvas-sized surface beside the retained tiles";
+
+  config.retainedMemoryBudgetBytes = retainedBytes + kCanvasBytes + 1u;
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+  ASSERT_EQ(retainedTotal(retained), retainedBytes);
+  EXPECT_EQ(result, CompositorController::PromoteResult::PromotedLayer);
+}
+
 TEST(CompositorGeodeSplashTest, ZoomedSelectionFallsBackToCompleteOwningTiles) {
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("geode_splash.svg");

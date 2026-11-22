@@ -203,19 +203,23 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 /// Admission threshold on retained compositor pixels in the browser build, in
 /// bytes.
 ///
-/// WebGPU reports no memory budget, the browser runtime does not observe an
-/// out-of-memory texture allocation, and once a device is lost the runtime
-/// refuses further work, so the browser admits new interaction layers against
-/// a smaller total than native. The Donner splash at a 3840x2160 backing store
-/// retained up to about 270 MiB between zoom 2 and zoom 4.5.
-inline constexpr size_t kBrowserCompositorMemoryBytes = 512ull * 1024ull * 1024ull;
+/// The renderer reserves every surface a frame holds, retained tiles
+/// included, against `RendererSurfaceBudget::kMaximumBytes`, and a frame that
+/// cannot reserve a fresh surface cannot complete its tile set. WebGPU reports
+/// no memory budget, the browser runtime does not observe an out-of-memory
+/// texture allocation, and once a device is lost the runtime refuses further
+/// work, so the browser admits a new interaction layer only while the
+/// retained total leaves room inside that surface budget.
+inline constexpr size_t kBrowserCompositorMemoryBytes = RendererSurfaceBudget::kMaximumBytes;
 
 /// Threshold on all retained compositor pixels, CPU bitmaps and GPU textures
 /// together, for admitting a new interaction promotion.
 ///
 /// `CompositorController::promoteEntity` refuses to promote an entity that
-/// holds no interaction hint yet once the retained total has reached this
-/// value. It is not a cap on retained pixels: an entity that already holds a
+/// holds no interaction hint yet once the retained total, plus one surface the
+/// size of the current canvas, has reached this value. A promotion
+/// re-rasterizes at least one such surface while the retained set is still
+/// held. It is not a cap on retained pixels: an entity that already holds a
 /// hint is refreshed without the comparison, mandatory filter, mask and
 /// isolated layers and static segments are not gated by it, and nothing is
 /// evicted to meet it. `CompositorConfig::retainedMemoryBudgetBytes` replaces
@@ -392,7 +396,8 @@ public:
       InvalidEntity,
       /// The compositor cannot add another layer without exceeding the layer limit.
       LayerLimit,
-      /// The promotion was refused for memory: retained pixels reached the total threshold;
+      /// The promotion was refused for memory: retained pixels plus one canvas-sized surface
+      /// reached the total threshold;
       /// retained CPU bitmaps reached the heap bitmap threshold; the entity's complete interaction
       /// tile exceeds the largest tile the compositor admits; or the request repeats, at the same
       /// raster size and surface transform, one that was refused because its complete tile was
@@ -1032,11 +1037,12 @@ public:
     InvalidEntity,
     /// Too many entities already promoted (`kMaxCompositorLayers`).
     LayerLimit,
-    /// Refused for memory: retained pixels reached the total threshold; retained CPU bitmaps
-    /// reached the heap bitmap threshold; the entity's complete interaction tile exceeds the
-    /// largest tile the compositor admits; or the request repeats, at the same raster size and
-    /// surface transform, one that was refused because its complete tile was oversized or dropped
-    /// after a texture allocation failure while it held an exclusive layer.
+    /// Refused for memory: retained pixels plus one canvas-sized surface reached the total
+    /// threshold; retained CPU bitmaps reached the heap bitmap threshold; the entity's complete
+    /// interaction tile exceeds the largest tile the compositor admits; or the request repeats, at
+    /// the same raster size and surface transform, one that was refused because its complete tile
+    /// was oversized or dropped after a texture allocation failure while it held an exclusive
+    /// layer.
     MemoryLimit,
     /// A descendant already has its own promoted layer (typically a
     /// mandatorily-detected filter / mask / isolated-layer). Allowing
@@ -1292,8 +1298,9 @@ private:
   /// Texture bytes held by the masked-child drag pieces.
   size_t maskedChildDragPieceBytes() const;
 
-  /// True when retained pixels have reached either admission threshold: all retained pixels
-  /// against the total threshold, or the CPU-bitmap share against the heap bitmap threshold.
+  /// True when retained pixels have reached either admission threshold: all retained pixels plus
+  /// one canvas-sized surface against the total threshold, or the CPU-bitmap share against the
+  /// heap bitmap threshold.
   bool retainedMemoryAtBudget() const;
   /// The only layer containing @p entity, or null when there is none, several, or @p entity is a
   /// layer itself.
