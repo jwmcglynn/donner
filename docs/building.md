@@ -185,17 +185,23 @@ conditionals have only one branch covered. Use `tools/lcov_metrics.py` or the su
 tools/lcov_metrics.py coverage-report/filtered_report.dat --coverage-target 90
 ```
 
-For exact comparisons against a processed Codecov commit, use Codecov's commit API JSON as the
-reference file/line universe. This accounts for Codecov's upload-time normalization of LCOV records,
-including lines that appear in `DA` records locally but are not counted in the processed report:
+For exact comparisons against a processed Codecov commit, use Codecov's coverage report API
+response as the reference file/line universe. This accounts for Codecov's upload-time normalization
+of LCOV records, including lines that appear in `DA` records locally but are not counted in the
+processed report:
 
 ```sh
-curl -fsSL -o /tmp/codecov-main.json \
-  https://api.codecov.io/api/v2/github/jwmcglynn/repos/donner/commits/<sha>/
+curl -fsSL -o coverage-report/codecov-report.json \
+  'https://api.codecov.io/api/v2/github/jwmcglynn/repos/donner/report/?sha=<sha>'
 tools/lcov_metrics.py coverage-report/filtered_report.dat \
-  --codecov-reference-json /tmp/codecov-main.json \
+  --codecov-reference-json coverage-report/codecov-report.json \
   --coverage-target 90
 ```
+
+The report response lists every processed file with its `line_coverage` as
+`[line_number, coverage]` pairs. `tools/lcov_metrics.py` exits with an error instead of printing a
+percentage when the reference has no `files` list, a malformed entry, or no coverable lines, and
+when the LCOV report itself has no `DA` records.
 
 ## CMake build {#cmake-build}
 
