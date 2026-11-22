@@ -117,8 +117,8 @@ threshold-widening hotfixes in 48h for `AsyncRendererTest`, `FilterDragBench`,
 on shared GHA macOS runners (~40 ms under load). Not a correctness escape, but
 it blocks PRs and churns the history.
 
-**Mitigation (tracked in doc 0030 M2):** `donner_perf_cc_test` macro splitting
-correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged
+**Mitigation (tracked in [0031](0031-ci_hardening_2026q2.md) M2.4):** `donner_perf_cc_test`
+macro splitting correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged
 `perf`). Nightly-only wall-clock runs stream into `tools/ci_timing_report.py`.
 
 ### Category 9: Sanitizer-Only Heap / UB Bugs (Added 2026-04-20)
@@ -144,8 +144,8 @@ ASAN_OPTIONS=abort_on_error=1:halt_on_error=1 \
     --test_arg=--gtest_filter=FiltersFeImage/*
 ```
 
-**Mitigation (tracked in doc 0030):** M1.2 adds a paths-scoped `asan-geode`
-PR gate for changes to `donner/svg/renderer/geode/**` and
+**Mitigation (tracked in [0031](0031-ci_hardening_2026q2.md)):** M1.2 adds a paths-scoped
+`asan-geode` PR gate for changes to `donner/svg/renderer/geode/**` and
 `donner/svg/renderer/RendererDriver.*`. M2 adds a nightly `sanitizers.yml`
 running ASan+UBSan across `//donner/...` (required for `main` merges,
 skip-idle when no commits landed that day).
