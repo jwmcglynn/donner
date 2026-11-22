@@ -222,17 +222,28 @@ const kCompletedReport = {
   errors: 0,
   testsuites: [{ testsuite: [kComparisonCase] }],
 };
+const kCallerProtocolSettings = [
+  "XML_OUTPUT_FILE",
+  "TEST_PREMATURE_EXIT_FILE",
+  "TEST_SHARD_STATUS_FILE",
+  "TEST_WARNINGS_OUTPUT_FILE",
+  "GTEST_SHARD_STATUS_FILE",
+];
 const stubDirectory = fs.mkdtempSync(path.join(process.env.TEST_TMPDIR, "incomplete-comparator-"));
 
 /**
- * Writes a comparator that exits 0 without completing its comparison case. It writes
- * XML_OUTPUT_FILE whenever that setting reaches it, as googletest does without an output flag.
+ * Writes a comparator that exits 0 without completing its comparison case. It writes every caller
+ * test-protocol file whose setting reaches it, and the JSON report that an inherited GTEST_OUTPUT
+ * names, so a leaked setting overwrites that caller file.
  */
 function incompleteComparator(name, report) {
   const file = path.join(stubDirectory, `${name}.sh`);
   const lines = [
     "#!/bin/sh",
-    "if [ -n \"$XML_OUTPUT_FILE\" ]; then echo \"<testsuites/>\" > \"$XML_OUTPUT_FILE\"; fi",
+    ...kCallerProtocolSettings.map((setting) =>
+      `if [ -n "$${setting}" ]; then echo stub > "$${setting}"; fi`
+    ),
+    "case \"$GTEST_OUTPUT\" in json:*) echo stub > \"${GTEST_OUTPUT#json:}\" ;; esac",
   ];
   if (report) {
     fs.writeFileSync(`${file}.json`, JSON.stringify(report));
@@ -248,7 +259,11 @@ function incompleteComparator(name, report) {
 }
 
 const kIncompleteComparators = [
-  ["exits without a report", incompleteComparator("no-report", null)],
+  [
+    "exits without a report",
+    incompleteComparator("no-report", null),
+    /bitmap comparator wrote no readable report/,
+  ],
   [
     "selects no case",
     incompleteComparator("no-case", {
@@ -258,6 +273,7 @@ const kIncompleteComparators = [
       errors: 0,
       testsuites: [],
     }),
+    /bitmap comparator did not complete exactly one valid comparison/,
   ],
   [
     "skips its case",
@@ -265,10 +281,11 @@ const kIncompleteComparators = [
       ...kCompletedReport,
       testsuites: [{ testsuite: [{ ...kComparisonCase, result: "SKIPPED" }] }],
     }),
+    /bitmap comparator did not complete exactly one valid comparison/,
   ],
 ];
 
-for (const [behavior, comparator] of kIncompleteComparators) {
+for (const [behavior, comparator, expectedError] of kIncompleteComparators) {
   test(`a comparator that ${behavior} fails the sample instead of checking it`, () => {
     const context = setup(`incomplete-${path.basename(comparator, ".sh")}`, true);
     const [sample] = authoredSamples(context.outputDirectory);
@@ -283,7 +300,7 @@ for (const [behavior, comparator] of kIncompleteComparators) {
           ...context.environment,
           DONNER_BROWSER_GOLDEN_COMPARE: comparator,
         }),
-      /bitmap comparator (wrote no readable report|did not complete exactly one valid comparison)/,
+      expectedError,
     );
     assert.equal(sample.pixelChecked, false, "an incomplete comparison must not check the sample");
     for (const file of context.callerFiles) {
