@@ -1659,6 +1659,32 @@ private:
   std::uint64_t nextSerial_ = 0;
 };
 
+/// Returns true when every corner of \p inner lies inside the convex quadrilateral \p outer, so
+/// their intersection is \p inner. Corners within 1e-6 device pixels of an edge count as
+/// inside.
+bool ConvexQuadContains(const Vector2d (&outer)[4], const Vector2d (&inner)[4]) {
+  constexpr double kEpsilon = 1e-6;
+  double orientation = 0.0;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const Vector2d& a = outer[i];
+    const Vector2d& b = outer[(i + 1) % 4];
+    orientation += a.x * b.y - b.x * a.y;
+  }
+  const double sign = orientation < 0.0 ? -1.0 : 1.0;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const Vector2d& a = outer[i];
+    const Vector2d edge = outer[(i + 1) % 4] - a;
+    const double length = edge.length();
+    for (const Vector2d& point : inner) {
+      const Vector2d offset = point - a;
+      if (sign * (edge.x * offset.y - edge.y * offset.x) < -kEpsilon * length) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 /// Gate for ordered cross-entity batching. Enabled: a batch's single draw can
@@ -2914,10 +2940,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// rect - which over-reports coverage. In that case the entry also
   /// carries the 4 polygon corners of the clip in device-pixel space,
   /// and the fragment shader tests each sample against the polygon's
-  /// half-planes on top of the scissor rect. We only honour the TOPMOST
-  /// polygon-bearing entry (`setClipPolygon` has no in-shader
-  /// intersection with a previous polygon) - nested rotated clips are
-  /// rare enough that we accept the over-coverage fallback.
+  /// half-planes on top of the scissor rect. We honour one polygon-bearing
+  /// entry (`setClipPolygon` has no in-shader intersection with a previous
+  /// polygon): an entry whose polygon contains the one already chosen keeps
+  /// it, since their intersection is the chosen one, and otherwise the
+  /// topmost wins. Partly overlapping nested rotated clips are rare enough
+  /// that we accept the over-coverage fallback.
   struct ClipStackEntry {
     ClipStackEntry() = default;
     ~ClipStackEntry() = default;
@@ -3850,10 +3878,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     updateEncoderScissor();
   }
 
+  /// Returns the polygon entry the shader tests once \p entry joins a clip stack whose chosen
+  /// polygon entry is \p chosen. The shader tests one polygon: when one polygon contains the
+  /// other, their intersection is the inner one, so it is kept; otherwise the topmost wins (see
+  /// ClipStackEntry docs).
+  static const ClipStackEntry* NextClipPolygon(const ClipStackEntry* chosen,
+                                               const ClipStackEntry& entry) {
+    if (!entry.hasPolygon) {
+      return chosen;
+    }
+    if (chosen != nullptr && ConvexQuadContains(entry.polygonCorners, chosen->polygonCorners)) {
+      return chosen;
+    }
+    return &entry;
+  }
+
   /// Recompute the intersection of every rectangular clip entry on
   /// `clipStack` and apply it to the active encoder as a scissor,
-  /// plus forward the topmost polygon clip (if any) through
-  /// `setClipPolygon`. Called whenever the clip stack changes.
+  /// plus forward the polygon clip `NextClipPolygon` chooses (if any)
+  /// through `setClipPolygon`. Called whenever the clip stack changes.
   void updateEncoderScissor() {
     if (!encoder) {
       return;
@@ -3880,11 +3923,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           active = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
         }
       }
-      if (entry.hasPolygon) {
-        // Overwrite with the topmost polygon entry; no multi-polygon
-        // intersection in the shader (see ClipStackEntry docs).
-        polygonEntry = &entry;
-      }
+      polygonEntry = NextClipPolygon(polygonEntry, entry);
       if (entry.maskResolveViewHandle != nullptr) {
         // Same deal for the path-clip mask - we always bind the
         // topmost one, and nested path-clip intersections are a
