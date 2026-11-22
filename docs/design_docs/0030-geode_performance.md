@@ -1,11 +1,11 @@
 # Design: Geode Rendering Performance
 
-**Status:** Design. An unchanged Geode frame re-encodes no path, creates no texture and re-uploads
-no geometry for solid and gradient fills and strokes, and ordered batching draws runs of resident
-draws as instanced draws. Steady-state residency for markers, patterns, images, filter passes, layer
-composites, clip and mask passes, and some text paints is still open (Milestone 8), as are
-index-keyed filter results (Milestone 5). `geode_counter_corpus_tests` lists every scene that
-still misses the steady state.
+**Status:** Design. On an unchanged frame, resident solid and gradient fills and strokes re-encode,
+create and re-upload nothing, and ordered batching draws runs of resident draws as instanced draws.
+Steady-state residency for markers, patterns, images, filter passes, layer composites, clip and mask
+geometry, and painted text is still open (Milestone 8), as are index-keyed filter results
+(Milestone 5). `geode_counter_corpus_tests` records the corpus scenes measured to miss the steady
+state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -105,24 +105,37 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `GeodeResidentPathComponent`.
   - [x] `{SimpleShapes,Moderate,Lion,GhostscriptTiger}_NoDirtyPath_ZeroEncodes` assert
     `pathEncodes == 0` on an unchanged second frame.
-- [x] Milestone 3: Single encoder per frame.
-  - [x] `RendererGeode::Impl` owns one frame command encoder from `beginFrame` to `endFrame`;
-    every `GeoEncoder` for the base target and for layer, filter, mask, and pattern passes records
-    into it, and blend-mode snapshot copies record into it as well.
-  - [x] Filter render, compute, copy, and composite passes record into the frame. The filter engine
-    closes a command buffer every `kMaxPassesPerCommandBuffer` (64) passes so a pathological graph
-    cannot build one unbounded command buffer; inside a frame those command buffers join the frame's
-    single submission (`MultipleBoundedMorphologyNodesStillChunkCommandBuffers`,
-    `AFrameChunkClosesOnlyWhenPassSixtyFiveCrossesTheBoundary`);
-    `GaussianBlur_UsesSingleFrameSubmission` pins the ordinary case.
+- [x] Milestone 3: Frame command buffers and submission.
+  - [x] `RendererGeode::Impl` records a frame through one runtime command encoder at a time. When
+    the active `GeoEncoder` finishes (`retireActiveEncoder`, at layer, filter, mask, and
+    pattern-tile boundaries and at end of frame) and before a filter executes, it closes that
+    encoder into a command buffer of the frame and opens a fresh one; empty encoders produce no
+    command buffer. A filter execution appends command buffers of its own, closing one every
+    `kMaxPassesPerCommandBuffer` (64) passes so a pathological graph cannot build one unbounded
+    command buffer.
+  - [x] `endFrame` submits all of the frame's command buffers together, in recording order, with
+    two exceptions. A frame that already holds `kMaxFrameCommandBuffersPerSubmission` (16)
+    command buffers splits before the next one (`splitFrameSubmission`): it submits what it holds
+    and, on Vulkan, waits for the queue to idle before recording continues. A memory-limited filter
+    budget that must free retained bytes before admitting another filter splits the same way
+    (`submitFilterBudgetChunk`).
+  - [x] For frames below the 16-buffer bound, `GaussianBlur_UsesSingleFrameSubmission` and
+    `MultipleBoundedMorphologyNodesStillChunkCommandBuffers` assert at most two submissions, the
+    frame's plus the snapshot readback's; the latter also asserts 3 to 16 command buffers.
+    `AFramePastTheSubmissionBoundSplitsAndStillRenders`,
+    `AFrameSplitTakesTheCrossSubmitCompletionWait`, and
+    `FilterFrameRecoveredThroughAMemoryChunkReportsNoRefusal` (`RendererGeode_tests.cc`) cover the
+    splits; `AFrameChunkClosesOnlyWhenPassSixtyFiveCrossesTheBoundary` and
+    `ChunksPastTheFramesBoundSplitAcrossSubmissions` (`GeodeFilterEngine_tests.cc`) cover filter
+    chunks.
   - [x] Snapshot readback is an explicit capture with its own submission and counters, outside
-    the frame's submission.
+    the frame's submissions.
 - [x] Milestone 4: Transient render-target pool.
   - [x] The render target is reused across frames while the viewport size is unchanged.
   - [x] `RendererGeodeTexturePool`, shared by the renderers of one device, reuses layer, mix-blend
     destination snapshot, filter, mask, clip-mask, and pattern-tile textures by exact
-    `(width, height, format, usage)`. Release is deferred to the frame boundary so recorded GPU
-    work completes before a texture is handed out again.
+    `(width, height, format, usage, sampleCount)`. Release is deferred to the frame boundary so
+    recorded GPU work completes before a texture is handed out again.
   - [x] `{SimpleShapes,Moderate,Lion,GhostscriptTiger,GaussianBlur}_NoDirtyPath_ZeroTextures`
     assert `textureCreates == 0` on an unchanged second frame.
 - [ ] Milestone 5: Filter engine caching.
@@ -140,11 +153,12 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
   - [x] `drawCalls`, `pipelineSwitches`, and `sameSourceDrawPairs` counters.
   - [x] Ordered batching: consecutive eligible draws, including different entities and different
     paints, join one instanced draw in painter order. Each instance carries a 256-byte record
-    (`InstanceRecord`, matching `SlugFillInstance` in
-    `donner/gpu/shader/programs/SlugFillSource.h`) with its transform, paint, fill rule, and any
+    (`SlugFillInstance` in `donner/gpu/shader/programs/SlugFill.h`, mirrored by the shader's
+    `InstanceRecord` in `SlugFillSource.h`) with its transform, paint, fill rule, and any
     rectangular clip, which the fragment stage applies. Draws under a clip polygon, a clip mask,
-    or an open mask pass do not join a batch, and the pending batch flushes at clip, layer,
-    filter, mask, and pattern-tile push and pop, at images, and at end of frame.
+    or an open mask pass do not join a batch. The pending batch flushes at every state change it
+    cannot carry, including clip, layer, filter, and mask push and pop, pattern tiles, images,
+    text that cannot join it, and end of frame.
     `kEnableSceneBatching` in `RendererGeode.cc` gates the feature and is on.
   - [x] Repeated `<use>` instances of one source draw as one instanced draw
     (`UseHeavy_BaselineCeilings` asserts `drawCalls == 1`). Lion's 132 paths draw as one batch
@@ -152,25 +166,29 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 - [x] Milestone 7: Opportunistic cleanups.
   - [x] Band-selection and band-fill scratch storage stays on the stack, bounded by `kMaxBands`.
   - [x] Curve maxima stay inclusive when assigning band references, so a curve ending exactly on an
-    internal band boundary is referenced by both adjacent bands.
-  - [x] TinySkia-only golden tests are pinned to `RendererTinySkia`.
+    internal band boundary is referenced by both adjacent bands
+    (`CurveEndingOnBandBoundaryIsReferencedByFollowingBand`).
+  - [x] The TinySkia showcase golden renders through `RendererTinySkia` directly
+    (`ShowcaseAssetFixture.GeneratedBadgeAndOverlayMatchGolden`), so a Geode test configuration
+    does not compare GPU output with a TinySkia image.
   - [x] Snapshot unpremultiplication runs as a GPU compute pass (`SnapshotUnpremultiply`) where
     the target format allows it (`GpuAndCpuPathsAreByteIdentical`).
 - [ ] Milestone 8: Steady-state residency for the remaining draw classes. Each item clears the
-  named `kKnownViolations` entries in `geode_counter_corpus_tests`.
+  named `kKnownViolations` entries in `geode_counter_corpus_tests`; every entry listed here misses
+  the steady state in the shipping configuration, with ordered batching on.
   - [ ] 8.1: Stroke cache keyed by resolved stroke style. `<use>` instances that share one source
-    path with different stroke styles thrash the single stroke slot and re-encode every frame, and
-    styled `<use>` stroke outlines draw through the per-frame arena. Clears `poker_chips`,
-    `stroking_complex`, `svg2_e_use_003`, `svg2_e_use_004`. Bound the extra slots with the
-    retained-geometry budget.
+    path with different stroke styles thrash the single stroke slot and re-encode every frame.
+    Clears `poker_chips`, `stroking_complex`. Bound the extra slots with the retained-geometry
+    budget.
   - [ ] 8.2: Marker instance residency. Every drawn marker re-uploads its geometry through the
     per-frame arena and builds its own bind group. Clears `marker`, `marker_segments`,
     `marker_spec_example`. A design that batches markers through instance records and needs new
     record fields changes the `SlugFillInstance` layout.
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
-    group every frame (`GeodeTextureEncoder::drawTexturedQuad`), and gradient-painted paths under
-    an opacity group re-upload their geometry and build bind groups per draw. Clears
-    `Edzample_Anim3`, `donner_icon`.
+    group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Clears `Edzample_Anim3`. The
+    corpus also records `donner_icon`, whose gradient-painted paths under an opacity group
+    re-upload geometry and build bind groups per draw; why those draws miss gradient residency is
+    not traced, so this item starts by tracing it.
   - [ ] 8.4: Image residency. Decoded images allocate a texture and re-upload their quad every
     frame, and the nested-document raster cache holds one entry per source, so the same external
     SVG drawn at two sizes re-uploads one of them. Clears `image_data_url_opacity`,
@@ -180,19 +198,26 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     tiled fill a resident slot. Clears `geode_pattern_checker`, `geode_pattern_nonrect`,
     `geode_pattern_offset`, `geode_pattern_solid`.
   - [ ] 8.6: Filter-pass steady state. Filter passes rewrite their per-pass uniforms and create a
-    bind group per pass every frame. Keep uniform allocations across unchanged frames and cache
-    bind groups by pass role rather than texture identity, because pooled textures change identity
-    between frames. Clears `filter_displacement_map`, `filter_drop_shadow`, `filter_fill_paint`,
-    `filter_spot_light`, `filter_stroke_paint`.
+    bind group per pass every frame. Keep uniform allocations across unchanged frames and reuse
+    pass bind groups. How to key the bind-group cache is open: the texture pool hands back the most
+    recently released texture of a key, but whether a pass sees the same textures on an unchanged
+    frame is not established. Measuring texture identity per pass across two unchanged frames
+    decides between keying on texture identity and keying on pass role. Clears
+    `filter_displacement_map`, `filter_drop_shadow`, `filter_fill_paint`, `filter_spot_light`,
+    `filter_stroke_paint`.
   - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
     clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
     re-uploads every frame, and nested viewports re-encode their subtree. Clears `donner_splash`,
     `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3, on 8.6 for `donner_splash`'s
-    filters, and on 8.1 for nested `<use>` instances.
-  - [ ] 8.8: Placed-text paint residency. Pattern- and gradient-painted glyphs and text
-    decorations re-encode and re-upload every frame. Clears `geode_text_decoration_underline`,
-    `geode_text_pattern_fill`, `geode_text_span_gradient_over_pattern`,
-    `geode_text_span_gradient_over_pattern_stroke`. Depends on 8.5.
+    filters, and on 8.1 for `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
+    text inside nested viewports; whether its text needs 8.8 is not traced.
+  - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`) and
+    solid-filled glyphs draw from resident outlines, but pattern- and gradient-painted glyphs and
+    text decorations are placed and encoded as transient geometry every frame. Clears
+    `geode_text_decoration_underline`, `geode_text_pattern_fill`,
+    `geode_text_span_gradient_over_pattern`, `geode_text_span_gradient_over_pattern_stroke`. The
+    three pattern-painted scenes depend on 8.5. The corpus reason strings for these entries say
+    placed text has no path cache or residency; correcting them is a follow-up to the corpus test.
 
 ## Background
 
@@ -251,13 +276,23 @@ Entity with <path d="...">
   the document's `GeodeResidentSlab` and caches its bind group. Later frames rewrite only the slot's
   uniform, and only when it changed; an unchanged frame writes nothing. Freed ranges return to the
   slab at the next frame boundary, so a re-upload never overwrites a range a recorded draw still
-  reads. Gradients with more than 16 stops also keep their stop ramp resident.
+  reads. Up to 16 stops travel inline in a gradient's parameters; a gradient with more reads its
+  stops from a stop-ramp texture (`GeodeGradientRamp`), which resident slots keep across frames, so
+  an unchanged frame uploads no ramp (`ManyStopGradient_OneRampThenZeroWrites`).
 - **Residency gates.** Residence is taken only when no clip polygon, clip mask, or mask pass is
   active, and once per slot per frame. Draws that fail a gate use the per-frame arena path.
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
-  order. Text uses the same mechanism for resident glyph outlines shared across occurrences
-  (`GeodeGlyphCache`, `geode/GeodeGlyphResidency.h`).
+  order.
+- **Glyphs.** `GeodeGlyphCache` (`geode/GeodeGlyphResidency.h`) caches each glyph outline once per
+  glyph identity (font, glyph, scale, stretch, rotation, and tolerance), bounded by entry and byte
+  budgets. Solid-filled glyph occurrences draw from those resident outlines through instance records
+  and join ordered batches.
+- **Invalidation.** Path geometry invalidates through `on_update<ComputedPathComponent>`, which
+  fires only when `ShapeSystem` changes the geometry; no separate dirty flag is involved.
+- **Uniform storage.** Resident slots hold their own uniforms. Per-frame draws bump-allocate from
+  per-encoder arenas, image blits from the encoder's uniform scratch, and filter passes from
+  per-frame scratch buffers. Nothing uses a uniform ring or dynamic offsets.
 - **Eviction.** Geometry changes remove the entity's cache and residence components; document
   teardown destroys them and returns their slab ranges. Residence is tracked per device, so a
   document drawn by another device uploads there instead of borrowing this device's buffers
@@ -265,9 +300,10 @@ Entity with <path d="...">
 
 ### Frames, encoders, and pools
 
-`RendererGeode::beginFrame` creates one command encoder; draws, layer blits, filter passes, mask
-passes, and target writes record into it, and `endFrame` submits it. Layer, filter, mask,
-clip-mask, and pattern textures come from `RendererGeodeTexturePool`; arena buffers come from
+A frame records through one runtime command encoder at a time and closes it into a command buffer
+at each boundary listed in Milestone 3; `endFrame` submits the frame's command buffers together
+unless the 16-buffer bound or a filter-memory split submitted part of them earlier. Layer, filter,
+mask, clip-mask, and pattern textures come from `RendererGeodeTexturePool`; arena buffers come from
 `GeodeBufferPool`.
 
 ### Counter-based tests over wall-clock tests
@@ -291,7 +327,10 @@ Steady-state invariants on an unchanged second frame, asserted per corpus scene:
 - `bufferWrites == 0`: resident geometry and unchanged uniforms are not re-uploaded.
 - `bindgroupCreates <= 6`: bind groups are cached per slot and per batch, not built per draw.
 
-The scenes listed in `kKnownViolations` miss one or more of these; Milestone 8 clears them.
+`kKnownViolations` lists the corpus scenes measured to miss one or more of these. An entry can
+carry a separate mask and ceilings for the build with ordered batching, and two entries
+(`svg2_e_use_003`, `svg2_e_use_004`) violate only with batching off; ordered batching is always
+compiled in, so they already meet the steady state. Milestone 8 covers the other 27.
 
 ## Testing and Validation
 
@@ -299,8 +338,9 @@ The scenes listed in `kKnownViolations` miss one or more of these; Milestone 8 c
   unchanged-frame invariants, including snapshot readback cost through
   `consumeReadbackStats()`.
 - `//donner/svg/renderer/geode:geode_counter_corpus_tests`: the corpus-wide steady-state gate.
-  `kKnownViolations` records each scene that misses an invariant, the counters it breaks, their
-  measured ceilings, and the reason. A listed scene must still break the counters its entry
+  `kKnownViolations` records each corpus scene measured to miss an invariant, the counters it
+  breaks, their measured ceilings, and the reason, with an optional separate mask and ceilings for
+  the build with ordered batching. A listed scene must still break the counters its entry
   names, so fixing a scene fails the suite until its entry is deleted, and a listed scene cannot
   get worse. Every scene must also render visible pixels unless listed in `kDeliberatelyInert`.
 - `//donner/svg/renderer/geode:geode_device_tests`, `:geode_path_encoder_tests`,
@@ -361,16 +401,11 @@ required for the per-frame goals here.
 
 - `RendererGeodeTexturePool` keys textures by exact size. A viewport that changes size every
   frame (resize, zoom) misses the pool for every size it has not seen, while power-of-two or
-  64-pixel buckets would trade VRAM for reuse. A counter test that renders a sequence of viewport
-  sizes and asserts `textureCreates` decides whether bucketing pays; no such test exists yet.
-
-Resolved by the as-built design:
-
-- Path-geometry invalidation uses `on_update<ComputedPathComponent>`, which fires only when
-  `ShapeSystem` changes the geometry; no new dirty flag is needed.
-- Uniform storage: resident slots hold their own uniforms and per-frame draws bump-allocate from
-  per-encoder arenas and a uniform scratch buffer. There is no uniform ring and no dynamic offset,
-  so the ring-sizing question does not arise.
+  64-pixel buckets would trade VRAM for reuse. A counter test that renders a sequence of new
+  viewport sizes and asserts `textureCreates` decides whether bucketing pays. The existing
+  `TransientTexturePoolStaysWithinGlobalMemoryBudgetAcrossSizeChurn` bounds retained memory under
+  size churn and checks reuse of a size already seen, but does not measure creates across new
+  sizes.
 
 # Future Work
 
@@ -378,5 +413,3 @@ Resolved by the as-built design:
   timestamp queries today, `RendererGeode::enableTimestamps` has no effect, and the
   `FrameTimings::renderPassNs` and `totalGpuNs` fields stay zero. Per-pass GPU time in
   `lastFrameTimings` would let the compositor attribute frame cost to specific draws.
-- [x] Glyph-level geometry cache: resident glyph outlines are shared across occurrences and
-  bounded by entry and byte budgets (`GeodeGlyphCache`).

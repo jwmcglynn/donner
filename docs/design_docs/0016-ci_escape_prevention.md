@@ -144,9 +144,9 @@ ASAN_OPTIONS=abort_on_error=1:halt_on_error=1 \
     --test_arg=--gtest_filter=FiltersFeImage/*
 ```
 
-**Mitigation (tracked in [0031](0031-ci_hardening_2026q2.md)):** M1.2 adds a paths-scoped
-`asan-geode` PR gate for changes to `donner/svg/renderer/geode/**` and
-`donner/svg/renderer/RendererDriver.*`. M2 adds a nightly `sanitizers.yml`
+**Mitigation (tracked in [0031](0031-ci_hardening_2026q2.md) M1.2 and M2.5):** M1.2 adds a
+paths-scoped `asan-geode` PR gate for changes to `donner/svg/renderer/geode/**` and
+`donner/svg/renderer/RendererDriver.*`. M2.5 adds a nightly `sanitizers.yml`
 running ASan+UBSan across `//donner/...` (required for `main` merges,
 skip-idle when no commits landed that day).
 
