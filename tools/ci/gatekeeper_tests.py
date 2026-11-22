@@ -1,5 +1,6 @@
 """Runs the gatekeeper decisions as a workflow step would: real git history, a fake gh."""
 
+import ast
 import importlib.util
 import json
 import os
@@ -267,12 +268,54 @@ class GatekeeperTest(unittest.TestCase):
         return result, output, merge
 
     def test_docs_only_pull_request(self):
-        head = _commit(self.repo, ["docs/guide.md", "CHANGELOG.md", "NOTES.md", ".gitignore",
-                                   ".editorconfig", ".gitattributes", "docs/img/a.svg"], "docs")
+        # Every kind of file docs/ holds, and the top-level documentation files.
+        head = _commit(self.repo, ["docs/guide.md", "docs/design_docs/0001-plan.md",
+                                   "docs/pages.dox", "docs/img/a.svg", "docs/img/b.png",
+                                   "docs/data.json", "docs/table.tsv", "docs/notes.txt",
+                                   "docs/page.html", "docs/archive.zip", "CHANGELOG",
+                                   "CHANGELOG.md", "RELEASE_NOTES.md", "NOTES.md", ".gitignore",
+                                   ".editorconfig"], "docs")
         result, output, merge = self._docs_only(self.root, head)
         self.assertEqual(output, "docs_only=true\n")
         self.assertIn(f"Comparing test merge {merge} with its first parent {self.root}.",
                       result.stdout)
+
+    def test_build_graph_files_and_test_inputs_are_not_documentation(self):
+        # docs/ is part of the root package: a BUILD file there splits it off. A CHANGELOG
+        # prefix names a top-level file, not a directory, and .gitattributes is a test input.
+        for path in ("docs/BUILD.bazel", "docs/BUILD", "docs/rules.bzl", "docs/CMakeLists.txt",
+                     "docs/deps.cmake", "docs/MODULE.bazel", "docs/WORKSPACE.bazel",
+                     "CHANGELOGx/BUILD.bazel", "CHANGELOG/foo.cc", ".gitattributes"):
+            with self.subTest(path=path):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                head = _commit(self.repo, ["docs/guide.md", path], "change " + path)
+                result, output, _ = self._docs_only(self.root, head)
+                self.assertEqual(output, "docs_only=false\n")
+                self.assertIn(f"Non-doc change: {path}", result.stdout)
+
+    def test_every_build_graph_input_lint_knows_is_not_documentation(self):
+        # The admission checkout cannot import tools/ci/lint_changes.py, so gatekeeper.py keeps
+        # its own list; this fails when graph_input accepts a file the gatekeeper calls docs.
+        source = Path(runfiles.Create().Rlocation("donner/tools/ci/lint_changes.py")).read_text(
+            encoding="utf-8")
+        function = next(node for node in ast.parse(source).body
+                        if isinstance(node, ast.FunctionDef) and node.name == "graph_input")
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "lint_changes.py", "exec"),
+             namespace)
+        graph_input = namespace["graph_input"]
+        gatekeeper = self._gatekeeper_module()
+        names = sorted({node.value for node in ast.walk(function)
+                        if isinstance(node, ast.Constant) and isinstance(node.value, str)})
+        self.assertIn("BUILD.bazel", names)
+        checked = 0
+        for name in names:
+            for path in (name, "docs/" + name, "docs/rules" + name):
+                if graph_input(path):
+                    checked += 1
+                    with self.subTest(path=path):
+                        self.assertFalse(gatekeeper.is_docs_only_path(path))
+        self.assertGreater(checked, len(names))
 
     def test_any_build_input_clears_docs_only(self):
         for path in ("donner/BUILD.bazel", "nested/README.md", ".bazelignore", ".gitmodules",
@@ -322,6 +365,12 @@ class GatekeeperTest(unittest.TestCase):
                 head = _commit(self.repo, ["docs/guide.md"], "remove %s, edit docs" % path)
                 _, output, _ = self._docs_only(base, head)
                 self.assertEqual(output, "docs_only=%s\n" % expected)
+
+    def _gatekeeper_module(self):
+        spec = importlib.util.spec_from_file_location("gatekeeper", self.script)
+        gatekeeper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gatekeeper)
+        return gatekeeper
 
     def _stage_entry(self, mode, path, target):
         """Stages `path` as a symlink to `target` (120000) or a gitlink to commit `target`."""
@@ -389,9 +438,7 @@ class GatekeeperTest(unittest.TestCase):
     def test_an_unexpected_diff_entry_is_not_docs_only(self):
         # Copies, renames, unmerged, unknown and broken pairs cannot appear in this diff; if one
         # ever does, CI runs. A documentation entry beside each shows only the entry decides.
-        spec = importlib.util.spec_from_file_location("gatekeeper", self.script)
-        gatekeeper = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(gatekeeper)
+        gatekeeper = self._gatekeeper_module()
         blob = "1" * 40
         document = f":100644 100644 {blob} {blob} M\tdocs/guide.md\n"
         self.assertTrue(gatekeeper._all_docs_entries(document))
@@ -471,8 +518,9 @@ class GatekeeperTest(unittest.TestCase):
     def test_empty_change_set_is_not_docs_only(self):
         _git(self.repo, "commit", "-q", "--allow-empty", "-m", "empty")
         head = _git(self.repo, "rev-parse", "HEAD")
-        _, output, _ = self._docs_only(self.root, head)
+        result, output, _ = self._docs_only(self.root, head)
         self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("The test merge changes no path; not docs-only.", result.stdout)
 
     def test_a_checkout_that_is_not_a_test_merge_of_the_payload_head_is_not_docs_only(self):
         # Every head here changes only documentation, so only the binding keeps CI running.
@@ -503,8 +551,8 @@ class GatekeeperTest(unittest.TestCase):
                 result, output, _ = self._run("docs-only", **context)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output, "docs_only=false\n")
-                self.assertIn("Cannot bind the checkout to a test merge of the pull request head",
-                              result.stdout)
+                self.assertIn("::warning::Cannot bind the checkout to a test merge of the pull "
+                              "request head", result.stdout)
 
     def test_a_checkout_without_the_merge_parents_is_not_docs_only(self):
         # actions/checkout's default depth does not fetch the test merge's parents.
@@ -531,6 +579,7 @@ class GatekeeperTest(unittest.TestCase):
                                       **self._pull_request(self.root, head))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("::warning::Cannot bind the checkout", result.stdout)
         # The first parent is listed but its tree is missing, so only the diff fails.
         tree = _git(self.repo, "rev-parse", f"{self.root}^{{tree}}")
         self.assertNotEqual(tree, _git(self.repo, "rev-parse", f"{merge}^{{tree}}"))
@@ -538,7 +587,7 @@ class GatekeeperTest(unittest.TestCase):
         result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, "docs_only=false\n")
-        self.assertIn("git diff failed", result.stdout)
+        self.assertIn("::warning::git diff failed", result.stdout)
 
     def test_non_pull_request_events_are_never_docs_only(self):
         for event in ("push", "schedule", "workflow_dispatch"):

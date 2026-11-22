@@ -41,17 +41,32 @@ import github_rate_limit  # noqa: E402
 
 MAIN_REF = "refs/heads/main"
 
-# Top-level files besides `*.md` that never affect a build. Build-impacting dotfiles such as
-# .bazelignore (Bazel package discovery) and .gitmodules (vendored dependencies) are deliberately
-# absent, so a change to one of them runs the full CI.
-_DOCS_ONLY_FILES = (".editorconfig", ".gitattributes", ".gitignore")
+# Top-level files besides `*.md` and `CHANGELOG*` that never affect a build. Build-impacting
+# dotfiles such as .bazelignore (Bazel package discovery), .gitmodules (vendored dependencies) and
+# .gitattributes (a test input that also shapes the source archive) are deliberately absent, so a
+# change to one of them runs the full CI.
+_DOCS_ONLY_FILES = (".editorconfig", ".gitignore")
+
+# Bazel and CMake build-graph files, which are never documentation, even under docs/: docs/ is
+# part of the root package, so a BUILD file there would split it off. gatekeeper_tests checks
+# that these cover every file tools/ci/lint_changes.py's graph_input treats as a graph input;
+# this script cannot import it, since the admission checkout holds only its own pinned files.
+_BUILD_GRAPH_NAMES = ("BUILD", "BUILD.bazel", "REPO.bazel", "CMakeLists.txt", ".bazelignore",
+                      ".bazelrc", ".bazelversion")
+_BUILD_GRAPH_PREFIXES = ("WORKSPACE", "MODULE.bazel")
+_BUILD_GRAPH_SUFFIXES = (".bzl", ".BUILD", ".BUILD.bazel", ".cmake", ".cmake.in")
 
 
 def is_docs_only_path(path: str) -> bool:
     """True for a changed path that cannot affect any build or test."""
-    if path.startswith("docs/") or path.startswith("CHANGELOG") or path in _DOCS_ONLY_FILES:
+    name = path.rsplit("/", 1)[-1]
+    if (name in _BUILD_GRAPH_NAMES or name.startswith(_BUILD_GRAPH_PREFIXES)
+            or name.endswith(_BUILD_GRAPH_SUFFIXES)):
+        return False
+    if path.startswith("docs/"):
         return True
-    return "/" not in path and path.endswith(".md")
+    return "/" not in path and (path.startswith("CHANGELOG") or path.endswith(".md")
+                                or path in _DOCS_ONLY_FILES)
 
 
 def _write_output(environ: Mapping[str, str], name: str, value: bool) -> None:
@@ -96,16 +111,16 @@ def _git(*args: str) -> str | None:
 def _tested_merge(head_sha: str) -> tuple[str, str] | None:
     """Returns the checked-out test merge and its first parent, or None if it cannot be bound.
 
-    CI builds GitHub's merge of the pull request head into the base branch tip, so the merge's
-    first parent is the tested base; the event payload's base commit can lag it. Only a merge
-    with exactly two parents whose second is the payload's head is bound. A shallow checkout
-    lists no parents, so it is not.
+    CI builds and tests GitHub's merge of the pull request head, so the merge's first parent is
+    the tested base: the commit GitHub merged the head into, which need not be the base branch
+    tip or the event payload's base commit. Only a merge with exactly two parents whose second
+    is the payload's head is bound. A depth-one checkout lists no parents, so it is not.
     """
     ancestry = _git("rev-list", "--parents", "-n", "1", "HEAD")
     commits = ancestry.split() if ancestry is not None else []
     if len(commits) != 3 or commits[2] != head_sha:
-        print(f"Cannot bind the checkout to a test merge of the pull request head {head_sha}: "
-              f"HEAD and its parents are {commits or 'unavailable'}.")
+        print(f"::warning::Cannot bind the checkout to a test merge of the pull request head "
+              f"{head_sha}: HEAD and its parents are {commits or 'unavailable'}; running CI.")
         return None
     return commits[0], commits[1]
 
@@ -128,7 +143,7 @@ def docs_only(environ: Mapping[str, str]) -> bool:
     # is not docs-only either.
     changed = _git("diff", "--raw", "--no-renames", first_parent, merge)
     if changed is None:
-        print("git diff failed; not docs-only.")
+        print("::warning::git diff failed; not docs-only, running CI.")
         return False
     return _all_docs_entries(changed)
 
@@ -164,6 +179,8 @@ def _all_docs(paths: Iterable[str]) -> bool:
             print(f"Non-doc change: {path}")
             return False
     # An empty change set is not evidence of a docs-only change.
+    if not any_path:
+        print("The test merge changes no path; not docs-only.")
     return any_path
 
 
