@@ -259,6 +259,8 @@ class SnapshotFallbackTest(unittest.TestCase):
     # The root and a detached member that only the snapshot reaches, never the group signal.
     TABLE = (f"{FakeLane.pid} 1 {FakeLane.pid} S 00:30 100 {STARTED} python3\n"
              f"7 1 7 S 00:20 100 {STARTED} python3\n")
+    # What a stalled lane that exhausted the process limit causes; not a missing executable.
+    ERROR = OSError(errno.EAGAIN, "Resource temporarily unavailable")
 
     def stop(self, tagged_pids, popen):
         with mock.patch.object(lane_stall_guard, "tagged_pids", side_effect=tagged_pids), \
@@ -270,29 +272,28 @@ class SnapshotFallbackTest(unittest.TestCase):
                                        lane_stall_guard.Clock(monotonic=0, wall=0))
         return kill.call_args_list, [call.args[0] for call in log.call_args_list]
 
-    def table_popen(self, failures):
-        """Popen that prints TABLE for the process table, or raises the next of `failures`."""
+    def table_popen(self, *starts: bool):
+        """Popen for successive process tables: one that prints TABLE, or raises ERROR."""
         real_popen = subprocess.Popen
-        failures = list(failures)
+        starts = list(starts)
 
         def popen(command, *args, **kwargs):
-            if failures and failures.pop(0) is not None:
-                raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+            if not starts.pop(0):
+                raise self.ERROR
             return real_popen([sys.executable, "-c",
                                f"import sys; sys.stdout.write({self.TABLE!r})"], *args, **kwargs)
         return popen
 
     def test_a_process_table_that_cannot_start_before_sigkill_kills_the_previous_members(self):
-        kills, logged = self.stop([{7}, {7}], self.table_popen([None, "fail"]))
+        kills, logged = self.stop([{7}, {7}], self.table_popen(True, False))
         self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
-        self.assertIn("lane stall guard: ps: could not be started: OSError: "
-                      f"[Errno {errno.EAGAIN}] Resource temporarily unavailable", logged)
+        self.assertIn(f"lane stall guard: {start_failure_note('ps', self.ERROR)}", logged)
         self.assertTrue(any("process snapshot failed (IncompleteSnapshot" in line
                             for line in logged), logged)
 
     def test_an_environment_listing_that_cannot_start_before_sigkill_kills_the_previous_members(
             self):
-        kills, logged = self.stop([{7}, None], self.table_popen([None, None]))
+        kills, logged = self.stop([{7}, None], self.table_popen(True, True))
         self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
         self.assertTrue(any("process snapshot failed (IncompleteSnapshot" in line
                             for line in logged), logged)
