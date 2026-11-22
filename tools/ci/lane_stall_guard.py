@@ -338,7 +338,8 @@ def signal_lane(root_pid: int, tag: str, signum: int, clock: Clock,
                 previous: list[int]) -> list[int]:
     """Sends `signum` to the lane's group and to each member of a fresh snapshot.
 
-    The root is the guard's unreaped child, so neither its pid nor its group can be reused yet.
+    Until the guard reaps the root, its pid and group cannot be reused; once the root has been
+    reaped during the SIGTERM grace, the group signal may reach a reused id.
     Other pids come from a snapshot taken here. If that snapshot fails, the group has still been
     signalled and the members of `previous`, the last snapshot that worked, are signalled
     instead. If it is incomplete (its process table or environment listing could not run), the
