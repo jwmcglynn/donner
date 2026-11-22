@@ -252,51 +252,78 @@ class StopLaneTest(unittest.TestCase):
                       log.call_args_list[0].args[0])
 
 
-class SnapshotFallbackTest(unittest.TestCase):
-    """A stop-path snapshot that could not be taken in full falls back to the previous one."""
+class ExitingLane(FakeLane):
+    """A lane whose root exits on SIGTERM, within the grace."""
 
-    STARTED = "Sat Nov 14 07:31:57 2026"
-    # The root and a detached member that only the snapshot reaches, never the group signal.
-    TABLE = (f"{FakeLane.pid} 1 {FakeLane.pid} S 00:30 100 {STARTED} python3\n"
-             f"7 1 7 S 00:20 100 {STARTED} python3\n")
+    def wait(self, timeout=None):
+        return -signal.SIGTERM
+
+
+class SnapshotFallbackTest(unittest.TestCase):
+    """Each stop-path signal uses a fresh snapshot; one whose process table or environment
+    listing could not run is supplemented with the previous snapshot's processes."""
+
     # What a stalled lane that exhausted the process limit causes; not a missing executable.
     ERROR = OSError(errno.EAGAIN, "Resource temporarily unavailable")
 
-    def stop(self, tagged_pids, popen):
-        with mock.patch.object(lane_stall_guard, "tagged_pids", side_effect=tagged_pids), \
-                mock.patch.object(lane_stall_guard.subprocess, "Popen", side_effect=popen), \
+    @staticmethod
+    def row(pid: int, elapsed: str = "00:20") -> str:
+        """A process table row; ppid 1, so only the lane's tag makes it a member."""
+        return f"{pid} 1 {pid} S {elapsed} 100 Sat Nov 14 07:31:57 2026 python3\n"
+
+    def popen(self, tables: list, listings: list):
+        """Popen that answers each process table, and each `ps -E` environment listing, with the
+        next entry of its list: text to print, or an exception to raise."""
+        real_popen = subprocess.Popen
+
+        def popen(command, *args, **kwargs):
+            answer = (listings if "-E" in command else tables).pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return real_popen([sys.executable, "-c", f"import sys; sys.stdout.write({answer!r})"],
+                              *args, **kwargs)
+        return popen
+
+    def stop(self, lane, popen, tagged_pids=None):
+        """Stops `lane`; with no `tagged_pids`, tagged processes come from `ps -E`, as on macOS."""
+        if tagged_pids is not None:
+            tagged = mock.patch.object(lane_stall_guard, "tagged_pids", side_effect=tagged_pids)
+        else:  # No /proc environments, so the guard lists them with `ps -E`.
+            tagged = mock.patch.object(lane_stall_guard, "Path",
+                                       **{"return_value.exists.return_value": False})
+        with tagged, mock.patch.object(lane_stall_guard.subprocess, "Popen", side_effect=popen), \
                 mock.patch.object(lane_stall_guard.os, "killpg"), \
                 mock.patch.object(lane_stall_guard.os, "kill") as kill, \
                 mock.patch.object(lane_stall_guard, "log") as log:
-            lane_stall_guard.stop_lane(FakeLane(), "tag",
-                                       lane_stall_guard.Clock(monotonic=0, wall=0))
+            lane_stall_guard.stop_lane(lane, "tag", lane_stall_guard.Clock(monotonic=0, wall=0))
         return kill.call_args_list, [call.args[0] for call in log.call_args_list]
 
-    def table_popen(self, *starts: bool):
-        """Popen for successive process tables: one that prints TABLE, or raises ERROR."""
-        real_popen = subprocess.Popen
-        starts = list(starts)
-
-        def popen(command, *args, **kwargs):
-            if not starts.pop(0):
-                raise self.ERROR
-            return real_popen([sys.executable, "-c",
-                               f"import sys; sys.stdout.write({self.TABLE!r})"], *args, **kwargs)
-        return popen
+    def test_a_member_started_during_the_grace_is_killed_after_the_root_exits(self):
+        root = self.row(FakeLane.pid, "00:30")
+        kills, logged = self.stop(
+            ExitingLane(), self.popen([root + self.row(7), self.row(9)], []), [{7}, {9}])
+        self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(9, signal.SIGKILL)])
+        self.assertEqual([line for line in logged if "snapshot" in line], [])
 
     def test_a_process_table_that_cannot_start_before_sigkill_kills_the_previous_members(self):
-        kills, logged = self.stop([{7}, {7}], self.table_popen(True, False))
+        root = self.row(FakeLane.pid, "00:30")
+        kills, logged = self.stop(
+            FakeLane(), self.popen([root + self.row(7), self.ERROR], []), [{7}, {7}])
         self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
         self.assertIn(f"lane stall guard: {start_failure_note('ps', self.ERROR)}", logged)
-        self.assertTrue(any("process snapshot failed (IncompleteSnapshot" in line
-                            for line in logged), logged)
+        self.assertIn("lane stall guard: process snapshot incomplete; signalling 0 processes it "
+                      "found and 1 from the previous snapshot", logged)
 
     def test_an_environment_listing_that_cannot_start_before_sigkill_kills_the_previous_members(
             self):
-        kills, logged = self.stop([{7}, None], self.table_popen(True, True))
+        table = self.row(FakeLane.pid, "00:30") + self.row(7)
+        missing = FileNotFoundError(errno.ENOENT, "No such file or directory", "ps")
+        listing = f"7 python3 {lane_stall_guard.TAG_VARIABLE}=tag\n"
+        kills, logged = self.stop(FakeLane(), self.popen([table, table], [listing, missing]))
         self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
-        self.assertTrue(any("process snapshot failed (IncompleteSnapshot" in line
-                            for line in logged), logged)
+        self.assertIn(f"lane stall guard: {start_failure_note('ps', missing)}", logged)
+        self.assertIn("lane stall guard: process snapshot incomplete; signalling 0 processes it "
+                      "found and 1 from the previous snapshot", logged)
 
 
 class DiagnosticToolTest(unittest.TestCase):
