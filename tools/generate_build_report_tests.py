@@ -798,7 +798,7 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("[python-sleep] Completed", status_output)
 
 
-# `bazel test` summaries recorded from Bazel 9.3 on Linux for failing targets that write
+# `bazel test` summaries adapted from Bazel 9.3 on Linux for failing targets that write
 # image-comparison PNGs, with the testlogs root replaced by <testlogs>. Undeclared outputs are
 # loose files under each run's test.outputs. A sharded target lists one log per shard, and
 # --runs_per_test and --flaky_test_attempts add run directories and attempt logs.
@@ -849,6 +849,32 @@ INFO: Build completed, 1 test FAILED, 4 total actions
 Executed 1 out of 1 test: 1 fails locally.
 """
 
+_TIMEOUT_SUMMARY = """\
+INFO: Build completed, 1 test FAILED, 5 total actions
+//donner/example:image_tests                                            TIMEOUT in 5.3s
+  <testlogs>/donner/example/image_tests/test.log
+
+Executed 1 out of 1 test: 1 fails remotely.
+"""
+
+# A summary line with no log listed under it.
+_NO_LOG_SUMMARY = """\
+//donner/example:image_tests                                             {status} in 0.4s
+"""
+
+# A test rule with its own configuration transition logs under that configuration's testlogs
+# directory (here a name taken from a real output tree), not the one `bazel info bazel-testlogs`
+# reports.
+_TRANSITIONED_SUMMARY = """\
+//donner/example:image_tests                                             FAILED in 1.0s
+  <bazel-out>/aarch64-fastbuild-ST-641315aedb22/testlogs/donner/example/image_tests/test.log
+"""
+
+_UNLOCATED_NOTE = (
+    ": failure images, if any, could not be located; the test summary listed no log for it "
+    "under this output tree."
+)
+
 _SHARDED_TARGET_DIR = "donner/example/sharded_image_tests"
 _SHARDED_REPORT_PREFIX = "reports/test-failures/" + _SHARDED_TARGET_DIR
 
@@ -859,7 +885,8 @@ class FailureImageLayoutTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.testlogs = Path(tmp.name) / "testlogs"
+        self.bazel_out = Path(tmp.name) / "bazel-out"
+        self.testlogs = self.bazel_out / "aarch64-fastbuild" / "testlogs"
         self.reports_root = Path(tmp.name) / "docs" / "reports"
         self.reports_root.mkdir(parents=True)
 
@@ -877,7 +904,9 @@ class FailureImageLayoutTests(unittest.TestCase):
             (outputs / name).write_bytes(payload)
 
     def render_tests_section(self, summary):
-        stderr = summary.replace("<testlogs>", str(self.testlogs))
+        stderr = summary.replace("<testlogs>", str(self.testlogs)).replace(
+            "<bazel-out>", str(self.bazel_out)
+        )
         runner = FakeRunner(
             {
                 TESTS_ARGS: generate_build_report.CommandResult(
@@ -897,6 +926,10 @@ class FailureImageLayoutTests(unittest.TestCase):
     @staticmethod
     def embedded_images(section):
         return [line for line in section.content.splitlines() if line.startswith("![")]
+
+    @staticmethod
+    def unlocated_notes(section):
+        return [line for line in section.content.splitlines() if "could not be located" in line]
 
     def staged_bytes(self, href):
         return (self.reports_root.parent / href).read_bytes()
@@ -952,7 +985,7 @@ class FailureImageLayoutTests(unittest.TestCase):
         )
 
     def test_stale_unsharded_results_beside_shards_are_ignored(self):
-        # An earlier unsharded run (for example `bazel run`, which disables sharding) leaves
+        # An earlier unsharded run (for example with --test_sharding_strategy=disabled) leaves
         # test.xml, test.log and test.outputs at the target root beside the shard directories.
         self.write_run(
             _SHARDED_TARGET_DIR,
@@ -1017,7 +1050,86 @@ class FailureImageLayoutTests(unittest.TestCase):
         section = self.render_tests_section(summary)
 
         self.assertEqual(self.embedded_images(section), [])
+        self.assertEqual(
+            self.unlocated_notes(section), ["- `//donner/example:image_tests`" + _UNLOCATED_NOTE]
+        )
         self.assertFalse((self.reports_root / "test-failures").exists())
+
+    def test_tests_command_pins_the_summary_format_it_parses(self):
+        # Explicit flags win over a user rc that changes the summary, its colors or its paths.
+        self.assertEqual(
+            [arg for arg in TESTS_ARGS if arg.split("=")[0] in (
+                "--test_summary", "--color", "--noprint_relative_test_log_paths")],
+            ["--test_summary=short", "--color=no", "--noprint_relative_test_log_paths"],
+        )
+
+    def test_failed_target_without_listed_logs_is_named(self):
+        self.write_run("donner/example/image_tests", {"diff_Case.png": b"diff"})
+
+        section = self.render_tests_section(_NO_LOG_SUMMARY.format(status="FAILED"))
+
+        self.assertEqual(self.embedded_images(section), [])
+        self.assertEqual(
+            self.unlocated_notes(section), ["- `//donner/example:image_tests`" + _UNLOCATED_NOTE]
+        )
+
+    def test_timed_out_target_without_listed_logs_is_named(self):
+        self.write_run("donner/example/image_tests", {"diff_Case.png": b"diff"})
+
+        section = self.render_tests_section(_NO_LOG_SUMMARY.format(status="TIMEOUT"))
+
+        self.assertEqual(
+            self.unlocated_notes(section), ["- `//donner/example:image_tests`" + _UNLOCATED_NOTE]
+        )
+
+    def test_timed_out_target_images_are_embedded(self):
+        self.write_run("donner/example/image_tests", {"diff_Case.png": b"diff"})
+
+        section = self.render_tests_section(_TIMEOUT_SUMMARY)
+
+        self.assertEqual(
+            self.embedded_images(section),
+            ["![diff_Case.png](reports/test-failures/donner/example/image_tests/diff_Case.png)"],
+        )
+        self.assertEqual(self.unlocated_notes(section), [])
+
+    def test_transitioned_configuration_log_is_harvested(self):
+        configuration = "aarch64-fastbuild-ST-641315aedb22"
+        target_logs = self.bazel_out / configuration / "testlogs" / "donner/example/image_tests"
+        outputs = target_logs / "test.outputs"
+        outputs.mkdir(parents=True)
+        (target_logs / "test.log").write_text("failure log\n")
+        (outputs / "diff_Case.png").write_bytes(b"transitioned diff")
+
+        section = self.render_tests_section(_TRANSITIONED_SUMMARY)
+
+        image = f"donner/example/image_tests/{configuration}/diff_Case.png"
+        self.assertEqual(
+            self.embedded_images(section),
+            [f"![{configuration}/diff_Case.png](reports/test-failures/{image})"],
+        )
+        self.assertEqual(self.unlocated_notes(section), [])
+        self.assertEqual(self.staged_bytes(f"reports/test-failures/{image}"), b"transitioned diff")
+
+    def test_outputs_resolving_outside_the_run_are_not_copied(self):
+        outside = self.testlogs.parent / "outside"
+        outside.mkdir(parents=True)
+        (outside / "diff_Leak.png").write_bytes(b"leak")
+        shard_1 = self.testlogs / _SHARDED_TARGET_DIR / "shard_1_of_2"
+        shard_1.mkdir(parents=True)
+        (shard_1 / "test.log").write_text("failure log\n")
+        (shard_1 / "test.outputs").symlink_to(outside, target_is_directory=True)
+        self.write_run(f"{_SHARDED_TARGET_DIR}/shard_2_of_2", {"diff_Ok.png": b"ok"})
+        (self.testlogs / _SHARDED_TARGET_DIR / "shard_2_of_2/test.outputs/diff_Link.png").symlink_to(
+            outside / "diff_Leak.png"
+        )
+
+        section = self.render_tests_section(_SHARDED_SUMMARY)
+
+        self.assertEqual(
+            self.embedded_images(section),
+            [f"![shard_2_of_2/diff_Ok.png]({_SHARDED_REPORT_PREFIX}/shard_2_of_2/diff_Ok.png)"],
+        )
 
     def test_parse_records_the_logs_listed_under_each_target(self):
         def parse(summary):
