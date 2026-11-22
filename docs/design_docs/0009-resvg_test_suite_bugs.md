@@ -73,7 +73,6 @@ requires the clipped render to equal the visible part of the rect blurred with r
 
 | Category                   | Test                                  | Reason (`withReason`)                                          |
 | -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
-| filters/feSpotLight        | complex-transform                     | Reference shades before skew and attenuates the cone edge differently |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
 | filters/filter             | subregion-and-primitiveUnits=objectBoundingBox-1/-2 | Reference disagreement: the PNG stores reduced alpha in the opaque interior; the golden clips the half-size primitive explicitly ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
@@ -226,6 +225,25 @@ current browsers use.
 | --- | --- | --- |
 | text/font-size | named-value | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
 | text/font-size | named-value-without-a-parent | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
+
+### Lighting under a skew (a maintainer decision)
+
+An informative note in Filter Effects 1 section 9.1 notes that some light source values cannot be
+mapped from the `primitiveUnits` coordinate space to the operating coordinate space, and the
+specification gives no rule for a light under a skewed transform, so neither convention is
+required. Section 11.4 also leaves the smoothing at a spot light's cone boundary to the
+user agent. Donner keeps its device-space convention: it shades the filtered alpha in the final
+raster and maps point and spot light positions there. The vendored references light the surface
+before the skew. For the diffuse and point-light rows, results.csv grades Firefox and Safari as
+matching the vendored PNG and Chrome as not. Keeping Donner's convention is a maintainer
+decision, so the two thresholds and the spot-light golden below record that decision, not an
+open defect.
+
+| Category | Test | Comparison |
+| --- | --- | --- |
+| filters/feDiffuseLighting | complex-transform | Vendored PNG at a 0.11 color threshold on the three lanes that run it; it shades the alpha ramp before the skew |
+| filters/fePointLight | complex-transform | Vendored PNG at a 0.11 color threshold on the three lanes that run it; it evaluates the point light before the skew |
+| filters/feSpotLight | complex-transform | Shared golden built on Donner's convention and qualified by an independent model (`resvg-complex-transform.png`, see the golden README) |
 
 ### Backend-difference goldens (text)
 

@@ -367,8 +367,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/feDiffuseLighting",
                 {
                     {"complex-transform.svg",
-                     Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
-                                           "Reference shades the alpha ramp before skew")},
+                     Params::WithThreshold(
+                         0.11f, kDefaultMismatchedPixels,
+                         "Larger threshold due to a convention the specification leaves open: "
+                         "Filter Effects 1 section 9.1 notes that light source values cannot be "
+                         "mapped to the operating coordinate space, and Donner keeps device-space "
+                         "lighting under the skew (maintainer decision); the reference "
+                         "shades the alpha ramp before the skew")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -449,8 +454,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/fePointLight",
                 {
                     {"complex-transform.svg",
-                     Params::WithThreshold(0.11f, kDefaultMismatchedPixels,
-                                           "Reference evaluates the point light before skew")},
+                     Params::WithThreshold(
+                         0.11f, kDefaultMismatchedPixels,
+                         "Larger threshold due to a convention the specification leaves open: "
+                         "Filter Effects 1 section 9.1 notes that light source values cannot be "
+                         "mapped to the operating coordinate space, and Donner keeps device-space "
+                         "lighting under the skew (maintainer decision); the reference "
+                         "evaluates the point light before the skew")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -468,8 +478,13 @@ INSTANTIATE_TEST_SUITE_P(
                     {"complex-transform.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-complex-transform.png")
-                         .withReason("Reference shades before skew and attenuates the cone "
-                                     "edge differently")},
+                         .withReason("Reference disagreement: the PNG shades before the skew and "
+                                     "smooths the cone edge differently; Filter Effects 1 leaves "
+                                     "both open (section 9.1 notes that light source values cannot "
+                                     "be mapped to the operating coordinate space, section 11.4 "
+                                     "leaves cone-edge smoothing to the user agent), and Donner "
+                                     "keeps device-space lighting under the skew (maintainer "
+                                     "decision)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
