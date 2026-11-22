@@ -74,9 +74,9 @@ Legend: `☐` Not started, `🧩` Stub only, `🟡` Implemented/tested (Rust com
       It translates the rectangle with the geometry when splitting the destination into tiles.
 - [x] `scan::path_aa::fillPath` intersects that rectangle with the viewport, clips the analytic
       edges, and scans their coverage once. The existing mask is still available for other coverage.
-- [x] Device clipping cancels overlapping opposed vertical boundary lines before using the convex
-      walker. The existing coverage arithmetic stays in place. The general walker scans only the
-      clipped row range when it is needed for a device rectangle.
+- [x] Device clipping cancels neighboring retraced vertical boundary lines, including across
+      the closing join, before using the convex walker. The general walker handles
+      mixed winding that remains on either boundary and scans only the clipped row range.
 - [x] The renderer's `FractionalClipKeepsShallowTriangleCoverage` compares the clipped SVG
       against an independently authored intersection. `CoincidentRectangularClipKeepsFilledPathCoverage`
       also checks transformed path clipping. Both use the canonical identity comparator.
