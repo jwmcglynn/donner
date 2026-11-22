@@ -9,8 +9,10 @@ after N seconds, this records the process table, the lane's processes and their 
 the open files of browser crash handlers that started during the lane, under DIR. It then stops
 the lane: its process tree and every process that still carries the run's environment variable,
 including processes that left the tree by starting a session of their own and being reparented.
-The stall path always exits 124, even when recording fails. SIGUSR1 starts the stall path at once,
-or as soon as the lane has been started.
+The stall path always exits 124, even when recording fails. A diagnostic command that cannot be
+started, for whatever reason, is recorded by name and reason in place of its output, and the
+remaining diagnostics are still written. SIGUSR1 starts the stall path at once, or as soon as the
+lane has been started.
 
 The guard turns a hang into a named failure. A Playwright run can wait without bound in browser
 teardown: the browser child counts as closed only once its process exits and every inherited
@@ -166,8 +168,20 @@ def _wait_bounded(process: subprocess.Popen, name: str) -> str:
         return f"{name}: no answer within {TOOL_TIMEOUT_SECONDS} s; abandoned, output partial\n"
 
 
+def _could_not_start(command: list[str], error: OSError) -> str:
+    """Logs and returns the note for a diagnostic command that could not be started.
+
+    Any OSError counts: a command that is not installed, not executable, or refused by a sandbox
+    is reported the same way, by name and reason.
+    """
+    note = f"{command[0]}: could not be started: {type(error).__name__}: {error}"
+    log(f"lane stall guard: {note}")
+    return note + "\n"
+
+
 def run_tool(command: list[str]) -> str:
-    """A diagnostic command's output, partial when it timed out, plus any note about how it ended.
+    """A diagnostic command's output, partial when it timed out, plus any note about how it ended,
+    or only a note when it could not be started.
 
     Output goes to a file rather than a pipe, so whatever it wrote is kept even when the command
     has to be abandoned.
@@ -176,8 +190,8 @@ def run_tool(command: list[str]) -> str:
         try:
             process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
                                        env=dict(os.environ, LC_ALL="C"))
-        except FileNotFoundError:
-            return f"{command[0]}: not available\n"
+        except OSError as error:
+            return _could_not_start(command, error)
         note = _wait_bounded(process, command[0])
         output.seek(0)
         return output.read().decode(errors="replace") + note
@@ -198,10 +212,12 @@ def _proc_tagged_pids(marker: str) -> set[int]:
 
 
 def _read_through_pipe(command: list[str]) -> str:
-    """A bounded command's standard output, read through a pipe so it never reaches a file."""
+    """A bounded command's standard output, read through a pipe so it never reaches a file, or
+    nothing when it could not be started."""
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except FileNotFoundError:
+    except OSError as error:
+        _could_not_start(command, error)
         return ""
     try:
         output, _ = process.communicate(timeout=TOOL_TIMEOUT_SECONDS)
@@ -250,7 +266,10 @@ def lane_members(root_pid: int, tag: str) -> tuple[str, list[dict], list[dict]]:
 
 
 def record_diagnostics(directory: Path, root_pid: int, tag: str, lane_seconds: float) -> None:
-    """Writes the process table, the lane's processes and their open files; prints the lane."""
+    """Writes the process table, the lane's processes and their open files; prints the lane.
+
+    Each file is written even when the command behind it, or an earlier one, cannot be started.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     table, rows, members = lane_members(root_pid, tag)
     (directory / "process-table.txt").write_text(table, encoding="utf-8")
