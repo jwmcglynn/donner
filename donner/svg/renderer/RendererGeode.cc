@@ -1050,6 +1050,14 @@ public:
     }
 
     std::lock_guard lock(mutex_);
+    RendererGeodePooledTexture pooled{std::move(texture)};
+    if (const auto handOut = handedOut_.find(IdentityOf(pooled.texture));
+        handOut != handedOut_.end()) {
+      pooled.acquiredFrame = handOut->second.acquiredFrame;
+      pooled.acquiredOrder = handOut->second.acquiredOrder;
+      handedOut_.erase(handOut);
+    }
+
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto existingBucket = buckets_.find(key);
     const uint64_t textureBytes = textureByteSize(key);
@@ -1058,16 +1066,8 @@ public:
     if (existingBucket != buckets_.end() &&
         existingBucket->second.free.size() >= kMaxPoolEntriesPerKey &&
         textureBytes * (existingBucket->second.free.size() + 1) > budgetBytes_ / 4) {
-      destroyPooledTexture(std::move(texture));
+      destroyPooledTexture(std::move(pooled.texture));
       return;
-    }
-
-    RendererGeodePooledTexture pooled{std::move(texture)};
-    if (const auto handOut = handedOut_.find(IdentityOf(pooled.texture));
-        handOut != handedOut_.end()) {
-      pooled.acquiredFrame = handOut->second.acquiredFrame;
-      pooled.acquiredOrder = handOut->second.acquiredOrder;
-      handedOut_.erase(handOut);
     }
 
     if (!evictPoolEntriesToFit(textureBytes)) {
