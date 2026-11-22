@@ -576,6 +576,7 @@ js_test(
     copy_data_to_bin = False,
     data = [
         "browser-presentation-regression.spec.ts-snapshots/basic-shapes-compositor-tile-overlay-darwin.png",
+        "incomplete-comparators.mjs",
         ":node_modules/@playwright/test",
         ":node_modules/pngjs",
         ":presentation_evidence_node",
@@ -1383,6 +1384,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = [
+        "incomplete-comparators.mjs",
         ":gpu_image_transfer_comparison_node",
         ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",

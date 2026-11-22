@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
+
+import {
+  assertCallerProtocolFilesUnchanged,
+  kCompletedReport,
+  writeCallerProtocolFiles,
+  writeIncompleteComparators,
+} from "./incomplete-comparators.mjs";
 
 // The page-free cases of browser-presentation-regression.spec.ts: they drive its capture, evidence
 // and diagnosis helpers with fake pages, synthetic PNGs and fixed records, so they need no browser
@@ -443,14 +450,15 @@ test("a frame account attach that fails or never settles still returns the captu
   }
 });
 
+// The Chromium golden that the spec's overlay cases compare against.
+const kOverlayGolden = path.join(
+  testDirectory,
+  "browser-presentation-regression.spec.ts-snapshots",
+  "basic-shapes-compositor-tile-overlay-darwin.png",
+);
+
 test("native overlay pixelmatch retains a one-pixel artwork regression", () => {
-  // The Chromium golden that the spec's overlay cases compare against.
-  const golden = path.join(
-    testDirectory,
-    "browser-presentation-regression.spec.ts-snapshots",
-    "basic-shapes-compositor-tile-overlay-darwin.png",
-  );
-  const baseline = readFileSync(golden);
+  const baseline = readFileSync(kOverlayGolden);
   const outputDir = path.join(
     mkdtempSync(path.join(process.env.TEST_UNDECLARED_OUTPUTS_DIR ?? scratchRoot, "overlay-")),
     "overlay-native-guard",
@@ -466,14 +474,17 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", () => {
     TESTBRIDGE_TEST_ONLY: "NoSuchSuite.NoSuchCase",
     UPDATE_GOLDEN_IMAGES_DIR: outputDir,
   };
-  assert.equal(compareOverlayBitmap(baseline, golden, outputDir, hostileEnvironment).matched, true);
+  assert.equal(
+    compareOverlayBitmap(baseline, kOverlayGolden, outputDir, hostileEnvironment).matched,
+    true,
+  );
 
   const oneChannel = PNG.sync.read(baseline);
   const roundedOffset = (274 * oneChannel.width + 279) * 4 + 1;
   oneChannel.data[roundedOffset] += 1;
   const accepted = compareOverlayBitmap(
     PNG.sync.write(oneChannel),
-    golden,
+    kOverlayGolden,
     outputDir,
     hostileEnvironment,
   );
@@ -482,7 +493,7 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", () => {
   oneChannel.data[roundedOffset] += 1;
   const rejected = compareOverlayBitmap(
     PNG.sync.write(oneChannel),
-    golden,
+    kOverlayGolden,
     outputDir,
     hostileEnvironment,
   );
@@ -494,7 +505,7 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", () => {
   changed.data.set([255, 0, 0, 255], artworkOffset);
   const comparison = compareOverlayBitmap(
     PNG.sync.write(changed),
-    golden,
+    kOverlayGolden,
     outputDir,
     hostileEnvironment,
   );
@@ -503,6 +514,33 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", () => {
     [comparison.failureActual, comparison.failureExpected, comparison.diff].every(existsSync),
   );
 });
+
+const kIncompleteComparators = writeIncompleteComparators(
+  mkdtempSync(path.join(scratchRoot, "incomplete-comparator-")),
+);
+
+for (const { behavior, comparator, expectedError } of kIncompleteComparators) {
+  test(`overlay comparison fails when its comparator ${behavior}`, () => {
+    const outputDir = mkdtempSync(
+      path.join(process.env.TEST_UNDECLARED_OUTPUTS_DIR ?? scratchRoot, "overlay-incomplete-"),
+    );
+    const caller = writeCallerProtocolFiles(outputDir);
+    // A completed report from an earlier run must not stand in for this one.
+    writeFileSync(path.join(outputDir, "gtest-result.json"), JSON.stringify(kCompletedReport));
+    const environment = {
+      ...process.env,
+      ...caller.settings,
+      GTEST_OUTPUT: `json:${caller.report}`,
+      DONNER_BROWSER_GOLDEN_COMPARE: comparator,
+    };
+    const captured = readFileSync(kOverlayGolden);
+    assert.throws(
+      () => compareOverlayBitmap(captured, kOverlayGolden, outputDir, environment),
+      expectedError,
+    );
+    assertCallerProtocolFilesUnchanged(caller.files);
+  });
+}
 
 test("zoom camera completion accepts retained scenes but rejects failed presentation", () => {
   const state = {
