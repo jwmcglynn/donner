@@ -13,14 +13,12 @@
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <array>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <span>
 #include <string_view>
-#include <type_traits>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
@@ -56,7 +54,7 @@ namespace donner::geode {
 
 class GeodeDevice;
 struct FilterResourceArena;
-/// Per-frame uniform scratch and pass bind-group cache state. Defined in
+/// Parameter scratch, texture views, and bind groups filter passes reuse across frames. Defined in
 /// GeodeFilterEngine.cc; the engine owns one instance across frames.
 struct FilterResourceCache;
 
@@ -139,38 +137,6 @@ public:
                                                    const gpu::TextureDescriptor& desc) = 0;
 };
 
-/// Runtime handles a filter execution's recorded commands reference, moved to whatever outlives
-/// those commands.
-struct RetainedFilterResources {
-  RetainedFilterResources() = default;
-  ~RetainedFilterResources() = default;
-
-  // Move-only, explicitly. The handles this holds are move-only, so a copy could never have
-  // worked; deleting it matters because a `std::deque` member advertises a copy constructor that
-  // fails only once instantiated, and its move is `noexcept` in one standard library but not
-  // another, so `std::vector` reallocation reached for that copy on one of them and not the other.
-  RetainedFilterResources(const RetainedFilterResources&) = delete;
-  RetainedFilterResources& operator=(const RetainedFilterResources&) = delete;
-
-  /// Construct by moving another instance's state.
-  /// @param other Source object.
-  RetainedFilterResources(RetainedFilterResources&& other) = default;
-
-  /// Replace this object's state by moving another instance.
-  /// @param other Source object.
-  /// @return This object after the move.
-  RetainedFilterResources& operator=(RetainedFilterResources&& other) = default;
-
-  std::deque<gpu::TextureView> textureViews;  //!< Views the commands attach to or sample.
-  std::deque<gpu::BindGroup> bindGroups;      //!< Bind groups the commands bind.
-};
-
-static_assert(!std::is_copy_constructible_v<RetainedFilterResources>,
-              "RetainedFilterResources owns move-only handles: a copy must be rejected here on "
-              "every standard library, not only on one whose containers reach for it");
-static_assert(std::is_move_constructible_v<RetainedFilterResources>,
-              "RetainedFilterResources is moved into the frame that outlives the execution");
-
 /**
  * Renderer-owned collection point for the command buffers one frame records.
  *
@@ -189,15 +155,6 @@ public:
 
   /// True when the frame refused an upload and must discard its recorded commands without loss.
   [[nodiscard]] virtual bool frameUploadRefused() const { return false; }
-
-  /// Keeps the handles a command buffer added here references alive until the frame submits.
-  ///
-  /// A submission re-validates every resource a recorded command names, so anything an execution
-  /// would otherwise drop when it finishes has to outlive the frame it recorded into rather than
-  /// the execution that recorded it.
-  ///
-  /// @param resources Handles the added command buffers reference; consumed.
-  virtual void retainUntilFrameSubmits(RetainedFilterResources resources) = 0;
 };
 
 /**
@@ -401,19 +358,30 @@ public:
                                 const Box2d* outputClipRegion = nullptr);
 
   /**
-   * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.
+   * Begin a new frame for this engine: rewind the parameter scratch cursor and destroy the cached
+   * texture views and bind groups no execution used since the previous call.
    *
-   * The renderer calls this once per frame from its own beginFrame, BEFORE
-   * the filter texture pool runs its stale-bucket eviction, and before any
-   * filter pass of the frame records. Uniform slots written after this call
-   * reuse stable (buffer, offset) pairs across frames. The cursor itself is
-   * mutex-guarded, but callers must still serialize one frame per device at
-   * a time: two sibling renderers drawing concurrently on the same device
-   * would alias uniform slots and rewind the cursor under recorded passes
-   * (the renderer's architecture already serializes the render worker per
-   * device).
+   * The renderer calls this from its own beginFrame, before any filter pass of the frame records,
+   * and only when no frame on the device is still unsubmitted: a recorded pass may read any
+   * parameter slot and bind any cached view or bind group until its frame submits. Parameter slots
+   * written after this call reuse stable (buffer, offset) pairs across frames, and a slot whose
+   * bytes did not change is not uploaded again. Views and bind groups are cached under the
+   * identities of the resources they name, so an unchanged frame that binds the same textures
+   * creates none. The state is mutex-guarded, but callers must still serialize one frame per
+   * device at a time: two sibling renderers drawing concurrently on the same device would alias
+   * parameter slots and rewind the cursor under recorded passes (the renderer's architecture
+   * already serializes the render worker per device).
    */
   void beginFrame();
+
+  /// Number of texture views and bind groups currently cached across frames.
+  struct CachedBindingCounts {
+    size_t textureViews = 0;  //!< Cached texture views.
+    size_t bindGroups = 0;    //!< Cached bind groups.
+  };
+
+  /// Counts of the views and bind groups the engine holds across frames, for tests.
+  CachedBindingCounts cachedBindingCountsForTesting() const;
 
   /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
   uint64_t retainedBufferBytes() const;
@@ -754,10 +722,8 @@ private:
 
   bool verbose_ = false;
 
-  /// Per-frame parameter scratch buffer and bump-allocated slot cursor (see
-  /// FilterResourceCache). Pass bind groups are still created per pass:
-  /// the pooled textures a pass binds rotate across frames, so their
-  /// identities are not stable cache keys.
+  /// Parameter scratch, texture views, and bind groups reused across frames (see
+  /// FilterResourceCache).
   std::unique_ptr<FilterResourceCache> resourceCache_;
   FilterExecutionMemory lastExecutionMemory_;
   uint32_t preferredTileExtent_ = 512;

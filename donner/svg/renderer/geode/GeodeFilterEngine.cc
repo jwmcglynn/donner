@@ -13,6 +13,7 @@
 #include <span>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -53,19 +54,40 @@
 
 namespace donner::geode {
 
-/// Reusable fixed-size parameter blocks. New blocks never depend on a previous arena's size,
-/// so admission bounds remain valid when other filters consume slots before execution.
+/**
+ * Engine-scoped GPU state that filter executions reuse across frames: parameter scratch blocks,
+ * and the texture views and bind groups filter passes bind.
+ *
+ * Parameter slots are bump-allocated from fixed-size blocks in recording order, and the cursor
+ * rewinds at each frame boundary, so an unchanged frame gives every pass the slot it had the frame
+ * before. Each block mirrors the bytes uploaded to it, and an upload whose bytes already sit in its
+ * slot is skipped. New blocks never depend on a previous arena's size, so admission bounds remain
+ * valid when other filters consume slots before execution.
+ *
+ * Views are keyed by the identity (slot and generation) of the texture they view, and bind groups
+ * by their whole descriptor: the layout and every bound view, buffer, offset, and size. A lookup
+ * returns only an object built from exactly the live resources the caller is binding; a texture
+ * destroyed and replaced in the same runtime slot carries a new generation and misses. Entries no
+ * execution used since the previous frame boundary are destroyed at the next one, the point at
+ * which every frame that recorded against them has submitted.
+ */
 struct FilterResourceCache {
   std::mutex mutex;
 
   struct RuntimeParameterSlot {
     const gpu::Buffer* buffer = nullptr;
     uint64_t offset = 0;
+    /// Index of the block holding the slot.
+    size_t block = 0;
   };
 
   struct RuntimeBlock {
     gpu::Buffer buffer;
     uint64_t size = 0;
+    /// The bytes successfully uploaded to \ref buffer, at their offsets.
+    std::vector<uint8_t> uploaded;
+    /// Per slot-aligned offset, how many bytes from that offset on \ref uploaded is known to hold.
+    std::vector<uint64_t> knownBytesAt;
   };
 
   RuntimeParameterSlot acquireRuntimeParameterSlot(GeodeDevice& device, size_t size) {
@@ -83,23 +105,171 @@ struct FilterResourceCache {
       if (!buffer.hasResult()) {
         return {};
       }
-      runtime.push_back({std::move(buffer).result(), bytes});
+      runtime.push_back({std::move(buffer).result(), bytes, std::vector<uint8_t>(bytes),
+                         std::vector<uint64_t>(bytes / kUniformOffsetAlignment, 0)});
       retainedBytes += bytes;
     }
-    RuntimeParameterSlot result{&runtime[runtimeIndex].buffer, runtimeCursor};
+    RuntimeParameterSlot result{&runtime[runtimeIndex].buffer, runtimeCursor, runtimeIndex};
     runtimeCursor += aligned;
     return result;
   }
 
+  /// Uploads \p data into \p slot unless the slot already holds exactly these bytes. False when
+  /// the upload fails, after which the block's contents count as unknown.
+  /// @param device Device owning the block. @param slot Slot to fill. @param data Bytes to hold.
+  bool writeRuntimeParameters(GeodeDevice& device, const RuntimeParameterSlot& slot,
+                              std::span<const uint8_t> data) {
+    std::lock_guard<std::mutex> lock(mutex);
+    RuntimeBlock& block = runtime[slot.block];
+    uint64_t& known = block.knownBytesAt[slot.offset / kUniformOffsetAlignment];
+    const auto held = block.uploaded.begin() + static_cast<std::ptrdiff_t>(slot.offset);
+    if (known >= data.size() && std::equal(data.begin(), data.end(), held)) {
+      return true;
+    }
+    if (device.runtimeDevice().writeBuffer(block.buffer, slot.offset, data).hasError()) {
+      // A failed write may have changed any of the range, which other slots' bytes overlap.
+      std::fill(block.knownBytesAt.begin(), block.knownBytesAt.end(), 0);
+      return false;
+    }
+    std::copy(data.begin(), data.end(), held);
+    known = std::max<uint64_t>(known, data.size());
+    return true;
+  }
+
+  /// A view of \p texture, cached across frames under the texture's identity. Null when the
+  /// runtime refuses it.
+  /// @param device Device owning \p texture. @param texture Live texture to view.
+  /// @param label Debug label used when the view is created; a hit keeps its original label.
+  const gpu::TextureView* view(GeodeDevice& device, const gpu::Texture& texture, RcString label) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto [it, inserted] =
+        views_.try_emplace(IdentityWord(texture.slotIndex(), texture.generation()));
+    if (inserted) {
+      gpu::Result<gpu::TextureView> created = device.runtimeDevice().createTextureView(
+          texture, gpu::TextureViewDescriptor{std::move(label)});
+      if (!created.hasResult()) {
+        views_.erase(it);
+        return nullptr;
+      }
+      it->second.view = std::move(created).result();
+    }
+    it->second.lastUsedFrame = frame_;
+    return &it->second.view;
+  }
+
+  /// A bind group over \p entries, cached across frames under its whole descriptor. Null when the
+  /// runtime refuses it.
+  /// @param device Device to create through. @param layout Layout the entries must match.
+  /// @param entries Bound resources. @param label Debug label used when the group is created.
+  const gpu::BindGroup* bindGroup(GeodeDevice& device, const gpu::BindGroupLayout& layout,
+                                  std::vector<gpu::BindGroupEntry> entries, RcString label) {
+    std::lock_guard<std::mutex> lock(mutex);
+    lookupKey_.clear();
+    lookupKey_.push_back(IdentityWord(layout.slotIndex(), layout.generation()));
+    for (const gpu::BindGroupEntry& entry : entries) {
+      AppendEntryWords(entry, lookupKey_);
+    }
+    auto it = bindGroups_.find(lookupKey_);
+    if (it == bindGroups_.end()) {
+      gpu::Result<gpu::BindGroup> created = device.runtimeDevice().createBindGroup(
+          gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)});
+      if (!created.hasResult()) {
+        return nullptr;
+      }
+      // No count here: the runtime counts the bind group it creates.
+      it = bindGroups_.emplace(lookupKey_, CachedBindGroup{std::move(created).result(), 0}).first;
+    }
+    it->second.lastUsedFrame = frame_;
+    return &it->second.group;
+  }
+
+  /// Rewinds the parameter cursor and destroys every view and bind group no execution used since
+  /// the previous call. Callers invoke it only when no frame that recorded filter work is still
+  /// unsubmitted.
   void beginFrame() {
     std::lock_guard<std::mutex> lock(mutex);
     runtimeIndex = 0;
     runtimeCursor = 0;
+    std::erase_if(views_, [&](const auto& entry) { return entry.second.lastUsedFrame != frame_; });
+    std::unordered_set<uint64_t> liveViews;
+    for (const auto& [unusedTexture, cached] : views_) {
+      liveViews.insert(IdentityWord(cached.view.slotIndex(), cached.view.generation()));
+    }
+    // A group naming a view that was just destroyed could never validate again.
+    std::erase_if(bindGroups_, [&](const auto& entry) {
+      return entry.second.lastUsedFrame != frame_ || !NamesOnlyViewsIn(entry.first, liveViews);
+    });
+    ++frame_;
+  }
+
+  /// Views and bind groups currently cached.
+  std::pair<size_t, size_t> cachedBindingCounts() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return {views_.size(), bindGroups_.size()};
   }
 
   uint64_t retainedBytes = 0;
 
 private:
+  enum class EntryKind : uint64_t { Buffer = 1, TextureView = 2, Sampler = 3 };
+
+  struct CachedView {
+    gpu::TextureView view;
+    uint64_t lastUsedFrame = 0;
+  };
+
+  struct CachedBindGroup {
+    gpu::BindGroup group;
+    uint64_t lastUsedFrame = 0;
+  };
+
+  struct KeyHash {
+    size_t operator()(const std::vector<uint64_t>& key) const {
+      uint64_t hash = 1469598103934665603ull;
+      for (uint64_t word : key) {
+        hash = (hash ^ word) * 1099511628211ull;
+      }
+      return static_cast<size_t>(hash);
+    }
+  };
+
+  static uint64_t IdentityWord(uint32_t slotIndex, uint32_t generation) {
+    return (uint64_t{slotIndex} << 32) | generation;
+  }
+
+  /// Appends a tag word (binding and kind) and the resource's identity, plus range for a buffer.
+  static void AppendEntryWords(const gpu::BindGroupEntry& entry, std::vector<uint64_t>& key) {
+    const auto tag = [&](EntryKind kind) {
+      return (uint64_t{entry.binding} << 8) | static_cast<uint64_t>(kind);
+    };
+    if (const auto* buffer = std::get_if<gpu::BufferBinding>(&entry.resource)) {
+      key.insert(key.end(), {tag(EntryKind::Buffer),
+                             IdentityWord(buffer->buffer.slotIndex(), buffer->buffer.generation()),
+                             buffer->offsetBytes, buffer->sizeBytes});
+    } else if (const auto* view = std::get_if<gpu::TextureViewBinding>(&entry.resource)) {
+      key.insert(key.end(), {tag(EntryKind::TextureView),
+                             IdentityWord(view->view.slotIndex(), view->view.generation())});
+    } else {
+      const auto& sampler = std::get<gpu::SamplerBinding>(entry.resource).sampler;
+      key.insert(key.end(), {tag(EntryKind::Sampler),
+                             IdentityWord(sampler.slotIndex(), sampler.generation())});
+    }
+  }
+
+  /// True when every view \p key binds is in \p liveViews.
+  static bool NamesOnlyViewsIn(const std::vector<uint64_t>& key,
+                               const std::unordered_set<uint64_t>& liveViews) {
+    // Word 0 is the layout; then each entry is a tag, an identity, and a buffer's range.
+    for (size_t index = 1; index < key.size();) {
+      const auto kind = static_cast<EntryKind>(key[index] & 0xff);
+      if (kind == EntryKind::TextureView && !liveViews.contains(key[index + 1])) {
+        return false;
+      }
+      index += kind == EntryKind::Buffer ? 4 : 2;
+    }
+    return true;
+  }
+
   static uint64_t align(size_t size) {
     // Every parameter payload is bounded below one block by the graph and primitive limits.
     UTILS_RELEASE_ASSERT(size <= svg::components::kGpuFilterParameterBlockBytes / 2);
@@ -110,6 +280,12 @@ private:
   std::deque<RuntimeBlock> runtime;
   size_t runtimeIndex = 0;
   uint64_t runtimeCursor = 0;
+  /// Frame boundaries passed so far; entries record the last one they were used after.
+  uint64_t frame_ = 0;
+  std::unordered_map<uint64_t, CachedView> views_;
+  std::unordered_map<std::vector<uint64_t>, CachedBindGroup, KeyHash> bindGroups_;
+  /// Reused for every lookup, so a hit allocates nothing.
+  std::vector<uint64_t> lookupKey_;
 };
 
 struct FilterResourceArena {
@@ -123,14 +299,6 @@ struct FilterResourceArena {
         chunkSubmittedHook_(chunkSubmittedHook),
         frameSink_(frameSink) {}
   ~FilterResourceArena() {
-    // A frame submits long after this execution ends, and its submission re-validates every
-    // resource the chunks name, so what they reference has to outlive the arena that made it.
-    if (frameSink_ != nullptr && framePendingChunks_ != 0) {
-      RetainedFilterResources retained;
-      retained.textureViews = std::move(textureViews_);
-      retained.bindGroups = std::move(bindGroups_);
-      frameSink_->retainUntilFrameSubmits(std::move(retained));
-    }
     for (auto& owned : textures_) {
       // A detached output left its record behind with a null handle; the caller owns it now.
       if (owned.texture.isValid()) {
@@ -256,64 +424,38 @@ struct FilterResourceArena {
     return {};
   }
 
-  /// A whole-texture view of \p texture, owned by this arena until the frame ends. Null when the
-  /// runtime refuses it.
-  /// @param texture Live runtime texture. @param label Debug label for the view.
+  /// A whole-texture view of \p texture from the engine's cache, which keeps it at least until
+  /// the frame recording it has submitted. Null when the runtime refuses it.
+  /// @param texture Live runtime texture. @param label Debug label for a newly created view; a
+  ///   cached view keeps the label it was created with, which only names a pass in diagnostics.
   const gpu::TextureView* createRuntimeTextureView(const gpu::Texture& texture, RcString label) {
-    // One view per named texture per frame, for the same reason the names themselves are reused.
-    // A hit keeps the label the view was opened with: the views are otherwise identical, and the
-    // label only names the pass in diagnostics.
-    for (const auto& [named, view] : viewByTexture_) {
-      if (named == &texture) {
-        return view;
-      }
-    }
-
-    gpu::Result<gpu::TextureView> view = device_.runtimeDevice().createTextureView(
-        texture, gpu::TextureViewDescriptor{std::move(label)});
-    if (!view.hasResult()) {
-      return nullptr;
-    }
-    textureViews_.push_back(std::move(view).result());
-    const gpu::TextureView* result = &textureViews_.back();
-    viewByTexture_.emplace_back(&texture, result);
-    return result;
+    return resourceCache_.view(device_, texture, std::move(label));
   }
 
   /// A parameter slot holding \p data for uniform or read-only storage binding. Null buffer when
   /// the scratch cannot be grown or the upload fails.
   ///
-  /// A pass cannot share the scratch the unmigrated passes bump-allocate from, because the runtime
-  /// cannot bind a backend buffer. It shares the runtime one instead: a buffer per pass would put
-  /// an allocation on every filter primitive of every frame.
+  /// Every pass shares the engine's scratch blocks: a buffer per pass would put an allocation on
+  /// every filter primitive of every frame. An unchanged slot is not uploaded again.
   /// @param data Bytes to upload.
   FilterResourceCache::RuntimeParameterSlot writeRuntimeParameterSlot(
       std::span<const uint8_t> data) {
     const FilterResourceCache::RuntimeParameterSlot slot =
         resourceCache_.acquireRuntimeParameterSlot(device_, data.size());
-    if (slot.buffer == nullptr ||
-        device_.runtimeDevice().writeBuffer(*slot.buffer, slot.offset, data).hasError()) {
+    if (slot.buffer == nullptr || !resourceCache_.writeRuntimeParameters(device_, slot, data)) {
       return {};
     }
     return slot;
   }
 
-  /// A bind group over \p entries, owned by this arena until the frame ends. Null when the
-  /// runtime refuses it.
+  /// A bind group over \p entries from the engine's cache, which keeps it at least until the
+  /// frame recording it has submitted. Null when the runtime refuses it.
   /// @param layout Layout the entries must match. @param entries Bound resources.
-  /// @param label Debug label for the bind group.
+  /// @param label Debug label for a newly created bind group.
   const gpu::BindGroup* createRuntimeBindGroup(const gpu::BindGroupLayout& layout,
                                                std::vector<gpu::BindGroupEntry> entries,
                                                RcString label) {
-    gpu::Result<gpu::BindGroup> bindGroup = device_.runtimeDevice().createBindGroup(
-        gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)});
-    if (!bindGroup.hasResult()) {
-      return nullptr;
-    }
-    // No count here: the runtime counts the bind group it creates, and counting again would
-    // report every migrated pass as building two.
-    bindGroups_.push_back(std::move(bindGroup).result());
-    return &bindGroups_.back();
+    return resourceCache_.bindGroup(device_, layout, std::move(entries), std::move(label));
   }
 
   /// Records one compute dispatch into this execution's runtime-owned command encoder.
@@ -531,14 +673,9 @@ private:
   bool executionFailed_ = false;
   bool submissionUncertain_ = false;
   bool forceRetain_ = false;
-  /// Deques rather than vectors: the accessors above hand out references into these, and a
-  /// vector would move them on growth.
+  /// A deque rather than a vector: the accessors above hand out references into it, and a vector
+  /// would move them on growth.
   std::deque<OwnedTexture> textures_;
-  std::deque<gpu::TextureView> textureViews_;
-  std::deque<gpu::BindGroup> bindGroups_;
-  /// Flat rather than hashed: a filter graph names a handful of textures, so a linear scan is
-  /// both smaller and faster than a hash table over that many entries.
-  std::vector<std::pair<const gpu::Texture*, const gpu::TextureView*>> viewByTexture_;
   uint64_t textureBytes = 0;
   /// Set once the output has been handed to the caller; see \ref detachTexture.
   bool detached_ = false;
@@ -1410,6 +1547,11 @@ void GeodeFilterEngine::beginFrame() {
   if (resourceCache_) {
     resourceCache_->beginFrame();
   }
+}
+
+GeodeFilterEngine::CachedBindingCounts GeodeFilterEngine::cachedBindingCountsForTesting() const {
+  const auto [views, bindGroups] = resourceCache_->cachedBindingCounts();
+  return CachedBindingCounts{views, bindGroups};
 }
 
 namespace {}  // namespace

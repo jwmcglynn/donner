@@ -455,6 +455,153 @@ TEST_F(GeodePerfTest, MigratedFilterPassesShareOneUniformScratch) {
                            "repeat render";
 }
 
+/// The element every filter fixture below filters, drawn here as an opacity group instead. Its
+/// composite blit is the one per-frame cost a filtered element shares with it; the filter passes
+/// that produce the filtered texture are not.
+constexpr std::string_view kOpacityGroupSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect x="10" y="10" width="80" height="80" fill="orange" opacity="0.5"/>
+</svg>
+)SVG";
+
+/// One filtered rect per filter primitive family, so each family's passes are measured alone.
+struct FilterFamilyFixture {
+  std::string_view name;  //!< Diagnostic name.
+  std::string_view svg;   //!< Document filtering one rect.
+};
+
+constexpr FilterFamilyFixture kFilterFamilyFixtures[] = {
+    {"colorMatrix", kOneColorMatrixSvg},
+    {"eightColorMatrices", kEightColorMatrixSvg},
+    {"gaussianBlurOfFillPaint", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f"><feGaussianBlur in="FillPaint" stdDeviation="3"/></filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+    {"dropShadow", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f"><feDropShadow dx="3" dy="2" stdDeviation="2" flood-color="navy"/></filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+    {"turbulenceDisplacement", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feTurbulence baseFrequency="0.07" numOctaves="2" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="12" xChannelSelector="R"
+                       yChannelSelector="G"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+    {"specularSpotLightComposite", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feSpecularLighting result="light" specularConstant="1.2" specularExponent="6">
+      <feSpotLight x="70" y="20" z="60" pointsAtX="40" pointsAtY="60" limitingConeAngle="25"/>
+    </feSpecularLighting>
+    <feComposite in="SourceGraphic" in2="light" operator="arithmetic" k2="1" k3="1"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+    {"diffuseDistantLightBlend", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feDiffuseLighting in="SourceAlpha" result="light" surfaceScale="3">
+      <feDistantLight azimuth="40" elevation="50"/>
+    </feDiffuseLighting>
+    <feBlend in="SourceGraphic" in2="light" mode="multiply"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+    {"floodOffsetMerge", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feFlood flood-color="teal" flood-opacity="0.5" result="wash"/>
+    <feOffset in="SourceGraphic" dx="4" dy="3" result="moved"/>
+    <feMerge><feMergeNode in="wash"/><feMergeNode in="moved"/></feMerge>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+    {"morphologyComponentTransfer", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feMorphology operator="dilate" radius="2"/>
+    <feComponentTransfer>
+      <feFuncR type="table" tableValues="0 0.5 1"/><feFuncA type="linear" slope="0.8"/>
+    </feComponentTransfer>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+    {"convolveMatrixTile", R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feConvolveMatrix order="3" kernelMatrix="0 -1 0 -1 5 -1 0 -1 0" x="10" y="10" width="20"
+                      height="20" result="cell"/>
+    <feTile in="cell"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG"},
+};
+
+/// Counters of an unchanged document's first and second frames on one renderer.
+struct FirstAndSecondFrame {
+  geode::GeodeCounters first;   //!< The frame that builds everything.
+  geode::GeodeCounters second;  //!< The unchanged repeat.
+};
+
+/// Renders \p svgSource twice on one renderer of \p device, each frame followed by a snapshot.
+/// @param svgSource Document to render. @param device Device to render on.
+FirstAndSecondFrame countersForFirstAndSecondRender(
+    std::string_view svgSource, const std::shared_ptr<geode::GeodeDevice>& device) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(svgSource, sink);
+  if (parsed.hasError()) {
+    ADD_FAILURE() << "ParseSVG failed: " << parsed.error().reason;
+    return {};
+  }
+  SVGDocument document = std::move(parsed.result());
+  RendererGeode renderer(device);
+  FirstAndSecondFrame frames;
+  frames.first = renderAndCaptureCounters(renderer, document);
+  frames.second = renderAndCaptureCounters(renderer, document);
+  return frames;
+}
+
+/// An unchanged frame re-records every filter pass, but uploads and binds nothing new for them.
+///
+/// Each pass's parameters land in the slot they had the frame before, so an upload of the same
+/// bytes is skipped; and the texture pool hands every pass the textures it had the frame before,
+/// so each pass finds its bind group, and the views it binds, already built. A filtered element
+/// then costs an unchanged frame exactly what an opacity group costs: the composite blit of its
+/// result, which is not a filter pass.
+TEST_F(GeodePerfTest, UnchangedFilterPassesUploadAndBindNothing) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const FirstAndSecondFrame composite = countersForFirstAndSecondRender(kOpacityGroupSvg, device);
+  printCounters("OpacityGroup (frame2)", composite.second);
+  for (const FilterFamilyFixture& fixture : kFilterFamilyFixtures) {
+    SCOPED_TRACE(fixture.name);
+    const FirstAndSecondFrame filtered = countersForFirstAndSecondRender(fixture.svg, device);
+    printCounters(std::string(fixture.name).append(" (frame2)").c_str(), filtered.second);
+
+    // Premise: the first frame recorded filter passes, each of which binds a group.
+    EXPECT_GT(filtered.first.bindgroupCreates, composite.first.bindgroupCreates);
+    EXPECT_EQ(filtered.second.textureCreates, 0u);
+    EXPECT_EQ(filtered.second.bufferWrites, composite.second.bufferWrites)
+        << "an unchanged filter pass uploaded its parameters again";
+    EXPECT_EQ(filtered.second.bindgroupCreates, composite.second.bindgroupCreates)
+        << "an unchanged filter pass built its bind group again";
+  }
+}
+
 TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
   auto device = sharedDevice();
   ASSERT_TRUE(device);

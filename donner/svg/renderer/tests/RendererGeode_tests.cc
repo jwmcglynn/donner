@@ -1555,6 +1555,145 @@ TEST_F(RendererGeodeTest, FilterTilesPreservePixelsAcrossSamplingAndClipBoundari
   }
 }
 
+/// A document whose one filter, made of \p primitives, covers three overlapping shapes.
+/// @param primitives Filter primitive markup.
+std::string FilteredShapesSvg(std::string_view primitives) {
+  return std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="80"
+      viewBox="0 0 96 80"><defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0"
+      width="96" height="80">)svg") +
+         std::string(primitives) +
+         R"svg(</filter></defs><g filter="url(#f)"><rect x="8" y="10" width="40" height="44"
+      fill="#3973ad"/><circle cx="58" cy="44" r="22" fill="#b75d23" opacity="0.6"/><rect x="30"
+      y="50" width="50" height="18" fill="#31ba55"/></g></svg>)svg";
+}
+
+/// Parses \p source, failing the test when it does not parse cleanly.
+/// @param source SVG document source.
+std::optional<SVGDocument> ParseFilterDocument(const std::string& source) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_TRUE(parsed.hasResult());
+  EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
+  if (!parsed.hasResult()) {
+    return std::nullopt;
+  }
+  return std::move(parsed.result());
+}
+
+/// \p source rendered once on a device of its own, whose filter engine starts with nothing cached.
+/// @param source SVG document source.
+RendererBitmap RenderOnFreshDevice(const std::string& source) {
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  EXPECT_THAT(device, testing::NotNull());
+  std::optional<SVGDocument> document = ParseFilterDocument(source);
+  if (!device || !document) {
+    return {};
+  }
+  RendererGeode renderer(device);
+  renderer.draw(*document);
+  return renderer.takeSnapshot();
+}
+
+// Filter passes reuse their parameter slots across frames and skip uploading bytes a slot already
+// holds. A document whose filter has the same passes with other parameters lands in the same slots
+// and binds the same textures, so its passes reuse every bind group; each changed parameter still
+// has to reach the GPU. Both blur deviations stay below the box-blur threshold of 2, so the edit
+// keeps the pass structure.
+TEST_F(RendererGeodeTest, ReusedFilterSlotsUploadEditedParameters) {
+  const std::string original = FilteredShapesSvg(
+      R"(<feGaussianBlur stdDeviation="1.5" result="soft"/>
+         <feOffset dx="3" dy="-2" result="moved"/>
+         <feDropShadow in="soft" dx="2" dy="3" stdDeviation="1" flood-color="#802040"/>
+         <feComposite in2="moved" operator="arithmetic" k1="0.2" k2="0.5" k3="0.5"/>)");
+  const std::string edited = FilteredShapesSvg(
+      R"(<feGaussianBlur stdDeviation="1.8" result="soft"/>
+         <feOffset dx="-4" dy="1" result="moved"/>
+         <feDropShadow in="soft" dx="-1" dy="2" stdDeviation="1.6" flood-color="#208040"/>
+         <feComposite in2="moved" operator="arithmetic" k1="0.1" k2="0.7" k3="0.4"/>)");
+  std::optional<SVGDocument> originalDocument = ParseFilterDocument(original);
+  std::optional<SVGDocument> editedDocument = ParseFilterDocument(edited);
+  ASSERT_TRUE(originalDocument && editedDocument);
+
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  renderer.draw(*originalDocument);
+  const RendererBitmap first = renderer.takeSnapshot();
+  renderer.draw(*originalDocument);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), first,
+                                       "reused_filter_slots_unchanged",
+                                       editor::tests::PixelmatchIdentityParams());
+  const geode::GeodeFilterEngine::CachedBindingCounts settled =
+      device->filterEngine().cachedBindingCountsForTesting();
+
+  renderer.draw(*editedDocument);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderOnFreshDevice(edited),
+                                       "reused_filter_slots_edited",
+                                       editor::tests::PixelmatchIdentityParams());
+  // Premise: the edit built no new binding, so only the uploads can carry it.
+  const geode::GeodeFilterEngine::CachedBindingCounts afterEdit =
+      device->filterEngine().cachedBindingCountsForTesting();
+  EXPECT_EQ(afterEdit.textureViews, settled.textureViews);
+  EXPECT_EQ(afterEdit.bindGroups, settled.bindGroups);
+  EXPECT_FALSE(device->isDeviceLost());
+}
+
+// Cached filter views and bind groups are found by the identities of the textures and buffers they
+// name. A frame that hands the same textures to other passes, and a frame whose textures were
+// destroyed and replaced, possibly in the same runtime slots, must each render exactly what a
+// device with nothing cached renders, and entries naming destroyed textures must not outlive the
+// next frame boundary.
+TEST_F(RendererGeodeTest, CachedFilterBindingsFollowTextureReuseAndReplacement) {
+  const std::string blurred = FilteredShapesSvg(
+      R"(<feGaussianBlur stdDeviation="2" result="soft"/>
+         <feOffset dx="3" dy="2"/>
+         <feComposite in2="soft" operator="arithmetic" k2="0.6" k3="0.6"/>)");
+  const std::string morphed = FilteredShapesSvg(
+      R"(<feMorphology operator="dilate" radius="2" result="thick"/>
+         <feColorMatrix type="hueRotate" values="90"/>
+         <feMerge><feMergeNode in="thick"/><feMergeNode/></feMerge>)");
+  std::optional<SVGDocument> blurredDocument = ParseFilterDocument(blurred);
+  std::optional<SVGDocument> morphedDocument = ParseFilterDocument(morphed);
+  ASSERT_TRUE(blurredDocument && morphedDocument);
+  const RendererBitmap blurredReference = RenderOnFreshDevice(blurred);
+  const RendererBitmap morphedReference = RenderOnFreshDevice(morphed);
+
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  const auto drawAndCompare = [&](SVGDocument& document, const RendererBitmap& reference,
+                                  std::string_view name) {
+    SCOPED_TRACE(name);
+    renderer.draw(document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference,
+                                         "cached_filter_bindings_" + std::string(name),
+                                         editor::tests::PixelmatchIdentityParams());
+    EXPECT_FALSE(device->isDeviceLost());
+  };
+
+  drawAndCompare(*blurredDocument, blurredReference, "blurred_first");
+  const geode::GeodeFilterEngine::CachedBindingCounts blurredOnly =
+      device->filterEngine().cachedBindingCountsForTesting();
+  ASSERT_GT(blurredOnly.bindGroups, 0u);
+
+  // The other graph takes the same pooled textures in different roles, then the first takes them
+  // back.
+  drawAndCompare(*morphedDocument, morphedReference, "morphed_on_reused_textures");
+  drawAndCompare(*blurredDocument, blurredReference, "blurred_after_reuse");
+
+  // Destroying every pooled texture makes the next frame create new ones, which the runtime may
+  // place in the slots just freed.
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  drawAndCompare(*blurredDocument, blurredReference, "blurred_on_replaced_textures");
+  drawAndCompare(*blurredDocument, blurredReference, "blurred_settled");
+
+  // Only the last frame's bindings remain: the ones naming destroyed or unused textures are gone.
+  const geode::GeodeFilterEngine::CachedBindingCounts settled =
+      device->filterEngine().cachedBindingCountsForTesting();
+  EXPECT_EQ(settled.textureViews, blurredOnly.textureViews);
+  EXPECT_EQ(settled.bindGroups, blurredOnly.bindGroups);
+}
+
 TEST_F(RendererGeodeTest, SettledFilterFramesReuseParameterScratch) {
   for (const bool replaceOpenFrame : {false, true}) {
     SCOPED_TRACE(replaceOpenFrame);
