@@ -11,8 +11,10 @@ the lane: its process tree and every process that still carries the run's enviro
 including processes that left the tree by starting a session of their own and being reparented.
 The stall path always exits 124, even when recording fails. A diagnostic command that cannot be
 started, for whatever reason, is recorded by name and reason in place of its output, and the
-remaining diagnostics are still written. SIGUSR1 starts the stall path at once, or as soon as the
-lane has been started.
+remaining diagnostics are still written; the environment listing that finds tagged processes is
+only logged, never written, because environments can hold secrets. While the lane is stopped, a
+process snapshot that could not be taken in full counts as failed. SIGUSR1 starts the stall path
+at once, or as soon as the lane has been started.
 
 The guard turns a hang into a named failure. A Playwright run can wait without bound in browser
 teardown: the browser child counts as closed only once its process exits and every inherited
@@ -69,6 +71,10 @@ PS_COLUMNS = "pid=,ppid=,pgid=,stat=,etime=,rss=,lstart=,comm="
 _LSTART_WORDS = 5
 # `ps` elapsed times are whole seconds; this covers their truncation and the snapshot's duration.
 START_SLACK_SECONDS = 2
+
+
+class IncompleteSnapshot(Exception):
+    """A process snapshot whose process table or environment listing did not run."""
 
 
 class StallRequested(Exception):
@@ -211,14 +217,14 @@ def _proc_tagged_pids(marker: str) -> set[int]:
             if entry.name.isdigit() and marker.encode() in _environment_of(entry)}
 
 
-def _read_through_pipe(command: list[str]) -> str:
+def _read_through_pipe(command: list[str]) -> str | None:
     """A bounded command's standard output, read through a pipe so it never reaches a file, or
-    nothing when it could not be started."""
+    None when it could not be started."""
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError as error:
         _could_not_start(command, error)
-        return ""
+        return None
     try:
         output, _ = process.communicate(timeout=TOOL_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -230,39 +236,48 @@ def _read_through_pipe(command: list[str]) -> str:
     return output.decode(errors="replace")
 
 
-def _ps_tagged_pids(marker: str) -> set[int]:
-    """Tagged processes from `ps -E`, which appends each environment to the command. Environment
-    text can hold secrets, so it is read through a pipe and never written anywhere."""
-    rows = (line.split() for line in
-            _read_through_pipe(["ps", "-A", "-ww", "-E", "-o", "pid=,command="]).splitlines())
+def _ps_tagged_pids(marker: str) -> set[int] | None:
+    """Tagged processes from `ps -E`, which appends each environment to the command, or None when
+    `ps` could not be started. Environment text can hold secrets, so it is read through a pipe
+    and never written anywhere."""
+    listing = _read_through_pipe(["ps", "-A", "-ww", "-E", "-o", "pid=,command="])
+    if listing is None:
+        return None
+    rows = (line.split() for line in listing.splitlines())
     return {int(fields[0]) for fields in rows
             if fields and fields[0].isdigit() and marker in fields[1:]}
 
 
-def tagged_pids(tag: str) -> set[int]:
-    """Processes whose environment carries this run's tag, excluding the guard itself."""
+def tagged_pids(tag: str) -> set[int] | None:
+    """Processes whose environment carries this run's tag, excluding the guard itself, or None
+    when the environment listing could not run."""
     marker = f"{TAG_VARIABLE}={tag}"
     if Path("/proc/self/environ").exists():
         pids = _proc_tagged_pids(marker)
     else:
         pids = _ps_tagged_pids(marker)
-    pids.discard(os.getpid())
+    if pids is not None:
+        pids.discard(os.getpid())
     return pids
 
 
-def lane_members(root_pid: int, tag: str) -> tuple[str, list[dict], list[dict]]:
-    """A fresh process table, its rows, and the lane's members in it.
+def lane_members(root_pid: int, tag: str) -> tuple[str, list[dict], list[dict], bool]:
+    """A fresh process table, its rows, the lane's members in it, and whether it is complete.
 
     Members are the root's process tree plus every other process carrying the run's tag. The
     tag is read just before the table, so a pid is used only within moments of being observed.
+    The snapshot is complete when the environment listing ran and the table lists the root: the
+    root is the guard's unreaped child, so every table that really ran lists it.
     """
     tagged = tagged_pids(tag)
     table = run_tool(["ps", "-A", "-ww", "-o", PS_COLUMNS])
     rows = parse_process_table(table)
     tree = lane_tree(rows, root_pid)
     in_tree = {row["pid"] for row in tree}
-    members = tree + [row for row in rows if row["pid"] in tagged and row["pid"] not in in_tree]
-    return table, rows, members
+    members = tree + [row for row in rows
+                      if row["pid"] in (tagged or set()) and row["pid"] not in in_tree]
+    complete = tagged is not None and any(row["pid"] == root_pid for row in rows)
+    return table, rows, members, complete
 
 
 def record_diagnostics(directory: Path, root_pid: int, tag: str, lane_seconds: float) -> None:
@@ -271,7 +286,7 @@ def record_diagnostics(directory: Path, root_pid: int, tag: str, lane_seconds: f
     Each file is written even when the command behind it, or an earlier one, cannot be started.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    table, rows, members = lane_members(root_pid, tag)
+    table, rows, members, _ = lane_members(root_pid, tag)
     (directory / "process-table.txt").write_text(table, encoding="utf-8")
     known = {row["pid"] for row in members}
     watched = members + [row for row in detached_helpers(rows, lane_seconds)
@@ -326,16 +341,19 @@ def signal_lane(root_pid: int, tag: str, signum: int, clock: Clock,
     """Sends `signum` to the lane's group and to each member of a fresh snapshot.
 
     The root is the guard's unreaped child, so neither its pid nor its group can be reused yet.
-    Other pids come from a snapshot taken here. If that snapshot fails, the group has still been
-    signalled and the members of `previous`, the last snapshot that worked, are signalled
-    instead. Returns the pids it signalled one by one.
+    Other pids come from a snapshot taken here. If that snapshot fails or is incomplete (its
+    process table or environment listing did not run), the group has still been signalled and
+    the members of `previous`, the last snapshot that worked, are signalled instead. Returns the
+    pids it signalled one by one.
     """
     try:
         os.killpg(root_pid, signum)
     except (ProcessLookupError, PermissionError):
         pass
     try:
-        _, _, members = lane_members(root_pid, tag)
+        _, _, members, complete = lane_members(root_pid, tag)
+        if not complete:
+            raise IncompleteSnapshot("the process table or environment listing did not run")
         targets = signal_targets(members, root_pid, clock.elapsed())
     except Exception as error:  # Snapshot failures must not skip the signals below.
         log(f"lane stall guard: process snapshot failed ({type(error).__name__}: {error}); "

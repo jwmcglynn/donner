@@ -238,7 +238,7 @@ class StopLaneTest(unittest.TestCase):
     def test_a_failed_snapshot_before_sigkill_still_kills_the_lane(self):
         lane = FakeLane()
         members = [{"pid": lane.pid, "elapsed": "00:30"}, {"pid": 7, "elapsed": "00:20"}]
-        snapshots = [("table", members, members), RuntimeError("ps failed")]
+        snapshots = [("table", members, members, True), RuntimeError("ps failed")]
         with mock.patch.object(lane_stall_guard, "lane_members", side_effect=snapshots), \
                 mock.patch.object(lane_stall_guard.os, "killpg") as killpg, \
                 mock.patch.object(lane_stall_guard.os, "kill") as kill, \
@@ -250,6 +250,52 @@ class StopLaneTest(unittest.TestCase):
                                                mock.call(7, signal.SIGKILL)])
         self.assertIn("process snapshot failed (RuntimeError: ps failed)",
                       log.call_args_list[0].args[0])
+
+
+class SnapshotFallbackTest(unittest.TestCase):
+    """A stop-path snapshot that could not be taken in full falls back to the previous one."""
+
+    STARTED = "Sat Nov 14 07:31:57 2026"
+    # The root and a detached member that only the snapshot reaches, never the group signal.
+    TABLE = (f"{FakeLane.pid} 1 {FakeLane.pid} S 00:30 100 {STARTED} python3\n"
+             f"7 1 7 S 00:20 100 {STARTED} python3\n")
+
+    def stop(self, tagged_pids, popen):
+        with mock.patch.object(lane_stall_guard, "tagged_pids", side_effect=tagged_pids), \
+                mock.patch.object(lane_stall_guard.subprocess, "Popen", side_effect=popen), \
+                mock.patch.object(lane_stall_guard.os, "killpg"), \
+                mock.patch.object(lane_stall_guard.os, "kill") as kill, \
+                mock.patch.object(lane_stall_guard, "log") as log:
+            lane_stall_guard.stop_lane(FakeLane(), "tag",
+                                       lane_stall_guard.Clock(monotonic=0, wall=0))
+        return kill.call_args_list, [call.args[0] for call in log.call_args_list]
+
+    def table_popen(self, failures):
+        """Popen that prints TABLE for the process table, or raises the next of `failures`."""
+        real_popen = subprocess.Popen
+        failures = list(failures)
+
+        def popen(command, *args, **kwargs):
+            if failures and failures.pop(0) is not None:
+                raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+            return real_popen([sys.executable, "-c",
+                               f"import sys; sys.stdout.write({self.TABLE!r})"], *args, **kwargs)
+        return popen
+
+    def test_a_process_table_that_cannot_start_before_sigkill_kills_the_previous_members(self):
+        kills, logged = self.stop([{7}, {7}], self.table_popen([None, "fail"]))
+        self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
+        self.assertIn("lane stall guard: ps: could not be started: OSError: "
+                      f"[Errno {errno.EAGAIN}] Resource temporarily unavailable", logged)
+        self.assertTrue(any("process snapshot failed (IncompleteSnapshot" in line
+                            for line in logged), logged)
+
+    def test_an_environment_listing_that_cannot_start_before_sigkill_kills_the_previous_members(
+            self):
+        kills, logged = self.stop([{7}, None], self.table_popen([None, None]))
+        self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
+        self.assertTrue(any("process snapshot failed (IncompleteSnapshot" in line
+                            for line in logged), logged)
 
 
 class DiagnosticToolTest(unittest.TestCase):
@@ -301,10 +347,10 @@ class DiagnosticToolTest(unittest.TestCase):
              "open-files.txt": "no lane processes\n"})
         self.assertIn(f"lane stall guard: {note}", logged)
 
-    def test_an_environment_listing_that_cannot_start_finds_no_tagged_processes(self):
+    def test_an_environment_listing_that_cannot_start_is_told_apart_from_finding_none(self):
         with mock.patch.object(lane_stall_guard.subprocess, "Popen", side_effect=self.ERROR), \
                 mock.patch.object(lane_stall_guard, "log") as log:
-            self.assertEqual(lane_stall_guard._ps_tagged_pids("marker"), set())
+            self.assertIsNone(lane_stall_guard._ps_tagged_pids("marker"))
         log.assert_called_once_with(f"lane stall guard: {start_failure_note('ps', self.ERROR)}")
 
 
