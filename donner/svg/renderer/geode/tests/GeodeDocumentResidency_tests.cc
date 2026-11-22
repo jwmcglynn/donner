@@ -92,6 +92,17 @@ constexpr std::string_view kRepeatedTextSvg = R"(
     <use href="#words" y="100"/>
   </svg>)";
 
+/// One path stroked through `<use>` with four stroke styles, so the path keeps four stroke
+/// outlines, each with residence of its own.
+constexpr std::string_view kStrokeStylesSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <defs><path id="p" d="M20 40 C60 0 120 80 180 30" fill="none"/></defs>
+    <use href="#p" stroke="#000" stroke-width="2"/>
+    <use href="#p" y="40" stroke="#c00" stroke-width="6"/>
+    <use href="#p" y="80" stroke="#0a0" stroke-width="4" stroke-dasharray="8,4"/>
+    <use href="#p" y="120" stroke="#00c" stroke-width="4" stroke-linecap="round"/>
+  </svg>)";
+
 /// Hermetic test fonts, relative to the runfiles root, so glyph identity does not depend on the
 /// host's installed fonts.
 constexpr std::string_view kFontsRunfilesPath = "third_party/resvg-test-suite/fonts";
@@ -477,6 +488,47 @@ TEST_F(GeodeDocumentResidencyTest, ADeviceThatGoesStopsCountingAgainstTheDocumen
   // the second device's slots; they must not keep its residence charged to the document.
   ASSERT_THAT(thumbnails.renderElement(*box, kThumbnailSizePx).empty(), IsFalse());
   EXPECT_THAT(budget->residentBytes(), Eq(firstShare));
+}
+
+/// A path's stroke outlines are charged to the document's cache budget and released when its
+/// geometry changes; their residence on a device that goes stops counting against the document,
+/// and the rest is released with the document.
+TEST_F(GeodeDocumentResidencyTest, StrokeOutlinesGoWithTheirPathDeviceAndDocument) {
+  const int64_t firstBaseline = first_->liveResidentBytesForTesting();
+  {
+    SVGDocument document = ParseShapes(kStrokeStylesSvg);
+    RendererGeode onFirst(first_);
+    onFirst.draw(document);
+    const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+    ASSERT_THAT(budget, NotNull());
+    const uint64_t outlineBytes = budget->cacheBytes();
+    const uint64_t firstShare = budget->residentBytes();
+    ASSERT_THAT(outlineBytes, Gt(0u)) << "the four stroke outlines must be charged to the document";
+    ASSERT_THAT(firstShare, Gt(0u));
+    ASSERT_THAT(first_->liveResidentBytesForTesting(), Gt(firstBaseline));
+
+    {
+      RendererGeode onSecond(second_);
+      onSecond.draw(document);
+    }
+    ASSERT_THAT(budget->residentBytes(), Gt(firstShare));
+    second_.reset();
+    onFirst.draw(document);
+    EXPECT_THAT(budget->residentBytes(), Eq(firstShare))
+        << "the stroke residence of a device that went must stop counting against the document";
+    EXPECT_THAT(budget->cacheBytes(), Eq(outlineBytes))
+        << "an unchanged frame keeps every outline it already cached, and caches nothing more";
+
+    // An emptied path has no outline left to cache, so every byte it charged must come back.
+    std::optional<SVGElement> path = document.querySelector("#p");
+    ASSERT_TRUE(path.has_value());
+    path->setAttribute("d", "");
+    onFirst.draw(document);
+    EXPECT_THAT(budget->cacheBytes(), Eq(0u))
+        << "a geometry change must release every stroke outline the path cached";
+  }
+  EXPECT_THAT(first_->liveResidentBytesForTesting(), Eq(firstBaseline))
+      << "the document's stroke residence must be released with the document";
 }
 
 TEST_F(GeodeDocumentResidencyTest, ADocumentBudgetRefusalRecoversWhenTheDeviceHoldingItGoes) {
