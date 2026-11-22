@@ -969,6 +969,9 @@ def _gatekeeper_source_violations(workflow):
          _with_key(comparison, "fetch-depth", 8) == "0" and
          _with_key(comparison, "ref", 8) is None and
          _with_key(comparison, "repository", 8) is None, "comparison checkout escaped its path"),
+        (_with_key(comparison, "sparse-checkout", 8) in ("'!/*'", '"!/*"') and
+         _with_key(comparison, "sparse-checkout-cone-mode", 8) == "false" and
+         _with_key(comparison, "filter", 8) is None, "comparison checkout must fetch history without PR files"),
         (all(_with_key(step, key, 8) == "false" for step in (source, comparison)
              for key in ("persist-credentials", "submodules", "lfs")),
          "admission checkout enables credentials, submodules or LFS"),
@@ -4881,6 +4884,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 ('python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only',
                  "python3 tools/ci/gatekeeper.py docs-only"),
                 ("uses: ./.github/actions/pr-trust", "uses: ./pr-input/.github/actions/pr-trust"),
+                ("fetch-depth: 0", "fetch-depth: 1"),
+                ("sparse-checkout: '!/*'", "sparse-checkout: '/*'"),
+                ("sparse-checkout: '!/*'\n          sparse-checkout-cone-mode: false",
+                 "sparse-checkout: '!/*'\n          sparse-checkout-cone-mode: true"),
+                ("path: pr-input", "path: pr-input\n          filter: tree:0"),
                 ("persist-credentials: false", "persist-credentials: true"),
             ):
                 with self.subTest(mutation=new):
