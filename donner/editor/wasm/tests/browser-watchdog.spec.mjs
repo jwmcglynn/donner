@@ -663,8 +663,8 @@ async function superviseWithAnchorError() {
     const child = originalSpawn.call(this, command, args, ...rest);
     if (args?.[0]?.endsWith("browser-watchdog-anchor.mjs")) {
       anchor = child;
-      // The driver never starts: this anchor fails before launch. The error is emitted before any
-      // I/O callback runs, so it always precedes the anchor's ready message.
+      // The driver never starts: this anchor fails before launching it. The error is emitted on
+      // the next tick, after `supervise` has subscribed to the anchor's events.
       child.send = () => true;
       process.nextTick(() => child.emit("error", new Error("simulated anchor failure")));
     }
@@ -689,6 +689,7 @@ async function superviseWithAnchorError() {
 test("an unexpected signal-zero probe failure cannot replace a rejected driver result", async () => {
   const listeners = ["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal));
   const { error, anchorPid, reportFile } = await superviseWithAnchorError();
+  assert.ok(anchorPid > 0, "the anchor spawn was intercepted");
   assert.equal(error?.message, "simulated anchor failure", "the driver's own failure is the result");
   const report = JSON.parse(fs.readFileSync(reportFile, "utf8"));
   assert.equal(report.reason, kUnverifiedProbeReason);
