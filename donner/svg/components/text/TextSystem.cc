@@ -162,11 +162,9 @@ LanguageTags AuthoredLanguageTags(std::string_view value) {
   if (!length) {
     return {};
   }
-  LanguageTags tags{};
-  unsigned count = tags.size();
   const char* start = normalized.data();
-  if (ComplexLanguageTags(start, start + *length, &count, tags.data())) {
-    return tags;
+  if (const auto index = ComplexLanguageIndex(start, start + *length)) {
+    return kComplexLanguageOutcomes[index];
   }
   return PrimaryLanguageTags(std::string_view(start, *length));
 }

@@ -384,6 +384,8 @@ public:
    *   BackgroundAlpha read transparent black. Tiled execution copies from it, so it needs
    *   `CopySrc` usage. The caller owns it for the call.
    * @param backdropDesc Descriptor \p backdrop was allocated with; ignored without \p backdrop.
+   * @param outputClipRegion Optional final clip region in the same coordinates as \p filterRegion.
+   *   A renderer may use a wider working region for intermediate primitives of a single effect.
    * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
   FilterExecutionResult execute(const svg::components::FilterGraph& graph,
@@ -395,7 +397,8 @@ public:
                                 std::optional<FilterTilePlan> admittedPlan = std::nullopt,
                                 FrameCommandBufferSink* frameSink = nullptr,
                                 const gpu::Texture* backdrop = nullptr,
-                                const gpu::TextureDescriptor* backdropDesc = nullptr);
+                                const gpu::TextureDescriptor* backdropDesc = nullptr,
+                                const Box2d* outputClipRegion = nullptr);
 
   /**
    * Begin a new frame for this engine by resetting the per-frame uniform scratch cursor.

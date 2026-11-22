@@ -1427,7 +1427,7 @@ struct FilterGraphExecution {
                        svg::components::FilterExecutionBudget* executionBudget,
                        std::optional<FilterTilePlan> admittedPlan,
                        FrameCommandBufferSink* frameSink,
-                       std::optional<FilterTexture> backdropSource)
+                       std::optional<FilterTexture> backdropSource, const Box2d* outputClipRegion)
       : engine(engine),
         graph(graph),
         sourceGraphic(sourceGraphic),
@@ -1438,6 +1438,7 @@ struct FilterGraphExecution {
               engine.chunkSubmittedHookForTesting_, frameSink),
         coordinates(graph, Vector2i(sourceGraphic.width(), sourceGraphic.height()), filterRegion,
                     deviceFromFilter),
+        outputRegion(outputClipRegion ? *outputClipRegion : filterRegion),
         currentBuffer(sourceGraphic),
         axisAligned(NearZero(deviceFromFilter.data[1], 1e-6) &&
                     NearZero(deviceFromFilter.data[2], 1e-6)) {}
@@ -1484,6 +1485,7 @@ struct FilterGraphExecution {
   std::optional<FilterTilePlan> admittedPlan;
   FilterResourceArena arena;
   FilterExecutionCoordinates coordinates;
+  Box2d outputRegion;  ///< Final crop, after all primitive stages.
   FilterTexture currentBuffer;
   std::optional<FilterTexture> sourceAlpha;
   std::optional<FilterTexture> backdrop;       //!< BackgroundImage, clipped to the filter region.
@@ -1860,7 +1862,8 @@ FilterExecutionResult GeodeFilterEngine::execute(
     const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
     svg::components::FilterExecutionBudget* executionBudget,
     std::optional<FilterTilePlan> admittedPlan, FrameCommandBufferSink* frameSink,
-    const gpu::Texture* backdrop, const gpu::TextureDescriptor* backdropDesc) {
+    const gpu::Texture* backdrop, const gpu::TextureDescriptor* backdropDesc,
+    const Box2d* outputClipRegion) {
   // Loss is terminal for this runtime. Refuse before the graph can allocate textures or record
   // another chunk, which also bounds backing retained by an earlier uncertain execution.
   if (device_.isDeviceLost()) {
@@ -1878,7 +1881,7 @@ FilterExecutionResult GeodeFilterEngine::execute(
   }
   FilterGraphExecution execution(*this, graph, source, filterRegion, deviceFromFilter,
                                  textureAllocator, executionBudget, admittedPlan, frameSink,
-                                 backdropSource);
+                                 backdropSource, outputClipRegion);
   const FilterTexture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
@@ -1932,10 +1935,10 @@ FilterTexture FilterGraphExecution::clip(FilterTexture input, const Box2d& regio
 
 FilterTexture FilterGraphExecution::clipOutputToFilterRegion(FilterTexture output) {
   if (!axisAligned) {
-    return clip(output, coordinates.filterRegion, /*transformed=*/true, /*resolve=*/true);
+    return clip(output, outputRegion, /*transformed=*/true, /*resolve=*/true);
   }
   // Whole-pixel bounds make the shader's pixel-center test keep exactly the centered pixels.
-  const Box2d pixelAABB = coordinates.deviceFromFilter.transformBox(coordinates.filterRegion);
+  const Box2d pixelAABB = coordinates.deviceFromFilter.transformBox(outputRegion);
   return engine.applySubregionClip(
       arena, output, Transform2d(),
       svg::FirstPixelCenterAtOrBeyond(pixelAABB.topLeft.x) - tileOrigin.x,
