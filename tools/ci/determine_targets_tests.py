@@ -822,11 +822,11 @@ class TestedMergeHistoryTest(_ScriptTest):
                               stdout=subprocess.PIPE, env=dict(os.environ, **self._GIT_ENV),
                               timeout=test_timing.STALL_GUARD_SECONDS).stdout.strip()
 
-    def commit(self, repo, files, message):
+    def commit(self, repo, files, message, content=None):
         for path in files:
             target = repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(message + "\n", encoding="utf-8")
+            target.write_text((content or message) + "\n", encoding="utf-8")
             self.git(repo, "add", "--", path)
         self.git(repo, "commit", "-q", "-m", message)
         return self.git(repo, "rev-parse", "HEAD")
@@ -876,8 +876,13 @@ class TestedMergeHistoryTest(_ScriptTest):
                     shutil.rmtree(self.workspace)
                     self.workspace.mkdir()
                 self.check_out("test-merge", depth)
+                self.assertEqual(self.git(self.workspace, "rev-parse", "--is-shallow-repository"),
+                                 "true" if depth else "false")
                 result, _, outputs = self.select("determine")
                 self.assertEqual(result.returncode, 0, result.stderr)
+                # The depth-two checkout lacks the fork point, so the path hints use the base.
+                self.assertIn("git merge-base failed; using base tip %s" % self.advanced
+                              if depth else "Using merge-base %s" % self.root, result.stdout)
                 # The pull request's own targets, including one the other change also touched;
                 # never //other:other, which only the other change touched.
                 self.assertTrue(outputs.endswith(
@@ -891,6 +896,19 @@ class TestedMergeHistoryTest(_ScriptTest):
                                   "//untouched:untouched"])
                 self.assertFalse(cached.with_name(self.root + ".json").exists())
                 shutil.rmtree(self.home)
+
+    def test_reverting_a_change_merged_after_the_payload_base_selects_its_target(self):
+        # The head is based on the advanced branch and restores other/b.txt. Against the payload's
+        # base commit the merged tree looks unchanged there, which would drop //other:other.
+        self.git(self.origin, "checkout", "-q", "--detach", self.advanced)
+        revert = self.commit(self.origin, ["other/b.txt"], "restore other/b.txt", content="root")
+        self.git(self.origin, "checkout", "-q", "--detach", self.advanced)
+        self.git(self.origin, "merge", "-q", "--no-ff", "-m", "test merge", revert)
+        self.git(self.origin, "branch", "revert-merge", "HEAD")
+        self.check_out("revert-merge")
+        result, _, outputs = self.select("determine", payload_head=revert)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(outputs.endswith("fallback=false\naffected=//other:other\n"), outputs)
 
     def test_a_checkout_without_the_merge_parents_selects_full_coverage(self):
         # actions/checkout's default depth: the test merge's parents are not fetched.

@@ -8,8 +8,10 @@
 #        bazel run //tools/ci:plan -- pr-meta|determine|determine-hosted-editor|select-wgpu-reference
 #
 #   pr-meta                The revision whose bazel-diff hashes the job restores or saves
-#                          (`base_sha`): the first parent of a pull request's test merge, or
-#                          this commit on a main push.
+#                          (`base_sha`): for a pull request, its test merge's first parent, or
+#                          the payload's base commit when the checkout is the head itself, or
+#                          empty for any other checkout; this commit on a main push; otherwise
+#                          empty.
 #   determine              The affected targets (`fallback`, `affected`, `full_test`) and the
 #                          hints that gate optional lanes (`browser_affected`,
 #                          `metal_affected` and the `wgpu_reference_*` outputs).
@@ -66,9 +68,10 @@ read_pr_event() {
 }
 
 # The event payload's base commit lags the base branch once other changes merge, while the
-# test merge is built on the branch tip. Hash the tree that Git actually merged into, and
-# require the second parent to be this PR head. A checkout too shallow to list the parents
-# fails here, and the caller selects full coverage.
+# test merge is built on the branch tip: compare with the merge's first parent, and require its
+# second parent to be this PR head. A checkout of the head itself compares with the payload's
+# base commit. Any other checkout fails, including one too shallow to list the merge's parents:
+# `determine` then selects full coverage and `pr-meta` reports no base to restore.
 tested_base() {
   [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] || return 1
   local ancestry checkout first second extra
@@ -407,7 +410,7 @@ determine() {
   else
     git worktree add --detach "$base_dir" "$BASE_SHA"
     generate_hashes "$base_dir" "$work_dir/base-hashes.json"
-    # Save for subsequent pushes to this PR (post-job cache step).
+    # Pull request runs only restore the Actions cache; main pushes save it.
     mkdir -p "$(dirname "$cached_base")"
     cp "$work_dir/base-hashes.json" "$cached_base"
   fi

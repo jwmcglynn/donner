@@ -332,6 +332,19 @@ class GatekeeperTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, "docs_only=true\n")
 
+    def test_an_older_payload_base_can_set_docs_only_for_an_empty_pull_request(self):
+        # The head is the fork point itself: its own diff is empty, which is not docs-only, but
+        # the base-branch documentation change after the older payload base makes it docs-only.
+        _git(self.repo, "checkout", "-q", "--detach", self.root)
+        fork = _commit(self.repo, ["docs/guide.md"], "base branch docs")
+        result, output, _ = self._run("docs-only", **self._pull_request(fork, fork))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "docs_only=false\n")
+        result, output, _ = self._run("docs-only", **self._pull_request(self.root, fork))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"Using merge-base {self.root} as diff basis.", result.stdout)
+        self.assertEqual(output, "docs_only=true\n")
+
     def test_missing_merge_base_falls_back_to_the_base_tip(self):
         _git(self.repo, "checkout", "-q", "--orphan", "unrelated")
         _git(self.repo, "rm", "-q", "-rf", ".")
