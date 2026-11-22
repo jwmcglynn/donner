@@ -441,7 +441,7 @@ constexpr std::array<KnownViolation, 26> kKnownViolations = {{
     {
         /*scene=*/"nested_svg_aspectratio",
         /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{4, 0, 2357, 265},
+        /*ceiling=*/{4, 0, 2357, 0},
         /*reason=*/
         "nested viewports carrying text and use instances re-encode and re-upload the whole "
         "subtree every frame",
@@ -449,13 +449,13 @@ constexpr std::array<KnownViolation, 26> kKnownViolations = {{
         "clears when nested-viewport subtrees, placed text, and use instances all keep their "
         "cached geometry",
         /*sceneBatchingViolated=*/kViolatedSameAsBase,
-        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
-        /*sceneBatchingCeiling=*/{4, 0, 746, 84},
+        /*sceneBatchingDiffers=*/kBufferWrites,
+        /*sceneBatchingCeiling=*/{4, 0, 746, 0},
     },
     {
         /*scene=*/"poker_chips",
         /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{12, 0, 96, 20},
+        /*ceiling=*/{12, 0, 96, 0},
         /*reason=*/
         "use instances share one source path with differing stroke styles, so the per-entity "
         "stroke cache thrashes and re-encodes every instance; with ordered batching that same "
@@ -464,13 +464,13 @@ constexpr std::array<KnownViolation, 26> kKnownViolations = {{
         "clears when the stroke cache keys on the resolved stroke style rather than one slot "
         "per source entity",
         /*sceneBatchingViolated=*/kViolatedSameAsBase,
-        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
-        /*sceneBatchingCeiling=*/{12, 0, 97, 19},
+        /*sceneBatchingDiffers=*/kBufferWrites,
+        /*sceneBatchingCeiling=*/{12, 0, 97, 0},
     },
     {
         /*scene=*/"stroking_complex",
         /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{8, 0, 16, 8},
+        /*ceiling=*/{8, 0, 16, 1},
         /*reason=*/
         "eight use instances share one source path with differing stroke styles (width, "
         "dash, opacity), so the per-entity stroke cache thrashes and re-encodes each "

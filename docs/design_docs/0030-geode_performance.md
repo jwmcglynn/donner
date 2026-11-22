@@ -191,8 +191,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     placement also composites an isolated layer; they clear with 8.3. Repeats of other entities
     hold the steady state the same way: `image_external_svg_par` and `image_external_svg_viewbox`,
     which draw one external SVG's paths twice per frame, clear here too, and `poker_chips`,
-    `stroking_complex`, and `nested_svg_aspectratio` no longer build a bind group per repeated
-    `<use>` draw.
+    `stroking_complex`, and `nested_svg_aspectratio` build no bind group per repeated `<use>`
+    draw.
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
     group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Clears `Edzample_Anim3`. The
     corpus also records `donner_icon`, whose gradient-painted paths under an opacity group
