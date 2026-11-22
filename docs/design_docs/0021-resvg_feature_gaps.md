@@ -100,8 +100,8 @@ one lane is not counted among that lane's comparisons.
 
 | Registered SVG fixtures | Count |
 | --- | ---: |
-| Total | 1,679 |
-| Pixel comparisons | 1,591 |
+| Total | 1,728 |
+| Pixel comparisons | 1,640 |
 | Comparisons with a numeric setting or custom golden | 79 |
 | Render-only, undefined-behavior registration | 54 |
 | Render-only, legacy feature | 33 |
@@ -110,10 +110,10 @@ one lane is not counted among that lane's comparisons.
 
 | Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
 | --- | ---: | ---: | ---: | ---: |
-| `default_text` | 1,565 | 87 | 26 | 1 |
-| `max` | 1,591 | 87 | 0 | 1 |
-| `geode` | 1,561 | 87 | 21 | 1 |
-| `geode_max_text` | 361 | 30 | 0 | 1 |
+| `default_text` | 1,611 | 87 | 29 | 1 |
+| `max` | 1,640 | 87 | 0 | 1 |
+| `geode` | 1,607 | 87 | 24 | 1 |
+| `geode_max_text` | 369 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->
 
