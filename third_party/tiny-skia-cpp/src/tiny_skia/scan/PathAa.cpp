@@ -1169,14 +1169,139 @@ std::vector<AnalyticEdge> buildAnalyticEdges(const Path& path, const Rect& edgeC
   return edges;
 }
 
+struct DeviceBoundaries {
+  FDot16 left;
+  FDot16 right;
+
+  bool contains(const AnalyticEdge& edge) const {
+    return edge.curveCount == 0 && edge.dx == 0 &&
+           (edge.upperX == left || edge.upperX == right);
+  }
+};
+
+FDot16 DeviceBoundaryX(float x, float viewportX) {
+  AnalyticEdge line;
+  return x != viewportX && line.setLine({x, 0}, {x, 1})
+             ? line.upperX
+             : std::numeric_limits<FDot16>::min();
+}
+
+enum class BoundaryReduction { None, First, Second, Both };
+
+// Analytic intervals are half-open. Neighboring lines which retrace at a shared snapped
+// endpoint cancel up to the end of their shorter interval.
+BoundaryReduction ReduceBoundaryPair(AnalyticEdge& first, AnalyticEdge& second,
+                                     const DeviceBoundaries& boundaries) {
+  if (first.winding == second.winding || first.upperX != second.upperX ||
+      !boundaries.contains(first) || !boundaries.contains(second)) {
+    return BoundaryReduction::None;
+  }
+  if (first.upperY == second.upperY) {
+    if (first.lowerY == second.lowerY) {
+      return BoundaryReduction::Both;
+    }
+    if (first.lowerY > second.lowerY) {
+      first.upperY = first.y = second.lowerY;
+      return BoundaryReduction::First;
+    }
+    second.upperY = second.y = first.lowerY;
+    return BoundaryReduction::Second;
+  }
+  if (first.lowerY == second.lowerY) {
+    if (first.upperY < second.upperY) {
+      first.lowerY = second.upperY;
+      return BoundaryReduction::First;
+    }
+    second.lowerY = first.upperY;
+    return BoundaryReduction::Second;
+  }
+  return BoundaryReduction::None;
+}
+
+bool HasSingleWindingOnEachBoundary(const std::vector<AnalyticEdge>& edges,
+                                    const DeviceBoundaries& boundaries) {
+  std::array<int, 2> winding{};
+  for (const auto& edge : edges) {
+    if (!boundaries.contains(edge)) {
+      continue;
+    }
+    auto& direction = winding[edge.upperX == boundaries.right];
+    if (direction != 0 && direction != edge.winding) {
+      return false;
+    }
+    direction = edge.winding;
+  }
+  return true;
+}
+
+// Reduce neighboring emitted lines, including across the cyclic join. Each reduction removes at
+// least one edge. Any remaining mixed winding selects the general walker.
+bool NormalizeConvexBoundaryLines(std::vector<AnalyticEdge>& edges, const Rect& clip,
+                                  const Rect& viewport) {
+  const DeviceBoundaries boundaries{DeviceBoundaryX(clip.left(), viewport.left()),
+                                    DeviceBoundaryX(clip.right(), viewport.right())};
+  if (HasSingleWindingOnEachBoundary(edges, boundaries)) {
+    return true;
+  }
+  size_t end = 0;
+  for (auto edge : edges) {
+    bool keep = true;
+    while (end != 0) {
+      const auto result = ReduceBoundaryPair(edges[end - 1], edge, boundaries);
+      if (result == BoundaryReduction::None) {
+        break;
+      }
+      if (result != BoundaryReduction::First) {
+        --end;
+      }
+      if (result != BoundaryReduction::Second) {
+        keep = false;
+        break;
+      }
+    }
+    if (keep) {
+      edges[end++] = edge;
+    }
+  }
+
+  size_t begin = 0;
+  while (end - begin > 1) {
+    const auto result = ReduceBoundaryPair(edges[end - 1], edges[begin], boundaries);
+    if (result == BoundaryReduction::None) {
+      break;
+    }
+    if (result != BoundaryReduction::First) {
+      --end;
+    }
+    if (result != BoundaryReduction::Second) {
+      ++begin;
+    }
+  }
+
+  // The destination begins before the retained range, so a forward move is safe.
+  if (begin != 0) {
+    std::move(edges.begin() + begin, edges.begin() + end, edges.begin());
+  }
+  edges.erase(edges.begin() + (end - begin), edges.end());
+  return HasSingleWindingOnEachBoundary(edges, boundaries);
+}
+
 // ── Main fill function ───────────────────────────────────────────────────────
 
 void aaaFillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clipRect,
                  const Rect& edgeClip, AdditiveBlitter& blitter, int startY, int stopY,
                  bool pathContainedInClip) {
   auto edges = buildAnalyticEdges(path, edgeClip, pathContainedInClip);
-
   if (edges.size() < 2) return;
+
+  const Rect viewport = clipRect.toRect();
+  const bool deviceClippedEdges = !pathContainedInClip && edgeClip != viewport;
+  bool convex = path.isConvex();
+  if (convex && deviceClippedEdges) {
+    // Keep existing viewport and tile-seam edge subdivision.
+    convex = NormalizeConvexBoundaryLines(edges, edgeClip, viewport);
+    if (edges.size() < 2) return;
+  }
 
   // Sort edge pointers by upperY, then x, then dx.
   std::vector<AnalyticEdge*> edgePtrs;
@@ -1222,10 +1347,16 @@ void aaaFillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clipR
   FDot16 leftBound = intToFixed(static_cast<std::int32_t>(clipRect.x()));
   FDot16 rightBound = intToFixed(static_cast<std::int32_t>(clipRect.right()));
 
-  if (path.isConvex() && edges.size() >= 2) {
+  if (convex) {
     aaaWalkConvexEdges(&headEdge, blitter, startY, stopY, leftBound, rightBound);
   } else {
-    bool skipIntersect = static_cast<int>(path.points().size()) > (stopY - startY) * 2;
+    const bool skipIntersect = static_cast<int>(path.points().size()) > (stopY - startY) * 2;
+    if (deviceClippedEdges) {
+      // Avoid walking empty rows outside the device clip. Keep the intersection heuristic based
+      // on the original viewport-limited range.
+      startY = std::max(startY, static_cast<int>(std::floor(edgeClip.top())));
+      stopY = std::min(stopY, static_cast<int>(std::ceil(edgeClip.bottom())));
+    }
     aaaWalkEdges(&headEdge, &tailEdge, fillRule, blitter, startY, stopY, leftBound, rightBound,
                  skipIntersect);
   }
