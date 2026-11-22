@@ -870,6 +870,14 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   return out;
 }
 
+/// True when \p texture is the texture \p ref names. Slot and generation together identify a
+/// texture, so a recycled slot never matches the texture it replaced, and a null \p ref matches
+/// nothing.
+bool SameTexture(const gpu::Texture& texture, gpu::TextureRef ref) {
+  return ref.isValid() && texture.slotIndex() == ref.slotIndex() &&
+         texture.generation() == ref.generation();
+}
+
 struct RendererGeodeTextureKey {
   uint32_t width = 0;
   uint32_t height = 0;
@@ -988,13 +996,22 @@ public:
   /// Takes a pooled texture matching \p desc, or creates one on a miss. The runtime counts the
   /// creation itself, so a hit ticks no counter and a miss ticks exactly one.
   /// @param desc Descriptor the texture must match exactly.
-  gpu::Texture acquire(const gpu::TextureDescriptor& desc) {
+  /// @param preferred Texture to hand back when it is still free in the bucket, so a caller that
+  ///   keeps state naming a texture, such as a cached bind group, gets the same one again. Any
+  ///   free texture of the bucket serves when it is not.
+  gpu::Texture acquire(const gpu::TextureDescriptor& desc, gpu::TextureRef preferred = {}) {
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     {
       std::lock_guard lock(mutex_);
       RendererGeodeTextureBucket& bucket = buckets_[key];
       bucket.lastUsedFrame = currentFrameIndex_;
       if (!bucket.free.empty()) {
+        const auto match =
+            std::find_if(bucket.free.begin(), bucket.free.end(),
+                         [&](const gpu::Texture& free) { return SameTexture(free, preferred); });
+        if (match != bucket.free.end()) {
+          std::iter_swap(match, std::prev(bucket.free.end()));
+        }
         gpu::Texture texture = std::move(bucket.free.back());
         bucket.free.pop_back();
         pooledTextureBytes_ -= textureByteSize(key);
@@ -2267,6 +2284,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     gpu::Texture tile;
     /// Descriptor \ref tile was acquired with, so releasing it finds the same pool bucket.
     gpu::TextureDescriptor tileDesc;
+    /// View of \ref tile from \ref patternTileViews, which outlives the frame so a resident
+    /// fill's cached bind group can keep naming it.
+    gpu::TextureViewRef tileView;
     Vector2d rasterTileSize;
     Transform2d targetFromRaster;
   };
@@ -2322,6 +2342,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     gpu::Texture tileTexture;       // Pooled tile, sampled after recording.
     /// Descriptor \ref tileTexture was acquired with, carried to the paint slot it promotes to.
     gpu::TextureDescriptor tileDesc;
+    /// See \ref PatternPaintSlot::tileView.
+    gpu::TextureViewRef tileView;
     int tilePixelWidth = 0;
     int tilePixelHeight = 0;
     // Scale factor applied to all `setTransform` calls while this frame is
@@ -2345,11 +2367,83 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                 "A copyable pattern stack frame would let vector growth copy its tile handle.");
   std::vector<PatternStackFrame> patternStack;
 
+  /// Pattern tiles this renderer acquired in one frame, per descriptor in acquisition order.
+  using PatternTileOrder = std::map<RendererGeodeTextureKey, std::vector<gpu::TextureRef>>;
+  /// Tiles of the previous frame. The Nth tile of a descriptor in a frame asks the pool for the
+  /// previous frame's Nth tile of that descriptor, so an unchanged frame draws every pattern into
+  /// the texture it used last frame and resident fills keep their cached bind groups. Only which
+  /// texture is reused depends on this; every tile is rendered again each frame.
+  PatternTileOrder previousFramePatternTiles;
+  /// Tiles of the current frame; see \ref previousFramePatternTiles.
+  PatternTileOrder currentFramePatternTiles;
+
+  /// A view of a pattern tile texture, kept while frames keep drawing into that texture.
+  struct PatternTileView {
+    gpu::TextureView view;       //!< View of the tile texture.
+    uint64_t lastUsedFrame = 0;  //!< Last \ref patternTileFrame that drew into the texture.
+  };
+  /// Views of pattern tile textures by texture slot and generation. A view lives while this
+  /// renderer's frames keep drawing into its texture and is dropped at the start of the second
+  /// frame that does not, after the frame that last bound it has been submitted. The textures
+  /// themselves go back to the pool at every frame end; a view of a texture the pool has since
+  /// destroyed is stale and is never bound again, because a tile's view is looked up by the
+  /// texture it draws into.
+  std::map<std::pair<uint32_t, uint32_t>, PatternTileView> patternTileViews;
+  /// This renderer's own frame count. Unlike \ref currentFrameIndex, which every renderer of the
+  /// device advances, it measures how many frames of this renderer a view went unused.
+  uint64_t patternTileFrame = 0;
+
+  /// The pool texture for the next pattern tile with \p desc, preferring the one the same tile
+  /// used last frame; see \ref previousFramePatternTiles.
+  gpu::Texture acquirePatternTileTexture(const gpu::TextureDescriptor& desc) {
+    const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
+    std::vector<gpu::TextureRef>& current = currentFramePatternTiles[key];
+    gpu::TextureRef preferred;
+    if (const auto previous = previousFramePatternTiles.find(key);
+        previous != previousFramePatternTiles.end() && current.size() < previous->second.size()) {
+      preferred = previous->second[current.size()];
+    }
+    gpu::Texture texture = acquireTexture(desc, preferred);
+    if (texture.isValid()) {
+      current.push_back(gpu::TextureRef(texture));
+    }
+    return texture;
+  }
+
+  /// A view of pattern tile \p texture that outlives this frame, created on first use.
+  /// @return The view, or null when the runtime refuses one.
+  gpu::TextureViewRef patternTileView(const gpu::Texture& texture) {
+    PatternTileView& entry = patternTileViews[{texture.slotIndex(), texture.generation()}];
+    if (!entry.view.isValid()) {
+      gpu::Result<gpu::TextureView> created = device->runtimeDevice().createTextureView(
+          texture, gpu::TextureViewDescriptor{"RendererGeodePatternTileView"});
+      if (created.hasError()) {
+        patternTileViews.erase({texture.slotIndex(), texture.generation()});
+        return gpu::TextureViewRef();
+      }
+      entry.view = std::move(created).result();
+    }
+    entry.lastUsedFrame = patternTileFrame;
+    return gpu::TextureViewRef(entry.view);
+  }
+
+  /// Start a frame's pattern tile bookkeeping: the finished frame's tile order becomes the
+  /// preference for this one, and views the finished frame did not draw into are dropped.
+  void beginFramePatternTiles() {
+    previousFramePatternTiles = std::move(currentFramePatternTiles);
+    currentFramePatternTiles.clear();
+    ++patternTileFrame;
+    std::erase_if(patternTileViews, [&](const auto& entry) {
+      return entry.second.lastUsedFrame + 1 < patternTileFrame;
+    });
+  }
+
   void promotePatternTile(PatternStackFrame& frame, bool forStroke,
                           std::optional<std::uint64_t> spanSlot) {
     PatternPaintSlot slot;
     slot.tile = std::move(frame.tileTexture);
     slot.tileDesc = frame.tileDesc;
+    slot.tileView = frame.tileView;
     slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
     slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
 
@@ -2578,26 +2672,36 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Acquire a pooled texture matching `desc`, or create a fresh one
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns an invalid texture on device failure.
-  gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
+  /// @param preferred Texture to take when it is free, as \ref RendererGeodeTexturePool::acquire
+  ///   describes.
+  gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc, gpu::TextureRef preferred = {}) {
     if (!texturePool) {
       return gpu::Texture{};
     }
     // A parked texture keeps its surface charge, which passes to the reuser.
-    if (gpu::Texture parked = takeFrameReusableTexture(desc); parked.isValid()) {
+    if (gpu::Texture parked = takeFrameReusableTexture(desc, preferred); parked.isValid()) {
       return parked;
     }
     if (!reserveTextureSurface(desc.size, desc.format)) {
       return gpu::Texture{};
     }
-    return texturePool->acquire(desc);
+    return texturePool->acquire(desc, preferred);
   }
 
-  /// Takes a texture this renderer parked in its open frame with exactly \p desc, if any.
-  gpu::Texture takeFrameReusableTexture(const gpu::TextureDescriptor& desc) {
+  /// Takes a texture this renderer parked in its open frame with exactly \p desc, if any,
+  /// \p preferred when it is among them.
+  gpu::Texture takeFrameReusableTexture(const gpu::TextureDescriptor& desc,
+                                        gpu::TextureRef preferred = {}) {
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
-    const auto reusable = std::find_if(
+    const auto matches = [&](const PendingRelease& r) {
+      return RendererGeodeTextureKey::From(r.desc) == key;
+    };
+    auto reusable = std::find_if(
         frameReusableTextures.begin(), frameReusableTextures.end(),
-        [&](const PendingRelease& r) { return RendererGeodeTextureKey::From(r.desc) == key; });
+        [&](const PendingRelease& r) { return matches(r) && SameTexture(r.texture, preferred); });
+    if (reusable == frameReusableTextures.end()) {
+      reusable = std::find_if(frameReusableTextures.begin(), frameReusableTextures.end(), matches);
+    }
     if (reusable == frameReusableTextures.end()) {
       return gpu::Texture{};
     }
@@ -3965,6 +4069,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                                     double opacity) const {
     geode::GeoEncoder::PatternPaint p;
     p.tile = &slot.tile;
+    p.tileView = slot.tileView;
     p.tileSize = slot.rasterTileSize;
     p.patternFromPath = slot.targetFromRaster.inverse();
     p.opacity = opacity;
@@ -5595,8 +5700,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     ensureCacheInvalidationWired(*source.registry());
     geode::GeodeResidentPathSlots& slots = residentPathSlots(source);
     if (solidPaint) {
-      // A solid fill binds no stop ramp, so the gradient slot of the same fill lets go of any it
-      // kept from an earlier gradient paint.
+      // A solid or pattern fill binds no stop ramp, so the gradient slot of the same fill lets go
+      // of any it kept from an earlier gradient paint.
       releaseGradientRamp(&slots.gradientFillSlots[variant]);
     }
     geode::GeodeResidentSlot& slot = slots.fillSlots[variant];
@@ -5679,6 +5784,56 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     } else {
       encoder->fillPath(drawPath, color, rule, precomputedEncoded);
     }
+  }
+
+  /// Emit a pattern fill on the same terms as \ref emitSolidFill: through \p residentSlot when
+  /// there is one, a cached encode and a tile view that outlives the frame, through the per-frame
+  /// arena otherwise.
+  void emitPatternFill(const Path& drawPath, FillRule rule,
+                       const geode::GeoEncoder::PatternPaint& patternPaint,
+                       const geode::EncodedPath* precomputedEncoded,
+                       geode::GeodeResidentSlot* residentSlot) {
+    if (residentSlot != nullptr && precomputedEncoded != nullptr &&
+        patternPaint.tileView.isValid()) {
+      encoder->fillPathPatternResident(*residentSlot, *precomputedEncoded, rule, patternPaint,
+                                       currentFrameIndex);
+    } else {
+      encoder->fillPathPattern(drawPath, rule, patternPaint, precomputedEncoded);
+    }
+  }
+
+  /// The resident slot a fill of \p source draws from, or null when it has none: only a solid
+  /// fill, a batchable gradient fill or a pattern fill with a persistent encode is resident. The
+  /// slot is shared by the batch size-1 flush, the cross-entity scene batch and the direct
+  /// `fillResolved` path, so such a fill re-uploads zero geometry on an unchanged frame however it
+  /// ends up being drawn; a pattern fill draws from the same slot, binding its tile.
+  /// @param source Entity whose fill is drawn.
+  /// @param admission The fill's encode admission.
+  /// @param solidFill Whether the fill paint is a solid color.
+  /// @param gradientBatchable Whether the fill paint is a gradient the scene batch accepts.
+  geode::GeodeResidentSlot* residentFillSlotForPaint(EntityHandle source,
+                                                     const AdmittedEncode& admission,
+                                                     bool solidFill, bool gradientBatchable) {
+    const bool patternFill = patternFillPaint.has_value();
+    if (!admission.persistent || !(solidFill || gradientBatchable || patternFill)) {
+      return nullptr;
+    }
+    return residentFillSlot(source, admission.variant, solidFill || patternFill);
+  }
+
+  /// Stroke \p source with the staged stroke pattern, consuming it: \p stroked is drawn through
+  /// the entity's resident stroke slot when its encode is persistent.
+  /// @param source Entity whose stroke is drawn.
+  /// @param stroked The stroke's outline and encode.
+  void emitPatternStroke(EntityHandle source, const StrokeDerived& stroked) {
+    // This element's fill may still be sitting in the pending batch; drain it
+    // so the pattern stroke lands on top of it rather than under it.
+    flushPendingBatch();
+    syncTransform();
+    emitPatternFill(*stroked.strokedPath, stroked.fillRule,
+                    buildPatternPaint(*patternStrokePaint, paint.strokeOpacity), stroked.encoded,
+                    stroked.persistent ? residentStrokeSlot(source) : nullptr);
+    releasePatternPaintSlot(patternStrokePaint);
   }
 
   /// Pack a 2D affine into the 8-float wire format the shader expects
@@ -6537,9 +6692,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // stroke draw (matching the CPU-renderer semantics).
     if (patternFillPaint.has_value()) {
       syncTransform();
-      const double opacity = paint.fillOpacity;
-      encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity),
-                               precomputedEncoded);
+      emitPatternFill(path, rule, buildPatternPaint(*patternFillPaint, paint.fillOpacity),
+                      precomputedEncoded, residentSlot);
       releasePatternPaintSlot(patternFillPaint);
       releaseGradientRamp(gradientResidentSlot);
       return;
@@ -6885,6 +7039,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     } else {
       ++currentFrameIndex;
     }
+    beginFramePatternTiles();
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
     // Nothing to give back after an endFrame. A frame that never reached one gives its loans back
@@ -7063,6 +7218,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
       tiles->clear();
     }
+    patternTileViews.clear();
+    previousFramePatternTiles.clear();
+    currentFramePatternTiles.clear();
   }
 
   /// Give up this renderer's render targets at teardown.
@@ -7454,6 +7612,10 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .textGlyphOccurrences = impl_->textMaterializationBudget->glyphOccurrences(),
       .textMaterializationBudgetRejected = impl_->textMaterializationBudget->rejected(),
   };
+}
+
+size_t RendererGeode::patternTileViewCountForTesting() const {
+  return impl_->patternTileViews.size();
 }
 
 size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
@@ -8195,17 +8357,19 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   const int tilePixelHeight = rasterMetrics->pixelHeight;
 
   // Pattern tile target sampled by the Slug fill shader when used as paint. It comes from the
-  // transient pool, so a document repainting the same pattern every frame allocates once.
+  // transient pool, so a document repainting the same pattern every frame allocates once, and
+  // the same tile takes the same texture again, so a resident fill keeps its bind group.
   const gpu::TextureDescriptor tileDesc{
       "RendererGeodePatternTile",
       gpu::Extent2d{static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight)},
       impl_->gpuTextureFormat(),
       gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled |
           gpu::TextureUsage::CopySrc};
-  gpu::Texture tileTexture = impl_->acquireTexture(tileDesc);
+  gpu::Texture tileTexture = impl_->acquirePatternTileTexture(tileDesc);
   if (!tileTexture.isValid()) {
     return false;
   }
+  const gpu::TextureViewRef tileView = impl_->patternTileView(tileTexture);
 
   // Stash the currently-active encoder/target/transform state. A nested
   // encoder can't share a render pass with the outer one, so we finish any
@@ -8247,6 +8411,7 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   frame.targetFromPattern = targetFromPattern;
   frame.tileTexture = std::move(tileTexture);
   frame.tileDesc = tileDesc;
+  frame.tileView = tileView;
   frame.tilePixelWidth = tilePixelWidth;
   frame.tilePixelHeight = tilePixelHeight;
   // Map pattern-tile units onto tile-texture pixels: this factor is applied
@@ -8478,15 +8643,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const bool fillBatchable = (kEnableSceneBatching || !hasStroke) && fillShapeBatchable &&
                              (solidFill || gradientFillBatchable);
 
-  // GPU residence: a persistent per-entity fill slot, eligible for
-  // any solid fill with a cached encode. Shared by the batch size-1 flush,
-  // the cross-entity scene batch and the direct `fillResolved` path, so a
-  // solid fill re-uploads zero geometry on an unchanged frame however it
-  // ends up being drawn.
-  geode::GeodeResidentSlot* residentFill =
-      (fillAdmission.persistent && (solidFill || gradientFillBatchable))
-          ? impl_->residentFillSlot(path.sourceEntity, fillAdmission.variant, solidFill)
-          : nullptr;
+  // GPU residence: a persistent per-entity fill slot.
+  geode::GeodeResidentSlot* residentFill = impl_->residentFillSlotForPaint(
+      path.sourceEntity, fillAdmission, solidFill, gradientFillBatchable);
 
   // Gradient residence: a persistent per-entity gradient slot for
   // gradient-painted fills with a cached encode. Pattern references also
@@ -8578,15 +8737,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // Pattern dispatch comes first: a stroke pattern slot was populated by the
   // driver via `endPatternTile(forStroke=true)` and consumed here.
   if (impl_->patternStrokePaint.has_value()) {
-    // This element's fill may still be sitting in the pending batch; drain it
-    // so the pattern stroke lands on top of it rather than under it.
-    impl_->flushPendingBatch();
-    impl_->syncTransform();
-    const double opacity = impl_->paint.strokeOpacity;
-    impl_->encoder->fillPathPattern(strokedOutline, strokeDerived.fillRule,
-                                    impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity),
-                                    strokeDerived.encoded);
-    impl_->releasePatternPaintSlot(impl_->patternStrokePaint);
+    impl_->emitPatternStroke(path.sourceEntity, strokeDerived);
     return;
   }
 

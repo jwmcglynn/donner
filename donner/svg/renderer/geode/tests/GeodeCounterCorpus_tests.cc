@@ -224,7 +224,7 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
   return out;
 }
 
-constexpr std::array<KnownViolation, 29> kKnownViolations = {{
+constexpr std::array<KnownViolation, 25> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kBufferWrites | kBindgroupCreates,
@@ -317,42 +317,6 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         "filter passes rewrite their per-pass uniform scratch every frame",
         /*tracking=*/
         "clears when filter passes keep their uniform allocations across unchanged frames",
-    },
-    {
-        /*scene=*/"geode_pattern_checker",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
-    },
-    {
-        /*scene=*/"geode_pattern_nonrect",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
-    },
-    {
-        /*scene=*/"geode_pattern_offset",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
-    },
-    {
-        /*scene=*/"geode_pattern_solid",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
     },
     {
         /*scene=*/"geode_text_decoration_underline",
