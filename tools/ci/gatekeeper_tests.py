@@ -318,7 +318,7 @@ class GatekeeperTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, "docs_only=true\n")
 
-    def test_a_payload_base_older_than_the_fork_only_adds_paths(self):
+    def test_a_payload_base_older_than_the_fork_adds_base_branch_paths(self):
         # The payload's base commit lags the base branch: this head forked from a newer commit,
         # so the diff from the merge base also holds the base branch's code change.
         _git(self.repo, "checkout", "-q", "--detach", self.root)
