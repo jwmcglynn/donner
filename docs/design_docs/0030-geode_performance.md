@@ -211,12 +211,14 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3, on 8.6 for `donner_splash`'s
     filters, and on 8.1 for `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
     text inside nested viewports; whether its text needs 8.8 is not traced.
-  - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`) and
-    solid-filled glyphs draw from resident outlines, but pattern- and gradient-painted glyphs,
-    stroked glyphs, glyphs stretched along a text path, and text decorations are placed and encoded
-    as transient geometry every frame. Clears `geode_text_decoration_underline`,
-    `geode_text_pattern_fill`, `geode_text_span_gradient_over_pattern`,
-    `geode_text_span_gradient_over_pattern_stroke`. The three pattern-painted scenes depend on 8.5.
+  - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`), and
+    only solid, unwarped glyph fills draw the cache's resident encodings. Pattern- and
+    gradient-painted glyphs are placed from their cached outlines, glyph strokes are expanded from
+    them, glyphs stretched along a text path are warped from the font outline, text decorations are
+    built from the run, and all of these are encoded as transient geometry every frame. Clears
+    `geode_text_decoration_underline`, `geode_text_pattern_fill`,
+    `geode_text_span_gradient_over_pattern`, `geode_text_span_gradient_over_pattern_stroke`. The
+    three pattern-painted scenes depend on 8.5.
 
 ## Background
 
@@ -327,8 +329,8 @@ Steady-state invariants on an unchanged second frame, asserted per corpus scene:
 - `bindgroupCreates <= 6`: bind groups are cached per slot and per batch, not built per draw.
 
 `kKnownViolations` lists the corpus scenes measured to miss one or more of these, all of them
-covered by Milestone 8. An entry names the counters it breaks and can carry separate ceilings for
-the build with ordered batching, which is always compiled in.
+covered by Milestone 8. An entry names the counters it breaks and their measured values. The list
+gates only the built configuration, which always compiles in ordered batching.
 
 ## Testing and Validation
 
@@ -337,10 +339,10 @@ the build with ordered batching, which is always compiled in.
   `consumeReadbackStats()`.
 - `//donner/svg/renderer/geode:geode_counter_corpus_tests`: the corpus-wide steady-state gate.
   `kKnownViolations` records each corpus scene measured to miss an invariant, the counters it
-  breaks, their measured ceilings, and the reason, with optional separate ceilings for the build
-  with ordered batching. A listed scene must still break the counters its entry names, so fixing
-  a scene fails the suite until its entry is deleted, and a listed scene cannot get worse. Every
-  scene must also render visible pixels unless listed in `kDeliberatelyInert`.
+  breaks, their measured ceilings in the built configuration, and the reason. A listed scene must
+  still break every counter its entry names, so fixing a counter fails the suite until it is
+  removed from the entry, and a listed scene cannot get worse. Every scene must also render visible
+  pixels unless listed in `kDeliberatelyInert`.
 - `//donner/svg/renderer/geode:geode_device_tests`, `:geode_path_encoder_tests`,
   `:geode_shaders_tests`, `:geo_encoder_tests`: existing unit tests stay green.
 - `//donner/svg/renderer/tests:renderer_geode_golden_tests`: strict-identity goldens stay
