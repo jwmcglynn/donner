@@ -34,7 +34,7 @@ cc_library(
         "-Wno-missing-field-initializers",
         "-Wno-cast-function-type-strict",
     ],
-    # HB_TINY strips unused APIs; the override enables file I/O and vertical metrics.
+    # HB_TINY strips unused APIs; the override restores thread safety, file I/O, and vertical metrics.
     # HAVE_FREETYPE enables hb-ft.cc. Donner extracts CFF and TrueType outlines with FreeType.
     defines = [
         "HB_TINY",

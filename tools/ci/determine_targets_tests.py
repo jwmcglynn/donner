@@ -470,6 +470,22 @@ class DetermineTest(_ScriptTest):
             self.assertEqual(call, _hashing(self.runner_temp, call[call.index("-w") + 1],
                                             call[-1]))
 
+    def test_changed_repository_marker_selects_full_coverage_before_queries(self):
+        result, calls, outputs = self.determine(affected="//external:harfbuzz\n//a:b\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.queried(calls), [])
+        self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=false",
+                            "fallback=true", "affected=", "wgpu_reference_unknown=true")
+
+    def test_changed_repository_marker_keeps_the_full_hosted_graph(self):
+        roots = "\n".join([*_HOSTED_BROWSERS, _HOSTED_PACKAGE, _HOSTED_LOCKFILE])
+        result, calls, outputs = self.determine(
+            mode="determine-hosted-editor", affected="//external:harfbuzz\n//donner/native:only\n",
+            queries=_queries(**{_HOSTED_ROOT_QUERY: (roots, 0)}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.queried(calls), [])
+        self.assertNotIn("hosted_editor_mode=", outputs)
+
     def test_generated_variants_do_not_inflate_the_affected_selection(self):
         hardware = 'kind("(ci_platform_test|test_suite) rule", attr(tags, "ci-linux-hardware-gpu", //...))'
         for variant, query in (("//a:ci_darwin_example", 'attr(tags, "ci-darwin-(test|build)"'),

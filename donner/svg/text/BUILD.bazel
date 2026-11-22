@@ -334,7 +334,10 @@ donner_cc_fuzzer(
 
 donner_cc_test(
     name = "text_backend_full_bitmap_tests",
-    srcs = ["tests/TextBackendFullBitmap_tests.cc"],
+    srcs = [
+        "tests/HarfBuzzThreading_tests.cc",
+        "tests/TextBackendFullBitmap_tests.cc",
+    ],
     data = ["tests/font_decoder_corpus/bitmap_emoji_subset.ttf"],
     target_compatible_with = select({
         "//donner/svg/renderer:text_full_enabled": [],
@@ -345,6 +348,7 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
+        "@harfbuzz",
     ],
 )
 

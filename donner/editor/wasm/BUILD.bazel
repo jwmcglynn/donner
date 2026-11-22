@@ -325,6 +325,8 @@ js_run_binary(
     chdir = package_name(),
     mnemonic = "MinifyEditorJavaScript",
     tool = "//donner/editor/wasm/tests:esbuild",
+    # The esbuild entry point belongs to the execution platform.
+    use_execroot_entry_point = False,
 )
 
 web_package(
