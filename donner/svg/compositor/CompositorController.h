@@ -203,10 +203,11 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 /// Admission threshold on retained compositor pixels in the browser build, in
 /// bytes.
 ///
-/// WebGPU reports no memory budget, and a texture allocation that fails there
-/// is not recovered, so the browser admits new interaction layers against a
-/// smaller total than native. A 3840x2160 backing store retains about half of
-/// this at a zoom past the raster clamp.
+/// WebGPU reports no memory budget, the browser runtime does not observe an
+/// out-of-memory texture allocation, and once a device is lost the runtime
+/// refuses further work, so the browser admits new interaction layers against
+/// a smaller total than native. The Donner splash at a 3840x2160 backing store
+/// retained up to about 270 MiB between zoom 2 and zoom 4.5.
 inline constexpr size_t kBrowserCompositorMemoryBytes = 512ull * 1024ull * 1024ull;
 
 /// Threshold on all retained compositor pixels, CPU bitmaps and GPU textures
@@ -217,7 +218,8 @@ inline constexpr size_t kBrowserCompositorMemoryBytes = 512ull * 1024ull * 1024u
 /// value. It is not a cap on retained pixels: an entity that already holds a
 /// hint is refreshed without the comparison, mandatory filter, mask and
 /// isolated layers and static segments are not gated by it, and nothing is
-/// evicted to meet it.
+/// evicted to meet it. `CompositorConfig::retainedMemoryBudgetBytes` replaces
+/// it for one controller.
 [[nodiscard]] size_t EffectiveCompositorMemoryBudget();
 
 /// Threshold on the retained compositor pixels that are held in CPU bitmaps,
@@ -390,11 +392,11 @@ public:
       InvalidEntity,
       /// The compositor cannot add another layer without exceeding the layer limit.
       LayerLimit,
-      /// The promotion was refused for memory: retained pixels reached the total threshold,
-      /// retained CPU bitmaps reached the heap bitmap
-      /// threshold, the entity's complete interaction tile exceeds the largest tile the compositor
-      /// admits, or the request repeats one whose exclusive layer failed to allocate at this
-      /// raster size.
+      /// The promotion was refused for memory: retained pixels reached the total threshold;
+      /// retained CPU bitmaps reached the heap bitmap threshold; the entity's complete interaction
+      /// tile exceeds the largest tile the compositor admits; or the request repeats, at the same
+      /// raster size and surface transform, one that was refused because its complete tile was
+      /// oversized or dropped after a texture allocation failure while it held an exclusive layer.
       MemoryLimit,
       /// A descendant is already promoted, so this entity was not promoted.
       DescendantPromoted,
@@ -602,7 +604,8 @@ public:
 
   /**
    * Returns the memory held by retained compositor pixels, in bytes: the CPU bitmaps and GPU
-   * textures of cached static segments and of layers.
+   * textures of cached static segments and of layers. Pieces held for a masked-child drag count as
+   * layer textures.
    */
   [[nodiscard]] size_t totalBitmapMemory() const;
 
@@ -1029,10 +1032,11 @@ public:
     InvalidEntity,
     /// Too many entities already promoted (`kMaxCompositorLayers`).
     LayerLimit,
-    /// Retained pixels reached the total threshold, retained CPU bitmaps reached the heap bitmap
-    /// threshold, the entity's complete interaction tile exceeds the largest tile the compositor
-    /// admits, or the request repeats one whose exclusive layer failed to allocate at this raster
-    /// size.
+    /// Refused for memory: retained pixels reached the total threshold; retained CPU bitmaps
+    /// reached the heap bitmap threshold; the entity's complete interaction tile exceeds the
+    /// largest tile the compositor admits; or the request repeats, at the same raster size and
+    /// surface transform, one that was refused because its complete tile was oversized or dropped
+    /// after a texture allocation failure while it held an exclusive layer.
     MemoryLimit,
     /// A descendant already has its own promoted layer (typically a
     /// mandatorily-detected filter / mask / isolated-layer). Allowing

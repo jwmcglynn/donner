@@ -2677,7 +2677,7 @@ size_t EffectiveCompositorMemoryBudget() {
 size_t EffectiveCompositorHeapBitmapBudget() {
 #ifdef __EMSCRIPTEN__
   const size_t heapBytes = emscripten_get_heap_size();
-  return std::min(kMaxCompositorMemoryBytes, heapBytes / 3);
+  return std::min(kBrowserCompositorMemoryBytes, heapBytes / 3);
 #else
   return kMaxCompositorMemoryBytes;
 #endif
