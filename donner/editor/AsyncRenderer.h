@@ -37,11 +37,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
 #include <thread>
@@ -314,6 +316,49 @@ inline HandoffTimings ComputeHandoffTimings(std::chrono::steady_clock::time_poin
   return timings;
 }
 
+/**
+ * Outcome of the most recent interaction-layer promotion request in one worker iteration.
+ *
+ * The retained total and the total budget are sampled at the start of each request, before the
+ * compositor decides it. The compositor compares them only for a new promotion of an entity that
+ * holds no interaction hint yet, after its other checks pass. An entity that already holds a hint
+ * is refreshed as `PromotedLayer` without that comparison, and `MemoryLimit` also covers the
+ * per-tile interaction raster limit and a cached refusal of a previously failed interaction root.
+ * So `MemoryLimit` with the retained total below the budget has a cause other than the total
+ * budget, and `PromotedLayer` with the retained total above it is a refreshed hint.
+ *
+ * When one iteration makes several requests (a multi-selection, or a retry after the first
+ * render), the last request wins: an earlier refusal can be followed by an admitted request.
+ */
+struct InteractionPromotionOutcome {
+  /// True when this iteration asked the compositor to promote a selected or dragged entity.
+  bool requested = false;
+  /// Entity named by the most recent request, or `entt::null` when nothing was requested.
+  Entity entity = entt::null;
+  /// Compositor result of the most recent request, or `std::nullopt` when nothing was requested.
+  std::optional<svg::compositor::CompositorController::PromoteResult::Code> result;
+  /// Retained compositor total (bitmaps and textures) at the start of the most recent request.
+  std::size_t retainedBitmapBytes = 0;
+  /// Total compositor memory budget at the start of the most recent request.
+  std::size_t memoryBudgetBytes = 0;
+};
+
+/**
+ * Stable name of an outcome's result, as published in editor diagnostics: the result code's name,
+ * or "None" when nothing was requested.
+ *
+ * @param outcome Outcome to name.
+ * @return Pointer to a static NUL-terminated string literal, valid for the life of the program, so
+ *   it may cross an asynchronous proxy to the browser main thread.
+ */
+[[nodiscard]] const char* InteractionPromotionResultName(
+    const InteractionPromotionOutcome& outcome);
+
+/// Print a promotion outcome for test diagnostics.
+/// @param stream Output stream.
+/// @param outcome Outcome to print.
+std::ostream& operator<<(std::ostream& stream, const InteractionPromotionOutcome& outcome);
+
 /// Presentation payload plus the document version it was rendered from.
 struct RenderResult {
   /// Internal timing split for one async worker iteration.
@@ -517,6 +562,8 @@ struct RenderResult {
   /// Compositor frame statistics across the same renders; see
   /// \ref CombineIterationRenderFrameStats.
   svg::compositor::CompositorController::RenderFrameStats compositorFrameStats;
+  /// Most recent interaction-layer promotion request of this iteration and its admission inputs.
+  InteractionPromotionOutcome interactionPromotion;
   std::chrono::steady_clock::time_point workerCompletedAt;  //!< Worker completion timestamp.
 };
 
