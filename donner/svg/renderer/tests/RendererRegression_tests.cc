@@ -1458,19 +1458,29 @@ TEST_F(RendererRegressionTests, SkewedLinearBlurKeepsTheOpaqueColorTransition) {
       </g>
     </svg>)svg");
   const RendererBitmap output = RenderDocumentWithBackend(document, ActiveRendererBackend());
-  constexpr double kSampleX = 307.5 / 2.5 - (270.5 / 2.5) * 0.5773502691896258;
-  // At this sample only the shifted blur contributes. Its horizontal transition is the CDF of
-  // a unit Gaussian centered at x = 60. The two opaque colors sum to one in linear light.
-  const double yellow = 0.5 * std::erfc((kSampleX - 60.0) / std::sqrt(2.0));
+  constexpr Vector2i kCropOrigin(306, 270);
+  constexpr Vector2i kCropSize(3, 1);
+  // Only the shifted blur contributes here. Its horizontal transition is the CDF of a unit
+  // Gaussian centered at x = 60, and the two opaque colors sum to one in linear light.
   const auto encode = [](double value) {
-    return 255.0 * (1.055 * std::pow(value, 1.0 / 2.4) - 0.055);
+    return static_cast<uint8_t>(std::lround(255.0 * (1.055 * std::pow(value, 1.0 / 2.4) - 0.055)));
   };
-  const auto [r, g, b, a] = PixelAt(output, 307, 270);
-  EXPECT_THAT((std::array{static_cast<double>(r), static_cast<double>(g), static_cast<double>(b)}),
-              testing::ElementsAre(testing::DoubleNear(encode(yellow), 4.0),
-                                   testing::DoubleNear(encode(yellow), 4.0),
-                                   testing::DoubleNear(encode(1.0 - yellow), 4.0)));
-  EXPECT_EQ(a, 255);
+  RendererBitmap expected;
+  expected.dimensions = kCropSize;
+  expected.rowBytes = kCropSize.x * 4;
+  for (int x = kCropOrigin.x; x < kCropOrigin.x + kCropSize.x; ++x) {
+    const double filterX = (x + 0.5) / 2.5 - ((kCropOrigin.y + 0.5) / 2.5) * 0.5773502691896258;
+    const double yellow = 0.5 * std::erfc((filterX - 60.0) / std::sqrt(2.0));
+    const uint8_t encodedYellow = encode(yellow);
+    expected.pixels.insert(expected.pixels.end(),
+                           {encodedYellow, encodedYellow, encode(1.0 - yellow), 255});
+  }
+  // The continuous Gaussian and the discrete raster can differ by a rounding level.
+  // Apply the normal perceptual threshold and require all pixels in the crop to pass.
+  editor::tests::CompareBitmapToBitmap(
+      editor::tests::CropBitmap(output, kCropOrigin, kCropSize), expected,
+      "skewed_linear_blur_color_transition",
+      editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true));
 }
 
 // When the filter-aligned raster would not fit the execution budget, both renderers draw the filter
