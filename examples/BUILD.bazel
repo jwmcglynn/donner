@@ -1,3 +1,6 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:native_binary.bzl", "native_test")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")

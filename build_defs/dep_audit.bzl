@@ -26,6 +26,7 @@ tool for `:renderer_geode` (a pure geode library that must never reach
 includes.
 """
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:variant_settings.bzl", "variant_transition")
 
 def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
@@ -89,7 +90,7 @@ def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
         testonly = True,
     )
 
-    native.sh_test(
+    sh_test(
         name = name,
         srcs = [":" + checker_name],
         args = ["$(location :" + genquery_name + ")"],
@@ -293,7 +294,7 @@ def configured_dependency_audit_test(name, target, forbidden = [], forbidden_pac
         required = required,
         testonly = True,
     )
-    native.sh_test(
+    sh_test(
         name = name,
         srcs = [":" + checker],
         **kwargs

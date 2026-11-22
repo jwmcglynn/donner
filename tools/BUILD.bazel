@@ -1,6 +1,6 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//build_defs:rules.bzl", "ci_darwin_targets", "donner_multi_transitioned_test")
 load(":native_delivery_fixture.bzl", "native_delivery_fixture")
-load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:licenses.bzl", "donner_closure_notice_file")
@@ -35,11 +35,6 @@ exports_files(
         "treemap.test.js",
     ],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
-)
-
-refresh_compile_commands(
-    name = "refresh_compile_commands",
-    targets = "//donner/...",
 )
 
 py_binary(

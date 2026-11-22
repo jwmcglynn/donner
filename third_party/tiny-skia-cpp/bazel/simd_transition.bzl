@@ -1,5 +1,7 @@
 """SIMD mode transitions and helper rules."""
 
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+
 def _simd_mode_transition_impl(_settings, attr):
     return {"//bazel/config:simd_mode": attr.simd_mode}
 

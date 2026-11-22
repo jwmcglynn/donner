@@ -1,3 +1,4 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_cc//cc:defs.bzl", "cc_binary")

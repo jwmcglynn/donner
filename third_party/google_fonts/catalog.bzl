@@ -1,5 +1,6 @@
 """Generate one WOFF2 catalog for installed native resources and deferred web delivery."""
 
+load("@rules_python//python:defs.bzl", "py_test")
 load(":fonts.bzl", "GOOGLE_FONTS")
 
 def _catalog_impl(ctx):
@@ -112,7 +113,7 @@ def catalog_asset_tests(target_compatible_with):
     for font in GOOGLE_FONTS:
         name = "catalog_woff2_" + font.repo[len("gfont_"):] + "_test"
         source = "@" + font.repo + "//file"
-        native.py_test(
+        py_test(
             name = name,
             size = "small",
             srcs = ["catalog_generate.py", "catalog_woff2_assets_test.py"],

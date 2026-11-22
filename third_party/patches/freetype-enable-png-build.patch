@@ -1,6 +1,10 @@
 --- a/BUILD.bazel
 +++ b/BUILD.bazel
-@@ -55,8 +55,10 @@
+@@ -1 +1,3 @@
++load("@rules_cc//cc:cc_library.bzl", "cc_library")
++
+ licenses(["notice"])
+@@ -55,8 +57,10 @@
      copts = [
          "-DFT2_BUILD_LIBRARY",
          "-UDEBUG",

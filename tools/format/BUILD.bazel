@@ -1,3 +1,4 @@
+load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:rules.bzl", "ci_darwin_targets")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")

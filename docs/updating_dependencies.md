@@ -9,8 +9,8 @@ by hand under the same rule. When one also needs a content pin, fetch the releas
 asset, or its tag source archive if it publishes none, with its `sha256` rather than replacing the
 tag with a commit.
 
-A few older pins still name a commit: the `git_override` blocks for `hedron_compile_commands`,
-`bloaty`, `imgui` and `glfw` in `MODULE.bazel` and for `stb`, `imgui` and `glfw` in
+A few older pins still name a commit: the `git_override` blocks for `bloaty`,
+`imgui` and `glfw` in `MODULE.bazel` and for `stb`, `imgui` and `glfw` in
 `examples/MODULE.bazel`, `woff2` and `bazel_clang_tidy` in `third_party/bazel/non_bcr_deps.bzl`,
 and the Google Fonts files in `third_party/google_fonts/fonts.bzl`. The CMake generator,
 `tools/cmake/gen_cmakelists.py`, also fetches every dependency by commit: googletest,
