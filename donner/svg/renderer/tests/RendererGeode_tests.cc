@@ -1572,7 +1572,7 @@ std::string FilteredShapesSvg(std::string_view primitives) {
 std::optional<SVGDocument> ParseFilterDocument(const std::string& source) {
   ParseWarningSink warnings;
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
-  EXPECT_TRUE(parsed.hasResult());
+  EXPECT_THAT(parsed, NoParseError());
   EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
   if (!parsed.hasResult()) {
     return std::nullopt;
@@ -1612,7 +1612,8 @@ TEST_F(RendererGeodeTest, ReusedFilterSlotsUploadEditedParameters) {
          <feComposite in2="moved" operator="arithmetic" k1="0.1" k2="0.7" k3="0.4"/>)");
   std::optional<SVGDocument> originalDocument = ParseFilterDocument(original);
   std::optional<SVGDocument> editedDocument = ParseFilterDocument(edited);
-  ASSERT_TRUE(originalDocument && editedDocument);
+  ASSERT_THAT(originalDocument, testing::Optional(testing::_));
+  ASSERT_THAT(editedDocument, testing::Optional(testing::_));
 
   const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
@@ -1635,7 +1636,7 @@ TEST_F(RendererGeodeTest, ReusedFilterSlotsUploadEditedParameters) {
       device->filterEngine().cachedBindingCountsForTesting();
   EXPECT_EQ(afterEdit.textureViews, settled.textureViews);
   EXPECT_EQ(afterEdit.bindGroups, settled.bindGroups);
-  EXPECT_FALSE(device->isDeviceLost());
+  EXPECT_THAT(device->isDeviceLost(), testing::IsFalse());
 }
 
 // Cached filter views and bind groups are found by the identities of the textures and buffers they
@@ -1654,7 +1655,8 @@ TEST_F(RendererGeodeTest, CachedFilterBindingsFollowTextureReuseAndReplacement) 
          <feMerge><feMergeNode in="thick"/><feMergeNode/></feMerge>)");
   std::optional<SVGDocument> blurredDocument = ParseFilterDocument(blurred);
   std::optional<SVGDocument> morphedDocument = ParseFilterDocument(morphed);
-  ASSERT_TRUE(blurredDocument && morphedDocument);
+  ASSERT_THAT(blurredDocument, testing::Optional(testing::_));
+  ASSERT_THAT(morphedDocument, testing::Optional(testing::_));
   const RendererBitmap blurredReference = RenderOnFreshDevice(blurred);
   const RendererBitmap morphedReference = RenderOnFreshDevice(morphed);
 
@@ -1668,7 +1670,7 @@ TEST_F(RendererGeodeTest, CachedFilterBindingsFollowTextureReuseAndReplacement) 
     editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference,
                                          "cached_filter_bindings_" + std::string(name),
                                          editor::tests::PixelmatchIdentityParams());
-    EXPECT_FALSE(device->isDeviceLost());
+    EXPECT_THAT(device->isDeviceLost(), testing::IsFalse());
   };
 
   drawAndCompare(*blurredDocument, blurredReference, "blurred_first");

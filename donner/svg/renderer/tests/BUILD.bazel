@@ -78,6 +78,15 @@ donner_multi_transitioned_test(
 )
 
 donner_cc_test(
+    name = "texture_hand_out_queue_tests",
+    srcs = ["TextureHandOutQueue_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:texture_hand_out_queue",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "pixel_format_utils_tests",
     srcs = ["PixelFormatUtils_tests.cc"],
     deps = [

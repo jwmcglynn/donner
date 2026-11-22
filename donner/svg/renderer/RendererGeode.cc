@@ -48,6 +48,7 @@
 #include "donner/svg/renderer/HeadlessDevicePool.h"
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/TextureHandOutQueue.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeAnchoredSampling.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
@@ -891,26 +892,9 @@ struct RendererGeodeTextureKey {
   }
 };
 
-/// A free pooled texture and when the pool last handed it out.
-struct RendererGeodePooledTexture {
-  gpu::Texture texture;
-  /// Pool frame of the last hand-out; zero when the pool never handed this texture out.
-  uint64_t acquiredFrame = 0;
-  /// Pool-wide sequence number of that hand-out, ordering hand-outs within one frame.
-  uint64_t acquiredOrder = 0;
-
-  /// True when \p next should be handed out before this texture: \p next was taken in a later
-  /// frame, or earlier in the same frame.
-  bool handsOutAfter(const RendererGeodePooledTexture& next) const {
-    return acquiredFrame < next.acquiredFrame ||
-           (acquiredFrame == next.acquiredFrame && acquiredOrder > next.acquiredOrder);
-  }
-};
-
 struct RendererGeodeTextureBucket {
-  /// Sorted so the back is handed out next: the textures of the most recent frame that took any,
-  /// in the order that frame took them, then those of earlier frames.
-  std::vector<RendererGeodePooledTexture> free;
+  /// Free textures, handed out in the order the most recent frame took them.
+  TextureHandOutQueue<gpu::Texture> free;
   uint64_t lastUsedFrame = 0;
 };
 
@@ -941,9 +925,7 @@ public:
   ~RendererGeodeTexturePool() {
     for (auto& [unusedKey, bucket] : buckets_) {
       (void)unusedKey;
-      for (RendererGeodePooledTexture& pooled : bucket.free) {
-        destroyPooledTexture(std::move(pooled.texture));
-      }
+      bucket.free.drain([&](gpu::Texture&& texture) { destroyPooledTexture(std::move(texture)); });
     }
   }
 
@@ -963,7 +945,7 @@ public:
     (void)evictPoolEntriesToFit(0);
     // A texture kept out longer than a bucket stays alive comes back with no hand-out order.
     std::erase_if(handedOut_, [&](const auto& entry) {
-      return currentFrameIndex_ - entry.second.acquiredFrame > kBucketEvictAfterFrames;
+      return currentFrameIndex_ - entry.second.frame > kBucketEvictAfterFrames;
     });
   }
 
@@ -1022,8 +1004,7 @@ public:
       RendererGeodeTextureBucket& bucket = buckets_[key];
       bucket.lastUsedFrame = currentFrameIndex_;
       if (!bucket.free.empty()) {
-        gpu::Texture texture = std::move(bucket.free.back().texture);
-        bucket.free.pop_back();
+        gpu::Texture texture = bucket.free.takeNext();
         pooledTextureBytes_ -= textureByteSize(key);
         --pooledTextureCount_;
         recordHandOut(texture);
@@ -1050,11 +1031,9 @@ public:
     }
 
     std::lock_guard lock(mutex_);
-    RendererGeodePooledTexture pooled{std::move(texture)};
-    if (const auto handOut = handedOut_.find(IdentityOf(pooled.texture));
-        handOut != handedOut_.end()) {
-      pooled.acquiredFrame = handOut->second.acquiredFrame;
-      pooled.acquiredOrder = handOut->second.acquiredOrder;
+    TextureHandOutStamp stamp;
+    if (const auto handOut = handedOut_.find(IdentityOf(texture)); handOut != handedOut_.end()) {
+      stamp = handOut->second;
       handedOut_.erase(handOut);
     }
 
@@ -1066,23 +1045,18 @@ public:
     if (existingBucket != buckets_.end() &&
         existingBucket->second.free.size() >= kMaxPoolEntriesPerKey &&
         textureBytes * (existingBucket->second.free.size() + 1) > budgetBytes_ / 4) {
-      destroyPooledTexture(std::move(pooled.texture));
+      destroyPooledTexture(std::move(texture));
       return;
     }
 
     if (!evictPoolEntriesToFit(textureBytes)) {
-      destroyPooledTexture(std::move(pooled.texture));
+      destroyPooledTexture(std::move(texture));
       return;
     }
 
     RendererGeodeTextureBucket& bucket = buckets_[key];
     bucket.lastUsedFrame = currentFrameIndex_;
-    bucket.free.insert(std::upper_bound(bucket.free.begin(), bucket.free.end(), pooled,
-                                        [](const RendererGeodePooledTexture& texture,
-                                           const RendererGeodePooledTexture& queued) {
-                                          return texture.handsOutAfter(queued);
-                                        }),
-                       std::move(pooled));
+    bucket.free.push(std::move(texture), stamp);
     pooledTextureBytes_ += textureBytes;
     ++pooledTextureCount_;
   }
@@ -1154,12 +1128,10 @@ private:
   }
 
   void destroyPoolBucket(const RendererGeodeTextureKey& key, RendererGeodeTextureBucket& bucket) {
-    const uint64_t bucketBytes = textureByteSize(key) * static_cast<uint64_t>(bucket.free.size());
-    for (RendererGeodePooledTexture& pooled : bucket.free) {
-      destroyPooledTexture(std::move(pooled.texture));
-    }
-    pooledTextureBytes_ -= bucketBytes;
-    pooledTextureCount_ -= bucket.free.size();
+    const std::size_t bucketCount = bucket.free.size();
+    bucket.free.drain([&](gpu::Texture&& texture) { destroyPooledTexture(std::move(texture)); });
+    pooledTextureBytes_ -= textureByteSize(key) * static_cast<uint64_t>(bucketCount);
+    pooledTextureCount_ -= bucketCount;
   }
 
   bool evictPoolEntriesToFit(uint64_t incomingBytes) {
@@ -1181,9 +1153,7 @@ private:
         return false;
       }
 
-      // The front is the texture the bucket would hand out last.
-      destroyPooledTexture(std::move(victim->second.free.front().texture));
-      victim->second.free.erase(victim->second.free.begin());
+      destroyPooledTexture(victim->second.free.takeLast());
       pooledTextureBytes_ -= textureByteSize(victim->first);
       --pooledTextureCount_;
       if (victim->second.free.empty()) {
@@ -1206,24 +1176,19 @@ private:
 
   /// Records that \p texture was handed out now, so its return can be ordered by it.
   void recordHandOut(const gpu::Texture& texture) {
-    handedOut_[IdentityOf(texture)] = HandOut{currentFrameIndex_, ++handOutCount_};
+    handedOut_[IdentityOf(texture)] = TextureHandOutStamp{currentFrameIndex_, ++handOutCount_};
   }
 
   static uint64_t IdentityOf(const gpu::Texture& texture) {
     return (uint64_t{texture.slotIndex()} << 32) | texture.generation();
   }
 
-  struct HandOut {
-    uint64_t acquiredFrame = 0;
-    uint64_t acquiredOrder = 0;
-  };
-
   std::shared_ptr<geode::GeodeDevice> device_;
   mutable std::mutex mutex_;
   std::map<RendererGeodeTextureKey, RendererGeodeTextureBucket> buckets_;
   /// When each texture now out of the pool was handed out, keyed by its runtime identity.
-  std::unordered_map<uint64_t, HandOut> handedOut_;
-  /// Hand-outs so far, the source of \ref RendererGeodePooledTexture::acquiredOrder.
+  std::unordered_map<uint64_t, TextureHandOutStamp> handedOut_;
+  /// Hand-outs so far, the source of \ref TextureHandOutStamp::order.
   uint64_t handOutCount_ = 0;
   uint64_t pooledTextureBytes_ = 0;
   std::size_t pooledTextureCount_ = 0;

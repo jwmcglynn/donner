@@ -14,6 +14,7 @@
 /// it targets; the trailing comment beside each assertion records the
 /// steady-state target it drives toward.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -583,7 +584,7 @@ FirstAndSecondFrame countersForFirstAndSecondRender(
 /// result, which is not a filter pass.
 TEST_F(GeodePerfTest, UnchangedFilterPassesUploadAndBindNothing) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const FirstAndSecondFrame composite = countersForFirstAndSecondRender(kOpacityGroupSvg, device);
   printCounters("OpacityGroup (frame2)", composite.second);
