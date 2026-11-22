@@ -57,6 +57,8 @@ _JAR_URL = "https://github.com/Tinder/bazel-diff/releases/download/v0.0.0/bazel-
 #     Like the real bazel-diff on this workspace, generate-hashes without
 #     --excludeExternalTargets also queries //external:all-targets, which fails because
 #     WORKSPACE is disabled: fatal with --no-keep_going, ignored otherwise.
+#     With "hash_packages", generate-hashes hashes each top-level directory of the workspace as
+#     one target, //dir:dir, and get-impacted-targets reports the targets whose hash changed.
 #   bazelisk: "queries", a list of [fragment, output, status]; the first fragment the query
 #     expression contains answers it.
 #   curl: "downloads", one [body, status] per call, in order.
@@ -98,6 +100,23 @@ if tool == "git":
     answer("")
 if tool == "java":
     output = Path(args[-1])
+    if config.get("hash_packages") and "get-impacted-targets" in args:
+        base, head = (json.loads(Path(args[args.index(flag) + 1]).read_text(encoding="utf-8"))
+                      for flag in ("-sh", "-fh"))
+        output.write_text("".join(label + "\n" for label in sorted(head)
+                                  if base.get(label) != head[label]), encoding="utf-8")
+        answer("")
+    if config.get("hash_packages"):
+        hashes = {}
+        for package in sorted(Path(args[args.index("-w") + 1]).iterdir()):
+            if package.is_dir() and package.name != ".git":
+                digest = hashlib.sha256()
+                for path in sorted(package.rglob("*")):
+                    if path.is_file():
+                        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+                hashes["//%s:%s" % (package.name, package.name)] = digest.hexdigest()
+        output.write_text(json.dumps(hashes), encoding="utf-8")
+        answer("")
     if "get-impacted-targets" in args and config.get("impacted_fail"):
         answer("", 1)
     if "get-impacted-targets" in args:
@@ -307,12 +326,16 @@ class DetermineTest(_ScriptTest):
                 self.assertNotIn("hosted_editor_mode=", outputs)
 
     def test_a_push_keeps_full_coverage_without_bazel_diff(self):
-        result, calls, outputs = self.run_script("determine", GITHUB_EVENT_NAME="push",
-                                                 GITHUB_REF="refs/heads/feature")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_outputs(outputs, "fallback=true", "affected=", "full_test=false")
-        self.assertIn("Non-PR event; keeping full //... coverage.", result.stdout)
-        self.assertEqual(calls, [])
+        # No workflow triggers on merge_group; were one added, it would take this path too.
+        for event, ref in (("push", "refs/heads/feature"),
+                           ("merge_group", "refs/heads/gh-readonly-queue/main/pr-7-sha0")):
+            with self.subTest(event=event):
+                result, calls, outputs = self.run_script("determine", GITHUB_EVENT_NAME=event,
+                                                         GITHUB_REF=ref)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, "fallback=true", "affected=", "full_test=false")
+                self.assertIn("Non-PR event; keeping full //... coverage.", result.stdout)
+                self.assertEqual(calls, [])
 
     def test_a_main_push_prewarms_the_base_hashes_once(self):
         cached = self.home / ".cache/bazel-diff-base-hashes/sha0.json"
@@ -764,6 +787,145 @@ class DetermineTest(_ScriptTest):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("usage: tools/ci/determine_targets.sh", result.stderr)
                 self.assertEqual((calls, outputs), ([], ""))
+
+
+class TestedMergeHistoryTest(_ScriptTest):
+    """Selects targets from real Git history, with each top-level directory hashed as a target.
+
+    The base branch advances after the pull request's event payload records its base commit:
+    GitHub builds the test merge on the newer tip, and only that tip, the merge's first parent,
+    tells the pull request's targets apart from the ones the other merged changes touched.
+    """
+    script_name = "determine_targets.sh"
+    # Host and user git configuration never reaches the fixture, and git never searches above
+    # the fixture's temporary directory for an enclosing repository.
+    _GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CEILING_DIRECTORIES": tempfile.gettempdir()}
+    # Every optional lane's query finds nothing, so the selection is the graph diff alone.
+    _QUERIES = [[_REFERENCE_QUERY, "//ref:test\n", 0], [_METAL_INTERSECTION_QUERY, "", 0],
+                [_METAL_SUITE_QUERY, "//m:test\n", 0]]
+    _FULL_COVERAGE = ("full_test=false", "fallback=true", "affected=",
+                      "wgpu_reference_unknown=true")
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        git = shutil.which("git")
+        if git is None:
+            raise RuntimeError("these cases need git on PATH; they must not pass by skipping")
+        cls.git_bin = cls.executables.path / "git-bin"
+        cls.git_bin.mkdir()
+        os.symlink(git, cls.git_bin / "git")
+
+    def git(self, repo, *args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, text=True,
+                              stdout=subprocess.PIPE, env=dict(os.environ, **self._GIT_ENV),
+                              timeout=test_timing.STALL_GUARD_SECONDS).stdout.strip()
+
+    def commit(self, repo, files, message):
+        for path in files:
+            target = repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(message + "\n", encoding="utf-8")
+            self.git(repo, "add", "--", path)
+        self.git(repo, "commit", "-q", "-m", message)
+        return self.git(repo, "rev-parse", "HEAD")
+
+    def setUp(self):
+        super().setUp()
+        # The workspace holds a pull request's history: it forks from `root`, and the base branch
+        # then merges another change. Both touch `shared`; only the other change touches `other`.
+        # `merge` is GitHub's test merge of the head into the advanced base branch.
+        repo = self.origin = self.work / "origin"
+        repo.mkdir()
+        self.git(repo, "init", "-q", "-b", "main")
+        self.git(repo, "config", "user.name", "Fixture")
+        self.git(repo, "config", "user.email", "fixture@example.com")
+        self.root = self.commit(repo, ["feature/a.txt", "other/b.txt", "shared/c.txt",
+                                       "untouched/d.txt"], "root")
+        self.head = self.commit(repo, ["feature/a.txt", "shared/pr.txt"], "pull request")
+        self.git(repo, "checkout", "-q", "--detach", self.root)
+        self.advanced = self.commit(repo, ["other/b.txt", "shared/main.txt"], "other change")
+        self.git(repo, "merge", "-q", "--no-ff", "-m", "test merge", self.head)
+        self.merge = self.git(repo, "rev-parse", "HEAD")
+        self.git(repo, "branch", "test-merge", self.merge)
+        self.git(repo, "branch", "pr-head", self.head)
+        self.git(repo, "branch", "advanced-base", self.advanced)
+
+    def check_out(self, ref, depth=None):
+        """Clones the fixture into the workspace as actions/checkout does, at `ref`."""
+        self.workspace.rmdir()
+        shallow = ["--depth", str(depth)] if depth else []
+        subprocess.run(["git", "clone", "-q", *shallow, "--branch", ref,
+                        "file://" + str(self.origin), str(self.workspace)], check=True,
+                       env=dict(os.environ, **self._GIT_ENV),
+                       timeout=test_timing.STALL_GUARD_SECONDS)
+
+    def select(self, mode, payload_head=None):
+        """Runs `mode` for a payload whose base commit is the fork point, before the advance."""
+        return self.run_script(
+            mode, config={"hash_packages": True, "queries": self._QUERIES},
+            event=_pull_request(base=self.root, head=payload_head or self.head),
+            PATH=os.pathsep.join((str(self.git_bin), str(self.bin), str(self.host))),
+            **self._GIT_ENV)
+
+    def test_targets_only_the_advanced_base_touched_are_not_selected(self):
+        for depth in (None, 2):
+            with self.subTest(depth=depth):
+                if depth:
+                    shutil.rmtree(self.workspace)
+                    self.workspace.mkdir()
+                self.check_out("test-merge", depth)
+                result, _, outputs = self.select("pr-meta")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, "base_sha=" + self.advanced)
+                result, _, outputs = self.select("determine")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                # The pull request's own targets, including one the other change also touched;
+                # never //other:other, which only the other change touched.
+                self.assertTrue(outputs.endswith(
+                    "fallback=false\naffected=//feature:feature //shared:shared\n"), outputs)
+                cached = self.home / ".cache/bazel-diff-base-hashes" / (self.advanced + ".json")
+                self.assertEqual(sorted(json.loads(cached.read_text())),
+                                 ["//feature:feature", "//other:other", "//shared:shared",
+                                  "//untouched:untouched"])
+                self.assertFalse(cached.with_name(self.root + ".json").exists())
+                shutil.rmtree(self.home)
+
+    def test_a_checkout_without_the_merge_parents_selects_full_coverage(self):
+        # actions/checkout's default depth: the test merge's parents are not fetched.
+        self.check_out("test-merge", depth=1)
+        result, _, outputs = self.select("pr-meta")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_outputs(outputs, "base_sha=")
+        result, calls, outputs = self.select("determine")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_outputs(outputs, *self._FULL_COVERAGE)
+        self.assertIn("Cannot bind the tested checkout to the PR head", result.stdout)
+        self.assertFalse(any(call[0] == "java" for call in calls))
+
+    def test_a_pull_request_head_checkout_compares_with_the_payload_base(self):
+        # The head itself lacks the other change, so the payload's base commit is its base.
+        self.check_out("pr-head")
+        result, _, outputs = self.select("pr-meta")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_outputs(outputs, "base_sha=" + self.root)
+        result, _, outputs = self.select("determine")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(outputs.endswith(
+            "fallback=false\naffected=//feature:feature //shared:shared\n"), outputs)
+
+    def test_a_checkout_that_does_not_merge_the_payload_head_selects_full_coverage(self):
+        # A non-merge commit that is not the head, and a merge of a different head.
+        for ref, payload_head in (("advanced-base", None), ("test-merge", self.advanced)):
+            with self.subTest(ref=ref, payload_head=payload_head):
+                shutil.rmtree(self.workspace)
+                self.workspace.mkdir()
+                self.check_out(ref)
+                result, calls, outputs = self.select("determine", payload_head)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, *self._FULL_COVERAGE)
+                self.assertFalse(any(call[0] == "java" for call in calls))
 
 
 class FetchBazelDiffTest(_ScriptTest):

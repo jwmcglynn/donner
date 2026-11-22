@@ -8,7 +8,8 @@
 #        bazel run //tools/ci:plan -- pr-meta|determine|determine-hosted-editor|select-wgpu-reference
 #
 #   pr-meta                The revision whose bazel-diff hashes the job restores or saves
-#                          (`base_sha`): a pull request's base, or this commit on a main push.
+#                          (`base_sha`): the first parent of a pull request's test merge, or
+#                          this commit on a main push.
 #   determine              The affected targets (`fallback`, `affected`, `full_test`) and the
 #                          hints that gate optional lanes (`browser_affected`,
 #                          `metal_affected` and the `wgpu_reference_*` outputs).
@@ -64,8 +65,10 @@ read_pr_event() {
   )"
 }
 
-# The PR event and the checkout can observe different base tips. Hash the tree
-# that Git actually merged into, and require the second parent to be this PR head.
+# The event payload's base commit lags the base branch once other changes merge, while the
+# test merge is built on the branch tip. Hash the tree that Git actually merged into, and
+# require the second parent to be this PR head. A checkout too shallow to list the parents
+# fails here, and the caller selects full coverage.
 tested_base() {
   [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] || return 1
   local ancestry checkout first second extra
@@ -220,11 +223,10 @@ determine() {
     exit 0
   fi
 
-  # Use the merge base of the tested base and PR head for path hints. A
-  # two-dot diff against a newer base also sees main's post-fork changes
-  # and can incorrectly trigger full CI for an unrelated workflow edit. Fail closed: if merge-base cannot
-  # be computed, keep the base-tip diff (over-inclusion only ever
-  # widens to the fallback path, never skips it).
+  # Use the merge base of the tested base and PR head for path hints. A two-dot diff from the
+  # tested base also sees main's changes since the fork and can incorrectly trigger full CI for
+  # an unrelated workflow edit. Fail closed: if merge-base cannot be computed, diff from the
+  # tested base (over-inclusion only ever widens to the fallback path, never skips it).
   if diff_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"; then
     echo "Using merge-base $diff_base as diff basis."
   else
