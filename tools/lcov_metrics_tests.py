@@ -275,6 +275,18 @@ class LcovMetricsCommandLineTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, self._describe(result))
         self.assertIn("codecov lines: 1/2 (50.00%)", result.stdout)
 
+    def test_line_entries_with_extra_fields_are_accepted(self) -> None:
+        reference = self._write_reference(
+            _report_endpoint_response(
+                [{"name": "donner/base/Foo.cc", "line_coverage": [[10, 0, "extra"], [11, 2]]}]
+            )
+        )
+
+        result = self._run("--codecov-reference-json", str(reference))
+
+        self.assertEqual(result.returncode, 0, self._describe(result))
+        self.assertIn("codecov lines: 1/2 (50.00%)", result.stdout)
+
     def test_metadata_only_json_is_rejected(self) -> None:
         cases = {
             "commit metadata without a report": {
@@ -302,6 +314,48 @@ class LcovMetricsCommandLineTest(unittest.TestCase):
         result = self._run("--codecov-reference-json", str(reference))
 
         self._assert_rejected(result, str(reference), "The commit abc is not in our records")
+
+    def test_untrusted_reference_text_is_escaped_in_diagnostics(self) -> None:
+        injected = "x\x1b[31m\n::error::forged"
+        cases = {
+            "error detail": {"detail": injected},
+            "duplicate file name": _report_endpoint_response(
+                [
+                    {"name": injected, "line_coverage": [[10, 0]]},
+                    {"name": injected, "line_coverage": [[11, 0]]},
+                ]
+            ),
+            "file name without line_coverage": _report_endpoint_response([{"name": injected}]),
+        }
+        for name, payload in cases.items():
+            with self.subTest(name):
+                reference = self._write_reference(payload)
+
+                result = self._run("--codecov-reference-json", str(reference))
+
+                self._assert_rejected(result, str(reference), json.dumps(injected))
+                details = self._describe(result)
+                self.assertNotIn("\x1b", result.stderr, details)
+                self.assertNotIn("\n::error::", result.stderr, details)
+
+    def test_reference_json_beyond_decoder_limits_is_rejected(self) -> None:
+        depth = 100_000
+        cases = {
+            "nesting deeper than the decoder allows": "[" * depth + "]" * depth,
+            "integer past the int-to-str digit limit": (
+                '{"files": [{"name": "donner/base/Foo.cc", "line_coverage": [['
+                + "1" * 5000
+                + ", 0]]}]}"
+            ),
+        }
+        for name, contents in cases.items():
+            with self.subTest(name):
+                reference = self._root / "codecov.json"
+                reference.write_text(contents, encoding="utf-8")
+
+                result = self._run("--codecov-reference-json", str(reference))
+
+                self._assert_rejected(result, str(reference), "not valid JSON")
 
     def test_malformed_file_entries_are_rejected(self) -> None:
         cases = {
@@ -382,12 +436,23 @@ class LcovMetricsCommandLineTest(unittest.TestCase):
             "empty file": "",
             "records without DA lines": "SF:donner/base/Foo.cc\nend_of_record\n",
         }
+        reference = self._write_reference(
+            _report_endpoint_response(
+                [{"name": "donner/base/Foo.cc", "line_coverage": [[10, 0], [11, 2]]}]
+            )
+        )
+        option_sets = {
+            "text": [],
+            "json": ["--json"],
+            "text with reference": ["--codecov-reference-json", str(reference)],
+            "json with reference": ["--json", "--codecov-reference-json", str(reference)],
+        }
         for name, contents in cases.items():
-            for json_output in (False, True):
-                with self.subTest(name, json_output=json_output):
+            for options_name, options in option_sets.items():
+                with self.subTest(name, options=options_name):
                     self._report.write_text(contents, encoding="utf-8")
 
-                    result = self._run(*(["--json"] if json_output else []))
+                    result = self._run(*options)
 
                     self._assert_rejected(result, str(self._report), "no executable line")
 
