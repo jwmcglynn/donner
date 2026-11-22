@@ -29,11 +29,12 @@ consteval wgsl::SourceText<N> ReplaceExact(wgsl::SourceText<N> source, std::stri
 
 constexpr auto kArtifact = wgsl::Compile<programs::kSlugFillSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kView = kArtifact.view();
-constexpr auto kChanged = ReplaceExact(
-    ReplaceExact(ReplaceExact(ReplaceExact(programs::kSlugFillSource, "@binding(0)", "@binding(6)"),
-                              "@binding(7)", "@binding(0)"),
-                 "fn vs_main(", "fn vs_test("),
-    "fn fs_main(", "fn fs_test(");
+// One replacement per constant: -fconstexpr-steps bounds each evaluation separately.
+constexpr auto kRebound6Source =
+    ReplaceExact(programs::kSlugFillSource, "@binding(0)", "@binding(6)");
+constexpr auto kRebound0Source = ReplaceExact(kRebound6Source, "@binding(7)", "@binding(0)");
+constexpr auto kRenamedVertexSource = ReplaceExact(kRebound0Source, "fn vs_main(", "fn vs_test(");
+constexpr auto kChanged = ReplaceExact(kRenamedVertexSource, "fn fs_main(", "fn fs_test(");
 constexpr auto kMutated = wgsl::Compile<kChanged, wgsl::Projection::All>();
 constexpr CompiledShaderView kMutatedView = kMutated.view();
 }  // namespace
