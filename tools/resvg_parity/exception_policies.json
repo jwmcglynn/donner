@@ -730,7 +730,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-embedded-svg-with-text.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-embedded-svg-with-text.png"
       }
     },
     {
@@ -753,7 +753,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-hanging-on-vertical.png"
       }
     },
     {
@@ -775,7 +775,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-font-size-adjust-simple-case.png"
       }
     },
     {
@@ -1034,7 +1034,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-method=stretch.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-method=stretch.png"
       }
     },
     {
@@ -1060,13 +1060,13 @@
       "max_pixels": 100,
       "references_by_fixture": {
         "text/textPath/mixed-children-1.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-1.png"
         },
         "text/textPath/mixed-children-2.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-2.png"
         },
         "text/textPath/very-long-text.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-very-long-text.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-very-long-text.png"
         }
       }
     },
@@ -1168,13 +1168,13 @@
       "max_pixels": 100,
       "references_by_fixture": {
         "text/writing-mode/japanese-with-tb.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-japanese-with-tb.png"
         },
         "text/writing-mode/mixed-languages-with-tb.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-mixed-languages-with-tb.png"
         },
         "text/writing-mode/tb-and-punctuation.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-tb-and-punctuation.png"
         }
       }
     }
