@@ -147,18 +147,6 @@ ImageComparisonParams GeodeUnquantizedGoldenGate(ImageComparisonParams params) {
       "budget");
 }
 
-/// \p params, with the Geode comparison disabled: the row blurs text over the crosshair and
-/// compares against a Donner software rendering. The golden's quarter-pixel quantized crosshair
-/// rows lie beside the partially covered blurred text, which the quarter-pixel edge coverage rule
-/// counts.
-ImageComparisonParams GeodeBlurredCrosshairGate(ImageComparisonParams params) {
-  return params.disableBackend(
-      RendererBackend::Geode,
-      "Harness mismatch: the golden's quarter-pixel quantized crosshair rows lie beside the "
-      "partially covered blurred text, which the edge coverage rule counts (602 px with the rule, "
-      "all on the crosshair's two rows)");
-}
-
 /// \p params, with the Geode comparison disabled: the text sits on the reference's crosshair, so
 /// the crosshair's quarter-pixel quantized rows border glyph ink, and the quarter-pixel edge
 /// coverage rule's vertical-neighbor condition rejects those pixels.
@@ -208,15 +196,15 @@ ImageComparisonParams ColorMatrixIdentityGolden() {
       "Reference disagreement: identity output; the reference stores linearRGB in 8 bits");
 }
 
-/// Params for the blurred-text rows, compared against the Donner golden at \p path (see
-/// testdata/golden/README.md): their PNGs draw every glyph edge outside the outline, and the blur
-/// spreads that extra ink into the glyph interiors, where the comparison counts it. The params keep
-/// a view of \p path, so it must be a string literal.
-ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path) {
-  return Params::WithGoldenOverride(
-      path, kDefaultThreshold,
-      "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside the outline; "
-      "Donner's glyph ink equals the outline's area (GlyphInkAreaTest)");
+/// Params for a blurred-text row (see testdata/golden/README.md). The CPU lanes compare against the
+/// Donner golden at \p path: the row's PNG draws every glyph edge outside the outline, and the blur
+/// spreads that extra ink into the glyph interiors, where the comparison counts it. The Geode lanes
+/// compare against Geode's own rendering at \p geodePath. \p reason gives both justifications. The
+/// params keep views of all three arguments, so they must be string literals.
+ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path, std::string_view geodePath,
+                                                std::string_view reason) {
+  return Params::WithGoldenOverride(path, kDefaultThreshold, reason)
+      .withGeodeGoldenOverride(geodePath);
 }
 
 /// Params for a color emoji row compared against the Donner golden at \p path (see
@@ -1731,17 +1719,16 @@ INSTANTIATE_TEST_SUITE_P(
                 // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-filter.svg",
                  HeavyGlyphReferenceGolden(
-                     "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png")
-                     .withGeodeGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/geode/text_textPath_with-filter.png",
-                         "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside "
-                         "the outline; Donner's glyph ink equals the outline's area "
-                         "(GlyphInkAreaTest). Geode compares with its own rendering: its blurred "
-                         "line matches the CPU renderer's (BlurredTextAcrossBackends), and "
-                         "pixelmatch counts the guide and glyph edge coverage under the blur, "
-                         "which it sets aside as anti-aliasing without it. Against an "
-                         "area-coverage control neither matches: Geode is closer by mean error, "
-                         "the CPU renderer by the share of guide edge pixels within 8 levels")},
+                     "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png",
+                     "donner/svg/renderer/testdata/golden/geode/text_textPath_with-filter.png",
+                     "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside "
+                     "the outline; Donner's glyph ink equals the outline's area "
+                     "(GlyphInkAreaTest). Geode compares with its own rendering: its blurred "
+                     "line matches the CPU renderer's (BlurredTextAcrossBackends), and "
+                     "pixelmatch counts the guide and glyph edge coverage under the blur, "
+                     "which it sets aside as anti-aliasing without it. Against an "
+                     "area-coverage control neither matches: Geode is closer by mean error, "
+                     "the CPU renderer by the share of guide edge pixels within 8 levels")},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
@@ -1816,10 +1803,18 @@ INSTANTIATE_TEST_SUITE_P(
                     {"bidi-reordering.svg",
                      Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
                          "Arabic shaping")},
-                    // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                    // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                     {"with-filter.svg",
-                     GeodeBlurredCrosshairGate(HeavyGlyphReferenceGolden(
-                         "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png"))},
+                     HeavyGlyphReferenceGolden(
+                         "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png",
+                         "donner/svg/renderer/testdata/golden/geode/text_tspan_with-filter.png",
+                         "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px "
+                         "outside the outline; Donner's glyph ink equals the outline's area "
+                         "(GlyphInkAreaTest). Geode compares with its own rendering: its "
+                         "blurred text matches the CPU renderer's (BlurredTextAcrossBackends), "
+                         "and every counted pixel is on the crosshair's two rows, where Geode "
+                         "and an area-coverage control store 159 and the CPU golden 128 and "
+                         "192")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

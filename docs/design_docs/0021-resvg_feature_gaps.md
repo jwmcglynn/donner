@@ -112,8 +112,8 @@ one lane is not counted among that lane's comparisons.
 | --- | ---: | ---: | ---: | ---: |
 | `default_text` | 1,554 | 98 | 26 | 1 |
 | `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,548 | 98 | 21 | 1 |
-| `geode_max_text` | 359 | 30 | 0 | 1 |
+| `geode` | 1,549 | 98 | 21 | 1 |
+| `geode_max_text` | 360 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->
 

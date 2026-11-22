@@ -1991,7 +1991,6 @@ GEODE_GATE_ALLOWLIST: dict[str, frozenset[str]] = {
     "text/text-decoration/underline-with-dy-list-2.svg": BOTH_TIERS,
     "text/text/compound-emojis-and-coordinates-list.svg": BOTH_TIERS,
     "text/text/compound-emojis.svg": BOTH_TIERS,
-    "text/tspan/with-filter.svg": BOTH_TIERS,
     "text/tspan/with-mask.svg": BOTH_TIERS,
     "text/unicode-bidi/bidi-override.svg": BOTH_TIERS,
     "text/writing-mode/japanese-with-tb.svg": BOTH_TIERS,

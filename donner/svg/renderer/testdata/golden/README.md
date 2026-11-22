@@ -1237,9 +1237,8 @@ the plain "Text" reference of `tspan/with-clip-path`, `tspan/with-mask` and othe
 9,168 pixels on simple text. The suite's results.csv records Chrome and Safari passing the vendored
 PNGs of both rows and Firefox and resvg failing them; those are visual grades, which cannot see a
 0.25 px edge offset. The full text tier matches both goldens with no differing pixel at default
-settings. Geode disables its comparison of `tspan/with-filter` (`GEODE_GATE_ALLOWLIST` in
-`parity_report.py`) and compares `textPath/with-filter` with a Geode golden (see "Geode goldens
-for translucent text over unfiltered edges").
+settings. Geode compares both rows with Geode goldens (see "Geode goldens for translucent text
+over unfiltered edges").
 
 Independent evidence: `GlyphInkAreaTest.RenderedInkEqualsExactOutlineArea`
 (`//donner/svg/renderer/tests:glyph_ink_area_tests`, on both renderers and both text tiers) requires
@@ -1556,7 +1555,7 @@ unfiltered edges"). The
 Firefox gradient-stroke images are browser renderings, which this table does not admit; their rows
 compare Geode with Geode goldens instead (see "Geode goldens for the gradient strokes"). `donner-tspan-with-filter.png` is a Donner software rendering, but its
 Geode difference lies on the crosshair beside the partially covered blurred text, which the rule
-counts, so its row does not opt in.
+counts, so its row does not opt in; it compares Geode with a Geode golden instead.
 
 Four more Donner software renderings, compared only with full shaping, are not recorded. Geode
 differs from `donner-compound-emojis.png`, `donner-compound-emojis-and-coordinates-list.png` and
@@ -1652,7 +1651,7 @@ To regenerate, delete a file and run from the repository root on Linux with the 
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run --config=geode \
   //donner/svg/renderer/tests:resvg_test_suite_geode -- \
-  '--gtest_filter=TextTextPath/*with_filter_GeodeGolden'
+  '--gtest_filter=TextTextPath/*with_filter_GeodeGolden:TextTspan/*with_filter_GeodeGolden'
 ```
 
 ### `text/textPath/with-filter`
@@ -1702,6 +1701,30 @@ Measurements are on Metal; software Vulkan gives the same figures within two pix
 The Metal comparison counts no pixel in either text tier.
 
 PNG SHA-256: `42b144c626434a72eb5dc95936854ee1582a7cd041385cefe891f98c4a57671f`.
+
+### `text/tspan/with-filter`
+
+`geode/text_tspan_with-filter.png`. The CPU lanes compare against `donner-tspan-with-filter.png`,
+itself a Donner software rendering (see "`text/tspan/with-filter` and `text/textPath/with-filter`"),
+so neither lane of this row is an independent comparison either.
+
+The fixture blurs "Text" (`stdDeviation="4"`) over the 0.5-unit crosshair, whose horizontal line
+spans device rows 249.375 to 250.625: an exact coverage of 0.625 in rows 249 and 250. Against
+`donner-tspan-with-filter.png` Geode counts 691 pixels on Metal and on software Vulkan, all on rows
+249 and 250.
+
+- The blurred text rendered alone, without the crosshair, counts no pixel between Geode and the CPU
+  renderer. Geode's blurred text composited over the CPU renderer's crosshair reproduces the golden
+  with no counted pixel; the CPU renderer's blurred text over Geode's crosshair counts 691.
+- On those rows the CPU renderer's sub-scanline coverage stores 128 and 192 (its edges fall on
+  quarter-pixel rows), and Geode stores 159 and 159. The 8x8 area-coverage control of the
+  crosshair drawn at 4000x4000 stores 159.4 and 159.4.
+
+Here Geode matches area coverage and the CPU golden does not, a stronger case than
+`text/textPath/with-filter`. With simple text Metal's rendering equals the golden, and the Metal
+comparison counts no pixel in either text tier.
+
+PNG SHA-256: `b6bb89d9f73c7b4399d5f969ed4a6ecf34a24e7edecd1e8976b64fe8d06bfdb6`.
 
 ## Registered golden digests
 
@@ -1757,6 +1780,7 @@ regenerates or adds a golden.
 | `geode/painting_stroke_linear-gradient-on-text.png` | `abb34a4510ae98c4c7545d8149d0a819e3f5fcd01037c4e08d8ac8e0a7c7ea5c` | Gradient strokes on text |
 | `geode/painting_stroke_radial-gradient-on-text.png` | `d80fc8c1d88df9e57484ebf839243fef522fcdd5872079903e1ce07046bc1891` | Gradient strokes on text |
 | `geode/text_textPath_with-filter.png` | `42b144c626434a72eb5dc95936854ee1582a7cd041385cefe891f98c4a57671f` | Geode goldens for translucent text over unfiltered edges |
+| `geode/text_tspan_with-filter.png` | `b6bb89d9f73c7b4399d5f969ed4a6ecf34a24e7edecd1e8976b64fe8d06bfdb6` | Geode goldens for translucent text over unfiltered edges |
 | `resvg-all-types-inline-bands.png` | `4a9f8b2def1a673e91396d9eb64ff2e71aaada40ad5cb616ae1e56d3132ca911` | Inline text decoration |
 | `resvg-closed-path.png` | `284366764d62e3c5a25f43b30ee3b8f115761e3b03dac6f0257d44fa54d00706` | textPath/closed-path references |
 | `resvg-complex-graphemes-and-coordinates-list.png` | `0c37edfeafdd94c8a9b8414f1c5794fee897b933a0dbd6a3e1ad8087bcba6b83` | Cyrillic combining mark position |

@@ -190,19 +190,21 @@
         "text/tspan/with-filter.svg"
       ],
       "kinds": [
+        "geode_golden",
         "shared_golden"
       ],
       "classification": "reference-disagreement",
-      "disposition": "Compare against the Donner rendering whose glyph ink equals the outline area.",
+      "disposition": "Compare against the Donner rendering whose glyph ink equals the outline area. Geode compares with its own rendering as a regression check: its blurred text matches the CPU renderer's, and every counted pixel is on the crosshair's two rows, where Geode's coverage equals an area-coverage control's and the CPU renderer's sub-scanline coverage does not.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "donner/svg/renderer/tests/GlyphInkArea_tests.cc"
       ],
-      "removal_criteria": "Use an adjacent reference whose glyph ink matches the outline area and that passes at default settings.",
-      "reference_provenance": "Donner CPU rendering; the vendored PNG draws glyph edges 0.25 to 0.3 px outside the outline.",
+      "removal_criteria": "Use an adjacent reference whose glyph ink matches the outline area and that passes at default settings; retire the Geode golden when a shared reference passes both renderers at default settings.",
+      "reference_provenance": "Donner CPU rendering; the vendored PNG draws glyph edges 0.25 to 0.3 px outside the outline. Geode golden written by the resvg suite harness on software Vulkan.",
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
+        "geode_golden": "donner/svg/renderer/testdata/golden/geode/text_tspan_with-filter.png",
         "shared_golden": "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png"
       }
     },
