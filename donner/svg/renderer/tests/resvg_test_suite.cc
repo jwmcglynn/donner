@@ -159,18 +159,6 @@ ImageComparisonParams GeodeBlurredCrosshairGate(ImageComparisonParams params) {
       "all on the crosshair's two rows)");
 }
 
-/// \p params, with the Geode comparison disabled: the row blurs text on paths and compares against
-/// a Donner software rendering that is not quarter-pixel quantized there, so quantization does not
-/// explain the difference.
-ImageComparisonParams GeodeUnresolvedBlurGate(ImageComparisonParams params) {
-  return params.disableBackend(
-      RendererBackend::Geode,
-      "Unresolved: Geode counts 496 px (497 on software Vulkan) against this Donner software "
-      "rendering, which the CPU renderer matches exactly; the golden is not quarter-pixel "
-      "quantized there (share 0.011), and the pixels lie on the blurred glyph edges, the guide "
-      "paths and their overlap");
-}
-
 /// \p params, with the Geode comparison disabled: the text sits on the reference's crosshair, so
 /// the crosshair's quarter-pixel quantized rows border glyph ink, and the quarter-pixel edge
 /// coverage rule's vertical-neighbor condition rejects those pixels.
@@ -1740,10 +1728,20 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
-                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-filter.svg",
-                 GeodeUnresolvedBlurGate(HeavyGlyphReferenceGolden(
-                     "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png"))},
+                 HeavyGlyphReferenceGolden(
+                     "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png")
+                     .withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/text_textPath_with-filter.png",
+                         "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside "
+                         "the outline; Donner's glyph ink equals the outline's area "
+                         "(GlyphInkAreaTest). Geode compares with its own rendering: its blurred "
+                         "line matches the CPU renderer's (BlurredTextAcrossBackends), and "
+                         "pixelmatch counts the guide and glyph edge coverage under the blur, "
+                         "which it sets aside as anti-aliasing without it. Against an "
+                         "area-coverage control neither matches: Geode is closer by mean error, "
+                         "the CPU renderer by the share of guide edge pixels within 8 levels")},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
