@@ -921,15 +921,15 @@ struct RendererGeodeTextureBucket {
  * one retained-memory budget covers the editor's main, compositor, and thumbnail renderers.
  *
  * The pool's currency is the runtime's own \c gpu::Texture, so a pooled texture is already named
- * to the runtime when it is handed out and needs no per-frame import.
+ * to the runtime when it is handed out and needs no per-frame import. It holds the device it
+ * allocates from rather than taking one per call, because a texture must be destroyed through
+ * that device on eviction and in this pool's destructor, where no caller is present to supply
+ * one.
  *
  * A bucket hands its textures out in the order the most recent frame took them, whatever order
  * they came back in, so a frame that repeats the previous frame's acquisitions gets back the same
  * texture for each one. Caches keyed on texture identity, such as the filter engine's views and
- * bind groups, therefore stay valid across unchanged frames. It holds the device it
- * allocates from rather than taking one per call, because a texture must be destroyed through
- * that device on eviction and in this pool's destructor, where no caller is present to supply
- * one.
+ * bind groups, therefore stay valid across unchanged frames.
  */
 class RendererGeodeTexturePool {
 public:

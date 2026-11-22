@@ -86,7 +86,8 @@ struct FilterResourceCache {
     uint64_t size = 0;
     /// The bytes successfully uploaded to \ref buffer, at their offsets.
     std::vector<uint8_t> uploaded;
-    /// Per slot-aligned offset, how many bytes from that offset on \ref uploaded is known to hold.
+    /// Per slot-aligned offset, how many bytes from there on \ref buffer is known to hold as they
+    /// appear in \ref uploaded.
     std::vector<uint64_t> knownBytesAt;
   };
 
