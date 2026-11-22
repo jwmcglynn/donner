@@ -511,15 +511,21 @@ INSTANTIATE_TEST_SUITE_P(
                 {"everything-via-xlink-href.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-xlink-filter-bounds.png")
-                     .withReason("Inherited filter bounds match the independently clipped input")},
+                     .withReason("Reference disagreement: the PNG stores the opaque input as "
+                                 "(0, 113, 49, 209); the golden clips the input to the inherited "
+                                 "filter region before the blur")},
                 {"some-attributes-via-xlink-href.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-xlink-filter-bounds.png")
-                     .withReason("Inherited filter bounds match the independently clipped input")},
+                     .withReason("Reference disagreement: the PNG stores the opaque input as "
+                                 "(0, 113, 49, 209); the golden clips the input to the inherited "
+                                 "filter region before the blur")},
                 {"with-region-and-subregion.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-filter-input-and-subregion.png")
-                     .withReason("Independent input clipping and primitive output subregion")},
+                     .withReason("Reference disagreement: the PNG stores the opaque input as "
+                                 "(0, 113, 49, 209); the golden clips the input at the filter "
+                                 "region and the output at the primitive subregion")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"complex-order-and-xlink-href.svg",
                  Params::WithGoldenOverride(
@@ -548,12 +554,14 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
                      kDefaultThreshold,
-                     "Explicit half-box clip; opaque interior and exact crosshair")},
+                     "Reference disagreement: the PNG stores reduced alpha in the opaque "
+                     "interior; the golden clips the half-size primitive explicitly")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-2.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
                      kDefaultThreshold,
-                     "Explicit half-box clip; opaque interior and exact crosshair")},
+                     "Reference disagreement: the PNG stores reduced alpha in the opaque "
+                     "interior; the golden clips the half-size primitive explicitly")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"in=BackgroundAlpha.svg",
                  Params::WithGoldenOverride(
@@ -1090,7 +1098,7 @@ INSTANTIATE_TEST_SUITE_P(
                     // quarters; see testdata/golden/README.md.
                     {"embedded-svg-with-text.svg",
                      Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-embedded-svg-with-text.png")
+                         "donner/svg/renderer/testdata/golden/donner-embedded-svg-with-text.png")
                          .withReason("Harness mismatch: SVG images get the suite's test fonts")},
                 })),
             ValuesIn(ActiveComparisonModes())),
@@ -1144,8 +1152,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
                               "and update the encoding declaration (#1182)")},
 
-                {"funcIRI-with-quotes.svg", Params{}},
-                {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1222,7 +1228,7 @@ INSTANTIATE_TEST_SUITE_P(
 
                     {"hanging-on-vertical.svg",
                      Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png")
+                         "donner/svg/renderer/testdata/golden/donner-hanging-on-vertical.png")
                          .withReason("Reference disagreement: the PNG advances upright glyphs "
                                      "1.39 em, not the 1 em vmtx advance CSS Writing Modes 3 "
                                      "5.1.1 requires (golden README)")
@@ -1385,7 +1391,7 @@ INSTANTIATE_TEST_SUITE_P(
                 // the golden is Donner's rendering; testdata/golden/README.md has the evidence.
                 {{"simple-case.svg",
                   Params::WithGoldenOverride(
-                      "donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png")
+                      "donner/svg/renderer/testdata/golden/donner-font-size-adjust-simple-case.png")
                       .withReason("Reference disagreement: text-anchor centers the shaped "
                                   "(kerned) advance (#1173)")}})),
             ValuesIn(ActiveComparisonModes())),
@@ -1547,7 +1553,7 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
                     {"rotate-with-multiple-values-and-complex-text.svg",
                      Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
-                         "Complex diatrics requires text-full")},
+                         "Complex diacritics require text-full")},
                     {"x-and-y-with-multiple-values-and-arabic-text.svg",
                      Params().onlyTextFull().withReason("Arabic text shaping")},
                     {"zalgo.svg",
@@ -1714,18 +1720,18 @@ INSTANTIATE_TEST_SUITE_P(
                 // regeneration.
                 {"method=stretch.svg",
                  Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-method=stretch.png")
+                     "donner/svg/renderer/testdata/golden/donner-textPath-method=stretch.png")
                      .withReason("Reference disagreement: the vendored PNG is align placement")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
+                     "donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-1.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 // SVG 2 continues the text after a textPath from the path's end point; the
                 // vendored PNG continues from the end of the glyphs on the path, so the golden is
                 // Donner's own rendering; testdata/golden/README.md records its evidence.
                 {"mixed-children-2.svg",
                  Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png")
+                     "donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-2.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"side=right.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
@@ -1736,7 +1742,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Regression golden for absolute distance along the text path")},
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
+                     "donner/svg/renderer/testdata/golden/donner-textPath-very-long-text.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::UndefinedBehavior("baseline-shift + rotate")},
@@ -1875,7 +1881,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"japanese-with-tb.svg",
                  GeodeCrosshairOnlyGoldenGate(
                      Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png")
+                         "donner/svg/renderer/testdata/golden/donner-japanese-with-tb.png")
                          .onlyTextFull()
                          .withReason("Reference disagreement: the PNG places upright glyphs 5.6 px "
                                      "below the vmtx origin CSS Writing Modes 3 5.1.1 requires "
@@ -1889,14 +1895,14 @@ INSTANTIATE_TEST_SUITE_P(
                      "Decoration 3)")},
                 {"mixed-languages-with-tb.svg",
                  Params::WithGoldenOverride(
-                     "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png")
+                     "donner/svg/renderer/testdata/golden/donner-mixed-languages-with-tb.png")
                      .onlyTextFull()
                      .withReason("Reference disagreement: upright glyphs 0.4 px below the vmtx "
                                  "origin CSS Writing Modes 3 5.1.1 requires (golden README)")},
                 {"tb-and-punctuation.svg",
                  GeodeGlyphEdgeGoldenGate(
                      Params::WithGoldenOverride(
-                         "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png")
+                         "donner/svg/renderer/testdata/golden/donner-tb-and-punctuation.png")
                          .onlyTextFull()
                          .withReason("Reference disagreement: the PNG lacks the `vert` punctuation "
                                      "forms and vmtx origin CSS Writing Modes 3 5.1.1 requires "

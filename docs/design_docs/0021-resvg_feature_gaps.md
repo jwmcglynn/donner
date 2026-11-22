@@ -531,7 +531,7 @@ renderings, byte-identical to the resvg v0.50.0 release, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 
 The `embedded-svg-with-text` row is a harness mismatch and compares against a Donner rendering
-(`testdata/golden/resvg-embedded-svg-with-text.png`) at the default settings on every backend. The
+(`testdata/golden/donner-embedded-svg-with-text.png`) at the default settings on every backend. The
 vendored reference omits the embedded SVG's text, which browsers and resvg draw; the resvg v0.49.0
 rendering draws it but quantizes the embedded frame lines' coverage to quarters. The golden encodes
 a harness-only configuration: the suite gives SVG image documents its test fonts, as a stand-in for
