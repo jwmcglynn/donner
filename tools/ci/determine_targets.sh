@@ -420,6 +420,19 @@ determine() {
     -fh "$work_dir/head-hashes.json" \
     -o "$work_dir/affected.txt"
 
+  # bazel-diff can report a changed repository as //external:name even when
+  # hashing excludes the old WORKSPACE package. Bazel 9 cannot query that
+  # marker, and it alone does not identify the repository's consumers.
+  if grep -q '^//external:' "$work_dir/affected.txt"; then
+    echo "Repository change reported by bazel-diff; keeping full graph coverage."
+    if [[ "$selection" != "hosted-editor" ]]; then
+      echo "fallback=true" >> "$GITHUB_OUTPUT"
+      echo "affected=" >> "$GITHUB_OUTPUT"
+      echo "wgpu_reference_unknown=true" >> "$GITHUB_OUTPUT"
+    fi
+    return
+  fi
+
   if [[ "$selection" == "hosted-editor" ]]; then
     # Hosted test labels are manual and would be discarded by the ordinary planner.
     select_hosted_editor "$work_dir" "$planner_dir"

@@ -267,6 +267,7 @@ class DetermineTest(_ScriptTest):
         controls = [
             {"labels": ("ci:full-test",)},
             {"ancestry": "merge0 unrelated-base other-pr"},
+            {"affected": "//external:harfbuzz\n//donner/native:only\n"},
             {"changed": "donner/editor/wasm/tests/pnpm-lock.yaml\n"},
             {"changed": "tools/ci/editor_wasm_stage.py\n"},
             {"queries": _queries(**{_HOSTED_ROOT_QUERY: ("", 1)})},
@@ -469,6 +470,13 @@ class DetermineTest(_ScriptTest):
         for call in hashing:
             self.assertEqual(call, _hashing(self.runner_temp, call[call.index("-w") + 1],
                                             call[-1]))
+
+    def test_changed_repository_marker_selects_full_coverage_before_queries(self):
+        result, calls, outputs = self.determine(affected="//external:harfbuzz\n//a:b\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.queried(calls), [])
+        self.assert_outputs(outputs, "full_test=false", "wgpu_reference_changed=false",
+                            "fallback=true", "affected=", "wgpu_reference_unknown=true")
 
     def test_generated_variants_do_not_inflate_the_affected_selection(self):
         hardware = 'kind("(ci_platform_test|test_suite) rule", attr(tags, "ci-linux-hardware-gpu", //...))'
