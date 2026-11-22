@@ -208,3 +208,107 @@ test("a real native pixel mismatch throws before marking the sample checked", ()
   for (const file of context.callerFiles) assert.equal(fs.readFileSync(file, "utf8"), sentinel);
   assert.deepEqual(fs.readdirSync(scratch), []);
 });
+
+const kComparisonCase = {
+  classname: "StandaloneGeodeBrowserPngCompare",
+  name: "CanvasMatchesGolden",
+  status: "RUN",
+  result: "COMPLETED",
+};
+const kCompletedReport = {
+  tests: 1,
+  failures: 0,
+  disabled: 0,
+  errors: 0,
+  testsuites: [{ testsuite: [kComparisonCase] }],
+};
+const kCallerProtocolSettings = [
+  "XML_OUTPUT_FILE",
+  "TEST_PREMATURE_EXIT_FILE",
+  "TEST_SHARD_STATUS_FILE",
+  "TEST_WARNINGS_OUTPUT_FILE",
+  "GTEST_SHARD_STATUS_FILE",
+];
+const stubDirectory = fs.mkdtempSync(path.join(process.env.TEST_TMPDIR, "incomplete-comparator-"));
+
+/**
+ * Writes a comparator that exits 0 without completing its comparison case. It writes every caller
+ * test-protocol file whose setting reaches it, and the JSON report that an inherited GTEST_OUTPUT
+ * names, so a leaked setting overwrites that caller file.
+ */
+function incompleteComparator(name, report) {
+  const file = path.join(stubDirectory, `${name}.sh`);
+  const lines = [
+    "#!/bin/sh",
+    ...kCallerProtocolSettings.map((setting) =>
+      `if [ -n "$${setting}" ]; then echo stub > "$${setting}"; fi`
+    ),
+    "case \"$GTEST_OUTPUT\" in json:*) echo stub > \"${GTEST_OUTPUT#json:}\" ;; esac",
+  ];
+  if (report) {
+    fs.writeFileSync(`${file}.json`, JSON.stringify(report));
+    lines.push(
+      "for arg in \"$@\"; do",
+      `  case "$arg" in --gtest_output=json:*) cp '${file}.json' "\${arg#*json:}" ;; esac`,
+      "done",
+    );
+  }
+  lines.push("exit 0", "");
+  fs.writeFileSync(file, lines.join("\n"), { mode: 0o755 });
+  return file;
+}
+
+const kIncompleteComparators = [
+  [
+    "exits without a report",
+    incompleteComparator("no-report", null),
+    /bitmap comparator wrote no readable report/,
+  ],
+  [
+    "selects no case",
+    incompleteComparator("no-case", {
+      tests: 0,
+      failures: 0,
+      disabled: 0,
+      errors: 0,
+      testsuites: [],
+    }),
+    /bitmap comparator did not complete exactly one valid comparison/,
+  ],
+  [
+    "skips its case",
+    incompleteComparator("skipped-case", {
+      ...kCompletedReport,
+      testsuites: [{ testsuite: [{ ...kComparisonCase, result: "SKIPPED" }] }],
+    }),
+    /bitmap comparator did not complete exactly one valid comparison/,
+  ],
+];
+
+for (const [behavior, comparator, expectedError] of kIncompleteComparators) {
+  test(`a comparator that ${behavior} fails the sample instead of checking it`, () => {
+    const context = setup(`incomplete-${path.basename(comparator, ".sh")}`, true);
+    const [sample] = authoredSamples(context.outputDirectory);
+    // A completed report from an earlier run must not stand in for this one.
+    fs.writeFileSync(
+      path.join(context.outputDirectory, `${sample.sequence}-compare.json`),
+      JSON.stringify(kCompletedReport),
+    );
+    assert.throws(
+      () =>
+        compareGpuTransferSamples([sample], context.outputDirectory, {
+          ...context.environment,
+          DONNER_BROWSER_GOLDEN_COMPARE: comparator,
+        }),
+      expectedError,
+    );
+    assert.equal(sample.pixelChecked, false, "an incomplete comparison must not check the sample");
+    for (const file of context.callerFiles) {
+      assert.equal(
+        fs.readFileSync(file, "utf8"),
+        sentinel,
+        `the comparator must not write ${path.basename(file)}`,
+      );
+    }
+  });
+}
