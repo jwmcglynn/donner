@@ -212,12 +212,11 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     filters, and on 8.1 for `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
     text inside nested viewports; whether its text needs 8.8 is not traced.
   - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`) and
-    solid-filled glyphs draw from resident outlines, but pattern- and gradient-painted glyphs and
-    text decorations are placed and encoded as transient geometry every frame. Clears
-    `geode_text_decoration_underline`, `geode_text_pattern_fill`,
-    `geode_text_span_gradient_over_pattern`, `geode_text_span_gradient_over_pattern_stroke`. The
-    three pattern-painted scenes depend on 8.5. The corpus reason strings for these entries say
-    placed text has no path cache or residency; correcting them is a follow-up to the corpus test.
+    solid-filled glyphs draw from resident outlines, but pattern- and gradient-painted glyphs,
+    stroked glyphs, glyphs stretched along a text path, and text decorations are placed and encoded
+    as transient geometry every frame. Clears `geode_text_decoration_underline`,
+    `geode_text_pattern_fill`, `geode_text_span_gradient_over_pattern`,
+    `geode_text_span_gradient_over_pattern_stroke`. The three pattern-painted scenes depend on 8.5.
 
 ## Background
 
@@ -327,10 +326,9 @@ Steady-state invariants on an unchanged second frame, asserted per corpus scene:
 - `bufferWrites == 0`: resident geometry and unchanged uniforms are not re-uploaded.
 - `bindgroupCreates <= 6`: bind groups are cached per slot and per batch, not built per draw.
 
-`kKnownViolations` lists the corpus scenes measured to miss one or more of these. An entry can
-carry a separate mask and ceilings for the build with ordered batching, and two entries
-(`svg2_e_use_003`, `svg2_e_use_004`) violate only with batching off; ordered batching is always
-compiled in, so they already meet the steady state. Milestone 8 covers the other 27.
+`kKnownViolations` lists the corpus scenes measured to miss one or more of these, all of them
+covered by Milestone 8. An entry names the counters it breaks and can carry separate ceilings for
+the build with ordered batching, which is always compiled in.
 
 ## Testing and Validation
 
@@ -339,10 +337,10 @@ compiled in, so they already meet the steady state. Milestone 8 covers the other
   `consumeReadbackStats()`.
 - `//donner/svg/renderer/geode:geode_counter_corpus_tests`: the corpus-wide steady-state gate.
   `kKnownViolations` records each corpus scene measured to miss an invariant, the counters it
-  breaks, their measured ceilings, and the reason, with an optional separate mask and ceilings for
-  the build with ordered batching. A listed scene must still break the counters its entry
-  names, so fixing a scene fails the suite until its entry is deleted, and a listed scene cannot
-  get worse. Every scene must also render visible pixels unless listed in `kDeliberatelyInert`.
+  breaks, their measured ceilings, and the reason, with optional separate ceilings for the build
+  with ordered batching. A listed scene must still break the counters its entry names, so fixing
+  a scene fails the suite until its entry is deleted, and a listed scene cannot get worse. Every
+  scene must also render visible pixels unless listed in `kDeliberatelyInert`.
 - `//donner/svg/renderer/geode:geode_device_tests`, `:geode_path_encoder_tests`,
   `:geode_shaders_tests`, `:geo_encoder_tests`: existing unit tests stay green.
 - `//donner/svg/renderer/tests:renderer_geode_golden_tests`: strict-identity goldens stay

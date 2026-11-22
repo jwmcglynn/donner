@@ -100,11 +100,6 @@ struct FrameSample {
   }
 };
 
-/// Sentinel for `KnownViolation::sceneBatchingViolated`: no override, the
-/// batching build breaks exactly what `violated` names. A plain `0` cannot
-/// serve, because "breaks nothing" is a meaningful value here.
-constexpr uint32_t kViolatedSameAsBase = ~uint32_t{0};
-
 /// Bit per gated counter, used by `KnownViolation::violated` to say which
 /// invariants a scene is currently allowed (and required) to break.
 enum CounterBit : uint32_t {
@@ -165,7 +160,9 @@ constexpr CounterField kCounterFields[] = {
 struct KnownViolation {
   /// Scene name, i.e. the SVG filename without its extension.
   std::string_view scene;
-  /// Bitmask of `CounterBit`: the counters this scene must STILL break.
+  /// Bitmask of `CounterBit`: the counters this scene must STILL break. One
+  /// mask covers every build, so an entry whose counters all hold in the build
+  /// under test fails the still-violating assertion and must be deleted.
   uint32_t violated;
   /// The full measured frame-two counter set. The counters named in
   /// `violated` are enforced as ceilings, so a listed scene cannot get worse
@@ -175,14 +172,6 @@ struct KnownViolation {
   std::string_view reason;
   /// What has to change for this entry to be deleted.
   std::string_view tracking;
-  /// Counters this scene still breaks in a build with cross-entity ordered
-  /// batching compiled in. Batching can fix a violation OUTRIGHT rather than
-  /// only moving its number, and an entry that went on listing a counter the
-  /// shipped build already holds would hide the next regression behind a
-  /// stale ceiling - the still-violating assertion is what catches that.
-  /// `kViolatedSameAsBase` keeps `violated`; `0` means the batching build
-  /// breaks nothing here and the scene is held to the shared target.
-  uint32_t sceneBatchingViolated = kViolatedSameAsBase;
   /// Counters whose measured value differs with cross-entity ordered batching
   /// compiled in, and the value they take there. A ceiling is the EXACT
   /// measurement of one build, so a scene that measures differently in the two
@@ -193,14 +182,6 @@ struct KnownViolation {
   uint32_t sceneBatchingDiffers = 0;
   Observed sceneBatchingCeiling = {};
 };
-
-/// Resolve `entry`'s violated mask for the build under test.
-constexpr uint32_t effectiveViolated(const KnownViolation& entry, bool sceneBatching) {
-  if (!sceneBatching || entry.sceneBatchingViolated == kViolatedSameAsBase) {
-    return entry.violated;
-  }
-  return entry.sceneBatchingViolated;
-}
 
 /// Resolve `entry`'s ceiling for the build under test, taking each counter
 /// from whichever measurement applies.
@@ -224,7 +205,7 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
   return out;
 }
 
-constexpr std::array<KnownViolation, 29> kKnownViolations = {{
+constexpr std::array<KnownViolation, 27> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kBufferWrites | kBindgroupCreates,
@@ -359,41 +340,45 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{1, 0, 9, 1},
         /*reason=*/
-        "glyph and decoration outlines are re-encoded and re-uploaded every frame; placed "
-        "text has no path cache or residency",
+        "the solid glyphs draw from the resident glyph cache, but the underline is a decoration "
+        "line, encoded as transient geometry and uploaded through the per-frame arena every frame",
         /*tracking=*/
-        "clears when placed glyph geometry gets the same per-entity cache and residency "
-        "shapes have",
+        "clears when text decoration lines keep their encoded geometry across unchanged frames",
     },
     {
         /*scene=*/"geode_text_pattern_fill",
         /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{4, 0, 24, 4},
         /*reason=*/
-        "glyph outlines re-encode and re-upload every frame; placed text has no path cache or "
-        "residency",
+        "the glyph cache serves only solid, unwarped fills, so each pattern-painted glyph is "
+        "placed, encoded as transient geometry and drawn through the per-frame arena every frame",
         /*tracking=*/
-        "clears when placed glyph geometry gains residency",
+        "clears when pattern-painted glyphs draw from resident glyph outlines and the tiled fill "
+        "gains residency",
     },
     {
         /*scene=*/"geode_text_span_gradient_over_pattern",
         /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{3, 0, 21, 3},
         /*reason=*/
-        "glyph outlines re-encode and re-upload every frame; placed text has no path cache or "
-        "residency",
+        "the glyph cache serves only solid, unwarped fills, so the pattern-painted glyphs and the "
+        "gradient-painted span glyph are each placed, encoded as transient geometry and drawn "
+        "through the per-frame arena every frame",
         /*tracking=*/
-        "clears when placed glyph geometry gains residency",
+        "clears when gradient- and pattern-painted glyphs draw from resident glyph outlines and "
+        "the tiled fill gains residency",
     },
     {
         /*scene=*/"geode_text_span_gradient_over_pattern_stroke",
         /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{3, 0, 21, 3},
         /*reason=*/
-        "glyph outlines re-encode and re-upload every frame; placed text has no path cache or "
-        "residency",
+        "stroked glyphs bypass the glyph cache whatever their paint, so each run's stroke outline "
+        "(pattern or gradient here) is expanded, encoded as transient geometry and drawn through "
+        "the per-frame arena every frame",
         /*tracking=*/
-        "clears when placed glyph geometry gains residency",
+        "clears when glyph stroke outlines keep their encoded geometry across unchanged frames "
+        "and the tiled stroke gains residency",
     },
     {
         /*scene=*/"image_data_url_opacity",
@@ -476,7 +461,6 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*tracking=*/
         "clears when nested-viewport subtrees, placed text, and use instances all keep their "
         "cached geometry",
-        /*sceneBatchingViolated=*/kViolatedSameAsBase,
         /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
         /*sceneBatchingCeiling=*/{4, 0, 746, 84},
     },
@@ -491,7 +475,6 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*tracking=*/
         "clears when the stroke cache keys on the resolved stroke style rather than one slot "
         "per source entity",
-        /*sceneBatchingViolated=*/kViolatedSameAsBase,
         /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
         /*sceneBatchingCeiling=*/{12, 0, 97, 19},
     },
@@ -506,36 +489,6 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*tracking=*/
         "clears when the stroke cache keys on the resolved stroke style rather than one slot "
         "per source entity",
-    },
-    {
-        /*scene=*/"svg2_e_use_003",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 9, 1},
-        /*reason=*/
-        "the stroke outline of a styled use instance draws through the per-frame arena "
-        "instead of a resident buffer; ordered batching draws it from the instance record "
-        "instead, which is why the batching build breaks nothing here",
-        /*tracking=*/
-        "clears when use-instance stroke outlines gain the residency their fills already "
-        "have",
-        /*sceneBatchingViolated=*/0,
-        /*sceneBatchingDiffers=*/kBufferWrites,
-        /*sceneBatchingCeiling=*/{0, 0, 0, 1},
-    },
-    {
-        /*scene=*/"svg2_e_use_004",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 9, 1},
-        /*reason=*/
-        "the stroke outline of a styled use instance draws through the per-frame arena "
-        "instead of a resident buffer; ordered batching draws it from the instance record "
-        "instead, which is why the batching build breaks nothing here",
-        /*tracking=*/
-        "clears when use-instance stroke outlines gain the residency their fills already "
-        "have",
-        /*sceneBatchingViolated=*/0,
-        /*sceneBatchingDiffers=*/kBufferWrites,
-        /*sceneBatchingCeiling=*/{0, 0, 0, 1},
     },
 }};
 
@@ -865,10 +818,7 @@ TEST_P(GeodeCounterCorpusTest, SecondFrameIsSteadyState) {
   for (const CounterField& field : kCounterFields) {
     const uint64_t value = sample.gated.*field.member;
     const uint64_t target = kSteadyState.*field.member;
-    const bool expectedToViolate =
-        known != nullptr &&
-        (effectiveViolated(*known, RendererGeode::sceneBatchingEnabledForTesting()) & field.bit) !=
-            0;
+    const bool expectedToViolate = known != nullptr && (known->violated & field.bit) != 0;
 
     if (!expectedToViolate) {
       EXPECT_LE(value, target)
@@ -962,14 +912,6 @@ TEST(GeodeCounterCorpusGate, KnownViolationsAreWellFormed) {
     EXPECT_FALSE(entry.tracking.empty())
         << "kKnownViolations entry '" << entry.scene << "' needs a tracking note.";
 
-    EXPECT_EQ(entry.sceneBatchingViolated == kViolatedSameAsBase
-                  ? 0u
-                  : (entry.sceneBatchingViolated & ~entry.violated),
-              0u)
-        << "kKnownViolations entry '" << entry.scene
-        << "' marks a counter violated in the batching build that the base build does not "
-        << "list, so the base build would fail the shared assertion on it. Widen `violated`.";
-
     EXPECT_EQ(entry.sceneBatchingDiffers & ~entry.violated, 0u)
         << "kKnownViolations entry '" << entry.scene
         << "' records a scene-batching ceiling for a counter it does not mark violated, so that "
@@ -977,12 +919,10 @@ TEST(GeodeCounterCorpusGate, KnownViolationsAreWellFormed) {
 
     const Observed entryCeilings =
         effectiveCeiling(entry, RendererGeode::sceneBatchingEnabledForTesting());
-    const uint32_t entryViolated =
-        effectiveViolated(entry, RendererGeode::sceneBatchingEnabledForTesting());
     for (const CounterField& field : kCounterFields) {
       const uint64_t ceiling = entryCeilings.*field.member;
       const uint64_t target = kSteadyState.*field.member;
-      if ((entryViolated & field.bit) != 0) {
+      if ((entry.violated & field.bit) != 0) {
         EXPECT_GT(ceiling, target)
             << "kKnownViolations entry '" << entry.scene << "' marks " << field.name
             << " as violated but records a ceiling at or below the shared target, so the "
