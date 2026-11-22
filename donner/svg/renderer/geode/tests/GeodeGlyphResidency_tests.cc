@@ -362,27 +362,26 @@ TEST(GeodeGlyphCacheTest, BeginFrameTrimsAtMostOncePerFrame) {
   EXPECT_EQ(cache.size(), 1u);
 }
 
-TEST(GeodeTextInstanceRecordComponentTest, OccurrenceAddressesSurviveGrowth) {
+TEST(GeodeOccurrenceRecordsTest, OccurrenceAddressesSurviveGrowth) {
   // A pending batch holds pointers into these entries while later occurrences
   // are still appending; a reallocating container would leave the batch
   // writing through dangling pointers at flush.
-  GeodeTextInstanceRecordComponent component;
-  component.occurrences.push_back(std::make_unique<GeodeTextInstanceRecordComponent::Occurrence>());
-  const GeodeTextInstanceRecordComponent::Occurrence* first = component.occurrences.front().get();
+  GeodeOccurrenceRecords component;
+  component.occurrences.push_back(std::make_unique<GeodeOccurrenceRecords::Occurrence>());
+  const GeodeOccurrenceRecords::Occurrence* first = component.occurrences.front().get();
 
   for (int i = 0; i < 512; ++i) {
-    component.occurrences.push_back(
-        std::make_unique<GeodeTextInstanceRecordComponent::Occurrence>());
+    component.occurrences.push_back(std::make_unique<GeodeOccurrenceRecords::Occurrence>());
   }
 
   EXPECT_EQ(component.occurrences.front().get(), first);
 }
 
-TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrenceStorage) {
+TEST(GeodeOccurrenceRecordsTest, SharedFamilyBoundsProjectedOccurrenceStorage) {
   uint64_t occurrenceBytes = 0;
   {
     auto probeBudget = std::make_shared<GeodeDocumentGeometryBudget>();
-    GeodeTextInstanceRecordComponent probe;
+    GeodeOccurrenceRecords probe;
     ASSERT_TRUE(probe.reserveOccurrence(probeBudget));
     ASSERT_TRUE(probe.appendReservedOccurrence(GeodeRecordSlab::Slot{}));
     occurrenceBytes = probe.cpuRetainedBytesForTesting();
@@ -395,8 +394,8 @@ TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrence
   auto secondDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
 
   {
-    GeodeTextInstanceRecordComponent first;
-    GeodeTextInstanceRecordComponent second;
+    GeodeOccurrenceRecords first;
+    GeodeOccurrenceRecords second;
     ASSERT_TRUE(first.reserveOccurrence(firstDocument));
     ASSERT_TRUE(first.appendReservedOccurrence(GeodeRecordSlab::Slot{}));
     EXPECT_FALSE(second.reserveOccurrence(secondDocument));
@@ -408,16 +407,16 @@ TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrence
             0u);
 }
 
-TEST(GeodeTextInstanceRecordComponentTest, ChargedOccurrenceMovesAndReleasesExactlyOnce) {
+TEST(GeodeOccurrenceRecordsTest, ChargedOccurrenceMovesAndReleasesExactlyOnce) {
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
 
   {
-    GeodeTextInstanceRecordComponent source;
+    GeodeOccurrenceRecords source;
     ASSERT_TRUE(source.reserveOccurrence(budget));
     ASSERT_TRUE(source.appendReservedOccurrence(GeodeRecordSlab::Slot{}));
     const uint64_t occurrenceBytes = source.cpuRetainedBytesForTesting();
-    GeodeTextInstanceRecordComponent moved(std::move(source));
-    GeodeTextInstanceRecordComponent assigned;
+    GeodeOccurrenceRecords moved(std::move(source));
+    GeodeOccurrenceRecords assigned;
     assigned = std::move(moved);
     EXPECT_EQ(budget->cacheBytes(), occurrenceBytes);
   }
@@ -425,20 +424,20 @@ TEST(GeodeTextInstanceRecordComponentTest, ChargedOccurrenceMovesAndReleasesExac
   EXPECT_EQ(budget->cacheBytes(), 0u);
 }
 
-TEST(GeodeTextInstanceRecordComponentTest, MoveLeavesTheSourceWithNoSlotsToRelease) {
+TEST(GeodeOccurrenceRecordsTest, MoveLeavesTheSourceWithNoSlotsToRelease) {
   // entt's swap-and-pop removal move-assigns the surviving component over the
   // removed one; a source that kept its slots would free the survivor's
   // records from its own destructor.
-  GeodeTextInstanceRecordComponent source;
-  source.occurrences.push_back(std::make_unique<GeodeTextInstanceRecordComponent::Occurrence>());
+  GeodeOccurrenceRecords source;
+  source.occurrences.push_back(std::make_unique<GeodeOccurrenceRecords::Occurrence>());
   source.lastFrame = 5u;
 
-  GeodeTextInstanceRecordComponent moved = std::move(source);
+  GeodeOccurrenceRecords moved = std::move(source);
   EXPECT_EQ(moved.occurrences.size(), 1u);
   EXPECT_EQ(moved.lastFrame, 5u);
   EXPECT_TRUE(source.occurrences.empty());
 
-  GeodeTextInstanceRecordComponent assigned;
+  GeodeOccurrenceRecords assigned;
   assigned = std::move(moved);
   EXPECT_EQ(assigned.occurrences.size(), 1u);
   EXPECT_TRUE(moved.occurrences.empty());

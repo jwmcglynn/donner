@@ -224,7 +224,7 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
   return out;
 }
 
-constexpr std::array<KnownViolation, 29> kKnownViolations = {{
+constexpr std::array<KnownViolation, 28> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kBufferWrites | kBindgroupCreates,
@@ -439,32 +439,28 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         "than holding one entry per source",
     },
     {
-        /*scene=*/"marker",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 414, 46},
-        /*reason=*/
-        "every drawn marker instance re-uploads its geometry through the per-frame arena and "
-        "builds its own bind group",
-        /*tracking=*/"clears when marker instance geometry gains per-entity residency",
-    },
-    {
         /*scene=*/"marker_segments",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 203, 43},
+        /*ceiling=*/{0, 0, 23, 23},
         /*reason=*/
-        "every drawn marker instance re-uploads its geometry and rebuilds its bind groups each "
-        "frame",
+        "the marker content carries opacity, so every marker instance draws inside its own "
+        "opacity group, whose composite rewrites its blit uniform and builds a bind group "
+        "every frame",
         /*tracking=*/
-        "clears when marker instance geometry gains per-entity residency",
+        "clears when the isolated-layer composite keeps its uniform and bind group across "
+        "unchanged frames",
     },
     {
         /*scene=*/"marker_spec_example",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 92, 20},
+        /*ceiling=*/{0, 0, 11, 11},
         /*reason=*/
-        "every drawn marker instance re-uploads its geometry through the per-frame arena and "
-        "builds its own bind group",
-        /*tracking=*/"clears when marker instance geometry gains per-entity residency",
+        "two of the three markers' content carries opacity, so each of their instances draws "
+        "inside its own opacity group, whose composite rewrites its blit uniform and builds a "
+        "bind group every frame",
+        /*tracking=*/
+        "clears when the isolated-layer composite keeps its uniform and bind group across "
+        "unchanged frames",
     },
     {
         /*scene=*/"nested_svg_aspectratio",

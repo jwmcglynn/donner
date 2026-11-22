@@ -1947,5 +1947,54 @@ TEST_F(GeodePerfTest, RecordSourcedAndUniformSourcedDrawsAgree) {
       << firstX << ", " << firstY << ")";
 }
 
+// ---------------------------------------------------------------------------
+// Marker instances.
+//
+// A marker's content is one entity drawn once per vertex, each placement at
+// its own transform. `#clipped` keeps the default `overflow: hidden`, so each
+// placement also draws inside its own viewport clip, and its content has both a
+// fill and a stroke. `#loose` is unclipped and sits on an unstroked path, so its
+// first placement is a lone pending draw that the next placement repeats
+// exactly. Every placement after the first of each content entity is a repeat
+// of a resident slot whose uniform and primary record already serve the first.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kMarkerInstancesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+  <marker id="clipped" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+    <path d="M0 0 L8 4 L0 8 Z" fill="#c00" stroke="#003"/>
+  </marker>
+  <marker id="loose" viewBox="0 0 6 6" markerWidth="6" markerHeight="6" refX="3" refY="3"
+          overflow="visible">
+    <circle cx="3" cy="3" r="3" fill="#06c"/>
+  </marker>
+  <polyline points="10,90 40,20 70,80 100,30 130,70 160,25 190,85" fill="none" stroke="#333"
+            stroke-width="2" marker-start="url(#clipped)" marker-mid="url(#clipped)"
+            marker-end="url(#clipped)"/>
+  <path d="M10 110 H60 H110 H160 H190" fill="none" marker-start="url(#loose)"
+        marker-mid="url(#loose)" marker-end="url(#loose)"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, MarkerInstances_SecondFrameIsSteadyState) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kMarkerInstancesSvg, device);
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
+  ASSERT_FALSE(frame.bitmap.empty()) << "renderer produced no snapshot";
+  ASSERT_GT(frame.counters.drawCalls, 0u) << "the scene must reach the fill path";
+
+  // Every placement after the first reuses its content's resident geometry and
+  // keeps a record of its own across frames, so an unchanged frame encodes,
+  // uploads and binds nothing new.
+  EXPECT_EQ(frame.counters.pathEncodes, 0u);
+  EXPECT_EQ(frame.counters.textureCreates, 0u);
+  EXPECT_EQ(frame.counters.bufferWrites, 0u)
+      << "repeated marker placements must not re-upload geometry or rewrite their records";
+  EXPECT_EQ(frame.counters.bufferWriteBytes, 0u);
+  EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
+      << "repeated marker placements must not build a bind group per draw";
+}
+
 }  // namespace
 }  // namespace donner::svg

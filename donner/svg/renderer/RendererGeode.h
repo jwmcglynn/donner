@@ -589,6 +589,10 @@ public:
   /// Lower the path encoder's per-path item limit for boundary tests; never raises it.
   void setPathEncoderItemLimitForTesting(std::size_t maximumItems);
 
+  /// Lower the persistent records one resident slot keeps for its second and later draws in a
+  /// frame (4096) for boundary tests; never raises it.
+  void setRepeatRecordLimitForTesting(std::size_t maximumRecords);
+
   /// Lower the outline points joined into one text stroke shape (65536) for tests; never raises it.
   void setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints);
 

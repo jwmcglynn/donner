@@ -1,8 +1,9 @@
 # Design: Geode Rendering Performance
 
 **Status:** Design. On an unchanged frame, resident solid and gradient fills and strokes re-encode,
-create and re-upload nothing, and ordered batching draws runs of resident draws as instanced draws.
-Steady-state residency for markers, patterns, images, filter passes, layer composites, clip and mask
+create and re-upload nothing, including the second and later draws of one entity in a frame such as
+marker placements, and ordered batching draws runs of resident draws as instanced draws.
+Steady-state residency for patterns, images, filter passes, layer composites, clip and mask
 geometry, and painted text is still open (Milestone 8), as are index-keyed filter results
 (Milestone 5). `geode_counter_corpus_tests` records the corpus scenes measured to miss the steady
 state.
@@ -180,10 +181,14 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     path with different stroke styles thrash the single stroke slot and re-encode every frame.
     Clears `poker_chips`, `stroking_complex`. Bound the extra slots with the retained-geometry
     budget.
-  - [ ] 8.2: Marker instance residency. Every drawn marker re-uploads its geometry through the
-    per-frame arena and builds its own bind group. Clears `marker`, `marker_segments`,
-    `marker_spec_example`. A design that batches markers through instance records and needs new
-    record fields changes the `SlugFillInstance` layout.
+  - [x] 8.2: Marker instance residency. A marker's content is one entity drawn once per placement;
+    its first placement of a frame draws from its resident slot's uniform, and every later one
+    takes a persistent record of its own (`GeodeResidentSlot::repeatRecords`) over the same
+    resident geometry and joins ordered batches. The record's existing transform, paint, and clip
+    rectangle carry the placement, so the `SlugFillInstance` layout is unchanged.
+    `MarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame. Clears `marker`.
+    `marker_segments` and `marker_spec_example` put `opacity` on the marker content, so each
+    placement also composites an isolated layer; they clear with 8.3.
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
     group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Clears `Edzample_Anim3`. The
     corpus also records `donner_icon`, whose gradient-painted paths under an opacity group
@@ -280,7 +285,15 @@ Entity with <path d="...">
   stops from a stop-ramp texture (`GeodeGradientRamp`), which resident slots keep across frames, so
   an unchanged frame uploads no ramp (`ManyStopGradient_OneRampThenZeroWrites`).
 - **Residency gates.** Residence is taken only when no clip polygon, clip mask, or mask pass is
-  active, and once per slot per frame. Draws that fail a gate use the per-frame arena path.
+  active. Draws that fail a gate use the per-frame arena path.
+- **Repeats within a frame.** A slot's uniform and primary record serve its first draw of a frame.
+  Its second and later draws in the frame (each marker placement, a repeated `<use>` source) take
+  persistent records from `GeodeResidentSlot::repeatRecords`: the `i`-th repeat writes record `i`,
+  only when its bytes change, so an edit that moves or repaints a placement rewrites exactly the
+  records it changed. A slot keeps at most 4096 such records, each a 256-byte GPU record plus a few
+  hundred bytes of CPU bookkeeping charged to the document's geometry budget, so under 3 MiB per
+  slot; repeats past that write a record that lives for one frame. Gradient-painted repeats keep the arena path, because a gradient's
+  parameters live in the slot's single paint block.
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
   order.
@@ -330,7 +343,7 @@ Steady-state invariants on an unchanged second frame, asserted per corpus scene:
 `kKnownViolations` lists the corpus scenes measured to miss one or more of these. An entry can
 carry a separate mask and ceilings for the build with ordered batching, and two entries
 (`svg2_e_use_003`, `svg2_e_use_004`) violate only with batching off; ordered batching is always
-compiled in, so they already meet the steady state. Milestone 8 covers the other 27.
+compiled in, so they already meet the steady state. Milestone 8 covers the other 26.
 
 ## Testing and Validation
 
