@@ -876,15 +876,15 @@ class TestedMergeHistoryTest(_ScriptTest):
                     shutil.rmtree(self.workspace)
                     self.workspace.mkdir()
                 self.check_out("test-merge", depth)
-                result, _, outputs = self.select("pr-meta")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assert_outputs(outputs, "base_sha=" + self.advanced)
                 result, _, outputs = self.select("determine")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 # The pull request's own targets, including one the other change also touched;
                 # never //other:other, which only the other change touched.
                 self.assertTrue(outputs.endswith(
                     "fallback=false\naffected=//feature:feature //shared:shared\n"), outputs)
+                result, _, outputs = self.select("pr-meta")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_outputs(outputs, "base_sha=" + self.advanced)
                 cached = self.home / ".cache/bazel-diff-base-hashes" / (self.advanced + ".json")
                 self.assertEqual(sorted(json.loads(cached.read_text())),
                                  ["//feature:feature", "//other:other", "//shared:shared",
@@ -895,14 +895,14 @@ class TestedMergeHistoryTest(_ScriptTest):
     def test_a_checkout_without_the_merge_parents_selects_full_coverage(self):
         # actions/checkout's default depth: the test merge's parents are not fetched.
         self.check_out("test-merge", depth=1)
-        result, _, outputs = self.select("pr-meta")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_outputs(outputs, "base_sha=")
         result, calls, outputs = self.select("determine")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_outputs(outputs, *self._FULL_COVERAGE)
         self.assertIn("Cannot bind the tested checkout to the PR head", result.stdout)
         self.assertFalse(any(call[0] == "java" for call in calls))
+        result, _, outputs = self.select("pr-meta")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_outputs(outputs, "base_sha=")
 
     def test_a_pull_request_head_checkout_compares_with_the_payload_base(self):
         # The head itself lacks the other change, so the payload's base commit is its base.
