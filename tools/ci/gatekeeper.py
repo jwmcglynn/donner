@@ -10,8 +10,10 @@ for every event. Who may run what (trust and secrets) stays in the workflow itse
                   request already covers. That push and the pull request's synchronize event
                   would otherwise run CI twice at the same commit; the push run then skips
                   cleanly instead of being cancelled. Needs `GH_TOKEN` for `gh pr list`.
-  docs-only       `docs_only=true` for a pull request whose changes, since its merge base, are
-                  all documentation. Anything that is not a pull request is never docs-only.
+  docs-only       `docs_only=true` for a pull request whose test merge, the checkout in the
+                  working directory, changes only documentation relative to its first parent.
+                  Any other event, a checkout that is not that merge and a git failure are
+                  never docs-only.
   main-advanced --workflow FILE
                   `should_run=true` for a manual dispatch, or when origin/main has moved since
                   FILE's last successful run (or FILE has none). A scheduled nightly then skips
@@ -85,36 +87,50 @@ def duplicate_push(environ: Mapping[str, str], run: Callable[[list[str]], str] =
     return False
 
 
-def _diff_base(base_sha: str, head_sha: str) -> str:
-    # base.sha is the base commit recorded in the event payload, which can lag the base branch.
-    # Diff from its merge base with the head, so base-branch changes are not attributed to the
-    # pull request. When that merge base is not the fork point (base.sha older than the fork, or
-    # off the branch's history), the diff can add paths the pull request did not change, which
-    # can clear docs_only, or set it when the pull request's own diff is empty, and it misses a
-    # path the pull request restored to that commit's content. If the merge base cannot be
-    # computed, the same holds for a diff from base.sha.
-    merge_base = subprocess.run(["git", "merge-base", base_sha, head_sha],
-                                stdout=subprocess.PIPE, text=True, check=False)
-    if merge_base.returncode == 0:
-        diff_base = merge_base.stdout.strip()
-        print(f"Using merge-base {diff_base} as diff basis.")
-        return diff_base
-    print(f"git merge-base failed; using base tip {base_sha} as diff basis.")
-    return base_sha
+def _git(*args: str) -> str | None:
+    """Runs git and returns its stdout, or None when git fails."""
+    result = subprocess.run(["git", *args], stdout=subprocess.PIPE, text=True, check=False)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _tested_merge(head_sha: str) -> tuple[str, str] | None:
+    """Returns the checked-out test merge and its first parent, or None if it cannot be bound.
+
+    CI builds GitHub's merge of the pull request head into the base branch tip, so the merge's
+    first parent is the tested base; the event payload's base commit can lag it. Only a merge
+    with exactly two parents whose second is the payload's head is bound. A shallow checkout
+    lists no parents, so it is not.
+    """
+    ancestry = _git("rev-list", "--parents", "-n", "1", "HEAD")
+    commits = ancestry.split() if ancestry is not None else []
+    if len(commits) != 3 or commits[2] != head_sha:
+        print(f"Cannot bind the checkout to a test merge of the pull request head {head_sha}: "
+              f"HEAD and its parents are {commits or 'unavailable'}.")
+        return None
+    return commits[0], commits[1]
 
 
 def docs_only(environ: Mapping[str, str]) -> bool:
     if environ["GITHUB_EVENT_NAME"] != "pull_request":
         return False
     event = json.loads(Path(environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-    base_sha = event["pull_request"]["base"]["sha"]
-    head_sha = event["pull_request"]["head"]["sha"]
+    head_sha = event.get("pull_request", {}).get("head", {}).get("sha") or ""
+    # The checkout is PR-controlled data: it is read through git only, never executed. Anything
+    # that does not bind to the tested merge, and any git failure, runs CI.
+    tested = _tested_merge(head_sha)
+    if tested is None:
+        return False
+    merge, first_parent = tested
+    print(f"Comparing test merge {merge} with its first parent {first_parent}.")
     # Deletions count: deleting a build input (a source, a BUILD file, a CMake file) can break
     # the build as surely as editing it. --no-renames reports a rename as its deleted old path and
     # its added new path, so moving a build input under docs/ is not docs-only either.
-    changed = _run(["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACMD",
-                    _diff_base(base_sha, head_sha), head_sha]).splitlines()
-    return _all_docs(path for path in changed if path)
+    changed = _git("diff", "--name-only", "--no-renames", "--diff-filter=ACMD", first_parent,
+                   merge)
+    if changed is None:
+        print("git diff failed; not docs-only.")
+        return False
+    return _all_docs(path for path in changed.splitlines() if path)
 
 
 def _all_docs(paths: Iterable[str]) -> bool:
