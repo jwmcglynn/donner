@@ -11,7 +11,7 @@ import sys
 import time
 import typing
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -754,12 +754,12 @@ def _target_to_testlogs_subpath(target: str) -> str:
 
 
 def _collect_failure_images_for_target(test_outputs_dir: Path) -> typing.List[Path]:
-    """Return the image-comparison PNGs a failed target left behind.
+    """Return the image-comparison PNGs one test run left behind.
 
-    A target's undeclared outputs live under ``<testlogs>/<path>/test.outputs``
-    either as loose files or (when there is more than one) inside
-    ``outputs.zip``. We surface the loose-file case directly; callers extract
-    the zip case first.
+    A run's undeclared outputs live in its ``test.outputs`` directory (or
+    ``attempt_<n>.outputs`` for a retried attempt), either as loose files or
+    inside ``outputs.zip``. We surface the loose-file case directly; callers
+    extract the zip case first.
     """
     images: typing.List[Path] = []
     if not test_outputs_dir.is_dir():
@@ -770,65 +770,96 @@ def _collect_failure_images_for_target(test_outputs_dir: Path) -> typing.List[Pa
     return images
 
 
+def _failed_run_output_dirs(
+    result: TestCaseResult, bazel_testlogs: Path
+) -> dict[str, Path]:
+    """Map the logs Bazel listed for a failed target to their output directories.
+
+    Keys are the run directory relative to the target's testlogs directory:
+    ``""`` for an unsharded single run, ``shard_1_of_2`` or
+    ``shard_1_of_2_run_2_of_2`` for a shard or ``--runs_per_test`` run, and
+    ``shard_1_of_2/test_attempts/attempt_1`` for a retried attempt. Only runs
+    this invocation listed count: Bazel never removes directories from earlier
+    invocations, so an unsharded ``test.outputs`` can sit beside newer shard
+    directories. Logs outside the target's testlogs directory are ignored.
+    """
+    target_dir = (bazel_testlogs / _target_to_testlogs_subpath(result.target)).resolve()
+    runs: dict[str, Path] = {}
+    for log in result.logs:
+        log_path = Path(log).resolve()
+        if log_path.name == "test.log":
+            run_dir, outputs_dir = log_path.parent, log_path.with_name("test.outputs")
+        elif log_path.parent.name == "test_attempts":
+            run_dir = log_path.with_suffix("")
+            outputs_dir = log_path.with_suffix(".outputs")
+        else:
+            continue
+        if not run_dir.is_relative_to(target_dir):
+            continue
+        label = run_dir.relative_to(target_dir).as_posix()
+        runs[label if label != "." else ""] = outputs_dir
+    return runs
+
+
+def _stage_run_images(outputs_dir: Path, unzip_dir: Path) -> typing.List[tuple[str, Path]]:
+    """Return ``(file name, path)`` for one run's loose and zipped failure PNGs."""
+    staged = [(path.name, path) for path in _collect_failure_images_for_target(outputs_dir)]
+    zip_path = outputs_dir / "outputs.zip"
+    if not zip_path.is_file():
+        return staged
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            for member in zf.namelist():
+                base = Path(member).name
+                if base.startswith(_FAILURE_IMAGE_PREFIXES) and base.endswith(".png"):
+                    staged.append((base, Path(zf.extract(member, unzip_dir))))
+    except (OSError, zipfile.BadZipFile):
+        pass
+    return staged
+
+
+def _copy_run_images(outputs_dir: Path, run_destination: Path, destination: Path) -> set[str]:
+    """Copy one run's failure PNGs into ``run_destination``.
+
+    Returns the copied paths relative to ``destination``.
+    """
+    unzip_dir = run_destination / "_unzip"
+    try:
+        staged = _stage_run_images(outputs_dir, unzip_dir)
+        if staged:
+            run_destination.mkdir(parents=True, exist_ok=True)
+        copied = set()
+        for name, source in staged:
+            dest_file = run_destination / name
+            shutil.copyfile(source, dest_file)
+            copied.add(dest_file.relative_to(destination).as_posix())
+        return copied
+    finally:
+        shutil.rmtree(unzip_dir, ignore_errors=True)
+
+
 def _harvest_failed_image_artifacts(
-    failed_targets: typing.Sequence[str],
+    failed_results: typing.Sequence[TestCaseResult],
     destination: Path,
     bazel_testlogs: Path,
 ) -> dict[str, typing.List[str]]:
     """Copy SVG-vs-golden PNGs from failed targets into ``destination``.
 
-    Returns ``{target: [relative_png_path, ...]}`` for every failed target
-    that produced image-comparison artifacts. Paths are relative to
+    Each failed run's images land in its own directory, so same-named images
+    from different shards, runs or attempts stay distinct. Returns
+    ``{target: [relative_png_path, ...]}`` for every failed target that
+    produced image-comparison artifacts. Paths are relative to
     ``destination`` so the report can build links from its ``reports/`` root.
     Targets that produced no such PNGs (non-image failures) are omitted.
     """
     harvested: dict[str, typing.List[str]] = {}
-    for target in failed_targets:
-        subpath = _target_to_testlogs_subpath(target)
-        outputs_dir = bazel_testlogs / subpath / "test.outputs"
-        if not outputs_dir.exists():
-            continue
-
-        # Materialize a flat working copy: loose PNGs plus anything inside a
-        # bundled outputs.zip.
-        staged: typing.List[tuple[str, Path]] = []
-        for path in _collect_failure_images_for_target(outputs_dir):
-            staged.append((path.name, path))
-
-        zip_path = outputs_dir / "outputs.zip"
-        extracted_dir: typing.Optional[Path] = None
-        if zip_path.is_file():
-            extracted_dir = destination / subpath / "_unzip"
-            try:
-                with zipfile.ZipFile(zip_path) as zf:
-                    for member in zf.namelist():
-                        base = Path(member).name
-                        if base.startswith(_FAILURE_IMAGE_PREFIXES) and base.endswith(
-                            ".png"
-                        ):
-                            zf.extract(member, extracted_dir)
-                            staged.append((base, extracted_dir / member))
-            except (OSError, zipfile.BadZipFile):
-                pass
-
-        if not staged:
-            if extracted_dir is not None and extracted_dir.exists():
-                shutil.rmtree(extracted_dir, ignore_errors=True)
-            continue
-
-        target_dir = destination / subpath
-        target_dir.mkdir(parents=True, exist_ok=True)
-        rel_paths: typing.List[str] = []
-        for name, source in staged:
-            dest_file = target_dir / name
-            shutil.copyfile(source, dest_file)
-            rel_paths.append(dest_file.relative_to(destination).as_posix())
-
-        if extracted_dir is not None and extracted_dir.exists():
-            shutil.rmtree(extracted_dir, ignore_errors=True)
-
+    for result in failed_results:
+        target_destination = destination / _target_to_testlogs_subpath(result.target)
+        rel_paths: set[str] = set()
+        for label, outputs_dir in _failed_run_output_dirs(result, bazel_testlogs).items():
+            rel_paths |= _copy_run_images(outputs_dir, target_destination / label, destination)
         if rel_paths:
-            harvested[target] = sorted(set(rel_paths))
+            harvested[result.target] = sorted(rel_paths)
     return harvested
 
 
@@ -842,7 +873,7 @@ def _resolve_bazel_testlogs() -> typing.Optional[Path]:
 
 
 def _render_failed_image_comparisons(
-    failed_targets: typing.Sequence[str],
+    failed_results: typing.Sequence[TestCaseResult],
     reports_root: typing.Optional[Path],
     *,
     bazel_testlogs: typing.Optional[Path] = None,
@@ -854,12 +885,12 @@ def _render_failed_image_comparisons(
     string when there are no failed targets, no artifacts, or no place to
     stage them.
     """
-    if not failed_targets:
+    if not failed_results:
         return ""
     if reports_root is None:
         # Without a checked-in reports tree we have nowhere to publish the
         # PNGs, so just name the failing targets.
-        listed = "\n".join(f"- `{t}`" for t in failed_targets)
+        listed = "\n".join(f"- `{r.target}`" for r in failed_results)
         return (
             "### Failed image comparisons\n\n"
             "The following targets failed; regenerate with `--save "
@@ -876,7 +907,7 @@ def _render_failed_image_comparisons(
     if destination.exists():
         shutil.rmtree(destination)
 
-    harvested = _harvest_failed_image_artifacts(failed_targets, destination, bazel_testlogs)
+    harvested = _harvest_failed_image_artifacts(failed_results, destination, bazel_testlogs)
     if not harvested:
         # No image-comparison artifacts (the failures were non-visual). Leave
         # the staging dir clean and emit nothing.
@@ -895,11 +926,13 @@ def _render_failed_image_comparisons(
     for target in sorted(harvested):
         lines.append(f"#### `{target}`")
         lines.append("")
+        target_subpath = _target_to_testlogs_subpath(target)
         for rel in harvested[target]:
             # Build the link relative to docs/ (the report lives at
             # docs/build_report.md, reports_root is docs/reports).
             href = f"reports/{_TEST_FAILURE_IMAGE_DIR}/{Path(rel).as_posix()}"
-            caption = Path(rel).name
+            # The run directory prefix tells same-named shard images apart.
+            caption = Path(rel).relative_to(target_subpath).as_posix()
             lines.append(f"![{caption}]({href})")
         lines.append("")
     return "\n".join(lines).rstrip()
@@ -932,6 +965,9 @@ class TestCaseResult:
     target: str
     status: str  # PASSED / FAILED / FLAKY / TIMEOUT / SKIPPED / NO STATUS / ...
     detail: str  # e.g. "in 1.2s", "(cached)", or "" when absent.
+    # Logs Bazel listed under the summary line: one per failed shard, run or
+    # retried attempt of this invocation.
+    logs: tuple[str, ...] = ()
 
 
 # `bazel test` summary lines look like:
@@ -961,6 +997,13 @@ _BAZEL_TEST_LINE_RE = re.compile(
     + r")"
     r"(?P<detail>.*)$"
 )
+# Bazel lists the log of every failed shard, run and retried attempt indented
+# under the target's summary line, e.g.
+#   /.../testlogs/pkg/target/shard_1_of_2_run_2_of_2/test.log
+#   /.../testlogs/pkg/target/shard_1_of_2/test_attempts/attempt_1.log
+_BAZEL_TEST_LOG_LINE_RE = re.compile(
+    r"^\s+(?P<path>/.*/(?:test\.log|test_attempts/attempt_\d+\.log))\s*$"
+)
 
 
 def parse_bazel_test_results(stdout: str) -> typing.List[TestCaseResult]:
@@ -971,13 +1014,16 @@ def parse_bazel_test_results(stdout: str) -> typing.List[TestCaseResult]:
     shape (build progress, the trailing "Executed N out of M tests" line) are
     ignored. The result is de-duplicated by target (last status wins) so a
     target that appears in both a per-shard line and the summary isn't double
-    counted.
+    counted. Log paths indented under a target's line are kept in ``logs``.
     """
     by_target: dict[str, TestCaseResult] = {}
+    current: typing.Optional[str] = None
     for line in stdout.splitlines():
         match = _BAZEL_TEST_LINE_RE.match(line.strip())
         if match is None:
+            current = _record_test_log(by_target, current, line)
             continue
+        current = match.group("target")
         detail = match.group("detail").strip()
         if match.group("cached"):
             detail = f"(cached) {detail}".strip()
@@ -987,6 +1033,23 @@ def parse_bazel_test_results(stdout: str) -> typing.List[TestCaseResult]:
             detail=detail,
         )
     return sorted(by_target.values(), key=lambda r: (r.status != "FAILED", r.target))
+
+
+def _record_test_log(
+    by_target: dict[str, TestCaseResult], current: typing.Optional[str], line: str
+) -> typing.Optional[str]:
+    """Attach an indented log line to ``current``; return the target still open.
+
+    Indented lines (logs, "Stats over N runs") keep the target's block open; any
+    other line closes it.
+    """
+    if current is None or not line[:1].isspace():
+        return None
+    log = _BAZEL_TEST_LOG_LINE_RE.match(line)
+    if log is not None:
+        record = by_target[current]
+        by_target[current] = replace(record, logs=record.logs + (log.group("path"),))
+    return current
 
 
 # Order test-status groups so failures/flakes surface at the top of the table.
@@ -1070,7 +1133,7 @@ def make_tests_section(
     # so parse both streams to populate the results table and failed-image harvest.
     combined_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
     parsed = parse_bazel_test_results(combined_output)
-    failed_targets = [r.target for r in parsed if r.status in ("FAILED", "TIMEOUT")]
+    failed_results = [r for r in parsed if r.status in ("FAILED", "TIMEOUT")]
 
     lines = [
         f"Generated with: `{format_command(args)}`",
@@ -1081,7 +1144,7 @@ def make_tests_section(
     ]
 
     failure_section = _render_failed_image_comparisons(
-        failed_targets, reports_root, bazel_testlogs=bazel_testlogs
+        failed_results, reports_root, bazel_testlogs=bazel_testlogs
     )
     if failure_section:
         lines.extend(["", failure_section])

@@ -17,6 +17,12 @@ MODULE_SPEC.loader.exec_module(generate_build_report)
 TESTS_ARGS = tuple(generate_build_report._TESTS_COMMAND_ARGS)
 
 
+def failed_result(target, testlogs):
+    """A FAILED summary record whose single run logged under ``testlogs``."""
+    log = testlogs / generate_build_report._target_to_testlogs_subpath(target) / "test.log"
+    return generate_build_report.TestCaseResult(target, "FAILED", "in 0.3s", (str(log),))
+
+
 class FakeRunner:
     def __init__(self, results):
         self.results = results
@@ -686,7 +692,11 @@ class GenerateBuildReportTests(unittest.TestCase):
 
             destination = tmp_path / "docs" / "reports" / "test-failures"
             harvested = generate_build_report._harvest_failed_image_artifacts(
-                ["//donner/svg/renderer/tests:renderer_geode_golden_tests"],
+                [
+                    failed_result(
+                        "//donner/svg/renderer/tests:renderer_geode_golden_tests", testlogs
+                    )
+                ],
                 destination,
                 testlogs,
             )
@@ -719,7 +729,7 @@ class GenerateBuildReportTests(unittest.TestCase):
 
             destination = tmp_path / "out"
             harvested = generate_build_report._harvest_failed_image_artifacts(
-                ["//donner/css/tests:css_tests"],
+                [failed_result("//donner/css/tests:css_tests", testlogs)],
                 destination,
                 testlogs,
             )
@@ -744,7 +754,7 @@ class GenerateBuildReportTests(unittest.TestCase):
             reports_root = tmp_path / "docs" / "reports"
             reports_root.mkdir(parents=True)
             block = generate_build_report._render_failed_image_comparisons(
-                ["//donner/svg/tests:svg_tests"],
+                [failed_result("//donner/svg/tests:svg_tests", testlogs)],
                 reports_root,
                 bazel_testlogs=testlogs,
             )
@@ -765,7 +775,7 @@ class GenerateBuildReportTests(unittest.TestCase):
             reports_root = tmp_path / "reports"
             reports_root.mkdir()
             block = generate_build_report._render_failed_image_comparisons(
-                ["//donner/base:base_tests"],
+                [failed_result("//donner/base:base_tests", testlogs)],
                 reports_root,
                 bazel_testlogs=testlogs,
             )
@@ -787,6 +797,280 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("[python-sleep] Still running", status_output)
         self.assertIn("[python-sleep] Completed", status_output)
 
+
+# `bazel test` summaries recorded from Bazel 9.3 on Linux for failing targets that write
+# image-comparison PNGs, with the testlogs root replaced by <testlogs>. Undeclared outputs are
+# loose files under each run's test.outputs. A sharded target lists one log per shard, and
+# --runs_per_test and --flaky_test_attempts add run directories and attempt logs.
+_UNSHARDED_SUMMARY = """\
+INFO: Build completed, 1 test FAILED, 26 total actions
+//donner/example:image_tests                                             FAILED in 0.4s
+  <testlogs>/donner/example/image_tests/test.log
+
+Executed 1 out of 1 test: 1 fails locally.
+"""
+
+_SHARDED_SUMMARY = """\
+FAIL: //donner/example:sharded_image_tests (shard 1 of 2) (Exit 1) (see <testlogs>/donner/example/sharded_image_tests/shard_1_of_2/test.log)
+FAIL: //donner/example:sharded_image_tests (shard 2 of 2) (Exit 1) (see <testlogs>/donner/example/sharded_image_tests/shard_2_of_2/test.log)
+FAILED: //donner/example:sharded_image_tests (Summary)
+      <testlogs>/donner/example/sharded_image_tests/shard_1_of_2/test.log
+      <testlogs>/donner/example/sharded_image_tests/shard_2_of_2/test.log
+INFO: Build completed, 1 test FAILED, 26 total actions
+//donner/example:sharded_image_tests                                     FAILED in 2 out of 2 in 0.4s
+  Stats over 2 runs: max = 0.4s, min = 0.4s, avg = 0.4s, dev = 0.0s
+  <testlogs>/donner/example/sharded_image_tests/shard_1_of_2/test.log
+  <testlogs>/donner/example/sharded_image_tests/shard_2_of_2/test.log
+
+Executed 1 out of 1 test: 1 fails locally.
+"""
+
+_SHARDED_RUNS_SUMMARY = """\
+INFO: Build completed, 1 test FAILED, 7 total actions
+//donner/example:sharded_image_tests                                     FAILED in 4 out of 4 in 0.4s
+  Stats over 4 runs: max = 0.4s, min = 0.4s, avg = 0.4s, dev = 0.0s
+  <testlogs>/donner/example/sharded_image_tests/shard_1_of_2_run_2_of_2/test.log
+  <testlogs>/donner/example/sharded_image_tests/shard_2_of_2_run_2_of_2/test.log
+  <testlogs>/donner/example/sharded_image_tests/shard_2_of_2_run_1_of_2/test.log
+  <testlogs>/donner/example/sharded_image_tests/shard_1_of_2_run_1_of_2/test.log
+
+Executed 1 out of 1 test: 1 fails locally.
+"""
+
+_SHARDED_ATTEMPTS_SUMMARY = """\
+INFO: Build completed, 1 test FAILED, 4 total actions
+//donner/example:sharded_image_tests                                     FAILED in 4 out of 4 in 0.4s
+  Stats over 4 runs: max = 0.4s, min = 0.3s, avg = 0.4s, dev = 0.0s
+  <testlogs>/donner/example/sharded_image_tests/shard_1_of_2/test.log
+  <testlogs>/donner/example/sharded_image_tests/shard_1_of_2/test_attempts/attempt_1.log
+  <testlogs>/donner/example/sharded_image_tests/shard_2_of_2/test.log
+  <testlogs>/donner/example/sharded_image_tests/shard_2_of_2/test_attempts/attempt_1.log
+
+Executed 1 out of 1 test: 1 fails locally.
+"""
+
+_SHARDED_TARGET_DIR = "donner/example/sharded_image_tests"
+_SHARDED_REPORT_PREFIX = "reports/test-failures/" + _SHARDED_TARGET_DIR
+
+
+class FailureImageLayoutTests(unittest.TestCase):
+    """The tests section finds failure images in every testlogs layout Bazel writes."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.testlogs = Path(tmp.name) / "testlogs"
+        self.reports_root = Path(tmp.name) / "docs" / "reports"
+        self.reports_root.mkdir(parents=True)
+
+    def write_run(self, run_dir, images, outputs_name="test.outputs", log_name="test.log"):
+        """Lay out one run directory the way Bazel 9 leaves it after a failure."""
+        directory = self.testlogs / run_dir
+        outputs = directory / outputs_name
+        outputs.mkdir(parents=True)
+        (directory / log_name).write_text("failure log\n")
+        if log_name == "test.log":
+            (directory / "test.xml").write_text("<testsuites/>\n")
+            (directory / "test.outputs_manifest").mkdir()
+            (directory / "test.outputs_manifest" / "MANIFEST").write_text("")
+        for name, payload in images.items():
+            (outputs / name).write_bytes(payload)
+
+    def render_tests_section(self, summary):
+        stderr = summary.replace("<testlogs>", str(self.testlogs))
+        runner = FakeRunner(
+            {
+                TESTS_ARGS: generate_build_report.CommandResult(
+                    label="tests",
+                    args=TESTS_ARGS,
+                    returncode=3,
+                    stdout="",
+                    stderr=stderr,
+                    duration_sec=1.0,
+                )
+            }
+        )
+        return generate_build_report.make_tests_section(
+            runner, self.reports_root, bazel_testlogs=self.testlogs
+        )
+
+    @staticmethod
+    def embedded_images(section):
+        return [line for line in section.content.splitlines() if line.startswith("![")]
+
+    def staged_bytes(self, href):
+        return (self.reports_root.parent / href).read_bytes()
+
+    def write_two_failed_shards(self, run_suffix=""):
+        for shard in (1, 2):
+            self.write_run(
+                f"{_SHARDED_TARGET_DIR}/shard_{shard}_of_2{run_suffix}",
+                {
+                    "diff_Same.png": f"shard {shard}{run_suffix} diff".encode(),
+                    f"actual_Shard{shard}.png": f"shard {shard}{run_suffix} actual".encode(),
+                },
+            )
+
+    def expected_shard_images(self, run_suffix=""):
+        lines = []
+        for shard in (1, 2):
+            run = f"shard_{shard}_of_2{run_suffix}"
+            for name in (f"actual_Shard{shard}.png", "diff_Same.png"):
+                lines.append(f"![{run}/{name}]({_SHARDED_REPORT_PREFIX}/{run}/{name})")
+        return lines
+
+    def test_unsharded_target_images_are_embedded(self):
+        self.write_run(
+            "donner/example/image_tests",
+            {"diff_Case.png": b"diff", "expected_Case.png": b"golden"},
+        )
+
+        section = self.render_tests_section(_UNSHARDED_SUMMARY)
+
+        self.assertEqual(
+            self.embedded_images(section),
+            [
+                "![diff_Case.png](reports/test-failures/donner/example/image_tests/diff_Case.png)",
+                "![expected_Case.png](reports/test-failures/donner/example/image_tests/"
+                "expected_Case.png)",
+            ],
+        )
+
+    def test_every_failed_shard_contributes_its_images(self):
+        self.write_two_failed_shards()
+
+        section = self.render_tests_section(_SHARDED_SUMMARY)
+
+        self.assertEqual(self.embedded_images(section), self.expected_shard_images())
+        # Same-named images from different shards keep their own bytes.
+        self.assertEqual(
+            [
+                self.staged_bytes(f"{_SHARDED_REPORT_PREFIX}/shard_{shard}_of_2/diff_Same.png")
+                for shard in (1, 2)
+            ],
+            [b"shard 1 diff", b"shard 2 diff"],
+        )
+
+    def test_stale_unsharded_results_beside_shards_are_ignored(self):
+        # An earlier unsharded run (for example `bazel run`, which disables sharding) leaves
+        # test.xml, test.log and test.outputs at the target root beside the shard directories.
+        self.write_run(
+            _SHARDED_TARGET_DIR,
+            {"diff_Same.png": b"stale diff", "diff_Stale.png": b"stale"},
+        )
+        self.write_two_failed_shards()
+
+        section = self.render_tests_section(_SHARDED_SUMMARY)
+
+        self.assertEqual(self.embedded_images(section), self.expected_shard_images())
+        self.assertFalse((self.reports_root / "test-failures" / _SHARDED_TARGET_DIR /
+                          "diff_Stale.png").exists())
+
+    def test_runs_per_test_directories_contribute_their_images(self):
+        for run in (1, 2):
+            self.write_two_failed_shards(f"_run_{run}_of_2")
+
+        section = self.render_tests_section(_SHARDED_RUNS_SUMMARY)
+
+        self.assertEqual(
+            self.embedded_images(section),
+            sorted(
+                self.expected_shard_images("_run_1_of_2")
+                + self.expected_shard_images("_run_2_of_2"),
+                key=lambda line: line.split("](")[1],
+            ),
+        )
+
+    def test_retried_attempts_contribute_their_images(self):
+        self.write_two_failed_shards()
+        for shard in (1, 2):
+            self.write_run(
+                f"{_SHARDED_TARGET_DIR}/shard_{shard}_of_2/test_attempts",
+                {"diff_Same.png": f"shard {shard} attempt 1".encode()},
+                outputs_name="attempt_1.outputs",
+                log_name="attempt_1.log",
+            )
+
+        section = self.render_tests_section(_SHARDED_ATTEMPTS_SUMMARY)
+
+        expected = []
+        for shard in (1, 2):
+            run = f"shard_{shard}_of_2"
+            attempt = f"{run}/test_attempts/attempt_1"
+            for image in (f"{run}/actual_Shard{shard}.png", f"{run}/diff_Same.png",
+                          f"{attempt}/diff_Same.png"):
+                expected.append(f"![{image}]({_SHARDED_REPORT_PREFIX}/{image})")
+        self.assertEqual(self.embedded_images(section), expected)
+        self.assertEqual(
+            self.staged_bytes(f"{_SHARDED_REPORT_PREFIX}/shard_2_of_2/test_attempts/attempt_1/"
+                              "diff_Same.png"),
+            b"shard 2 attempt 1",
+        )
+
+    def test_logs_outside_the_target_directory_are_ignored(self):
+        self.write_run("donner/other/other_tests", {"diff_Other.png": b"other"})
+        summary = _UNSHARDED_SUMMARY.replace(
+            "<testlogs>/donner/example/image_tests/test.log",
+            "<testlogs>/donner/example/image_tests/../../other/other_tests/test.log",
+        )
+
+        section = self.render_tests_section(summary)
+
+        self.assertEqual(self.embedded_images(section), [])
+        self.assertFalse((self.reports_root / "test-failures").exists())
+
+    def test_parse_records_the_logs_listed_under_each_target(self):
+        def parse(summary):
+            return [
+                (r.target, r.status, r.logs)
+                for r in generate_build_report.parse_bazel_test_results(
+                    summary.replace("<testlogs>", "/out/testlogs")
+                )
+            ]
+
+        # The per-shard FAIL lines and the mid-run "(Summary)" block do not add logs, even
+        # when another target's summary block came before them.
+        self.assertEqual(
+            parse(_UNSHARDED_SUMMARY + _SHARDED_SUMMARY),
+            [
+                (
+                    "//donner/example:image_tests",
+                    "FAILED",
+                    ("/out/testlogs/donner/example/image_tests/test.log",),
+                ),
+                (
+                    "//donner/example:sharded_image_tests",
+                    "FAILED",
+                    (
+                        f"/out/testlogs/{_SHARDED_TARGET_DIR}/shard_1_of_2/test.log",
+                        f"/out/testlogs/{_SHARDED_TARGET_DIR}/shard_2_of_2/test.log",
+                    ),
+                )
+            ],
+        )
+        self.assertEqual(
+            parse(_SHARDED_ATTEMPTS_SUMMARY + _UNSHARDED_SUMMARY),
+            [
+                (
+                    "//donner/example:image_tests",
+                    "FAILED",
+                    ("/out/testlogs/donner/example/image_tests/test.log",),
+                ),
+                (
+                    "//donner/example:sharded_image_tests",
+                    "FAILED",
+                    tuple(
+                        f"/out/testlogs/{_SHARDED_TARGET_DIR}/{run}"
+                        for run in (
+                            "shard_1_of_2/test.log",
+                            "shard_1_of_2/test_attempts/attempt_1.log",
+                            "shard_2_of_2/test.log",
+                            "shard_2_of_2/test_attempts/attempt_1.log",
+                        )
+                    ),
+                ),
+            ],
+        )
 
 if __name__ == "__main__":
     unittest.main()
