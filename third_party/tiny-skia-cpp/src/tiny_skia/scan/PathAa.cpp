@@ -1169,14 +1169,103 @@ std::vector<AnalyticEdge> buildAnalyticEdges(const Path& path, const Rect& edgeC
   return edges;
 }
 
+bool IsVerticalBoundaryLine(const AnalyticEdge& edge, FDot16 x) {
+  return edge.curveCount == 0 && edge.dx == 0 && edge.upperX == x;
+}
+
+bool HasOpposedBoundaryLines(const std::vector<AnalyticEdge>& edges, FDot16 x) {
+  std::array<bool, 2> directions{};
+  for (const auto& edge : edges) {
+    if (IsVerticalBoundaryLine(edge, x)) {
+      directions[edge.winding > 0] = true;
+    }
+  }
+  return directions[0] && directions[1];
+}
+
+struct BoundaryEvent {
+  FDot16 y;
+  bool positive;
+  int delta;
+};
+
+// Clip-generated vertical lines can retrace the same boundary. Cancel only overlapping opposite
+// winding, after the endpoint coordinates have been snapped by the analytic edge builder.
+bool NormalizeConvexBoundary(std::vector<AnalyticEdge>& edges, float clipX) {
+  AnalyticEdge vertical;
+  if (!vertical.setLine({clipX, 0}, {clipX, 1}) ||
+      !HasOpposedBoundaryLines(edges, vertical.upperX)) {
+    return true;
+  }
+  const auto onBoundary = [&](const AnalyticEdge& edge) {
+    return IsVerticalBoundaryLine(edge, vertical.upperX);
+  };
+  std::vector<BoundaryEvent> events;
+  for (const auto& edge : edges) {
+    if (onBoundary(edge)) {
+      events.push_back({edge.upperY, edge.winding > 0, 1});
+      events.push_back({edge.lowerY, edge.winding > 0, -1});
+    }
+  }
+  std::sort(events.begin(), events.end(),
+            [](const BoundaryEvent& a, const BoundaryEvent& b) { return a.y < b.y; });
+
+  std::array<std::ptrdiff_t, 2> active{};
+  std::ptrdiff_t winding = 0;
+  FDot16 begin = 0;
+  bool retraced = false;
+  std::vector<AnalyticEdge> normalized;
+  for (size_t i = 0; i < events.size();) {
+    const FDot16 y = events[i].y;
+    do {
+      const auto& event = events[i++];
+      active[event.positive] += event.delta;
+    } while (i < events.size() && events[i].y == y);
+
+    retraced = retraced || (active[0] != 0 && active[1] != 0);
+    const auto nextWinding = active[1] - active[0];
+    if (nextWinding < -1 || nextWinding > 1) {
+      return false;  // Preserve the original edges for the general walker.
+    }
+    if (nextWinding != winding) {
+      if (winding != 0) {
+        auto edge = vertical;
+        edge.upperY = edge.y = begin;
+        edge.lowerY = y;
+        edge.winding = static_cast<std::int8_t>(winding);
+        normalized.push_back(edge);
+      }
+      begin = y;
+      winding = nextWinding;
+    }
+  }
+  if (retraced) {
+    edges.erase(std::remove_if(edges.begin(), edges.end(), onBoundary), edges.end());
+    edges.insert(edges.end(), normalized.begin(), normalized.end());
+  }
+  return true;
+}
+
 // ── Main fill function ───────────────────────────────────────────────────────
 
 void aaaFillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clipRect,
                  const Rect& edgeClip, AdditiveBlitter& blitter, int startY, int stopY,
                  bool pathContainedInClip) {
   auto edges = buildAnalyticEdges(path, edgeClip, pathContainedInClip);
-
   if (edges.size() < 2) return;
+
+  const Rect viewport = clipRect.toRect();
+  const bool deviceClippedEdges = !pathContainedInClip && edgeClip != viewport;
+  bool convex = path.isConvex();
+  if (convex && deviceClippedEdges) {
+    // A tile seam is an existing viewport boundary. Keep its established edge subdivision.
+    const bool leftNormalized = edgeClip.left() == viewport.left() ||
+                                NormalizeConvexBoundary(edges, edgeClip.left());
+    const bool rightNormalized = edgeClip.right() == viewport.right() ||
+                                 NormalizeConvexBoundary(edges, edgeClip.right());
+    convex = leftNormalized && rightNormalized;
+    if (edges.size() < 2) return;
+  }
 
   // Sort edge pointers by upperY, then x, then dx.
   std::vector<AnalyticEdge*> edgePtrs;
@@ -1222,10 +1311,16 @@ void aaaFillPath(const Path& path, FillRule fillRule, const ScreenIntRect& clipR
   FDot16 leftBound = intToFixed(static_cast<std::int32_t>(clipRect.x()));
   FDot16 rightBound = intToFixed(static_cast<std::int32_t>(clipRect.right()));
 
-  if (path.isConvex() && edges.size() >= 2) {
+  if (convex) {
     aaaWalkConvexEdges(&headEdge, blitter, startY, stopY, leftBound, rightBound);
   } else {
-    bool skipIntersect = static_cast<int>(path.points().size()) > (stopY - startY) * 2;
+    const bool skipIntersect = static_cast<int>(path.points().size()) > (stopY - startY) * 2;
+    if (deviceClippedEdges) {
+      // Avoid walking empty rows outside the device clip. Keep the intersection heuristic based
+      // on the original viewport-limited range.
+      startY = std::max(startY, static_cast<int>(std::floor(edgeClip.top())));
+      stopY = std::min(stopY, static_cast<int>(std::ceil(edgeClip.bottom())));
+    }
     aaaWalkEdges(&headEdge, &tailEdge, fillRule, blitter, startY, stopY, leftBound, rightBound,
                  skipIntersect);
   }

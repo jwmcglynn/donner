@@ -1942,8 +1942,8 @@ RendererBitmap RenderBackdropCase(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
-RendererBitmap RenderTinySkiaClipCase(std::string_view body) {
-  SVGDocument document = instantiateSubtree(body, {}, Vector2i(64, 64));
+RendererBitmap RenderTinySkiaClipCase(std::string_view body, Vector2i viewport = Vector2i(64, 64)) {
+  SVGDocument document = instantiateSubtree(body, {}, viewport);
   return RenderDocumentWithBackend(document, RendererBackend::TinySkia);
 }
 
@@ -1972,10 +1972,16 @@ TEST_F(RendererRegressionTests, CoincidentRectangularClipKeepsFilledPathCoverage
     std::string_view clipped;
     std::string_view expected;
   };
+  constexpr std::string_view kClippedTriangle =
+      R"svg(<path d="M8.25 8.5 H21.25 V11.25 L14 18.5 L8.25 12.75 Z"/>)svg";
   const std::array scenes{
       Scene{"triangle_crosses_both_vertical_clip_edges",
-            R"svg(<path d="M4 8.5 H24 L14 18.5 Z" clip-path="url(#c)"/>)svg",
-            R"svg(<path d="M8.25 8.5 H21.25 V11.25 L14 18.5 L8.25 12.75 Z"/>)svg"},
+            R"svg(<path d="M4 8.5 H24 L14 18.5 Z" clip-path="url(#c)"/>)svg", kClippedTriangle},
+      Scene{"translated_triangle_crosses_clip",
+            R"svg(<g clip-path="url(#c)">
+                    <path d="M2 6.5 H22 L12 16.5 Z" transform="translate(2 2)"/>
+                  </g>)svg",
+            kClippedTriangle},
       Scene{"curved_fill_crosses_left_clip_edge",
             R"svg(<path d="M4 8.5 H20 V14.5 Q18 18.5 10 18.5 H4 Z" clip-path="url(#c)"/>)svg",
             R"svg(<path d="M8.25 8.5 H20 V14.5 Q18 18.5 10 18.5 H8.25 Z"/>)svg"},
@@ -1990,6 +1996,36 @@ TEST_F(RendererRegressionTests, CoincidentRectangularClipKeepsFilledPathCoverage
     editor::tests::CompareBitmapToBitmap(
         RenderTinySkiaClipCase(std::string(kClip) + std::string(scene.clipped)),
         RenderTinySkiaClipCase(scene.expected), scene.label,
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, FractionalClipKeepsShallowTriangleCoverage) {
+  constexpr std::string_view kClip =
+      R"svg(<clipPath id="c"><rect x="8.25" y="8.5" width="27.5" height="30.75"/></clipPath>)svg";
+  // Line intersections with x=35.75 and y=39.25 give the visible polygon in both cases.
+  constexpr std::string_view kIntersection =
+      R"svg(<path d="M35.75 21.4270833333 L34 21.5 L32.2070707071 39.25 H35.75 Z"/>)svg";
+  struct Scene {
+    std::string_view label;
+    std::string_view path;
+    int height;
+  };
+  const std::array scenes{
+      Scene{"shallow_triangle_fractional_clip",
+            R"svg(<path d="M70 20 L34 21.5 L29 71 Z" clip-path="url(#c)"/>)svg", 64},
+      Scene{"reversed_shallow_triangle_fractional_clip",
+            R"svg(<path d="M29 71 L34 21.5 L70 20 Z" clip-path="url(#c)"/>)svg", 64},
+      // Extend the left edge along the original line far below the same device clip.
+      Scene{"tall_shallow_triangle_fractional_clip",
+            R"svg(<path d="M70 20 L34 21.5 L-606 6357.5 Z" clip-path="url(#c)"/>)svg", 6400},
+  };
+  for (const Scene& scene : scenes) {
+    SCOPED_TRACE(scene.label);
+    const Vector2i viewport(64, scene.height);
+    editor::tests::CompareBitmapToBitmap(
+        RenderTinySkiaClipCase(std::string(kClip) + std::string(scene.path), viewport),
+        RenderTinySkiaClipCase(kIntersection, viewport), scene.label,
         editor::tests::PixelmatchIdentityParams());
   }
 }

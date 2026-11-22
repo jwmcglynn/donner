@@ -80,41 +80,6 @@ TEST(PaintTest, IsSolidColorFalseForGradient) {
   EXPECT_FALSE(paint.isSolidColor());
 }
 
-TEST(PainterTest, FractionalDeviceClipBeforeAntialiasing) {
-  auto actual = Pixmap::fromSize(32, 24);
-  auto expected = Pixmap::fromSize(32, 24);
-  ASSERT_THAT(actual, testing::Optional(testing::_));
-  ASSERT_THAT(expected, testing::Optional(testing::_));
-  PathBuilder triangle;
-  triangle.moveTo(2, 6.5f);
-  triangle.lineTo(22, 6.5f);
-  triangle.lineTo(12, 16.5f);
-  triangle.close();
-  const auto input = triangle.finish();
-  const auto clip = Rect::fromLTRB(8.25f, 8.5f, 21.25f, 23.5f);
-  ASSERT_THAT(input, testing::Optional(testing::_));
-  ASSERT_THAT(clip, testing::Optional(testing::_));
-
-  PathBuilder intersection;
-  intersection.moveTo(8.25f, 8.5f);
-  intersection.lineTo(21.25f, 8.5f);
-  intersection.lineTo(21.25f, 11.25f);
-  intersection.lineTo(14, 18.5f);
-  intersection.lineTo(8.25f, 12.75f);
-  intersection.close();
-  const auto clipped = intersection.finish();
-  ASSERT_THAT(clipped, testing::Optional(testing::_));
-
-  Paint paint;
-  paint.setColor(Color::black);
-  auto actualView = actual->mutableView();
-  auto expectedView = expected->mutableView();
-  tiny_skia::Painter::fillPath(actualView, *input, paint, FillRule::Winding,
-                              Transform::fromTranslate(2, 2), nullptr, nullptr, &*clip);
-  tiny_skia::Painter::fillPath(expectedView, *clipped, paint, FillRule::Winding);
-  EXPECT_THAT(actual->data(), testing::ElementsAreArray(expected->data()));
-}
-
 // ---- DrawTiler tests ----
 
 TEST(DrawTilerTest, SmallPixmapDoesNotRequireTiling) {
