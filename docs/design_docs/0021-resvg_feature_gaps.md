@@ -101,18 +101,18 @@ one lane is not counted among that lane's comparisons.
 | Registered SVG fixtures | Count |
 | --- | ---: |
 | Total | 1,679 |
-| Pixel comparisons | 1,580 |
+| Pixel comparisons | 1,590 |
 | Comparisons with a numeric setting or custom golden | 78 |
 | Render-only, undefined-behavior registration | 55 |
-| Render-only, legacy feature | 43 |
+| Render-only, legacy feature | 33 |
 | Explicit skips | 1 |
 | Fixtures in disabled categories | 0 |
 
 | Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
 | --- | ---: | ---: | ---: | ---: |
-| `default_text` | 1,554 | 98 | 26 | 1 |
-| `max` | 1,580 | 98 | 0 | 1 |
-| `geode` | 1,547 | 98 | 21 | 1 |
+| `default_text` | 1,564 | 88 | 26 | 1 |
+| `max` | 1,590 | 88 | 0 | 1 |
+| `geode` | 1,557 | 88 | 21 | 1 |
 | `geode_max_text` | 358 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->
@@ -193,7 +193,7 @@ bottom for completeness.
 | B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare at default settings; `font/simple-case` compares against a Donner golden (see [B7](#b7-text-reference-qualification))                 |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
-| F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
+| F1  | `enable-background` + `in=Background*`                                  |           13 (10 more compare) | **Out of scope** (deprecated)                                                                                                                                                                       |
 | —   | other deprecated/UB render-only cases                                               |       See the current inventory | **Out of scope**                                                                                                                                                                                    |
 
 ---
@@ -800,8 +800,8 @@ agreement with the historical reference.
 
 | Category or case                                                          | Tests | State and why                                                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------- | ----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| filters/enable-background                                                 |    17 | Category default `Params::DeprecatedInSVG2(...)`: removed in SVG 2 (→ `<filter>` chains / `backdrop-filter`). The other four of the 21 cases already match the reference with SVG 2 semantics and compare. See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
-| filters/filter `in=Background*-with-enable-background`                    |     2 | `Params::DeprecatedInSVG2`: the BackgroundImage/BackgroundAlpha snapshot comes from `enable-background`.                                                                                                                                                                          |
+| filters/enable-background                                                 |    12 | Category default `Params::DeprecatedInSVG2(...)`: removed in SVG 2 (→ `<filter>` chains / `backdrop-filter`). The other nine of the 21 cases match the reference with SVG 2 semantics and compare.                                                                                |
+| filters/filter `in=BackgroundAlpha-with-enable-background`                |     1 | `Params::DeprecatedInSVG2`: the BackgroundAlpha snapshot comes from `enable-background`. `in=BackgroundImage-with-enable-background` matches its reference and compares.                                                                                                          |
 | text/tref, painting/display/none-on-tref                                  | 9 + 1 | `Params::DeprecatedInSVG2`: `<tref>` removed in SVG 2.                                                                                                                                                                                                                            |
 | text/kerning                                                              |     2 | `Params::DeprecatedInSVG2`: `kerning` property removed in SVG 2.                                                                                                                                                                                                                  |
 | text/glyph-orientation-horizontal                                         |     1 | `Params::DeprecatedInSVG2`: removed in SVG 2. `glyph-orientation-vertical/simple-case` is user-agent defined and renders only (see below).                                                                                                                                                              |
