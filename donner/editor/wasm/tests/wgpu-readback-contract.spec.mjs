@@ -1903,14 +1903,20 @@ test("a worker result publishes its interaction promotion from the slots after t
   assert.equal(count, ownerEnd + 4, "the promotion fields are the last four slots");
   assert.match(
     timingPublisher,
-    /AppendInteractionPromotion\(result\.interactionPromotion,\s*std::span<double>\(values\)\.subspan\(kOwnerDispatchEnd\)\);/,
+    /AppendInteractionPromotion\(result\.interactionPromotion,\s*std::span<double>\(values\)\.subspan\(kOwnerDispatchEnd, 4\)\);/,
     "the promotion fills the slots after the owner detail",
   );
-  assert.match(timingPublisher, /PromoteResultName\(result\.interactionPromotion\.result\)\.data\(\)\);/);
+  // The name crosses the proxy as a pointer to static NUL-terminated storage.
+  assert.match(timingPublisher, /InteractionPromotionResultName\(result\.interactionPromotion\)\);/);
+  assert.match(
+    renderCoordinatorSource,
+    /void PublishWorkerGpuWaitFailure\([\s\S]*?delete stats\['interactionPromotion'\];/,
+    "a GPU-wait failure must not carry an earlier result's promotion forward",
+  );
   const appended = renderCoordinatorSource.match(/void AppendInteractionPromotion\([\s\S]*?\n\}/)[0];
   assert.deepEqual(
     [...appended.matchAll(/promotion\.(\w+)/g)].map(([, name]) => name),
-    ["requested", "result", "retainedBitmapBytes", "memoryBudgetBytes"],
+    ["requested", "result", "result", "retainedBitmapBytes", "memoryBudgetBytes"],
     "the native side appends the promotion in the order the publisher reads it",
   );
 });

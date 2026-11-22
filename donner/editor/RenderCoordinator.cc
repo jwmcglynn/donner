@@ -116,11 +116,13 @@ void AppendOwnerDispatchDetail(
   UTILS_RELEASE_ASSERT(next == values.size());
 }
 
-/// Appends the published fields of a worker result's interaction promotion outcome.
+/// Appends the published fields of a worker result's interaction promotion outcome. The result
+/// code is -1 when nothing was requested.
 void AppendInteractionPromotion(const InteractionPromotionOutcome& promotion,
                                 std::span<double> values) {
+  UTILS_RELEASE_ASSERT(values.size() == 4);
   values[0] = static_cast<double>(promotion.requested);
-  values[1] = static_cast<double>(promotion.result);
+  values[1] = promotion.result.has_value() ? static_cast<double>(*promotion.result) : -1.0;
   values[2] = static_cast<double>(promotion.retainedBitmapBytes);
   values[3] = static_cast<double>(promotion.memoryBudgetBytes);
 }
@@ -207,7 +209,7 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
       timing.gpuOwnerDispatch,
       std::span<double>(values).subspan(kCoreValueCount, kOwnerDispatchEnd - kCoreValueCount));
   AppendInteractionPromotion(result.interactionPromotion,
-                             std::span<double>(values).subspan(kOwnerDispatchEnd));
+                             std::span<double>(values).subspan(kOwnerDispatchEnd, 4));
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -362,7 +364,7 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
       static_cast<double>(presentationAdmissionSequence.value_or(0)),
       static_cast<double>(presentationProducerGeneration.value_or(0)),
       static_cast<double>(result.capturedPresentation ? result.capturedPresentation->identity().captureId : 0),
-      PromoteResultName(result.interactionPromotion.result).data());
+      InteractionPromotionResultName(result.interactionPromotion));
   // clang-format on
 }
 
@@ -418,6 +420,8 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         delete stats['unattributedFramesCompleted'];
         // This failure has no result-poll producer timestamp; prior render delay is unrelated.
         delete stats['publicationDelayMs'];
+        // A promotion outcome belongs to the result that made the request, not to this failure.
+        delete stats['interactionPromotion'];
         stats['acceptedForPresentation'] = false;
         stats['deviceLost'] = $0 > 0;
         stats['gpuWaitTimeoutSite'] = UTF8ToString($1);

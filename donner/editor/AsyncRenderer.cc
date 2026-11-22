@@ -553,10 +553,12 @@ svg::compositor::CompositorController::RenderFrameStats CombineIterationRenderFr
   return combined;
 }
 
-std::string_view PromoteResultName(
-    svg::compositor::CompositorController::PromoteResult::Code code) {
+const char* InteractionPromotionResultName(const InteractionPromotionOutcome& outcome) {
   using Code = svg::compositor::CompositorController::PromoteResult::Code;
-  switch (code) {
+  if (!outcome.result.has_value()) {
+    return "None";
+  }
+  switch (*outcome.result) {
     case Code::PromotedLayer: return "PromotedLayer";
     case Code::OwningTilesRequired: return "OwningTilesRequired";
     case Code::InvalidEntity: return "InvalidEntity";
@@ -570,7 +572,7 @@ std::string_view PromoteResultName(
 std::ostream& operator<<(std::ostream& stream, const InteractionPromotionOutcome& outcome) {
   return stream << "InteractionPromotionOutcome{requested=" << outcome.requested
                 << ", entity=" << static_cast<std::uint32_t>(outcome.entity)
-                << ", result=" << PromoteResultName(outcome.result)
+                << ", result=" << InteractionPromotionResultName(outcome)
                 << ", retainedBitmapBytes=" << outcome.retainedBitmapBytes
                 << ", memoryBudgetBytes=" << outcome.memoryBudgetBytes << "}";
 }
@@ -1828,8 +1830,9 @@ void AsyncRenderer::workerLoop() {
     // root render.
     const bool editorPromotionEnabled = compositor_ != nullptr;
     InteractionPromotionOutcome interactionPromotion;
-    // Records each request with the retained bytes and budget the admission check compares, so a
-    // refused promotion is observable from the published result.
+    // Records each request with the retained total and the total budget sampled before the
+    // compositor decides it, so a refused promotion is observable from the published result. See
+    // InteractionPromotionOutcome for which results that comparison can explain.
     const auto promoteInteraction = [&](Entity entity, svg::compositor::InteractionHint kind) {
       interactionPromotion = InteractionPromotionOutcome{
           .requested = true,

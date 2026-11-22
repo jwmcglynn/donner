@@ -1545,14 +1545,14 @@ TEST(AsyncRendererTest, NestedMultiSelectionNeverPublishesOverlappingLayers) {
 
 /// Published name of a promotion outcome's result, so a mismatch prints a readable reason.
 std::string PromotionResultName(const InteractionPromotionOutcome& outcome) {
-  return std::string(PromoteResultName(outcome.result));
+  return InteractionPromotionResultName(outcome);
 }
 
-/// Renders \p selector selected in \p svgSource twice and returns both results. The first render
-/// requests the promotion; the second retries a refused one after the compositor has a viewport to
-/// judge the selected element's interaction tile against.
-std::vector<RenderResult> RenderSelectionTwice(std::string_view svgSource, const char* selector,
-                                               Entity* selectedEntity) {
+/// Renders \p svgSource once per entry of \p selectPerRender, selecting \p selector for an active
+/// drag in the renders whose entry is true, and returns every result.
+std::vector<RenderResult> RenderSelectionSequence(std::string_view svgSource, const char* selector,
+                                                  std::span<const bool> selectPerRender,
+                                                  Entity* selectedEntity) {
   svg::SVGDocument document = svg::instantiateSubtree(std::string(svgSource));
   document.setCanvasSize(64, 64);
   auto selected = document.querySelector(selector);
@@ -1565,19 +1565,21 @@ std::vector<RenderResult> RenderSelectionTwice(std::string_view svgSource, const
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
   std::vector<RenderResult> results;
-  for (std::uint64_t version = 1; version <= 2; ++version) {
+  for (std::size_t index = 0; index < selectPerRender.size(); ++index) {
     RenderRequest request(renderer, document);
-    request.version = version;
+    request.version = index + 1;
     request.documentGeneration = 1;
-    request.selectedEntity = *selectedEntity;
-    request.dragPreview = RenderRequest::DragPreview{
-        .entity = *selectedEntity,
-        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
-    };
+    if (selectPerRender[index]) {
+      request.selectedEntity = *selectedEntity;
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = *selectedEntity,
+          .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      };
+    }
     asyncRenderer.requestRender(request);
     std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
     if (!result.has_value()) {
-      ADD_FAILURE() << "render " << version << " produced no result";
+      ADD_FAILURE() << "render " << index + 1 << " produced no result";
       return {};
     }
     results.push_back(std::move(*result));
@@ -1586,57 +1588,68 @@ std::vector<RenderResult> RenderSelectionTwice(std::string_view svgSource, const
 }
 
 TEST(AsyncRendererTest, PublishesAdmittedInteractionPromotionWithItsBudgetInputs) {
+  // The first render has no selection, so its retained tiles exist when the second render
+  // requests the promotion and the sampled retained total is nonzero.
+  constexpr std::array<bool, 2> kSelectPerRender = {false, true};
   Entity entity = entt::null;
-  const std::vector<RenderResult> results = RenderSelectionTwice(
+  const std::vector<RenderResult> results = RenderSelectionSequence(
       R"svg(
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
           <rect x="0" y="0" width="64" height="64" fill="white"/>
           <rect id="target" x="12" y="12" width="24" height="24" fill="red"/>
         </svg>
       )svg",
-      "#target", &entity);
+      "#target", kSelectPerRender, &entity);
   ASSERT_EQ(results.size(), 2u);
-  // The first render promotes the selection; the second keeps it and requests nothing.
-  const RenderResult* result = &results[0];
-  EXPECT_FALSE(results[1].interactionPromotion.requested) << results[1].interactionPromotion;
-  ASSERT_TRUE(result->compositedPreview.has_value());
-  EXPECT_EQ(result->compositedPreview->entity, entity);
+  EXPECT_THAT(results[0].interactionPromotion,
+              AllOf(Field("requested", &InteractionPromotionOutcome::requested, false),
+                    ResultOf("result name", PromotionResultName, "None")));
 
+  const RenderResult& result = results[1];
+  ASSERT_TRUE(result.compositedPreview.has_value());
+  EXPECT_EQ(result.compositedPreview->entity, entity);
   const std::size_t budget = svg::compositor::EffectiveCompositorMemoryBudget();
   EXPECT_THAT(
-      result->interactionPromotion,
+      result.interactionPromotion,
       AllOf(Field("requested", &InteractionPromotionOutcome::requested, true),
             Field("entity", &InteractionPromotionOutcome::entity, entity),
             ResultOf("result name", PromotionResultName, "PromotedLayer"),
             Field("retainedBitmapBytes", &InteractionPromotionOutcome::retainedBitmapBytes,
-                  ::testing::Lt(budget)),
+                  AllOf(Gt(0u), ::testing::Lt(budget))),
             Field("memoryBudgetBytes", &InteractionPromotionOutcome::memoryBudgetBytes, budget)));
 }
 
 TEST(AsyncRendererTest, PublishesRefusedInteractionPromotionReason) {
   // The selected rectangle's complete interaction tile is far larger than the largest tile the
-  // compositor admits, so every request to promote it is refused with MemoryLimit.
+  // compositor admits. The first request is admitted before the compositor has a viewport, and its
+  // first frame drops the oversized tile. Every later request, the retry in that render and the
+  // request in the next, is refused with MemoryLimit by the cached refusal of that interaction
+  // root, not by the total budget: the retained total stays far below it.
+  constexpr std::array<bool, 2> kSelectPerRender = {true, true};
   Entity entity = entt::null;
-  const std::vector<RenderResult> results = RenderSelectionTwice(
+  const std::vector<RenderResult> results = RenderSelectionSequence(
       R"svg(
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
           <rect x="0" y="0" width="64" height="64" fill="white"/>
           <rect id="target" x="-6000" y="-6000" width="12064" height="12064" fill="red"/>
         </svg>
       )svg",
-      "#target", &entity);
+      "#target", kSelectPerRender, &entity);
   ASSERT_EQ(results.size(), 2u);
-  const RenderResult* result = &results[1];
-  ASSERT_TRUE(result->compositedPreview.has_value());
-  EXPECT_TRUE(result->compositedPreview->entity == entt::null)
+  const RenderResult& result = results[1];
+  ASSERT_TRUE(result.compositedPreview.has_value());
+  EXPECT_THAT(result.compositedPreview->entity, ::testing::Eq(Entity{entt::null}))
       << "A refused promotion must leave the drag without a drag-target layer";
 
-  EXPECT_THAT(result->interactionPromotion,
-              AllOf(Field("requested", &InteractionPromotionOutcome::requested, true),
-                    Field("entity", &InteractionPromotionOutcome::entity, entity),
-                    ResultOf("result name", PromotionResultName, "MemoryLimit"),
-                    Field("memoryBudgetBytes", &InteractionPromotionOutcome::memoryBudgetBytes,
-                          svg::compositor::EffectiveCompositorMemoryBudget())));
+  const std::size_t budget = svg::compositor::EffectiveCompositorMemoryBudget();
+  EXPECT_THAT(
+      result.interactionPromotion,
+      AllOf(Field("requested", &InteractionPromotionOutcome::requested, true),
+            Field("entity", &InteractionPromotionOutcome::entity, entity),
+            ResultOf("result name", PromotionResultName, "MemoryLimit"),
+            Field("retainedBitmapBytes", &InteractionPromotionOutcome::retainedBitmapBytes,
+                  ::testing::Lt(budget)),
+            Field("memoryBudgetBytes", &InteractionPromotionOutcome::memoryBudgetBytes, budget)));
 }
 
 TEST(AsyncRendererTest, PendingParentDemotionDoesNotClaimMovableChildCoverage) {
