@@ -805,12 +805,12 @@ TEST(GeodeResourceBudgetTest, AResidentRefusalLastsOnlyUntilBytesAreReleased) {
 }
 
 TEST(GeodeResourceBudgetTest, StrokeCacheReplacementIncludesRetainedDashCapacity) {
-  GeodePathCacheComponent::StrokeSlot previous;
+  GeodePathCacheComponent::StrokeVariant previous;
   previous.strokeKey.dashArray.reserve(1u);
   const std::optional<std::size_t> previousBytes = previous.retainedBytes();
   ASSERT_TRUE(previousBytes.has_value());
 
-  GeodePathCacheComponent::StrokeSlot replacement;
+  GeodePathCacheComponent::StrokeVariant replacement;
   replacement.strokeKey.dashArray.reserve(previous.strokeKey.dashArray.capacity() + 1u);
   const std::optional<std::size_t> replacementBytes = replacement.retainedBytes();
   ASSERT_TRUE(replacementBytes.has_value());

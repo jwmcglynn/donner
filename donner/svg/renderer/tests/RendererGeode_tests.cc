@@ -38,6 +38,7 @@
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -4429,6 +4430,115 @@ TEST_F(RendererGeodeTest, StrokeCacheIsReusedWithinAScaleBucket) {
       << "A zoom step inside the same power-of-two scale bucket must reuse the cached stroke "
          "outline instead of re-flattening every frame.";
 }
+
+/// One edit to a document whose source path is stroked through three `<use>` instances with
+/// different stroke styles, so the source path's stroke cache holds several outlines when the
+/// edit lands. `target` names the edited element: the instance `edited`, the source path `p`, or
+/// the group `zoom` that scales every instance.
+struct StrokeKeyEdit {
+  std::string_view name;       //!< Case name, also the comparison's artifact name.
+  std::string_view target;     //!< Id of the edited element.
+  std::string_view attribute;  //!< Attribute the edit writes.
+  std::string_view before;     //!< Attribute value before the edit.
+  std::string_view after;      //!< Attribute value after the edit.
+  std::string_view extra;      //!< Further attributes on the edited instance.
+};
+
+/// Prints the case name, so a failure names the edit. @param edit Case. @param os Stream.
+void PrintTo(const StrokeKeyEdit& edit, std::ostream* os) {
+  *os << edit.name;
+}
+
+/// The shared-source document with `edit.attribute` of `edit.target` set to \p value.
+std::string SharedStrokeSourceSvg(const StrokeKeyEdit& edit, std::string_view value) {
+  const auto valueFor = [&](std::string_view target, std::string_view attribute,
+                            std::string_view fallback) {
+    return std::string(edit.target == target && edit.attribute == attribute ? value : fallback);
+  };
+  std::string editedAttribute;
+  if (edit.target == "edited") {
+    editedAttribute = std::string(edit.attribute) + "=\"" + std::string(value) + "\"";
+  }
+  return R"svg(<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" )svg"
+         R"svg(width="400" height="240"><defs><path id="p" fill="none" d=")svg" +
+         valueFor("p", "d", "M10,40 L30,10 L50,40 C60,55 75,55 85,40") + R"svg(" pathLength=")svg" +
+         valueFor("p", "pathLength", "100") + R"svg("/></defs><g id="zoom" transform=")svg" +
+         valueFor("zoom", "transform", "scale(1)") +
+         R"svg("><use xlink:href="#p" stroke="#000" stroke-width="3"/>)svg"
+         R"svg(<use xlink:href="#p" x="90" stroke="#00c" stroke-width="2" stroke-linejoin="round" )svg"
+         R"svg(stroke-dasharray="5,2"/><use id="edited" xlink:href="#p" y="50" stroke="#c00" )svg" +
+         std::string(edit.extra) + " " + editedAttribute + "/></g></svg>";
+}
+
+class RendererGeodeStrokeKeyTest : public RendererGeodeTest,
+                                   public ::testing::WithParamInterface<StrokeKeyEdit> {};
+
+/// Every input of a cached stroke outline is part of its key: after an edit to any of them, the
+/// next frame draws what a fresh document with the edited value draws, never the outline cached
+/// for the old value.
+TEST_P(RendererGeodeStrokeKeyTest, EditRendersLikeAFreshDocument) {
+  const StrokeKeyEdit& edit = GetParam();
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const auto parse = [&](std::string_view value) {
+    auto parsed = parser::SVGParser::ParseSVG(SharedStrokeSourceSvg(edit, value), warnings);
+    EXPECT_THAT(parsed.hasError(), testing::IsFalse());
+    return std::move(parsed).result();
+  };
+
+  SVGDocument document = parse(edit.before);
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  renderer.draw(document);
+  const RendererBitmap beforeEdit = renderer.takeSnapshot();
+  ASSERT_THAT(beforeEdit.empty(), testing::IsFalse());
+
+  auto target = document.querySelector("#" + std::string(edit.target));
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  if (edit.attribute == "pathLength") {
+    // Written through the DOM setter: a runtime `setAttribute("pathLength", ...)` does not
+    // reach the element's path length.
+    target->cast<SVGGeometryElement>().setPathLength(std::stod(std::string(edit.after)));
+  } else {
+    target->setAttribute(edit.attribute, edit.after);
+  }
+  renderer.draw(document);
+  const RendererBitmap afterEdit = renderer.takeSnapshot();
+
+  SVGDocument fresh = parse(edit.after);
+  RendererGeode reference = createRenderer();
+  reference.draw(fresh);
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  // Premise: the edit changes the rendering, so serving the old outline cannot match.
+  ASSERT_THAT(beforeEdit.pixels == expected.pixels, testing::IsFalse())
+      << "the edit to " << edit.attribute << " must change the rendering";
+
+  editor::tests::CompareBitmapToBitmap(afterEdit, expected, "stroke_key_" + std::string(edit.name),
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    StrokeKeyComponents, RendererGeodeStrokeKeyTest,
+    ::testing::Values(
+        StrokeKeyEdit{"width", "edited", "stroke-width", "5", "8", ""},
+        StrokeKeyEdit{"linejoin", "edited", "stroke-linejoin", "miter", "bevel",
+                      R"(stroke-width="5")"},
+        StrokeKeyEdit{"linecap", "edited", "stroke-linecap", "butt", "square",
+                      R"(stroke-width="5")"},
+        StrokeKeyEdit{"miterlimit", "edited", "stroke-miterlimit", "4", "1", R"(stroke-width="5")"},
+        StrokeKeyEdit{"dasharray", "edited", "stroke-dasharray", "6,3", "4,2",
+                      R"(stroke-width="5")"},
+        StrokeKeyEdit{"dashoffset", "edited", "stroke-dashoffset", "0", "3",
+                      R"(stroke-width="5" stroke-dasharray="6,3")"},
+        StrokeKeyEdit{"pathlength", "p", "pathLength", "100", "50",
+                      R"(stroke-width="5" stroke-dasharray="6,3")"},
+        StrokeKeyEdit{"tolerance", "zoom", "transform", "scale(1)", "scale(4)",
+                      R"(stroke-width="5")"},
+        StrokeKeyEdit{"geometry", "p", "d", "M10,40 L30,10 L50,40 C60,55 75,55 85,40",
+                      "M10,40 L30,20 L50,40 C60,65 75,65 85,40", R"(stroke-width="5")"}),
+    [](const ::testing::TestParamInfo<StrokeKeyEdit>& info) {
+      return std::string(info.param.name);
+    });
 
 /// Fill and stroke together: interior should be the fill color, the stroke
 /// ring around the edge should be the stroke color.

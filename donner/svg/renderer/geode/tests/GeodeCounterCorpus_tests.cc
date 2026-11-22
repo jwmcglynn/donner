@@ -468,44 +468,41 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     },
     {
         /*scene=*/"nested_svg_aspectratio",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{4, 0, 2357, 265},
+        /*violated=*/kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{0, 0, 2357, 265},
         /*reason=*/
-        "nested viewports carrying text and use instances re-encode and re-upload the whole "
-        "subtree every frame",
+        "nested viewports carrying text and use instances re-upload geometry and build bind "
+        "groups every frame",
         /*tracking=*/
         "clears when nested-viewport subtrees, placed text, and use instances all keep their "
         "cached geometry",
         /*sceneBatchingViolated=*/kViolatedSameAsBase,
         /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
-        /*sceneBatchingCeiling=*/{4, 0, 746, 84},
+        /*sceneBatchingCeiling=*/{0, 0, 8, 77},
     },
     {
         /*scene=*/"poker_chips",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{12, 0, 96, 20},
+        /*violated=*/kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{0, 0, 6, 16},
         /*reason=*/
-        "use instances share one source path with differing stroke styles, so the per-entity "
-        "stroke cache thrashes and re-encodes every instance; with ordered batching that same "
-        "thrash costs one more buffer write and saves one bind group",
+        "each chip's use instances draw the shared source path's fill and stroke outlines and "
+        "the shared circles again; a resident slot carries one draw's uniform per frame, so "
+        "every repeat after the first chip draws through the per-frame arena",
         /*tracking=*/
-        "clears when the stroke cache keys on the resolved stroke style rather than one slot "
-        "per source entity",
-        /*sceneBatchingViolated=*/kViolatedSameAsBase,
-        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
-        /*sceneBatchingCeiling=*/{12, 0, 97, 19},
+        "clears when a resident slot drawn more than once in a frame keeps residence for each "
+        "occurrence",
     },
     {
         /*scene=*/"stroking_complex",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{8, 0, 16, 8},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 6, 2},
         /*reason=*/
-        "eight use instances share one source path with differing stroke styles (width, "
-        "dash, opacity), so the per-entity stroke cache thrashes and re-encodes each "
-        "instance",
+        "two stroke styles of the shared source path are each drawn by two use instances; a "
+        "resident slot carries one draw's uniform per frame, so each repeat draws through the "
+        "per-frame arena",
         /*tracking=*/
-        "clears when the stroke cache keys on the resolved stroke style rather than one slot "
-        "per source entity",
+        "clears when a resident slot drawn more than once in a frame keeps residence for each "
+        "occurrence",
     },
     {
         /*scene=*/"svg2_e_use_003",

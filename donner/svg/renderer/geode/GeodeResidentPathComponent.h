@@ -1297,13 +1297,21 @@ struct GeodeResidentGradientSlot {
 /// entity's fill and stroke encodes. Installed lazily by `RendererGeode`
 /// at the solid-fill draw sites; removed by the same entt listener that
 /// clears `GeodePathCacheComponent` when geometry changes.
+/// GPU residence for one cached stroke outline (`GeodePathCacheComponent::StrokeVariant`).
+struct GeodeResidentStrokeSlots {
+  GeodeResidentSlot solid;             ///< Solid stroke's resident geometry and record.
+  GeodeResidentGradientSlot gradient;  ///< Gradient-painted stroke's resident outline and paint.
+};
+
 struct GeodeResidentPathSlots {
   /// Solid fill's resident geometry and record, one per cached fill encode variant.
   std::array<GeodeResidentSlot, kGeodeFillVariantCount> fillSlots;
-  GeodeResidentSlot strokeSlot;  ///< Solid stroke's resident geometry and record.
+  /// Stroke residence, one per cached stroke variant. Allocated on first use, so an entity that is
+  /// never stroked keeps only the pointers, and at a stable address, so a pending batch can keep
+  /// pointing at a slot.
+  std::array<std::unique_ptr<GeodeResidentStrokeSlots>, kGeodeStrokeVariantCount> strokeSlots;
   /// Gradient-painted fill residence, one per cached fill encode variant.
   std::array<GeodeResidentGradientSlot, kGeodeFillVariantCount> gradientFillSlots;
-  GeodeResidentGradientSlot gradientStrokeSlot;  ///< Cached gradient-stroked outline and paint.
 };
 
 /// One entity's GPU residence, one set of slots per device that draws it: a second device
