@@ -157,6 +157,15 @@ constexpr CounterField kCounterFields[] = {
      "bind groups should be cached per pipeline, not rebuilt per draw"},
 };
 
+/// Why the filter scenes still miss the steady state: their filter passes upload and bind nothing
+/// on an unchanged frame, but each filter result reaches its parent through the same composite blit
+/// an opacity group uses.
+constexpr std::string_view kFilterResultCompositeReason =
+    "the composite blit of each filter result rewrites its uniform every frame; the filter passes "
+    "themselves upload and bind nothing new";
+constexpr std::string_view kFilterResultCompositeTracking =
+    "clears when the isolated-layer composite reuses a stable uniform allocation across frames";
+
 // ---------------------------------------------------------------------------
 // Known violations.
 // ---------------------------------------------------------------------------
@@ -223,15 +232,6 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
   }
   return out;
 }
-
-/// Why the filter scenes still miss the steady state: their filter passes upload and bind nothing
-/// on an unchanged frame, but each filter result reaches its parent through the same composite blit
-/// an opacity group uses.
-constexpr std::string_view kFilterResultCompositeReason =
-    "the composite blit of each filter result rewrites its uniform every frame; the filter passes "
-    "themselves upload and bind nothing new";
-constexpr std::string_view kFilterResultCompositeTracking =
-    "clears when the isolated-layer composite reuses a stable uniform allocation across frames";
 
 constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {

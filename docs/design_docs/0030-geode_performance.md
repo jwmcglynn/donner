@@ -215,13 +215,13 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `ReusedFilterSlotsUploadEditedParameters`). What keeps `filter_displacement_map`,
     `filter_drop_shadow`, `filter_fill_paint`, `filter_spot_light`, and `filter_stroke_paint` listed
     is the composite blit of each filter result, one uniform write per filtered element, which is
-    the 8.3 composite.
+    the 8.3 composite. `donner_splash`'s filter passes meet the steady state too; its remaining
+    counters are those composites and its clip geometry (8.7).
   - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
     clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
     re-uploads every frame, and nested viewports re-encode their subtree. Clears `donner_splash`,
-    `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3, which also owns the composites of
-    `donner_splash`'s filter results and opacity groups, and on 8.1 for
-    `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
+    `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3, on 8.6 for `donner_splash`'s
+    filters, and on 8.1 for `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
     text inside nested viewports; whether its text needs 8.8 is not traced.
   - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`) and
     solid-filled glyphs draw from resident outlines, but pattern- and gradient-painted glyphs and
