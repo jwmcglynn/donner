@@ -1,11 +1,11 @@
 # Design: Geode Rendering Performance
 
 **Status:** Design. On an unchanged frame, resident solid and gradient fills and strokes re-encode,
-create and re-upload nothing, and ordered batching draws runs of resident draws as instanced draws.
-Steady-state residency for markers, patterns, images, filter passes, layer composites, clip and mask
-geometry, and painted text is still open (Milestone 8), as are index-keyed filter results
-(Milestone 5). `geode_counter_corpus_tests` records the corpus scenes measured to miss the steady
-state.
+create and re-upload nothing, filter passes upload and bind nothing new, and ordered batching draws
+runs of resident draws as instanced draws. Steady-state residency for markers, patterns, images,
+layer composites, clip and mask geometry, and painted text is still open (Milestone 8), as are
+index-keyed filter results (Milestone 5). `geode_counter_corpus_tests` records the corpus scenes
+measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -54,8 +54,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 ## Next Steps
 
 - Start the independent Milestone 8 items: keyed stroke cache (8.1), layer-composite uniforms
-  (8.3), pattern residency (8.5), and filter-pass steady state (8.6), together with the Milestone 5
-  named-result keys.
+  (8.3), and pattern residency (8.5), together with the Milestone 5 named-result keys. 8.3 also
+  clears the five filter scenes 8.6 left listed.
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -135,7 +135,9 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
   - [x] `RendererGeodeTexturePool`, shared by the renderers of one device, reuses layer, mix-blend
     destination snapshot, filter, mask, clip-mask, and pattern-tile textures by exact
     `(width, height, format, usage, sampleCount)`. Release is deferred to the frame boundary so
-    recorded GPU work completes before a texture is handed out again.
+    recorded GPU work completes before a texture is handed out again. A bucket hands its textures
+    out in the order the most recent frame took them, whatever order they came back in, so a frame
+    that repeats the previous frame's acquisitions gets back the same texture for each one.
   - [x] `{SimpleShapes,Moderate,Lion,GhostscriptTiger,GaussianBlur}_NoDirtyPath_ZeroTextures`
     assert `textureCreates == 0` on an unchanged second frame.
 - [ ] Milestone 5: Filter engine caching.
@@ -197,19 +199,29 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
   - [ ] 8.5: Pattern residency. Cache each pattern tile per paint server across frames and give the
     tiled fill a resident slot. Clears `geode_pattern_checker`, `geode_pattern_nonrect`,
     `geode_pattern_offset`, `geode_pattern_solid`.
-  - [ ] 8.6: Filter-pass steady state. Filter passes rewrite their per-pass uniforms and create a
-    bind group per pass every frame. Keep uniform allocations across unchanged frames and reuse
-    pass bind groups. How to key the bind-group cache is open: the texture pool hands back the most
-    recently released texture of a key, but whether a pass sees the same textures on an unchanged
-    frame is not established. Measuring texture identity per pass across two unchanged frames
-    decides between keying on texture identity and keying on pass role. Clears
-    `filter_displacement_map`, `filter_drop_shadow`, `filter_fill_paint`, `filter_spot_light`,
-    `filter_stroke_paint`.
+  - [x] 8.6: Filter-pass steady state. A pass's parameters land in the slot they had the frame
+    before, and an upload of bytes the slot already holds is skipped. Texture views and bind groups
+    are cached in the filter engine under the identities (slot and generation) of the textures and
+    buffers they name, so a lookup returns only an object built from the live resources being
+    bound, and a texture destroyed and replaced in its runtime slot misses; entries unused since
+    the previous frame boundary are destroyed at the next one, once every frame that recorded
+    against them has submitted. They hold no texture, so pooled textures stay inside the pool's
+    byte budget and per-key cap. Keying on texture identity rather than pass role works because the
+    pool hands textures out in the previous frame's acquisition order: in release order, the
+    intermediates two filters share in one frame come back reversed on alternate frames, and every
+    pass misses under either key. A filter region that changes size takes new textures and rebuilds
+    its bindings once (`UnchangedFilterPassesUploadAndBindNothing`; reuse and replacement in
+    `CachedFilterBindingsFollowTextureReuseAndReplacement`, edits in
+    `ReusedFilterSlotsUploadEditedParameters`). What keeps `filter_displacement_map`,
+    `filter_drop_shadow`, `filter_fill_paint`, `filter_spot_light`, and `filter_stroke_paint` listed
+    is the composite blit of each filter result, one uniform write per filtered element, which is
+    the 8.3 composite.
   - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
     clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
     re-uploads every frame, and nested viewports re-encode their subtree. Clears `donner_splash`,
-    `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3, on 8.6 for `donner_splash`'s
-    filters, and on 8.1 for `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
+    `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3, which also owns the composites of
+    `donner_splash`'s filter results and opacity groups, and on 8.1 for
+    `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
     text inside nested viewports; whether its text needs 8.8 is not traced.
   - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`) and
     solid-filled glyphs draw from resident outlines, but pattern- and gradient-painted glyphs and
@@ -291,8 +303,9 @@ Entity with <path d="...">
 - **Invalidation.** Path geometry invalidates through `on_update<ComputedPathComponent>`, which
   fires only when `ShapeSystem` changes the geometry; no separate dirty flag is involved.
 - **Uniform storage.** Resident slots hold their own uniforms. Per-frame draws bump-allocate from
-  per-encoder arenas, image blits from the encoder's uniform scratch, and filter passes from
-  per-frame scratch buffers. Nothing uses a uniform ring or dynamic offsets.
+  per-encoder arenas, image blits from the encoder's uniform scratch, and filter passes from the
+  filter engine's scratch blocks, which skip uploading a slot that already holds the same bytes.
+  Nothing uses a uniform ring or dynamic offsets.
 - **Eviction.** Geometry changes remove the entity's cache and residence components; document
   teardown destroys them and returns their slab ranges. Residence is tracked per device, so a
   document drawn by another device uploads there instead of borrowing this device's buffers
