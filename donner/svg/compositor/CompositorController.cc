@@ -2667,7 +2667,11 @@ size_t CompositorController::layerCount() const {
 }
 
 size_t EffectiveCompositorMemoryBudget() {
+#ifdef __EMSCRIPTEN__
+  return kBrowserCompositorMemoryBytes;
+#else
   return kMaxCompositorMemoryBytes;
+#endif
 }
 
 size_t EffectiveCompositorHeapBitmapBudget() {
@@ -2684,10 +2688,15 @@ bool CompositorController::retainedMemoryAtBudget() const {
   const size_t heapBitmapBytes = breakdown.segmentBitmapBytes + breakdown.layerBitmapBytes;
   const size_t retainedBytes =
       heapBitmapBytes + breakdown.segmentTextureBytes + breakdown.layerTextureBytes;
-  return retainedBytes >=
-             config_.retainedMemoryBudgetBytes.value_or(EffectiveCompositorMemoryBudget()) ||
-         heapBitmapBytes >=
-             config_.heapBitmapBudgetBytes.value_or(EffectiveCompositorHeapBitmapBudget());
+  return retainedBytes >= retainedMemoryBudgetBytes() || heapBitmapBytes >= heapBitmapBudgetBytes();
+}
+
+size_t CompositorController::retainedMemoryBudgetBytes() const {
+  return config_.retainedMemoryBudgetBytes.value_or(EffectiveCompositorMemoryBudget());
+}
+
+size_t CompositorController::heapBitmapBudgetBytes() const {
+  return config_.heapBitmapBudgetBytes.value_or(EffectiveCompositorHeapBitmapBudget());
 }
 
 size_t CompositorController::totalBitmapMemory() const {

@@ -191,8 +191,8 @@ private:
 [[nodiscard]] std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(
     const SVGDocument& oldDoc, const SVGDocument& newDoc);
 
-/// Maximum total budget for retained compositor pixels, CPU bitmaps and GPU
-/// textures together, in bytes.
+/// Admission threshold on retained compositor pixels, CPU bitmaps and GPU
+/// textures together, in bytes, on hosts with a large address space.
 ///
 /// Sized for high-DPI editor sessions with mandatory filter, mask, and
 /// isolated-layer promotions plus one active drag target. Scale-band caching
@@ -200,20 +200,38 @@ private:
 /// canvas resolution.
 inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 
-/// Budget for all retained compositor pixels, CPU bitmaps and GPU textures
-/// together. A new promotion is refused once the retained total reaches it.
+/// Admission threshold on retained compositor pixels in the browser build, in
+/// bytes.
+///
+/// WebGPU reports no memory budget, and a texture allocation that fails there
+/// is not recovered, so the browser admits new interaction layers against a
+/// smaller total than native. A 3840x2160 backing store retains about half of
+/// this at a zoom past the raster clamp.
+inline constexpr size_t kBrowserCompositorMemoryBytes = 512ull * 1024ull * 1024ull;
+
+/// Threshold on all retained compositor pixels, CPU bitmaps and GPU textures
+/// together, for admitting a new interaction promotion.
+///
+/// `CompositorController::promoteEntity` refuses to promote an entity that
+/// holds no interaction hint yet once the retained total has reached this
+/// value. It is not a cap on retained pixels: an entity that already holds a
+/// hint is refreshed without the comparison, mandatory filter, mask and
+/// isolated layers and static segments are not gated by it, and nothing is
+/// evicted to meet it.
 [[nodiscard]] size_t EffectiveCompositorMemoryBudget();
 
-/// Budget for the retained compositor pixels that are held in CPU bitmaps.
+/// Threshold on the retained compositor pixels that are held in CPU bitmaps,
+/// for admitting a new interaction promotion. It gates the same requests as
+/// \ref EffectiveCompositorMemoryBudget.
 ///
 /// On wasm the linear memory is small and FIXED (growth is fatal on every
 /// browser engine, so the build links with equal initial and maximum
-/// memory), and a budget larger than the whole address space means admission
-/// can never refuse: full-canvas CPU payloads accrue across zoom size-commit
-/// epochs until the module aborts. CPU bitmaps are therefore bounded to a
-/// third of the actual heap there. GPU textures do not live in that heap, so
-/// they count only against \ref EffectiveCompositorMemoryBudget. Native keeps
-/// the constant.
+/// memory), and a threshold larger than the whole address space means
+/// admission can never refuse: full-canvas CPU payloads accrue across zoom
+/// size-commit epochs until the module aborts. CPU bitmaps are therefore
+/// bounded to a third of the actual heap there. GPU textures do not live in
+/// that heap, so they count only against \ref EffectiveCompositorMemoryBudget.
+/// Native keeps the constant.
 ///
 /// NOTE the measured caveat: refusing promotion is not free - an unpromoted
 /// heavy subtree re-rasterizes full-document per frame, which can cost MORE
@@ -295,11 +313,11 @@ struct CompositorConfig {
   /// disable this so a span is rasterized once and then reused as a cached tile.
   bool immediateStaticSpans = true;
 
-  /// Budget for all retained compositor pixels, in bytes. Unset uses
+  /// Admission threshold on all retained compositor pixels, in bytes. Unset uses
   /// `EffectiveCompositorMemoryBudget()`.
   std::optional<size_t> retainedMemoryBudgetBytes;
 
-  /// Budget for retained pixels held in CPU bitmaps, in bytes. Unset uses
+  /// Admission threshold on retained pixels held in CPU bitmaps, in bytes. Unset uses
   /// `EffectiveCompositorHeapBitmapBudget()`.
   std::optional<size_t> heapBitmapBudgetBytes;
 
@@ -372,7 +390,11 @@ public:
       InvalidEntity,
       /// The compositor cannot add another layer without exceeding the layer limit.
       LayerLimit,
-      /// The compositor cannot add another layer without exceeding the memory budget.
+      /// The promotion was refused for memory: retained pixels reached the total threshold,
+      /// retained CPU bitmaps reached the heap bitmap
+      /// threshold, the entity's complete interaction tile exceeds the largest tile the compositor
+      /// admits, or the request repeats one whose exclusive layer failed to allocate at this
+      /// raster size.
       MemoryLimit,
       /// A descendant is already promoted, so this entity was not promoted.
       DescendantPromoted,
@@ -387,6 +409,24 @@ public:
     static constexpr Code MemoryLimit = Code::MemoryLimit;  ///< Memory limit was reached.
     static constexpr Code DescendantPromoted =
         Code::DescendantPromoted;  ///< A descendant already owns a promoted layer.
+
+    /// Prints the name of \p value.
+    friend std::ostream& operator<<(std::ostream& stream, Code value) {
+      switch (value) {
+        case Code::PromotedLayer: return stream << "PromotedLayer";
+        case Code::OwningTilesRequired: return stream << "OwningTilesRequired";
+        case Code::InvalidEntity: return stream << "InvalidEntity";
+        case Code::LayerLimit: return stream << "LayerLimit";
+        case Code::MemoryLimit: return stream << "MemoryLimit";
+        case Code::DescendantPromoted: return stream << "DescendantPromoted";
+      }
+      return stream << "Code(" << static_cast<int>(value) << ")";
+    }
+
+    /// Prints the name of the result's code.
+    friend std::ostream& operator<<(std::ostream& stream, const PromoteResult& result) {
+      return stream << result.code;
+    }
 
     /// Result code for this promotion request.
     Code code = Code::PromotedLayer;
@@ -561,9 +601,18 @@ public:
   [[nodiscard]] size_t layerCount() const;
 
   /**
-   * Returns the total memory used by all layer bitmaps, in bytes.
+   * Returns the memory held by retained compositor pixels, in bytes: the CPU bitmaps and GPU
+   * textures of cached static segments and of layers.
    */
   [[nodiscard]] size_t totalBitmapMemory() const;
+
+  /// Admission threshold on \ref totalBitmapMemory for a new interaction promotion: the
+  /// configured override, or `EffectiveCompositorMemoryBudget()`.
+  [[nodiscard]] size_t retainedMemoryBudgetBytes() const;
+
+  /// Admission threshold on the CPU-bitmap share of \ref totalBitmapMemory for a new interaction
+  /// promotion: the configured override, or `EffectiveCompositorHeapBitmapBudget()`.
+  [[nodiscard]] size_t heapBitmapBudgetBytes() const;
 
   /// Split of \ref totalBitmapMemory by what holds the pixels. The four kinds
   /// are evicted by different rules, so a single total cannot say which rule is
@@ -980,8 +1029,10 @@ public:
     InvalidEntity,
     /// Too many entities already promoted (`kMaxCompositorLayers`).
     LayerLimit,
-    /// Retained pixels already at the total budget, or retained CPU bitmaps already at the
-    /// heap bitmap budget.
+    /// Retained pixels reached the total threshold, retained CPU bitmaps reached the heap bitmap
+    /// threshold, the entity's complete interaction tile exceeds the largest tile the compositor
+    /// admits, or the request repeats one whose exclusive layer failed to allocate at this raster
+    /// size.
     MemoryLimit,
     /// A descendant already has its own promoted layer (typically a
     /// mandatorily-detected filter / mask / isolated-layer). Allowing
@@ -1237,8 +1288,8 @@ private:
   /// Texture bytes held by the masked-child drag pieces.
   size_t maskedChildDragPieceBytes() const;
 
-  /// True when retained pixels have reached either admission budget: all retained pixels against
-  /// the total budget, or the CPU-bitmap share against the heap bitmap budget.
+  /// True when retained pixels have reached either admission threshold: all retained pixels
+  /// against the total threshold, or the CPU-bitmap share against the heap bitmap threshold.
   bool retainedMemoryAtBudget() const;
   /// The only layer containing @p entity, or null when there is none, several, or @p entity is a
   /// layer itself.

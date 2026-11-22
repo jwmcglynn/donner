@@ -1787,14 +1787,14 @@ TEST(CompositorGeodeSplashTest, SelectionBudgetRefusalDoesNotMakePartialTilesPre
       << "the last complete frame must remain available while selected tiles cannot be allocated";
 }
 
-// Loads the splash, renders one overview frame with \p config, and reports the admission result for
-// a letter that has not been selected before.
-CompositorController::PromoteResult PromoteFreshLetterAfterOverviewFrame(
-    const CompositorConfig& config, CompositorController::BitmapMemoryBreakdown* retained) {
-  const donner::tests::RequiredRunfile source =
-      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+// Renders one overview frame of \p source with \p config, then reports the retained pixels and the
+// admission result for a letter that has not been selected before.
+void PromoteFreshLetterAfterOverviewFrame(std::string_view source, const CompositorConfig& config,
+                                          CompositorController::BitmapMemoryBreakdown* retained,
+                                          CompositorController::PromoteResult* result) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
-  auto parsed = parser::SVGParser::ParseSVG(source.contents, warnings);
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError());
   SVGDocument document = std::move(parsed.result());
   document.setCanvasSize(1536, 1024);
   RendererGeode renderer;
@@ -1803,10 +1803,12 @@ CompositorController::PromoteResult PromoteFreshLetterAfterOverviewFrame(
   viewport.size = Vector2d(1536, 1024);
   viewport.devicePixelRatio = 1.0;
   compositor.renderFrame(viewport);
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
   *retained = compositor.bitmapMemoryBreakdown();
   const auto letter = document.querySelector("#letter-G");
-  return compositor.promoteEntity(letter->unsafeEntityHandle().entity(),
-                                  InteractionHint::Selection);
+  ASSERT_TRUE(letter.has_value());
+  *result =
+      compositor.promoteEntity(letter->unsafeEntityHandle().entity(), InteractionHint::Selection);
 }
 
 TEST(CompositorGeodeSplashTest, RetainedTexturesDoNotCountAgainstTheHeapBitmapBudget) {
@@ -1819,8 +1821,9 @@ TEST(CompositorGeodeSplashTest, RetainedTexturesDoNotCountAgainstTheHeapBitmapBu
   config.heapBitmapBudgetBytes = kHeapBitmapBudget;
 
   CompositorController::BitmapMemoryBreakdown retained;
-  const CompositorController::PromoteResult result =
-      PromoteFreshLetterAfterOverviewFrame(config, &retained);
+  CompositorController::PromoteResult result{CompositorController::PromoteResult::InvalidEntity};
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
 
   ASSERT_GT(retained.segmentTextureBytes + retained.layerTextureBytes, kHeapBitmapBudget)
       << "The retained tiles must exceed the heap bitmap budget for this case to mean anything";
@@ -1839,8 +1842,9 @@ TEST(CompositorGeodeSplashTest, RetainedTexturesCountAgainstTheTotalBudget) {
   config.retainedMemoryBudgetBytes = kRetainedBudget;
 
   CompositorController::BitmapMemoryBreakdown retained;
-  const CompositorController::PromoteResult result =
-      PromoteFreshLetterAfterOverviewFrame(config, &retained);
+  CompositorController::PromoteResult result{CompositorController::PromoteResult::InvalidEntity};
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
 
   ASSERT_GT(retained.segmentTextureBytes + retained.layerTextureBytes, kRetainedBudget);
   EXPECT_EQ(result, CompositorController::PromoteResult::MemoryLimit);
