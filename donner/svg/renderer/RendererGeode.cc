@@ -6303,6 +6303,37 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return index;
   }
 
+  /// Stores \p candidate in the stroke variant of \p cache that `strokeVariantToReplace` picks,
+  /// charging its bytes to the document budget in place of the variant it replaces.
+  /// @param source Entity owning \p cache.
+  /// @param cache Stroke cache of \p source.
+  /// @param candidate Outline to store; moved from only when stored.
+  /// @return Index of the stored variant, or nullopt when every variant served a draw this frame
+  ///   or the budget refused the outline. The cache is unchanged then.
+  std::optional<std::size_t> storeStrokeVariant(
+      EntityHandle source, geode::GeodePathCacheComponent& cache,
+      std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& candidate) {
+    const std::optional<std::size_t> replaceable = strokeVariantToReplace(cache, currentFrameIndex);
+    const std::optional<std::size_t> retainedBytes = candidate->retainedBytes();
+    if (!replaceable.has_value() || !retainedBytes.has_value()) {
+      return std::nullopt;
+    }
+    std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& slot =
+        cache.strokeVariants[*replaceable];
+    // A replaced variant hands its charge over, so the budget never holds both outlines.
+    geode::GeodeGeometryCacheReservation& reservation =
+        slot ? slot->reservation : candidate->reservation;
+    if (!reservation.replace(documentGeometryBudget(*source.registry()), *retainedBytes)) {
+      return std::nullopt;
+    }
+    releaseStrokeVariant(source, cache, *replaceable);
+    if (slot) {
+      candidate->reservation = std::move(slot->reservation);
+    }
+    slot = std::move(candidate);
+    return replaceable;
+  }
+
   /// Stroke-side of the cache. Builds (or reuses) the `strokeToFill` output and its encode in
   /// one of `source`'s `GeodePathCacheComponent::strokeVariants`, keyed by the stroke style, the
   /// device-derived flattening tolerance, and the host transform of a `non-scaling-stroke`
@@ -6331,8 +6362,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     };
     if (source) {
       ensureCacheInvalidationWired(*source.registry());
-      std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
-          documentGeometryBudget(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
       if (const std::optional<std::size_t> hit =
               cache.strokeVariantFor(strokeStyle, flattenTolerance, hostFromLocal)) {
@@ -6358,23 +6387,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
               .strokedEncode = std::move(*encoded),
               .strokeFillRule = fillRule,
           });
-      const std::optional<std::size_t> replaceable =
-          strokeVariantToReplace(cache, currentFrameIndex);
-      const std::optional<std::size_t> retainedBytes = candidate->retainedBytes();
-      if (replaceable.has_value() && retainedBytes.has_value()) {
-        std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& slot =
-            cache.strokeVariants[*replaceable];
-        // A replaced variant hands its charge over, so the budget never holds both outlines.
-        geode::GeodeGeometryCacheReservation& reservation =
-            slot ? slot->reservation : candidate->reservation;
-        if (reservation.replace(documentBudget, *retainedBytes)) {
-          releaseStrokeVariant(source, cache, *replaceable);
-          if (slot) {
-            candidate->reservation = std::move(slot->reservation);
-          }
-          slot = std::move(candidate);
-          return fromVariant(cache, *replaceable);
-        }
+      if (const std::optional<std::size_t> stored = storeStrokeVariant(source, cache, candidate)) {
+        return fromVariant(cache, *stored);
       }
       // Every variant already served a draw this frame, or the document budget refused the
       // outline: draw from a per-frame outline and leave the cached variants and their residence
