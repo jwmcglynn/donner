@@ -122,15 +122,38 @@ def docs_only(environ: Mapping[str, str]) -> bool:
         return False
     merge, first_parent = tested
     print(f"Comparing test merge {merge} with its first parent {first_parent}.")
-    # Deletions count: deleting a build input (a source, a BUILD file, a CMake file) can break
-    # the build as surely as editing it. --no-renames reports a rename as its deleted old path and
-    # its added new path, so moving a build input under docs/ is not docs-only either.
-    changed = _git("diff", "--name-only", "--no-renames", "--diff-filter=ACMD", first_parent,
-                   merge)
+    # Every changed path counts, whatever its status: deleting a build input (a source, a BUILD
+    # file, a CMake file) can break the build as surely as editing it. --no-renames reports a
+    # rename as its deleted old path and its added new path, so moving a build input under docs/
+    # is not docs-only either.
+    changed = _git("diff", "--raw", "--no-renames", first_parent, merge)
     if changed is None:
         print("git diff failed; not docs-only.")
         return False
-    return _all_docs(path for path in changed.splitlines() if path)
+    return _all_docs_entries(changed)
+
+
+# Without rename, copy or break detection, a diff between two commits reports only these.
+_TREE_DIFF_STATUSES = ("A", "D", "M", "T")
+# Absent, and regular files. A symlink or gitlink is never documentation, even under docs/: the
+# directory is not in .bazelignore, so a symlink there can add packages to Bazel's `//...`.
+_DOCUMENT_MODES = ("000000", "100644", "100755")
+
+
+def _all_docs_entries(raw_diff: str) -> bool:
+    """True when every `git diff --raw` entry is a documentation file; unknown entries are not."""
+    paths = []
+    for line in raw_diff.splitlines():
+        metadata, tab, path = line.partition("\t")
+        fields = metadata.split()
+        if not tab or len(fields) != 5 or fields[4] not in _TREE_DIFF_STATUSES:
+            print(f"Unexpected diff entry: {line}")
+            return False
+        if fields[0].removeprefix(":") not in _DOCUMENT_MODES or fields[1] not in _DOCUMENT_MODES:
+            print(f"Non-file change: {path}")
+            return False
+        paths.append(path)
+    return _all_docs(paths)
 
 
 def _all_docs(paths: Iterable[str]) -> bool:

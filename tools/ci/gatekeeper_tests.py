@@ -1,5 +1,6 @@
 """Runs the gatekeeper decisions as a workflow step would: real git history, a fake gh."""
 
+import importlib.util
 import json
 import os
 import shlex
@@ -253,7 +254,8 @@ class GatekeeperTest(unittest.TestCase):
 
     def _test_merge(self, base_tip, *heads):
         """Checks out GitHub's test merge of `heads` into `base_tip`, as CI checks it out."""
-        _git(self.repo, "checkout", "-q", "--detach", base_tip)
+        # Forced: a fixture may stage an entry its worktree does not match.
+        _git(self.repo, "checkout", "-q", "-f", "--detach", base_tip)
         _git(self.repo, "merge", "-q", "--no-ff", "-m", "test merge", *heads)
         return _git(self.repo, "rev-parse", "HEAD")
 
@@ -320,6 +322,88 @@ class GatekeeperTest(unittest.TestCase):
                 head = _commit(self.repo, ["docs/guide.md"], "remove %s, edit docs" % path)
                 _, output, _ = self._docs_only(base, head)
                 self.assertEqual(output, "docs_only=%s\n" % expected)
+
+    def _stage_entry(self, mode, path, target):
+        """Stages `path` as a symlink to `target` (120000) or a gitlink to commit `target`."""
+        if mode == "120000":
+            link = self.work / "link-target"
+            link.write_text(target, encoding="utf-8")
+            target = _git(self.repo, "hash-object", "-w", str(link))
+        _git(self.repo, "update-index", "--add", "--cacheinfo", f"{mode},{target},{path}")
+
+    def test_a_type_change_of_a_build_input_clears_docs_only(self):
+        # A source file becomes a symlink (or a symlink a file) beside a documentation edit.
+        for link_first in (False, True):
+            with self.subTest(link_first=link_first):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                if link_first:
+                    self._stage_entry("120000", "donner/code.cc", "../README.md")
+                    _git(self.repo, "commit", "-q", "-m", "add a symlink")
+                    base = _git(self.repo, "rev-parse", "HEAD")
+                    # The worktree still has no file there, so this writes a regular file.
+                    head = _commit(self.repo, ["donner/code.cc", "docs/guide.md"], "as a file")
+                else:
+                    base = _commit(self.repo, ["donner/code.cc"], "add a file")
+                    self._stage_entry("120000", "donner/code.cc", "../README.md")
+                    head = _commit(self.repo, ["docs/guide.md"], "as a symlink")
+                result, output, _ = self._docs_only(base, head)
+                self.assertEqual(output, "docs_only=false\n")
+                self.assertIn("Non-file change: donner/code.cc", result.stdout)
+
+    def test_a_mode_only_change_of_a_build_input_clears_docs_only(self):
+        base = _commit(self.repo, ["tools/run.sh"], "add a script")
+        _git(self.repo, "update-index", "--chmod=+x", "tools/run.sh")
+        head = _commit(self.repo, ["docs/guide.md"], "make the script executable")
+        self.assertEqual(_git(self.repo, "diff", "--raw", base, head, "--", "tools/run.sh")[:15],
+                         ":100644 100755 ")
+        result, output, _ = self._docs_only(base, head)
+        self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("Non-doc change: tools/run.sh", result.stdout)
+
+    def test_a_symlink_or_gitlink_under_docs_clears_docs_only(self):
+        # Bazel's `//...` walks docs/, which .bazelignore does not exclude: a symlink there can
+        # add packages or a cycle. A gitlink is a dependency checkout, not a document.
+        cases = (("a document becomes a symlink", "100644", "120000"),
+                 ("a symlink becomes a document", "120000", "100644"),
+                 ("a symlink is added", None, "120000"),
+                 ("a gitlink is added", None, "160000"))
+        for name, before, after in cases:
+            with self.subTest(case=name):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                if before == "100644":
+                    _commit(self.repo, ["docs/linked.md"], "add a document")
+                elif before == "120000":
+                    self._stage_entry("120000", "docs/linked.md", "../donner")
+                    _git(self.repo, "commit", "-q", "-m", "add a symlink")
+                base = _git(self.repo, "rev-parse", "HEAD")
+                if after == "100644":
+                    _commit(self.repo, ["docs/linked.md"], "as a document")
+                else:
+                    self._stage_entry(after, "docs/linked.md",
+                                      "../donner" if after == "120000" else self.root)
+                head = _commit(self.repo, ["docs/guide.md"], "edit docs")
+                result, output, _ = self._docs_only(base, head)
+                self.assertEqual(output, "docs_only=false\n")
+                self.assertIn("Non-file change: docs/linked.md", result.stdout)
+
+    def test_an_unexpected_diff_entry_is_not_docs_only(self):
+        # Copies, renames, unmerged, unknown and broken pairs cannot appear in this diff; if one
+        # ever does, CI runs. A documentation entry beside each shows only the entry decides.
+        spec = importlib.util.spec_from_file_location("gatekeeper", self.script)
+        gatekeeper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gatekeeper)
+        blob = "1" * 40
+        document = f":100644 100644 {blob} {blob} M\tdocs/guide.md\n"
+        self.assertTrue(gatekeeper._all_docs_entries(document))
+        for entry in (f":100644 100644 {blob} {blob} C075\tdocs/a.md\tdocs/b.md",
+                      f":100644 100644 {blob} {blob} R100\tdocs/a.md\tdocs/b.md",
+                      f":000000 000000 {'0' * 40} {'0' * 40} U\tdocs/a.md",
+                      f":100644 100644 {blob} {blob} X\tdocs/a.md",
+                      f":100644 100644 {blob} {blob} B\tdocs/a.md",
+                      f":100644 100644 {blob} {blob} M",
+                      "docs/a.md"):
+            with self.subTest(entry=entry):
+                self.assertFalse(gatekeeper._all_docs_entries(document + entry + "\n"))
 
     def test_base_drift_after_the_fork_is_not_attributed_to_the_pull_request(self):
         head = _commit(self.repo, ["docs/guide.md"], "docs")
