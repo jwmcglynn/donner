@@ -38,7 +38,7 @@ BCR versus what stays behind `git_override`.
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-def _non_bcr_deps_impl(_mctx):
+def _non_bcr_deps_impl(mctx):
     # Data only; runtime SheenBidi is the regular BCR module in MODULE.bazel.
     http_archive(
         name = "sheenbidi_unicode_data",
@@ -64,10 +64,6 @@ def _non_bcr_deps_impl(_mctx):
     # moved tag fails the fetch instead of changing the shipped sources. The
     # archive holds the same tree as a checkout of the tag.
     #
-    # The patch_cmds below create src/config-override.h to re-enable parts of
-    # the HarfBuzz API that HB_TINY/HB_LEAN strip out. We need:
-    #   - file I/O for hb_face_create_from_file_or_fail
-    #   - vertical advances and per-glyph origins from FreeType
     http_archive(
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
@@ -77,15 +73,8 @@ def _non_bcr_deps_impl(_mctx):
         patch_args = ["-p1"],
         urls = ["https://github.com/harfbuzz/harfbuzz/archive/refs/tags/15.2.0.tar.gz"],
         patch_cmds = [
-            """cat > src/config-override.h << 'HBEOF'
-// Re-enable file I/O (hb_face_create_from_file_or_fail references
-// hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
-#undef HB_NO_OPEN
-// Preserve font-provided vertical advances and per-glyph origins.
-#undef HB_NO_VERTICAL
-// Keep variation composite decoding outside the shaping capability set.
-#define HB_NO_VAR_COMPOSITES
-HBEOF""",
+            "cat > src/config-override.h <<'HBEOF'\n%s\nHBEOF" %
+            mctx.read(Label("//third_party:harfbuzz-config-override.h")).rstrip(),
         ],
     )
 

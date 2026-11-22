@@ -1,4 +1,6 @@
 // Override HarfBuzz config to enable the APIs used by the FreeType-backed shaper.
+// Independent shaping buffers share HarfBuzz's Unicode callbacks and reference counts.
+#undef HB_NO_MT
 // Re-enable file I/O (hb_face_create_from_file_or_fail references
 // hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
 #undef HB_NO_OPEN
