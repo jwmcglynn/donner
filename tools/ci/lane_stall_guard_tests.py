@@ -5,6 +5,7 @@ on a pipe, and the test waits for those reports, or for the guard's own output, 
 the next signal. The guard's own deadline is a backstop that no case reaches.
 """
 
+import errno
 import os
 from pathlib import Path
 import select
@@ -86,6 +87,22 @@ def read_until_closed(read_fd: int) -> bytes:
         if not chunk:
             return data
         data += chunk
+
+
+def start_error(command: list[str]) -> OSError | None:
+    """Why `command` cannot be started in this test's environment, which the guard inherits, or
+    None when it can."""
+    try:
+        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=test_timing.STALL_GUARD_SECONDS, check=False)
+    except OSError as error:
+        return error
+    return None
+
+
+def start_failure_note(command: str, error: OSError) -> str:
+    """What the guard records for a diagnostic command that could not be started."""
+    return f"{command}: could not be started: {type(error).__name__}: {error}"
 
 
 def read_output_until(guard: subprocess.Popen, marker: bytes, seen: bytes = b"") -> bytes:
@@ -221,7 +238,7 @@ class StopLaneTest(unittest.TestCase):
     def test_a_failed_snapshot_before_sigkill_still_kills_the_lane(self):
         lane = FakeLane()
         members = [{"pid": lane.pid, "elapsed": "00:30"}, {"pid": 7, "elapsed": "00:20"}]
-        snapshots = [("table", members, members), RuntimeError("ps failed")]
+        snapshots = [("table", members, members, True), RuntimeError("ps failed")]
         with mock.patch.object(lane_stall_guard, "lane_members", side_effect=snapshots), \
                 mock.patch.object(lane_stall_guard.os, "killpg") as killpg, \
                 mock.patch.object(lane_stall_guard.os, "kill") as kill, \
@@ -233,6 +250,136 @@ class StopLaneTest(unittest.TestCase):
                                                mock.call(7, signal.SIGKILL)])
         self.assertIn("process snapshot failed (RuntimeError: ps failed)",
                       log.call_args_list[0].args[0])
+
+
+class ExitingLane(FakeLane):
+    """A lane whose root exits on SIGTERM, within the grace."""
+
+    def wait(self, timeout=None):
+        return -signal.SIGTERM
+
+
+class SnapshotFallbackTest(unittest.TestCase):
+    """Each stop-path signal uses a fresh snapshot; one whose process table or environment
+    listing could not run is supplemented with the previous snapshot's processes."""
+
+    # What a stalled lane that exhausted the process limit causes; not a missing executable.
+    ERROR = OSError(errno.EAGAIN, "Resource temporarily unavailable")
+
+    @staticmethod
+    def row(pid: int, elapsed: str = "00:20") -> str:
+        """A process table row; ppid 1, so only the lane's tag makes it a member."""
+        return f"{pid} 1 {pid} S {elapsed} 100 Sat Nov 14 07:31:57 2026 python3\n"
+
+    def popen(self, tables: list, listings: list):
+        """Popen that answers each process table, and each `ps -E` environment listing, with the
+        next entry of its list: text to print, or an exception to raise."""
+        real_popen = subprocess.Popen
+
+        def popen(command, *args, **kwargs):
+            answer = (listings if "-E" in command else tables).pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return real_popen([sys.executable, "-c", f"import sys; sys.stdout.write({answer!r})"],
+                              *args, **kwargs)
+        return popen
+
+    def stop(self, lane, popen, tagged_pids=None):
+        """Stops `lane`; with no `tagged_pids`, tagged processes come from `ps -E`, as on macOS."""
+        if tagged_pids is not None:
+            tagged = mock.patch.object(lane_stall_guard, "tagged_pids", side_effect=tagged_pids)
+        else:  # No /proc environments, so the guard lists them with `ps -E`.
+            tagged = mock.patch.object(lane_stall_guard, "Path",
+                                       **{"return_value.exists.return_value": False})
+        with tagged, mock.patch.object(lane_stall_guard.subprocess, "Popen", side_effect=popen), \
+                mock.patch.object(lane_stall_guard.os, "killpg"), \
+                mock.patch.object(lane_stall_guard.os, "kill") as kill, \
+                mock.patch.object(lane_stall_guard, "log") as log:
+            lane_stall_guard.stop_lane(lane, "tag", lane_stall_guard.Clock(monotonic=0, wall=0))
+        return kill.call_args_list, [call.args[0] for call in log.call_args_list]
+
+    def test_a_member_started_during_the_grace_is_killed_after_the_root_exits(self):
+        root = self.row(FakeLane.pid, "00:30")
+        kills, logged = self.stop(
+            ExitingLane(), self.popen([root + self.row(7), self.row(9)], []), [{7}, {9}])
+        self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(9, signal.SIGKILL)])
+        self.assertEqual([line for line in logged if "snapshot" in line], [])
+
+    def test_a_process_table_that_cannot_start_before_sigkill_kills_the_previous_members(self):
+        root = self.row(FakeLane.pid, "00:30")
+        kills, logged = self.stop(
+            FakeLane(), self.popen([root + self.row(7), self.ERROR], []), [{7}, {7}])
+        self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
+        self.assertIn(f"lane stall guard: {start_failure_note('ps', self.ERROR)}", logged)
+        self.assertIn("lane stall guard: process snapshot incomplete; signalling 0 processes it "
+                      "found and 1 from the previous snapshot", logged)
+
+    def test_an_environment_listing_that_cannot_start_before_sigkill_kills_the_previous_members(
+            self):
+        table = self.row(FakeLane.pid, "00:30") + self.row(7)
+        missing = FileNotFoundError(errno.ENOENT, "No such file or directory", "ps")
+        listing = f"7 python3 {lane_stall_guard.TAG_VARIABLE}=tag\n"
+        kills, logged = self.stop(FakeLane(), self.popen([table, table], [listing, missing]))
+        self.assertEqual(kills, [mock.call(7, signal.SIGTERM), mock.call(7, signal.SIGKILL)])
+        self.assertIn(f"lane stall guard: {start_failure_note('ps', missing)}", logged)
+        self.assertIn("lane stall guard: process snapshot incomplete; signalling 0 processes it "
+                      "found and 1 from the previous snapshot", logged)
+
+
+class DiagnosticToolTest(unittest.TestCase):
+    """A diagnostic command that cannot be started is recorded in place of its output, whatever
+    the reason, and the remaining diagnostics are still written."""
+
+    # Neither a missing executable nor a permission error: any OSError from starting a command.
+    ERROR = OSError(errno.ENOEXEC, "Exec format error")
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="lane stall guard ")
+        self.addCleanup(temporary.cleanup)
+        self.diagnostics = Path(temporary.name) / "diagnostics"
+
+    def record_with_failing_start(self, failing: str) -> list[str]:
+        """Records this process as the lane while `failing` cannot be started; returns the log."""
+        real_popen = subprocess.Popen
+
+        def popen(command, *args, **kwargs):
+            if command[0] == failing:
+                raise self.ERROR
+            return real_popen(command, *args, **kwargs)
+
+        with mock.patch.object(lane_stall_guard.subprocess, "Popen", side_effect=popen), \
+                mock.patch.object(lane_stall_guard, "log") as log:
+            lane_stall_guard.record_diagnostics(self.diagnostics, os.getpid(), "tag",
+                                                lane_seconds=1.0)
+        return [call.args[0] for call in log.call_args_list]
+
+    def read(self, name: str) -> str:
+        return (self.diagnostics / name).read_text(encoding="utf-8")
+
+    def test_an_open_files_command_that_cannot_start_is_recorded_after_the_lane(self):
+        logged = self.record_with_failing_start("lsof")
+        note = start_failure_note("lsof", self.ERROR)
+        self.assertEqual(self.read("open-files.txt"), note + "\n")
+        self.assertIn(f"lane stall guard: {note}", logged)
+        recorded_pids = {line.split()[0] for line in self.read("lane-processes.txt").splitlines()}
+        self.assertIn(str(os.getpid()), recorded_pids, self.read("lane-processes.txt"))
+        self.assertIn(str(os.getpid()), self.read("process-table.txt"))
+
+    def test_a_process_table_command_that_cannot_start_still_writes_every_later_file(self):
+        logged = self.record_with_failing_start("ps")
+        note = start_failure_note("ps", self.ERROR)
+        self.assertEqual(
+            {name: self.read(name) for name in
+             ("process-table.txt", "lane-processes.txt", "open-files.txt")},
+            {"process-table.txt": note + "\n", "lane-processes.txt": "",
+             "open-files.txt": "no lane processes\n"})
+        self.assertIn(f"lane stall guard: {note}", logged)
+
+    def test_an_environment_listing_that_cannot_start_is_told_apart_from_finding_none(self):
+        with mock.patch.object(lane_stall_guard.subprocess, "Popen", side_effect=self.ERROR), \
+                mock.patch.object(lane_stall_guard, "log") as log:
+            self.assertIsNone(lane_stall_guard._ps_tagged_pids("marker"))
+        log.assert_called_once_with(f"lane stall guard: {start_failure_note('ps', self.ERROR)}")
 
 
 class GuardTest(unittest.TestCase):
@@ -304,8 +451,20 @@ class GuardTest(unittest.TestCase):
         recorded_pids = {line.split()[0] for line in recorded.splitlines()}
         for pid in pids:
             self.assertIn(pid, recorded_pids, recorded)
-        for name in ("process-table.txt", "open-files.txt"):
-            self.assertTrue((self.diagnostics / name).is_file(), name)
+        written = sorted(path.name for path in self.diagnostics.iterdir())
+        self.assertEqual(written, ["lane-processes.txt", "open-files.txt", "process-table.txt"],
+                         f"guard output:\n{output}")
+        open_files = (self.diagnostics / "open-files.txt").read_text(encoding="utf-8")
+        error = start_error(["lsof", "-v"])
+        if error is not None:
+            # lsof is not installed on some sandboxed workers; the guard records why instead.
+            self.assertEqual(open_files, start_failure_note("lsof", error) + "\n", output)
+            self.skipTest(f"lsof cannot be started here ({type(error).__name__}: {error}), so "
+                          "only the recorded reason was checked, not the lane's open files")
+        listed_pids = {fields[1] for fields in map(str.split, open_files.splitlines())
+                       if len(fields) > 1}
+        for pid in pids:
+            self.assertIn(pid, listed_pids, open_files)
 
     def test_a_failure_to_record_still_stops_the_lane(self):
         blocker = self.work / "not-a-directory"

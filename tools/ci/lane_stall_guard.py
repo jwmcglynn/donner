@@ -9,8 +9,13 @@ after N seconds, this records the process table, the lane's processes and their 
 the open files of browser crash handlers that started during the lane, under DIR. It then stops
 the lane: its process tree and every process that still carries the run's environment variable,
 including processes that left the tree by starting a session of their own and being reparented.
-The stall path always exits 124, even when recording fails. SIGUSR1 starts the stall path at once,
-or as soon as the lane has been started.
+The stall path always exits 124, even when recording fails. A diagnostic command that cannot be
+started, for whatever reason, is recorded by name and reason in place of its output, and the
+remaining diagnostics are still written; the environment listing that finds tagged processes is
+only logged, never written, because environments can hold secrets. While the lane is stopped, a
+process snapshot whose process table or environment listing could not run is supplemented with
+the processes of the previous snapshot. SIGUSR1 starts the stall path at once, or as soon as the
+lane has been started.
 
 The guard turns a hang into a named failure. A Playwright run can wait without bound in browser
 teardown: the browser child counts as closed only once its process exits and every inherited
@@ -166,8 +171,20 @@ def _wait_bounded(process: subprocess.Popen, name: str) -> str:
         return f"{name}: no answer within {TOOL_TIMEOUT_SECONDS} s; abandoned, output partial\n"
 
 
-def run_tool(command: list[str]) -> str:
-    """A diagnostic command's output, partial when it timed out, plus any note about how it ended.
+def _could_not_start(command: list[str], error: OSError) -> str:
+    """Logs and returns the note for a diagnostic command that could not be started.
+
+    Any OSError counts: a command that is not installed, not executable, or refused by a sandbox
+    is reported the same way, by name and reason.
+    """
+    note = f"{command[0]}: could not be started: {type(error).__name__}: {error}"
+    log(f"lane stall guard: {note}")
+    return note + "\n"
+
+
+def run_tool(command: list[str]) -> tuple[str, bool]:
+    """A diagnostic command's output, partial when it timed out, plus any note about how it ended,
+    or only a note when it could not be started; and whether it started.
 
     Output goes to a file rather than a pipe, so whatever it wrote is kept even when the command
     has to be abandoned.
@@ -176,11 +193,11 @@ def run_tool(command: list[str]) -> str:
         try:
             process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
                                        env=dict(os.environ, LC_ALL="C"))
-        except FileNotFoundError:
-            return f"{command[0]}: not available\n"
+        except OSError as error:
+            return _could_not_start(command, error), False
         note = _wait_bounded(process, command[0])
         output.seek(0)
-        return output.read().decode(errors="replace") + note
+        return output.read().decode(errors="replace") + note, True
 
 
 def _environment_of(entry: Path) -> list[bytes]:
@@ -197,12 +214,14 @@ def _proc_tagged_pids(marker: str) -> set[int]:
             if entry.name.isdigit() and marker.encode() in _environment_of(entry)}
 
 
-def _read_through_pipe(command: list[str]) -> str:
-    """A bounded command's standard output, read through a pipe so it never reaches a file."""
+def _read_through_pipe(command: list[str]) -> str | None:
+    """A bounded command's standard output, read through a pipe so it never reaches a file, or
+    None when it could not be started."""
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except FileNotFoundError:
-        return ""
+    except OSError as error:
+        _could_not_start(command, error)
+        return None
     try:
         output, _ = process.communicate(timeout=TOOL_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -214,45 +233,58 @@ def _read_through_pipe(command: list[str]) -> str:
     return output.decode(errors="replace")
 
 
-def _ps_tagged_pids(marker: str) -> set[int]:
-    """Tagged processes from `ps -E`, which appends each environment to the command. Environment
-    text can hold secrets, so it is read through a pipe and never written anywhere."""
-    rows = (line.split() for line in
-            _read_through_pipe(["ps", "-A", "-ww", "-E", "-o", "pid=,command="]).splitlines())
+def _ps_tagged_pids(marker: str) -> set[int] | None:
+    """Tagged processes from `ps -E`, which appends each environment to the command, or None when
+    `ps` could not be started. Environment text can hold secrets, so it is read through a pipe
+    and never written anywhere."""
+    listing = _read_through_pipe(["ps", "-A", "-ww", "-E", "-o", "pid=,command="])
+    if listing is None:
+        return None
+    rows = (line.split() for line in listing.splitlines())
     return {int(fields[0]) for fields in rows
             if fields and fields[0].isdigit() and marker in fields[1:]}
 
 
-def tagged_pids(tag: str) -> set[int]:
-    """Processes whose environment carries this run's tag, excluding the guard itself."""
+def tagged_pids(tag: str) -> set[int] | None:
+    """Processes whose environment carries this run's tag, excluding the guard itself, or None
+    when the environment listing could not run."""
     marker = f"{TAG_VARIABLE}={tag}"
     if Path("/proc/self/environ").exists():
         pids = _proc_tagged_pids(marker)
     else:
         pids = _ps_tagged_pids(marker)
-    pids.discard(os.getpid())
+    if pids is not None:
+        pids.discard(os.getpid())
     return pids
 
 
-def lane_members(root_pid: int, tag: str) -> tuple[str, list[dict], list[dict]]:
-    """A fresh process table, its rows, and the lane's members in it.
+def lane_members(root_pid: int, tag: str) -> tuple[str, list[dict], list[dict], bool]:
+    """A fresh process table, its rows, the lane's members in it, and whether it is complete.
 
     Members are the root's process tree plus every other process carrying the run's tag. The
     tag is read just before the table, so a pid is used only within moments of being observed.
+    The snapshot is complete when the process table command started and, where the platform
+    reads environments through a command, that listing ran. A complete snapshot need not list
+    the root: once the lane has been reaped, no table does.
     """
     tagged = tagged_pids(tag)
-    table = run_tool(["ps", "-A", "-ww", "-o", PS_COLUMNS])
+    table, started = run_tool(["ps", "-A", "-ww", "-o", PS_COLUMNS])
     rows = parse_process_table(table)
     tree = lane_tree(rows, root_pid)
     in_tree = {row["pid"] for row in tree}
-    members = tree + [row for row in rows if row["pid"] in tagged and row["pid"] not in in_tree]
-    return table, rows, members
+    members = tree + [row for row in rows
+                      if row["pid"] in (tagged or set()) and row["pid"] not in in_tree]
+    complete = started and tagged is not None
+    return table, rows, members, complete
 
 
 def record_diagnostics(directory: Path, root_pid: int, tag: str, lane_seconds: float) -> None:
-    """Writes the process table, the lane's processes and their open files; prints the lane."""
+    """Writes the process table, the lane's processes and their open files; prints the lane.
+
+    Each file is written even when the command behind it, or an earlier one, cannot be started.
+    """
     directory.mkdir(parents=True, exist_ok=True)
-    table, rows, members = lane_members(root_pid, tag)
+    table, rows, members, _ = lane_members(root_pid, tag)
     (directory / "process-table.txt").write_text(table, encoding="utf-8")
     known = {row["pid"] for row in members}
     watched = members + [row for row in detached_helpers(rows, lane_seconds)
@@ -260,7 +292,7 @@ def record_diagnostics(directory: Path, root_pid: int, tag: str, lane_seconds: f
     summary = "".join(f"{row['line']}\n" for row in watched)
     (directory / "lane-processes.txt").write_text(summary, encoding="utf-8")
     pids = ",".join(str(row["pid"]) for row in watched)
-    open_files = run_tool(["lsof", "-b", "-w", "-nP", "-p", pids]) if pids \
+    open_files = run_tool(["lsof", "-b", "-w", "-nP", "-p", pids])[0] if pids \
         else "no lane processes\n"
     (directory / "open-files.txt").write_text(open_files, encoding="utf-8")
     log("lane stall guard: lane processes (pid ppid pgid stat elapsed rss started command):")
@@ -306,18 +338,27 @@ def signal_lane(root_pid: int, tag: str, signum: int, clock: Clock,
                 previous: list[int]) -> list[int]:
     """Sends `signum` to the lane's group and to each member of a fresh snapshot.
 
-    The root is the guard's unreaped child, so neither its pid nor its group can be reused yet.
+    Until the guard reaps the root, its pid and group cannot be reused; once the root has been
+    reaped during the SIGTERM grace, the group signal may reach a reused id.
     Other pids come from a snapshot taken here. If that snapshot fails, the group has still been
     signalled and the members of `previous`, the last snapshot that worked, are signalled
-    instead. Returns the pids it signalled one by one.
+    instead. If it is incomplete (its process table or environment listing could not run), the
+    members it did find are signalled together with those of `previous`: each fresh member
+    passed the same start-time check as a complete snapshot's, and `previous` is what a failed
+    snapshot falls back to, so the union signals no pid that one of those two paths would not.
+    Returns the pids it signalled one by one.
     """
     try:
         os.killpg(root_pid, signum)
     except (ProcessLookupError, PermissionError):
         pass
     try:
-        _, _, members = lane_members(root_pid, tag)
+        _, _, members, complete = lane_members(root_pid, tag)
         targets = signal_targets(members, root_pid, clock.elapsed())
+        if not complete:
+            log(f"lane stall guard: process snapshot incomplete; signalling {len(targets)} "
+                f"processes it found and {len(previous)} from the previous snapshot")
+            targets = list(dict.fromkeys(targets + previous))
     except Exception as error:  # Snapshot failures must not skip the signals below.
         log(f"lane stall guard: process snapshot failed ({type(error).__name__}: {error}); "
             f"signalling {len(previous)} processes from the previous snapshot")
