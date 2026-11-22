@@ -553,6 +553,28 @@ svg::compositor::CompositorController::RenderFrameStats CombineIterationRenderFr
   return combined;
 }
 
+std::string_view PromoteResultName(
+    svg::compositor::CompositorController::PromoteResult::Code code) {
+  using Code = svg::compositor::CompositorController::PromoteResult::Code;
+  switch (code) {
+    case Code::PromotedLayer: return "PromotedLayer";
+    case Code::OwningTilesRequired: return "OwningTilesRequired";
+    case Code::InvalidEntity: return "InvalidEntity";
+    case Code::LayerLimit: return "LayerLimit";
+    case Code::MemoryLimit: return "MemoryLimit";
+    case Code::DescendantPromoted: return "DescendantPromoted";
+  }
+  return "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& stream, const InteractionPromotionOutcome& outcome) {
+  return stream << "InteractionPromotionOutcome{requested=" << outcome.requested
+                << ", entity=" << static_cast<std::uint32_t>(outcome.entity)
+                << ", result=" << PromoteResultName(outcome.result)
+                << ", retainedBitmapBytes=" << outcome.retainedBitmapBytes
+                << ", memoryBudgetBytes=" << outcome.memoryBudgetBytes << "}";
+}
+
 bool CanPresentTilePayload(bool requiresTexturePresentation, const svg::RendererBitmap& bitmap,
                            const std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
                            const std::function<bool()>& shouldCancel) {
@@ -1805,6 +1827,21 @@ void AsyncRenderer::workerLoop() {
     // narrows automatic retained-content layers; it does not collapse selected content back into a
     // root render.
     const bool editorPromotionEnabled = compositor_ != nullptr;
+    InteractionPromotionOutcome interactionPromotion;
+    // Records each request with the retained bytes and budget the admission check compares, so a
+    // refused promotion is observable from the published result.
+    const auto promoteInteraction = [&](Entity entity, svg::compositor::InteractionHint kind) {
+      interactionPromotion = InteractionPromotionOutcome{
+          .requested = true,
+          .entity = entity,
+          .retainedBitmapBytes = compositor_->totalBitmapMemory(),
+          .memoryBudgetBytes = svg::compositor::EffectiveCompositorMemoryBudget(),
+      };
+      const svg::compositor::CompositorController::PromoteResult promoteResult =
+          compositor_->promoteEntity(entity, kind);
+      interactionPromotion.result = promoteResult.code;
+      return promoteResult;
+    };
     const std::vector<Entity> desiredEntities = (geometryDebugOverlay || !editorPromotionEnabled)
                                                     ? std::vector<Entity>()
                                                     : DesiredCompositorEntities(request);
@@ -1845,7 +1882,7 @@ void AsyncRenderer::workerLoop() {
 
       for (Entity entity : desiredEntities) {
         const svg::compositor::CompositorController::PromoteResult promoteResult =
-            compositor_->promoteEntity(entity, desiredKind);
+            promoteInteraction(entity, desiredKind);
         if (promoteResult.promotedLayer()) {
           AppendUniqueEntity(&compositorEntities_, entity);
           if (compositorEntity_ == entt::null) {
@@ -2121,7 +2158,7 @@ void AsyncRenderer::workerLoop() {
                 continue;
               }
               const svg::compositor::CompositorController::PromoteResult promoteResult =
-                  compositor_->promoteEntity(entity, desiredKind);
+                  promoteInteraction(entity, desiredKind);
               if (promoteResult.promotedLayer()) {
                 AppendUniqueEntity(&compositorEntities_, entity);
                 promotionAddedAfterPrepare = true;
@@ -2362,6 +2399,7 @@ void AsyncRenderer::workerLoop() {
           done.result.compositorRenderCount = compositorRenderCount;
           done.result.compositorFrameStats =
               CombineIterationRenderFrameStats(earlierRenderStats, lastCompositorRenderFrameStats_);
+          done.result.interactionPromotion = interactionPromotion;
           if (compositorDiagnosticsEnabled_.load(std::memory_order_acquire)) {
             const auto diagnosticsStart = std::chrono::steady_clock::now();
             if (compositor_ != nullptr) {

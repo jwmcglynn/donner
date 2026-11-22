@@ -37,13 +37,16 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <variant>
@@ -314,6 +317,32 @@ inline HandoffTimings ComputeHandoffTimings(std::chrono::steady_clock::time_poin
   return timings;
 }
 
+/// Outcome of the most recent interaction-layer promotion request in one worker iteration, with the
+/// retained compositor bytes and the memory budget the compositor's admission check compares.
+struct InteractionPromotionOutcome {
+  /// True when this iteration asked the compositor to promote a selected or dragged entity.
+  bool requested = false;
+  /// Entity named by the most recent request, or `entt::null` when nothing was requested.
+  Entity entity = entt::null;
+  /// Compositor result of the most recent request.
+  svg::compositor::CompositorController::PromoteResult::Code result =
+      svg::compositor::CompositorController::PromoteResult::Code::PromotedLayer;
+  /// Retained compositor bitmap and texture bytes immediately before the most recent request.
+  std::size_t retainedBitmapBytes = 0;
+  /// Effective compositor memory budget in force for the most recent request.
+  std::size_t memoryBudgetBytes = 0;
+};
+
+/// Stable name of a promotion result code, as published in editor diagnostics.
+/// @param code Promotion result code.
+[[nodiscard]] std::string_view PromoteResultName(
+    svg::compositor::CompositorController::PromoteResult::Code code);
+
+/// Print a promotion outcome for test diagnostics.
+/// @param stream Output stream.
+/// @param outcome Outcome to print.
+std::ostream& operator<<(std::ostream& stream, const InteractionPromotionOutcome& outcome);
+
 /// Presentation payload plus the document version it was rendered from.
 struct RenderResult {
   /// Internal timing split for one async worker iteration.
@@ -517,6 +546,8 @@ struct RenderResult {
   /// Compositor frame statistics across the same renders; see
   /// \ref CombineIterationRenderFrameStats.
   svg::compositor::CompositorController::RenderFrameStats compositorFrameStats;
+  /// Most recent interaction-layer promotion request of this iteration and its admission inputs.
+  InteractionPromotionOutcome interactionPromotion;
   std::chrono::steady_clock::time_point workerCompletedAt;  //!< Worker completion timestamp.
 };
 

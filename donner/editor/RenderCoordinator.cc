@@ -116,6 +116,15 @@ void AppendOwnerDispatchDetail(
   UTILS_RELEASE_ASSERT(next == values.size());
 }
 
+/// Appends the published fields of a worker result's interaction promotion outcome.
+void AppendInteractionPromotion(const InteractionPromotionOutcome& promotion,
+                                std::span<double> values) {
+  values[0] = static_cast<double>(promotion.requested);
+  values[1] = static_cast<double>(promotion.result);
+  values[2] = static_cast<double>(promotion.retainedBitmapBytes);
+  values[3] = static_cast<double>(promotion.memoryBudgetBytes);
+}
+
 // Proxied to the browser main thread: the render pthread has no `window`.
 // Numeric values ride an owned heap buffer because EM_ASM argument substitution stops at $15.
 // Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
@@ -129,7 +138,8 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
   const auto& fastPath = result.compositorFastPathDelta;
   // The fixed values below, then the owner dispatch detail appended after them.
   constexpr std::size_t kCoreValueCount = 59;
-  constexpr std::size_t kValueCount = 88;
+  constexpr std::size_t kOwnerDispatchEnd = 88;
+  constexpr std::size_t kValueCount = 92;
   const WorkerTilePayloadCounts payloadCounts = CountWorkerTilePayloads(result);
   const double coreValues[kCoreValueCount] = {
       result.workerMs,
@@ -193,8 +203,11 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
       static_cast<double>(RepresentsActiveDrag(result))};
   double values[kValueCount] = {};
   std::copy(std::begin(coreValues), std::end(coreValues), std::begin(values));
-  AppendOwnerDispatchDetail(timing.gpuOwnerDispatch,
-                            std::span<double>(values).subspan(kCoreValueCount));
+  AppendOwnerDispatchDetail(
+      timing.gpuOwnerDispatch,
+      std::span<double>(values).subspan(kCoreValueCount, kOwnerDispatchEnd - kCoreValueCount));
+  AppendInteractionPromotion(result.interactionPromotion,
+                             std::span<double>(values).subspan(kOwnerDispatchEnd));
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -316,6 +329,15 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
           'canvasFrames' : heap[b + 86],
           'receivedDuringCanvasFrame' : heap[b + 87],
         });
+        // The most recent interaction-layer promotion request of this result, with the retained
+        // bytes and the budget the compositor's admission check compared.
+        stats['interactionPromotion'] = ({
+          'requested' : heap[b + 88] > 0,
+          'result' : UTF8ToString($7),
+          'resultCode' : heap[b + 89],
+          'retainedBitmapBytes' : heap[b + 90],
+          'memoryBudgetBytes' : heap[b + 91],
+        });
         const totals = ([
           [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
           [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],
@@ -339,7 +361,8 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
       presentationAdmissionSequence.has_value() && presentationProducerGeneration.has_value(),
       static_cast<double>(presentationAdmissionSequence.value_or(0)),
       static_cast<double>(presentationProducerGeneration.value_or(0)),
-      static_cast<double>(result.capturedPresentation ? result.capturedPresentation->identity().captureId : 0));
+      static_cast<double>(result.capturedPresentation ? result.capturedPresentation->identity().captureId : 0),
+      PromoteResultName(result.interactionPromotion.result).data());
   // clang-format on
 }
 

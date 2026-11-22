@@ -544,7 +544,7 @@ test("worker poll timestamps retain their producer clock across delayed proxy de
     "HEAPF64",
     "_free",
     "UTF8ToString",
-    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0",
+    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0", "$7 = 0",
     body,
   );
   const count = Number(/kValueCount = (\d+)/.exec(publisher)[1]);
@@ -907,7 +907,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
     "HEAPF64",
     "_free",
     "UTF8ToString",
-    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0",
+    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0", "$7 = 0",
     body(timingPublisher[0]),
   );
   const publishAccepted = new Function("window", "$0", "$1", "$2", body(acceptedPublisher[0]));
@@ -1835,10 +1835,11 @@ test("a worker result publishes its owner dispatch detail from the slots after t
   const body = timingPublisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
   const publish = makeProductionPublisher(workerTimingPredicates,
     "window", "$0", "$1", "$2", "HEAPF64", "_free", "UTF8ToString", "performance",
-    "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0", body,
+    "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0", "$7 = 0", body,
   );
   const count = Number(/kValueCount = (\d+)/.exec(timingPublisher)[1]);
   const core = Number(/kCoreValueCount = (\d+)/.exec(timingPublisher)[1]);
+  const ownerEnd = Number(/kOwnerDispatchEnd = (\d+)/.exec(timingPublisher)[1]);
   const heap = Float64Array.from({ length: count }, (_, index) => 1000 + index);
   const window = {};
   publish(window, 0, 0, count, heap, () => {}, () => "none", { timeOrigin: 0, now: () => 0 });
@@ -1858,10 +1859,13 @@ test("a worker result publishes its owner dispatch detail from the slots after t
     detail.canvasFrames,
     detail.receivedDuringCanvasFrame,
   ];
-  assert.deepEqual(slots, Array.from({ length: count - core }, (_, index) => 1000 + core + index));
+  assert.deepEqual(
+    slots,
+    Array.from({ length: ownerEnd - core }, (_, index) => 1000 + core + index),
+  );
   assert.match(
     timingPublisher,
-    /AppendOwnerDispatchDetail\(timing\.gpuOwnerDispatch,\s*std::span<double>\(values\)\.subspan\(kCoreValueCount\)\);/,
+    /AppendOwnerDispatchDetail\(\s*timing\.gpuOwnerDispatch,\s*std::span<double>\(values\)\.subspan\(kCoreValueCount, kOwnerDispatchEnd - kCoreValueCount\)\);/,
     "the detail fills the slots after the core values",
   );
   const appended = renderCoordinatorSource.match(/void AppendOwnerDispatchDetail\([\s\S]*?\n\}/)[0];
@@ -1871,5 +1875,42 @@ test("a worker result publishes its owner dispatch detail from the slots after t
       "completionWakeMs", "startLatencyBuckets", "canvasFrameActiveMs", "canvasFrames",
       "receivedDuringCanvasFrame"],
     "the native side appends the detail in the order the publisher reads it",
+  );
+});
+
+test("a worker result publishes its interaction promotion from the slots after the owner detail", () => {
+  const timingPublisher = renderCoordinatorSource.match(
+    /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
+  )[0];
+  const body = timingPublisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publish = makeProductionPublisher(workerTimingPredicates,
+    "window", "$0", "$1", "$2", "HEAPF64", "_free", "UTF8ToString", "performance",
+    "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0", "$7 = 0", body,
+  );
+  const count = Number(/kValueCount = (\d+)/.exec(timingPublisher)[1]);
+  const ownerEnd = Number(/kOwnerDispatchEnd = (\d+)/.exec(timingPublisher)[1]);
+  const heap = Float64Array.from({ length: count }, (_, index) => 1000 + index);
+  const window = {};
+  // The only string argument resolved here is the promotion result name.
+  publish(window, 0, 0, count, heap, () => {}, () => "MemoryLimit", { timeOrigin: 0, now: () => 0 });
+  assert.deepEqual(window.__donnerWorkerStats.interactionPromotion, {
+    requested: true,
+    result: "MemoryLimit",
+    resultCode: 1000 + ownerEnd + 1,
+    retainedBitmapBytes: 1000 + ownerEnd + 2,
+    memoryBudgetBytes: 1000 + ownerEnd + 3,
+  });
+  assert.equal(count, ownerEnd + 4, "the promotion fields are the last four slots");
+  assert.match(
+    timingPublisher,
+    /AppendInteractionPromotion\(result\.interactionPromotion,\s*std::span<double>\(values\)\.subspan\(kOwnerDispatchEnd\)\);/,
+    "the promotion fills the slots after the owner detail",
+  );
+  assert.match(timingPublisher, /PromoteResultName\(result\.interactionPromotion\.result\)\.data\(\)\);/);
+  const appended = renderCoordinatorSource.match(/void AppendInteractionPromotion\([\s\S]*?\n\}/)[0];
+  assert.deepEqual(
+    [...appended.matchAll(/promotion\.(\w+)/g)].map(([, name]) => name),
+    ["requested", "result", "retainedBitmapBytes", "memoryBudgetBytes"],
+    "the native side appends the promotion in the order the publisher reads it",
   );
 });
