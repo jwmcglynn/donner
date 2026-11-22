@@ -318,6 +318,20 @@ class GatekeeperTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, "docs_only=true\n")
 
+    def test_a_payload_base_older_than_the_fork_only_adds_paths(self):
+        # The payload's base commit lags the base branch: this head forked from a newer commit,
+        # so the diff from the merge base also holds the base branch's code change.
+        _git(self.repo, "checkout", "-q", "--detach", self.root)
+        fork = _commit(self.repo, ["donner/code.cc"], "base branch change")
+        head = _commit(self.repo, ["docs/guide.md"], "docs")
+        result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"Using merge-base {self.root} as diff basis.", result.stdout)
+        self.assertEqual(output, "docs_only=false\n")
+        result, output, _ = self._run("docs-only", **self._pull_request(fork, head))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "docs_only=true\n")
+
     def test_missing_merge_base_falls_back_to_the_base_tip(self):
         _git(self.repo, "checkout", "-q", "--orphan", "unrelated")
         _git(self.repo, "rm", "-q", "-rf", ".")
