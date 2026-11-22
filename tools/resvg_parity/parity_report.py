@@ -2691,16 +2691,23 @@ RENDER_PASS_CONTRACTS = {
 
 
 def build_head_to_head(
-    report: dict[str, object], engine_results: dict[str, int], engine: str = HEAD_TO_HEAD_ENGINE
+    report: dict[str, object], engine_results: dict[str, int], engine: str = HEAD_TO_HEAD_ENGINE,
+    release_additions: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
     """Compare configured Donner outcomes with an engine's published results.
 
     The score assumes green corpus runs. It includes pixel comparisons and explicitly
     credited render-only contracts. Strict passes count only pixel comparisons without
     a numerical budget or a custom golden. The engine score uses its recorded passes.
+
+    `release_additions` are cases vendored from a later upstream release than the snapshot
+    whose results.csv the engine column comes from; they have no recorded result, so both
+    sides leave them unscored and the report lists them. Any other case without a result fails.
     """
 
-    cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
+    all_cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
+    unscored = sorted((set(all_cases) & release_additions) - set(engine_results))
+    cases = {path: case for path, case in all_cases.items() if path not in unscored}
     missing = sorted(set(cases) - set(engine_results))
     extra = sorted(set(engine_results) - set(cases))
     if missing or extra:
@@ -2749,7 +2756,8 @@ def build_head_to_head(
             "gap": len(gap),
             "gap_by_state": dict(Counter(_gap_state(cases[path]) for path in gap)),
             "margin": len(donner_passes) - len(engine_passes),
-            "total_cases": len(cases),
+            "total_cases": len(all_cases),
+            "unscored_release_additions": len(unscored),
         },
         "render_passes": [
             {"path": path, "contract": RENDER_PASS_CONTRACTS[path]} for path in sorted(render_passes)
@@ -2760,6 +2768,9 @@ def build_head_to_head(
             {"path": path, "reason": cases[path]["reason"], "state": _gap_state(cases[path])}
             for path in gap
         ],
+        "unscored_release_additions": [
+            {"path": path, "state": _gap_state(all_cases[path])} for path in unscored
+        ],
     }
 
 
@@ -2769,7 +2780,31 @@ def generate_head_to_head(repo_root: Path) -> dict[str, object]:
         text = results_path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as error:
         raise ParityReportError(f"cannot read engine results {results_path}: {error}") from error
-    return build_head_to_head(generate_report(repo_root), parse_engine_results(text))
+    return build_head_to_head(generate_report(repo_root), parse_engine_results(text),
+                              release_additions=release_addition_cases(repo_root))
+
+
+def release_addition_cases(repo_root: Path) -> frozenset[str]:
+    """Return the cases whose SVG and PNG are both recorded in the upstream release manifest.
+
+    The manifest records files byte-identical to a later upstream release, so such a case is the
+    release's own test and reference; one absent from results.csv was added after the snapshot.
+    A tree without the manifest has no such cases.
+    """
+
+    path = repo_root / UPSTREAM_RELEASE_MANIFEST
+    if not path.exists():
+        return frozenset()
+    try:
+        manifest = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read {UPSTREAM_RELEASE_MANIFEST}: {error}") from error
+    listed = {match.group(2) for match in map(_MANIFEST_LINE.fullmatch, manifest.splitlines())
+              if match}
+    return frozenset(
+        path.removeprefix("tests/") for path in listed
+        if path.endswith(".svg") and path[:-4] + ".png" in listed
+    )
 
 
 def _default_repo_root() -> Path:

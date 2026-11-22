@@ -1755,6 +1755,7 @@ class ParityReportTests(unittest.TestCase):
             "gap_by_state": {"disabled": 1, "skip": 1, "undefined-behavior": 1},
             "margin": -1,
             "total_cases": 9,
+            "unscored_release_additions": 0,
         })
         self.assertEqual(head_to_head["donner_only"], [
             {"engine_result": "failed", "path": "painting/fill/budget.svg"},
@@ -1793,6 +1794,48 @@ class ParityReportTests(unittest.TestCase):
         with self.assertRaisesRegex(parity_report.ParityReportError,
                                     r"8 cases without a result .*1 results without a case"):
             parity_report.build_head_to_head(report, results)
+
+    def test_head_to_head_leaves_release_additions_without_a_result_unscored(self) -> None:
+        report = self._head_to_head_fixture()
+        results = {path: 1 for path in (
+            "painting/fill/both.svg", "painting/fill/budget.svg", "painting/fill/golden.svg",
+            "painting/fill/gated.svg", "painting/fill/skip.svg", "painting/fill/ub.svg",
+            "painting/fill/neither.svg")}
+        additions = frozenset({"painting/fill/unknown.svg", "painting/stroke/off.svg",
+                               "painting/fill/both.svg"})
+
+        head_to_head = parity_report.build_head_to_head(report, results,
+                                                        release_additions=additions)
+
+        # A recorded result keeps a release-recorded case scored; the other two are left out of
+        # both scores and listed.
+        self.assertEqual(head_to_head["unscored_release_additions"], [
+            {"path": "painting/fill/unknown.svg", "state": "compare"},
+            {"path": "painting/stroke/off.svg", "state": "disabled"},
+        ])
+        self.assertEqual(
+            {key: head_to_head["summary"][key] for key in (
+                "donner_pixel_pass", "engine_pass", "total_cases", "unscored_release_additions")},
+            {"donner_pixel_pass": 4, "engine_pass": 7, "total_cases": 9,
+             "unscored_release_additions": 2},
+        )
+        with self.assertRaisesRegex(parity_report.ParityReportError,
+                                    r"1 cases without a result \['painting/stroke/off.svg'\]"):
+            parity_report.build_head_to_head(
+                report, results, release_additions=frozenset({"painting/fill/unknown.svg"}))
+
+    def test_release_additions_need_both_files_in_the_manifest(self) -> None:
+        manifest = self.fixture.root / parity_report.UPSTREAM_RELEASE_MANIFEST
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        digest = "0" * 64
+        manifest.write_text("".join(f"{digest}  tests/{path}\n" for path in (
+            "a/b/both.png", "a/b/both.svg", "a/b/png-only.png", "a/b/svg-only.svg")),
+            encoding="utf-8")
+
+        self.assertEqual(parity_report.release_addition_cases(self.fixture.root),
+                         frozenset({"a/b/both.svg"}))
+        manifest.unlink()
+        self.assertEqual(parity_report.release_addition_cases(self.fixture.root), frozenset())
 
     def test_engine_results_reject_malformed_rows(self) -> None:
         malformed = {
@@ -2057,8 +2100,14 @@ class RealTreeParityReportTests(unittest.TestCase):
         head_to_head = parity_report.generate_head_to_head(repo_root)
 
         summary = head_to_head["summary"]
+        unscored = {row["path"] for row in head_to_head["unscored_release_additions"]}
         self.assertEqual(summary["total_cases"], report["summary"]["total_cases"])
-        self.assertEqual(summary["donner_pixel_pass"], report["summary"]["compare_cases"])
+        self.assertEqual(summary["unscored_release_additions"], len(unscored))
+        self.assertLessEqual(unscored, parity_report.release_addition_cases(repo_root))
+        self.assertEqual(summary["donner_pixel_pass"],
+                         report["summary"]["compare_cases"]
+                         - sum(row["state"] == "compare"
+                               for row in head_to_head["unscored_release_additions"]))
         self.assertEqual(summary["donner_pass"],
                          summary["donner_pixel_pass"] + summary["donner_render_pass"])
         self.assertEqual(summary["both_pass"] + summary["donner_only"], summary["donner_pass"])
