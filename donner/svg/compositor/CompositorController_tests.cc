@@ -579,16 +579,16 @@ TEST_F(CompositorControllerTest, RetainedCpuBitmapsCountAgainstTheHeapBitmapBudg
   CompositorConfig config;
   config.heapBitmapBudgetBytes = 1u;
   CompositorController compositor(document, renderer_, config);
-  ASSERT_TRUE(compositor.promoteEntity(first->unsafeEntityHandle().entity(),
-                                       InteractionHint::Selection));
+  ASSERT_TRUE(
+      compositor.promoteEntity(first->unsafeEntityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const CompositorController::BitmapMemoryBreakdown retained = compositor.bitmapMemoryBreakdown();
   ASSERT_GT(retained.segmentBitmapBytes + retained.layerBitmapBytes, 0u);
   ASSERT_LT(compositor.totalBitmapMemory(), EffectiveCompositorMemoryBudget());
-  EXPECT_EQ(compositor.promoteEntity(second->unsafeEntityHandle().entity(),
-                                     InteractionHint::Selection),
-            CompositorController::PromoteResult::MemoryLimit)
+  EXPECT_EQ(
+      compositor.promoteEntity(second->unsafeEntityHandle().entity(), InteractionHint::Selection),
+      CompositorController::PromoteResult::MemoryLimit)
       << "Retained CPU bitmaps at the heap bitmap budget must refuse a new promotion";
 }
 
