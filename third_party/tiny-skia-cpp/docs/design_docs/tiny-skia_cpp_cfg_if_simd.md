@@ -17,6 +17,10 @@ M3 host complete)
   - forced scalar fallback backend (`scalar` mode)
 - Confirm supported ISA scope from Rust source: this is broader than amd64/arm.
 
+- [x] Fused pattern source-over uses rounded division by 255 for destination attenuation in
+  the native and scalar paths. A transparent source preserves the destination bytes, including
+  the last partial SIMD batch of a repeated pattern.
+
 ## Goals
 
 - Match Rust `cfg_if!` structure for `wide` types (`f32x4`, `f32x8`, `i32x4`, `i32x8`,
