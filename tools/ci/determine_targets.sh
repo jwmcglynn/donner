@@ -8,7 +8,10 @@
 #        bazel run //tools/ci:plan -- pr-meta|determine|determine-hosted-editor|select-wgpu-reference
 #
 #   pr-meta                The revision whose bazel-diff hashes the job restores or saves
-#                          (`base_sha`): a pull request's base, or this commit on a main push.
+#                          (`base_sha`): for a pull request, its test merge's first parent, or
+#                          the payload's base commit when the checkout is the head itself, or
+#                          empty for any other checkout; this commit on a main push; otherwise
+#                          empty.
 #   determine              The affected targets (`fallback`, `affected`, `full_test`) and the
 #                          hints that gate optional lanes (`browser_affected`,
 #                          `metal_affected` and the `wgpu_reference_*` outputs).
@@ -64,8 +67,11 @@ read_pr_event() {
   )"
 }
 
-# The PR event and the checkout can observe different base tips. Hash the tree
-# that Git actually merged into, and require the second parent to be this PR head.
+# The event payload's base commit lags the base branch once other changes merge, while the
+# test merge is built on the branch tip: compare with the merge's first parent, and require its
+# second parent to be this PR head. A checkout of the head itself compares with the payload's
+# base commit. Any other checkout fails, including one too shallow to list the merge's parents:
+# `determine` then selects full coverage and `pr-meta` reports no base to restore.
 tested_base() {
   [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] || return 1
   local ancestry checkout first second extra
@@ -220,11 +226,10 @@ determine() {
     exit 0
   fi
 
-  # Use the merge base of the tested base and PR head for path hints. A
-  # two-dot diff against a newer base also sees main's post-fork changes
-  # and can incorrectly trigger full CI for an unrelated workflow edit. Fail closed: if merge-base cannot
-  # be computed, keep the base-tip diff (over-inclusion only ever
-  # widens to the fallback path, never skips it).
+  # Use the merge base of the tested base and PR head for path hints. A two-dot diff from the
+  # tested base also sees main's changes since the fork and can incorrectly trigger full CI for
+  # an unrelated workflow edit. Fail closed: if merge-base cannot be computed, diff from the
+  # tested base (over-inclusion only ever widens to the fallback path, never skips it).
   if diff_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"; then
     echo "Using merge-base $diff_base as diff basis."
   else
@@ -405,7 +410,7 @@ determine() {
   else
     git worktree add --detach "$base_dir" "$BASE_SHA"
     generate_hashes "$base_dir" "$work_dir/base-hashes.json"
-    # Save for subsequent pushes to this PR (post-job cache step).
+    # Pull request runs only restore the Actions cache; main pushes save it.
     mkdir -p "$(dirname "$cached_base")"
     cp "$work_dir/base-hashes.json" "$cached_base"
   fi

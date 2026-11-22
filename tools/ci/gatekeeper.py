@@ -86,10 +86,13 @@ def duplicate_push(environ: Mapping[str, str], run: Callable[[list[str]], str] =
 
 
 def _diff_base(base_sha: str, head_sha: str) -> str:
-    # base.sha is the base branch's current tip, so a two-dot diff from it would attribute
-    # post-fork drift on the base to the pull request. Diff from the merge base instead. If it
-    # cannot be computed, fall back to the base tip: drift can then only clear docs_only, which
-    # runs more CI, never less.
+    # base.sha is the base commit recorded in the event payload, which can lag the base branch.
+    # Diff from its merge base with the head, so base-branch changes are not attributed to the
+    # pull request. When that merge base is not the fork point (base.sha older than the fork, or
+    # off the branch's history), the diff can add paths the pull request did not change, which
+    # can clear docs_only, or set it when the pull request's own diff is empty, and it misses a
+    # path the pull request restored to that commit's content. If the merge base cannot be
+    # computed, the same holds for a diff from base.sha.
     merge_base = subprocess.run(["git", "merge-base", base_sha, head_sha],
                                 stdout=subprocess.PIPE, text=True, check=False)
     if merge_base.returncode == 0:
