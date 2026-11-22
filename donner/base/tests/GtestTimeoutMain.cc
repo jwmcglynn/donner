@@ -10,9 +10,10 @@
  *      `DONNER_TEST_TIMEOUT_SECONDS` environment variable, or a default of 60 s.
  *   2. A deadline derived from Bazel's `TEST_TIMEOUT`, ending a fixed margin before the Bazel
  *      timeout and measured from `main()` entry (see `GtestTimeoutBudget.h`). It bounds the whole
- *      run, including time spent in earlier cases and outside any case, so the watchdog fires first
- * in every test size, shard and
- *      `--test_timeout` setting without per-target flags.
+ *      run, including time spent in earlier cases and outside any case.
+ *
+ * The deadline makes the watchdog fire first in every test size, shard and `--test_timeout`
+ * setting, without per-target flags.
  *
  * On timeout, the process prints the stalled test-case name to stderr and exits with status 124
  * (the same code GNU `timeout(1)` uses).

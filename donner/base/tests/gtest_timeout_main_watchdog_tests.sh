@@ -41,12 +41,16 @@ start_scenario() {
 
   local -a clear=(-u XML_OUTPUT_FILE -u TEST_PREMATURE_EXIT_FILE -u TEST_TOTAL_SHARDS
     -u TEST_SHARD_INDEX -u TEST_SHARD_STATUS_FILE)
+  # LeakSanitizer's exit-time check needs ptrace, which some sandboxes block, and then stalls the
+  # child; the verdicts here must not depend on that, so leak checking is off for the fixture.
+  local asan_options="${ASAN_OPTIONS:+${ASAN_OPTIONS}:}detect_leaks=0"
   if [[ "${mode}" != inherited ]]; then
     clear+=(-u TEST_TIMEOUT)
   fi
 
   (
-    env "${clear[@]}" ${assignments[@]+"${assignments[@]}"} "${fixture}" "$@" \
+    env "${clear[@]}" ASAN_OPTIONS="${asan_options}" ${assignments[@]+"${assignments[@]}"} \
+      "${fixture}" "$@" \
       >"${out_dir}/${name}.out" 2>&1 &
     child=$!
     killer=""
