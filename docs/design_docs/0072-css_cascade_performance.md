@@ -78,9 +78,12 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - **Ancestor filter.** On the synthetic descendant-only document (1,000 elements, 100 rules), the
   new counter of candidates rejected by the filter reaches at least 857 of the 902 candidates that
   today fail after an ancestor walk (95 percent), with no false negative (enforced by the
-  differential tests), and style time on the real documents does not regress by more than 2
-  percent. On the real documents only one candidate per document fails in an ancestor walk, so no
-  time goal is set there (see [Ancestor Filter Opportunity](#ancestor-filter-opportunity)).
+  differential tests). Target, not yet measured: style time on the real documents does not
+  regress by more than 2 percent, checked by quiet-machine runs of the perf benchmark (the
+  baseline was taken under load, so a 2 percent bound needs a quieter measurement than this
+  document's). On the real documents only one candidate per document fails in an ancestor walk,
+  so no time gain is expected there (see
+  [Ancestor Filter Opportunity](#ancestor-filter-opportunity)).
 - **Shared computed styles.** With the matched properties cache, the share of elements whose
   computed style is reused reaches at least 60 percent on the splash document (opportunity
   measured at 66 percent) and at least 99 percent on bootstrap-icons (measured at 99.8 percent).
@@ -153,8 +156,14 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - No `env()`, `attr()` or other substitution functions, and no `@media`, `@supports`,
   `@container` or `@scope` (unsupported today and unchanged).
 - No SMIL animation of custom properties.
-- No change to the public API. The index, filter, cache, counters and invalidation summaries are
-  internal; public documentation keeps describing documents, elements and styles.
+- No change to the public SVG DOM API (`SVGDocument`, `SVGElement` and the element classes). The
+  rule index, ancestor filter, cache, counters and invalidation summaries are internal to
+  `donner/svg/components/style/`. Two public library surfaces do change, and are reviewed as API:
+  Part A adds the header `donner/base/BloomFilter.h` to the public `//donner/base` target, and
+  Part B changes public `donner/css` types (`css::Specificity` gains a layer rank and accessor,
+  `css::SelectorRule` a layer id, `css::Stylesheet` a layer table and `css::Declaration` a
+  `containsSubstitution` flag). The task scheduler adds `donner/base/tasks/`, designed in
+  [0073-task_scheduler](0073-task_scheduler.md).
 - No full document reparse, and no new trigger for one.
 - Narrowing invalidation for element insertion or removal; listed under
   [Future Work](#future-work).
@@ -217,15 +226,17 @@ including tests and review fixes. "After" names the milestones that must land fi
   - [ ] Resolve pseudo-class names to an enumeration at parse time.
   - Done when: each kept change shows a median improvement of at least 5 percent in candidate
     match time on the benchmark; a change that does not is dropped.
-- [ ] Milestone A5: Narrowed invalidation for single-element edits (5.5 days). After A2.
+- [ ] Milestone A5: Narrowed invalidation for single-element edits (6.5 days). After A2.
   - [ ] Compute a `SelectorDependencySummary` per stylesheet at parse time, including the
         directional dependencies of filtered `:nth-child` and `:nth-last-child` selectors.
   - [ ] Route class, `id`, `style` and presentation-attribute writes in `SVGElement` through it,
         marking the affected entities dirty for the existing selective style pass instead of
         setting `RenderTreeState::needsFullStyleRecompute`.
   - [ ] Restyle the `<use>` shadow instances of a written element.
-  - [ ] Add the narrow-versus-full differential edit test.
-  - Done when: the edit goals are met and the differential edit test is green.
+  - [ ] Add the narrow-versus-full differential edit test, comparing computed styles, render-tree
+        and resolved-reference state, and rendered output.
+  - Done when: the edit goals are met and the differential edit test is green on all three
+    comparisons for every edit routed to the narrowed path.
 - [ ] Milestone A6: Base-library Bloom filter (2 days). No dependency.
   - [ ] Add `donner/base/BloomFilter.h` with `BloomFilter`, `CountingBloomFilter` and `BloomHash`,
         unit tests in `//donner/base:base_tests` and `//donner/base:bloom_filter_fuzzer`.
@@ -246,14 +257,14 @@ including tests and review fixes. "After" names the milestones that must land fi
   - Done when: style time on the rule-free 1,000-element synthetic document falls from 6.1 ms by
     at least 20 percent, or the breakdown shows the cost is inherent and the result is recorded
     here; all existing suites are green on the shared storage.
-- [ ] Milestone A9: Matched properties cache (3 days). After A3 and A8.
+- [ ] Milestone A9: Matched properties cache (3.5 days). After A3 and A8.
   - [ ] Key, look up and insert shared records in `computePropertiesInto`; count hits and
-        uncacheable elements; charge retained bytes per record.
+        uncacheable elements; charge retained bytes per record; evict by clock.
   - [ ] Run the differential test and fuzzer with the cache on and off.
   - Done when: the shared-computed-style goals and the bootstrap-icons style-time goal are met and
     the differential targets are green.
 
-Part A estimate: 26 engineering days.
+Part A estimate: 27.5 engineering days.
 
 ### Part B Milestones
 
@@ -684,9 +695,10 @@ the pitfall is a large universal bucket, which every element still scans.
 **Ancestor Bloom filter.** While walking the tree, the engine keeps a counting Bloom filter of
 the ancestors' tag, id, class and attribute-name hashes; each selector stores a few hashes from
 the compounds to the left of descendant and child combinators, and is rejected without walking
-ancestors when any hash is absent. WebKit's `SelectorFilter` uses a 4,096-slot counting filter,
-salts hashes by kind, keeps up to 4 per selector, and quotes about 0.2 percent false positives at
-100 strings
+ancestors when any hash is absent. WebKit's `SelectorFilter` uses a 4,096-slot counting filter
+(`bloomFilterKeyBits = 12`), collects a selector's hashes in separate lists for ids, classes, tags
+and attributes, keeps up to 4 per selector, and quotes about 0.2 percent false positives at 100
+strings
 ([SelectorFilter.h](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/css/SelectorFilter.h));
 the change that introduced it estimated about 30 percent faster matching on sites with many
 descendant selectors ([WebKit bug 53880](https://bugs.webkit.org/show_bug.cgi?id=53880)). Stylo
@@ -747,9 +759,8 @@ it walked ([Igalia, 2023](https://blogs.igalia.com/blee/posts/2023/05/31/how-bli
 to 2x on root-level changes ([CL 2117143003](https://codereview.chromium.org/2117143003)). Stylo
 keeps custom properties in shared inherited and non-inherited maps
 ([custom_properties.rs](https://github.com/servo/stylo/blob/main/style/custom_properties.rs)).
-Stylo removes dependency cycles during substitution with a variant of Tarjan's
-strongly-connected-components algorithm, invalidating every member of a cycle, and caps a value
-at 2 MiB (`MAX_VALUE_LENGTH_IN_BYTES`, with a comment that values can otherwise grow
+Stylo removes dependency cycles during substitution, invalidating every member of a cycle, and
+caps a value at 2 MiB (`MAX_VALUE_LENGTH_IN_BYTES`, with a comment that values can otherwise grow
 exponentially). Blink detects cycles with a depth-first walk that locks the properties it is
 applying (`CascadeResolver` in
 [cascade_resolver.h](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/css/resolver/cascade_resolver.h))
@@ -919,8 +930,13 @@ rule are removed during candidate collection.
 de-duplicated list of candidate `ruleIndex` values from: the entry for the element's id, one per
 class (split once with `StringUtils::SplitAsciiWhitespace`, the same split `ClassSelector` uses),
 the lowercased tag name, one per attribute local name, and `universal`. All lookups go through
-`ShadowedElementAdapter` (`id()`, `className()`, `tagName()`, attribute enumeration), so shadow
-entities use exactly the structure-from-tree, data-from-light-element rule they use today.
+`ShadowedElementAdapter`, so shadow entities use exactly the structure-from-tree,
+data-from-light-element rule they use today. The adapter has `id()`, `className()`, `tagName()`,
+`hasAttribute()`, `getAttribute()` and `findMatchingAttributes()` but no way to list attributes,
+so the index adds one internal method, `forEachAttributeLocalName(callback)`, which visits the
+light element's `AttributesComponent` names (no allocation); and `classNames()`, which returns the
+element's class list split once per cascade (shared with the `ClassSelector` change in
+Milestone A4).
 Candidates are visited in ascending rule order and passed to the unchanged `MatchSelectorRule`,
 which still tests every entry of the rule in list order and returns the first match. Sheet order,
 import order and rule order are preserved, so the declarations applied, their order and their
@@ -1017,14 +1033,29 @@ attribute path in `MarkPresentationAttributeDirty` compute the affected set inst
   tears down clones.
 
 Every affected entity is restyled by the existing selective pass in `computeAllStyles`, and the
-frame can take `RenderingContext::tryRetainedUpdate` instead of the full rebuild. Paths that set
-`needsFullStyleRecompute` for reasons other than selectors (element-specific attributes on lines,
-convolve matrices, conditional processing, `<use>` geometry) keep doing so until each is shown to
-be local by the differential edit test.
+frame can take `RenderingContext::tryRetainedUpdate` instead of the full rebuild.
+
+**Render-side dependents.** A full restyle also sends the frame through the full rebuild, which
+recomputes things that depend on an element without being its style: gradients and patterns built
+from their stops and children and drawn by shapes elsewhere, markers, clip paths, masks and
+filters, text layout, and references resolved by id (`href`, `url(#id)`). A narrowed edit that
+restyles the right elements can still leave those stale, and a computed-style comparison would
+not notice. So the following keep the full restyle and full rebuild until the differential edit
+test, with its render-side comparisons, shows them local:
+
+- `id` writes (`SVGElement::setId`), which re-target `href` and `url(#id)` references;
+- any write to an element that is, or is inside, a paint server, `<marker>`, `<clipPath>`,
+  `<mask>`, `<filter>` or `<symbol>`, since its effect reaches the elements that reference it;
+- writes that set `needsFullStyleRecompute` for reasons other than selectors today
+  (element-specific attributes on lines, convolve matrices, conditional processing, `<use>`
+  geometry).
+
+The narrowed path starts with `class`, `style` and presentation-attribute writes on elements
+outside those resource subtrees, plus their `<use>` instances through the reverse map.
 
 **Why presentation attributes request a full restyle today is not stated in the code.** The
 plausible dependents are `<use>` instances (covered by the reverse map), paint servers and
-gradient stops (`ComputedStopComponent`), and text layout. Milestone 5 starts by running the
+gradient stops (`ComputedStopComponent`), and text layout. Milestone A5 starts by running the
 differential edit test with the current full restyle replaced by the narrowed set on the whole
 corpus, and keeps the full restyle for any attribute whose narrowed result differs until the
 missing dependent is identified.
@@ -1101,16 +1132,20 @@ is correct in every traversal mode:
   inheriting from it, which synchronizes the filter to the parent's chain; the child's match
   happened earlier, before that call, and any later match synchronizes again first.
 - Selective pass: dirty entities arrive in arbitrary order and each is synchronized.
-- Shadow trees and `computeStylesFor`: the adapter's chain is used, so shadow and light trees
-  never mix.
+- Shadow trees and `computeStylesFor`: the adapter's chain is used. A main-branch shadow root
+  is appended as a child of its `<use>` element (`ShadowTreeSystem::createShadowEntity`), so a
+  shadow entity's chain runs through its shadow ancestors into the `<use>` element and the light
+  ancestors above it, which is the chain matching walks; offscreen shadow roots are not attached,
+  so their chains stop at the root. The filter follows whatever chain the adapter produces.
 - External-use documents: each registry's traversal owns its own filter.
 
 The filter belongs to one style pass object, created when `computeAllStyles` or
 `computeStylesFor` starts and destroyed when it returns. A pass abandoned by a budget rejection
 destroys its filter with it, so no later pass can see a half-maintained set. Chain
-synchronization charges `SelectorTraversalBudget` one step per ancestor it pushes, and when the
-budget refuses, the filter is cleared and disabled for the rest of the pass, which only loses the
-rejections it would have made.
+synchronization is not charged to `SelectorTraversalBudget` or any other style budget, so the
+budget outcome, and with it the computed styles, are the same with the filter on or off. Its cost
+is bounded instead by the parser's nesting-depth limit: at most one pop and one push per
+ancestor level per element.
 
 **Expected effect.** See [Ancestor Filter Opportunity](#ancestor-filter-opportunity): no
 measurable time on the real documents, and up to 902 of 1,913 candidates on the descendant-only
@@ -1147,13 +1182,25 @@ everything a computed style depends on in `computePropertiesInto`:
   same values, including font sizes resolved against the parent.
 - Whether the parent carries `DoNotInheritFillOrStrokeTag`, and whether the element is a symbol
   that is a direct `<use>` instance root (`ApplySymbolInstanceDisplay`).
+- The element type of the data entity (`ElementTypeComponent`), which the measured opportunity
+  keyed on.
 - The root element's record, for `rem` lengths (`ComputedRootFontSize`).
 
-Elements are not cached when they have `AnimatedValuesComponent` (animation and contextual font
-size), when they are an external-use root (`ExternalRootContext`), or when the cascade reported a
+`externalFill` and `externalStroke` stay on the component, outside the shared record, because
+`inheritComputedParent` derives them from the element's own fill and stroke states, the
+external-use occurrence and the parent component's flags. On a hit they are computed with the same
+`ExternalPaintOrigin` calls from the local `StyleComponent` states (equal for every element with
+this key) and this element's parent component, which costs two state checks.
+
+Elements are not cached when their data entity, which is the light element for a shadow instance,
+has `AnimatedValuesComponent` (`ApplyAnimatedStyle` and the contextual font size read the data
+entity), when they are an external-use root (`ExternalRootContext`), or when the cascade reported a
 warning to the sink (a cached result would skip the diagnostic). The measured opportunity used
-the same inputs and found no element whose key matched another's while its computed style
-differed (see [Shared Computed Style Opportunity](#shared-computed-style-opportunity)).
+these inputs and found no element whose key matched another's while its computed style differed
+(see [Shared Computed Style Opportunity](#shared-computed-style-opportunity)). Six documents are
+not evidence that the key is complete; the gate is the differential fuzzer, run with the cache on
+and off, whose generator produces presentation attributes, `style` attributes, `<use>` instances,
+external-use documents and animations.
 
 **Where it runs.** Matching still runs for every element; the cache replaces what follows it:
 declaration parsing into the local registry copy, animation hooks, inheritance and font
@@ -1167,11 +1214,21 @@ change. Entries hold strong references, so a cached record outlives the elements
 until the next clear or eviction. Narrowed invalidation needs no cache change: a recomputed
 element builds a new key, and a new parent record changes its children's keys.
 
-**Memory budget.** Retained bytes are charged per distinct record instead of per entity:
-`StyleResourceBudget::reserveComplexPropertyBytes` charges a record's heap bytes when it is
-created and releases them when the last reference goes. The cache holds at most 4,096 entries and
-at most 8 entries per hash bucket; past either bound it stops inserting until the next clear, so
-an adversary who forces distinct keys gets today's behavior, not unbounded growth.
+**Eviction.** The cache holds at most 4,096 entries and at most 8 per hash bucket. When either is
+full, an insertion evicts by a clock sweep over a reference bit set on every hit, so a long editing
+session in which full clears are rare keeps caching its current working set rather than freezing
+on the first 4,096 keys. An adversary who forces distinct keys makes every insertion evict, which
+costs one sweep step and leaves today's per-element cost.
+
+**Memory budget and ownership.** Retained bytes are charged per distinct record instead of per
+entity. The cache, not the records, holds the charge: a record's heap bytes are reserved through
+`StyleResourceBudget::reserveComplexPropertyBytes` when the cache creates it and released when the
+cache evicts it or is cleared. A record can outlive its cache entry while elements still point at
+it, for example through `ExternalUseStyleRetention`; those references keep the memory alive but
+stop counting against the budget once the entry is gone, so the budget bounds what the cache can
+create, and the elements holding records are themselves bounded by the document. The cache and every
+record it created are owned by the document's style context, which outlives the budget object it
+charges.
 
 ### Interaction with Existing Incremental Paths
 
@@ -1553,8 +1610,13 @@ Stylesheets and documents are untrusted input.
   new). For each corpus document and each edit kind (class add, remove and replace; `id`;
   `style`; every presentation attribute the document uses), apply the edit, prepare a frame with
   narrowed invalidation, then compare every computed style with a document that received the same
-  edit followed by a forced full restyle. Includes `<use>`, patterns, markers, text, sibling and
-  descendant selectors, and filtered structural selectors (`:nth-child(1 of .selected)`,
+  edit followed by a forced full restyle. It compares three things, because computed styles alone
+  miss render-side under-invalidation: every computed style; the render tree
+  (`RenderingInstanceComponent` set and draw order) and every resolved reference (paint servers,
+  clip paths, masks, markers, filters, `href` targets); and the rendered TinySkia output, compared
+  with `CompareBitmapToBitmap` and `PixelmatchIdentityParams`. Includes `<use>`, gradient stops
+  used by shapes elsewhere, patterns, markers, text, `id` changes that re-target references,
+  sibling and descendant selectors, and filtered structural selectors (`:nth-child(1 of .selected)`,
   `:nth-last-child(2 of .a, .b)`, and both nested in `:is()` and left of a combinator) where the
   edited element is before, after and equal to the subject.
 - **Index unit tests** for key extraction on every selector shape in
