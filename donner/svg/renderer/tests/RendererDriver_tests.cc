@@ -1201,19 +1201,27 @@ TEST_F(RendererDriverTest, CullingUsesNonScalingStrokeAdjustedWidth) {
          "culled based on the narrower authored stroke width.";
 }
 
-/// A stroke width written in a unit, with the centerline that puts its reach onto the canvas.
+/// A stroke width written in a unit, with the outline that puts its reach onto the canvas.
 struct UnitStrokeWidthCase {
   const char* name;
   const char* path;
+  /// Right edge of the stroke: the outline's right edge, x = -18, plus half the resolved width.
+  double strokeRightEdge;
 };
+
+/// Names the case in test failure output.
+void PrintTo(const UnitStrokeWidthCase& testCase, std::ostream* os) {
+  *os << testCase.name;
+}
 
 class RendererDriverUnitStrokeWidthTest
     : public RendererDriverTest,
       public ::testing::WithParamInterface<UnitStrokeWidthCase> {};
 
-// The viewport cull and the range bounds pad a shape by the width the draw resolves: a centerline
+// The viewport cull and the range bounds pad a shape by the width the draw resolves. A thin outline
 // left of a 400x100 canvas whose stroke reaches onto it (80, 58.3 and 96 user units wide) must be
-// drawn and bounded on the canvas, although its bare number (5, 20 or 1) would keep it off.
+// drawn and bounded on the canvas; its bare number (5, 20 or 1) would keep it off, and the cull
+// would drop it.
 TEST_P(RendererDriverUnitStrokeWidthTest, StrokeWidthUnitsResolveBeforeBounding) {
   SVGDocument document = makeDocument(GetParam().path, Vector2i(400, 100));
 
@@ -1221,7 +1229,7 @@ TEST_P(RendererDriverUnitStrokeWidthTest, StrokeWidthUnitsResolveBeforeBounding)
   EXPECT_CALL(renderer, beginFrame(_)).Times(1);
   EXPECT_CALL(renderer, endFrame()).Times(1);
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
-  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setTransform(_)).Times(::testing::AnyNumber());
   EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
     ++drawPathCount;
   });
@@ -1229,7 +1237,7 @@ TEST_P(RendererDriverUnitStrokeWidthTest, StrokeWidthUnitsResolveBeforeBounding)
   viewport.size = Vector2d(400, 100);
   viewport.devicePixelRatio = 1.0;
   driver.draw(document, viewport, Transform2d());
-  EXPECT_THAT(drawPathCount, ::testing::Ge(1)) << "The viewport cull dropped a visible stroke";
+  EXPECT_THAT(drawPathCount, Eq(1)) << "The viewport cull dropped a visible stroke";
 
   const auto element = document.querySelector("#stroke");
   ASSERT_THAT(element, testing::Ne(std::nullopt));
@@ -1238,19 +1246,23 @@ TEST_P(RendererDriverUnitStrokeWidthTest, StrokeWidthUnitsResolveBeforeBounding)
       document.registry(), entity, entity, RenderViewport{.size = Vector2d(400, 100)},
       Transform2d(), RendererDriver::EntityRangeBoundsOptions{.clipToCanvas = false});
   ASSERT_THAT(bounds, testing::Ne(std::nullopt));
-  EXPECT_THAT(bounds->bottomRight.x, ::testing::Gt(5.0))
-      << "The range bounds must reach as far as the resolved stroke";
+  EXPECT_THAT(bounds->bottomRight.x, ::testing::DoubleNear(GetParam().strokeRightEdge, 1e-3))
+      << "The range bounds must reach exactly as far as the resolved stroke";
 }
 
+// The outline is 4 units wide, so its own bounds are not degenerate and the cull can bound it.
 INSTANTIATE_TEST_SUITE_P(
     Units, RendererDriverUnitStrokeWidthTest,
     ::testing::Values(
-        UnitStrokeWidthCase{"em", R"svg(<path id="stroke" d="M -20 0 L -20 100" stroke="red"
-          stroke-width="5em" font-size="16" stroke-linejoin="round" fill="none"/>)svg"},
-        UnitStrokeWidthCase{"percent", R"svg(<path id="stroke" d="M -20 0 L -20 100" stroke="red"
-          stroke-width="20%" stroke-linejoin="round" fill="none"/>)svg"},
-        UnitStrokeWidthCase{"inch", R"svg(<path id="stroke" d="M -20 0 L -20 100" stroke="red"
-          stroke-width="1in" stroke-linejoin="round" fill="none"/>)svg"}),
+        UnitStrokeWidthCase{"em", R"svg(<path id="stroke" d="M -22 0 H -18 V 100 H -22 Z"
+          stroke="red" stroke-width="5em" font-size="16" stroke-linejoin="round" fill="none"/>)svg",
+                            -18.0 + 40.0},
+        UnitStrokeWidthCase{"percent", R"svg(<path id="stroke" d="M -22 0 H -18 V 100 H -22 Z"
+          stroke="red" stroke-width="20%" stroke-linejoin="round" fill="none"/>)svg",
+                            -18.0 + 0.1 * std::sqrt((400.0 * 400.0 + 100.0 * 100.0) / 2.0)},
+        UnitStrokeWidthCase{"inch", R"svg(<path id="stroke" d="M -22 0 H -18 V 100 H -22 Z"
+          stroke="red" stroke-width="1in" stroke-linejoin="round" fill="none"/>)svg",
+                            -18.0 + 48.0}),
     [](const ::testing::TestParamInfo<UnitStrokeWidthCase>& info) { return info.param.name; });
 
 TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacityWithBlendMode) {
