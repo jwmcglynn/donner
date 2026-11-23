@@ -30,13 +30,14 @@ consteval auto ReplaceExact(wgsl::SourceText<N> source, const char (&before)[Old
 }
 constexpr auto kArtifact = wgsl::Compile<programs::kImageBlitSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kView = kArtifact.view();
-constexpr auto kMutatedSource =
-    ReplaceExact(ReplaceExact(ReplaceExact(ReplaceExact(ReplaceExact(programs::kImageBlitSource,
-                                                                     "@binding(0)", "@binding(7)"),
-                                                        "@binding(1)", "@binding(9)"),
-                                           "@binding(2)", "@binding(8)"),
-                              "fn vs_main(", "fn vs_test("),
-                 "fn fs_main(", "fn fs_test(");
+// One replacement per constant: -fconstexpr-steps bounds each evaluation separately, so chaining
+// the five full-source copies into one initializer would need five times the budget.
+constexpr auto kRebound0Source =
+    ReplaceExact(programs::kImageBlitSource, "@binding(0)", "@binding(7)");
+constexpr auto kRebound1Source = ReplaceExact(kRebound0Source, "@binding(1)", "@binding(9)");
+constexpr auto kRebound2Source = ReplaceExact(kRebound1Source, "@binding(2)", "@binding(8)");
+constexpr auto kRenamedVertexSource = ReplaceExact(kRebound2Source, "fn vs_main(", "fn vs_test(");
+constexpr auto kMutatedSource = ReplaceExact(kRenamedVertexSource, "fn fs_main(", "fn fs_test(");
 constexpr auto kMutated = wgsl::Compile<kMutatedSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kMutatedView = kMutated.view();
 constexpr auto kExplicitSource = ReplaceExact(
