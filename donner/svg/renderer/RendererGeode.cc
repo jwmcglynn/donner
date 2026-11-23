@@ -3967,7 +3967,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// edges is exact and becomes the active polygon. A larger one cannot be carried: an entry marked
   /// boundsFallbackWhenStacked then keeps the enclosing polygon and clips only through its
   /// device-space bounds in the scissor, and any other entry replaces the active polygon. Carrying
-  /// the full intersection is tracked in #ISSUE-GEODE-POLYGON-CLIP-STACK.
+  /// the full intersection is tracked in #2627.
   static void FoldClipPolygon(ActiveClipPolygon& active, const ClipStackEntry& entry) {
     if (!entry.hasPolygon || active.empty) {
       return;
