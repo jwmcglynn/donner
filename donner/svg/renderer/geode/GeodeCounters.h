@@ -153,6 +153,11 @@ struct GeodeCounters {
   /// chunk's strokes into shapes: fewer than two for each outline, however the glyphs overlap.
   uint64_t textStrokeBoundsTests = 0;
 
+  /// Convex polygon intersections the clip stack performed this frame. Each pushed clip folds its
+  /// polygon into the one cached on the entry below it, so this is at most one per pushed clip
+  /// whatever the stack depth, and popping a clip, or reapplying the clip state, performs none.
+  uint64_t clipPolygonIntersections = 0;
+
   /// Glyph occurrences this frame that resolved to an already-cached glyph
   /// outline. A text run repeats a handful of outlines across many
   /// occurrences, so this is the direct measure of the glyph cache doing its

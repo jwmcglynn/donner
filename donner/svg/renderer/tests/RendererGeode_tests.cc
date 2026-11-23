@@ -1598,6 +1598,56 @@ RendererBitmap RenderOnFreshDevice(const std::string& source) {
   return renderer.takeSnapshot();
 }
 
+/// A document whose markers sit inside \p depth nested viewports turned by one rotation, one
+/// marker on each of the \p placements vertices of a polyline. Every viewport and every marker
+/// clips to a turned rectangle, so each pushes a clip polygon. The viewports shrink by one unit on
+/// each side, so each polygon lies inside the one before it and no intersection is empty.
+/// @param depth Number of nested viewports.
+/// @param placements Number of polyline vertices, one marker each.
+std::string MarkersInTurnedViewportsSvg(int depth, int placements) {
+  std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="4" markerHeight="4"
+      refX="2" refY="2"><rect width="4" height="4" fill="blue"/></marker></defs>
+      <g transform="rotate(30 50 50)"><svg x="5" y="5" width="90" height="90">)svg";
+  for (int level = 1; level < depth; ++level) {
+    const int size = 90 - 2 * level;
+    source += "<svg x=\"1\" y=\"1\" width=\"" + std::to_string(size) + "\" height=\"" +
+              std::to_string(size) + "\">";
+  }
+  const int innermost = 90 - 2 * (depth - 1);
+  source += R"svg(<polyline fill="none" marker-start="url(#m)" marker-mid="url(#m)" )svg"
+            R"svg(marker-end="url(#m)" points=")svg";
+  for (int i = 0; i < placements; ++i) {
+    const double x = 4.0 + (i % 2) * (innermost - 8);
+    const double y = 4.0 + (innermost - 8) * static_cast<double>(i) / (placements - 1);
+    source += (i == 0 ? "" : " ") + std::to_string(x) + "," + std::to_string(y);
+  }
+  source += "\"/>";
+  for (int level = 0; level < depth; ++level) {
+    source += "</svg>";
+  }
+  source += "</g></svg>";
+  return source;
+}
+
+// Each pushed clip folds its polygon into the fold cached on the entry below it, so the clip stack
+// performs one polygon intersection per pushed polygon that has a polygon beneath it: the
+// viewports after the first, and every marker. Popping a marker's clip, and reapplying the clip
+// state for each marker's draw, must not fold the stack again. The count is exact and does not
+// grow with the product of depth and placements.
+TEST_F(RendererGeodeTest, ClipStackFoldsOncePerPushedPolygon) {
+  for (const auto [depth, placements] : {std::pair{20, 200}, std::pair{40, 200}}) {
+    SCOPED_TRACE(testing::Message() << "depth " << depth << ", placements " << placements);
+    std::optional<SVGDocument> document =
+        ParseFilterDocument(MarkersInTurnedViewportsSvg(depth, placements));
+    ASSERT_TRUE(document.has_value());
+    RendererGeode renderer = createRenderer();
+    renderer.draw(*document);
+    const auto expected = static_cast<uint64_t>((depth - 1) + placements);
+    EXPECT_EQ(renderer.lastFrameTimings().counters.clipPolygonIntersections, expected);
+  }
+}
+
 // Filter passes reuse their parameter slots across frames and skip uploading bytes a slot already
 // holds. A document whose filter has the same passes with other parameters lands in the same slots
 // and binds the same textures, so its passes reuse every bind group; each changed parameter still
