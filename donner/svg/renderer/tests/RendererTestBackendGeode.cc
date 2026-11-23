@@ -139,7 +139,7 @@ public:
       }
     }
     // Registered cases include disabled cases; a corpus change needs explicit review.
-    constexpr size_t kReviewedGeodeGoldenCases = 1728;
+    constexpr size_t kReviewedGeodeGoldenCases = 1729;
     if (geodeCases != kReviewedGeodeGoldenCases || tinyCases != geodeCases) {
       FAIL() << "resvg wgpu reference case census changed: GeodeGolden=" << geodeCases
              << ", TinyGolden=" << tinyCases << ", reviewed=" << kReviewedGeodeGoldenCases;

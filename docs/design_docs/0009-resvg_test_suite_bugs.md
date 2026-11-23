@@ -156,6 +156,17 @@ Writing Modes 3 does not define how a user agent synthesizes them.
 covered: it requires the alias to draw exactly like `text-orientation: upright` and unlike the
 default sideways Latin.
 
+### Filter primitive subregion edges inside a device pixel
+
+`filters/filter/subregion-and-primitiveUnits=objectBoundingBox-3` renders without a comparison
+(`Params::UndefinedBehavior`, listed in `SPEC_UB_ALLOWLIST`). Its objectBoundingBox subregion runs
+from 112.5 to 187.5 device pixels on the 300x300 canvas. Measured on Linux, Donner covers columns
+and rows 112 to 187, both half-covered edge pixels, and the reference 112 to 186; that last column
+and row is the whole difference (147 pixels on the software renderer, 153 on Geode with software
+Vulkan). Filter Effects 1
+sections 8, 9.1 and 9.4 make the subregion a hard clip in the operating coordinate space but give
+no rule for an edge that falls inside a device pixel.
+
 ### Opaque vendored references
 
 These vendored PNGs are opaque white, while Donner's canvas and the other references are

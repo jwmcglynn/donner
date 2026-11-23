@@ -2171,7 +2171,7 @@ class RealTreeParityReportTests(unittest.TestCase):
         self.assertEqual(summary["total_cases"], report["summary"]["total_cases"])
         self.assertEqual(summary["unscored_release_additions"], len(unscored))
         self.assertEqual(unscored, parity_report.release_addition_cases(repo_root))
-        self.assertEqual(len(unscored), 49)
+        self.assertEqual(len(unscored), 50)
         self.assertEqual(summary["donner_pixel_pass"],
                          report["summary"]["compare_cases"]
                          - sum(row["state"] == "compare"

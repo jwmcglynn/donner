@@ -10,6 +10,7 @@ tests/filters/feMorphology/fractional-radius.svg
 tests/filters/feMorphology/radius-larger-than-region.svg
 tests/filters/filter-functions/two-urls-with-different-regions.svg
 tests/filters/filter/on-group-with-an-empty-filtered-child.svg
+tests/filters/filter/subregion-and-primitiveUnits=objectBoundingBox-3.svg
 tests/filters/filter/with-region-and-skew-on-intermediate-result.svg
 tests/filters/filter/with-subregion-and-rotation.svg
 tests/filters/flood-color/currentColor.svg

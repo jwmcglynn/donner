@@ -46,6 +46,8 @@ d36c7e4d895c1d274b89f191f751df376d218f34fd54ecff3050af632f6fa648  tests/filters/
 77334671067330ef3aeb621ec6a2bcf6dfdf67decf4da3cccd3e86e47ad62e3b  tests/filters/filter/negative-subregion.png
 9b816cb7f77df8e768f4535d6f0998646343e5cffe43eb034f22fbf0389aeb67  tests/filters/filter/on-group-with-an-empty-filtered-child.png
 32876dc31aaccfb4cfbc01210e3944f3a8419bae325e221643c4bd7233f2a36d  tests/filters/filter/on-group-with-an-empty-filtered-child.svg
+4ee22a13ae15b2dddbf4212c30e1983c2ce0a8a96f043ed6f7d53c88fa637b17  tests/filters/filter/subregion-and-primitiveUnits=objectBoundingBox-3.png
+0675674b41795b194604e9a08e81cef84287f8c22beaccb093c311ce26fa80c4  tests/filters/filter/subregion-and-primitiveUnits=objectBoundingBox-3.svg
 2715fabfd127c05f46b4d0916834089e93b263b4b17c30e98d2e38e58d6dc583  tests/filters/filter/with-region-and-skew-on-intermediate-result.png
 87033bf05e6a84a00e61bdcba0d6ddc1f6b539199a8dfe5e7ef53f824fe9393a  tests/filters/filter/with-region-and-skew-on-intermediate-result.svg
 6df43d788ac8b2317641dca3c8f08ced387a5ad591da437949b30a0e2696a354  tests/filters/filter/with-subregion-1.png

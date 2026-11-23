@@ -593,6 +593,12 @@ INSTANTIATE_TEST_SUITE_P(
                      kDefaultThreshold,
                      "Reference disagreement: the PNG stores reduced alpha in the opaque "
                      "interior; the golden clips the half-size primitive explicitly")},
+                // The subregion spans 112.5 to 187.5 device px. Donner covers pixels 112 to 187,
+                // the reference 112 to 186.
+                {"subregion-and-primitiveUnits=objectBoundingBox-3.svg",
+                 Params::UndefinedBehavior(
+                     "Filter Effects 1 sections 8, 9.1 and 9.4 give no rule for a primitive "
+                     "subregion edge that falls inside a device pixel")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"in=BackgroundAlpha.svg",
                  Params::WithGoldenOverride(
