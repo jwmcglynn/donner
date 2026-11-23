@@ -53,9 +53,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the independent Milestone 8 items: same-frame repeats of a resident slot (8.9),
-  layer-composite uniforms (8.3), pattern residency (8.5), and filter-pass steady state (8.6),
-  together with the Milestone 5 named-result keys.
+- Start the independent Milestone 8 items: layer-composite uniforms (8.3), pattern residency
+  (8.5), and filter-pass steady state (8.6), together with the Milestone 5 named-result keys.
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -193,8 +192,10 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `StrokeStylesPastTheCache_ReEncodeOnlyTheOverflow`; staleness under an edit to each key
     component and to the path: `RendererGeodeStrokeKeyTest` in `RendererGeode_tests.cc`). It
     removes the path encodes of `poker_chips`, `stroking_complex`, and `nested_svg_aspectratio`.
-    The remaining uploads and bind groups of the first two are 8.9, and those of
-    `nested_svg_aspectratio` are 8.7.
+    The remaining uploads and bind groups of the first two come from same-frame repeats of one
+    resident slot: several `<use>` instances draw the same fill or stroke variant at different
+    transforms or paints, and every draw after the first goes through the per-frame arena. That
+    is the repeat case 8.2 covers. Those of `nested_svg_aspectratio` are 8.7.
   - [ ] 8.2: Marker instance residency. Every drawn marker re-uploads its geometry through the
     per-frame arena and builds its own bind group. Clears `marker`, `marker_segments`,
     `marker_spec_example`. A design that batches markers through instance records and needs new
@@ -234,12 +235,6 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `geode_text_span_gradient_over_pattern`, `geode_text_span_gradient_over_pattern_stroke`. The
     three pattern-painted scenes depend on 8.5. The corpus reason strings for these entries say
     placed text has no path cache or residency; correcting them is a follow-up to the corpus test.
-  - [ ] 8.9: Same-frame repeats of a resident slot. A resident slot carries one draw's uniform per
-    frame, so when several `<use>` instances draw one source path's fill or stroke variant at
-    different transforms or paints, every draw after the first goes through the per-frame arena,
-    re-uploading its geometry and building a bind group. Clears `poker_chips` and
-    `stroking_complex`. Markers also draw one content entity at many transforms per frame;
-    whether 8.2's marker entries share this cause is not traced.
 
 ## Background
 
