@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -29,19 +30,33 @@ using testing::IsNull;
 using testing::IsTrue;
 using testing::NotNull;
 
+namespace donner::gpu {
+
+/// Prints a resource identity in test failures.
+inline void PrintTo(const ResourceIdentity& identity, std::ostream* os) {
+  *os << "{slot: " << identity.slotIndex << ", generation: " << identity.generation << "}";
+}
+
+}  // namespace donner::gpu
+
 namespace donner::geode {
 namespace {
 
-/// Number of buffers \p device has released.
-size_t ReleasedBufferCount(const gpu::RecordingDevice& device) {
+/// Number of resources of kind \p resourceName that \p device has released.
+size_t ReleasedCount(const gpu::RecordingDevice& device, std::string_view resourceName) {
   const std::string capture = device.serialize();
-  constexpr std::string_view kDestroyBuffer = "destroy buffer#";
+  const std::string destroy = "destroy " + std::string(resourceName) + "#";
   size_t count = 0;
-  for (size_t at = capture.find(kDestroyBuffer); at != std::string::npos;
-       at = capture.find(kDestroyBuffer, at + kDestroyBuffer.size())) {
+  for (size_t at = capture.find(destroy); at != std::string::npos;
+       at = capture.find(destroy, at + destroy.size())) {
     ++count;
   }
   return count;
+}
+
+/// Number of buffers \p device has released.
+size_t ReleasedBufferCount(const gpu::RecordingDevice& device) {
+  return ReleasedCount(device, gpu::BufferTag::kName);
 }
 
 class GeodeHandleRetirementTest : public testing::Test {
@@ -134,6 +149,58 @@ TEST_F(GeodeHandleRetirementTest, AnotherDevicesHandleStaysWithTheCaller) {
   EXPECT_THAT(buffers.front().deviceId(), Eq(other.deviceId()))
       << "only this retirement's device's handles may be released on its thread";
   EXPECT_THAT(retirement_.heldCountsForTesting().buffers, Eq(1u));
+}
+
+TEST_F(GeodeHandleRetirementTest, RetiredTexturesWaitForTheOwnerAndForeignOnesStayWithTheCaller) {
+  const auto createTexture = [](gpu::Device& device) {
+    return gpu::GetResultOrFail(device.createTexture(
+        gpu::TextureDescriptor{"retired", gpu::Extent2d{2, 2}, gpu::TextureFormat::RGBA8Unorm,
+                               gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst}));
+  };
+  gpu::RecordingDevice other;
+  std::vector<gpu::Texture> textures;
+  textures.push_back(createTexture(device_));
+  textures.push_back(createTexture(other));
+  textures.emplace_back();  // A null handle, which is simply dropped.
+
+  EXPECT_THAT(retirement_.retireTextures(textures), Eq(1u));
+  ASSERT_THAT(textures.size(), Eq(1u));
+  EXPECT_THAT(textures.front().deviceId(), Eq(other.deviceId()));
+  EXPECT_THAT(retirement_.heldCountsForTesting().textures, Eq(1u));
+  EXPECT_THAT(retirement_.hasPending(), IsTrue());
+  EXPECT_THAT(ReleasedCount(device_, gpu::TextureTag::kName), Eq(0u))
+      << "retiring must not reach the device";
+
+  retirement_.release();
+
+  EXPECT_THAT(retirement_.heldCountsForTesting().textures, Eq(0u));
+  EXPECT_THAT(ReleasedCount(device_, gpu::TextureTag::kName), Eq(1u));
+}
+
+TEST_F(GeodeHandleRetirementTest, TheTextureReleaseListenerHearsOfEachTextureBeforeItsRelease) {
+  gpu::Texture texture = gpu::GetResultOrFail(device_.createTexture(
+      gpu::TextureDescriptor{"retired", gpu::Extent2d{2, 2}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst}));
+  const gpu::ResourceIdentity identity{texture.slotIndex(), texture.generation()};
+  std::vector<gpu::ResourceIdentity> heard;
+  std::vector<size_t> releasedWhenHeard;
+  retirement_.setTextureReleaseListener(
+      [&](const gpu::ResourceIdentity& released) {
+        heard.push_back(released);
+        releasedWhenHeard.push_back(ReleasedCount(device_, gpu::TextureTag::kName));
+      },
+      [] { return true; });
+  std::vector<gpu::Texture> textures;
+  textures.push_back(std::move(texture));
+  ASSERT_THAT(retirement_.retireTextures(textures), Eq(0u));
+  EXPECT_THAT(heard, IsEmpty()) << "retiring must not report the texture yet";
+
+  retirement_.release();
+
+  EXPECT_THAT(heard, testing::ElementsAre(identity));
+  EXPECT_THAT(releasedWhenHeard, testing::ElementsAre(0u))
+      << "the listener must hear of the texture before it is released";
+  EXPECT_THAT(ReleasedCount(device_, gpu::TextureTag::kName), Eq(1u));
 }
 
 TEST(GeodePerDeviceTest, EachDeviceGetsItsOwnEntry) {

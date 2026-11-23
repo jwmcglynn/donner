@@ -3797,7 +3797,7 @@ GeodeTextureEncoder::Filter ImageFilter(svg::ImageSamplingKernel kernel) {
 }
 
 /// Builds textured-quad parameters for an uploaded image draw.
-GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& image,
+GeodeTextureEncoder::QuadParams MakeImageQuadParams(const Vector2i& imageSize,
                                                     const Box2d& destRect, double opacity,
                                                     svg::ImageRendering imageRendering,
                                                     const Transform2d& deviceFromLocalTransform,
@@ -3810,8 +3810,8 @@ GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& im
   params.sourceIsPremultiplied = true;
 
   const Transform2d deviceFromImage =
-      Transform2d::Scale(destRect.width() / static_cast<double>(image.width),
-                         destRect.height() / static_cast<double>(image.height)) *
+      Transform2d::Scale(destRect.width() / static_cast<double>(imageSize.x),
+                         destRect.height() / static_cast<double>(imageSize.y)) *
       Transform2d::Translate(destRect.topLeft) * deviceFromLocalTransform;
   params.filter = ImageFilter(svg::ImageSamplingKernelFor(imageRendering, deviceFromImage));
   params.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
@@ -3843,15 +3843,40 @@ void GeoEncoder::drawPremultipliedImage(const svg::ImageResource& image, const B
   if (!impl_->ensurePassOpen()) {
     return;
   }
-  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   const gpu::Texture& texture =
       impl_->transientResources.retain(GeodeTextureEncoder::uploadRgba8Texture(
           *impl_->gpuContext, image.data.data(), static_cast<uint32_t>(image.width),
           static_cast<uint32_t>(image.height)));
-  if (!texture.isValid()) {
+  drawImageTexture(texture, Vector2i(image.width, image.height), destRect, opacity, imageRendering);
+}
+
+bool GeoEncoder::acceptsImage(const svg::ImageResource& image, const Box2d& destRect) const {
+  return IsValidImageDraw(image, destRect, *impl_->device);
+}
+
+gpu::Texture GeoEncoder::uploadImageTexture(const svg::ImageResource& image) {
+  if (!IsValidImageDraw(image, Box2d({0.0, 0.0}, {1.0, 1.0}), *impl_->device)) {
+    return gpu::Texture();
+  }
+  // Interpolation happens in premultiplied space so transparent colored texels cannot fringe.
+  const std::vector<uint8_t> premultiplied = svg::PremultiplyRgba(image.data);
+  return GeodeTextureEncoder::uploadRgba8Texture(*impl_->gpuContext, premultiplied.data(),
+                                                 static_cast<uint32_t>(image.width),
+                                                 static_cast<uint32_t>(image.height));
+}
+
+void GeoEncoder::drawImageTexture(const gpu::Texture& texture, const Vector2i& imageSize,
+                                  const Box2d& destRect, double opacity,
+                                  svg::ImageRendering imageRendering,
+                                  GeodeTextureEncoder::RetainedQuadBinding* retained) {
+  if (!texture.isValid() || imageSize.x <= 0 || imageSize.y <= 0 || destRect.isEmpty()) {
     return;
   }
+  if (!impl_->ensurePassOpen()) {
+    return;
+  }
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Build the same MVP the Slug-fill path uses, so the image's local-space
   // destination rectangle lands in the correct spot after the current
@@ -3860,11 +3885,9 @@ void GeoEncoder::drawPremultipliedImage(const svg::ImageResource& image, const B
   impl_->buildMvp(mvp);
 
   const GeodeTextureEncoder::QuadParams qp = MakeImageQuadParams(
-      image, destRect, opacity, imageRendering, impl_->transform, impl_->activeClipMaskView);
+      imageSize, destRect, opacity, imageRendering, impl_->transform, impl_->activeClipMaskView);
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->gpuContext, *impl_->imagePipeline, *impl_->pass,
-                                        texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources, impl_.get());
+  impl_->drawRetainableQuad(texture, mvp, qp, retained);
 }
 
 void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,

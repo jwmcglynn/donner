@@ -353,6 +353,46 @@ TEST_F(GeodePerfTest, MultiImageBlit_PoolsCompositeUniforms) {
          "blit.";
 }
 
+/// Two decoded images, one sampled smoothly and one pixelated, over a solid background.
+constexpr std::string_view kDecodedImagesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="48">
+  <rect width="96" height="48" fill="#204060"/>
+  <image x="4" y="4" width="36" height="24" image-rendering="smooth"
+         href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAI0lEQVR42mP438Dwn2HB/wMaJwIaGE5oLPj//z+DAwMDw38Ari8MarxRuBEAAAAASUVORK5CYII="/>
+  <image x="48" y="8" width="42" height="28" style="image-rendering: pixelated"
+         href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAIklEQVR42mNgaPj///8ChgMnNAIaGDROLPjP8P+/A1DoPwC1KA9nEqdknwAAAABJRU5ErkJggg=="/>
+</svg>
+)SVG";
+
+/// An image that has not changed keeps its texture, and its blit keeps its uniform and bind group:
+/// an unchanged frame creates, uploads and writes nothing for it.
+TEST_F(GeodePerfTest, DecodedImages_UnchangedFrameWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kDecodedImagesSvg, sink);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  EXPECT_GE(renderer.lastFrameTimings().counters.textureCreates, 2u)
+      << "Premise: the first frame uploads one texture per image";
+
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "unchanged frame " << frame);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("DecodedImages (unchanged frame)", c);
+    EXPECT_EQ(c.drawCalls, 3u) << "Premise: the background and both images draw";
+    EXPECT_EQ(c.pathEncodes, 0u);
+    EXPECT_EQ(c.textureCreates, 0u) << "An unchanged image draws from the texture it kept";
+    EXPECT_EQ(c.textureWriteBytes, 0u) << "An unchanged image uploads no pixels";
+    EXPECT_EQ(c.bufferWrites, 0u) << "An unchanged image blit rewrites no uniform";
+    EXPECT_EQ(c.bindgroupCreates, 0u) << "An unchanged image blit keeps its bind group";
+  }
+}
+
 TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";

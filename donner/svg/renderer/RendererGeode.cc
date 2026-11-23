@@ -42,6 +42,7 @@
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/Stroke.h"
@@ -63,6 +64,7 @@
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePerDevice.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeResidentImageComponent.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
@@ -1010,6 +1012,23 @@ public:
     destroyListeners_.erase(token);
   }
 
+  /**
+   * Tell every destroy listener that \p texture, a texture of this pool's device that the pool
+   * does not own, is about to be destroyed, as \ref destroyPooledTexture tells them of its own. The
+   * device's handle retirement calls this for each texture it releases, so a texture kept across
+   * frames outside the pool, such as a decoded image's, is reported to every renderer on the device
+   * the same way.
+   *
+   * @param texture Identity of the texture about to be destroyed.
+   */
+  void notifyTextureDestroyed(const gpu::ResourceIdentity& texture) {
+    std::lock_guard lock(mutex_);
+    for (const auto& [unusedToken, listener] : destroyListeners_) {
+      (void)unusedToken;
+      listener(texture);
+    }
+  }
+
   /// Takes a pooled texture matching \p desc, or creates one on a miss. The runtime counts the
   /// creation itself, so a hit ticks no counter and a miss ticks exactly one.
   /// @param desc Descriptor the texture must match exactly.
@@ -1262,6 +1281,17 @@ std::shared_ptr<RendererGeodeTexturePool> TexturePoolForDevice(
 
   auto pool = std::make_shared<RendererGeodeTexturePool>(device);
   pools[device.get()] = pool;
+  // Textures the device's retirement releases, such as decoded images kept across frames, reach
+  // the same listeners as the pool's own, so every renderer drops its views of them first.
+  // One live pool per device (this registry), so this replaces only a listener whose pool is gone.
+  const std::weak_ptr<RendererGeodeTexturePool> weakPool = pool;
+  device->handleRetirement()->setTextureReleaseListener(
+      [weakPool](const gpu::ResourceIdentity& texture) {
+        if (const std::shared_ptr<RendererGeodeTexturePool> live = weakPool.lock()) {
+          live->notifyTextureDestroyed(texture);
+        }
+      },
+      [weakPool] { return !weakPool.expired(); });
   return pool;
 }
 
@@ -1548,9 +1578,9 @@ private:
 
 /// Every per-entity component that keeps state per device in a `geode::GeodePerDevice`. A new one
 /// must be listed here, or a gone device's slots on it would keep that device's slabs alive.
-using DocumentPerDeviceComponents = PerDeviceComponents<geode::GeodeResidentPathComponent,
-                                                        geode::GeodeTextInstanceResidencyComponent,
-                                                        geode::GeodeTextShapeResidencyComponent>;
+using DocumentPerDeviceComponents = PerDeviceComponents<
+    geode::GeodeResidentPathComponent, geode::GeodeTextInstanceResidencyComponent,
+    geode::GeodeTextShapeResidencyComponent, geode::GeodeResidentImageComponent>;
 
 /**
  * Drops, from every entity of \p registry, the residence slots of devices that are gone.
@@ -3124,8 +3154,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * it refuses any use of a view whose texture is gone in any case.
    */
   struct RetainedCompositeSequence {
-    /// Most entries one sequence keeps: one per surface a frame's surface budget can admit at a
-    /// time.
+    /// Most entries one sequence keeps. Set to the most surfaces a frame's surface budget admits at
+    /// a time, which bounds the composites of one frame; the image blit sequence uses the same cap
+    /// for its kept-texture blits, which no surface budget bounds.
     static constexpr size_t kMaxEntries = RendererSurfaceBudget::kMaximumSurfaces;
 
     struct Entry {
@@ -3136,7 +3167,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     static_assert(!std::is_copy_constructible_v<Entry> &&
                       std::is_nothrow_move_constructible_v<Entry>,
                   "Vector growth must move entries, never copy their GPU handles.");
-    /// Host bytes one entry may take; the design doc's per-renderer retained maximum relies on it.
+    /// Host bytes one entry may take. With \ref kMaxEntries entries per sequence this bounds the
+    /// host storage a sequence retains, and a renderer keeps three sequences.
     static constexpr size_t kMaxEntryHostBytes = 512;
     static_assert(sizeof(Entry) <= kMaxEntryHostBytes);
 
@@ -3235,6 +3267,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   RetainedCompositeSequence layerComposites;
   /// Composites of the filter results drawn in a frame, in draw order.
   RetainedCompositeSequence filterOutputComposites;
+  /// Blits of the image textures kept across frames that a frame draws, in draw order. A kept
+  /// texture is written only when it is created, so an entry that finds the same texture samples
+  /// the pixels it was built for.
+  RetainedCompositeSequence imageBlits;
   /// Set by a pool trim to nothing while a frame records; the frame's end then releases every
   /// retained composite entry.
   bool releaseRetainedCompositesAtFrameEnd = false;
@@ -3247,6 +3283,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     layerComposites.clear();
     filterOutputComposites.clear();
+    imageBlits.clear();
   }
 
   /// After the frame's submission: drop the entries it did not reach, release the bind groups that
@@ -3257,6 +3294,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (std::exchange(releaseRetainedCompositesAtFrameEnd, false)) {
       layerComposites.clear();
       filterOutputComposites.clear();
+      imageBlits.clear();
       return;
     }
     if (frameRecordingAbandoned || frameArenaWriteFailed) {
@@ -3264,8 +3302,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     layerComposites.dropUnclaimed();
     filterOutputComposites.dropUnclaimed();
+    imageBlits.dropUnclaimed();
     layerComposites.releaseClipMaskBindings();
     filterOutputComposites.releaseClipMaskBindings();
+    imageBlits.releaseClipMaskBindings();
   }
 
   /// Registration of \ref releaseRetainedViewsOf with the texture pool; zero when not registered.
@@ -3281,6 +3321,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void releaseRetainedViewsOf(const gpu::ResourceIdentity& texture) {
     layerComposites.releaseViewsOf(texture);
     filterOutputComposites.releaseViewsOf(texture);
+    imageBlits.releaseViewsOf(texture);
   }
 
   /// Release the views and bind group of every retained entry, keeping the uniform buffers. For a
@@ -3289,6 +3330,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void releaseAllRetainedViews() {
     layerComposites.releaseAllViews();
     filterOutputComposites.releaseAllViews();
+    imageBlits.releaseAllViews();
   }
 
   /// GPU filter-graph executor. Non-owning pointer into the
@@ -5034,6 +5076,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// `this`.
   static void onComputedPathChanged(Registry& registry, Entity entity);
 
+  /// Drop an entity's resident image textures when its `LoadedImageComponent` is replaced or
+  /// destroyed. Connected to entt's `on_update` / `on_destroy` signals like
+  /// \ref onComputedPathChanged.
+  static void onLoadedImageChanged(Registry& registry, Entity entity);
+
   /// Scratch buffer for the no-source-entity stroke path. `getStrokeDerived`
   /// uses this as stable storage when there's no `GeodePathCacheComponent`
   /// to live on (e.g. `drawRect` / `drawEllipse` convenience draws). Only
@@ -5685,6 +5732,41 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return {&emptyGeometry, false};
     }
     return getFillEncode(source, path, rule);
+  }
+
+  /// Document whose frame \ref drawDocument is drawing live under its write access, for
+  /// \ref settleDocumentResidency at the frame's start. Null outside such a draw, and for a
+  /// concurrent-DOM document, whose frames replay a snapshot that must not touch the live document.
+  Registry* frameDocument = nullptr;
+
+  /**
+   * Take back what this device's slabs for the document in \p registry released before this frame
+   * (freed ranges and records, retired bind groups, stop ramps and image textures), whether or not
+   * the frame draws anything that looks the slabs up. Without it, a document whose last resident
+   * draw went away would keep those until a later draw used its slabs again. Creates nothing; skips
+   * a frame that opened inside another frame on this device, as the lookups do.
+   *
+   * @param registry Registry of the document the frame draws, whose write access the drawing
+   *   thread holds for the whole frame, or null when no such document is being drawn.
+   */
+  void settleDocumentResidency(Registry* registry) {
+    if (registry == nullptr || device->oldestOpenFrameGeneration() < currentFrameIndex) {
+      return;
+    }
+    const auto* residencyPtr = registry->ctx().find<std::shared_ptr<DocumentResidency>>();
+    if (residencyPtr == nullptr) {
+      return;
+    }
+    DocumentDeviceResidency* residency = (*residencyPtr)->devices.find(device->deviceId());
+    if (residency == nullptr) {
+      return;
+    }
+    if (residency->geometry) {
+      residency->geometry->beginFrame(currentFrameIndex);
+    }
+    if (residency->records) {
+      residency->records->beginFrame(currentFrameIndex);
+    }
   }
 
   /// This device's painter-ordered record slab (ordered batching) for the document in
@@ -6503,6 +6585,98 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   geode::GeodeResidentPathSlots& residentPathSlots(EntityHandle source) {
     return source.get_or_emplace<geode::GeodeResidentPathComponent>().devices.forDevice(
         deviceKey());
+  }
+
+  /**
+   * This device's resident texture for \p image, uploading it when the entity keeps none for the
+   * image's current pixels.
+   *
+   * Only an image drawn from its source entity's `LoadedImageComponent` is kept: the texture is
+   * keyed by that component's revision and the image size, both compared before every draw, so a
+   * texture uploaded from other pixels is never drawn. Returns null, leaving the draw to upload a
+   * texture for this frame only, when there is no such entity, when the document's resident limit
+   * refuses the texture's bytes, or when the device refuses the texture.
+   *
+   * @param source Entity the image was loaded onto, or null.
+   * @param image Pixels being drawn; the encoder accepts them.
+   */
+  const gpu::Texture* residentImageTexture(EntityHandle source, const ImageResource& image) {
+    const components::LoadedImageComponent* loaded = LoadedImageDrawnAs(source, image);
+    if (loaded == nullptr) {
+      return nullptr;
+    }
+    Registry& registry = *source.registry();
+    ensureCacheInvalidationWired(registry);
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(registry);
+    geode::GeodeImageResidency& residency =
+        source.get_or_emplace<geode::GeodeResidentImageComponent>().devices.forDevice(deviceKey());
+    if (const geode::GeodeResidentImage* current = residency.image();
+        current != nullptr && residency.slab() == slab &&
+        keptImageMatches(*current, loaded->revision(), image)) {
+      return &current->texture;
+    }
+    // Stale or absent: let go of the old texture first, so its charge does not count against the
+    // replacement once the frames that sampled it are done.
+    residency.replace(slab, nullptr);
+    std::shared_ptr<geode::GeodeResidentImage> kept =
+        uploadKeptImage(slab->documentBudget(), loaded->revision(), image);
+    if (kept == nullptr) {
+      return nullptr;
+    }
+    const gpu::Texture* texture = &kept->texture;
+    residency.replace(std::move(slab), std::move(kept));
+    return texture;
+  }
+
+  /// The loaded image component of \p source when \p image is its decoded image, or null.
+  /// @param source Entity the image was loaded onto, or null.
+  /// @param image Pixels being drawn.
+  static const components::LoadedImageComponent* LoadedImageDrawnAs(EntityHandle source,
+                                                                    const ImageResource& image) {
+    if (!source) {
+      return nullptr;
+    }
+    const auto* loaded = source.try_get<components::LoadedImageComponent>();
+    if (loaded == nullptr || !loaded->image.has_value() || &*loaded->image != &image) {
+      return nullptr;
+    }
+    return loaded;
+  }
+
+  /// Whether \p kept holds the pixels of \p image at \p revision, on this renderer's device.
+  /// @param kept Kept texture.
+  /// @param revision `LoadedImageComponent::revision()` of the image being drawn.
+  /// @param image Pixels being drawn.
+  bool keptImageMatches(const geode::GeodeResidentImage& kept, std::uint64_t revision,
+                        const ImageResource& image) const {
+    return kept.revision == revision && kept.width == image.width && kept.height == image.height &&
+           kept.texture.deviceId() == device->runtimeDevice().deviceId();
+  }
+
+  /// Upload \p image to a texture kept across frames, charged to \p budget, or null when the
+  /// budget refuses its bytes or the device refuses the texture.
+  /// @param budget Document budget to charge.
+  /// @param revision `LoadedImageComponent::revision()` of the image.
+  /// @param image Pixels to upload; the encoder accepts them.
+  std::shared_ptr<geode::GeodeResidentImage> uploadKeptImage(
+      const std::shared_ptr<geode::GeodeDocumentGeometryBudget>& budget, std::uint64_t revision,
+      const ImageResource& image) {
+    const std::uint64_t bytes = geode::GeodeResidentImage::TextureBytes(image.width, image.height);
+    if (!budget || !budget->reserveImageBytes(bytes)) {
+      return nullptr;
+    }
+    auto kept = std::make_shared<geode::GeodeResidentImage>();
+    kept->chargedBudget = budget;
+    kept->chargedBytes = bytes;
+    kept->texture = encoder->uploadImageTexture(image);
+    if (!kept->texture.isValid()) {
+      return nullptr;
+    }
+    kept->revision = revision;
+    kept->width = image.width;
+    kept->height = image.height;
+    kept->owner = device->handleRetirement();
+    return kept;
   }
 
   /// This device's resident slab for the document in \p registry: one growable chunk set per
@@ -7979,6 +8153,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (device) {
       currentFrameIndex = device->beginFrameGeneration();
       frameGenerationOpen = true;
+      settleDocumentResidency(frameDocument);
     } else {
       ++currentFrameIndex;
     }
@@ -7987,6 +8162,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     pendingBatch.reset();
     layerComposites.beginFrame();
     filterOutputComposites.beginFrame();
+    imageBlits.beginFrame();
     // Nothing to give back after an endFrame. A frame that never reached one gives its loans back
     // here.
     releaseFrameLoans();
@@ -8201,6 +8377,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // Retained views go before any texture this teardown destroys, inside the pool or not.
     layerComposites.clear();
     filterOutputComposites.clear();
+    imageBlits.clear();
     if (texturePool) {
       texturePool->removeDestroyListener(std::exchange(texturePoolDestroyListener, 0));
     }
@@ -8251,8 +8428,11 @@ void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
   // Destruction callbacks must not create pools while registry.destroy() iterates them.
   static_cast<void>(registry.storage<geode::GeodePathCacheComponent>());
   static_cast<void>(registry.storage<geode::GeodeResidentPathComponent>());
+  static_cast<void>(registry.storage<geode::GeodeResidentImageComponent>());
   registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
+  registry.on_update<components::LoadedImageComponent>().connect<&Impl::onLoadedImageChanged>();
+  registry.on_destroy<components::LoadedImageComponent>().connect<&Impl::onLoadedImageChanged>();
   // Leaving the connection attached across renderer destruction is
   // intentional: our free-function listener has no `this`-capture,
   // so it's safe to outlive the renderer. Connections die with the
@@ -8267,6 +8447,11 @@ void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entit
   // Slot reset parks bind groups and buffer ranges in their slabs until no older frame is open.
   // Geometry can change during a shared-device offscreen draw before the outer frame submits.
   registry.remove<geode::GeodeResidentPathComponent>(entity);
+}
+
+void RendererGeode::Impl::onLoadedImageChanged(Registry& registry, Entity entity) {
+  // Each device's texture parks in that device's slab until no open frame can still sample it.
+  registry.remove<geode::GeodeResidentImageComponent>(entity);
 }
 
 namespace {
@@ -8461,7 +8646,14 @@ void RendererGeode::drawDocument(SVGDocument& document, ParseWarningSink* warnin
   impl_->ensureCacheInvalidationWired(document.registry());
 
   RendererDriver driver(*this, impl_->verbose, nullptr, nullptr, warningSink);
+  // A concurrent-DOM document is captured into a snapshot and replayed, and replay must not touch
+  // the live document, so its frames leave its residence alone; only a live draw, which holds write
+  // access for the whole frame, settles it.
+  if (document.threadingMode() != ThreadingMode::ConcurrentDom) {
+    impl_->frameDocument = &document.registry();
+  }
   driver.draw(document);
+  impl_->frameDocument = nullptr;
 }
 
 std::vector<std::optional<gpu::ResourceIdentity>> RendererGeode::layerCompositeTexturesForTesting()
@@ -8476,13 +8668,15 @@ RendererGeode::filterOutputCompositeTexturesForTesting() const {
 
 RendererGeode::RetainedCompositeCounts RendererGeode::retainedCompositeCountsForTesting() const {
   return RetainedCompositeCounts{impl_->layerComposites.entries.size(),
-                                 impl_->filterOutputComposites.entries.size()};
+                                 impl_->filterOutputComposites.entries.size(),
+                                 impl_->imageBlits.entries.size()};
 }
 
 RendererGeode::RetainedCompositeCounts RendererGeode::retainedCompositeViewHoldersForTesting()
     const {
   return RetainedCompositeCounts{impl_->layerComposites.viewHolderCount(),
-                                 impl_->filterOutputComposites.viewHolderCount()};
+                                 impl_->filterOutputComposites.viewHolderCount(),
+                                 impl_->imageBlits.viewHolderCount()};
 }
 
 size_t RendererGeode::maxRetainedCompositesForTesting() {
@@ -9824,6 +10018,15 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
   ImageRendering imageRendering = params.imageRendering;
   if (imageRendering == ImageRendering::Auto && params.imageRenderingPixelated) {
     imageRendering = ImageRendering::Pixelated;
+  }
+  if (!impl_->encoder->acceptsImage(image, params.targetRect)) {
+    return;
+  }
+  if (const gpu::Texture* texture = impl_->residentImageTexture(params.sourceEntity, image)) {
+    impl_->encoder->drawImageTexture(
+        *texture, Vector2i(image.width, image.height), params.targetRect, 1.0, imageRendering,
+        impl_->imageBlits.binding(impl_->imageBlits.claim(), *texture));
+    return;
   }
   impl_->encoder->drawImage(image, params.targetRect, 1.0, imageRendering);
 }

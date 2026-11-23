@@ -15,8 +15,9 @@
 namespace donner::geode {
 
 /**
- * Buffers and bind groups of one runtime device that were let go of where that device may not be
- * used, kept until the context rendering through the device releases them on its own thread.
+ * Buffers, bind groups and textures of one runtime device that were let go of where that device
+ * may not be used, kept until the context rendering through the device releases them on its own
+ * thread.
  *
  * A runtime device is single-threaded: releasing a handle returns its slot to the device's tables,
  * which the device's own thread may be using at the same moment. State a document keeps for a
@@ -46,6 +47,7 @@ public:
   struct HeldCounts {
     std::size_t buffers = 0;     //!< Buffers held.
     std::size_t bindGroups = 0;  //!< Bind groups held.
+    std::size_t textures = 0;    //!< Textures held.
   };
 
   /// @param runtimeDeviceId `gpu::Device::deviceId()` of the runtime device whose handles this
@@ -64,6 +66,33 @@ public:
    */
   [[nodiscard]] std::size_t retire(std::vector<gpu::Buffer>& buffers,
                                    std::vector<gpu::BindGroup>& bindGroups);
+
+  /**
+   * Takes every texture of this retirement's device in \p textures, leaving the others where they
+   * are, and removes null handles.
+   *
+   * @param textures Textures to retire.
+   * @return Number of textures left with the caller because another device owns them.
+   */
+  [[nodiscard]] std::size_t retireTextures(std::vector<gpu::Texture>& textures);
+
+  /// Called on the releasing thread with each held texture's identity just before \ref release
+  /// lets go of it.
+  using TextureReleaseListener = std::function<void(const gpu::ResourceIdentity& texture)>;
+
+  /**
+   * Have \p listener told of every texture \ref release lets go of, before it does, so state that
+   * holds views of the texture can drop them first. There is one listener: the device's one live
+   * texture pool. A new listener may replace an earlier one only once that one reports itself gone
+   * (see \p isLive); replacing a live one is a programming error, asserted in debug builds. The
+   * listener runs on the thread calling \ref release, without this object's lock, and must not
+   * call back into this object.
+   *
+   * @param listener Callback receiving each released texture's identity.
+   * @param isLive Whether \p listener's owner still exists; consulted when a later call replaces
+   * it.
+   */
+  void setTextureReleaseListener(TextureReleaseListener listener, std::function<bool()> isLive);
 
   /// Wake the owning event loop when another thread hands it work. The callback runs under this
   /// mailbox's lock and must only post a nonblocking wake; clearing it waits for any call to end.
@@ -95,6 +124,9 @@ private:
   std::atomic<bool> closed_ = false;
   std::vector<gpu::Buffer> buffers_;
   std::vector<gpu::BindGroup> bindGroups_;
+  std::vector<gpu::Texture> textures_;
+  TextureReleaseListener textureReleaseListener_;
+  std::function<bool()> textureReleaseListenerLive_;
   std::function<void()> wakeCallback_;
 };
 

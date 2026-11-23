@@ -364,6 +364,22 @@ donner_cc_library(
     ],
 )
 
+# Header-only ECS component keeping a decoded image's texture on each device that draws it, so an
+# unchanged image is drawn again without creating or uploading a texture.
+donner_cc_library(
+    name = "geode_resident_image_component",
+    hdrs = ["GeodeResidentImageComponent.h"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_handle_retirement",
+        ":geode_resident_path_component",
+        ":geode_resource_budget",
+        "//donner/base",
+        "//donner/gpu",
+    ],
+)
+
 # Header-only glyph-identity-keyed outline cache plus the persistent
 # per-occurrence text instance records that ride on top of it.
 donner_cc_library(
@@ -1262,6 +1278,7 @@ donner_cc_test(
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/svg",
+        "//donner/svg/components",
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_driver",
