@@ -344,6 +344,16 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         "clears when decoded images keep their texture and the image quad gains residency",
     },
     {
+        /*scene=*/"marker",
+        /*violated=*/kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{0, 0, 6, 14},
+        /*reason=*/
+        "the markers use orient=\"auto\", and a marker's viewport clip turns with the marker, so "
+        "each turned placement draws under a clip polygon; no resident path draws under a clip "
+        "polygon, so those placements take the per-frame arena and build a bind group per draw",
+        /*tracking=*/"clears when draws under a clip polygon are resident",
+    },
+    {
         /*scene=*/"marker_segments",
         /*violated=*/kBufferWrites | kBindgroupCreates,
         /*ceiling=*/{0, 0, 23, 23},
