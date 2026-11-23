@@ -563,10 +563,12 @@ match time by at least 5 percent is not kept.
 `SelectorDependencySummary`: for each id, class and attribute local name that appears anywhere in
 a selector, whether it appears only in a subject compound (affects the element itself), in a
 compound left of a descendant or child combinator (affects descendants), or left of a sibling
-combinator (affects following siblings and their descendants). It also records whether any
-selector uses `:has()`, a structural pseudo-class (`:nth-*`, `:first-*`, `:last-*`, `:only-*`,
-`:empty`), or a key-less attribute selector. The summary is the union over the sheet's own and
-imported rules, and the document view is the union over applicable stylesheets.
+combinator (affects following siblings and their descendants). Names inside the `of S` filter of
+`:nth-child(An+B of S)` and `:nth-last-child(An+B of S)` get a direction of their own (see
+routing below). It also records whether any selector uses `:has()`, a structural pseudo-class
+(`:nth-*`, `:first-*`, `:last-*`, `:only-*`, `:empty`), or a key-less attribute selector. The
+summary is the union over the sheet's own and imported rules, and the document view is the union
+over applicable stylesheets.
 
 **Routing.** `SVGElement::setClassName`, `setId`, `setStyle`, `updateStyle` and the presentation
 attribute path in `MarkPresentationAttributeDirty` compute the affected set instead of setting
@@ -591,8 +593,19 @@ attribute path in `MarkPresentationAttributeDirty` compute the affected set inst
   combinator to its right inside the argument. A name under `:not()` is a dependency like any
   other, since adding or removing it changes the match.
 - `:has()` anywhere, or a key-less attribute selector when the written name is an attribute, falls
-  back to `needsFullStyleRecompute`. Structural pseudo-classes do not depend on attribute values
-  and need no fallback for these edits.
+  back to `needsFullStyleRecompute`.
+- Unfiltered structural pseudo-classes (`:first-child`, `:nth-child(2n)`, `:nth-of-type()` and the
+  rest) depend only on tree position and element names, which these edits do not change. The
+  filtered forms do depend on attributes: `PseudoClassSelector::matchesNthFunction` passes the
+  `of S` selector to `getIndexInParent`, which counts only siblings that match `S`. A class change
+  on one sibling can therefore change another sibling's match with no tree mutation:
+  `:nth-child(1 of .selected)` counts matching siblings before the subject, so a change to a name
+  in `S` on element X redoes X and every following sibling of X; `:nth-last-child(1 of .selected)`
+  counts matching siblings after the subject, so it redoes X and every preceding sibling. Each
+  redone sibling's subtree is redone too, and the direction is widened to both when the
+  pseudo-class sits in a compound left of a sibling combinator. The summary records each name in
+  an `of S` filter with these directions, including names nested in `:is()`, `:where()` and
+  `:not()` inside `S`.
 - The `<use>` and resource shadow instances whose `ShadowEntityComponent::lightEntity` is a dirty
   entity are dirtied too, because they read the light element's attributes. This needs a reverse
   map from light entity to shadow entities, maintained by `ShadowTreeSystem` when it creates and
@@ -667,8 +680,10 @@ Stylesheets and documents are untrusted input.
   new). For each corpus document and each edit kind (class add, remove and replace; `id`;
   `style`; every presentation attribute the document uses), apply the edit, prepare a frame with
   narrowed invalidation, then compare every computed style with a document that received the same
-  edit followed by a forced full restyle. Includes `<use>`, patterns, markers, text and sibling
-  and descendant selectors.
+  edit followed by a forced full restyle. Includes `<use>`, patterns, markers, text, sibling and
+  descendant selectors, and filtered structural selectors (`:nth-child(1 of .selected)`,
+  `:nth-last-child(2 of .a, .b)`, and both nested in `:is()` and left of a combinator) where the
+  edited element is before, after and equal to the subject.
 - **Index unit tests** for key extraction on every selector shape in
   [Donner Today](#donner-today), including namespaces, case, `:is()`, `:not()` and `:has()` in
   the subject compound.
