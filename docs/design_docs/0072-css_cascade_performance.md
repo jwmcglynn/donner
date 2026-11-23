@@ -1829,26 +1829,29 @@ Stylesheets and documents are untrusted input.
 
 ## Open Questions
 
-- **Retained-byte accounting for shared records.** Charging the computed-style budget per
+Each question is labelled with its part, so a part can be lifted into its own document with its
+questions.
+
+- **Part A: retained-byte accounting for shared records.** Charging the computed-style budget per
   distinct record instead of per entity lets documents that exceed the 64 MiB retained-property
   limit today only through duplication style completely. Recommendation: charge per record, the
   same reasoning as the per-candidate decision.
-- **`var()` in presentation attributes.** The SVG Working Group resolved to allow it but has not
-  specified the parse model; Firefox and Safari support it, Chromium partially. Recommendation:
+- **Part B: `var()` in presentation attributes.** The SVG Working Group resolved to allow it but has
+  not specified the parse model; Firefox and Safari support it, Chromium partially. Recommendation:
   support it as a pending substitution at presentation-attribute priority, matching
   `variable-presentation-attribute.html`, and revisit if the specified parse model differs.
-- **Invalid text while typing.** The engine renders what the current text parses to, so typing
-  through an unbalanced brace changes the rendering until it is closed. Recommendation: keep the
-  engine exact (it equals export and reload) and, if the flicker bothers users, add an editor-side
-  debounce that defers applying a stylesheet edit while the source has an unclosed block.
-- **`revert` and `revert-layer`.** Unsupported today (dropped as invalid). Supporting them needs
-  every candidate declaration per property kept through the cascade instead of one winning slot.
-  Recommendation: keep them out of Part B and take them up with `@property` in a later design,
+- **Part C: invalid text while typing.** The engine renders what the current text parses to, so
+  typing through an unbalanced brace changes the rendering until it is closed. Recommendation: keep
+  the engine exact (it equals export and reload) and, if the flicker bothers users, add an
+  editor-side debounce that defers applying a stylesheet edit while the source has an unclosed
+  block.
+- **Part B: `revert` and `revert-layer`.** Unsupported today (dropped as invalid). Supporting them
+  needs every candidate declaration per property kept through the cascade instead of one winning
+  slot. Recommendation: keep them out of Part B and take them up with `@property` in a later design,
   since both change how the cascade stores candidates.
-
-- **Parallel threshold.** The initial 1,000-element threshold keeps most single illustrations
-  serial. Recommendation: keep it until Milestone D3 measures the curve, and do not lower it to
-  make small documents parallel unless the measured wake cost allows.
+- **Part D: parallel threshold.** The initial 1,000-element threshold keeps most single
+  illustrations serial. Recommendation: keep it until Milestone D3 measures the curve, and do not
+  lower it to make small documents parallel unless the measured wake cost allows.
 
 ## Future Work
 
