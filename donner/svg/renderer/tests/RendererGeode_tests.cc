@@ -10055,11 +10055,18 @@ std::function<void(SVGDocument&)> MarkerElementEdit(std::function<void(SVGMarker
 // frames must render exactly what a fresh document carrying the same edit renders. A multi-step
 // edit renders after every step and compares every step's frame with a fresh document carrying
 // the steps so far.
+//
+// The edits run on two fixtures. With the default `orient`, every placement's marker viewport clip
+// stays an axis-aligned rectangle, so the placements are resident and the steady frame must write
+// nothing before the edit. With `orient="auto"` the placements turn, their viewport clip becomes a
+// clip polygon, and no resident path draws under a clip polygon yet (#2644: Geode draws under a
+// clip polygon are never resident), so that fixture asserts pixels only.
 TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem) {
-  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  const std::string rotatedSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
     <linearGradient id="g"><stop offset="0" stop-color="#ff00ff"/>
       <stop offset="1" stop-color="#00ffff"/></linearGradient>
-    <clipPath id="cp"><rect width="3" height="6"/></clipPath>
+    <clipPath id="cp"><rect width="1" height="6"/></clipPath>
     <marker id="m" viewBox="0 0 6 6" markerWidth="6" markerHeight="4" refX="3" refY="3"
             orient="auto">
       <path id="content" d="M0 0 L6 3 L0 6 Z" fill="context-stroke" stroke="context-fill"
@@ -10071,6 +10078,10 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
             stroke-width="1.5" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
     </g>
   </svg>)svg";
+  std::string axisAlignedSource = rotatedSource;
+  const std::string orientAuto = "\n            orient=\"auto\"";
+  ASSERT_THAT(axisAlignedSource.find(orientAuto), testing::Ne(std::string::npos));
+  axisAlignedSource.erase(axisAlignedSource.find(orientAuto), orientAuto.size());
 
   const MarkerEdit edits[] = {
       {"path_vertices", {SetAttributeEdit("host", "d", "M6 52 L18 14 L30 48 L42 14 L58 40")}},
@@ -10121,49 +10132,111 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
       {"context_fill", {SetAttributeEdit("host", "fill", "#00ccff")}},
   };
 
-  for (const MarkerEdit& edit : edits) {
-    SCOPED_TRACE(edit.label);
-    SVGDocument document = ParseDocumentOrFail(source);
-    RendererGeode renderer = createRenderer();
-    renderer.draw(document);
-    renderer.draw(document);
-    // Premise: the steady frame rewrites nothing, so the placements are drawing from records
-    // kept across frames and the edit is what has to reach them.
-    ASSERT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
-    const RendererBitmap before = renderer.takeSnapshot();
-
-    ASSERT_THAT(before.empty(), testing::IsFalse());
-    for (size_t stepCount = 1; stepCount <= edit.steps.size(); ++stepCount) {
-      SCOPED_TRACE(stepCount);
-      ASSERT_NO_FATAL_FAILURE(edit.steps[stepCount - 1](document));
+  for (const auto& [fixture, source, placementsResident] :
+       {std::tuple<std::string, std::string, bool>{"axis_aligned", axisAlignedSource, true},
+        std::tuple<std::string, std::string, bool>{"rotated", rotatedSource, false}}) {
+    for (const MarkerEdit& edit : edits) {
+      SCOPED_TRACE(fixture + ": " + edit.label);
+      SVGDocument document = ParseDocumentOrFail(source);
+      RendererGeode renderer = createRenderer();
       renderer.draw(document);
-      const RendererBitmap actual = renderer.takeSnapshot();
-
-      // A document of its own per step: a document drawn before carries residence of its own.
-      SVGDocument freshDocument = ParseDocumentOrFail(source);
-      for (size_t i = 0; i < stepCount; ++i) {
-        ASSERT_NO_FATAL_FAILURE(edit.steps[i](freshDocument));
+      renderer.draw(document);
+      // Premise: the steady frame rewrites nothing, so the placements are drawing from records
+      // kept across frames and the edit is what has to reach them.
+      if (placementsResident) {
+        ASSERT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
       }
-      RendererGeode freshRenderer = createRenderer();
-      freshRenderer.draw(freshDocument);
-      const RendererBitmap expected = freshRenderer.takeSnapshot();
-      ASSERT_THAT(expected.empty(), testing::IsFalse());
+      const RendererBitmap before = renderer.takeSnapshot();
 
-      // Premise: the first step changes the picture, so matching the fresh render is not vacuous.
-      if (stepCount == 1) {
-        const int changed =
-            DifferingPixels(actual, before, std::string("marker_edit_premise_") + edit.label);
-        EXPECT_THAT(changed, testing::Gt(0)) << "the first step does not change the picture";
-        if (changed <= 0) {
-          break;
+      ASSERT_THAT(before.empty(), testing::IsFalse());
+      for (size_t stepCount = 1; stepCount <= edit.steps.size(); ++stepCount) {
+        SCOPED_TRACE(stepCount);
+        ASSERT_NO_FATAL_FAILURE(edit.steps[stepCount - 1](document));
+        renderer.draw(document);
+        const RendererBitmap actual = renderer.takeSnapshot();
+
+        // A document of its own per step: a document drawn before carries residence of its own.
+        SVGDocument freshDocument = ParseDocumentOrFail(source);
+        for (size_t i = 0; i < stepCount; ++i) {
+          ASSERT_NO_FATAL_FAILURE(edit.steps[i](freshDocument));
         }
+        RendererGeode freshRenderer = createRenderer();
+        freshRenderer.draw(freshDocument);
+        const RendererBitmap expected = freshRenderer.takeSnapshot();
+        ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+        // Premise: the first step changes the picture, so matching the fresh render is not vacuous.
+        if (stepCount == 1) {
+          const int changed = DifferingPixels(
+              actual, before, std::string("marker_edit_premise_") + fixture + "_" + edit.label);
+          EXPECT_THAT(changed, testing::Gt(0)) << "the first step does not change the picture";
+          if (changed <= 0) {
+            break;
+          }
+        }
+        editor::tests::CompareBitmapToBitmap(actual, expected,
+                                             std::string("marker_edit_") + fixture + "_" +
+                                                 edit.label + "_step_" + std::to_string(stepCount),
+                                             editor::tests::PixelmatchIdentityParams());
       }
-      editor::tests::CompareBitmapToBitmap(
-          actual, expected,
-          std::string("marker_edit_") + edit.label + "_step_" + std::to_string(stepCount),
-          editor::tests::PixelmatchIdentityParams());
     }
   }
+}
+
+// Placements of an `orient="auto"` marker turn with their path, and so does each placement's
+// marker viewport clip, which then reaches the renderer as a clip polygon. Here the content spills
+// out of the viewport on both sides and is cut by it. Six placements of one marker, on three paths
+// of different directions, must match the same placements drawn by six markers placed once each,
+// and the steady frame must match a fresh render. No steady-state counters are asserted: no
+// resident path draws under a clip polygon yet (#2644: Geode draws under a clip polygon are never
+// resident), so these placements still take the per-frame path.
+TEST_F(RendererGeodeTest, RotatedClippedMarkerPlacementsMatchSinglePlacementMarkers) {
+  const auto marker = [](const std::string& id, const std::string& overflow) {
+    return R"svg(<marker id=")svg" + id + R"svg(" markerWidth="8" markerHeight="8" refX="4" refY="4"
+        orient="auto" markerUnits="userSpaceOnUse" overflow=")svg" +
+           overflow + R"svg(">
+        <rect x="-3" y="2" width="14" height="4" fill="#0044cc"/>
+        <rect x="2" y="-3" width="4" height="14" fill="#cc4400" fill-opacity="0.75"/>
+      </marker>)svg";
+  };
+  const std::vector<std::string> paths = {"M8 50 L28 30", "M30 56 L54 44", "M40 30 L50 8"};
+  const auto document = [&](bool shared, const std::string& overflow) {
+    std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg";
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+      source += marker(shared ? "m" : "s" + std::to_string(i), overflow);
+      source += marker(shared ? "m" : "e" + std::to_string(i), overflow);
+    }
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+      const std::string start = shared ? "m" : "s" + std::to_string(i);
+      const std::string end = shared ? "m" : "e" + std::to_string(i);
+      source += "<path d=\"" + paths[i] + "\" stroke=\"#000000\" stroke-width=\"2\" " +
+                "marker-start=\"url(#" + start + ")\" marker-end=\"url(#" + end + ")\"/>";
+    }
+    return source + "</svg>";
+  };
+  const auto render = [this](const std::string& source) {
+    SVGDocument parsed = ParseDocumentOrFail(source);
+    RendererGeode renderer = createRenderer();
+    renderer.draw(parsed);
+    return renderer.takeSnapshot();
+  };
+  const RendererBitmap singles = render(document(false, "hidden"));
+  ASSERT_THAT(
+      DifferingPixels(render(document(false, "visible")), singles, "rotated_marker_clip_premise"),
+      testing::Gt(0))
+      << "the marker viewport must cut the content, or the clip is not exercised";
+
+  const std::string shared = document(true, "hidden");
+  const RendererBitmap fresh = render(shared);
+  editor::tests::CompareBitmapToBitmap(fresh, singles, "rotated_marker_placements_first",
+                                       editor::tests::PixelmatchIdentityParams());
+  SVGDocument parsed = ParseDocumentOrFail(shared);
+  RendererGeode renderer = createRenderer();
+  renderer.draw(parsed);
+  renderer.draw(parsed);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), fresh,
+                                       "rotated_marker_placements_steady",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 // An offscreen pass that draws the same document inside an open outer frame must not rewrite the

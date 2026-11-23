@@ -2243,14 +2243,18 @@ TEST_F(GeodePerfTest, RecordSourcedAndUniformSourcedDrawsAgree) {
 // A marker's content is one entity drawn once per vertex, each placement at
 // its own transform. `#clipped` keeps the default `overflow: hidden`, so each
 // placement also draws inside its own viewport clip, and its content has both a
-// fill and a stroke. `#loose` is unclipped and sits on an unstroked path, so its
+// fill and a stroke. Its placements are not turned, so that clip stays an
+// axis-aligned rectangle: a turned placement's clip is a clip polygon, under
+// which no draw is resident yet (#2644: Geode draws under a clip polygon are
+// never resident; RotatedClippedMarkerPlacementsMatchSinglePlacementMarkers
+// covers those placements' pixels). `#loose` is unclipped and sits on an unstroked path, so its
 // first placement is a lone pending draw that the next placement repeats
 // exactly. Every placement after the first of each content entity is a repeat
 // of a resident slot whose uniform and primary record already serve the first.
 // ---------------------------------------------------------------------------
 constexpr std::string_view kMarkerInstancesSvg = R"SVG(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
-  <marker id="clipped" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+  <marker id="clipped" markerWidth="8" markerHeight="8" refX="4" refY="4">
     <path d="M0 0 L8 4 L0 8 Z" fill="#c00" stroke="#003"/>
   </marker>
   <marker id="loose" viewBox="0 0 6 6" markerWidth="6" markerHeight="6" refX="3" refY="3"

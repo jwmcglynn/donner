@@ -4,8 +4,9 @@
 re-encode, create and re-upload nothing, including the second and later draws of one entity in a
 frame such as marker placements, filter passes upload and bind nothing new, and ordered batching
 draws runs of resident draws as instanced draws. Steady-state residency for images, layer
-composites, clip and mask geometry, and painted text is still open (Milestone 8), as are index-keyed
-filter results (Milestone 5). `geode_counter_corpus_tests` records the corpus scenes measured to miss
+composites, clip and mask geometry, draws under a clip polygon (among them turned marker
+placements), and painted text is still open (Milestone 8), as are index-keyed filter results
+(Milestone 5). `geode_counter_corpus_tests` records the corpus scenes measured to miss
 the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
@@ -213,7 +214,11 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     takes a persistent record of its own (`GeodeResidentSlot::repeatRecords`) over the same
     resident geometry and joins ordered batches. The record's existing transform, paint, and clip
     rectangle carry the placement, so the `SlugFillInstance` layout is unchanged.
-    `MarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame. Clears `marker`.
+    `MarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame for placements whose
+    marker viewport clip is an axis-aligned rectangle. A turned placement (`orient="auto"`) is not
+    resident: a marker's viewport clip turns with the marker, so it reaches the renderer as a clip
+    polygon, under which no draw is resident (8.9). `marker` stays listed for that reason, and
+    `RotatedClippedMarkerPlacementsMatchSinglePlacementMarkers` covers those placements' pixels.
     `marker_segments` and `marker_spec_example` put `opacity` on the marker content, so each
     placement also composites an isolated layer; they clear with 8.3. Repeats of other entities
     hold the steady state the same way, each stroke variant of a path keeping its own records:
@@ -290,6 +295,12 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     three pattern-painted scenes depend on 8.5: placed-glyph pattern fills still draw through
     the arena path, and `GeoEncoder::fillPathPatternResident` is the resident form available to
     them.
+  - [ ] 8.9: Residency under a clip polygon. A clip polygon reaches the shader only through the
+    draw-level uniform, and no resident path writes one: a slot's solo resident draw
+    (`GeoEncoder::submitResidentOrArenaFill`) and a repeat's record (`tryAppendRepeatDraw`) both
+    fall back to the per-frame arena while a clip polygon is active. A turned marker placement
+    draws under one, because its viewport clip turns with it. Clears `marker`. Tracked in #2644 (Geode
+    draws under a clip polygon are never resident).
 
 ## Background
 
