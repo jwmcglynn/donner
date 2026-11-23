@@ -1,6 +1,14 @@
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:rules.bzl", "donner_cc_binary")
 load(
+    "//donner/gpu/shader:constexpr_budgets.bzl",
+    "GAUSSIAN_BLUR_ALL_PROJECTIONS_CONSTEXPR_COPTS",
+    "IMAGE_BLIT_CONSTEXPR_COPTS",
+    "SLUG_FILL_CONSTEXPR_COPTS",
+    "SLUG_GRADIENT_CONSTEXPR_COPTS",
+    "SLUG_MASK_CONSTEXPR_COPTS",
+)
+load(
     "//donner/gpu/shader:shader_families.bzl",
     "PRODUCTION_SHADER_FAMILIES",
     "linked_shader_artifacts",
@@ -73,6 +81,7 @@ donner_cc_binary(
     name = "gaussian_all_probe",
     testonly = 1,
     srcs = ["GaussianBlurAllProbe.cc"],
+    copts = GAUSSIAN_BLUR_ALL_PROJECTIONS_CONSTEXPR_COPTS,
     target_compatible_with = _NATIVE,
     deps = ["//donner/gpu/shader:gaussian_blur_source"],
 )
@@ -493,7 +502,7 @@ donner_cc_binary(
     name = "slug_all_probe",
     testonly = 1,
     srcs = ["SlugMaskAllProbe.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_MASK_CONSTEXPR_COPTS,
     target_compatible_with = _NATIVE,
     deps = ["//donner/gpu/shader:slug_mask_source"],
 )
@@ -564,7 +573,7 @@ donner_cc_binary(
     name = "image_blit_all_probe",
     testonly = 1,
     srcs = ["ImageBlitAllProbe.cc"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = IMAGE_BLIT_CONSTEXPR_COPTS,
     target_compatible_with = _NATIVE,
     deps = ["//donner/gpu/shader:image_blit_source"],
 )
@@ -635,7 +644,7 @@ donner_cc_binary(
     name = "slug_fill_all_probe",
     testonly = 1,
     srcs = ["SlugFillAllProbe.cc"],
-    copts = ["-fconstexpr-steps=8388608"],
+    copts = SLUG_FILL_CONSTEXPR_COPTS,
     target_compatible_with = _NATIVE,
     deps = ["//donner/gpu/shader:slug_fill_source"],
 )
@@ -706,7 +715,7 @@ donner_cc_binary(
     name = "slug_gradient_all_probe",
     testonly = 1,
     srcs = ["SlugGradientAllProbe.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_GRADIENT_CONSTEXPR_COPTS,
     target_compatible_with = _NATIVE,
     deps = ["//donner/gpu/shader:slug_gradient_source"],
 )

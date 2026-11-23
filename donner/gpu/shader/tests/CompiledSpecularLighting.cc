@@ -34,9 +34,11 @@ consteval wgsl::SourceText<N> ReplaceExact(wgsl::SourceText<N> source, std::stri
 constexpr auto kArtifact =
     wgsl::Compile<programs::kSpecularLightingSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kView = kArtifact.view();
+// One replacement per constant: -fconstexpr-steps bounds each evaluation separately.
+constexpr auto kReboundSource =
+    ReplaceExact(programs::kSpecularLightingSource, "@binding(2)", "@binding(7)");
 constexpr auto kMutatedSource =
-    ReplaceExact(ReplaceExact(programs::kSpecularLightingSource, "@binding(2)", "@binding(7)"),
-                 "@workgroup_size(8, 8, 1)", "@workgroup_size(4, 2, 1)");
+    ReplaceExact(kReboundSource, "@workgroup_size(8, 8, 1)", "@workgroup_size(4, 2, 1)");
 constexpr auto kMutatedArtifact = wgsl::Compile<kMutatedSource, wgsl::Projection::All>();
 constexpr CompiledShaderView kMutatedView = kMutatedArtifact.view();
 
