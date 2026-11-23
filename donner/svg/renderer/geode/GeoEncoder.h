@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -331,11 +332,19 @@ public:
   /// @param antialias True to retain analytic edge coverage.
   void setAntialias(bool antialias);
 
-  /// True when a clip polygon or a clip mask is active. Batchable
-  /// residence and cross-entity batching are only taken with no active
-  /// clip state (the cached bind groups and shared batch uniform carry
-  /// zero clip flags).
+  /// True when a clip polygon or a clip mask is active. Cross-entity batching
+  /// is only taken with no active clip state (the cached bind groups and
+  /// shared batch uniform carry zero clip flags); a same-frame repeat of a
+  /// resident slot also batches under a clip polygon, through a uniform of its
+  /// own (`publishOccurrenceClipUniform`).
   bool hasActiveClipState() const;
+
+  /// True when a clip polygon is active: a rectangle clip under a transform
+  /// that does not keep it axis-aligned.
+  bool hasClipPolygon() const;
+
+  /// True when a path-clip mask is active.
+  bool hasActiveClipMask() const;
 
   /// Monotonic clip-state version: every scissor, clip-polygon, and
   /// clip-mask mutation bumps it. The ordered batch machinery snapshots it
@@ -846,6 +855,35 @@ public:
   /** Cancel one prepared scene instance before demoting it to a different draw path. */
   void releasePreparedSceneAdmission(const EncodedPath& encoded);
 
+  /// A batch-level uniform a scene batch binds in place of the shared one.
+  struct ClipUniformBinding {
+    gpu::BufferRef buffer;  ///< Geometry slab chunk holding the uniform.
+    uint64_t bufferId = 0;  ///< Stable identity of `buffer`, for the bind-group cache key.
+    uint64_t offset = 0;    ///< Byte offset of the uniform in `buffer`.
+  };
+
+  /**
+   * Publish the batch-level uniform of a same-frame repeat drawn under the active clip polygon.
+   *
+   * The polygon reaches the shader only through the draw-level uniform; an instance record
+   * carries no polygon. A repeat drawn under one therefore needs a uniform of its own, which
+   * \p occurrence keeps across frames in a range of \p slab and rewrites only when its bytes
+   * change: a different polygon, target size or anti-aliasing mode. The bytes are the shared
+   * batch uniform's with the polygon's planes, so a batch binding it draws exactly what an
+   * unbatched draw under the polygon draws.
+   *
+   * @param records Owner of \p occurrence, which charges the uniform's CPU copy to its document
+   *   budget.
+   * @param occurrence The occurrence about to be drawn; it must belong to \p records.
+   * @param slab Geometry slab of the repeated slot, on this encoder's device. The range comes out
+   *   of its chunks, whose bytes it charges to the document's resident budget.
+   * @return The uniform to bind, or no value, drawing nothing and writing nothing, when no clip
+   *   polygon is active or the budget or the slab refuses it.
+   */
+  std::optional<ClipUniformBinding> publishOccurrenceClipUniform(
+      GeodeOccurrenceRecords& records, GeodeOccurrenceRecords::Occurrence& occurrence,
+      const std::shared_ptr<GeodeResidentSlab>& slab);
+
   /// One cross-entity ordered batch: consecutive resident slots of one
   /// slab chunk plus a run of consecutive record-slab slots.
   struct SceneBatchBinding {
@@ -872,6 +910,12 @@ public:
     /// batch-uniform buffer so a steady frame writes nothing; null falls
     /// back to the encoder's per-frame uniform arena.
     GeodeRecordSlab* recordSlab = nullptr;
+
+    /// The uniform of a batch drawn under a clip polygon, published by
+    /// `publishOccurrenceClipUniform` when the batch's instances were appended,
+    /// bound in place of the shared batch uniform. No value for a batch drawn
+    /// without a clip polygon.
+    std::optional<ClipUniformBinding> clipUniform;
   };
 
   /**

@@ -3454,11 +3454,12 @@ TEST_F(RendererGeodeTest, PatternEditsReachTheNextFrameOfAWarmRenderer) {
   }
 }
 
-/// A resident pattern fill paints exactly what the per-frame arena pattern fill paints. Both
-/// documents rotate the triangle; in the second it sits in a nested viewport, whose clip rectangle
-/// the rotation turns into a clip polygon, which sends the fill through the arena. The viewport
-/// reaches far past the triangle on every side, so the clip itself changes no pixel. The pattern
-/// is rotated too, so a wrong mapping from path to tile cannot match.
+/// A resident pattern fill paints exactly what the per-frame arena pattern fill paints, which a
+/// renderer whose document budget keeps no resident bytes draws. The triangle is rotated, and the
+/// pattern too, so a wrong mapping from path to tile cannot match. The same triangle in a nested
+/// viewport, whose clip rectangle the rotation turns into a clip polygon, is resident as well and
+/// paints the same: the viewport reaches far past the triangle on every side, so the clip itself
+/// changes no pixel.
 TEST_F(RendererGeodeTest, ResidentPatternFillMatchesTheArenaPatternFill) {
   ASSERT_THAT(sharedDevice(), testing::NotNull());
   constexpr std::string_view kDefs = R"svg(
@@ -3485,34 +3486,42 @@ TEST_F(RendererGeodeTest, ResidentPatternFillMatchesTheArenaPatternFill) {
       std::string(
           R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64"><defs>)svg") +
       std::string(kDefs) + "</defs>";
-  SVGDocument resident = ParsePatternDocument(head + rotated(triangle("url(#p)")) + "</svg>");
-  SVGDocument arena =
+  const std::string source = head + rotated(triangle("url(#p)")) + "</svg>";
+  SVGDocument resident = ParsePatternDocument(source);
+  SVGDocument arena = ParsePatternDocument(source);
+  SVGDocument underPolygon =
       ParsePatternDocument(head + rotated(inViewport(triangle("url(#p)"))) + "</svg>");
-  // A solid fill under a clip polygon always draws from the arena, which builds a bind group for
-  // each draw on every frame.
-  SVGDocument clippedSolid =
-      ParsePatternDocument(head + rotated(inViewport(triangle("#808080"))) + "</svg>");
 
-  const auto steadyFrame = [&](SVGDocument& document) {
+  const auto steadyFrame = [&](SVGDocument& document, std::uint64_t residentBytes) {
     RendererGeode renderer = createRenderer();
+    renderer.setGeometryBudgetForTesting(/*maximumDraws=*/4096u, /*maximumItems=*/1u << 20,
+                                         /*maximumFrameBytes=*/64u << 20,
+                                         /*maximumCacheBytes=*/64u << 20,
+                                         /*maximumResidentBytes=*/residentBytes);
     renderer.draw(document);
     renderer.draw(document);
     const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
     return std::make_tuple(counters.bufferWrites, counters.bindgroupCreates,
                            renderer.takeSnapshot());
   };
-  const auto [residentWrites, residentBindGroups, residentBitmap] = steadyFrame(resident);
-  const auto [arenaWrites, arenaBindGroups, arenaBitmap] = steadyFrame(arena);
-  const uint64_t clippedSolidBindGroups = std::get<1>(steadyFrame(clippedSolid));
+  const auto [residentWrites, residentBindGroups, residentBitmap] =
+      steadyFrame(resident, 64u << 20);
+  const auto [arenaWrites, arenaBindGroups, arenaBitmap] = steadyFrame(arena, 0u);
+  const auto [polygonWrites, polygonBindGroups, polygonBitmap] =
+      steadyFrame(underPolygon, 64u << 20);
   ASSERT_THAT(residentWrites, testing::Eq(0u)) << "Premise: the unclipped fill is resident";
   ASSERT_THAT(residentBindGroups, testing::Eq(0u)) << "Premise: the unclipped fill is resident";
-  ASSERT_THAT(clippedSolidBindGroups, testing::Gt(0u));
-  ASSERT_THAT(arenaBindGroups, testing::Eq(clippedSolidBindGroups))
-      << "Premise: the clipped pattern fill builds a bind group of its own, as an arena fill of "
-         "the same shape does, so it draws from the arena";
+  ASSERT_THAT(arenaBindGroups, testing::Gt(0u))
+      << "Premise: with no resident bytes the fill builds a bind group of its own every frame, so "
+         "it draws from the arena";
   ASSERT_THAT(test::CountNonTransparentPixels(residentBitmap), testing::Gt(0u));
+  EXPECT_THAT(polygonWrites, testing::Eq(0u)) << "the fill under a clip polygon is resident";
+  EXPECT_THAT(polygonBindGroups, testing::Eq(0u)) << "the fill under a clip polygon is resident";
 
   editor::tests::CompareBitmapToBitmap(residentBitmap, arenaBitmap, "resident_vs_arena_pattern",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(polygonBitmap, residentBitmap,
+                                       "resident_under_polygon_pattern",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
@@ -3690,8 +3699,8 @@ TEST_F(RendererGeodeTest, ClipEditsReachTheNextFrameOfAWarmRenderer) {
 /// The documents of \ref ResidentClippedDrawsMatchTheArenaDraws: a solid fill, a gradient fill
 /// with a gradient stroke, and a pattern fill under a clip with a curved path, all rotated. With
 /// \p polygonClip the group sits in a nested viewport, whose clip rectangle the rotation turns
-/// into a clip polygon, which sends every clipped draw through the per-frame arena. The viewport
-/// reaches far past the content on every side, so it changes no pixel itself.
+/// into a clip polygon, which each draw's uniform carries together with the clip mask. The
+/// viewport reaches far past the content on every side, so it changes no pixel itself.
 std::string ClippedDrawsDocument(bool polygonClip) {
   const std::string content = R"svg(
     <g clip-path="url(#round)">
@@ -3722,30 +3731,43 @@ std::string ClippedDrawsDocument(bool polygonClip) {
          body + "</g></svg>";
 }
 
-/// Draws under a path clip mask paint exactly what the per-frame arena paints for the same draws:
-/// a resident solid, gradient, gradient stroke and pattern fill bind the clip mask's retained view
-/// and carry the same clip flag in their uniforms as arena draws do.
+/// Draws under a path clip mask paint exactly what the per-frame arena paints for the same draws,
+/// which a renderer whose document budget keeps no resident bytes draws: a resident solid,
+/// gradient, gradient stroke and pattern fill bind the clip mask's retained view and carry the
+/// same clip flag in their uniforms as arena draws do. Under a clip polygon as well, they stay
+/// resident and paint the same.
 TEST_F(RendererGeodeTest, ResidentClippedDrawsMatchTheArenaDraws) {
   ASSERT_THAT(sharedDevice(), testing::NotNull());
   SVGDocument resident = ParsePatternDocument(ClippedDrawsDocument(/*polygonClip=*/false));
-  SVGDocument arena = ParsePatternDocument(ClippedDrawsDocument(/*polygonClip=*/true));
+  SVGDocument arena = ParsePatternDocument(ClippedDrawsDocument(/*polygonClip=*/false));
+  SVGDocument underPolygon = ParsePatternDocument(ClippedDrawsDocument(/*polygonClip=*/true));
 
-  const auto steadyFrame = [&](SVGDocument& document) {
+  const auto steadyFrame = [&](SVGDocument& document, std::uint64_t residentBytes) {
     RendererGeode renderer = createRenderer();
+    renderer.setGeometryBudgetForTesting(/*maximumDraws=*/4096u, /*maximumItems=*/1u << 20,
+                                         /*maximumFrameBytes=*/64u << 20,
+                                         /*maximumCacheBytes=*/64u << 20,
+                                         /*maximumResidentBytes=*/residentBytes);
     renderer.draw(document);
     renderer.draw(document);
     const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
     return std::make_tuple(counters.bindgroupCreates, renderer.takeSnapshot());
   };
-  const auto [residentBindGroups, residentBitmap] = steadyFrame(resident);
-  const auto [arenaBindGroups, arenaBitmap] = steadyFrame(arena);
+  const auto [residentBindGroups, residentBitmap] = steadyFrame(resident, 64u << 20);
+  const auto [arenaBindGroups, arenaBitmap] = steadyFrame(arena, 0u);
+  const auto [polygonBindGroups, polygonBitmap] = steadyFrame(underPolygon, 64u << 20);
   ASSERT_THAT(residentBindGroups, testing::Eq(0u))
       << "Premise: the clipped draws and the clip's mask fill are resident";
   ASSERT_THAT(arenaBindGroups, testing::Ge(4u))
-      << "Premise: under the clip polygon every clipped draw builds a bind group of its own";
+      << "Premise: with no resident bytes every clipped draw builds a bind group of its own";
   ASSERT_THAT(test::CountNonTransparentPixels(residentBitmap), testing::Gt(0u));
+  EXPECT_THAT(polygonBindGroups, testing::Eq(0u))
+      << "the clipped draws under a clip polygon and the clip's mask fill are resident";
 
   editor::tests::CompareBitmapToBitmap(residentBitmap, arenaBitmap, "resident_vs_arena_clipped",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(polygonBitmap, residentBitmap,
+                                       "resident_under_polygon_clipped",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
@@ -11365,10 +11387,11 @@ std::function<void(SVGDocument&)> MarkerElementEdit(std::function<void(SVGMarker
 // the steps so far.
 //
 // The edits run on two fixtures. With the default `orient`, every placement's marker viewport clip
-// stays an axis-aligned rectangle, so the placements are resident and the steady frame must write
-// nothing before the edit. With `orient="auto"` the placements turn, their viewport clip becomes a
-// clip polygon, and no resident path draws under a clip polygon yet (#2644: Geode draws under a
-// clip polygon are never resident), so that fixture asserts pixels only.
+// stays an axis-aligned rectangle, which each placement's record carries. With `orient="auto"` the
+// placements turn and their viewport clip becomes a clip polygon, which the first placement's
+// uniform and each later placement's kept batch uniform carry. Both are resident, so in both the
+// steady frame must write nothing before the edit. `marker_orient_switches` turns the placements of
+// either fixture, sets them axis-aligned, and turns them again.
 TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem) {
   const std::string rotatedSource =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
@@ -11403,6 +11426,13 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
       {"marker_orient", {MarkerElementEdit([](SVGMarkerElement& marker) {
          marker.setOrient(MarkerOrient::AngleDegrees(30));
        })}},
+      {"marker_orient_switches",
+       {MarkerElementEdit(
+            [](SVGMarkerElement& marker) { marker.setOrient(MarkerOrient::AngleDegrees(30)); }),
+        MarkerElementEdit(
+            [](SVGMarkerElement& marker) { marker.setOrient(MarkerOrient::AngleDegrees(0)); }),
+        MarkerElementEdit(
+            [](SVGMarkerElement& marker) { marker.setOrient(MarkerOrient::Auto()); })}},
       {"marker_ref_y", {MarkerElementEdit([](SVGMarkerElement& marker) {
          marker.setRefY(Lengthd(1, Lengthd::Unit::None));
        })}},
@@ -11440,20 +11470,18 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
       {"context_fill", {SetAttributeEdit("host", "fill", "#00ccff")}},
   };
 
-  for (const auto& [fixture, source, placementsResident] :
-       {std::tuple<std::string, std::string, bool>{"axis_aligned", axisAlignedSource, true},
-        std::tuple<std::string, std::string, bool>{"rotated", rotatedSource, false}}) {
+  for (const auto& [fixture, source] :
+       {std::pair<std::string, std::string>{"axis_aligned", axisAlignedSource},
+        std::pair<std::string, std::string>{"rotated", rotatedSource}}) {
     for (const MarkerEdit& edit : edits) {
       SCOPED_TRACE(fixture + ": " + edit.label);
       SVGDocument document = ParseDocumentOrFail(source);
       RendererGeode renderer = createRenderer();
       renderer.draw(document);
       renderer.draw(document);
-      // Premise: the steady frame rewrites nothing, so the placements are drawing from records
-      // kept across frames and the edit is what has to reach them.
-      if (placementsResident) {
-        ASSERT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
-      }
+      // Premise: the steady frame rewrites nothing, so the placements are drawing from records and
+      // uniforms kept across frames and the edit is what has to reach them.
+      ASSERT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
       const RendererBitmap before = renderer.takeSnapshot();
 
       ASSERT_THAT(before.empty(), testing::IsFalse());
@@ -11495,9 +11523,8 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
 // marker viewport clip, which then reaches the renderer as a clip polygon. Here the content spills
 // out of the viewport on both sides and is cut by it. Six placements of one marker, on three paths
 // of different directions, must match the same placements drawn by six markers placed once each,
-// and the steady frame must match a fresh render. No steady-state counters are asserted: no
-// resident path draws under a clip polygon yet (#2644: Geode draws under a clip polygon are never
-// resident), so these placements still take the per-frame path.
+// and the steady frame, which draws every placement from residence and so writes and binds
+// nothing, must match a fresh render.
 TEST_F(RendererGeodeTest, RotatedClippedMarkerPlacementsMatchSinglePlacementMarkers) {
   const auto marker = [](const std::string& id, const std::string& overflow) {
     return R"svg(<marker id=")svg" + id + R"svg(" markerWidth="8" markerHeight="8" refX="4" refY="4"
@@ -11542,9 +11569,229 @@ TEST_F(RendererGeodeTest, RotatedClippedMarkerPlacementsMatchSinglePlacementMark
   RendererGeode renderer = createRenderer();
   renderer.draw(parsed);
   renderer.draw(parsed);
+  const geode::GeodeCounters& steady = renderer.lastFrameTimings().counters;
+  EXPECT_THAT(steady.bufferWrites, testing::Eq(0u))
+      << "turned placements must keep their geometry, records and clip polygons resident";
+  EXPECT_THAT(steady.bindgroupCreates, testing::Eq(0u))
+      << "turned placements must keep their bind groups";
   editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), fresh,
                                        "rotated_marker_placements_steady",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+// A render snapshot of draws under a clip polygon, turned marker placements and a turned nested
+// viewport, holds no handle into the live document, so a replay of it reaches no residence there
+// and draws what a direct draw draws.
+TEST_F(RendererGeodeTest, ClipPolygonSnapshotsHoldNoLiveReference) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <marker id="m" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+      <path d="M-2 -2 L10 4 L-2 10 Z" fill="#c00" stroke="#003"/>
+    </marker>
+    <polyline points="4,60 16,8 28,56 40,8 60,40" fill="none" stroke="#333"
+              marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
+    <g transform="rotate(20 32 32)">
+      <svg x="20" y="20" width="24" height="24"><rect x="-4" y="-4" width="40" height="40"
+        fill="#2050c0"/></svg>
+    </g>
+  </svg>)svg";
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode renderer = createRenderer();
+  RendererDriver driver(renderer);
+  const RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+  EXPECT_THAT(snapshot.liveRegistryReferenceCountForTesting(document.registry()), testing::Eq(0u))
+      << "a recorded draw under a clip polygon must not keep a handle into the live document";
+
+  driver.draw(snapshot);
+  const RendererBitmap replayed = renderer.takeSnapshot();
+  ASSERT_THAT(test::CountNonTransparentPixels(replayed), testing::Gt(0u));
+  editor::tests::CompareBitmapToBitmap(replayed, RenderFreshGeode(sharedDevice(), source),
+                                       "clip_polygon_snapshot_replay",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A frame drawn at a new surface transform, as a compositor draws a layer it moves, keeps the
+// document's residence: no edit rebuilds the render tree, so every resident draw keeps its slot and
+// every turned marker placement after the first keeps its occurrence, and only the polygons
+// change. Each uniform carrying a polygon must be rewritten, so the warm frame must render exactly
+// what a fresh renderer renders at the new transform.
+TEST_F(RendererGeodeTest, ClipPolygonUniformsFollowTheSurfaceTransform) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <marker id="m" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"
+            markerUnits="userSpaceOnUse">
+      <rect x="-3" y="2" width="14" height="4" fill="#0044cc"/>
+      <rect x="2" y="-3" width="4" height="14" fill="#cc4400" fill-opacity="0.75"/>
+    </marker>
+    <path d="M8 50 L28 30 L50 40 L40 10" fill="none" stroke="#000000" stroke-width="2"
+          marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
+    <g transform="rotate(20 32 32)">
+      <svg x="10" y="10" width="20" height="20"><rect x="-4" y="-4" width="30" height="30"
+        fill="#208040"/></svg>
+    </g>
+  </svg>)svg";
+  RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  const Transform2d surfaceFromCanvas = Transform2d::Rotate(MathConstants<double>::kPi / 12.0) *
+                                        Transform2d::Translate(Vector2d(6.0, -4.0));
+
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode warm = createRenderer();
+  RendererDriver warmDriver(warm);
+  warmDriver.draw(document, viewport, Transform2d());
+  warmDriver.draw(document, viewport, Transform2d());
+  // Premise: the steady frame rewrites nothing, so the draws read uniforms kept across frames.
+  ASSERT_THAT(warm.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
+  const RendererBitmap before = warm.takeSnapshot();
+  warmDriver.draw(document, viewport, surfaceFromCanvas);
+  const RendererBitmap actual = warm.takeSnapshot();
+
+  SVGDocument freshDocument = ParseDocumentOrFail(source);
+  RendererGeode fresh = createRenderer();
+  RendererDriver freshDriver(fresh);
+  freshDriver.draw(freshDocument, viewport, surfaceFromCanvas);
+  const RendererBitmap expected = fresh.takeSnapshot();
+  ASSERT_THAT(DifferingPixels(expected, before, "clip_polygon_surface_transform_premise"),
+              testing::Gt(0))
+      << "the new transform must change the picture";
+  editor::tests::CompareBitmapToBitmap(actual, expected, "clip_polygon_surface_transform",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// The scene of \ref ClipPolygonDrawsFollowEveryEditOfThePolygon and
+/// \ref ClipPolygonResidentDrawsMatchTheArenaDraws: a nested viewport turned with its group over
+/// a solid fill, a pattern fill, a linear gradient fill with a solid stroke, a radial gradient fill
+/// and the four placements of a turned marker, whose content its marker viewport cuts. Every shape
+/// spills past the nested viewport.
+/// @param viewportOverflow The nested viewport's `overflow`: `hidden` clips the shapes by the
+///   polygon, `visible` does not.
+std::string ClipPolygonSceneSvg(std::string_view viewportOverflow = "hidden") {
+  return R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2050c0"/>
+      <stop offset="1" stop-color="#c05020"/></linearGradient>
+    <radialGradient id="r"><stop offset="0" stop-color="#f0e040"/>
+      <stop offset="1" stop-color="#4020a0"/></radialGradient>
+    <pattern id="p" patternUnits="userSpaceOnUse" width="4" height="4">
+      <rect width="2" height="2" fill="#208040"/></pattern>
+    <marker id="m" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"
+            markerUnits="userSpaceOnUse">
+      <rect x="-3" y="1" width="12" height="4" fill="#7030a0"/>
+    </marker>
+    <g id="turn" transform="rotate(20 32 32)">
+      <svg x="8" y="12" width="48" height="40" viewBox="0 0 48 40" overflow=")svg" +
+         std::string(viewportOverflow) + R"svg(">
+        <rect x="-6" y="-6" width="30" height="26" fill="#e0c020"/>
+        <rect x="24" y="-6" width="30" height="26" fill="url(#p)"/>
+        <circle cx="12" cy="30" r="14" fill="url(#g)" stroke="#102030" stroke-width="2"/>
+        <ellipse cx="36" cy="30" rx="16" ry="12" fill="url(#r)"/>
+        <polyline points="4,36 16,30 28,36 40,30" fill="none" stroke="none"
+                  marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
+      </svg>
+    </g>
+  </svg>)svg";
+}
+
+// Draws under a clip polygon that cuts them paint exactly what the per-frame arena paints for the
+// same draws, which a renderer whose document budget keeps no resident bytes draws: a solid, a
+// pattern, a linear and a radial gradient fill drawn once each from their slots' uniforms, and the
+// turned marker placements after the first drawn as repeats from batches binding their occurrences'
+// clip uniforms.
+TEST_F(RendererGeodeTest, ClipPolygonResidentDrawsMatchTheArenaDraws) {
+  const auto steadyFrame = [&](const std::string& source, std::uint64_t residentBytes) {
+    SVGDocument document = ParseDocumentOrFail(source);
+    RendererGeode renderer = createRenderer();
+    renderer.setGeometryBudgetForTesting(/*maximumDraws=*/4096u, /*maximumItems=*/1u << 20,
+                                         /*maximumFrameBytes=*/64u << 20,
+                                         /*maximumCacheBytes=*/64u << 20,
+                                         /*maximumResidentBytes=*/residentBytes);
+    renderer.draw(document);
+    renderer.draw(document);
+    const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+    return std::make_tuple(counters.bufferWrites, counters.bindgroupCreates,
+                           renderer.takeSnapshot());
+  };
+  const auto [residentWrites, residentBindGroups, resident] =
+      steadyFrame(ClipPolygonSceneSvg(), 64u << 20);
+  const auto [arenaWrites, arenaBindGroups, arena] = steadyFrame(ClipPolygonSceneSvg(), 0u);
+  const RendererBitmap unclipped =
+      std::get<2>(steadyFrame(ClipPolygonSceneSvg("visible"), 64u << 20));
+  ASSERT_THAT(residentWrites, testing::Eq(0u))
+      << "Premise: the draws under the polygon are resident";
+  ASSERT_THAT(residentBindGroups, testing::Eq(0u))
+      << "Premise: the draws under the polygon are resident";
+  ASSERT_THAT(arenaBindGroups, testing::Gt(0u))
+      << "Premise: with no resident bytes the draws build bind groups of their own every frame, so "
+         "they draw from the arena";
+  ASSERT_THAT(DifferingPixels(resident, unclipped, "clip_polygon_cut_premise"), testing::Gt(0))
+      << "Premise: the polygon must cut the shapes, or a wrong polygon would pass unnoticed";
+
+  editor::tests::CompareBitmapToBitmap(resident, arena, "clip_polygon_resident_vs_arena",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A nested viewport turned with its group reaches the renderer as a clip polygon over one draw of
+// each resident class, every one of which spills past the viewport, and over the placements of a
+// turned marker, whose content its own marker viewport cuts and whose placements after the first
+// are same-frame repeats. A warm renderer keeps each draw's uniform, and each repeat's batch
+// uniform, polygon included, across frames and rewrites it only when its bytes change, so each
+// edit that moves, resizes, turns, skews, straightens or zooms the polygons must render exactly
+// what a fresh document carrying the same edits renders. A multi-step edit renders after every
+// step. Edits of the clip rectangle itself are the marker viewport edits of
+// `MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem`.
+TEST_F(RendererGeodeTest, ClipPolygonDrawsFollowEveryEditOfThePolygon) {
+  const std::string source = ClipPolygonSceneSvg();
+
+  const MarkerEdit edits[] = {
+      {"turn_further", {SetAttributeEdit("turn", "transform", "rotate(35 32 32)")}},
+      {"skew", {SetAttributeEdit("turn", "transform", "rotate(20 32 32) skewX(10)")}},
+      {"move", {SetAttributeEdit("turn", "transform", "translate(5 -3) rotate(20 32 32)")}},
+      {"resize", {SetAttributeEdit("turn", "transform", "rotate(20 32 32) scale(0.8)")}},
+      {"straighten_then_turn",
+       {SetAttributeEdit("turn", "transform", "rotate(0 32 32)"),
+        SetAttributeEdit("turn", "transform", "rotate(20 32 32)")}},
+      // A new canvas size scales every polygon in device pixels without editing the document.
+      {"zoom", {[](SVGDocument& document) { document.setCanvasSize(96, 96); }}},
+  };
+
+  for (const MarkerEdit& edit : edits) {
+    SCOPED_TRACE(edit.label);
+    SVGDocument document = ParseDocumentOrFail(source);
+    RendererGeode renderer = createRenderer();
+    renderer.draw(document);
+    renderer.draw(document);
+    // Premise: the steady frame rewrites nothing, so each draw reads a uniform kept across frames
+    // and the edit is what has to reach it.
+    ASSERT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
+    const RendererBitmap before = renderer.takeSnapshot();
+    ASSERT_THAT(before.pixels, testing::Not(testing::IsEmpty()));
+
+    for (size_t stepCount = 1; stepCount <= edit.steps.size(); ++stepCount) {
+      SCOPED_TRACE(stepCount);
+      ASSERT_NO_FATAL_FAILURE(edit.steps[stepCount - 1](document));
+      renderer.draw(document);
+      const RendererBitmap actual = renderer.takeSnapshot();
+
+      SVGDocument freshDocument = ParseDocumentOrFail(source);
+      for (size_t i = 0; i < stepCount; ++i) {
+        ASSERT_NO_FATAL_FAILURE(edit.steps[i](freshDocument));
+      }
+      RendererGeode freshRenderer = createRenderer();
+      freshRenderer.draw(freshDocument);
+      const RendererBitmap expected = freshRenderer.takeSnapshot();
+      ASSERT_THAT(expected.pixels, testing::Not(testing::IsEmpty()));
+
+      // Premise: the first step changes the picture, so matching the fresh render is not vacuous.
+      // A zoom changes the canvas size by construction.
+      if (stepCount == 1 && actual.dimensions == before.dimensions) {
+        EXPECT_THAT(
+            DifferingPixels(actual, before, std::string("clip_polygon_edit_premise_") + edit.label),
+            testing::Gt(0))
+            << "the first step does not change the picture";
+      }
+      editor::tests::CompareBitmapToBitmap(
+          actual, expected,
+          std::string("clip_polygon_edit_") + edit.label + "_step_" + std::to_string(stepCount),
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 // An offscreen pass that draws the same document inside an open outer frame must not rewrite the

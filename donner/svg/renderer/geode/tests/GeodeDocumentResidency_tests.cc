@@ -121,6 +121,30 @@ constexpr std::string_view kMarkerSvg = R"svg(
 /// Placements of `kMarkerSvg`'s marker after the first.
 constexpr size_t kMarkerRepeats = 6;
 
+/// `kMarkerSvg` with the marker turned to each segment, its content spilling past the marker
+/// viewport. Every placement's viewport clip turns with it and becomes a clip polygon, so each of
+/// the `kMarkerRepeats` repeats keeps a clip uniform as well as a record.
+constexpr std::string_view kTurnedMarkerSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <marker id="m" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
+      <path id="content" d="M-2 -2 L12 5 L-2 12 Z" fill="#c33"/>
+    </marker>
+    <polyline points="10,180 40,20 70,160 100,40 130,150 160,30 190,170" fill="none"
+              stroke="#036" stroke-width="2" marker-start="url(#m)" marker-mid="url(#m)"
+              marker-end="url(#m)"/>
+  </svg>)svg";
+
+/// `kTurnedMarkerSvg` without `orient`: the same placements, axis-aligned, so no clip polygon.
+constexpr std::string_view kAxisAlignedSpillingMarkerSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <marker id="m" markerWidth="10" markerHeight="10" refX="5" refY="5">
+      <path id="content" d="M-2 -2 L12 5 L-2 12 Z" fill="#c33"/>
+    </marker>
+    <polyline points="10,180 40,20 70,160 100,40 130,150 160,30 190,170" fill="none"
+              stroke="#036" stroke-width="2" marker-start="url(#m)" marker-mid="url(#m)"
+              marker-end="url(#m)"/>
+  </svg>)svg";
+
 /// One path stroked through `<use>` with four stroke styles, so the path keeps four stroke
 /// outlines, each with residence of its own.
 constexpr std::string_view kStrokeStylesSvg = R"(
@@ -245,6 +269,68 @@ size_t RepeatRecordsOf(SVGDocument& document) {
     });
   }
   return records;
+}
+
+/// Calls \p visit with the repeat records of every resident slot that keeps any, on every device,
+/// in \p document. @param document Document to inspect. @param visit Visitor.
+void ForEachRepeatRecords(SVGDocument& document,
+                          const std::function<void(const geode::GeodeOccurrenceRecords&)>& visit) {
+  const auto visitSlot = [&](const geode::GeodeResidentSlot& slot) {
+    if (slot.repeatRecords) {
+      visit(*slot.repeatRecords);
+    }
+  };
+  for (auto&& [entity, residence] :
+       document.registry().view<geode::GeodeResidentPathComponent>().each()) {
+    residence.devices.forEach([&](geode::GeodeResidentPathSlots& slots) {
+      for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
+        visitSlot(slot);
+      }
+      for (const std::unique_ptr<geode::GeodeResidentStrokeSlots>& stroke : slots.strokeSlots) {
+        if (stroke) {
+          visitSlot(stroke->solid);
+        }
+      }
+    });
+  }
+}
+
+/// Repeat occurrences in \p document that keep a clip uniform range.
+/// @param document Document to inspect.
+size_t ClipUniformsOf(SVGDocument& document) {
+  size_t uniforms = 0;
+  ForEachRepeatRecords(document, [&](const geode::GeodeOccurrenceRecords& records) {
+    for (const auto& occurrence : records.occurrences) {
+      if (occurrence && occurrence->clipUniform && occurrence->clipUniform->size != 0) {
+        ++uniforms;
+      }
+    }
+  });
+  return uniforms;
+}
+
+/// CPU bytes the clip uniforms of \p document's repeat occurrences take: each one's record and the
+/// capacity of its copy of the uniform. @param document Document to inspect.
+uint64_t ClipUniformBytesOf(SVGDocument& document) {
+  uint64_t bytes = 0;
+  ForEachRepeatRecords(document, [&](const geode::GeodeOccurrenceRecords& records) {
+    for (const auto& occurrence : records.occurrences) {
+      if (occurrence && occurrence->clipUniform) {
+        bytes += sizeof(geode::GeodeClipUniform) + occurrence->clipUniform->lastBytes.capacity();
+      }
+    }
+  });
+  return bytes;
+}
+
+/// CPU bytes every slot's repeat records charge to \p document's budget.
+/// @param document Document to inspect.
+uint64_t RepeatRecordChargeOf(SVGDocument& document) {
+  uint64_t bytes = 0;
+  ForEachRepeatRecords(document, [&](const geode::GeodeOccurrenceRecords& records) {
+    bytes += records.cpuRetainedBytesForTesting();
+  });
+  return bytes;
 }
 
 /// Persistent repeat records held by each solid stroke slot that holds any, on every device, in
@@ -1178,6 +1264,152 @@ TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsGoWithTheDeviceThatKeptThe
   EXPECT_THAT(RepeatRecordsOf(document), Eq(kMarkerRepeats));
   EXPECT_THAT(budget->residentBytes(), Eq(firstResident));
   EXPECT_THAT(budget->cacheBytes(), Eq(firstCache));
+}
+
+TEST_F(GeodeDocumentResidencyTest, TurnedMarkerClipUniformsAreChargedAndGoWithTheDocument) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  // The same placements, axis-aligned, keep the same records and no clip uniform.
+  SVGDocument axisAligned = ParseShapes(kAxisAlignedSpillingMarkerSvg);
+  RendererGeode axisAlignedRenderer(first_);
+  axisAlignedRenderer.draw(axisAligned);
+  axisAlignedRenderer.draw(axisAligned);
+  ASSERT_THAT(RepeatRecordsOf(axisAligned), Eq(kMarkerRepeats));
+  ASSERT_THAT(ClipUniformsOf(axisAligned), Eq(0u));
+  const uint64_t axisAlignedRecordCharge = RepeatRecordChargeOf(axisAligned);
+  ASSERT_THAT(axisAlignedRecordCharge, Gt(0u));
+
+  std::optional<SVGDocument> document = ParseShapes(kTurnedMarkerSvg);
+  RendererGeode renderer(first_);
+  renderer.draw(*document);
+  renderer.draw(*document);
+  EXPECT_THAT(RepeatRecordsOf(*document), Eq(kMarkerRepeats));
+  EXPECT_THAT(ClipUniformsOf(*document), Eq(kMarkerRepeats))
+      << "each repeat under a clip polygon keeps one clip uniform, and an unchanged frame adds "
+         "none";
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(*document);
+  ASSERT_THAT(budget, NotNull());
+  const uint64_t clipUniformBytes = ClipUniformBytesOf(*document);
+  ASSERT_THAT(clipUniformBytes, Gt(0u));
+  EXPECT_THAT(RepeatRecordChargeOf(*document), Eq(axisAlignedRecordCharge + clipUniformBytes))
+      << "the repeat records charge their clip uniforms on top of what the same records charge "
+         "without them";
+  ASSERT_THAT(budget->cacheBytes(), Ge(RepeatRecordChargeOf(*document)));
+  ASSERT_THAT(budget->residentBytes(), Gt(0u));
+
+  document.reset();
+  EXPECT_THAT(budget->residentBytes(), Eq(0u))
+      << "the slab the clip uniforms' ranges come from must go with the document";
+  EXPECT_THAT(budget->cacheBytes(), Eq(0u)) << "and so must their CPU copies";
+}
+
+TEST_F(GeodeDocumentResidencyTest, TurnedMarkerClipUniformsGoWithTheContentAndTheDevice) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  SVGDocument document = ParseShapes(kTurnedMarkerSvg);
+  RendererGeode onFirst(first_);
+  onFirst.draw(document);
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+  ASSERT_THAT(budget, NotNull());
+  ASSERT_THAT(ClipUniformsOf(document), Eq(kMarkerRepeats));
+  const uint64_t firstResident = budget->residentBytes();
+  const uint64_t firstCache = budget->cacheBytes();
+
+  {
+    RendererGeode onSecond(second_);
+    onSecond.draw(document);
+  }
+  ASSERT_THAT(ClipUniformsOf(document), Eq(2 * kMarkerRepeats))
+      << "each device keeps clip uniforms in its own geometry slab";
+  second_.reset();
+  onFirst.draw(document);
+  EXPECT_THAT(ClipUniformsOf(document), Eq(kMarkerRepeats))
+      << "the clip uniforms of a device that went go with its slots";
+  EXPECT_THAT(budget->residentBytes(), Eq(firstResident));
+  EXPECT_THAT(budget->cacheBytes(), Eq(firstCache));
+
+  // New content geometry drops the content's residence, clip uniforms included, and the next
+  // frame keeps a fresh set without growing the charge.
+  std::optional<SVGElement> content = document.querySelector("#content");
+  ASSERT_THAT(content, testing::Optional(testing::_));
+  content->setAttribute("d", "M-2 -2 L12 4 L-2 12 Z");
+  onFirst.draw(document);
+  onFirst.draw(document);
+  EXPECT_THAT(ClipUniformsOf(document), Eq(kMarkerRepeats)) << "a fresh set replaces them";
+  EXPECT_THAT(budget->cacheBytes(), Eq(firstCache));
+}
+
+TEST_F(GeodeDocumentResidencyTest, TurnedMarkerRepeatsFallBackWhenTheDocumentRefusesClipUniforms) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  constexpr uint64_t kUnlimited = 64u << 20;
+  SVGDocument referenceDocument = ParseShapes(kTurnedMarkerSvg);
+  RendererGeode reference(first_);
+  reference.draw(referenceDocument);
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  // Cache bytes the turned placements hold without a single clip uniform: those of the same
+  // placements axis-aligned. Under exactly that much, the records are kept and the clip uniforms
+  // refused, so each turned repeat draws through the per-frame arena instead, every frame.
+  SVGDocument probe = ParseShapes(kAxisAlignedSpillingMarkerSvg);
+  RendererGeode probeRenderer(first_);
+  probeRenderer.draw(probe);
+  probeRenderer.draw(probe);
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> probeBudget = DocumentBudgetOf(probe);
+  ASSERT_THAT(probeBudget, NotNull());
+  const uint64_t cacheWithoutClipUniforms = probeBudget->cacheBytes();
+
+  SVGDocument document = ParseShapes(kTurnedMarkerSvg);
+  RendererGeode renderer(first_);
+  renderer.setGeometryBudgetForTesting(geode::GeodeFrameGeometryBudget::kMaximumDraws,
+                                       geode::GeodeFrameGeometryBudget::kMaximumItems,
+                                       geode::GeodeFrameGeometryBudget::kMaximumRetainedBytes,
+                                       cacheWithoutClipUniforms, kUnlimited);
+  renderer.draw(document);
+  renderer.draw(document);
+  EXPECT_THAT(ClipUniformsOf(document), testing::Lt(kMarkerRepeats));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.bindgroupCreates, Gt(0u))
+      << "a repeat refused its clip uniform draws through the arena";
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "turned_marker_clip_uniforms_refused",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(GeodeDocumentResidencyTest, ConcurrentDomReplayKeepsNoClipUniformOnTheDocument) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  SVGDocument direct = ParseShapes(kTurnedMarkerSvg);
+  RendererGeode directRenderer(first_);
+  directRenderer.draw(direct);
+  directRenderer.draw(direct);
+  ASSERT_THAT(ClipUniformsOf(direct), Eq(kMarkerRepeats))
+      << "Premise: a live draw keeps clip uniforms on the document";
+
+  // The driver's concurrent-DOM draw records a snapshot under document access and replays it
+  // without holding access; a snapshot's paths carry no source entity.
+  SVGDocument replayed = ParseShapes(kTurnedMarkerSvg);
+  replayed.setThreadingMode(ThreadingMode::ConcurrentDom);
+  RendererGeode replayRenderer(first_);
+  RendererDriver driver(replayRenderer);
+  driver.draw(replayed);
+  driver.draw(replayed);
+  size_t residentComponents = 0;
+  size_t clipUniforms = 0;
+  {
+    const DocumentWriteAccess access = replayed.writeAccess();
+    residentComponents = replayed.registry().view<geode::GeodeResidentPathComponent>().size();
+    clipUniforms = ClipUniformsOf(replayed);
+  }
+  EXPECT_THAT(residentComponents, Eq(0u))
+      << "a snapshot replay must not keep resident slots, or their repeats, on the document";
+  EXPECT_THAT(clipUniforms, Eq(0u));
+  editor::tests::CompareBitmapToBitmap(replayRenderer.takeSnapshot(), directRenderer.takeSnapshot(),
+                                       "turned_marker_snapshot_replay",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(GeodeDocumentResidencyTest, RecordsARepeatBorrowedGoWithTheDocumentOnceItsFrameEnds) {

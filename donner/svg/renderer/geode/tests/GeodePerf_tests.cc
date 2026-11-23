@@ -1433,14 +1433,17 @@ TEST_F(GeodePerfTest, ManyStopGradient_ArenaDrawBeforeResidentDrawsLeavesThemCac
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
   const std::string defs = ManyStopGradientDefs("g", 40);
-  // A rotated nested viewport clips its content by a polygon, which sends the draw through the
-  // arena.
-  const std::string clipped =
-      R"svg(<g transform="rotate(1)"><svg width="300" height="300" overflow="hidden">)svg"
-      R"svg(<rect width="20" height="80" fill="url(#g)"/></svg></g>)svg";
+  // The second `<use>` of one element in a frame finds the slot's uniform taken by the first and
+  // draws through the arena. The first draws from residence inside an isolated layer, which
+  // records through an encoder of its own, so the arena draw is still the first draw of the
+  // gradient in the frame's main encoder; the layer and its resident draw add nothing on an
+  // unchanged frame.
+  const std::string repeated =
+      R"svg(<g opacity="0.5"><use href="#a"/><rect x="100" width="4" height="4"/></g>)svg"
+      R"svg(<use href="#a" y="40"/>)svg";
   const std::string head =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" + defs +
-      "</defs>" + clipped;
+      R"svg(<rect id="a" width="20" height="80" fill="url(#g)"/></defs>)svg" + repeated;
   SVGDocument arenaOnly = ParsePerfDocument(head + "</svg>");
   std::string mixedSource = head;
   for (int i = 1; i < 6; ++i) {
@@ -2396,13 +2399,12 @@ TEST_F(GeodePerfTest, RecordSourcedAndUniformSourcedDrawsAgree) {
 // its own transform. `#clipped` keeps the default `overflow: hidden`, so each
 // placement also draws inside its own viewport clip, and its content has both a
 // fill and a stroke. Its placements are not turned, so that clip stays an
-// axis-aligned rectangle: a turned placement's clip is a clip polygon, under
-// which no draw is resident yet (#2644: Geode draws under a clip polygon are
-// never resident; RotatedClippedMarkerPlacementsMatchSinglePlacementMarkers
-// covers those placements' pixels). `#loose` is unclipped and sits on an unstroked path, so its
-// first placement is a lone pending draw that the next placement repeats
-// exactly. Every placement after the first of each content entity is a repeat
-// of a resident slot whose uniform and primary record already serve the first.
+// axis-aligned rectangle, which each placement's record carries; turned
+// placements, whose clip is a clip polygon, are
+// TurnedMarkerInstances_SecondFrameIsSteadyState. `#loose` is unclipped and sits on an unstroked
+// path, so its first placement is a lone pending draw that the next placement repeats exactly.
+// Every placement after the first of each content entity is a repeat of a resident slot whose
+// uniform and primary record already serve the first.
 // ---------------------------------------------------------------------------
 constexpr std::string_view kMarkerInstancesSvg = R"SVG(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
@@ -2709,6 +2711,101 @@ TEST_F(GeodePerfTest, MaskComposites_UnchangedFrameWritesAndCreatesNothing) {
     EXPECT_EQ(c.bindgroupCreates, 0u)
         << "Mask and clipped composites keep the bind groups naming their textures and clip views";
   }
+}
+
+// ---------------------------------------------------------------------------
+// Draws under a clip polygon.
+//
+// A rectangle clip under a transform that turns it reaches the renderer as a
+// clip polygon, which the fragment stage reads from the draw-level uniform; an
+// instance record carries only an axis-aligned clip rectangle.
+// ---------------------------------------------------------------------------
+
+/// A nested viewport, whose clip is its rectangle, turned with its group, over one draw of each
+/// resident class: a solid fill, a pattern fill, a linear gradient fill with a solid stroke, and
+/// a radial gradient fill. Every shape spills past the viewport, so the polygon cuts each of them.
+constexpr std::string_view kClipPolygonSoloDrawsSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2050c0"/>
+      <stop offset="1" stop-color="#c05020"/>
+    </linearGradient>
+    <radialGradient id="r">
+      <stop offset="0" stop-color="#f0e040"/>
+      <stop offset="1" stop-color="#4020a0"/>
+    </radialGradient>
+    <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="4" height="4" fill="#208040"/>
+    </pattern>
+  </defs>
+  <g transform="rotate(20 80 60)">
+    <svg x="20" y="20" width="120" height="80" viewBox="0 0 120 80">
+      <rect x="-10" y="-10" width="70" height="50" fill="#e0c020"/>
+      <rect x="60" y="-10" width="70" height="50" fill="url(#p)"/>
+      <circle cx="30" cy="62" r="30" fill="url(#g)" stroke="#102030" stroke-width="3"/>
+      <ellipse cx="92" cy="62" rx="36" ry="26" fill="url(#r)"/>
+    </svg>
+  </g>
+</svg>
+)SVG";
+
+/// A draw under a clip polygon is drawn once per frame here, from its own resident slot: the
+/// slot's uniform carries the polygon's planes and is written only when its bytes change, so an
+/// unchanged frame encodes, uploads and binds nothing for any resident draw class.
+TEST_F(GeodePerfTest, ClipPolygonSoloDraws_UnchangedFrameWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kClipPolygonSoloDrawsSvg, device);
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
+  ASSERT_GT(test::CountNonTransparentPixels(frame.bitmap), 0u)
+      << "Premise: the clipped draws must paint, or zero counters below prove nothing";
+  EXPECT_GE(frame.counters.drawCalls, 5u) << "Premise: every shape and the stroke are drawn";
+
+  EXPECT_EQ(frame.counters.pathEncodes, 0u);
+  EXPECT_EQ(frame.counters.textureCreates, 0u);
+  EXPECT_EQ(frame.counters.bufferWrites, 0u)
+      << "Draws under a clip polygon must not re-upload their geometry or rewrite their uniforms";
+  EXPECT_EQ(frame.counters.bufferWriteBytes, 0u);
+  EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
+      << "Draws under a clip polygon must keep their resident bind groups";
+}
+
+/// \ref kMarkerInstancesSvg with the clipped marker turned to each segment: every placement's
+/// viewport clip turns with it and becomes a clip polygon, a different one per placement.
+constexpr std::string_view kTurnedMarkerInstancesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+  <marker id="clipped" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+    <path d="M-2 -2 L10 4 L-2 10 Z" fill="#c00" stroke="#003"/>
+  </marker>
+  <polyline points="10,90 40,20 70,80 100,30 130,70 160,25 190,85" fill="none" stroke="#333"
+            stroke-width="2" marker-start="url(#clipped)" marker-mid="url(#clipped)"
+            marker-end="url(#clipped)"/>
+</svg>
+)SVG";
+
+/// Each placement after the first of a marker's content is a repeat of the content's resident
+/// slot. Under a clip polygon a repeat keeps, besides its record, a batch-level uniform of its own
+/// that carries its polygon, so an unchanged frame writes and binds nothing for turned, clipped
+/// placements either.
+TEST_F(GeodePerfTest, TurnedMarkerInstances_SecondFrameIsSteadyState) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kTurnedMarkerInstancesSvg, device);
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
+  ASSERT_GT(test::CountNonTransparentPixels(frame.bitmap), 0u)
+      << "Premise: the placements must paint, or zero counters below prove nothing";
+  ASSERT_GT(frame.counters.drawCalls, 0u) << "the scene must reach the fill path";
+
+  EXPECT_EQ(frame.counters.pathEncodes, 0u);
+  EXPECT_EQ(frame.counters.textureCreates, 0u);
+  EXPECT_EQ(frame.counters.bufferWrites, 0u)
+      << "turned marker placements must not re-upload geometry or rewrite records or uniforms";
+  EXPECT_EQ(frame.counters.bufferWriteBytes, 0u);
+  EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
+      << "turned marker placements must not build a bind group per draw";
 }
 
 }  // namespace

@@ -818,6 +818,17 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   void populateBatchUniform(Uniforms& u, const FillDrawArgs& args, const Transform2d& mvpTransform,
                             bool identityMvp);
 
+  /// Populate the draw-level uniform of a scene batch exactly as `fillPathSceneBatch` does: the
+  /// identity mvp, so each record's transform maps on its own, and the target, clip and
+  /// anti-aliasing state every instance of the batch shares. `populateBatchUniform` reads no
+  /// paint from its arguments; a batch's paint and fill rule ride in its records.
+  void populateSceneBatchUniform(Uniforms& u);
+
+  /// The draw-level uniform a scene batch binds: the uniform its instances published for the clip
+  /// polygon they are drawn under, else the record slab's shared batch uniform holding these bytes,
+  /// else a per-frame arena copy.
+  Allocation resolveSceneBatchUniform(const SceneBatchBinding& binding, const FillDrawArgs& args);
+
   /// Populate the per-instance InstanceRecord from args + encoded +
   /// transform. Same sharing contract as populateBatchUniform.
   void populateInstanceRecord(InstanceRecord& r, const EncodedPath& encoded,
@@ -2170,6 +2181,14 @@ bool GeoEncoder::hasActiveClipState() const {
   return impl_->clipPolygonActive || impl_->activeClipMaskView != nullptr;
 }
 
+bool GeoEncoder::hasClipPolygon() const {
+  return impl_->clipPolygonActive;
+}
+
+bool GeoEncoder::hasActiveClipMask() const {
+  return impl_->activeClipMaskView != nullptr;
+}
+
 uint64_t GeoEncoder::clipStateVersion() const {
   return impl_->clipStateVersion;
 }
@@ -2281,6 +2300,13 @@ void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& arg
   writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = activeClipMaskView != nullptr ? 1u : 0u;
   u.antialias = antialias ? 1u : 0u;
+}
+
+void GeoEncoder::Impl::populateSceneBatchUniform(Uniforms& u) {
+  FillDrawArgs args = {};
+  args.tileSize = Vector2d(1.0, 1.0);
+  args.patternFromPath = Transform2d();
+  populateBatchUniform(u, args, Transform2d(), /*identityMvp=*/true);
 }
 
 /// Pack an affine into the record's two vec4 transform rows (the same
@@ -2853,18 +2879,19 @@ void GeoEncoder::fillPathPatternResident(GeodeResidentSlot& slot, const EncodedP
 
 void GeoEncoder::submitResidentOrArenaFill(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                            const FillDrawArgs& args, uint64_t frameId) {
-  // A draw under a path clip mask stays resident: its uniform carries the clip flag like the
-  // arena draw's, and its bind group binds the mask's view, which the renderer keeps across frames.
-  // A clip polygon or an open mask pass still takes the per-frame arena path.
-  if (impl_->clipPolygonActive || impl_->maskPassOpen) {
+  // A draw under a path clip mask or a clip polygon stays resident: its uniform carries the clip
+  // flag and the polygon's planes exactly as the arena draw's does, compared before it is written,
+  // and its bind group binds the mask's view, which the renderer keeps across frames. An open mask
+  // pass still takes the per-frame arena path.
+  if (impl_->maskPassOpen) {
     submitFillDraw(args, {}, /*requireAdmission=*/false);
     return;
   }
   // A slot's single uniform buffer can only carry one draw's uniform per
   // frame, and its cached bind group only one pattern tile. If a frame that
   // drew this slot resident is still open - an earlier draw in THIS frame,
-  // when this repeat could not take a repeat record of its own (a clip
-  // polygon or mask, gradient or pattern paint, a refused record), or an
+  // when this repeat could not take a repeat record of its own (a clip mask,
+  // gradient or pattern paint, a refused record), or an
   // outer renderer's frame on this device that recorded a draw against the
   // slot while an offscreen pass renders the same document - route this draw
   // through the arena path so it gets its
@@ -2994,6 +3021,86 @@ void GeoEncoder::releasePreparedSceneAdmission(const EncodedPath& encoded) {
   impl_->releaseResidentInstance(encoded);
 }
 
+std::optional<GeoEncoder::ClipUniformBinding> GeoEncoder::publishOccurrenceClipUniform(
+    GeodeOccurrenceRecords& records, GeodeOccurrenceRecords::Occurrence& occurrence,
+    const std::shared_ptr<GeodeResidentSlab>& slab) {
+  if (!impl_->clipPolygonActive || slab == nullptr ||
+      slab->owningDeviceId() != impl_->device->deviceId()) {
+    return std::nullopt;
+  }
+  // Every range comes from the repeated slot's slab; when that slab is replaced, the ranges of
+  // the old one go back to it.
+  if (records.clipUniformSlab != slab) {
+    records.releaseClipUniforms();
+    records.clipUniformSlab = slab;
+  }
+  GeodeClipUniform* uniform = records.reserveClipUniform(occurrence, sizeof(Uniforms));
+  if (uniform == nullptr) {
+    return std::nullopt;
+  }
+  Uniforms u = {};
+  impl_->populateSceneBatchUniform(u);
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&u);
+  if (uniform->size == 0) {
+    // A whole number of slab alignment units, so the range leaves no unwritten bytes between it
+    // and the allocation after it; its first write covers all of it.
+    const uint64_t rangeBytes = alignUp(sizeof(Uniforms), kStorageOffsetAlignment);
+    GeodeResidentSlab::Allocation alloc;
+    if (!slab->allocate(*impl_->device, rangeBytes, kStorageOffsetAlignment, alloc)) {
+      return std::nullopt;
+    }
+    std::vector<uint8_t> staging(rangeBytes, 0u);
+    std::memcpy(staging.data(), bytes, sizeof(Uniforms));
+    (void)impl_->gpuContext->gpuDevice->writeBuffer(slab->bufferForId(alloc.bufferId), alloc.offset,
+                                                    staging);
+    uniform->buffer = alloc.buffer;
+    uniform->bufferId = alloc.bufferId;
+    uniform->offset = alloc.offset;
+    uniform->size = alloc.size;
+    uniform->lastBytes.assign(bytes, bytes + sizeof(Uniforms));
+  } else if (uniform->lastBytes.size() != sizeof(Uniforms) ||
+             std::memcmp(uniform->lastBytes.data(), bytes, sizeof(Uniforms)) != 0) {
+    (void)impl_->gpuContext->gpuDevice->writeBuffer(
+        slab->bufferForId(uniform->bufferId), uniform->offset,
+        std::span<const uint8_t>(bytes, sizeof(Uniforms)));
+    // The copy's capacity was reserved and charged with the uniform, so this assigns in place.
+    uniform->lastBytes.assign(bytes, bytes + sizeof(Uniforms));
+  }
+  return ClipUniformBinding{uniform->buffer, uniform->bufferId, uniform->offset};
+}
+
+GeoEncoder::Impl::Allocation GeoEncoder::Impl::resolveSceneBatchUniform(
+    const SceneBatchBinding& binding, const FillDrawArgs& args) {
+  Allocation uniAlloc = {};
+  // A batch under a clip polygon binds the uniform its instances published when they were
+  // appended, which carries the polygon; every instance of a batch shares one clip state.
+  if (binding.clipUniform.has_value()) {
+    uniAlloc.buffer = binding.clipUniform->buffer;
+    uniAlloc.bufferId = binding.clipUniform->bufferId;
+    uniAlloc.offset = binding.clipUniform->offset;
+    uniAlloc.size = sizeof(Uniforms);
+    return uniAlloc;
+  }
+
+  // Batch uniforms are frame-constant, so they live in the document's
+  // record slab and a steady frame rewrites nothing. The per-frame arena is
+  // the fallback when no slab is supplied or its cache is full.
+  Uniforms u = {};
+  populateBatchUniform(u, args, Transform2d(), /*identityMvp=*/true);
+  if (binding.recordSlab != nullptr) {
+    const GeodeRecordSlab::BatchUniformHandle uniform =
+        binding.recordSlab->acquireBatchUniform(*device, &u, sizeof(Uniforms));
+    uniAlloc.buffer = uniform.buffer;
+    uniAlloc.bufferId = uniform.bufferId;
+    uniAlloc.offset = 0;
+    uniAlloc.size = sizeof(Uniforms);
+  }
+  if (!uniAlloc.buffer.isValid()) {
+    uniAlloc = allocSceneBatchUniform(u);
+  }
+  return uniAlloc;
+}
+
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
                                     const SceneBatchBinding& binding) {
   if (!impl_->validateAndConsumeSceneBatch(binding)) {
@@ -3005,8 +3112,9 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   impl_->bindSolidBatchedPipeline();
 
   // Batch-level uniform: orthographic mapping only (the caller set the
-  // encoder transform to identity). Pattern/clip fields use the device
-  // dummies / zero flags - batchable draws never carry patterns or clips.
+  // encoder transform to identity). Pattern and clip-mask fields use the
+  // device dummies and zero flags: batchable draws never carry patterns or
+  // clip masks.
   FillDrawArgs args = {};
   args.rule = rule;
   args.paintMode = 0u;
@@ -3022,23 +3130,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   args.patternFromPath = Transform2d();
   args.instanceCount = binding.instanceCount;
 
-  // Batch uniforms are frame-constant, so they live in the document's
-  // record slab and a steady frame rewrites nothing. The per-frame arena is
-  // the fallback when no slab is supplied or its cache is full.
-  Uniforms u = {};
-  impl_->populateBatchUniform(u, args, Transform2d(), /*identityMvp=*/true);
-  Impl::Allocation uniAlloc = {};
-  if (binding.recordSlab != nullptr) {
-    const GeodeRecordSlab::BatchUniformHandle uniform =
-        binding.recordSlab->acquireBatchUniform(*impl_->device, &u, sizeof(Uniforms));
-    uniAlloc.buffer = uniform.buffer;
-    uniAlloc.bufferId = uniform.bufferId;
-    uniAlloc.offset = 0;
-    uniAlloc.size = sizeof(Uniforms);
-  }
-  if (!uniAlloc.buffer.isValid()) {
-    uniAlloc = impl_->allocSceneBatchUniform(u);
-  }
+  const Impl::Allocation uniAlloc = impl_->resolveSceneBatchUniform(binding, args);
 
   // Whole-chunk views: valid while a chunk stays under the device's
   // maxStorageBufferBindingSize (default 128 MiB); kInitialChunkBytes
@@ -3764,13 +3856,13 @@ void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
   GradientUniforms u = {};
   impl_->buildLinearGradientUniforms(u, params, rule);
 
-  // A clip polygon or an open mask pass takes the per-frame arena path, as does a
-  // slot whose single uniform an open frame already drew with (the stamp claim
-  // covers a same-frame repeat and an offscreen pass drawing while an outer
-  // frame on this device has recorded against the slot), mirroring
-  // `fillPathResident`. A draw under a path clip mask stays resident and binds
-  // the mask's view.
-  if (impl_->clipPolygonActive || impl_->maskPassOpen ||
+  // An open mask pass takes the per-frame arena path, as does a slot whose
+  // single uniform an open frame already drew with (the stamp claim covers a
+  // same-frame repeat and an offscreen pass drawing while an outer frame on
+  // this device has recorded against the slot), mirroring `fillPathResident`.
+  // A draw under a path clip mask or a clip polygon stays resident: the
+  // uniform carries both, and the bind group binds the mask's view.
+  if (impl_->maskPassOpen ||
       ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
        impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
     impl_->submitGradientArenaFallback(u, encoded);
@@ -3793,7 +3885,7 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
   GradientUniforms u = {};
   impl_->buildRadialGradientUniforms(u, params, rule);
 
-  if (impl_->clipPolygonActive || impl_->maskPassOpen ||
+  if (impl_->maskPassOpen ||
       ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
        impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
     impl_->submitGradientArenaFallback(u, encoded);

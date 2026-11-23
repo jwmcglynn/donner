@@ -450,6 +450,21 @@ private:
   std::weak_ptr<GeodeHandleRetirement> owner_;
 };
 
+class GeodeResidentSlab;
+
+/**
+ * A batch-level uniform kept across frames for one occurrence of a repeated draw (see
+ * \ref GeodeOccurrenceRecords): a range of a geometry slab chunk, named by identity like a slab
+ * allocation, and the bytes last written to it, so an unchanged frame writes nothing.
+ */
+struct GeodeClipUniform {
+  gpu::BufferRef buffer;           ///< Borrowed chunk identity; the slab owns the buffer.
+  uint64_t bufferId = 0;           ///< Stable identity of `buffer`.
+  uint64_t offset = 0;             ///< Byte offset of the range in `buffer`.
+  uint64_t size = 0;               ///< Bytes of the range; 0 until it is allocated.
+  std::vector<uint8_t> lastBytes;  ///< Bytes last written to the range.
+};
+
 /**
  * Persistent per-occurrence instance records for content drawn more than once
  * over shared resident geometry: the glyph occurrences of one text element, or
@@ -487,12 +502,19 @@ private:
  * (`GeodeDevice::beginFrameGeneration`) so the comparison covers renderers
  * sharing a device, and the renderer diverts the second writer to per-frame
  * temporary slots instead.
+ *
+ * An occurrence drawn under a clip polygon also keeps a uniform of its own
+ * (\ref GeodeClipUniform): the polygon reaches the shader only through the
+ * draw-level uniform, which an ordered batch otherwise shares.
  */
 struct GeodeOccurrenceRecords {
   /// One occurrence's record slot plus the bytes last written to it.
   struct Occurrence {
     GeodeRecordSlab::Slot slot;
     std::vector<uint8_t> lastRecord;
+    /// The batch-level uniform this occurrence's draw binds while a clip polygon is active;
+    /// created the first time it draws under one and kept until its owner releases it.
+    std::unique_ptr<GeodeClipUniform> clipUniform;
   };
   /// Stable owner for a separately allocated occurrence record.
   using OccurrenceOwner = std::unique_ptr<Occurrence>;
@@ -519,6 +541,10 @@ struct GeodeOccurrenceRecords {
   std::shared_ptr<GeodeDocumentGeometryBudget> cpuBudget;  ///< Document budget for CPU records.
   GeodeGeometryCacheReservation cpuReservation;            ///< Owned CPU-byte reservation.
   uint64_t cpuRetainedBytes = 0;                           ///< Charged owner and record bytes.
+  /// Geometry slab every occurrence's `clipUniform` range comes from: the slab of the slot whose
+  /// draws the occurrences repeat, on the same device. Null until an occurrence first draws under
+  /// a clip polygon.
+  std::shared_ptr<GeodeResidentSlab> clipUniformSlab;
 
   GeodeOccurrenceRecords() = default;
   ~GeodeOccurrenceRecords() { freeRecordSlots(); }
@@ -535,6 +561,7 @@ struct GeodeOccurrenceRecords {
         cpuBudget(std::move(other.cpuBudget)),
         cpuReservation(std::move(other.cpuReservation)),
         cpuRetainedBytes(other.cpuRetainedBytes),
+        clipUniformSlab(std::move(other.clipUniformSlab)),
         cpuOccurrenceBytes(other.cpuOccurrenceBytes),
         occurrenceReservationPending(other.occurrenceReservationPending) {
     std::vector<OccurrenceOwner>().swap(other.occurrences);
@@ -560,6 +587,7 @@ struct GeodeOccurrenceRecords {
       cpuBudget = std::move(other.cpuBudget);
       cpuReservation = std::move(other.cpuReservation);
       cpuRetainedBytes = other.cpuRetainedBytes;
+      clipUniformSlab = std::move(other.clipUniformSlab);
       cpuOccurrenceBytes = other.cpuOccurrenceBytes;
       occurrenceReservationPending = other.occurrenceReservationPending;
       std::vector<OccurrenceOwner>().swap(other.occurrences);
@@ -643,9 +671,43 @@ struct GeodeOccurrenceRecords {
   /// CPU bytes currently charged for this component, exposed to tests.
   uint64_t cpuRetainedBytesForTesting() const { return cpuRetainedBytes; }
 
+  /// The clip uniform of \p occurrence, created and charged with the occurrence's other CPU bytes
+  /// on first use: the record of its range and a copy of \p bytes bytes of uniform.
+  /// @param occurrence An occurrence of this component.
+  /// @param bytes Size of the uniform it will hold.
+  /// @return The occurrence's clip uniform, or null, leaving none, when the budget refuses it.
+  GeodeClipUniform* reserveClipUniform(Occurrence& occurrence, size_t bytes) {
+    if (occurrence.clipUniform) {
+      return occurrence.clipUniform->lastBytes.capacity() >= bytes ? occurrence.clipUniform.get()
+                                                                   : nullptr;
+    }
+    if (!cpuBudget || occurrenceReservationPending) {
+      return nullptr;
+    }
+    auto clipUniform = std::make_unique<GeodeClipUniform>();
+    clipUniform->lastBytes.reserve(bytes);
+    const uint64_t added = sizeof(GeodeClipUniform) + clipUniform->lastBytes.capacity();
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    if (added > std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes ||
+        cpuOccurrenceBytes + added > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+        !cpuReservation.replace(cpuBudget, ownerBytes + cpuOccurrenceBytes + added)) {
+      return nullptr;
+    }
+    cpuOccurrenceBytes += added;
+    cpuRetainedBytes = ownerBytes + cpuOccurrenceBytes;
+    occurrence.clipUniform = std::move(clipUniform);
+    return occurrence.clipUniform.get();
+  }
+
+  /// Return every occurrence's clip uniform range to `clipUniformSlab` (deferred to its next frame
+  /// boundary, like every other slab free) and drop the uniforms and their charge.
+  void releaseClipUniforms();
+
   /// Return every slot to the slab (deferred to the next frame's merge, like
   /// every other record free) and drop them.
   void freeRecordSlots() {
+    releaseClipUniforms();
     if (recordSlab) {
       for (const OccurrenceOwner& occurrence : occurrences) {
         if (occurrence && occurrence->slot.buffer.isValid()) {
@@ -1099,6 +1161,32 @@ private:
   std::weak_ptr<GeodeHandleRetirement> owner_;
 };
 
+inline void GeodeOccurrenceRecords::releaseClipUniforms() {
+  uint64_t releasedBytes = 0;
+  for (const OccurrenceOwner& occurrence : occurrences) {
+    if (!occurrence || !occurrence->clipUniform) {
+      continue;
+    }
+    const GeodeClipUniform& uniform = *occurrence->clipUniform;
+    if (clipUniformSlab && uniform.size != 0) {
+      clipUniformSlab->free(GeodeResidentSlab::Allocation{uniform.buffer, uniform.offset,
+                                                          uniform.size, uniform.bufferId});
+    }
+    releasedBytes += sizeof(GeodeClipUniform) + uniform.lastBytes.capacity();
+    occurrence->clipUniform.reset();
+  }
+  clipUniformSlab.reset();
+  if (releasedBytes == 0) {
+    return;
+  }
+  cpuOccurrenceBytes -= std::min(releasedBytes, cpuOccurrenceBytes);
+  cpuRetainedBytes =
+      static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner) + cpuOccurrenceBytes;
+  if (cpuBudget) {
+    (void)cpuReservation.replace(cpuBudget, cpuRetainedBytes);
+  }
+}
+
 /// GPU-resident geometry for one cached `EncodedPath` (a fill slot or a
 /// stroke slot). Owns a single combined-usage GPU buffer that holds the
 /// path's eight analytic dual-ray SSBO regions and per-draw uniform block, plus the cached fill
@@ -1199,7 +1287,7 @@ struct GeodeResidentSlot {
   /// is drawn again in the same frame at a different transform/color
   /// (markers, repeated `<use>`), the second and later draws take records of
   /// their own from `repeatRecords` and join ordered batches; a repeat that
-  /// cannot (a clip polygon or mask, gradient paint, a refused record) falls
+  /// cannot (a clip mask, gradient paint, a refused record) falls
   /// back to the per-frame arena path so it still gets its own uniform.
   /// Sentinel `~0` means "never drawn".
   uint64_t lastResidentFrame = ~uint64_t{0};
