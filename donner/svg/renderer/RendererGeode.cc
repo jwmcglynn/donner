@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -1671,6 +1672,148 @@ private:
   std::uint64_t nextSerial_ = 0;
 };
 
+/// Device-pixel distance for simplifying the convex clip intersection below. Two intersection
+/// vertices closer than this are one vertex, and a vertex closer than this to the chord between its
+/// neighbours is dropped, which moves the clip boundary by at most about this distance per removed
+/// vertex. The shader tests each pixel centre against the clip's half-planes, so this can only
+/// change a pixel whose centre lies within that distance of the boundary: the same order as the
+/// shader's own plane tolerance (1e-4) and float rounding. It keeps near-parallel edges from
+/// counting as extra edges through floating-point noise alone.
+constexpr double kClipPolygonEpsilonPx = 1e-3;
+
+/// Twice the signed area of \p polygon; its sign gives the winding.
+double SignedDoubleArea(std::span<const Vector2d> polygon) {
+  double area = 0.0;
+  for (std::size_t i = 0; i < polygon.size(); ++i) {
+    const Vector2d& a = polygon[i];
+    const Vector2d& b = polygon[(i + 1) % polygon.size()];
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area;
+}
+
+/// Signed distance of \p point from the edge \p a to \p b, positive on the inside of a polygon
+/// with winding \p sign.
+double EdgeDistance(const Vector2d& a, const Vector2d& b, const Vector2d& point, double sign) {
+  const Vector2d edge = b - a;
+  const double length = edge.length();
+  if (length <= kClipPolygonEpsilonPx) {
+    return 0.0;
+  }
+  const Vector2d offset = point - a;
+  return sign * (edge.x * offset.y - edge.y * offset.x) / length;
+}
+
+/// Vertices of a convex clip polygon, in fixed inline storage so that folding a clip into the
+/// clip stack allocates nothing.
+///
+/// Bound: the clip stack only ever intersects a polygon of at most four vertices (the active
+/// polygon, kept only while it has at most four) with a clip quad of four edges. One
+/// Sutherland-Hodgman step emits at most two vertices per input vertex (the vertex itself when
+/// inside, and one crossing), so four steps from four vertices emit at most 4 * 2^4 = 64. For an
+/// exactly convex subject a step adds at most one vertex (at most eight in all), but rounding in
+/// the distances of near-collinear vertices can change sign more than twice around the polygon,
+/// so the storage is sized by the construction bound, which holds whatever the rounding.
+class ClipVertices {
+public:
+  /// Vertices of the subject polygon before any step.
+  static constexpr std::size_t kMaxSubjectVertices = 4;
+  /// Half-planes the subject is clipped by.
+  static constexpr std::size_t kMaxClipEdges = 4;
+  /// The construction bound above.
+  static constexpr std::size_t kCapacity = kMaxSubjectVertices << kMaxClipEdges;
+  static_assert(kCapacity == 64,
+                "Four Sutherland-Hodgman steps from four vertices emit at most 64.");
+
+  ClipVertices() = default;
+  explicit ClipVertices(std::span<const Vector2d> vertices) {
+    UTILS_RELEASE_ASSERT(vertices.size() <= kMaxSubjectVertices);
+    for (const Vector2d& vertex : vertices) {
+      push(vertex);
+    }
+  }
+
+  std::size_t size() const { return size_; }
+  bool empty() const { return size_ == 0; }
+  const Vector2d& operator[](std::size_t i) const { return vertices_[i]; }
+  void clear() { size_ = 0; }
+
+  void push(const Vector2d& vertex) {
+    UTILS_RELEASE_ASSERT_MSG(size_ < kCapacity, "Clip polygon exceeds its construction bound");
+    vertices_[size_++] = vertex;
+  }
+
+  /// Removes the vertex at \p index, keeping the order of the rest.
+  void erase(std::size_t index) {
+    for (std::size_t i = index + 1; i < size_; ++i) {
+      vertices_[i - 1] = vertices_[i];
+    }
+    --size_;
+  }
+
+private:
+  std::array<Vector2d, kCapacity> vertices_{};
+  std::size_t size_ = 0;
+};
+
+/// Clips the convex \p subject by the half-plane inside the edge \p a to \p b into \p result
+/// (Sutherland-Hodgman step).
+void ClipByEdge(const ClipVertices& subject, const Vector2d& a, const Vector2d& b, double sign,
+                ClipVertices& result) {
+  result.clear();
+  for (std::size_t i = 0; i < subject.size(); ++i) {
+    const Vector2d& current = subject[i];
+    const Vector2d& next = subject[(i + 1) % subject.size()];
+    const double currentDistance = EdgeDistance(a, b, current, sign);
+    const double nextDistance = EdgeDistance(a, b, next, sign);
+    if (currentDistance >= 0.0) {
+      result.push(current);
+    }
+    if ((currentDistance >= 0.0) != (nextDistance >= 0.0)) {
+      const double t = currentDistance / (currentDistance - nextDistance);
+      result.push(current + (next - current) * t);
+    }
+  }
+}
+
+/// Removes vertices of the convex \p polygon that coincide with the previous one or lie on the
+/// chord between their neighbours, both within kClipPolygonEpsilonPx.
+void SimplifyConvexPolygon(ClipVertices& polygon) {
+  bool changed = true;
+  while (changed && polygon.size() >= 3) {
+    changed = false;
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+      const Vector2d& previous = polygon[(i + polygon.size() - 1) % polygon.size()];
+      const Vector2d& next = polygon[(i + 1) % polygon.size()];
+      const bool coincident = (polygon[i] - previous).length() <= kClipPolygonEpsilonPx;
+      if (coincident ||
+          std::abs(EdgeDistance(previous, next, polygon[i], 1.0)) <= kClipPolygonEpsilonPx) {
+        polygon.erase(i);
+        changed = true;
+        break;
+      }
+    }
+  }
+}
+
+/// Returns the intersection of the convex polygons \p subject (at most
+/// ClipVertices::kMaxSubjectVertices vertices) and \p clip (at most ClipVertices::kMaxClipEdges
+/// edges), simplified by SimplifyConvexPolygon. Fewer than three vertices means the intersection
+/// is empty. Allocates nothing.
+ClipVertices IntersectConvexPolygons(std::span<const Vector2d> subject,
+                                     std::span<const Vector2d> clip) {
+  UTILS_RELEASE_ASSERT(clip.size() <= ClipVertices::kMaxClipEdges);
+  const double sign = SignedDoubleArea(clip) < 0.0 ? -1.0 : 1.0;
+  std::array<ClipVertices, 2> buffers{ClipVertices(subject), ClipVertices()};
+  std::size_t current = 0;
+  for (std::size_t i = 0; i < clip.size() && !buffers[current].empty(); ++i) {
+    ClipByEdge(buffers[current], clip[i], clip[(i + 1) % clip.size()], sign, buffers[1 - current]);
+    current = 1 - current;
+  }
+  SimplifyConvexPolygon(buffers[current]);
+  return buffers[current];
+}
+
 }  // namespace
 
 /// Gate for ordered cross-entity batching. Enabled: a batch's single draw can
@@ -2963,10 +3106,34 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// rect - which over-reports coverage. In that case the entry also
   /// carries the 4 polygon corners of the clip in device-pixel space,
   /// and the fragment shader tests each sample against the polygon's
-  /// half-planes on top of the scissor rect. We only honour the TOPMOST
-  /// polygon-bearing entry (`setClipPolygon` has no in-shader
-  /// intersection with a previous polygon) - nested rotated clips are
-  /// rare enough that we accept the over-coverage fallback.
+  /// half-planes on top of the scissor rect. The shader tests one polygon of
+  /// at most four edges, so `FoldClipPolygon` intersects the stacked
+  /// polygons and keeps the intersection while it has at most four edges;
+  /// beyond that it falls back as that function describes.
+  /// The polygon the shader tests for a clip stack: \ref count corners, none when \ref count is
+  /// zero, and \ref empty when the stacked polygons do not overlap.
+  struct ActiveClipPolygon {
+    std::array<Vector2d, 4> corners{};
+    std::size_t count = 0;
+    bool empty = false;
+  };
+
+  /// The clip state of a stack up to and including one entry, cached on that entry when it is
+  /// pushed. It is computed from the fold of the entry below and the entry itself, so a push folds
+  /// one entry and a pop folds nothing: the entry below already holds its own fold.
+  struct ClipFold {
+    /// An entry's coverage could not be produced, or the stacked polygons do not overlap.
+    bool drawsNothing = false;
+    /// Intersection of every valid `pixelRect`; none when no entry has one.
+    std::optional<Box2d> scissor;
+    ActiveClipPolygon polygon;
+    /// Mask of the topmost entry that has one; both null when none does. They name the same
+    /// objects as that entry's \ref ClipStackEntry::maskResolveTextureHandle and view, which stay
+    /// put while the entry moves, and that entry is popped no earlier than the one caching them.
+    const gpu::Texture* maskTexture = nullptr;
+    const gpu::TextureView* maskView = nullptr;
+  };
+
   struct ClipStackEntry {
     ClipStackEntry() = default;
     ~ClipStackEntry() = default;
@@ -2984,6 +3151,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Box2d pixelRect;
     bool valid = false;
     bool hasPolygon = false;
+    /// From ResolvedClip::boundsFallbackWhenStacked.
+    bool boundsFallbackWhenStacked = false;
     /// The clip's coverage could not be produced, so nothing under it draws.
     bool allocationRejected = false;
     Vector2d polygonCorners[4];
@@ -3007,6 +3176,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// stays valid while the owning clip entry is moved between the live stack and a filter
     /// frame's saved stack, which a vector's reallocation would not survive.
     std::deque<PendingRelease> maskLayerTextures;
+    /// The clip state of the stack up to and including this entry; set by \ref pushClipEntry.
+    ClipFold fold;
   };
 
   /// State for an in-progress filter layer. Captures all draws
@@ -3275,13 +3446,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Builds the path mask while preserving the active ancestor clip and main-pass transform.
   void buildClipMask(const ResolvedClip& clip, ClipStackEntry& entry) {
     const Transform2d savedDeviceFromLocal = deviceFromLocalTransform;
-    const gpu::Texture* ancestorMask = nullptr;
-    for (auto it = clipStack.rbegin(); it != clipStack.rend(); ++it) {
-      if (it->maskResolveViewHandle != nullptr) {
-        ancestorMask = it->maskResolveTextureHandle;
-        break;
-      }
-    }
+    // The topmost mask on the stack, which the top entry's fold caches.
+    const gpu::Texture* ancestorMask = clipStackFold().maskTexture;
     std::size_t cursor = clip.clipPaths.size();
     entry.maskResolveTextureHandle = buildClipLayerMask(
         clip, entry, cursor, clip.clipPaths.back().layer, ancestorMask, savedDeviceFromLocal);
@@ -3297,7 +3463,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   bool initializeClipEntry(const ResolvedClip& clip, ClipStackEntry& entry) {
     if (rejectedFilterDepth != 0) {
-      clipStack.push_back(std::move(entry));
+      pushClipEntry(std::move(entry));
       return false;
     }
     if (!clip.clipRect.has_value()) {
@@ -3326,6 +3492,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entry.polygonCorners[3] =
         deviceFromClip.transformPosition(Vector2d(local.topLeft.x, local.bottomRight.y));
     entry.hasPolygon = true;
+    entry.boundsFallbackWhenStacked = clip.boundsFallbackWhenStacked;
     return true;
   }
 
@@ -3428,7 +3595,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     ClipStackEntry filterClipEntry;
     filterClipEntry.pixelRect = deviceFromLocalTransform.transformBox(admission.region);
     filterClipEntry.valid = true;
-    clipStack.push_back(std::move(filterClipEntry));
+    pushClipEntry(std::move(filterClipEntry));
     updateEncoderScissor();
     return true;
   }
@@ -3893,84 +4060,157 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frame.hasRegionClip) {
       // Preserve admission timing and empty capture on failure. Successful region coverage must
       // not be applied to each mask primitive or multiplied again by an isolated layer.
-      clipStack.push_back(std::move(frame.compositeRegionClip.back()));
+      pushClipEntry(std::move(frame.compositeRegionClip.back()));
       frame.compositeRegionClip.clear();
     }
     updateEncoderScissor();
   }
 
-  /// Recompute the intersection of every rectangular clip entry on
-  /// `clipStack` and apply it to the active encoder as a scissor,
-  /// plus forward the topmost polygon clip (if any) through
-  /// `setClipPolygon`. Called whenever the clip stack changes.
+  /// Folds \p entry into \p active. The shader tests one polygon of at most four edges. Each
+  /// polygon entry is intersected with the polygon already active; an intersection of at most four
+  /// edges is exact and becomes the active polygon. A larger one cannot be carried: an entry marked
+  /// boundsFallbackWhenStacked then keeps the enclosing polygon and clips only through its
+  /// device-space bounds in the scissor, and any other entry replaces the active polygon. Carrying
+  /// the full intersection is tracked in #2627.
+  /// @param intersections Counts the polygon intersection this performs, at most one.
+  static void FoldClipPolygon(ActiveClipPolygon& active, const ClipStackEntry& entry,
+                              uint64_t& intersections) {
+    if (!entry.hasPolygon || active.empty) {
+      return;
+    }
+    const std::span<const Vector2d> quad(entry.polygonCorners);
+    if (active.count == 0) {
+      std::copy(quad.begin(), quad.end(), active.corners.begin());
+      active.count = quad.size();
+      return;
+    }
+    ++intersections;
+    const ClipVertices intersection = IntersectConvexPolygons(
+        std::span<const Vector2d>(active.corners.data(), active.count), quad);
+    if (intersection.size() < 3) {
+      active.empty = true;
+    } else if (intersection.size() <= active.corners.size()) {
+      for (std::size_t i = 0; i < intersection.size(); ++i) {
+        active.corners[i] = intersection[i];
+      }
+      active.count = intersection.size();
+    } else if (!entry.boundsFallbackWhenStacked) {
+      std::copy(quad.begin(), quad.end(), active.corners.begin());
+      active.count = quad.size();
+    }
+  }
+
+  /// The clip state of a stack whose top is \p entry over a stack whose state is \p below: the
+  /// scissor rectangles intersected, the polygon folded by FoldClipPolygon, the topmost mask.
+  /// @param intersections Counts the polygon intersections performed, at most one.
+  static ClipFold FoldClipEntry(const ClipFold& below, const ClipStackEntry& entry,
+                                uint64_t& intersections) {
+    ClipFold fold = below;
+    if (entry.maskResolveViewHandle != nullptr) {
+      // Only the topmost path-clip mask is bound; nested path-clip intersections are a TODO
+      // (would need multiple clip-mask bindings in the fragment shader or a per-clip
+      // compositing pass).
+      fold.maskTexture = entry.maskResolveTextureHandle;
+      fold.maskView = entry.maskResolveViewHandle;
+    }
+    if (fold.drawsNothing) {
+      return fold;
+    }
+    if (entry.allocationRejected) {
+      fold.drawsNothing = true;
+      return fold;
+    }
+    if (entry.valid) {
+      if (!fold.scissor.has_value()) {
+        fold.scissor = entry.pixelRect;
+      } else {
+        // Intersect: take the overlap of the two rectangles.
+        const Box2d& active = *fold.scissor;
+        const double x0 = std::max(active.topLeft.x, entry.pixelRect.topLeft.x);
+        const double y0 = std::max(active.topLeft.y, entry.pixelRect.topLeft.y);
+        const double x1 = std::min(active.bottomRight.x, entry.pixelRect.bottomRight.x);
+        const double y1 = std::min(active.bottomRight.y, entry.pixelRect.bottomRight.y);
+        fold.scissor = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
+      }
+    }
+    FoldClipPolygon(fold.polygon, entry, intersections);
+    if (fold.polygon.empty) {
+      // The stacked polygons do not overlap, so nothing under them draws.
+      fold.drawsNothing = true;
+    }
+    return fold;
+  }
+
+  /// Pushes \p entry onto `clipStack`, caching on it the fold of the stack it tops. Every push
+  /// goes through here, including an entry moved back from a saved stack, whose cached fold
+  /// described the stack it was pushed onto before. Restoring a whole saved stack keeps each
+  /// entry over the entries it was folded with, so their folds stay valid.
+  void pushClipEntry(ClipStackEntry&& entry) {
+    entry.fold = FoldClipEntry(clipStackFold(), entry, counters.clipPolygonIntersections);
+    clipStack.push_back(std::move(entry));
+  }
+
+  /// The clip state of the whole of `clipStack`: the fold cached on its top entry, or the
+  /// unclipped state when it is empty.
+  const ClipFold& clipStackFold() const {
+    static const ClipFold kUnclipped;
+    return clipStack.empty() ? kUnclipped : clipStack.back().fold;
+  }
+
+  /// Sends \p active to the encoder, repeating the last vertex of a triangle: the zero-length edge
+  /// that leaves is a half-plane every sample is inside of.
+  void applyClipPolygon(const ActiveClipPolygon& active) {
+    if (active.count == 0) {
+      encoder->clearClipPolygon();
+      return;
+    }
+    Vector2d corners[4];
+    for (std::size_t i = 0; i < 4; ++i) {
+      corners[i] = active.corners[std::min(i, active.count - 1)];
+    }
+    encoder->setClipPolygon(corners);
+  }
+
+  /// Apply the clip state cached on the top of `clipStack` to the active encoder: the scissor
+  /// rectangle, the polygon `FoldClipPolygon` built (if any) through `setClipPolygon`, and the
+  /// topmost path-clip mask. Called whenever the clip stack or the encoder changes; it folds
+  /// nothing itself.
   void updateEncoderScissor() {
     if (!encoder) {
       return;
     }
-    std::optional<Box2d> active;
-    const ClipStackEntry* polygonEntry = nullptr;
-    const ClipStackEntry* maskEntry = nullptr;
-    for (const ClipStackEntry& entry : clipStack) {
-      if (entry.allocationRejected) {
-        encoder->clearClipPolygon();
-        encoder->clearClipMask();
-        encoder->setScissorRect(0, 0, 0, 0);
-        return;
-      }
-      if (entry.valid) {
-        if (!active.has_value()) {
-          active = entry.pixelRect;
-        } else {
-          // Intersect: take the overlap of the two rectangles.
-          const double x0 = std::max(active->topLeft.x, entry.pixelRect.topLeft.x);
-          const double y0 = std::max(active->topLeft.y, entry.pixelRect.topLeft.y);
-          const double x1 = std::min(active->bottomRight.x, entry.pixelRect.bottomRight.x);
-          const double y1 = std::min(active->bottomRight.y, entry.pixelRect.bottomRight.y);
-          active = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
-        }
-      }
-      if (entry.hasPolygon) {
-        // Overwrite with the topmost polygon entry; no multi-polygon
-        // intersection in the shader (see ClipStackEntry docs).
-        polygonEntry = &entry;
-      }
-      if (entry.maskResolveViewHandle != nullptr) {
-        // Same deal for the path-clip mask - we always bind the
-        // topmost one, and nested path-clip intersections are a
-        // TODO (would need multiple clip-mask bindings in the
-        // fragment shader or a per-clip compositing pass).
-        maskEntry = &entry;
-      }
-    }
-
-    if (polygonEntry != nullptr) {
-      encoder->setClipPolygon(polygonEntry->polygonCorners);
-    } else {
+    const ClipFold& fold = clipStackFold();
+    if (fold.drawsNothing) {
       encoder->clearClipPolygon();
+      encoder->clearClipMask();
+      encoder->setScissorRect(0, 0, 0, 0);
+      return;
     }
+    applyClipPolygon(fold.polygon);
 
-    if (maskEntry != nullptr) {
+    if (fold.maskView != nullptr) {
       // Pass the parent texture alongside the view so the encoder keeps
       // the Vulkan resource alive even after this clip-stack entry is
       // destroyed. The 1-arg setClipMask overload accidentally left the
       // view dangling across `popClip`→`pop_back`→destructor →
       // `updateEncoderScissor` sequences; see issue #551.
-      encoder->setClipMask(*maskEntry->maskResolveTextureHandle, *maskEntry->maskResolveViewHandle);
+      encoder->setClipMask(*fold.maskTexture, *fold.maskView);
     } else {
       encoder->clearClipMask();
     }
 
-    if (!active.has_value()) {
+    if (!fold.scissor.has_value()) {
       encoder->clearScissorRect();
       return;
     }
+    const Box2d& active = *fold.scissor;
     // Convert the Box2d corners to integer pixel coords. Floor on topLeft
     // and ceil on bottomRight so we don't accidentally clip fractional
     // edge pixels that the rasterizer still wants to cover.
-    const int32_t x = static_cast<int32_t>(std::floor(active->topLeft.x));
-    const int32_t y = static_cast<int32_t>(std::floor(active->topLeft.y));
-    const int32_t w = std::max(0, static_cast<int32_t>(std::ceil(active->bottomRight.x)) - x);
-    const int32_t h = std::max(0, static_cast<int32_t>(std::ceil(active->bottomRight.y)) - y);
+    const int32_t x = static_cast<int32_t>(std::floor(active.topLeft.x));
+    const int32_t y = static_cast<int32_t>(std::floor(active.topLeft.y));
+    const int32_t w = std::max(0, static_cast<int32_t>(std::ceil(active.bottomRight.x)) - x);
+    const int32_t h = std::max(0, static_cast<int32_t>(std::ceil(active.bottomRight.y)) - y);
     encoder->setScissorRect(x, y, w, h);
   }
 
@@ -7863,7 +8103,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     impl_->buildClipMask(clip, entry);
   }
 
-  impl_->clipStack.push_back(std::move(entry));
+  impl_->pushClipEntry(std::move(entry));
   impl_->updateEncoderScissor();
 }
 
@@ -8354,7 +8594,7 @@ void RendererGeode::popMask() {
   }
   const bool hasCompositeRegionClip = !frame.compositeRegionClip.empty();
   if (hasCompositeRegionClip) {
-    impl_->clipStack.push_back(std::move(frame.compositeRegionClip.back()));
+    impl_->pushClipEntry(std::move(frame.compositeRegionClip.back()));
     frame.compositeRegionClip.clear();
   }
 

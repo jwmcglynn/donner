@@ -32,18 +32,18 @@ The matrix has 4,140 rows in 17 ledgers:
 
 | Class                 | Rows  | Meaning                                                                |
 | --------------------- | ----- | ---------------------------------------------------------------------- |
-| `conformant`          | 1,758 | The code was read and a named test asserts the behavior.               |
+| `conformant`          | 1,763 | The code was read and a named test asserts the behavior.               |
 | `conformant-untested` | 345   | The code was read and matches; no test asserts it.                     |
-| `partial`             | 547   | Implemented with named missing values, cases or sub-features.          |
-| `divergent`           | 220   | Implemented, and behaves differently from the specification.           |
+| `partial`             | 543   | Implemented with named missing values, cases or sub-features.          |
+| `divergent`           | 219   | Implemented, and behaves differently from the specification.           |
 | `missing`             | 829   | Not implemented.                                                       |
 | `not-applicable`      | 363   | Outside what a script-free XML renderer must do, with a stated reason. |
 | `spec-ambiguity`      | 45    | The text is unclear, or two normative texts conflict.                  |
 | `legacy`              | 33    | Donner implements something the CR or the dependent TR removed.        |
 
 These counts are not a conformance percentage;
-[Audit Totals and How to Read Them](#audit-totals-and-how-to-read-them) explains why. Of the 1,596
-`partial`, `divergent` and `missing` rows, 35 are rated high impact, 208 medium and 1,353 low. The
+[Audit Totals and How to Read Them](#audit-totals-and-how-to-read-them) explains why. Of the 1,591
+`partial`, `divergent` and `missing` rows, 35 are rated high impact, 207 medium and 1,349 low. The
 35 high rows describe 13 distinct defects.
 
 The findings that matter most:
@@ -252,11 +252,11 @@ review has no range and says so.
         [transforms_coordinates](../spec_audit/transforms_coordinates.md);
         `val:requiredExtensions/empty-string`, `feat:svg2/style-child-element-error`,
         `feat:svg2/symbol-refxy-placement` in [structure](../spec_audit/structure.md).
-  - [ ] Markers: scale `markerUnits="strokeWidth"` by the used stroke width, honor
-        `non-scaling-stroke`, and clip to the marker viewport (2 to 3 days).
+  - [ ] Markers: scale `markerUnits="strokeWidth"` by the used stroke width and honor
+        `non-scaling-stroke` (2 to 3 days).
         `feat:svg2/painting-vector-effect-markers` in
         [painting_properties](../spec_audit/painting_properties.md);
-        `feat:svg2/marker-units-strokeWidth-scale`, `feat:svg2/marker-clip` in
+        `feat:svg2/marker-units-strokeWidth-scale` in
         [paint_servers_markers_images](../spec_audit/paint_servers_markers_images.md).
   - [ ] SVG used as an image: size from the referenced document's intrinsic dimensions and ratio,
         honor `overflow` on `image`, isolate the embedded document (3 to 6 days).
@@ -557,10 +557,10 @@ Per ledger:
 | [structure](../spec_audit/structure.md)                                       | 214   | 84           | 20                    | 34        | 12          | 21        | 39               | 3                | 1        | 1                    | 7      | 59    |
 | [shapes_paths](../spec_audit/shapes_paths.md)                                 | 156   | 107          | 16                    | 18        | 4           | 5         | 2                | 4                | 0        | 0                    | 0      | 27    |
 | [text_layout](../spec_audit/text_layout.md)                                   | 185   | 111          | 8                     | 28        | 9           | 10        | 8                | 3                | 8        | 1                    | 5      | 41    |
-| [paint_servers_markers_images](../spec_audit/paint_servers_markers_images.md) | 199   | 126          | 16                    | 30        | 12          | 8         | 4                | 2                | 1        | 0                    | 15     | 35    |
-| [clipping_masking](../spec_audit/clipping_masking.md)                         | 192   | 74           | 2                     | 21        | 9           | 76        | 6                | 4                | 0        | 0                    | 18     | 88    |
+| [paint_servers_markers_images](../spec_audit/paint_servers_markers_images.md) | 199   | 129          | 16                    | 28        | 11          | 8         | 4                | 2                | 1        | 0                    | 14     | 33    |
+| [clipping_masking](../spec_audit/clipping_masking.md)                         | 192   | 75           | 2                     | 20        | 9           | 76        | 6                | 4                | 0        | 0                    | 18     | 87    |
 | [filters_core](../spec_audit/filters_core.md)                                 | 212   | 147          | 22                    | 22        | 6           | 6         | 4                | 4                | 1        | 0                    | 8      | 26    |
-| [filters_generators_lighting](../spec_audit/filters_generators_lighting.md)   | 151   | 93           | 0                     | 19        | 22          | 7         | 2                | 6                | 2        | 0                    | 6      | 42    |
+| [filters_generators_lighting](../spec_audit/filters_generators_lighting.md)   | 151   | 94           | 0                     | 18        | 22          | 7         | 2                | 6                | 2        | 0                    | 6      | 41    |
 | [animation](../spec_audit/animation.md)                                       | 145   | 99           | 8                     | 20        | 3           | 8         | 6                | 1                | 0        | 0                    | 4      | 27    |
 | [interactivity_accessibility](../spec_audit/interactivity_accessibility.md)   | 233   | 55           | 6                     | 69        | 9           | 25        | 68               | 1                | 0        | 0                    | 6      | 97    |
 | [painting_properties](../spec_audit/painting_properties.md)                   | 191   | 116          | 15                    | 25        | 16          | 10        | 4                | 3                | 2        | 1                    | 9      | 41    |
@@ -571,7 +571,7 @@ Per ledger:
 | [color_compositing](../spec_audit/color_compositing.md)                       | 351   | 127          | 37                    | 18        | 15          | 102       | 46               | 5                | 1        | 1                    | 10     | 124   |
 | [transforms_coordinates](../spec_audit/transforms_coordinates.md)             | 254   | 112          | 29                    | 37        | 14          | 19        | 39               | 4                | 0        | 7                    | 9      | 54    |
 | [xml_data_formats](../spec_audit/xml_data_formats.md)                         | 162   | 57           | 5                     | 33        | 35          | 20        | 10               | 2                | 0        | 9                    | 7      | 72    |
-| **Total**                                                                     | 4,140 | 1,758        | 345                   | 547       | 220         | 829       | 363              | 45               | 33       | 35                   | 208    | 1,353 |
+| **Total**                                                                     | 4,140 | 1,763        | 345                   | 543       | 219         | 829       | 363              | 45               | 33       | 35                   | 207    | 1,349 |
 
 `partial`, `divergent` and `missing` rows by impact and by the size recorded in the ledgers (S up to
 2 days, M 3 to 7, L 8 to 20, XL above 20, for the row taken alone):
@@ -579,15 +579,15 @@ Per ledger:
 | Impact | Rows  | `partial` | `divergent` | `missing` |
 | ------ | ----- | --------- | ----------- | --------- |
 | high   | 35    | 17        | 12          | 6         |
-| medium | 208   | 86        | 48          | 74        |
-| low    | 1,353 | 444       | 160         | 749       |
+| medium | 207   | 85        | 48          | 74        |
+| low    | 1,349 | 441       | 159         | 749       |
 
 | Size | S     | M   | L   | XL |
 | ---- | ----- | --- | --- | -- |
-| Rows | 1,181 | 300 | 108 | 7  |
+| Rows | 1,177 | 299 | 108 | 7  |
 
-618 of these 1,596 rows have a test that touches the area; 978 have none. Of the 2,103 rows in the
-two conformant classes, 1,758 name an asserting test and 345 do not.
+613 of these 1,591 rows have a test that touches the area; 978 have none. Of the 2,108 rows in the
+two conformant classes, 1,763 name an asserting test and 345 do not.
 
 ## Audit Method
 
@@ -627,7 +627,7 @@ and each row it did not cover as not covered. The same re-read sampled 42 rows c
   the cited lines.
 - The sample puts the rate of `conformant` rows that are not actually conformant at about 5 percent
   (2 of 42), and the rate of rows whose named test does not assert the behavior at about 5 percent
-  more. The 1,758 `conformant` total should be read with that error rate: outside the sample, the
+  more. The 1,763 `conformant` total should be read with that error rate: outside the sample, the
   class was read once.
 - Test evidence is a named test read far enough to see what it asserts. For resvg cases it is the
   registration in `donner/svg/renderer/tests/resvg_test_suite.cc` (compared, thresholded,
@@ -898,7 +898,7 @@ are solid on both renderers.
 | `attr:href@linearGradient`, `attr:href@radialGradient`, `attr:href@pattern`                                              | partial            | medium | S to M | Same-document targets only; `xlink:href` wins over `href`.                                                                          |
 | `feat:svg2/image-auto-size-svg`                                                                                          | divergent          | medium | M      | An SVG image without a size is not sized from its intrinsic dimensions.                                                             |
 | `feat:svg2/linear-gradient-zero-length-vector`                                                                           | divergent          | low    | S      | The two renderers disagree with each other and mostly with the CR.                                                                  |
-| `feat:svg2/marker-clip`, `feat:svg2/marker-units-strokeWidth-scale`                                                      | divergent, partial | low    | S      | The marker clip follows the mapped `viewBox`, not the viewport; `markerUnits="strokeWidth"` ignores units and `non-scaling-stroke`. |
+| `feat:svg2/marker-units-strokeWidth-scale`                                                                               | partial            | low    | S      | `markerUnits="strokeWidth"` ignores units and `non-scaling-stroke`.                                                                 |
 | `feat:svg2/marker-orient-closed-subpath`                                                                                 | divergent          | low    | S      | Orientation at the closing vertex follows the resvg references, not the literal CR sentence.                                        |
 | `feat:svg2/image-overflow`, `feat:svg2/image-svg-root-preserveAspectRatio-ignored`, `feat:svg2/image-fragment-only-href` | divergent          | low    | S to M | `overflow` is ignored on `image`; the embedded root's `preserveAspectRatio` is honored; a fragment-only `href` is not resolved.     |
 | `feat:svg2/image-object-fit-position`, `feat:svg2/image-media-fragments`                                                 | missing            | low    | M to L | No `object-fit`, `object-position` or media fragments.                                                                              |

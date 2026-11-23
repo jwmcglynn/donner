@@ -378,6 +378,223 @@ TEST_F(RendererRegressionTests, UseResolvesNumericAndCyrillicIds) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// SVG 2 section 13.7.4 establishes a marker's implicit overflow clip at its viewport, the
+// markerWidth by markerHeight box, so `meet` keeps content in the letterbox and `slice` clips
+// the viewBox content that falls outside the viewport.
+TEST_F(RendererRegressionTests, MarkerOverflowClipsToItsViewportNotItsViewBox) {
+  const auto meet = RenderReferenceContract(R"svg(
+      <marker id="m" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="20"
+              viewBox="0 0 20 10">
+        <rect y="-5" width="20" height="20" fill="blue"/>
+      </marker>
+      <path d="M 20 20 L 40 20" fill="none" marker-start="url(#m)"/>)svg");
+  const auto slice = RenderReferenceContract(R"svg(
+      <marker id="m" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="20" refY="10"
+              viewBox="0 0 20 40" preserveAspectRatio="xMidYMid slice">
+        <rect width="20" height="40" fill="blue"/>
+      </marker>
+      <path d="M 20 20 L 40 20" fill="none" marker-start="url(#m)"/>)svg");
+  EXPECT_THAT(PixelAt(meet, 30, 17), testing::ElementsAre(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(slice, 30, 44), testing::ElementsAre(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(
+      meet,
+      RenderReferenceContract(R"svg(<rect x="20" y="15" width="20" height="20" fill="blue"/>)svg"),
+      "marker_meet_viewport_clip", editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      slice,
+      RenderReferenceContract(R"svg(<rect x="20" y="20" width="20" height="20" fill="blue"/>)svg"),
+      "marker_slice_viewport_clip", editor::tests::PixelmatchIdentityParams());
+}
+
+// The viewport clip follows the viewBox alignment and origin, `preserveAspectRatio="none"`, and
+// the marker's own rotation: it is the rotated viewport, not that viewport's bounding box.
+TEST_F(RendererRegressionTests, MarkerOverflowClipFollowsAlignmentOriginAndRotation) {
+  struct AxisAlignedCase {
+    std::string_view label;
+    std::string_view markerAttributes;
+    std::string_view content;
+    std::string_view expected;
+  };
+  for (const AxisAlignedCase& testCase : {
+           AxisAlignedCase{"xMinYMin_meet", R"(viewBox="0 0 20 10" preserveAspectRatio="xMinYMin")",
+                           R"(<rect y="-5" width="20" height="20" fill="blue"/>)",
+                           R"(<rect x="20" y="20" width="20" height="15" fill="blue"/>)"},
+           AxisAlignedCase{"viewBox_origin", R"(viewBox="10 10 20 10" refX="10" refY="10")",
+                           R"(<rect x="10" width="20" height="40" fill="blue"/>)",
+                           R"(<rect x="20" y="15" width="20" height="20" fill="blue"/>)"},
+           AxisAlignedCase{"none", R"(viewBox="0 0 20 10" preserveAspectRatio="none")",
+                           R"(<rect y="-5" width="20" height="20" fill="blue"/>)",
+                           R"(<rect x="20" y="20" width="20" height="20" fill="blue"/>)"},
+       }) {
+    SCOPED_TRACE(testCase.label);
+    const auto actual = RenderReferenceContract(
+        std::string(R"svg(<marker id="m" markerUnits="userSpaceOnUse" markerWidth="20"
+                            markerHeight="20" )svg") +
+        std::string(testCase.markerAttributes) + ">" + std::string(testCase.content) +
+        R"svg(</marker><path d="M 20 20 L 40 20" fill="none" marker-start="url(#m)"/>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, RenderReferenceContract(testCase.expected),
+                                         testCase.label, editor::tests::PixelmatchIdentityParams());
+  }
+
+  // A 20 by 20 viewport centred on the vertex and turned 45 degrees: (44, 44) lies inside its
+  // bounding box but outside the turned square.
+  const auto rotated = RenderReferenceContract(R"svg(
+      <marker id="m" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="20" refX="10"
+              refY="10" orient="45">
+        <rect x="-10" y="-10" width="40" height="40" fill="blue"/>
+      </marker>
+      <path d="M 32 32 L 50 32" fill="none" marker-start="url(#m)"/>)svg");
+  EXPECT_THAT(PixelAt(rotated, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(rotated, 44, 44), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(rotated, 20, 20), testing::ElementsAre(0, 0, 0, 0));
+  // Inside the turned square but outside the unturned one (22 to 42), and the reverse.
+  EXPECT_THAT(PixelAt(rotated, 32, 20), testing::ElementsAre(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(rotated, 23, 23), testing::ElementsAre(0, 0, 0, 0));
+}
+
+// A marker's clip inside a turned nested `svg` must keep the nested viewport's clip: (57, 44) lies
+// inside the marker viewport and inside the bounding box of the turned nested viewport, but
+// outside the nested viewport itself.
+TEST_F(RendererRegressionTests, MarkerClipInsideTurnedNestedViewportKeepsTheViewportClip) {
+  const auto actual = RenderReferenceContract(R"svg(
+      <g transform="rotate(30 32 32)">
+        <svg x="12" y="12" width="40" height="40">
+          <marker id="m" markerUnits="userSpaceOnUse" markerWidth="60" markerHeight="60">
+            <rect x="-20" y="-20" width="100" height="100" fill="blue"/>
+          </marker>
+          <path d="M 0 0 L 10 0" fill="none" marker-start="url(#m)"/>
+        </svg>
+      </g>)svg");
+  EXPECT_THAT(PixelAt(actual, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 57, 44), testing::ElementsAre(0, 0, 0, 0));
+}
+
+/// Renders a marker whose content fills its viewport, at the start of \p path, inside a 40 by 40
+/// nested `svg` turned 30 degrees about the centre of the 64 by 64 canvas.
+RendererBitmap RenderMarkerInTurnedViewport(std::string_view markerAttributes,
+                                            std::string_view path) {
+  return RenderReferenceContract(std::string(R"svg(
+      <g transform="rotate(30 32 32)">
+        <svg x="12" y="12" width="40" height="40">
+          <marker id="m" markerUnits="userSpaceOnUse" )svg") +
+                                 std::string(markerAttributes) + R"svg(>
+            <rect x="-20" y="-20" width="100" height="100" fill="blue"/>
+          </marker>
+          <path d=")svg" + std::string(path) +
+                                 R"svg(" fill="none" marker-start="url(#m)"/>
+        </svg>
+      </g>)svg");
+}
+
+/// Renders \p body inside the 40 by 40 nested `svg` that RenderMarkerInTurnedViewport turns.
+RendererBitmap RenderInTurnedViewport(std::string_view body) {
+  return RenderReferenceContract(std::string(R"svg(
+      <g transform="rotate(30 32 32)">
+        <svg x="12" y="12" width="40" height="40">)svg") +
+                                 std::string(body) + R"svg(</svg></g>)svg");
+}
+
+/// Expects each of \p filled to be exactly the blue fill and each of \p clear to be exactly
+/// transparent. The tests pick these pixels at least 2.5 px from every clip edge, where Geode's
+/// pixel-centre polygon test and the software renderer's coverage agree exactly.
+void ExpectProbes(const RendererBitmap& actual, std::initializer_list<std::pair<int, int>> filled,
+                  std::initializer_list<std::pair<int, int>> clear) {
+  for (const auto& [x, y] : filled) {
+    EXPECT_THAT(PixelAt(actual, x, y), testing::ElementsAre(0, 0, 255, 255))
+        << "pixel (" << x << ", " << y << ")";
+  }
+  for (const auto& [x, y] : clear) {
+    EXPECT_THAT(PixelAt(actual, x, y), testing::ElementsAre(0, 0, 0, 0))
+        << "pixel (" << x << ", " << y << ")";
+  }
+}
+
+// The marker viewport and the turned nested viewport each cut the content. When the two clips only
+// partly overlap, or do not overlap, what draws is their intersection.
+TEST_F(RendererRegressionTests, MarkerClipPartlyOutsideTurnedNestedViewportKeepsBothClips) {
+  // Both clips turn by 30 degrees, so their intersection is the turned 30 by 40 rectangle
+  // x = 10 to 40 in the nested viewport. (57, 44) is inside the marker viewport but outside it.
+  const auto partial =
+      RenderMarkerInTurnedViewport(R"(markerWidth="40" markerHeight="40")", "M 10 0 L 20 0");
+  ExpectProbes(partial, {{40, 36}, {37, 32}, {36, 34}},
+               {{57, 44}, {60, 28}, {56, 35}, {25, 8}, {17, 22}});
+  // The same two clips as two nested viewports draw the same pixels: a nested `svg` at the marker
+  // viewport's place, holding the marker's content in the same coordinates.
+  editor::tests::CompareBitmapToBitmap(
+      partial, RenderInTurnedViewport(R"svg(<svg x="10" y="0" width="40" height="40">
+          <rect x="-20" y="-20" width="100" height="100" fill="blue"/></svg>)svg"),
+      "marker_partial_overlap_as_viewports", editor::tests::PixelmatchIdentityParams());
+
+  // The 10 by 10 marker viewport starting at x = 42 lies wholly outside the nested viewport.
+  const auto disjoint =
+      RenderMarkerInTurnedViewport(R"(markerWidth="10" markerHeight="10")", "M 42 0 L 50 0");
+  editor::tests::CompareBitmapToBitmap(disjoint, RenderReferenceContract(""), "marker_disjoint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A marker turned by `orient="45"` inside the viewport turned by 30 degrees: the two clips
+// intersect in an octagon, which a renderer testing one four-edge polygon cannot carry. The
+// nested viewport's clip must still hold: (12, 20) and (20, 51) are inside the marker viewport and
+// outside the nested one. A renderer may fall back to the marker viewport's device-space bounds
+// (x and y from 9.95 to 54.05 here), which over-covers the corners of the turned marker viewport
+// inside the nested viewport, as before markers were clipped in their own space; those pixels are
+// not checked. (26, 7) and (56, 26) are inside the nested viewport but outside those bounds, so
+// the fallback still clips them.
+TEST_F(RendererRegressionTests, MarkerClipOctagonIntersectionKeepsTheEnclosingClip) {
+  const auto actual = RenderMarkerInTurnedViewport(
+      R"(markerWidth="36" markerHeight="36" refX="18" refY="18" orient="45")", "M 20 20 L 30 20");
+  EXPECT_THAT(PixelAt(actual, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 12, 20), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(actual, 20, 51), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(actual, 26, 7), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(actual, 56, 26), testing::ElementsAre(0, 0, 0, 0));
+}
+
+// A nested `svg` partly outside a turned `svg`, turned with it, and a marker partly outside both:
+// every stacked viewport is a polygon clip, and what draws is the intersection of all of them.
+TEST_F(RendererRegressionTests, StackedTurnedViewportsDrawTheirIntersection) {
+  // Intersection x = 10 to 40, y = 0 to 30 in the outer nested viewport.
+  const auto twoViewports = RenderInTurnedViewport(R"svg(<svg x="10" y="-10" width="40" height="40">
+          <rect x="-20" y="-20" width="100" height="100" fill="blue"/></svg>)svg");
+  ExpectProbes(twoViewports, {{38, 30}, {39, 30}},
+               {{57, 44}, {39, 5}, {53, 13}, {25, 8}, {21, 15}});
+
+  // Intersection x = 10 to 40, y = 5 to 30.
+  const auto threeClips = RenderInTurnedViewport(R"svg(
+      <svg x="10" y="-10" width="40" height="40">
+        <marker id="m" markerUnits="userSpaceOnUse" markerWidth="40" markerHeight="40">
+          <rect x="-20" y="-20" width="100" height="100" fill="blue"/>
+        </marker>
+        <path d="M 0 15 L 5 15" fill="none" marker-start="url(#m)"/>
+      </svg>)svg");
+  ExpectProbes(threeClips, {{36, 31}, {39, 33}}, {{39, 5}, {46, 9}, {25, 8}, {21, 15}});
+  editor::tests::CompareBitmapToBitmap(
+      threeClips, RenderInTurnedViewport(R"svg(<svg x="10" y="-10" width="40" height="40">
+          <svg x="0" y="15" width="40" height="40">
+            <rect x="-20" y="-20" width="100" height="100" fill="blue"/></svg></svg>)svg"),
+      "three_clips_as_viewports", editor::tests::PixelmatchIdentityParams());
+}
+
+// SVG 2 section 8.6: a viewBox with a zero width or height disables rendering of the element.
+TEST_F(RendererRegressionTests, MarkerWithZeroSizeViewBoxDrawsNothing) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  AssertVisibleFixture(expected, "marker_zero_viewbox_sibling_visible");
+  for (std::string_view viewBox : {"0 0 0 10", "0 0 20 0"}) {
+    SCOPED_TRACE(viewBox);
+    editor::tests::CompareBitmapToBitmap(
+        RenderReferenceContract(
+            std::string(R"svg(<marker id="m" markerUnits="userSpaceOnUse" markerWidth="20"
+                                markerHeight="20" viewBox=")svg") +
+            std::string(viewBox) + R"svg(">
+              <rect width="20" height="20" fill="blue"/>
+            </marker>
+            <path d="M 20 20 L 40 20" fill="none" marker-start="url(#m)"/>
+            <rect x="1" y="1" width="3" height="3" fill="lime"/>)svg"),
+        expected, "marker_zero_viewbox_draws_nothing", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 RendererBitmap RenderReferenceRadial(std::string_view attributes, bool singleStop = false) {
   return RenderReferenceContract(
       std::string(R"svg(<radialGradient id="g" )svg") + std::string(attributes) +

@@ -5025,6 +5025,21 @@ Vector2d MarkerReferencePoint(const components::ResolvedMarker& marker,
           component.refY.toPixels(viewport, FontMetrics(), Lengthd::Extent::Y)};
 }
 
+/// Returns the marker's viewBox, or std::nullopt when it has none.
+std::optional<Box2d> MarkerViewBox(components::LayoutSystem& layoutSystem,
+                                   EntityHandle markerHandle) {
+  if (!layoutSystem.overridesViewBox(markerHandle)) {
+    return std::nullopt;
+  }
+  return layoutSystem.getViewBox(markerHandle);
+}
+
+/// Returns true when \p viewBox has a zero width or height, which disables rendering of the
+/// element (SVG 2 section 8.6).
+bool ViewBoxDisablesRendering(const std::optional<Box2d>& viewBox) {
+  return viewBox.has_value() && viewBox->isEmpty();
+}
+
 }  // namespace
 
 void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
@@ -5054,10 +5069,10 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
 
   const Box2d markerSize = Box2d::FromXYWH(0, 0, dimensions.x, dimensions.y);
 
-  const std::optional<Box2d> markerViewBox =
-      layoutSystem.overridesViewBox(markerHandle)
-          ? std::optional<Box2d>(layoutSystem.getViewBox(markerHandle))
-          : std::nullopt;
+  const std::optional<Box2d> markerViewBox = MarkerViewBox(layoutSystem, markerHandle);
+  if (ViewBoxDisablesRendering(markerViewBox)) {
+    return;
+  }
 
   // Per SVG2 §11.6.2, when the marker has a viewBox, refX/refY percentages (and the
   // left/center/right / top/center/bottom keywords the parser maps to percentages) resolve
@@ -5101,16 +5116,22 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
   surfaceFromCanvasTransform_ = markerUserSpaceFromWorld;
 
-  // Apply overflow clipping if needed. The clip rect is in world coordinates,
-  // so reset the transform to identity before clipping.
+  // Apply overflow clipping if needed. The clip rect is in the marker's content coordinates, so it
+  // turns with the marker.
   const auto& markerStyle = markerHandle.get<components::ComputedStyleComponent>();
   const Overflow overflow = markerStyle.properties->overflow.get().value();
   const bool needsClip = overflow != Overflow::Visible && overflow != Overflow::Auto;
 
   if (needsClip) {
-    renderer_.setTransform(Transform2d());
+    renderer_.setTransform(markerUserSpaceFromWorld);
     ResolvedClip markerClip;
-    markerClip.clipRect = markerUserSpaceFromWorld.transformBox(markerViewBox.value_or(markerSize));
+    // The clip is the marker's viewport (SVG 2 section 13.7.4), which differs from its viewBox
+    // whenever preserveAspectRatio letterboxes (`meet`) or crops (`slice`) the content.
+    markerClip.clipRect = markerUnitsFromViewBox.inverse().transformBox(markerSize);
+    // Where a renderer cannot intersect this clip exactly with an enclosing turned clip, it may
+    // keep the enclosing clip and clip to this viewport's device-space bounds; before the marker
+    // clip turned with the marker, it was always the device-space bounds of the viewBox rectangle.
+    markerClip.boundsFallbackWhenStacked = true;
     renderer_.pushClip(markerClip);
   }
 

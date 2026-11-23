@@ -630,7 +630,7 @@ paint_servers_markers_images	val:offset/<percentage>	conformant	-	-	yes
 paint_servers_markers_images	val:preserveAspectRatio@image/none	conformant	-	-	yes
 paint_servers_markers_images	val:preserveAspectRatio@image/<align>-meet	conformant	-	-	yes
 paint_servers_markers_images	val:preserveAspectRatio@image/<align>-slice	conformant	-	-	yes
-paint_servers_markers_images	val:preserveAspectRatio@marker/all	partial	low	S	yes
+paint_servers_markers_images	val:preserveAspectRatio@marker/all	conformant	-	-	yes
 paint_servers_markers_images	val:preserveAspectRatio@pattern/all	conformant	-	-	yes
 paint_servers_markers_images	val:crossorigin/anonymous	missing	low	S	no
 paint_servers_markers_images	val:crossorigin/use-credentials	missing	low	S	no
@@ -699,7 +699,7 @@ paint_servers_markers_images	feat:svg2/pserver-fallback-invalid-reference	confor
 paint_servers_markers_images	feat:svg2/pserver-never-rendered	conformant	-	-	yes
 paint_servers_markers_images	feat:svg2/pserver-referencable-when-display-none	partial	low	S	no
 paint_servers_markers_images	feat:svg2/marker-viewport-size	conformant	-	-	yes
-paint_servers_markers_images	feat:svg2/marker-clip	divergent	low	S	yes
+paint_servers_markers_images	feat:svg2/marker-clip	conformant	-	-	yes
 paint_servers_markers_images	feat:svg2/marker-overflow-visible	conformant-untested	low	S	no
 paint_servers_markers_images	feat:svg2/marker-units-strokeWidth-scale	partial	low	S	yes
 paint_servers_markers_images	feat:svg2/marker-orient-open-subpath-ends	conformant	-	-	yes
@@ -935,7 +935,7 @@ clipping_masking	feat:svg2-render/ua-stylesheet-overflow	conformant	-	-	yes
 clipping_masking	feat:svg2-render/overflow-root-svg	conformant	-	-	yes
 clipping_masking	feat:svg2-render/overflow-nested-svg	conformant	-	-	yes
 clipping_masking	feat:svg2-render/overflow-symbol	conformant	-	-	yes
-clipping_masking	feat:svg2-render/overflow-marker	partial	low	S	yes
+clipping_masking	feat:svg2-render/overflow-marker	conformant	-	-	yes
 clipping_masking	feat:svg2-render/overflow-pattern	partial	low	M	yes
 clipping_masking	feat:svg2-render/overflow-image	partial	low	S	no
 clipping_masking	feat:svg2-render/overflow-foreignobject	not-applicable	-	-	no

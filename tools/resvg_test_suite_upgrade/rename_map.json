@@ -140,7 +140,7 @@
     "svg/a-filter-004.svg": "tests/filters/filter-functions/drop-shadow-function-no-color.svg",
     "svg/a-filter-005.svg": "tests/filters/filter-functions/drop-shadow-function-only-offset.svg",
     "svg/a-filter-006.svg": "tests/filters/filter-functions/drop-shadow-function-only-X-offset.svg",
-    "svg/a-filter-007.svg": "tests/filters/filter-functions/drop-shadow-function-comma-spearated.svg",
+    "svg/a-filter-007.svg": "tests/filters/filter-functions/drop-shadow-function-comma-separated.svg",
     "svg/a-filter-008.svg": "tests/filters/filter-functions/drop-shadow-function-extra-value.svg",
     "svg/a-filter-009.svg": "tests/filters/filter-functions/two-drop-shadow-function.svg",
     "svg/a-filter-010.svg": "tests/filters/filter-functions/drop-shadow-function-no-values.svg",
