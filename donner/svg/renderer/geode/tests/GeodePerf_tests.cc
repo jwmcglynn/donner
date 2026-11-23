@@ -639,6 +639,67 @@ TEST_F(GeodePerfTest, UnchangedFilterPassesUploadAndBindNothing) {
          "its bind group";
 }
 
+/// A blur on an element at the canvas corner, whose capture extends past the canvas: its result
+/// composites through a textured quad placed at a negative offset.
+constexpr std::string_view kFilterAtCanvasEdgeSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="b"><feGaussianBlur stdDeviation="3"/></filter>
+  <rect x="0" y="0" width="40" height="40" fill="green" filter="url(#b)"/>
+</svg>
+)SVG";
+
+/// Renders \p svgSource on one renderer for three frames and returns each frame's counters, sampled
+/// before any readback.
+/// @param svgSource Document to render. @param device Device to render on.
+std::array<geode::GeodeCounters, 3> countersForThreeRenders(
+    std::string_view svgSource, const std::shared_ptr<geode::GeodeDevice>& device) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(svgSource, sink);
+  if (parsed.hasError()) {
+    ADD_FAILURE() << "ParseSVG failed: " << parsed.error().reason;
+    return {};
+  }
+  SVGDocument document = std::move(parsed.result());
+  RendererGeode renderer(device);
+  std::array<geode::GeodeCounters, 3> frames;
+  for (geode::GeodeCounters& frame : frames) {
+    renderer.draw(document);
+    frame = renderer.lastFrameTimings().counters;
+  }
+  return frames;
+}
+
+/// An unchanged frame composites each filter result without writing a buffer or creating a bind
+/// group: the composite keeps its uniform buffer and bind group, and the texture pool hands the
+/// filter the output texture it had the frame before. A result whose capture covers exactly the
+/// target composites through a full-target blit (`turbulenceDisplacement`); a capture sized to its
+/// filter region composites through a textured quad at the capture's offset (the other fixtures).
+TEST_F(GeodePerfTest, FilterResultComposites_UnchangedFrameWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const auto expectSteady = [&](std::string_view name, std::string_view svg) {
+    SCOPED_TRACE(name);
+    const std::array<geode::GeodeCounters, 3> frames = countersForThreeRenders(svg, device);
+    // Premise: the first frame composited filter results through the image pipeline.
+    EXPECT_GT(frames[0].bindgroupCreates, 0u);
+    for (size_t frame = 1; frame < frames.size(); ++frame) {
+      SCOPED_TRACE(testing::Message() << "frame " << frame + 1);
+      printCounters(std::string(name).c_str(), frames[frame]);
+      EXPECT_EQ(frames[frame].textureCreates, 0u);
+      EXPECT_EQ(frames[frame].bufferWrites, 0u)
+          << "an unchanged filter result composite rewrote its uniform";
+      EXPECT_EQ(frames[frame].bindgroupCreates, 0u)
+          << "an unchanged filter result composite built its bind group again";
+    }
+  };
+  for (const FilterFamilyFixture& fixture : kFilterFamilyFixtures) {
+    expectSteady(fixture.name, fixture.svg);
+  }
+  expectSteady("twoFiltersSharingIntermediates", kTwoFiltersSharingIntermediatesSvg);
+  expectSteady("filterAtCanvasEdge", kFilterAtCanvasEdgeSvg);
+}
+
 TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
   auto device = sharedDevice();
   ASSERT_TRUE(device);
@@ -1083,6 +1144,55 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
       << "Resident gradient strokes must re-upload zero geometry on an unchanged frame.";
   EXPECT_LE(c.bindgroupCreates, 1u)
       << "The cached gradient-stroke bind group must be reused on an unchanged frame.";
+}
+
+/// Five isolated-layer composites over a background: three sibling opacity groups with distinct
+/// opacities, one of them wrapping a nested group, and a `mix-blend-mode` composite, all of solid
+/// fills that are resident on an unchanged frame.
+constexpr std::string_view kLayerCompositesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <rect width="64" height="64" fill="#204080"/>
+  <g opacity="0.25"><rect x="4" y="4" width="24" height="24" fill="red"/></g>
+  <g opacity="0.5"><rect x="36" y="4" width="24" height="24" fill="lime"/></g>
+  <g opacity="0.75">
+    <g opacity="0.6"><rect x="4" y="36" width="24" height="24" fill="yellow"/></g>
+  </g>
+  <rect x="36" y="36" width="24" height="24" fill="white" opacity="0.9"
+        style="mix-blend-mode: multiply"/>
+</svg>
+)SVG";
+
+/// An unchanged frame composites its isolated layers without writing a buffer or creating a bind
+/// group: each composite keeps its uniform buffer and bind group, and the texture pool hands it the
+/// layer and backdrop textures it composited last frame.
+TEST_F(GeodePerfTest, LayerComposites_UnchangedFrameWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kLayerCompositesSvg, sink);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  ASSERT_FALSE(renderer.takeSnapshot().empty());
+
+  // Two unchanged frames: a composite's bind group matches only while the pool hands the layer the
+  // same textures as last frame.
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(::testing::Message() << "frame " << frame);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+    EXPECT_EQ(c.pathEncodes, 0u);
+    EXPECT_EQ(c.textureCreates, 0u);
+    EXPECT_EQ(c.bufferWrites, 0u) << "An unchanged layer composite must not rewrite its uniform.";
+    EXPECT_EQ(c.bindgroupCreates, 0u)
+        << "An unchanged layer composite must reuse the bind group of the textures it composited "
+           "last frame.";
+  }
 }
 
 /// Three patterns with tiles of one size: two fill rects and the third strokes a rect. The three

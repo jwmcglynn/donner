@@ -10,14 +10,17 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <string>
 #include <vector>
 
 #include "donner/base/FillRule.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
@@ -299,6 +302,134 @@ TEST_F(GeoEncoderTest, AScissorSetBeforeTheFirstBlitStillClipsIt) {
       << "Outside the scissor the target must keep what the clear left";
   EXPECT_THAT(pixelAt(pixels, 48, 16), RgbaEq(0, 0, 0, 255));
   EXPECT_THAT(pixelAt(pixels, 16, 48), RgbaEq(0, 0, 0, 255));
+}
+
+/// A retained quad binding is reused only with every input it was built from. Each case draws
+/// through one binding with inputs A, then with inputs B that differ in one bound resource, and the
+/// second draw must match inputs B drawn without a binding.
+TEST_F(GeoEncoderTest, RetainedQuadBindingRebuildsWhenAnyBoundInputChanges) {
+  // Fills a texture of \p extent with \p texelAt(x, y), premultiplied RGBA.
+  const auto makeTexture = [&](gpu::Extent2d extent, auto texelAt) {
+    gpu::Result<gpu::Texture> created = device_->runtimeDevice().createTexture(
+        gpu::TextureDescriptor{"RetainedQuadInput", extent, gpu::TextureFormat::RGBA8Unorm,
+                               gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+    EXPECT_TRUE(created.hasResult()) << created.error();
+    gpu::Texture texture = std::move(created).result();
+    std::vector<uint8_t> texels(static_cast<size_t>(gpu::kTexelRowPitchAlignment) * extent.height);
+    for (uint32_t y = 0; y < extent.height; ++y) {
+      for (uint32_t x = 0; x < extent.width; ++x) {
+        const std::array<uint8_t, 4> texel = texelAt(x, y);
+        std::copy(texel.begin(), texel.end(),
+                  texels.begin() + y * gpu::kTexelRowPitchAlignment + x * 4);
+      }
+    }
+    const gpu::Status written = device_->runtimeDevice().writeTexture(
+        texture, texels, {0, gpu::kTexelRowPitchAlignment, extent.height}, extent);
+    EXPECT_TRUE(written.hasResult()) << written.error();
+    return texture;
+  };
+  const auto solid = [&](std::array<uint8_t, 4> rgba) {
+    return makeTexture(kTargetSize, [rgba](uint32_t, uint32_t) { return rgba; });
+  };
+  const auto snapshot = [&]() {
+    svg::RendererBitmap bitmap;
+    bitmap.dimensions = Vector2i(kSize, kSize);
+    bitmap.pixels = readback();
+    bitmap.rowBytes = kSize * 4;
+    bitmap.alphaType = svg::AlphaType::Premultiplied;
+    return bitmap;
+  };
+  // Draws through \p binding (or a per-frame allocation when null) with \p draw and reads back.
+  const auto render = [&](GeodeTextureEncoder::RetainedQuadBinding* binding, auto draw) {
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                       kTargetSize);
+    encoder.clear(css::RGBA(0, 0, 0, 255));
+    draw(encoder, binding);
+    encoder.finish();
+    return snapshot();
+  };
+  // Inputs A then B through one binding must equal B without one; A without a binding must differ
+  // from B, so the case can tell a stale binding from a rebuilt one.
+  const auto expectRebuild = [&](const char* name, auto drawA, auto drawB) {
+    SCOPED_TRACE(name);
+    GeodeTextureEncoder::RetainedQuadBinding binding;
+    (void)render(&binding, drawA);
+    const svg::RendererBitmap actual = render(&binding, drawB);
+    const svg::RendererBitmap expected = render(nullptr, drawB);
+    const svg::RendererBitmap other = render(nullptr, drawA);
+    // A signal, not an acceptance: identity criteria, with every mismatch allowed and counted.
+    editor::tests::BitmapGoldenCompareParams signalParams =
+        editor::tests::PixelmatchIdentityParams();
+    signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+    int premiseMismatch = 0;
+    editor::tests::CompareBitmapToBitmap(other, expected,
+                                         std::string("retained_quad_premise_") + name, signalParams,
+                                         &premiseMismatch);
+    EXPECT_GT(premiseMismatch, 0) << "inputs A and B must render differently";
+    editor::tests::CompareBitmapToBitmap(actual, expected, std::string("retained_quad_") + name,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+
+  const gpu::Texture layer = solid({128, 0, 0, 128});
+
+  // The blend backdrop changes while the layer texture stays.
+  const gpu::Texture blueBackdrop = solid({0, 0, 255, 255});
+  const gpu::Texture greenBackdrop = solid({0, 255, 0, 255});
+  constexpr uint32_t kMultiply = 2;
+  expectRebuild(
+      "backdrop",
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.blitFullTargetBlended(layer, blueBackdrop, kMultiply, 1.0, binding);
+      },
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.blitFullTargetBlended(layer, greenBackdrop, kMultiply, 1.0, binding);
+      });
+
+  // The clip mask view changes while the layer texture stays.
+  const gpu::Texture leftMask = makeTexture(kTargetSize, [](uint32_t x, uint32_t) {
+    return x < kSize / 2 ? std::array<uint8_t, 4>{255, 255, 255, 255}
+                         : std::array<uint8_t, 4>{0, 0, 0, 0};
+  });
+  const gpu::Texture topMask = makeTexture(kTargetSize, [](uint32_t, uint32_t y) {
+    return y < kSize / 2 ? std::array<uint8_t, 4>{255, 255, 255, 255}
+                         : std::array<uint8_t, 4>{0, 0, 0, 0};
+  });
+  const gpu::Texture opaqueLayer = solid({255, 0, 0, 255});
+  // The views outlive every draw that binds them, as a clip stack entry's do.
+  gpu::Result<gpu::TextureView> leftView =
+      device_->runtimeDevice().createTextureView(leftMask, gpu::TextureViewDescriptor{"LeftMask"});
+  gpu::Result<gpu::TextureView> topView =
+      device_->runtimeDevice().createTextureView(topMask, gpu::TextureViewDescriptor{"TopMask"});
+  ASSERT_TRUE(leftView.hasResult()) << leftView.error();
+  ASSERT_TRUE(topView.hasResult()) << topView.error();
+  expectRebuild(
+      "clip_mask",
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.setClipMask(leftMask, leftView.result());
+        encoder.blitFullTarget(opaqueLayer, 1.0, binding);
+      },
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.setClipMask(topMask, topView.result());
+        encoder.blitFullTarget(opaqueLayer, 1.0, binding);
+      });
+
+  // The sampler changes: a nearest-sampled upscale, then a bilinear one of the same texture.
+  const gpu::Texture checker = makeTexture({4, 4}, [](uint32_t x, uint32_t y) {
+    return (x + y) % 2 == 0 ? std::array<uint8_t, 4>{255, 255, 255, 255}
+                            : std::array<uint8_t, 4>{0, 0, 0, 255};
+  });
+  const Box2d upscaled({0, 0}, {kSize, kSize});
+  const Box2d wholeTexture({0, 0}, {1, 1});
+  expectRebuild(
+      "sampler",
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.drawTexture(checker, upscaled, wholeTexture, 1.0, /*pixelated=*/true,
+                            /*sourceIsPremultiplied=*/true, binding);
+      },
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.drawTexture(checker, upscaled, wholeTexture, 1.0, /*pixelated=*/false,
+                            /*sourceIsPremultiplied=*/true, binding);
+      });
 }
 
 /// A mask pass over a mask whose extent is not the target's is refused before anything is recorded:

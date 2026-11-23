@@ -356,6 +356,49 @@ bool FillTexelMapping(gpu::Device& device, const gpu::Texture& texture, const fl
              : FillAnchoredTexelRows(params, descriptor.result().size, u);
 }
 
+/// The sampler a quad with \p params samples its source through.
+const gpu::Sampler& QuadSampler(const GeodeImagePipeline& pipeline,
+                                const GeodeTextureEncoder::QuadParams& params) {
+  return params.filter == GeodeTextureEncoder::Filter::Nearest ? pipeline.nearestSampler()
+                                                               : pipeline.linearSampler();
+}
+
+/// Create the bind group one quad draws with.
+///
+/// @param device Device to create the bind group on.
+/// @param pipeline Image pipeline whose layout the bind group follows.
+/// @param sampler Sampler for the source texture.
+/// @param uniformBinding Buffer range holding the quad's uniforms.
+/// @param views The four texture views the quad binds.
+gpu::Result<gpu::BindGroup> CreateQuadBindGroup(gpu::Device& device,
+                                                const GeodeImagePipeline& pipeline,
+                                                const gpu::Sampler& sampler,
+                                                const gpu::BufferBinding& uniformBinding,
+                                                const QuadViews& views) {
+  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(ImageBlit);
+  return device.createBindGroup(gpu::BindGroupDescriptor{
+      "GeodeImageBlitBindGroup",
+      pipeline.bindGroupLayout(),
+      {{shader.resource("uniforms")->binding, uniformBinding},
+       {shader.resource("imageSampler")->binding, gpu::SamplerBinding{sampler}},
+       {shader.resource("imageTexture")->binding, gpu::TextureViewBinding{views.source}},
+       {shader.resource("maskTexture")->binding, gpu::TextureViewBinding{views.mask}},
+       {shader.resource("dstSnapshotTexture")->binding, gpu::TextureViewBinding{views.backdrop}},
+       {shader.resource("clipMaskTexture")->binding, gpu::TextureViewBinding{views.clipMask}}}});
+}
+
+/// Identity of the resource \p handle names; null for a null handle.
+template <typename Tag>
+gpu::ResourceIdentity IdentityOf(const gpu::Handle<Tag>& handle) {
+  return gpu::ResourceIdentity{handle.slotIndex(), handle.generation()};
+}
+
+/// Identity of the resource \p handle points at; null when \p handle is null.
+template <typename Tag>
+gpu::ResourceIdentity IdentityOf(const gpu::Handle<Tag>* handle) {
+  return handle != nullptr ? IdentityOf(*handle) : gpu::ResourceIdentity{};
+}
+
 }  // namespace
 
 void GeodeTextureEncoder::drawTexturedQuad(
@@ -378,25 +421,15 @@ void GeodeTextureEncoder::drawTexturedQuad(
     return;
   }
 
-  // Pick sampler based on requested filter mode.
-  const gpu::Sampler& sampler =
-      params.filter == Filter::Nearest ? pipeline.nearestSampler() : pipeline.linearSampler();
+  const gpu::Sampler& sampler = QuadSampler(pipeline, params);
 
   QuadViews views;
   if (!ResolveQuadViews(device, resourceArena, texture, params, views)) {
     return;
   }
 
-  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(ImageBlit);
-  gpu::Result<gpu::BindGroup> bindGroupResult = device.createBindGroup(gpu::BindGroupDescriptor{
-      "GeodeImageBlitBindGroup",
-      pipeline.bindGroupLayout(),
-      {{shader.resource("uniforms")->binding, uniformBinding},
-       {shader.resource("imageSampler")->binding, gpu::SamplerBinding{sampler}},
-       {shader.resource("imageTexture")->binding, gpu::TextureViewBinding{views.source}},
-       {shader.resource("maskTexture")->binding, gpu::TextureViewBinding{views.mask}},
-       {shader.resource("dstSnapshotTexture")->binding, gpu::TextureViewBinding{views.backdrop}},
-       {shader.resource("clipMaskTexture")->binding, gpu::TextureViewBinding{views.clipMask}}}});
+  gpu::Result<gpu::BindGroup> bindGroupResult =
+      CreateQuadBindGroup(device, pipeline, sampler, uniformBinding, views);
   if (bindGroupResult.hasError()) {
     return;
   }
@@ -408,6 +441,139 @@ void GeodeTextureEncoder::drawTexturedQuad(
   (void)pass.setPipeline(pipeline.pipeline());
   (void)pass.setBindGroup(0, bindGroup);
   (void)pass.draw(6, 1, 0, 0);
+}
+
+bool GeodeTextureEncoder::RetainedQuadBinding::publishUniforms(gpu::Device& device,
+                                                               std::span<const uint8_t> bytes) {
+  if (!uniformBuffer_.isValid()) {
+    gpu::Result<gpu::Buffer> created = device.createBuffer(
+        gpu::BufferDescriptor{"GeodeRetainedQuadUniforms", kRetainedBytes,
+                              gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+    if (created.hasError()) {
+      return false;
+    }
+    uniformBuffer_ = std::move(created).result();
+    uniformCurrent_ = false;
+    bindGroupBindsBuffer_ = false;
+  }
+  if (uniformCurrent_ && std::equal(bytes.begin(), bytes.end(), uniformBytes_.begin())) {
+    return true;
+  }
+  uniformCurrent_ = false;
+  if (device.writeBuffer(uniformBuffer_, 0, bytes).hasError()) {
+    return false;
+  }
+  std::copy(bytes.begin(), bytes.end(), uniformBytes_.begin());
+  uniformCurrent_ = true;
+  return true;
+}
+
+bool GeodeTextureEncoder::RetainedQuadBinding::viewsTexture(
+    const gpu::ResourceIdentity& texture) const {
+  return (sourceView_.isValid() && inputs_.source == texture) ||
+         (backdropView_.isValid() && inputs_.backdrop == texture);
+}
+
+bool GeodeTextureEncoder::RetainedQuadBinding::bindsClipMask() const {
+  return bindGroup_.isValid() && inputs_.clipMask != gpu::ResourceIdentity{};
+}
+
+void GeodeTextureEncoder::RetainedQuadBinding::releaseTextureViews() {
+  // The bind group names the views, so it goes first.
+  bindGroup_ = gpu::BindGroup();
+  sourceView_ = gpu::TextureView();
+  backdropView_ = gpu::TextureView();
+  bindGroupBindsBuffer_ = false;
+  inputs_ = Inputs{};
+}
+
+bool GeodeTextureEncoder::RetainedQuadBinding::rebuildBindGroup(gpu::Device& device,
+                                                                const GeodeImagePipeline& pipeline,
+                                                                const gpu::Texture& texture,
+                                                                const QuadParams& params,
+                                                                const Inputs& inputs) {
+  releaseTextureViews();
+  // Views exist only alongside the inputs they were made from, which is what viewsTexture reads, so
+  // a failure part way through releases whatever it created.
+  inputs_ = inputs;
+  const auto fail = [this] {
+    releaseTextureViews();
+    return false;
+  };
+
+  gpu::Result<gpu::TextureView> sourceView =
+      device.createTextureView(texture, gpu::TextureViewDescriptor{"GeodeRetainedQuadView"});
+  if (sourceView.hasError()) {
+    return fail();
+  }
+  sourceView_ = std::move(sourceView).result();
+  QuadViews views;
+  views.source = sourceView_;
+  views.mask = views.source;
+  views.backdrop = views.source;
+  if (params.dstSnapshotTexture != nullptr) {
+    gpu::Result<gpu::TextureView> backdropView = device.createTextureView(
+        *params.dstSnapshotTexture, gpu::TextureViewDescriptor{"GeodeRetainedQuadBackdropView"});
+    if (backdropView.hasError()) {
+      return fail();
+    }
+    backdropView_ = std::move(backdropView).result();
+    views.backdrop = backdropView_;
+  }
+  views.clipMask =
+      params.clipMaskView != nullptr ? gpu::TextureViewRef(*params.clipMaskView) : views.source;
+
+  gpu::Result<gpu::BindGroup> bindGroup =
+      CreateQuadBindGroup(device, pipeline, QuadSampler(pipeline, params),
+                          gpu::BufferBinding{uniformBuffer_, 0, kRetainedBytes}, views);
+  if (bindGroup.hasError()) {
+    return fail();
+  }
+  bindGroup_ = std::move(bindGroup).result();
+  bindGroupBindsBuffer_ = true;
+  return true;
+}
+
+bool GeodeTextureEncoder::drawRetainedQuad(const GeodeGpuContext& context,
+                                           const GeodeImagePipeline& pipeline,
+                                           gpu::RenderPassEncoder& pass,
+                                           const gpu::Texture& texture, const float mvp[16],
+                                           uint32_t targetWidth, uint32_t targetHeight,
+                                           const QuadParams& params, RetainedQuadBinding& binding) {
+  if (!texture.isValid() || params.maskTexture != nullptr) {
+    return false;
+  }
+  gpu::Device& device = *context.gpuDevice;
+
+  Uniforms u = BuildQuadUniforms(mvp, targetWidth, targetHeight, params);
+  if (!FillTexelMapping(device, texture, mvp, targetWidth, targetHeight, params, u)) {
+    return false;
+  }
+  static_assert(sizeof(Uniforms) == RetainedQuadBinding::kRetainedBytes);
+  if (!binding.publishUniforms(
+          device, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&u), sizeof(u)))) {
+    return false;
+  }
+
+  const RetainedQuadBinding::Inputs inputs{
+      .layout = IdentityOf(pipeline.bindGroupLayout()),
+      .source = IdentityOf(texture),
+      .backdrop = IdentityOf(params.dstSnapshotTexture),
+      .clipMask = IdentityOf(params.clipMaskView),
+      .deviceId = texture.deviceId(),
+      .nearestSampler = params.filter == Filter::Nearest,
+  };
+  const bool reusable =
+      binding.bindGroupBindsBuffer_ && binding.bindGroup_.isValid() && binding.inputs_ == inputs;
+  if (!reusable && !binding.rebuildBindGroup(device, pipeline, texture, params, inputs)) {
+    return false;
+  }
+
+  // As in drawTexturedQuad, the caller already bound and counted the image pipeline.
+  (void)pass.setPipeline(pipeline.pipeline());
+  (void)pass.setBindGroup(0, binding.bindGroup_);
+  (void)pass.draw(6, 1, 0, 0);
+  return true;
 }
 
 }  // namespace donner::geode

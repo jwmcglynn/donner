@@ -2,11 +2,12 @@
 
 **Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes
 re-encode, create and re-upload nothing, including the second and later draws of one entity in a
-frame such as marker placements, filter passes upload and bind nothing new, and ordered batching
-draws runs of resident draws as instanced draws. Steady-state residency for images, layer
-composites, clip and mask geometry, draws under a clip polygon (among them turned marker
-placements), and painted text is still open (Milestone 8). `geode_counter_corpus_tests` records
-the corpus scenes measured to miss the steady state.
+frame such as marker placements, filter passes upload and bind nothing new, opacity, blend-mode
+and filter-result composites without a clip mask write and create nothing, and ordered batching
+draws runs of resident draws as instanced draws. Steady-state residency for images, clip and mask
+geometry (including composites under a clip mask), draws under a clip polygon (among them turned
+marker placements), and painted text is still open (Milestone 8). `geode_counter_corpus_tests`
+records the corpus scenes measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -54,8 +55,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the independent Milestone 8 item, layer-composite uniforms (8.3), which also clears the
-  five filter scenes 8.6 left listed.
+- Start the next independent Milestone 8 item, image residency (8.4), whose opacity case 8.3
+  unblocked.
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -242,14 +243,62 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `image_external_svg_par` and `image_external_svg_viewbox`, which draw one external SVG's paths
     twice per frame, clear here, and with 8.1 so do `poker_chips`, `stroking_complex`, and
     `nested_svg_aspectratio` (`UseStrokeStylesRepeated_SecondFrameIsSteadyState`).
-  - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
-    group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Filter results reach their parent
-    through the same blit. Clears `Edzample_Anim3`, `filter_displacement_map`, `filter_drop_shadow`,
-    `filter_fill_paint`, `filter_spot_light`, `filter_stroke_paint`, `marker_segments`, and
-    `marker_spec_example`, and the composite part of `donner_splash`. The corpus also records
-    `donner_icon`, whose gradient-painted paths under an opacity group re-upload geometry and build
-    bind groups per draw; why those draws miss gradient residency is not traced, so this item starts
-    by tracing it.
+  - [x] 8.3: Isolated-layer and filter-result composites. Each opacity or blend-mode composite,
+    and each composite of a filter result, keeps a uniform buffer and a bind group across frames
+    (`GeodeTextureEncoder::RetainedQuadBinding`), indexed by draw order within the frame, with
+    layers and filter results in separate sequences. The bind group is reused only with the
+    textures it was built from, matched by runtime identity (slot and generation), so it never
+    binds a destroyed texture or one whose slot now holds another texture
+    (`LayerCompositeRebuildsWhenItsTextureWasDestroyed`), and a composite whose texture another
+    renderer holds rebuilds (`LayerCompositeRebuildsWhenAnotherRendererHoldsItsTexture`). The
+    uniform is rewritten only when its bytes change
+    (`LayerCompositeRewritesItsUniformWhenOpacityChanges`). Because the texture pool hands each
+    size's textures out in the previous frame's acquisition order, an unchanged frame gives every
+    composite the textures it had before, also when another renderer on the device draws between
+    frames (`LayerCompositesKeepTheirTexturesAcrossUnchangedFrames`); a filter result keeps its
+    output texture and binding when its content is edited
+    (`FilterResultCompositeKeepsItsBindingAcrossContentEdits`). Each sequence keeps at most 256
+    entries, the most surfaces a frame's surface budget admits at once; composites past that in
+    one frame allocate their uniform and bind group for that frame only. The surface budget alone
+    does not bound the entries, because a frame split by a memory-limited filter budget returns
+    the surfaces it already composited (`LayerCompositeRetainedStateIsCappedAcrossFrameSplits`).
+    An entry holds a 224-byte uniform buffer on the GPU, a 224-byte CPU mirror of it, and the
+    handles of that buffer, at most two texture views and one bind group; its host record is at
+    most 512 bytes (a `static_assert` on `RetainedCompositeSequence::Entry`). A renderer therefore
+    retains at most 512 entries: 112 KiB of uniform buffers on the GPU, 256 KiB of host records, and
+    the runtime objects behind 512 buffers, 1024 views and 512 bind groups. These bytes are not
+    charged to a byte budget. Entries the frame did not reach are dropped once it is submitted, a
+    texture pool trim to nothing releases every entry, and all are released with the renderer
+    (`LayerCompositeEntriesFollowTheLastFrame`). An entry's textures go back to the device's
+    shared pool at each frame end while its views stay, so entries release their views and bind
+    group, keeping the uniform buffer, before any texture they view is destroyed. The pool reports
+    each texture to every renderer on the device before destroying it; tested for a trim by
+    another renderer, a stale bucket and a budget eviction caused by another renderer's large frame
+    (`RetainedCompositesReleaseViewsBeforeThePoolDestroysTheirTextures`). A frame that ends without
+    submitting, because it never reached `endFrame` or its recording failed, releases every entry's
+    views, including bind groups naming its clip-mask views
+    (`RetainedCompositesReleaseViewsWhenAFrameIsAbandoned`). Covered only structurally: a release
+    the pool rejects goes through the same reporting destroy; a texture a failed frame hands to
+    fenced destruction, and one destroyed with no pool, are reported the same way; the pool
+    destroys textures in its own destructor only after every renderer has unregistered; teardown
+    releases the entries before destroying any texture; and a bind group naming a submitted frame's
+    clip-mask view is released when that frame ends. The runtime refuses any use of a view whose
+    texture is gone in any case; this ordering keeps a retained view from outliving the request to
+    destroy its texture. The blend backdrop, the clip-mask view and the sampler are part of the bind
+    group's key, each changed alone in
+    `RetainedQuadBindingRebuildsWhenAnyBoundInputChanges`; the source texture is covered by the
+    tests above. The bind group layout and the device are keyed too, defensively and untested: a
+    device has one image pipeline layout per target format. Blend-mode and filter-region edits and a
+    canvas rescale match a fresh renderer (`CompositeEditsMatchAFreshRenderer`).
+    `LayerComposites_UnchangedFrameWritesAndCreatesNothing` and
+    `FilterResultComposites_UnchangedFrameWritesAndCreatesNothing` gate the counters.
+    `Edzample_Anim3`, `donner_icon`, the five filter scenes, and with 8.2 `marker_segments` and
+    `marker_spec_example` meet the steady state: in
+    `donner_icon` every counter came from its twenty `opacity: .5` spark outlines, each its own
+    isolated layer, while its gradient-painted paths are resident and batched. A composite under a
+    path clip mask binds a clip-mask view created for that frame, so it rebuilds its bind group
+    every frame, and composites through a `<mask>` keep the per-frame path; neither is part of this
+    item.
   - [ ] 8.4: Image residency. Decoded images allocate a texture and re-upload their quad every
     frame. Clears `image_data_url_opacity`, `image_data_url_pixelated`. Depends on 8.3 for the
     opacity case. `image_external_svg_par` and `image_external_svg_viewbox`, which draw one
@@ -292,16 +341,13 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     release order, the intermediates two filters share in one frame come back reversed on alternate
     frames, and every pass misses under either key (the two-filter case of
     `UnchangedFilterPassesUploadAndBindNothing`). A filter region that changes size takes new
-    textures and rebuilds its bindings once. What keeps `filter_displacement_map`,
-    `filter_drop_shadow`, `filter_fill_paint`, `filter_spot_light`, and `filter_stroke_paint` listed
-    is the composite blit of each filter result, one uniform write per filtered element, which is
-    the 8.3 composite. `donner_splash`'s filter passes meet the steady state too; its remaining
-    counters are its composites (8.3) and its clip geometry (8.7).
+    textures and rebuilds its bindings once.
   - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
     clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
-    re-uploads every frame. Clears `donner_splash` and `geode_splash`. Depends on 8.3 for
-    `donner_splash`'s composites. `nested_svg_aspectratio`'s per-frame uploads were same-frame
-    repeats of resident slots, not nested-viewport geometry, and cleared with 8.1 and 8.2.
+    re-uploads every frame. Clears `donner_splash` and `geode_splash`. With 8.3, `donner_splash`'s
+    remaining counters are its clip geometry. `nested_svg_aspectratio`'s per-frame uploads were
+    same-frame repeats of resident slots, not nested-viewport geometry, and cleared with 8.1 and
+    8.2.
   - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`), and
     only solid, unwarped glyph fills draw the cache's resident encodings. Pattern- and
     gradient-painted glyphs are placed from their cached outlines, glyph strokes are expanded from
@@ -316,8 +362,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     draw-level uniform, and no resident path writes one: a slot's solo resident draw
     (`GeoEncoder::submitResidentOrArenaFill`) and a repeat's record (`tryAppendRepeatDraw`) both
     fall back to the per-frame arena while a clip polygon is active. A turned marker placement
-    draws under one, because its viewport clip turns with it. Clears `marker`. Tracked in #2644 (Geode
-    draws under a clip polygon are never resident).
+    draws under one, because its viewport clip turns with it. Clears `marker`. Tracked in #2644
+    (Geode draws under a clip polygon are never resident).
 
 ## Background
 
@@ -441,10 +487,11 @@ Entity with <path d="...">
   and join ordered batches.
 - **Invalidation.** Path geometry invalidates through `on_update<ComputedPathComponent>`, which
   fires only when `ShapeSystem` changes the geometry; no separate dirty flag is involved.
-- **Uniform storage.** Resident slots hold their own uniforms. Per-frame draws bump-allocate from
-  per-encoder arenas, image blits from the encoder's uniform scratch, and filter passes from the
-  filter engine's scratch blocks, which skip uploading a slot that already holds the same bytes.
-  Nothing uses a uniform ring or dynamic offsets.
+- **Uniform storage.** Resident slots hold their own uniforms, and each isolated-layer or
+  filter-result composite keeps a uniform buffer and bind group of its own across frames. Per-frame
+  draws bump-allocate from per-encoder arenas, image blits from the encoder's uniform scratch, and
+  filter passes from the filter engine's scratch blocks, which skip uploading a slot that already
+  holds the same bytes. Nothing uses a uniform ring or dynamic offsets.
 - **Eviction.** Geometry changes remove the entity's cache and residence components; document
   teardown destroys them and returns their slab ranges. Residence is tracked per device, so a
   document drawn by another device uploads there instead of borrowing this device's buffers

@@ -11,6 +11,7 @@
 #include <deque>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -979,6 +980,36 @@ public:
     return result;
   }
 
+  /// Called with a pooled texture's runtime identity just before the pool destroys it.
+  using DestroyListener = std::function<void(const gpu::ResourceIdentity& texture)>;
+
+  /**
+   * Register \p listener to hear of every texture this pool destroys, before the destroy. A
+   * renderer holding views of textures it returned to the pool releases them there, because any
+   * renderer sharing the device can make the pool destroy them: by trimming it, by releasing a
+   * texture that evicts others to fit the budget, or by beginning frames until a bucket goes stale.
+   *
+   * The listener runs with this pool's lock held, on the thread making that call, which the
+   * device's one-thread-at-a-time contract serializes with the listener's own renderer. It must not
+   * call back into this pool.
+   *
+   * @param listener Callback receiving the identity of each texture about to be destroyed.
+   * @return Token for \ref removeDestroyListener.
+   */
+  uint64_t addDestroyListener(DestroyListener listener) {
+    std::lock_guard lock(mutex_);
+    const uint64_t token = ++destroyListenerTokens_;
+    destroyListeners_.emplace(token, std::move(listener));
+    return token;
+  }
+
+  /// Stop calling the listener registered under \p token.
+  /// @param token Token \ref addDestroyListener returned.
+  void removeDestroyListener(uint64_t token) {
+    std::lock_guard lock(mutex_);
+    destroyListeners_.erase(token);
+  }
+
   /// Takes a pooled texture matching \p desc, or creates one on a miss. The runtime counts the
   /// creation itself, so a hit ticks no counter and a miss ticks exactly one.
   /// @param desc Descriptor the texture must match exactly.
@@ -1097,15 +1128,24 @@ private:
            gpu::TextureFormatBytesPerTexel(key.format);
   }
 
-  /// Destroys the backend object behind \p texture, not just this pool's name for it.
+  /// Destroys the backend object behind \p texture, not just this pool's name for it, after every
+  /// destroy listener has released what it holds of it.
   ///
   /// Dropping the handle alone releases the runtime slot and leaves the backend texture resident
   /// until the host runtime collects it, which is exactly where a succession of evicted pool
   /// entries shows up as retained memory.
+  ///
+  /// Every caller holds \ref mutex_, except the destructor, which runs once no renderer holds the
+  /// pool and so no listener remains.
   /// @param texture Texture to destroy; consumed.
   void destroyPooledTexture(gpu::Texture&& texture) {
     if (!texture.isValid()) {
       return;
+    }
+    const gpu::ResourceIdentity identity{texture.slotIndex(), texture.generation()};
+    for (const auto& [unusedToken, listener] : destroyListeners_) {
+      (void)unusedToken;
+      listener(identity);
     }
     const gpu::Status destroyed =
         device_->runtimeDevice().destroyTextureBacking(std::move(texture));
@@ -1190,6 +1230,10 @@ private:
   };
   /// When a frame last began or a texture was last returned.
   std::chrono::steady_clock::time_point lastActivityTime_ = std::chrono::steady_clock::now();
+  /// Listeners told of each texture before it is destroyed, by registration token.
+  std::map<uint64_t, DestroyListener> destroyListeners_;
+  /// Tokens handed out so far.
+  uint64_t destroyListenerTokens_ = 0;
 };
 
 /// The one pool serving \p device, created on first use. Renderers sharing a device share its
@@ -2830,7 +2874,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       texturePool->release(std::move(texture), desc);
     } else {
       // No pool to return it to, so the backend object is destroyed here rather than left
-      // resident until the host runtime collects it.
+      // resident until the host runtime collects it, after any retained view of it is released.
+      releaseRetainedViewsOf(gpu::ResourceIdentity{texture.slotIndex(), texture.generation()});
       const gpu::Status destroyed =
           device->runtimeDevice().destroyTextureBacking(std::move(texture));
       (void)destroyed;
@@ -2853,6 +2898,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void retainRecoverableTexture(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
+    // The device destroys it once the fence passes, outside the pool, so no retained view of it
+    // may stay behind.
+    releaseRetainedViewsOf(gpu::ResourceIdentity{texture.slotIndex(), texture.generation()});
     const uint64_t fence = device->runtimeDevice().lastSubmittedSerial();
     if (!device->deferDestroyTextureBackingAfterSerial(std::move(texture), fence)) {
       failedFilterTextures.push_back({std::move(texture), desc});
@@ -3017,6 +3065,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return filterExecutionBudget->beginChunkAfterSubmit();
   }
 
+  /// Composite index of a composite that keeps nothing across frames, such as a placeholder layer.
+  static constexpr size_t kNoComposite = std::numeric_limits<size_t>::max();
+
   /// A saved encoder + target state for an in-progress isolated layer
   /// (`pushIsolatedLayer` / `popIsolatedLayer`). When the driver begins a
   /// group with non-identity opacity or a non-Normal blend mode, we
@@ -3037,10 +3088,207 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// anything else drives `popIsolatedLayer` through the blend-blit
     /// variant that snapshots the parent and uses the W3C formulas.
     MixBlendMode blendMode = MixBlendMode::Normal;
+    /// Index into \ref layerComposites for this layer's composite.
+    size_t compositeIndex = kNoComposite;
   };
   static_assert(!std::is_copy_constructible_v<LayerStackFrame>,
                 "A copyable layer stack frame would let vector growth copy its texture handles.");
   std::vector<LayerStackFrame> layerStack;
+
+  /**
+   * The uniform buffers and bind groups one kind of full-target composite keeps from frame to
+   * frame, indexed by the order the frame draws those composites in, which is stable while the
+   * document is unchanged.
+   *
+   * The texture pool hands each size's textures out in the order the last frame took them, so an
+   * unchanged frame composites the same textures in the same order and every binding still matches
+   * (`LayerCompositesKeepTheirTexturesAcrossUnchangedFrames`). A changed document shifts the
+   * indices; a composite then finds different textures or uniforms and rebuilds, which is correct,
+   * only not free.
+   *
+   * A sequence keeps at most \ref kMaxEntries entries; composites past that in one frame allocate
+   * their uniform and bind group for that frame only. The surface budget does not bound this on its
+   * own, because a frame split by a memory-limited filter budget returns the surfaces of the layers
+   * it already composited and admits as many again
+   * (`LayerCompositeRetainedStateIsCappedAcrossFrameSplits`). Entries the frame did not reach are
+   * dropped once it is submitted, and every entry is released when the texture pool is trimmed to
+   * nothing (`LayerCompositeEntriesFollowTheLastFrame`). Entries release their views before any
+   * texture they view is destroyed: the pool reports each texture to \ref releaseRetainedViewsOf
+   * before destroying it, whichever renderer's call caused that
+   * (`RetainedCompositesReleaseViewsBeforeThePoolDestroysTheirTextures`); a texture destroyed
+   * outside the pool, after a failed frame or with no pool, is reported the same way; and a frame
+   * that ends without submitting releases every entry's views
+   * (`RetainedCompositesReleaseViewsWhenAFrameIsAbandoned`). So an entry's view destroy is always
+   * requested before its texture's; the runtime defers both past the submissions using them, and
+   * it refuses any use of a view whose texture is gone in any case.
+   */
+  struct RetainedCompositeSequence {
+    /// Most entries one sequence keeps: one per surface a frame's surface budget can admit at a
+    /// time.
+    static constexpr size_t kMaxEntries = RendererSurfaceBudget::kMaximumSurfaces;
+
+    struct Entry {
+      geode::GeodeTextureEncoder::RetainedQuadBinding binding;
+      /// The texture this frame's composite drew from; empty until it draws.
+      std::optional<gpu::ResourceIdentity> texture;
+    };
+    static_assert(!std::is_copy_constructible_v<Entry> &&
+                      std::is_nothrow_move_constructible_v<Entry>,
+                  "Vector growth must move entries, never copy their GPU handles.");
+    /// Host bytes one entry may take; the design doc's per-renderer retained maximum relies on it.
+    static constexpr size_t kMaxEntryHostBytes = 512;
+    static_assert(sizeof(Entry) <= kMaxEntryHostBytes);
+
+    std::vector<Entry> entries;
+    /// Entries claimed so far in the open frame.
+    size_t claimedThisFrame = 0;
+
+    /// Claim the next entry for a composite of this frame, or \ref kNoComposite past
+    /// \ref kMaxEntries.
+    size_t claim() {
+      if (claimedThisFrame >= kMaxEntries) {
+        return kNoComposite;
+      }
+      const size_t index = claimedThisFrame++;
+      if (index >= entries.size()) {
+        entries.resize(index + 1);
+      }
+      entries[index].texture.reset();
+      return index;
+    }
+
+    /// The binding entry \p index draws with, after recording \p texture as its source.
+    geode::GeodeTextureEncoder::RetainedQuadBinding* binding(size_t index,
+                                                             const gpu::Texture& texture) {
+      if (index == kNoComposite) {
+        return nullptr;
+      }
+      entries[index].texture = gpu::ResourceIdentity{texture.slotIndex(), texture.generation()};
+      return &entries[index].binding;
+    }
+
+    /// Drop the entries the frame did not reach. Only once nothing recorded can still be submitted:
+    /// a dropped entry's bind group must not be named by a pending submission.
+    void dropUnclaimed() {
+      if (entries.size() > claimedThisFrame) {
+        entries.resize(claimedThisFrame);
+      }
+    }
+
+    /// Start counting a new frame's entries, dropping any the last frame did not reach.
+    void beginFrame() {
+      dropUnclaimed();
+      claimedThisFrame = 0;
+    }
+
+    /// Release every entry. Only while no frame is recording.
+    void clear() {
+      entries.clear();
+      claimedThisFrame = 0;
+    }
+
+    /// Release the views and bind group of every entry viewing \p texture, keeping its uniform
+    /// buffer.
+    void releaseViewsOf(const gpu::ResourceIdentity& texture) {
+      for (Entry& entry : entries) {
+        if (entry.binding.viewsTexture(texture)) {
+          entry.binding.releaseTextureViews();
+        }
+      }
+    }
+
+    /// Release the views and bind group of every entry, keeping its uniform buffer.
+    void releaseAllViews() {
+      for (Entry& entry : entries) {
+        entry.binding.releaseTextureViews();
+      }
+    }
+
+    /// Release the views and bind group of every entry whose bind group names a clip mask view.
+    /// That view belongs to the frame that drew the composite, and a new frame supplies a new one.
+    void releaseClipMaskBindings() {
+      for (Entry& entry : entries) {
+        if (entry.binding.bindsClipMask()) {
+          entry.binding.releaseTextureViews();
+        }
+      }
+    }
+
+    /// Entries whose binding holds a texture view or a bind group.
+    size_t viewHolderCount() const {
+      return static_cast<size_t>(std::count_if(entries.begin(), entries.end(), [](const Entry& e) {
+        return e.binding.holdsTextureViews();
+      }));
+    }
+
+    /// The source of each entry claimed in the last frame, in claim order.
+    std::vector<std::optional<gpu::ResourceIdentity>> textures() const {
+      std::vector<std::optional<gpu::ResourceIdentity>> result;
+      for (size_t i = 0; i < std::min(entries.size(), claimedThisFrame); ++i) {
+        result.push_back(entries[i].texture);
+      }
+      return result;
+    }
+  };
+  /// Composites of the isolated layers pushed in a frame, in push order.
+  RetainedCompositeSequence layerComposites;
+  /// Composites of the filter results drawn in a frame, in draw order.
+  RetainedCompositeSequence filterOutputComposites;
+  /// Set by a pool trim to nothing while a frame records; the frame's end then releases every
+  /// retained composite entry.
+  bool releaseRetainedCompositesAtFrameEnd = false;
+
+  /// Release every retained composite entry now, or at the open frame's end if one is recording.
+  void releaseRetainedComposites() {
+    if (frameRecordingOpen) {
+      releaseRetainedCompositesAtFrameEnd = true;
+      return;
+    }
+    layerComposites.clear();
+    filterOutputComposites.clear();
+  }
+
+  /// After the frame's submission: drop the entries it did not reach, release the bind groups that
+  /// name the frame's clip mask views, and release every entry if a pool trim asked for it during
+  /// the frame. A frame that was abandoned releases every entry's views instead: what it touched is
+  /// retained or destroyed outside the pool.
+  void finishRetainedCompositeFrame() {
+    if (std::exchange(releaseRetainedCompositesAtFrameEnd, false)) {
+      layerComposites.clear();
+      filterOutputComposites.clear();
+      return;
+    }
+    if (frameRecordingAbandoned || frameArenaWriteFailed) {
+      releaseAllRetainedViews();
+    }
+    layerComposites.dropUnclaimed();
+    filterOutputComposites.dropUnclaimed();
+    layerComposites.releaseClipMaskBindings();
+    filterOutputComposites.releaseClipMaskBindings();
+  }
+
+  /// Registration of \ref releaseRetainedViewsOf with the texture pool; zero when not registered.
+  uint64_t texturePoolDestroyListener = 0;
+
+  /**
+   * Release every retained composite view of \p texture, which the shared texture pool is about to
+   * destroy. A retained entry's views outlive the frame that made them, while its textures return
+   * to the pool at that frame's end, so the pool may destroy one at a call from any renderer on
+   * this device. Textures the open frame recorded draws from stay out of the pool until it ends,
+   * so this never touches a bind group a pending command names.
+   */
+  void releaseRetainedViewsOf(const gpu::ResourceIdentity& texture) {
+    layerComposites.releaseViewsOf(texture);
+    filterOutputComposites.releaseViewsOf(texture);
+  }
+
+  /// Release the views and bind group of every retained entry, keeping the uniform buffers. For a
+  /// frame that ends without submitting: its textures leave the pool's path, and its clip mask
+  /// views go with it.
+  void releaseAllRetainedViews() {
+    layerComposites.releaseAllViews();
+    filterOutputComposites.releaseAllViews();
+  }
 
   /// GPU filter-graph executor. Non-owning pointer into the
   /// shared GeodeDevice - see pipeline field comment above for why.
@@ -3754,9 +4002,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const FilterInputBuffer buffer{static_cast<int>(frame.layerDesc.size.width),
                                    static_cast<int>(frame.layerDesc.size.height),
                                    frame.filterBufferOffsetX, frame.filterBufferOffsetY};
+    geode::GeodeTextureEncoder::RetainedQuadBinding* retained =
+        filterOutputComposites.binding(filterOutputComposites.claim(), filteredTexture);
     if (!buffer.exceedsViewport(static_cast<int>(outerExtent.width),
                                 static_cast<int>(outerExtent.height))) {
-      encoder->blitFullTarget(filteredTexture, 1.0);
+      encoder->blitFullTarget(filteredTexture, 1.0, retained);
       return;
     }
     // An expanded or inset capture maps texture pixel (0, 0) to device (-offsetX, -offsetY).
@@ -3768,7 +4018,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                         static_cast<double>(filteredDesc.size.width),
                         static_cast<double>(filteredDesc.size.height)),
         kWholeTextureUv, 1.0, /*pixelated=*/true,
-        /*sourceIsPremultiplied=*/true);
+        /*sourceIsPremultiplied=*/true, retained);
     syncTransform();
   }
 
@@ -7505,6 +7755,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void resetForBeginFrame(const RenderViewport& nextViewport) {
+    // A frame that never reached endFrame submits nothing, and what it touched is retained or
+    // returned below; its entries' views go first, with the bind groups naming its clip masks.
+    if (frameRecordingOpen || frameRecordingAbandoned || frameArenaWriteFailed) {
+      releaseAllRetainedViews();
+    }
     borrowedTargetSnapshot.reset();
     if (device) {
       device->drainDeferredDestroys();
@@ -7554,6 +7809,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     beginFramePatternTiles();
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
+    layerComposites.beginFrame();
+    filterOutputComposites.beginFrame();
     // Nothing to give back after an endFrame. A frame that never reached one gives its loans back
     // here.
     releaseFrameLoans();
@@ -7765,6 +8022,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     closeFrameGeneration();
 
     waitForQueueIdleAtTeardown();
+    // Retained views go before any texture this teardown destroys, inside the pool or not.
+    layerComposites.clear();
+    filterOutputComposites.clear();
+    if (texturePool) {
+      texturePool->removeDestroyListener(std::exchange(texturePoolDestroyListener, 0));
+    }
     drainFrameReusableTextures(frameRecordingAbandoned || !device || device->isDeviceLost());
     releaseOpenStackTexturesAtTeardown();
     frameImportedTextureViews.clear();
@@ -7787,6 +8050,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// is always constructed with `verbose=false`.
   void initPipelines(bool /*verboseFlag*/) {
     texturePool = TexturePoolForDevice(device);
+    texturePoolDestroyListener = texturePool->addDestroyListener(
+        [this](const gpu::ResourceIdentity& texture) { releaseRetainedViewsOf(texture); });
     textureFormat = device->textureFormat();
     device->setCounters(&counters);
     pipeline = &device->pipeline();
@@ -7932,6 +8197,9 @@ void RendererGeode::trimTexturePool(RendererGeodeTexturePoolTrim level) {
   if (impl_->texturePool) {
     impl_->texturePool->trim(level);
   }
+  if (level == RendererGeodeTexturePoolTrim::All) {
+    impl_->releaseRetainedComposites();
+  }
 }
 
 void RendererGeode::setTexturePoolClockForTesting(
@@ -8018,6 +8286,31 @@ void RendererGeode::drawDocument(SVGDocument& document, ParseWarningSink* warnin
 
   RendererDriver driver(*this, impl_->verbose, nullptr, nullptr, warningSink);
   driver.draw(document);
+}
+
+std::vector<std::optional<gpu::ResourceIdentity>> RendererGeode::layerCompositeTexturesForTesting()
+    const {
+  return impl_->layerComposites.textures();
+}
+
+std::vector<std::optional<gpu::ResourceIdentity>>
+RendererGeode::filterOutputCompositeTexturesForTesting() const {
+  return impl_->filterOutputComposites.textures();
+}
+
+RendererGeode::RetainedCompositeCounts RendererGeode::retainedCompositeCountsForTesting() const {
+  return RetainedCompositeCounts{impl_->layerComposites.entries.size(),
+                                 impl_->filterOutputComposites.entries.size()};
+}
+
+RendererGeode::RetainedCompositeCounts RendererGeode::retainedCompositeViewHoldersForTesting()
+    const {
+  return RetainedCompositeCounts{impl_->layerComposites.viewHolderCount(),
+                                 impl_->filterOutputComposites.viewHolderCount()};
+}
+
+size_t RendererGeode::maxRetainedCompositesForTesting() {
+  return Impl::RetainedCompositeSequence::kMaxEntries;
 }
 
 bool RendererGeode::sceneBatchingEnabledForTesting() {
@@ -8236,6 +8529,7 @@ void RendererGeode::endFrame() {
       impl_->frameRecordingAbandoned = true;
     }
   }
+  impl_->finishRetainedCompositeFrame();
 
   // The frame's work is submitted, so nothing it recorded can still be waiting
   // to read a buffer: its generation stops holding back the caches that defer
@@ -8385,6 +8679,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
     impl_->layerStack.push_back({});
     return;
   }
+  const size_t compositeIndex = impl_->layerComposites.claim();
 
   // Finish the outer encoder so its queued draws land on the saved target
   // before we redirect subsequent work into the offscreen layer. Same
@@ -8399,6 +8694,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   frame.layerDesc = td;
   frame.opacity = opacity;
   frame.blendMode = blendMode;
+  frame.compositeIndex = compositeIndex;
 
   impl_->target = Impl::aliasOf(frame.layerTexture);
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
@@ -8492,8 +8788,9 @@ void RendererGeode::popIsolatedLayer() {
       newEncoder->setLoadPreserve();
       impl_->replaceActiveEncoder(std::move(newEncoder));
       impl_->updateEncoderScissor();
-      impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshotHandle,
-                                            static_cast<uint32_t>(frame.blendMode), frame.opacity);
+      impl_->encoder->blitFullTargetBlended(
+          frame.layerTexture, snapshotHandle, static_cast<uint32_t>(frame.blendMode), frame.opacity,
+          impl_->layerComposites.binding(frame.compositeIndex, frame.layerTexture));
       // Defer release: `blitFullTargetBlended` recorded samples from
       // both `frame.layerTexture` and `snapshot` into the shared
       // one of the frame's command buffers; they must stay alive until it
@@ -8516,7 +8813,9 @@ void RendererGeode::popIsolatedLayer() {
   newEncoder->setLoadPreserve();
   impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
-  impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
+  impl_->encoder->blitFullTarget(
+      frame.layerTexture, frame.opacity,
+      impl_->layerComposites.binding(frame.compositeIndex, frame.layerTexture));
   // Same deferred-release rationale as the blend-mode branch above.
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
 }

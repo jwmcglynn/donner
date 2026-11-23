@@ -17,6 +17,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -10675,6 +10676,644 @@ TEST_F(RendererGeodeTest, UseRepeatsMatchPlainGeometryAndFollowEdits) {
                                          "use_repeats_edit_" + label,
                                          editor::tests::PixelmatchIdentityParams());
   }
+}
+
+}  // namespace
+}  // namespace donner::svg
+
+namespace donner::gpu {
+
+/// Prints a resource identity as `(slot, generation)` in test failures.
+inline void PrintTo(const ResourceIdentity& identity, std::ostream* os) {
+  *os << "(" << identity.slotIndex << ", " << identity.generation << ")";
+}
+
+}  // namespace donner::gpu
+
+namespace donner::svg {
+
+/// Prints retained composite entry counts by sequence in test failures.
+inline void PrintTo(const RendererGeode::RetainedCompositeCounts& counts, std::ostream* os) {
+  *os << "{layers: " << counts.layers << ", filterResults: " << counts.filterResults << "}";
+}
+
+namespace {
+
+/// Matches retained composite entry counts of \p layers isolated-layer and \p filterResults
+/// filter-result entries.
+testing::Matcher<RendererGeode::RetainedCompositeCounts> RetainedCounts(size_t layers,
+                                                                        size_t filterResults) {
+  return testing::AllOf(
+      testing::Field("layers", &RendererGeode::RetainedCompositeCounts::layers, layers),
+      testing::Field("filterResults", &RendererGeode::RetainedCompositeCounts::filterResults,
+                     filterResults));
+}
+
+/// Matches retained composite entry counts of \p layers isolated-layer entries.
+testing::Matcher<RendererGeode::RetainedCompositeCounts> RetainedLayerCount(size_t layers) {
+  return testing::Field("layers", &RendererGeode::RetainedCompositeCounts::layers, layers);
+}
+
+/// Five isolated-layer composites over a background: three sibling opacity groups with distinct
+/// opacities, one wrapping a nested group, and a `mix-blend-mode` composite. Every layer covers
+/// the whole canvas, so all of them share one texture size.
+constexpr std::string_view kLayerCompositeSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <rect width="64" height="64" fill="#204080"/>
+  <g id="first" opacity="0.25"><rect x="4" y="4" width="24" height="24" fill="red"/></g>
+  <g opacity="0.5"><rect x="36" y="4" width="24" height="24" fill="lime"/></g>
+  <g opacity="0.75">
+    <g opacity="0.6"><rect x="4" y="36" width="24" height="24" fill="yellow"/></g>
+  </g>
+  <rect x="36" y="36" width="24" height="24" fill="white" opacity="0.9"
+        style="mix-blend-mode: multiply"/>
+</svg>)svg";
+
+/// Isolated layers composited by kLayerCompositeSvg.
+constexpr size_t kLayerCompositeCount = 5;
+
+/// Renders \p document through a fresh renderer on the shared device: the oracle for a renderer
+/// whose composites kept state across earlier frames.
+RendererBitmap RenderFresh(const std::shared_ptr<geode::GeodeDevice>& device,
+                           SVGDocument& document) {
+  RendererGeode fresh(device);
+  fresh.draw(document);
+  return fresh.takeSnapshot();
+}
+
+/// Matches a composite texture list in which every layer was composited.
+MATCHER(AllComposited, "every layer composited from a texture") {
+  return std::all_of(
+      arg.begin(), arg.end(),
+      [](const std::optional<gpu::ResourceIdentity>& identity) { return identity.has_value(); });
+}
+
+/// Each layer composites from the same texture on every unchanged frame, also when another renderer
+/// on the device draws its own layers between frames, and from new ones once the layer size
+/// changes; the bind groups follow the textures and the pixels stay those of a fresh renderer.
+TEST_F(RendererGeodeTest, LayerCompositesKeepTheirTexturesAcrossUnchangedFrames) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(kLayerCompositeSvg, document));
+  const RendererBitmap expected = RenderFresh(sharedDevice(), *document);
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  const auto firstFrame = renderer.layerCompositeTexturesForTesting();
+  ASSERT_THAT(firstFrame, testing::SizeIs(kLayerCompositeCount));
+  ASSERT_THAT(firstFrame, AllComposited());
+
+  RendererGeode other = createRenderer();
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    if (frame == 3) {
+      // The other renderer takes and returns textures of the same size before this frame.
+      other.draw(*document);
+      ASSERT_THAT(other.layerCompositeTexturesForTesting(), testing::SizeIs(kLayerCompositeCount));
+    }
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::ElementsAreArray(firstFrame));
+    const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+    EXPECT_EQ(counters.bindgroupCreates, 0u);
+    EXPECT_EQ(counters.bufferWrites, 0u);
+    editor::tests::CompareBitmapToBitmap(
+        renderer.takeSnapshot(), expected,
+        "layer_composites_unchanged_frame_" + std::to_string(frame),
+        editor::tests::PixelmatchIdentityParams());
+  }
+
+  // A new canvas size gives every layer a texture of a new size.
+  document->setCanvasSize(48, 48);
+  const RendererBitmap expectedResized = RenderFresh(sharedDevice(), *document);
+  renderer.draw(*document);
+  const auto resizedFrame = renderer.layerCompositeTexturesForTesting();
+  ASSERT_THAT(resizedFrame, testing::SizeIs(kLayerCompositeCount));
+  ASSERT_THAT(resizedFrame, AllComposited());
+  EXPECT_THAT(resizedFrame, testing::Pointwise(testing::Ne(), firstFrame))
+      << "every layer must take a texture of the new size";
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, kLayerCompositeCount)
+      << "every composite samples a new texture, so every bind group is rebuilt";
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expectedResized,
+                                       "layer_composites_resized_frame",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::ElementsAreArray(resizedFrame));
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bufferWrites, 0u);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expectedResized,
+                                       "layer_composites_after_resize",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Destroying the pooled layer texture between frames frees its runtime slot, and the next frame's
+/// new layer texture reuses that slot under a new generation. A composite keyed on the slot alone
+/// would bind the destroyed texture; it must rebuild instead. One layer, so the slot the next frame
+/// reuses is that layer's own.
+TEST_F(RendererGeodeTest, LayerCompositeRebuildsWhenItsTextureWasDestroyed) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <rect width="64" height="64" fill="#204080"/>
+        <g opacity="0.5"><rect x="8" y="8" width="40" height="40" fill="lime"/></g>
+      </svg>)svg",
+      document));
+  const RendererBitmap expected = RenderFresh(sharedDevice(), *document);
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  renderer.draw(*document);
+  // The readback waits for the frame, so destroying its texture frees its slot for reuse.
+  ASSERT_FALSE(renderer.takeSnapshot().empty());
+  const auto beforeTrim = renderer.layerCompositeTexturesForTesting();
+  ASSERT_THAT(beforeTrim, testing::SizeIs(1));
+  ASSERT_THAT(beforeTrim, AllComposited());
+
+  // The frame returned its layer texture to the pool; drop every free texture.
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+
+  const auto afterTrim = renderer.layerCompositeTexturesForTesting();
+  ASSERT_THAT(afterTrim, testing::SizeIs(1));
+  ASSERT_THAT(afterTrim, AllComposited());
+  EXPECT_THAT(afterTrim, testing::Pointwise(testing::Ne(), beforeTrim))
+      << "the layer composited a destroyed texture";
+  // Premise: the hazard this test guards needs the destroyed texture's slot handed to the layer's
+  // new texture.
+  EXPECT_THAT(afterTrim[0],
+              testing::Optional(testing::Field("slotIndex", &gpu::ResourceIdentity::slotIndex,
+                                               beforeTrim[0]->slotIndex)))
+      << "premise: the destroyed texture's slot is reused by the layer's new texture";
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 1u);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "layer_composite_after_texture_destroyed",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A second renderer on the device takes one of the first renderer's pooled layer textures, fills
+/// it with its own submitted content, and still holds it while the first renderer draws again. The
+/// first renderer's composites must not sample that texture through the bind groups they kept, and
+/// every composite whose texture changed rebuilds its bind group.
+TEST_F(RendererGeodeTest, LayerCompositeRebuildsWhenAnotherRendererHoldsItsTexture) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(kLayerCompositeSvg, document));
+  const RendererBitmap expected = RenderFresh(sharedDevice(), *document);
+
+  RendererGeode first = createRenderer();
+  first.draw(*document);
+  first.draw(*document);
+  const auto firstFrames = first.layerCompositeTexturesForTesting();
+  ASSERT_THAT(firstFrames, testing::SizeIs(kLayerCompositeCount));
+  ASSERT_THAT(firstFrames, AllComposited());
+
+  // The other renderer's layer takes the next texture of the size the pool hands out, one of the
+  // first renderer's, paints it opaque red and submits.
+  RendererGeode other = createRenderer();
+  const auto paintOpaqueRedLayer = [&]() {
+    RenderViewport viewport;
+    viewport.size = Vector2d(64.0, 64.0);
+    viewport.devicePixelRatio = 1.0;
+    other.beginFrame(viewport);
+    other.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+    other.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    other.drawRect(Box2d({0, 0}, {64, 64}), StrokeParams{});
+  };
+  paintOpaqueRedLayer();
+  other.popIsolatedLayer();
+  other.endFrame();
+  const auto taken = other.layerCompositeTexturesForTesting();
+  ASSERT_THAT(taken, testing::SizeIs(1));
+  ASSERT_THAT(taken, AllComposited());
+  ASSERT_THAT(firstFrames, testing::Contains(taken[0]))
+      << "premise: the other renderer took one of the first renderer's textures";
+
+  // Its next frame takes the same texture back, which now holds its submitted red, and keeps it
+  // while the first renderer draws.
+  paintOpaqueRedLayer();
+  first.draw(*document);
+  EXPECT_THAT(first.deviceLost(), testing::IsFalse());
+  const auto whileHeld = first.layerCompositeTexturesForTesting();
+  ASSERT_THAT(whileHeld, testing::SizeIs(kLayerCompositeCount));
+  ASSERT_THAT(whileHeld, AllComposited());
+  EXPECT_THAT(whileHeld, testing::Not(testing::Contains(taken[0])))
+      << "the first renderer composited a texture another renderer holds";
+  const auto changed = static_cast<uint64_t>(std::count_if(
+      whileHeld.begin(), whileHeld.end(),
+      [&, i = size_t{0}](const std::optional<gpu::ResourceIdentity>& texture) mutable {
+        return texture != firstFrames[i++];
+      }));
+  EXPECT_GT(changed, 0u);
+  EXPECT_EQ(first.lastFrameTimings().counters.bindgroupCreates, changed)
+      << "exactly the composites whose texture changed rebuild their bind groups";
+  editor::tests::CompareBitmapToBitmap(first.takeSnapshot(), expected,
+                                       "layer_composite_while_another_renderer_holds_texture",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  other.popIsolatedLayer();
+  other.endFrame();
+  EXPECT_THAT(other.layerCompositeTexturesForTesting(), testing::ElementsAreArray(taken))
+      << "premise: the other renderer held the taken texture through the first renderer's frame";
+}
+
+/// A filter result composites from the same output texture on every unchanged frame. Editing the
+/// filtered content re-runs the filter into that same texture, so the composite keeps its bind
+/// group and shows the new content. Covers both filter-result paths: a filter region covering the
+/// whole canvas composites through a full-target blit, and a region-sized capture through a
+/// textured quad at its offset. A composite whose texture changes is covered by the layer composite
+/// tests, which share the binding.
+TEST_F(RendererGeodeTest, FilterResultCompositeKeepsItsBindingAcrossContentEdits) {
+  for (const auto& [name, region] :
+       {std::pair<const char*, const char*>{
+            "full_target", R"( filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64")"},
+        std::pair<const char*, const char*>{"region_sized", ""}}) {
+    SCOPED_TRACE(name);
+    std::optional<SVGDocument> document;
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+        std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <filter id="b")svg") +
+            region + R"svg(><feGaussianBlur stdDeviation="2"/></filter>
+          <rect id="target" x="20" y="20" width="24" height="24" fill="green" filter="url(#b)"/>
+        </svg>)svg",
+        document));
+
+    RendererGeode renderer = createRenderer();
+    renderer.draw(*document);
+    const auto firstFrame = renderer.filterOutputCompositeTexturesForTesting();
+    ASSERT_THAT(firstFrame, testing::SizeIs(1));
+    ASSERT_THAT(firstFrame, AllComposited());
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.filterOutputCompositeTexturesForTesting(),
+                testing::ElementsAreArray(firstFrame));
+    EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
+    EXPECT_EQ(renderer.lastFrameTimings().counters.bufferWrites, 0u);
+    editor::tests::CompareBitmapToBitmap(
+        renderer.takeSnapshot(), RenderFresh(sharedDevice(), *document),
+        std::string("filter_result_unchanged_") + name, editor::tests::PixelmatchIdentityParams());
+
+    std::optional<SVGElement> target = document->querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_)) << "the fixture names this element";
+    target->setAttribute("fill", "magenta");
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.filterOutputCompositeTexturesForTesting(),
+                testing::ElementsAreArray(firstFrame));
+    EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u)
+        << "a content edit changes no bound resource of the composite";
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
+                                         RenderFresh(sharedDevice(), *document),
+                                         std::string("filter_result_content_edit_") + name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A frame split by a memory-limited filter budget returns the surfaces of the layers it already
+/// composited, so the frame admits more layers than its surface budget holds at once. The retained
+/// composite entries stay capped, and the composites past the cap draw with per-frame state.
+TEST_F(RendererGeodeTest, LayerCompositeRetainedStateIsCappedAcrossFrameSplits) {
+  const size_t cap = RendererGeode::maxRetainedCompositesForTesting();
+  constexpr size_t kLayersPerSegment = 200;
+  constexpr int kExtent = 16;
+  // Two segments of layers, split as a memory-limited filter budget splits a frame.
+  const auto drawFrame = [&](RendererGeode& renderer) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(kExtent, kExtent);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    for (size_t segment = 0; segment < 2; ++segment) {
+      for (size_t i = 0; i < kLayersPerSegment; ++i) {
+        const size_t pixel = (segment * kLayersPerSegment + i) % (kExtent * kExtent);
+        renderer.pushIsolatedLayer(0.5, MixBlendMode::Normal);
+        renderer.setPaint(
+            solidFill(css::RGBA(static_cast<uint8_t>(i), 64, static_cast<uint8_t>(255 - i), 255)));
+        renderer.drawRect(Box2d::FromXYWH(static_cast<double>(pixel % kExtent),
+                                          static_cast<double>(pixel / kExtent), 1.0, 1.0),
+                          StrokeParams{});
+        renderer.popIsolatedLayer();
+      }
+      if (segment == 0) {
+        (void)renderer.submitFilterBudgetChunkForTesting();
+      }
+    }
+    renderer.endFrame();
+  };
+  // Premise: the frame composites more layers than the cap.
+  ASSERT_GT(2 * kLayersPerSegment, cap);
+
+  RendererGeode fresh = createRenderer();
+  drawFrame(fresh);
+  ASSERT_THAT(fresh.deviceLost(), testing::IsFalse());
+  const RendererBitmap expected = fresh.takeSnapshot();
+
+  RendererGeode renderer = createRenderer();
+  for (int frame = 1; frame <= 2; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    drawFrame(renderer);
+    ASSERT_THAT(renderer.deviceLost(), testing::IsFalse());
+    // Exactly the cap: every layer of the frame was admitted, more than one segment's surfaces.
+    EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), RetainedLayerCount(cap));
+    editor::tests::CompareBitmapToBitmap(
+        renderer.takeSnapshot(), expected,
+        "layer_composites_past_the_cap_frame_" + std::to_string(frame),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A renderer keeps composite entries only for what its last frame drew: drawing fewer layers
+/// drops the rest once that frame is submitted, and trimming the texture pool to nothing releases
+/// every entry.
+TEST_F(RendererGeodeTest, LayerCompositeEntriesFollowTheLastFrame) {
+  std::optional<SVGDocument> many;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <filter id="b"><feGaussianBlur stdDeviation="2"/></filter>
+        <g opacity="0.5"><rect width="20" height="20" fill="red"/></g>
+        <g opacity="0.5"><rect x="20" width="20" height="20" fill="lime"/></g>
+        <g opacity="0.5"><rect x="40" width="20" height="20" fill="blue"/></g>
+        <rect y="30" width="20" height="20" fill="green" filter="url(#b)"/>
+      </svg>)svg",
+      many));
+  std::optional<SVGDocument> few;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <g opacity="0.5"><rect width="20" height="20" fill="red"/></g>
+      </svg>)svg",
+      few));
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*many);
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), RetainedCounts(3, 1));
+
+  renderer.draw(*few);
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), RetainedCounts(1, 0))
+      << "entries the last frame did not reach must be dropped when it ends";
+
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), RetainedCounts(0, 0));
+
+  renderer.draw(*many);
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), RetainedLayerCount(3));
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderFresh(sharedDevice(), *many),
+                                       "layer_composite_entries_after_trim",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Another renderer on the same device can make the shared texture pool destroy the textures this
+/// renderer's retained composites were built from, by trimming the pool or by beginning frames
+/// until their bucket goes stale. Each entry must let go of its texture views and bind group before
+/// the pool destroys a texture they name, keeping only its uniform buffer, and the next frame must
+/// rebuild them from live textures. Ends with both renderers torn down, which the sanitizer lanes
+/// check for use after free.
+TEST_F(RendererGeodeTest, RetainedCompositesReleaseViewsBeforeThePoolDestroysTheirTextures) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <filter id="b"><feGaussianBlur stdDeviation="2"/></filter>
+        <g opacity="0.5"><rect width="20" height="20" fill="red"/></g>
+        <g opacity="0.5"><rect x="20" width="20" height="20" fill="lime"/></g>
+        <g opacity="0.5"><rect x="40" width="20" height="20" fill="blue"/></g>
+        <rect y="30" width="20" height="20" fill="green" filter="url(#b)"/>
+      </svg>)svg",
+      document));
+  std::optional<SVGDocument> plain;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+        <rect width="16" height="16" fill="red"/>
+      </svg>)svg",
+      plain));
+
+  // A device of its own, so the pool holds only what these renderers put there.
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  RendererGeode other(device);
+
+  const auto expectRebuiltFromLiveTextures = [&](const char* label) {
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse()) << label;
+    EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(3, 1)) << label;
+    const RendererBitmap retained = renderer.takeSnapshot();
+    editor::tests::CompareBitmapToBitmap(retained, RenderFresh(device, *document), label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+
+  renderer.draw(*document);
+  ASSERT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(3, 1));
+  ASSERT_THAT(renderer.texturePoolStats().textureCount, testing::Gt(0u))
+      << "the frame's layer and filter textures must be back in the pool";
+
+  other.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  ASSERT_THAT(renderer.texturePoolStats().textureCount, testing::Eq(0u));
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(0, 0))
+      << "a trim by another renderer destroyed the textures these entries viewed";
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), RetainedCounts(3, 1))
+      << "entries keep their uniform buffers";
+  expectRebuiltFromLiveTextures("retained_composites_after_other_renderer_trim");
+
+  // The pool evicts a bucket no frame has used for 120 frames, counting every renderer's frames.
+  constexpr int kFramesPastStale = 125;
+  for (int frame = 0; frame < kFramesPastStale; ++frame) {
+    other.draw(*plain);
+  }
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(0, 0))
+      << "stale-bucket eviction destroyed the textures these entries viewed";
+  expectRebuiltFromLiveTextures("retained_composites_after_stale_eviction");
+
+  // A later frame of larger textures evicts the least recently used buckets to fit the pool's
+  // budget: six nested full-canvas layers of 16 MiB each return 96 MiB at once, past the 64 MiB
+  // budget a pool of small frames keeps.
+  std::optional<SVGDocument> large;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="2048">
+        <g opacity="0.9"><rect width="2048" height="2048" fill="red"/>
+         <g opacity="0.9"><rect width="2048" height="2048" fill="lime"/>
+          <g opacity="0.9"><rect width="2048" height="2048" fill="blue"/>
+           <g opacity="0.9"><rect width="2048" height="2048" fill="yellow"/>
+            <g opacity="0.9"><rect width="2048" height="2048" fill="white"/>
+             <g opacity="0.9"><rect width="2048" height="2048" fill="black"/></g>
+            </g>
+           </g>
+          </g>
+         </g>
+        </g>
+      </svg>)svg",
+      large));
+  other.draw(*large);
+  ASSERT_THAT(other.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(0, 0))
+      << "budget eviction destroyed the textures these entries viewed";
+  expectRebuiltFromLiveTextures("retained_composites_after_budget_eviction");
+}
+
+/// A frame that ends without submitting, whether it never reaches endFrame or its recording fails,
+/// releases every retained entry's views and bind group: the textures it touched are retained or
+/// destroyed outside the pool, and its clip mask views go with it. The next frame rebuilds them.
+TEST_F(RendererGeodeTest, RetainedCompositesReleaseViewsWhenAFrameIsAbandoned) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <filter id="b"><feGaussianBlur stdDeviation="2"/></filter>
+        <g opacity="0.5"><rect width="20" height="20" fill="red"/></g>
+        <g opacity="0.5"><rect x="20" width="20" height="20" fill="lime"/></g>
+        <g opacity="0.5"><rect x="40" width="20" height="20" fill="blue"/></g>
+        <rect y="30" width="20" height="20" fill="green" filter="url(#b)"/>
+      </svg>)svg",
+      document));
+
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  // Claims the first layer entry of the frame and composites through it.
+  const auto compositeOneLayer = [&] {
+    renderer.pushIsolatedLayer(0.5, MixBlendMode::Normal);
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawRect(Box2d({0, 0}, {20, 20}), StrokeParams{});
+    renderer.popIsolatedLayer();
+  };
+
+  renderer.draw(*document);
+  ASSERT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(3, 1));
+  beginFrame(renderer);
+  compositeOneLayer();
+  beginFrame(renderer);
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(0, 0))
+      << "a frame that never reached endFrame must release every entry's views";
+  renderer.endFrame();
+
+  renderer.draw(*document);
+  ASSERT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(3, 1));
+  beginFrame(renderer);
+  compositeOneLayer();
+  renderer.injectActiveArenaWriteFailureForTesting();
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(0, 0))
+      << "a frame abandoned at endFrame must release every entry's views";
+
+  // The failed frame's textures are destroyed once the submissions before it complete; until then
+  // the next frame is refused, so wait for the queue as a host would.
+  ASSERT_THAT(device->waitForQueueIdle(), testing::Eq(geode::GpuWaitResult::Complete));
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), RetainedCounts(3, 1));
+  const RendererBitmap recovered = renderer.takeSnapshot();
+  editor::tests::CompareBitmapToBitmap(recovered, RenderFresh(device, *document),
+                                       "retained_composites_after_abandoned_frames",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Edits that change what a retained composite draws with, each compared with a fresh renderer:
+/// a blend mode, a filter region that moves the same filter result between the full-target blit
+/// and the offset quad, a canvas resize that rescales the document through its viewBox, and a
+/// composite under a path clip mask, whose clip view is new every frame.
+TEST_F(RendererGeodeTest, CompositeEditsMatchAFreshRenderer) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+        <clipPath id="c"><circle cx="16" cy="48" r="12"/></clipPath>
+        <filter id="b" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+          <feGaussianBlur stdDeviation="2"/>
+        </filter>
+        <rect width="64" height="64" fill="#204080"/>
+        <rect id="blend" x="4" y="4" width="24" height="24" fill="orange"
+              style="mix-blend-mode: multiply"/>
+        <rect x="36" y="4" width="24" height="24" fill="green" filter="url(#b)"/>
+        <g opacity="0.6" clip-path="url(#c)"><rect x="0" y="32" width="32" height="32" fill="red"/></g>
+      </svg>)svg",
+      document));
+
+  RendererGeode renderer = createRenderer();
+  const auto expectFresh = [&](const char* label) {
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse()) << label;
+    editor::tests::CompareBitmapToBitmap(
+        renderer.takeSnapshot(), RenderFresh(sharedDevice(), *document),
+        std::string("composite_edit_") + label, editor::tests::PixelmatchIdentityParams());
+  };
+  expectFresh("first");
+  expectFresh("unchanged_with_clip_mask");
+  expectFresh("unchanged_with_clip_mask_again");
+
+  std::optional<SVGElement> blend = document->querySelector("#blend");
+  ASSERT_THAT(blend, testing::Optional(testing::_)) << "the fixture names this element";
+  blend->setAttribute("style", "mix-blend-mode: screen");
+  expectFresh("blend_mode");
+
+  std::optional<SVGElement> filter = document->querySelector("#b");
+  ASSERT_THAT(filter, testing::Optional(testing::_)) << "the fixture names this element";
+  filter->setAttribute("filterUnits", "objectBoundingBox");
+  filter->setAttribute("x", "-0.1");
+  filter->setAttribute("y", "-0.1");
+  filter->setAttribute("width", "1.2");
+  filter->setAttribute("height", "1.2");
+  expectFresh("filter_region_to_quad");
+  filter->setAttribute("filterUnits", "userSpaceOnUse");
+  filter->setAttribute("x", "0");
+  filter->setAttribute("y", "0");
+  filter->setAttribute("width", "64");
+  filter->setAttribute("height", "64");
+  expectFresh("filter_region_to_blit");
+
+  document->setCanvasSize(96, 96);
+  expectFresh("canvas_rescale");
+}
+
+/// Editing a layer's opacity rewrites that composite's uniform and nothing else: its textures and
+/// bind group are unchanged.
+TEST_F(RendererGeodeTest, LayerCompositeRewritesItsUniformWhenOpacityChanges) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(kLayerCompositeSvg, document));
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  renderer.draw(*document);
+
+  std::optional<SVGElement> group = document->querySelector("#first");
+  ASSERT_THAT(group, testing::Optional(testing::_)) << "the fixture names this element";
+  group->setAttribute("opacity", "0.4");
+  const RendererBitmap expected = RenderFresh(sharedDevice(), *document);
+
+  renderer.draw(*document);
+  const geode::GeodeCounters edited = renderer.lastFrameTimings().counters;
+  EXPECT_EQ(edited.bufferWrites, 1u) << "the edited composite rewrites its uniform once";
+  EXPECT_EQ(edited.bindgroupCreates, 0u) << "an opacity edit changes no bound resource";
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "layer_composite_opacity_edit",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  renderer.draw(*document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bufferWrites, 0u);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
+}
+
+/// A composite keeps state only for a layer texture the frame's surface budget admitted, so a frame
+/// of more layers than the budget allows keeps at most one entry per admitted surface, and those
+/// stay steady.
+TEST_F(RendererGeodeTest, LayerCompositeRetainedStateFollowsTheSurfaceBudget) {
+  constexpr size_t kLayers = 300;
+  std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="15">)svg";
+  for (size_t i = 0; i < kLayers; ++i) {
+    source += "<rect x=\"" + std::to_string(i % 20) + "\" y=\"" + std::to_string(i / 20) +
+              R"svg(" width="1" height="1" fill="black" opacity="0.5"/>)svg";
+  }
+  source += "</svg>";
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  renderer.draw(*document);
+  // The frame's own target takes one surface.
+  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(),
+              testing::SizeIs(RendererSurfaceBudget::kMaximumSurfaces - 1));
+  const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+  EXPECT_EQ(counters.bufferWrites, 0u);
+  EXPECT_EQ(counters.bindgroupCreates, 0u);
+
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/4u, /*maximumBytes=*/1u << 20);
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::SizeIs(3u));
 }
 
 }  // namespace
