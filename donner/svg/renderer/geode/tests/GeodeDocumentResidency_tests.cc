@@ -10,18 +10,24 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <cinttypes>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
@@ -107,6 +113,17 @@ constexpr std::string_view kMarkerSvg = R"svg(
 
 /// Placements of `kMarkerSvg`'s marker after the first.
 constexpr size_t kMarkerRepeats = 6;
+
+/// One path stroked through `<use>` with four stroke styles, so the path keeps four stroke
+/// outlines, each with residence of its own.
+constexpr std::string_view kStrokeStylesSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <defs><path id="p" d="M20 40 C60 0 120 80 180 30" fill="none"/></defs>
+    <use href="#p" stroke="#000" stroke-width="2"/>
+    <use href="#p" y="40" stroke="#c00" stroke-width="6"/>
+    <use href="#p" y="80" stroke="#0a0" stroke-width="4" stroke-dasharray="8,4"/>
+    <use href="#p" y="120" stroke="#00c" stroke-width="4" stroke-linecap="round"/>
+  </svg>)";
 
 /// Hermetic test fonts, relative to the runfiles root, so glyph identity does not depend on the
 /// host's installed fonts.
@@ -213,7 +230,11 @@ size_t RepeatRecordsOf(SVGDocument& document) {
       for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
         count(slot);
       }
-      count(slots.strokeSlot);
+      for (const std::unique_ptr<geode::GeodeResidentStrokeSlots>& stroke : slots.strokeSlots) {
+        if (stroke) {
+          count(stroke->solid);
+        }
+      }
     });
   }
   return records;
@@ -235,7 +256,11 @@ struct DestroyedRepeatRecords {
           for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
             count(slot);
           }
-          count(slots.strokeSlot);
+          for (const std::unique_ptr<geode::GeodeResidentStrokeSlots>& stroke : slots.strokeSlots) {
+            if (stroke) {
+              count(stroke->solid);
+            }
+          }
         });
   }
 };
@@ -550,6 +575,157 @@ TEST_F(GeodeDocumentResidencyTest, ADeviceThatGoesStopsCountingAgainstTheDocumen
   // the second device's slots; they must not keep its residence charged to the document.
   ASSERT_THAT(thumbnails.renderElement(*box, kThumbnailSizePx).empty(), IsFalse());
   EXPECT_THAT(budget->residentBytes(), Eq(firstShare));
+}
+
+/// A path's stroke outlines are charged to the document's cache budget and released when its
+/// geometry changes; their residence on a device that goes stops counting against the document,
+/// and the rest is released with the document.
+TEST_F(GeodeDocumentResidencyTest, StrokeOutlinesGoWithTheirPathDeviceAndDocument) {
+  const int64_t firstBaseline = first_->liveResidentBytesForTesting();
+  {
+    SVGDocument document = ParseShapes(kStrokeStylesSvg);
+    RendererGeode onFirst(first_);
+    onFirst.draw(document);
+    const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+    ASSERT_THAT(budget, NotNull());
+    const uint64_t outlineBytes = budget->cacheBytes();
+    const uint64_t firstShare = budget->residentBytes();
+    ASSERT_THAT(outlineBytes, Gt(0u)) << "the four stroke outlines must be charged to the document";
+    ASSERT_THAT(firstShare, Gt(0u));
+    ASSERT_THAT(first_->liveResidentBytesForTesting(), Gt(firstBaseline));
+
+    {
+      RendererGeode onSecond(second_);
+      onSecond.draw(document);
+    }
+    ASSERT_THAT(budget->residentBytes(), Gt(firstShare));
+    second_.reset();
+    onFirst.draw(document);
+    EXPECT_THAT(budget->residentBytes(), Eq(firstShare))
+        << "the stroke residence of a device that went must stop counting against the document";
+    EXPECT_THAT(budget->cacheBytes(), Eq(outlineBytes))
+        << "an unchanged frame keeps every outline it already cached, and caches nothing more";
+
+    // An emptied path has no outline left to cache, so every byte it charged must come back.
+    std::optional<SVGElement> path = document.querySelector("#p");
+    ASSERT_TRUE(path.has_value());
+    path->setAttribute("d", "");
+    onFirst.draw(document);
+    EXPECT_THAT(budget->cacheBytes(), Eq(0u))
+        << "a geometry change must release every stroke outline the path cached";
+  }
+  EXPECT_THAT(first_->liveResidentBytesForTesting(), Eq(firstBaseline))
+      << "the document's stroke residence must be released with the document";
+}
+
+/// A document whose path is stroked through `<use>` instances with the given stroke widths, one
+/// instance per width, so the path keeps one stroke outline per width.
+/// @param widths Stroke widths of the instances.
+std::string StrokeWidthsSvg(std::span<const int> widths) {
+  std::string svg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">)"
+      R"(<defs><path id="p" d="M20 40 C60 0 120 80 180 30" fill="none"/></defs>)";
+  for (const int width : widths) {
+    svg += R"(<use href="#p" stroke="#c00" stroke-width=")" + std::to_string(width) + R"("/>)";
+  }
+  return svg + "</svg>";
+}
+
+/// A stroke key drawn once per frame, cycling through more keys than the path keeps outlines
+/// for, replaces a cached outline every frame. Each replacement hands the evicted outline's
+/// charge over, so the document is charged exactly what a fresh document holding the same eight
+/// outlines is charged; the evicted outline's residence goes with it, so the device's resident
+/// bytes stop growing once the cycle repeats; and every frame draws what a fresh document draws.
+TEST_F(GeodeDocumentResidencyTest, ReplacedStrokeOutlinesHandOverTheirChargeAndResidence) {
+  constexpr int kKeys = 12;
+  constexpr std::size_t kCached = 8;
+  const std::array<int, 1> firstWidth = {1};
+  SVGDocument document = ParseShapes(StrokeWidthsSvg(firstWidth));
+  std::optional<SVGElement> use = document.querySelector("use");
+  ASSERT_TRUE(use.has_value());
+  RendererGeode renderer(first_);
+
+  int64_t firstCyclePeak = 0;
+  std::vector<int> recent;
+  for (int frame = 0; frame < 2 * kKeys; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    const int width = 1 + frame % kKeys;
+    use->setAttribute("stroke-width", std::to_string(width));
+    renderer.draw(document);
+    const RendererBitmap actual = renderer.takeSnapshot();
+    recent.push_back(width);
+    if (recent.size() > kCached) {
+      recent.erase(recent.begin());
+    }
+
+    const std::array<int, 1> onlyWidth = {width};
+    SVGDocument fresh = ParseShapes(StrokeWidthsSvg(onlyWidth));
+    RendererGeode reference(second_);
+    reference.draw(fresh);
+    editor::tests::CompareBitmapToBitmap(actual, reference.takeSnapshot(),
+                                         "replaced_stroke_outline_frame_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+
+    SVGDocument holdingTheSameOutlines = ParseShapes(StrokeWidthsSvg(recent));
+    RendererGeode counter(second_);
+    counter.draw(holdingTheSameOutlines);
+    EXPECT_THAT(DocumentBudgetOf(document)->cacheBytes(),
+                Eq(DocumentBudgetOf(holdingTheSameOutlines)->cacheBytes()))
+        << "the document must be charged for exactly the eight outlines it holds";
+
+    const int64_t resident = first_->liveResidentBytesForTesting();
+    if (frame < kKeys) {
+      firstCyclePeak = std::max(firstCyclePeak, resident);
+    } else {
+      EXPECT_THAT(resident, testing::Le(firstCyclePeak))
+          << "replaced outlines must release their residence";
+    }
+  }
+
+  std::optional<SVGElement> path = document.querySelector("#p");
+  ASSERT_TRUE(path.has_value());
+  path->setAttribute("d", "");
+  renderer.draw(document);
+  EXPECT_THAT(DocumentBudgetOf(document)->cacheBytes(), Eq(0u));
+}
+
+/// A stroked path with curves, so its outline depends on the device scale it is drawn at, inside
+/// a group whose transform zooms it.
+constexpr std::string_view kZoomedStrokeSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <g id="zoom"><path d="M2 4 C6 0 12 8 18 3" fill="none" stroke="#c00" stroke-width="1"/></g>
+  </svg>)";
+
+/// Cache bytes charged to \p document after drawing it once at each of \p scales.
+uint64_t StrokeCacheBytesAfterZooming(const std::shared_ptr<geode::GeodeDevice>& device,
+                                      SVGDocument& document, std::span<const double> scales) {
+  std::optional<SVGElement> zoom = document.querySelector("#zoom");
+  EXPECT_TRUE(zoom.has_value());
+  RendererGeode renderer(device);
+  for (const double scale : scales) {
+    zoom->setAttribute("transform", "scale(" + std::to_string(scale) + ")");
+    renderer.draw(document);
+    std::fprintf(stderr, "[zoom] scale=%g cacheBytes=%" PRIu64 "\n", scale,
+                 DocumentBudgetOf(document)->cacheBytes());
+  }
+  return DocumentBudgetOf(document)->cacheBytes();
+}
+
+/// Zooming one stroked element through five power-of-two scale buckets keeps only the outlines
+/// of the last two buckets, as a fill keeps its last two tolerance buckets, so a zoom cannot fill
+/// the element's stroke cache, or the document's budget, with one style's outlines.
+TEST_F(GeodeDocumentResidencyTest, ZoomingKeepsTwoStrokeOutlinesPerStyle) {
+  SVGDocument zoomed = ParseShapes(kZoomedStrokeSvg);
+  const std::array<double, 5> buckets = {1.0, 2.0, 4.0, 8.0, 16.0};
+  const uint64_t zoomedBytes = StrokeCacheBytesAfterZooming(first_, zoomed, buckets);
+
+  SVGDocument lastTwo = ParseShapes(kZoomedStrokeSvg);
+  const std::array<double, 2> lastTwoBuckets = {8.0, 16.0};
+  const uint64_t lastTwoBytes = StrokeCacheBytesAfterZooming(first_, lastTwo, lastTwoBuckets);
+
+  ASSERT_THAT(lastTwoBytes, Gt(0u));
+  EXPECT_THAT(zoomedBytes, Eq(lastTwoBytes))
+      << "a zoomed stroke must keep only the outlines of its last two scale buckets";
 }
 
 TEST_F(GeodeDocumentResidencyTest, ADocumentBudgetRefusalRecoversWhenTheDeviceHoldingItGoes) {

@@ -54,9 +54,9 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the independent Milestone 8 items: keyed stroke cache (8.1), layer-composite uniforms
-  (8.3), and pattern residency (8.5), together with the Milestone 5 named-result keys. 8.3 also
-  clears the five filter scenes 8.6 left listed.
+- Start the independent Milestone 8 items: layer-composite uniforms (8.3) and pattern residency
+  (8.5), together with the Milestone 5 named-result keys. 8.3 also clears the five filter scenes
+  8.6 left listed.
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -93,9 +93,24 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     through the per-frame arena create one bind group per draw; Milestone 8 lists them.
 - [x] Milestone 2: `GeodePathCacheComponent`, the CPU encode cache.
   - [x] `GeodePathCacheComponent` (`geode/GeodePathCacheComponent.h`) holds the encoded fill for up
-    to `kGeodeFillVariantCount` device-derived tolerance buckets and one stroke slot holding the
-    `strokeToFill` outline and its encode, keyed by the stroke style and the device-derived
-    stroke tolerance.
+    to `kGeodeFillVariantCount` device-derived tolerance buckets and up to
+    `kGeodeStrokeVariantCount` (8) stroke variants, each holding a `strokeToFill` outline and its
+    encode. A stroke variant is keyed by the stroke style (width, cap, join, miter limit, dash
+    array, dash offset, and `pathLength`), the device-derived flattening tolerance, which must
+    match exactly, and the host transform of a `non-scaling-stroke` centerline. One stroke style
+    keeps at most `kStrokeVariantsPerStyle` (2) outlines across tolerance buckets and host
+    transforms, so a zoom through further scale buckets replaces the style's own least recently
+    used outline (`ZoomingKeepsTwoStrokeOutlinesPerStyle`). Otherwise a new key takes an empty
+    variant or replaces the least recently used one. A variant is replaced only when no open frame
+    on the device may still read it: neither the current frame nor an outer frame that an
+    offscreen pass runs inside, whose pending batch can still point at it; when every candidate
+    may still be read, the draw uses a per-frame outline or encode. Fill variants are replaced
+    under the same rule (`NestedPassKeepsTheStrokeOutlineAnOuterFrameLeftPending`,
+    `NestedPassKeepsTheFillEncodeAnOuterFrameLeftPending`). Each variant's bytes are charged to the
+    document's cache-byte budget, a replacement taking over the evicted variant's charge, and each
+    has its own resident slots, released with the variant, the entity, or the device
+    (`ReplacedStrokeOutlinesHandOverTheirChargeAndResidence`,
+    `StrokeOutlinesGoWithTheirPathDeviceAndDocument`).
   - [x] The driver passes the source entity to the backend in `PathShape::sourceEntity`
     (`RendererInterface.h`); backends that keep no per-entity state ignore it.
   - [x] `ShapeSystem`'s `emplaceComputedPathIfChanged` keeps the existing `ComputedPathComponent`
@@ -179,13 +194,21 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     does not compare GPU output with a TinySkia image.
   - [x] Snapshot unpremultiplication runs as a GPU compute pass (`SnapshotUnpremultiply`) where
     the target format allows it (`GpuAndCpuPathsAreByteIdentical`).
-- [ ] Milestone 8: Steady-state residency for the remaining draw classes. Each item clears the
-  named `kKnownViolations` entries in `geode_counter_corpus_tests`; every entry listed here misses
-  the steady state in the shipping configuration, with ordered batching on.
-  - [ ] 8.1: Stroke cache keyed by resolved stroke style. `<use>` instances that share one source
-    path with different stroke styles thrash the single stroke slot and re-encode every frame.
-    Clears `poker_chips`, `stroking_complex`. Bound the extra slots with the retained-geometry
-    budget.
+- [ ] Milestone 8: Steady-state residency for the remaining draw classes. Each item removes one
+  cause of the named `kKnownViolations` entries in `geode_counter_corpus_tests`; an entry is
+  deleted once every item it names has landed. Every entry listed here misses the steady state in
+  the shipping configuration, with ordered batching on.
+  - [x] 8.1: Stroke outlines cached per stroke key (see Milestone 2), so `<use>` instances that
+    stroke one source path with different styles keep one outline each and re-encode nothing on an
+    unchanged frame (`UseInstancesWithDistinctStrokeStyles_NoDirtyPath_ZeroEncodes`,
+    `StrokeStylesPastTheCache_ReEncodeOnlyTheOverflow`; staleness under an edit to each key
+    component and to the path: `RendererGeodeStrokeKeyTest` in `RendererGeode_tests.cc`). It
+    removes the path encodes of `poker_chips`, `stroking_complex`, and `nested_svg_aspectratio`.
+    The remaining uploads and bind groups of all three come from same-frame repeats of one
+    resident slot: several `<use>` instances draw the same fill or stroke variant at different
+    transforms or paints, and every draw after the first went through the per-frame arena. 8.2
+    gives those repeats resident records, and with both items landed the three entries meet the
+    steady state and are deleted.
   - [x] 8.2: Marker instance residency. A marker's content is one entity drawn once per placement;
     its first placement of a frame draws from its resident slot's uniform, and every later one
     takes a persistent record of its own (`GeodeResidentSlot::repeatRecords`) over the same
@@ -194,10 +217,10 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `MarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame. Clears `marker`.
     `marker_segments` and `marker_spec_example` put `opacity` on the marker content, so each
     placement also composites an isolated layer; they clear with 8.3. Repeats of other entities
-    hold the steady state the same way: `image_external_svg_par` and `image_external_svg_viewbox`,
-    which draw one external SVG's paths twice per frame, clear here too, and `poker_chips`,
-    `stroking_complex`, and `nested_svg_aspectratio` build no bind group per repeated `<use>`
-    draw.
+    hold the steady state the same way, each stroke variant of a path keeping its own records:
+    `image_external_svg_par` and `image_external_svg_viewbox`, which draw one external SVG's paths
+    twice per frame, clear here, and with 8.1 so do `poker_chips`, `stroking_complex`, and
+    `nested_svg_aspectratio`.
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
     group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Filter results reach their parent
     through the same blit. Clears `Edzample_Anim3`, `filter_displacement_map`, `filter_drop_shadow`,
@@ -245,10 +268,9 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     counters are its composites (8.3) and its clip geometry (8.7).
   - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
     clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
-    re-uploads every frame, and nested viewports re-encode their subtree. Clears `donner_splash`,
-    `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3 for `donner_splash`'s composites and
-    on 8.1 for `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
-    text inside nested viewports; whether its text needs 8.8 is not traced.
+    re-uploads every frame. Clears `donner_splash` and `geode_splash`. Depends on 8.3 for
+    `donner_splash`'s composites. `nested_svg_aspectratio`'s per-frame uploads were same-frame
+    repeats of resident slots, not nested-viewport geometry, and cleared with 8.1 and 8.2.
   - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`), and
     only solid, unwarped glyph fills draw the cache's resident encodings. Pattern- and
     gradient-painted glyphs are placed from their cached outlines, glyph strokes are expanded from
@@ -288,6 +310,12 @@ removing per-draw resource churn in Geode directly benefits the `DragFrameOverhe
   ([texture memory between frames](../guides/embedding_geode.md#EmbeddingGeodeTexturePool)).
   `GeodeFrameGeometryBudget` (`geode/GeodeResourceBudget.h`) bounds the encoded geometry a frame
   admits; once a frame exceeds it, the frame refuses further geometry.
+  `GeodeDocumentGeometryBudget` bounds the encodes a document keeps across frames (64 MiB) and
+  its resident geometry (64 MiB). Once it refuses a cache charge it refuses every later charge
+  that would grow the document's total; a replacement that does not grow it is still accepted.
+  From then on an encode that would add bytes, such as an outline for a new stroke key, draws
+  from a per-frame encode while the encodes already cached keep serving. A document's stroke
+  outlines count against that budget: up to two per stroke style and eight per path.
 
 ## Proposed Architecture
 
@@ -304,7 +332,8 @@ vertex buffer is bound.
 ```
 Entity with <path d="...">
   +-- ComputedPathComponent        (ShapeSystem; on_update fires only on real changes)
-  +-- GeodePathCacheComponent      (CPU encodes: fill variants per tolerance, stroke slot)
+  +-- GeodePathCacheComponent      (CPU encodes: fill variants per tolerance, stroke variants
+  |                                 per stroke key)
   +-- GeodeResidentPathComponent   (GPU residence: solid and gradient slots per variant)
          +-- slot range in GeodeResidentSlab  (document-scoped chunks, first-fit free list)
          +-- cached bind group

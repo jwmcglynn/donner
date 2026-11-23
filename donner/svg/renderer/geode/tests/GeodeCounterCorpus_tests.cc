@@ -403,39 +403,6 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         "clears when the isolated-layer composite keeps its uniform and bind group across "
         "unchanged frames",
     },
-    {
-        /*scene=*/"nested_svg_aspectratio",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{4, 0, 18, 0},
-        /*reason=*/
-        "four paths inside the nested viewports re-encode every frame, so their geometry and "
-        "the records of their repeated draws are re-uploaded",
-        /*tracking=*/
-        "clears when nested-viewport subtrees and placed text keep their cached geometry",
-    },
-    {
-        /*scene=*/"poker_chips",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{12, 0, 14, 0},
-        /*reason=*/
-        "use instances share one source path with differing stroke styles, so the per-entity "
-        "stroke cache thrashes and re-encodes every instance",
-        /*tracking=*/
-        "clears when the stroke cache keys on the resolved stroke style rather than one slot "
-        "per source entity",
-    },
-    {
-        /*scene=*/"stroking_complex",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{8, 0, 9, 1},
-        /*reason=*/
-        "eight use instances share one source path with differing stroke styles (width, "
-        "dash, opacity), so the per-entity stroke cache thrashes and re-encodes each "
-        "instance",
-        /*tracking=*/
-        "clears when the stroke cache keys on the resolved stroke style rather than one slot "
-        "per source entity",
-    },
 });
 
 const KnownViolation* findKnownViolation(std::string_view scene) {
