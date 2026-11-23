@@ -337,7 +337,16 @@ Part C estimate: 13.5 engineering days.
 
 ### Part D Milestones
 
-- [ ] Milestone D1: Parallel style pass (4 days). After A7, A8, A9 and scheduler milestones S1 to
+- [ ] Milestone D0: Read-only cascade signatures (2 days). After A8.
+  - [ ] The cascade takes `Registry&` and `EntityHandle` throughout, `ShadowedElementAdapter` holds
+        a `std::reference_wrapper<Registry>`, and `GetStyleResourceBudget` emplaces into the
+        registry context. Change the read paths (`applyStylesheetRules`, `MatchSelectorRule`, the
+        adapter, `inheritProperties`, `computePropertiesInto`) to take `const Registry&`, route the
+        only write (the computed-style slot) through a narrow writer, and move context creation
+        into the pre-region step. Serial behavior is unchanged.
+  - Done when: the existing style suites and the differential tests are green, and the parallel
+    path compiles against the const view only.
+- [ ] Milestone D1: Parallel style pass (4 days). After D0, A7, A9 and scheduler milestones S1 to
       S3.
   - [ ] Pre-region step: create every pool and context object, pre-emplace computed-style slots
         for dirty entities and their missing ancestors, find the roots of dirty subtrees.
@@ -358,16 +367,16 @@ Part C estimate: 13.5 engineering days.
     deepest stack use of a cascade task is measured and set as this client's help margin in the
     scheduler, and the Part D speedup goal is met.
 
-Part D estimate: 7 engineering days.
+Part D estimate: 9 engineering days.
 
 ### Order and Total
 
 A1 first; A2, A3, A6, A8, B4, C1 and C3 can then proceed in parallel; A4 follows A3; A7 follows
 A3 and A6; A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B;
-C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D1 follows A7, A8, A9 and the
-scheduler milestones S1 to S3 of [0073-task_scheduler](0073-task_scheduler.md); D2 and D3 follow
-D1. Total committed estimate for this document: 65.5 engineering days (A 27.5, B 17.5, C 13.5, D 7);
-the scheduler is estimated in 0073.
+C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D0 follows A8; D1 follows D0,
+A7, A9 and the scheduler milestones S1 to S3 of [0073-task_scheduler](0073-task_scheduler.md); D2
+and D3 follow D1. Total committed estimate for this document: 67.5 engineering days (A 27.5, B 17.5,
+C 13.5, D 9); the scheduler is estimated in 0073.
 
 ## Background
 
@@ -1065,7 +1074,9 @@ test, with its render-side comparisons, shows them local:
   `<mask>`, `<filter>` or `<symbol>`, since its effect reaches the elements that reference it;
 - writes that set `needsFullStyleRecompute` for reasons other than selectors today
   (element-specific attributes on lines, convolve matrices, conditional processing, `<use>`
-  geometry).
+  geometry);
+- any write to a text content element or inside one (`<text>`, `<tspan>`, `<textPath>`), since
+  restyling a span invalidates its text root's layout.
 
 The narrowed path starts with `class`, `style` and presentation-attribute writes on elements
 outside those resource subtrees, plus their `<use>` instances through the reverse map.
@@ -1246,14 +1257,18 @@ on the first 4,096 keys. An adversary who forces distinct keys makes every inser
 costs one sweep step and leaves today's per-element cost.
 
 **Memory budget and ownership.** Retained bytes are charged per distinct record instead of per
-entity. The cache, not the records, holds the charge: a record's heap bytes are reserved through
-`StyleResourceBudget::reserveComplexPropertyBytes` when the cache creates it and released when the
-cache evicts it or is cleared. A record can outlive its cache entry while elements still point at
-it, for example through `ExternalUseStyleRetention`; those references keep the memory alive but
-stop counting against the budget once the entry is gone, so the budget bounds what the cache can
-create, and the elements holding records are themselves bounded by the document. The cache and every
-record it created are owned by the document's style context, which outlives the budget object it
-charges.
+entity, and the charge lives exactly as long as the record. When a record is created (by the cache
+or for an uncacheable element), its heap bytes are reserved against the computed-style budget, and
+the record's deleter releases them when its last reference goes, whether the cache evicted it long
+before or never held it. Eviction only drops the cache's reference. The reservation is held by the
+record through a shared reference to the document's `DocumentResourceFamilyBudget` account, so a
+record that outlives the `StyleResourceBudget` object (through `ExternalUseStyleRetention`, for
+example) still releases correctly, and releases from worker threads in Part D are atomic. A hostile
+document therefore hits the same 64 MiB retained-property limit as today: distinct keys create
+distinct records, each charged until no element points at it. A test
+(`style_index_differential_tests`, hostile case) builds a document whose elements each carry a
+distinct attacker-sized `stroke-dasharray` and asserts that the budget refuses at the same element
+with the cache on and off.
 
 ### Interaction with Existing Incremental Paths
 
@@ -1372,7 +1387,9 @@ declaration in `b` outranks every one in `a` and `a.x`, although `a.x` is declar
 
 The document therefore builds one layer tree across all applicable stylesheets, walking them in
 cascade order (imports first, as today): each `@layer` statement, block or layered import adds its
-dotted path to the tree if absent, appending new children after their existing siblings. Ranks
+dotted path to the tree if absent, appending new children after their existing siblings. A
+sheet imported with `layer(x)` or `layer` adds its own layers under that layer's node, so
+`@layer y` inside a sheet imported into `x` is `x.y`. Ranks
 are assigned only after the whole tree is known, by a post-order walk: a node's children receive
 ranks in sibling order, then the node's own declarations receive the next rank. The root's own
 declarations, the unlayered author styles, therefore get the highest rank. Presentation attributes
@@ -1430,7 +1447,12 @@ then). Decoding is not proportional to bytes: typing the third character of `&am
 decoded text from three characters to one. So the incremental path runs only when the edited child
 has a segment both before and after the edit, and the old and new bytes of the edited range contain
 no `&`; otherwise the stylesheet is reparsed as today. Edits to CDATA content map one to one, since
-CDATA is not decoded.
+CDATA is not decoded. When the style text is held on the element's own value rather than in text
+children (the `!foundTextChild` branch of `ProjectStyleContents`), the same rule applies to the
+single value segment, which exists only when the value's source span and decoded length match.
+`ApplySourceEditResult::sourceDeltas` can hold more than one delta; the incremental path runs only
+when exactly one delta falls inside the `<style>` element's content, and any other shape takes the
+full stylesheet reparse.
 
 **Rule window.** Every retained rule already carries its `ruleSourceRange`. The window starts at
 the start of the last top-level rule that begins at or before the edit start (or at the sheet
@@ -1446,13 +1468,39 @@ or at-rule prelude (`.ne` typed before a rule, or a deleted `{` leaving `b c}` t
 the next rule), a stray top-level `}`, which CSS consumes as prelude text, an open block, comment,
 string or `url(`, or a trailing backslash that would escape the next character. In that case the
 window end moves to the end of the next old rule and the window is parsed again, until it is
-accepted or reaches the sheet end. The equality argument: the old parse was at top level with no
-pending tokens at the window start (a rule began there), the text before the window is unchanged,
-and CSS tokenizing and rule-list parsing carry no state past a completed rule's final token, so a
-fresh parse of the new text is the old parse of the prefix, the window parse, and the old parse of
-the suffix. If the window contains or produces an `@import`, `@namespace`, `@font-face` or
-`@layer` rule, or the stylesheet's resource stats would exceed a limit, the whole sheet is reparsed
-as today.
+accepted or reaches the sheet end.
+
+**Cross-rule parser state.** Tokenizing restarts cleanly after a completed rule's final token, but
+Donner's parsers carry state from rule to rule, so token-level resynchronization is not enough.
+Reading `StylesheetParser::Parse`, `StylesheetParseState`, `HandleAtRule` and
+`RuleParserImpl::consumeListOfRules`, that state is:
+
+- `StylesheetParseState::importsAllowed`: true until a retained qualified rule or an at-rule that
+  ends the import section (`AtRuleEndsImportSection`: `@namespace` with a block, and any of the
+  block at-rules it lists) has been seen. It decides whether a later `@import` is kept.
+- The accumulated `imports` and `fontFaces` lists, in order.
+- Cumulative resource accounting: `Stylesheet::SecurityStats` (rules, declarations, component
+  values, `rejected`), the rule-count cap `RuleParser::kMaximumRules` checked against the running
+  rule count, and the shared `ComponentValueParsingBudget` across every rule. A parse that hits a
+  limit stops early, so everything after that point depends on everything before it.
+- `@charset` removal (`maybeRemoveCharset`), which applies only at the start of the sheet.
+- No namespace state: `@namespace` rules are not recorded, and the selector parser does not consult
+  declared prefixes today. If namespace prefixes are later plumbed into selector parsing, the
+  prefix map becomes cross-rule state and joins this list.
+
+The window parse is seeded with the old parse's state at the window start (`importsAllowed`, and the
+running counts), and a window that starts at offset 0 goes through the same `@charset` handling as
+a full parse. The window is accepted only when, in addition to the token-level condition, the
+parser state at the window end is the same in the old and the new parse: `importsAllowed` is
+equal, the window contains no `@import`, `@namespace`, `@font-face` or `@layer` rule before or
+after the edit, the spliced totals stay within every limit, and the old parse was not stopped by a
+limit (`rejected`). Otherwise the whole sheet is reparsed. For example, in
+`a{} @import url(i); b{}`, deleting `a{}` empties the window; the old state at the window end has
+`importsAllowed` false, the new one true, so the edit takes the full reparse and the import is kept,
+as a fresh parse keeps it. The equality argument is then: the parser state at both window boundaries
+is the same in the old and new parse, the text outside the window is unchanged, and each rule's
+parse depends only on its text and the state at its start, so a fresh parse of the new text is the
+old parse of the prefix, the window parse, and the old parse of the suffix.
 
 **Splice.** The new rule vector is the rules before the window, the window's rules with source
 ranges shifted to sheet offsets, and the rules after the window with ranges shifted by the edit's
@@ -1479,11 +1527,14 @@ matched against its own shadow-tree structure. No key-to-element map exists, and
 would have to be maintained on every class, id, attribute and tree mutation. The scan's cost is
 one key test per entity per changed rule; at the measured upper bound of 155 ns per full rule
 test, a 5,137-entity document costs at most 0.8 ms per changed rule, and a key test is a fraction
-of a full test. A keystroke changes one rule, so this stays under the 1 ms goal on the measured
-documents. The scan is charged to the rule-element budget. Matching elements, their descendants and
-their `<use>` instances are marked for the selective pass; the matched properties cache is cleared
-because rule identities changed. A changed rule that uses `:has()`, or a change in layer order,
-falls back to one full restyle.
+of a full test. A keystroke changes one rule, which is scanned twice (its old and its new
+version), so the bound is about 1.6 ms on the 5,137-entity sprite and about 0.2 ms on the
+622-entity splash, where the keystroke goal is set. A rule whose subject compound has no key (a
+universal entry) gets a full match against every entity, at that same upper bound. The scan is
+charged to the rule-element budget. Matching elements, their descendants and their `<use>` instances
+are marked for the selective pass; the matched properties cache is cleared because rule identities
+changed. A changed rule that uses `:has()`, or a change in layer order, falls back to one full
+restyle.
 
 A keystroke in a `class`, `id` or `style` attribute is an attribute edit, not a stylesheet edit:
 it takes the `AttributeValue` scope and reaches `SVGElement`, where Part A's narrowed invalidation
@@ -1600,9 +1651,12 @@ per-element cost and is calibrated in Milestone D3.
   element. These figures come from a toy experiment on a loaded machine and are indicative only;
   D3 measures the real ones.
 - **Parents before children.** Inheritance needs the parent's computed record. The pass is a
-  top-down traversal from each root: a task cascades its root, then runs each child subtree inline
-  when it is smaller than the grain (initially 64 elements) or spawns it as a task otherwise. A
-  child never starts before its parent's record is published, which the spawn order guarantees.
+  top-down traversal from each root inside one flat `TaskScope`: a task cascades its root, then
+  walks each child subtree smaller than the grain (initially 64 elements) with an explicit,
+  heap-allocated stack, and spawns each larger child subtree into the same scope. Tasks never wait,
+  so a task's native stack use is one task frame whatever the tree depth, and only the pass owner
+  waits, once. A child never starts before its parent's record is published, which the spawn order
+  guarantees.
   The on-demand parent computation in `computePropertiesInto` stays for the serial path and is an
   assertion failure in the parallel path. Offscreen shadow trees are separate roots, started after
   the main tree; entities that no root reaches are cascaded by a serial sweep afterwards, as the
