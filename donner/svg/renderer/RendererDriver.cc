@@ -5128,6 +5128,10 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
     // The clip is the marker's viewport (SVG 2 section 13.7.4), which differs from its viewBox
     // whenever preserveAspectRatio letterboxes (`meet`) or crops (`slice`) the content.
     markerClip.clipRect = markerUnitsFromViewBox.inverse().transformBox(markerSize);
+    // Before the clip turned with the marker it was the viewport's device-space bounds, so where a
+    // renderer cannot intersect it exactly with an enclosing turned clip, those bounds are no
+    // worse.
+    markerClip.boundsFallbackWhenStacked = true;
     renderer_.pushClip(markerClip);
   }
 

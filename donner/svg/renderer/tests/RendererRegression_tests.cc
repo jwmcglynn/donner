@@ -469,6 +469,64 @@ TEST_F(RendererRegressionTests, MarkerClipInsideTurnedNestedViewportKeepsTheView
   EXPECT_THAT(PixelAt(actual, 57, 44), testing::ElementsAre(0, 0, 0, 0));
 }
 
+/// Renders a marker whose content fills its viewport, at the start of \p path, inside a 40 by 40
+/// nested `svg` turned 30 degrees about the centre of the 64 by 64 canvas.
+RendererBitmap RenderMarkerInTurnedViewport(std::string_view markerAttributes,
+                                            std::string_view path) {
+  return RenderReferenceContract(std::string(R"svg(
+      <g transform="rotate(30 32 32)">
+        <svg x="12" y="12" width="40" height="40">
+          <marker id="m" markerUnits="userSpaceOnUse" )svg") +
+                                 std::string(markerAttributes) + R"svg(>
+            <rect x="-20" y="-20" width="100" height="100" fill="blue"/>
+          </marker>
+          <path d=")svg" + std::string(path) +
+                                 R"svg(" fill="none" marker-start="url(#m)"/>
+        </svg>
+      </g>)svg");
+}
+
+// The marker viewport and the turned nested viewport each cut the content. When the two clips only
+// partly overlap, or do not overlap, what draws is their intersection.
+TEST_F(RendererRegressionTests, MarkerClipPartlyOutsideTurnedNestedViewportKeepsBothClips) {
+  // Both clips turn by 30 degrees, so their intersection is the turned 30 by 40 rectangle
+  // x = 10 to 40 in the nested viewport. (57, 44) is inside the marker viewport but outside it.
+  const auto partial =
+      RenderMarkerInTurnedViewport(R"(markerWidth="40" markerHeight="40")", "M 10 0 L 20 0");
+  EXPECT_THAT(PixelAt(partial, 57, 44), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(partial, 40, 36), testing::ElementsAre(0, 0, 255, 255));
+  // The CPU renderer multiplies two coverage masks and Geode tests half-planes, where the oracle
+  // fills one rectangle, so their turned edges are anti-aliased differently; pixelmatch's
+  // anti-aliasing detection excludes those pixels and every other pixel must match exactly.
+  editor::tests::CompareBitmapToBitmap(
+      partial,
+      RenderReferenceContract(
+          R"svg(<g transform="rotate(30 32 32)">
+                  <rect x="22" y="12" width="30" height="40" fill="blue"/></g>)svg"),
+      "marker_partial_overlap_turned_viewport",
+      editor::tests::ApprovedPixelToleranceParams(0.0f, 0, /*includeAntiAliasing=*/false));
+
+  // The 10 by 10 marker viewport starting at x = 42 lies wholly outside the nested viewport.
+  const auto disjoint =
+      RenderMarkerInTurnedViewport(R"(markerWidth="10" markerHeight="10")", "M 42 0 L 50 0");
+  editor::tests::CompareBitmapToBitmap(disjoint, RenderReferenceContract(""), "marker_disjoint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A marker turned by `orient="45"` inside the viewport turned by 30 degrees: the two clips
+// intersect in an octagon, which a renderer testing one four-edge polygon cannot carry. The
+// nested viewport's clip must still hold: (12, 20) and (20, 51) are inside the marker viewport and
+// outside the nested one. A renderer may fall back to the marker viewport's device-space bounds
+// there, which over-covers the corners of the turned marker viewport inside the nested viewport,
+// as before markers were clipped in their own space; those pixels are not checked.
+TEST_F(RendererRegressionTests, MarkerClipOctagonIntersectionKeepsTheEnclosingClip) {
+  const auto actual = RenderMarkerInTurnedViewport(
+      R"(markerWidth="36" markerHeight="36" refX="18" refY="18" orient="45")", "M 20 20 L 30 20");
+  EXPECT_THAT(PixelAt(actual, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 12, 20), testing::ElementsAre(0, 0, 0, 0));
+  EXPECT_THAT(PixelAt(actual, 20, 51), testing::ElementsAre(0, 0, 0, 0));
+}
+
 // SVG 2 section 8.6: a viewBox with a zero width or height disables rendering of the element.
 TEST_F(RendererRegressionTests, MarkerWithZeroSizeViewBoxDrawsNothing) {
   const auto expected =

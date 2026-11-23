@@ -1056,6 +1056,11 @@ struct ResolvedClip {
   /// Transform applied to all clip paths (e.g., objectBoundingBox unit mapping).
   Transform2d clipPathUnitsTransform;  ///< Transform applied to the clip path coordinate system.
   std::optional<components::ResolvedMask> mask;  ///< Optional resolved mask reference.
+  /// For a renderer that tests a single convex clip polygon: when this clip's rectangle is not
+  /// axis-aligned in device space and its exact intersection with an enclosing polygon clip cannot
+  /// be represented, keep the enclosing polygon and clip to this rectangle's device-space bounds,
+  /// instead of replacing the enclosing polygon with this one.
+  bool boundsFallbackWhenStacked = false;
 
   /// Default constructor.
   ResolvedClip() = default;
@@ -1070,7 +1075,8 @@ struct ResolvedClip {
         clipPaths(other.clipPaths),
         clipPathUnitsTransform(other.clipPathUnitsTransform),
         mask(other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
-                        : std::nullopt) {}
+                        : std::nullopt),
+        boundsFallbackWhenStacked(other.boundsFallbackWhenStacked) {}
 
   /// Deep-copy assignment operator.
   ResolvedClip& operator=(const ResolvedClip& other) {
@@ -1080,6 +1086,7 @@ struct ResolvedClip {
       clipPathUnitsTransform = other.clipPathUnitsTransform;
       mask = other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
                         : std::nullopt;
+      boundsFallbackWhenStacked = other.boundsFallbackWhenStacked;
     }
     return *this;
   }

@@ -1687,30 +1687,87 @@ private:
   std::uint64_t nextSerial_ = 0;
 };
 
-/// Returns true when every corner of \p inner lies inside the convex quadrilateral \p outer, so
-/// their intersection is \p inner. Corners within 1e-6 device pixels of an edge count as
-/// inside.
-bool ConvexQuadContains(const Vector2d (&outer)[4], const Vector2d (&inner)[4]) {
-  constexpr double kEpsilon = 1e-6;
-  double orientation = 0.0;
-  for (std::size_t i = 0; i < 4; ++i) {
-    const Vector2d& a = outer[i];
-    const Vector2d& b = outer[(i + 1) % 4];
-    orientation += a.x * b.y - b.x * a.y;
+/// Device-pixel tolerance for the convex clip intersection below. Two intersection vertices closer
+/// than this are one vertex, and a vertex closer than this to the chord between its neighbours is
+/// dropped, which shrinks the convex polygon by a sliver at most this wide. 1e-3 px changes any
+/// pixel's coverage by at most a quarter of one 8-bit step (1/255), so the edge count is decided
+/// by the geometry, not by floating-point noise from near-parallel edges.
+constexpr double kClipPolygonEpsilonPx = 1e-3;
+
+/// Twice the signed area of \p polygon; its sign gives the winding.
+double SignedDoubleArea(std::span<const Vector2d> polygon) {
+  double area = 0.0;
+  for (std::size_t i = 0; i < polygon.size(); ++i) {
+    const Vector2d& a = polygon[i];
+    const Vector2d& b = polygon[(i + 1) % polygon.size()];
+    area += a.x * b.y - b.x * a.y;
   }
-  const double sign = orientation < 0.0 ? -1.0 : 1.0;
-  for (std::size_t i = 0; i < 4; ++i) {
-    const Vector2d& a = outer[i];
-    const Vector2d edge = outer[(i + 1) % 4] - a;
-    const double length = edge.length();
-    for (const Vector2d& point : inner) {
-      const Vector2d offset = point - a;
-      if (sign * (edge.x * offset.y - edge.y * offset.x) < -kEpsilon * length) {
-        return false;
+  return area;
+}
+
+/// Signed distance of \p point from the edge \p a to \p b, positive on the inside of a polygon
+/// with winding \p sign.
+double EdgeDistance(const Vector2d& a, const Vector2d& b, const Vector2d& point, double sign) {
+  const Vector2d edge = b - a;
+  const double length = edge.length();
+  if (length <= kClipPolygonEpsilonPx) {
+    return 0.0;
+  }
+  const Vector2d offset = point - a;
+  return sign * (edge.x * offset.y - edge.y * offset.x) / length;
+}
+
+/// Clips the convex \p subject by the half-plane inside the edge \p a to \p b (Sutherland-Hodgman
+/// step).
+std::vector<Vector2d> ClipByEdge(const std::vector<Vector2d>& subject, const Vector2d& a,
+                                 const Vector2d& b, double sign) {
+  std::vector<Vector2d> result;
+  for (std::size_t i = 0; i < subject.size(); ++i) {
+    const Vector2d& current = subject[i];
+    const Vector2d& next = subject[(i + 1) % subject.size()];
+    const double currentDistance = EdgeDistance(a, b, current, sign);
+    const double nextDistance = EdgeDistance(a, b, next, sign);
+    if (currentDistance >= 0.0) {
+      result.push_back(current);
+    }
+    if ((currentDistance >= 0.0) != (nextDistance >= 0.0)) {
+      const double t = currentDistance / (currentDistance - nextDistance);
+      result.push_back(current + (next - current) * t);
+    }
+  }
+  return result;
+}
+
+/// Removes vertices of the convex \p polygon that coincide with the previous one or lie on the
+/// chord between their neighbours, both within kClipPolygonEpsilonPx.
+std::vector<Vector2d> SimplifyConvexPolygon(std::vector<Vector2d> polygon) {
+  bool changed = true;
+  while (changed && polygon.size() >= 3) {
+    changed = false;
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+      const Vector2d& previous = polygon[(i + polygon.size() - 1) % polygon.size()];
+      const Vector2d& next = polygon[(i + 1) % polygon.size()];
+      const bool coincident = (polygon[i] - previous).length() <= kClipPolygonEpsilonPx;
+      if (coincident ||
+          std::abs(EdgeDistance(previous, next, polygon[i], 1.0)) <= kClipPolygonEpsilonPx) {
+        polygon.erase(polygon.begin() + static_cast<std::ptrdiff_t>(i));
+        changed = true;
+        break;
       }
     }
   }
-  return true;
+  return polygon;
+}
+
+/// Returns the intersection of the convex polygons \p subject and \p clip, simplified by
+/// SimplifyConvexPolygon. Fewer than three vertices means the intersection is empty.
+std::vector<Vector2d> IntersectConvexPolygons(std::vector<Vector2d> subject,
+                                              std::span<const Vector2d> clip) {
+  const double sign = SignedDoubleArea(clip) < 0.0 ? -1.0 : 1.0;
+  for (std::size_t i = 0; i < clip.size() && !subject.empty(); ++i) {
+    subject = ClipByEdge(subject, clip[i], clip[(i + 1) % clip.size()], sign);
+  }
+  return SimplifyConvexPolygon(std::move(subject));
 }
 
 }  // namespace
@@ -2980,6 +3037,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Box2d pixelRect;
     bool valid = false;
     bool hasPolygon = false;
+    /// From ResolvedClip::boundsFallbackWhenStacked.
+    bool boundsFallbackWhenStacked = false;
     /// The clip's coverage could not be produced, so nothing under it draws.
     bool allocationRejected = false;
     Vector2d polygonCorners[4];
@@ -3322,6 +3381,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entry.polygonCorners[3] =
         deviceFromClip.transformPosition(Vector2d(local.topLeft.x, local.bottomRight.y));
     entry.hasPolygon = true;
+    entry.boundsFallbackWhenStacked = clip.boundsFallbackWhenStacked;
     return true;
   }
 
@@ -3895,31 +3955,62 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     updateEncoderScissor();
   }
 
-  /// Returns the polygon entry the shader tests once \p entry joins a clip stack whose chosen
-  /// polygon entry is \p chosen. The shader tests one polygon: when one polygon contains the
-  /// other, their intersection is the inner one, so it is kept; otherwise the topmost wins (see
-  /// ClipStackEntry docs).
-  static const ClipStackEntry* NextClipPolygon(const ClipStackEntry* chosen,
-                                               const ClipStackEntry& entry) {
-    if (!entry.hasPolygon) {
-      return chosen;
+  /// The polygon the shader tests for the whole clip stack: empty when the stacked polygons do not
+  /// overlap, std::nullopt when no entry has a polygon.
+  struct ActiveClipPolygon {
+    std::optional<std::vector<Vector2d>> corners;
+    bool empty = false;
+  };
+
+  /// Folds \p entry into \p active. The shader tests one polygon of at most four edges. Each
+  /// polygon entry is intersected with the polygon already active; an intersection of at most four
+  /// edges is exact and becomes the active polygon. A larger one cannot be carried: an entry marked
+  /// boundsFallbackWhenStacked then keeps the enclosing polygon and clips only through its
+  /// device-space bounds in the scissor, and any other entry replaces the active polygon. Carrying
+  /// the full intersection is tracked in #ISSUE-GEODE-POLYGON-CLIP-STACK.
+  static void FoldClipPolygon(ActiveClipPolygon& active, const ClipStackEntry& entry) {
+    if (!entry.hasPolygon || active.empty) {
+      return;
     }
-    if (chosen != nullptr && ConvexQuadContains(entry.polygonCorners, chosen->polygonCorners)) {
-      return chosen;
+    const std::span<const Vector2d> quad(entry.polygonCorners);
+    if (!active.corners) {
+      active.corners.emplace(quad.begin(), quad.end());
+      return;
     }
-    return &entry;
+    std::vector<Vector2d> intersection = IntersectConvexPolygons(*active.corners, quad);
+    if (intersection.size() < 3) {
+      active.empty = true;
+    } else if (intersection.size() <= 4) {
+      active.corners = std::move(intersection);
+    } else if (!entry.boundsFallbackWhenStacked) {
+      active.corners.emplace(quad.begin(), quad.end());
+    }
+  }
+
+  /// Sends \p active to the encoder, repeating the last vertex of a triangle: the zero-length edge
+  /// that leaves is a half-plane every sample is inside of.
+  void applyClipPolygon(const ActiveClipPolygon& active) {
+    if (!active.corners) {
+      encoder->clearClipPolygon();
+      return;
+    }
+    Vector2d corners[4];
+    for (std::size_t i = 0; i < 4; ++i) {
+      corners[i] = (*active.corners)[std::min(i, active.corners->size() - 1)];
+    }
+    encoder->setClipPolygon(corners);
   }
 
   /// Recompute the intersection of every rectangular clip entry on
   /// `clipStack` and apply it to the active encoder as a scissor,
-  /// plus forward the polygon clip `NextClipPolygon` chooses (if any)
+  /// plus forward the polygon `FoldClipPolygon` builds from the stack (if any)
   /// through `setClipPolygon`. Called whenever the clip stack changes.
   void updateEncoderScissor() {
     if (!encoder) {
       return;
     }
     std::optional<Box2d> active;
-    const ClipStackEntry* polygonEntry = nullptr;
+    ActiveClipPolygon polygon;
     const ClipStackEntry* maskEntry = nullptr;
     for (const ClipStackEntry& entry : clipStack) {
       if (entry.allocationRejected) {
@@ -3940,7 +4031,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           active = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
         }
       }
-      polygonEntry = NextClipPolygon(polygonEntry, entry);
+      FoldClipPolygon(polygon, entry);
       if (entry.maskResolveViewHandle != nullptr) {
         // Same deal for the path-clip mask - we always bind the
         // topmost one, and nested path-clip intersections are a
@@ -3950,11 +4041,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
     }
 
-    if (polygonEntry != nullptr) {
-      encoder->setClipPolygon(polygonEntry->polygonCorners);
-    } else {
+    if (polygon.empty) {
+      // The stacked polygons do not overlap, so nothing under them draws.
       encoder->clearClipPolygon();
+      encoder->clearClipMask();
+      encoder->setScissorRect(0, 0, 0, 0);
+      return;
     }
+    applyClipPolygon(polygon);
 
     if (maskEntry != nullptr) {
       // Pass the parent texture alongside the view so the encoder keeps
