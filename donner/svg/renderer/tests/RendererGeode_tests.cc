@@ -8980,8 +8980,6 @@ TEST_F(RendererGeodeTest, VariedFilterSizesCreateNoTexturesOnceWarm) {
   EXPECT_THAT(pool.budgetBytes, testing::Le(pool.maximumBudgetBytes));
 }
 
-// An embedder can give the pool's free textures back: to the floor when rendering goes idle, and
-// all of them when the app is hidden.
 // A bucket left unused for longer than the pool keeps idle buckets is destroyed whole. The pool's
 // texture count and bytes must both drop by everything it held, so a trim to nothing leaves both
 // at zero.
@@ -9014,6 +9012,8 @@ TEST_F(RendererGeodeTest, StaleBucketEvictionKeepsThePoolTotalsConsistent) {
   EXPECT_THAT(stats.bytes, testing::Eq(0u));
 }
 
+// An embedder can give the pool's free textures back: to the floor when rendering goes idle, and
+// all of them when the app is hidden.
 TEST_F(RendererGeodeTest, TrimTexturePoolFreesFreeTextures) {
   SVGDocument document = ParseDocumentOrFail(VariedGlowSource());
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
