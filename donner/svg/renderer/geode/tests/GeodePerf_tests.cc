@@ -551,6 +551,25 @@ constexpr FilterFamilyFixture kFilterFamilyFixtures[] = {
 )SVG"},
 };
 
+/// Two filtered elements whose filters run at one size, so the second filter takes the first one's
+/// intermediates within the frame and all of them return to the pool together at its end.
+constexpr std::string_view kTwoFiltersSharingIntermediatesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="s"><feDropShadow dx="2" dy="3" stdDeviation="2"/></filter>
+  <filter id="b"><feGaussianBlur stdDeviation="3"/></filter>
+  <rect x="10" y="10" width="30" height="30" fill="red" filter="url(#s)"/>
+  <circle cx="70" cy="60" r="20" fill="blue" filter="url(#b)"/>
+</svg>
+)SVG";
+
+/// The same two elements as opacity groups: two composite blits and no filter pass.
+constexpr std::string_view kTwoOpacityGroupsSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect x="10" y="10" width="30" height="30" fill="red" opacity="0.5"/>
+  <circle cx="70" cy="60" r="20" fill="blue" opacity="0.5"/>
+</svg>
+)SVG";
+
 /// Counters of an unchanged document's first and second frames on one renderer.
 struct FirstAndSecondFrame {
   geode::GeodeCounters first;   //!< The frame that builds everything.
@@ -601,6 +620,21 @@ TEST_F(GeodePerfTest, UnchangedFilterPassesUploadAndBindNothing) {
     EXPECT_EQ(filtered.second.bindgroupCreates, composite.second.bindgroupCreates)
         << "an unchanged filter pass built its bind group again";
   }
+
+  // Intermediates the two filters share come back at the frame boundary in an order of their own;
+  // each pass must still be handed the textures it had the frame before.
+  const FirstAndSecondFrame twoComposites =
+      countersForFirstAndSecondRender(kTwoOpacityGroupsSvg, device);
+  const FirstAndSecondFrame twoFilters =
+      countersForFirstAndSecondRender(kTwoFiltersSharingIntermediatesSvg, device);
+  printCounters("TwoOpacityGroups (frame2)", twoComposites.second);
+  printCounters("TwoFiltersSharingIntermediates (frame2)", twoFilters.second);
+  EXPECT_GT(twoFilters.first.bindgroupCreates, twoComposites.first.bindgroupCreates);
+  EXPECT_EQ(twoFilters.second.bufferWrites, twoComposites.second.bufferWrites)
+      << "a pass sharing another filter's intermediates uploaded its parameters again";
+  EXPECT_EQ(twoFilters.second.bindgroupCreates, twoComposites.second.bindgroupCreates)
+      << "a pass sharing another filter's intermediates was handed other textures and rebuilt "
+         "its bind group";
 }
 
 TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
