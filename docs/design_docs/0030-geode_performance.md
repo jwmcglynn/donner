@@ -197,7 +197,7 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     fill or stroke slot (`GeoEncoder::fillPathPatternResident`), whose cached bind group binds the
     tile's view, and each tile takes back from the pool the texture the same tile used the frame
     before, so an unchanged frame uploads nothing and creates no bind group
-    (`PatternFills_UnchangedFrameWritesAndCreatesNothing`). Covers `geode_pattern_checker`,
+    (`PatternFills_UnchangedFrameWritesAndCreatesNothing`). Clears `geode_pattern_checker`,
     `geode_pattern_nonrect`, `geode_pattern_offset`, `geode_pattern_solid`. The tile itself is
     rendered again every frame, which costs one render pass and its content draws but no gated
     counter; skipping that pass is Future Work. A pattern painted by several elements renders its
@@ -222,7 +222,9 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     text decorations are placed and encoded as transient geometry every frame. Clears
     `geode_text_decoration_underline`, `geode_text_pattern_fill`,
     `geode_text_span_gradient_over_pattern`, `geode_text_span_gradient_over_pattern_stroke`. The
-    three pattern-painted scenes depend on 8.5. The corpus reason strings for these entries say
+    three pattern-painted scenes depend on 8.5: placed-glyph pattern fills still draw through
+    the arena path, and `GeoEncoder::fillPathPatternResident` is the resident form available to
+    them. The corpus reason strings for these entries say
     placed text has no path cache or residency; correcting them is a follow-up to the corpus test.
 
 ## Background
@@ -290,10 +292,15 @@ Entity with <path d="...">
   rebuilt when the tile's view changes. The renderer renders every tile again each frame, into a
   pool texture: the Nth tile of a size in a frame asks the pool for the texture the Nth tile of
   that size used the frame before, and the renderer keeps a view of each tile texture for one
-  frame after its last use (`PatternTileViewsStayBoundedBetweenFrames`). Tile textures go back to
-  the pool at every frame end, so the pool's byte budget bounds them, and an edit anywhere a
-  tile's pixels come from reaches the next frame
-  (`PatternEditsReachTheNextFrameOfAWarmRenderer`).
+  frame after its last use (`PatternTileViewsStayBoundedBetweenFrames`). A view owns no memory of
+  its own; the tile textures go back to the pool at every frame end and are charged to the pool's
+  byte budget. Because every tile is rendered again, a warm renderer's next frame matches a fresh
+  render after an edit of a shape inside the pattern, the pattern's size or transform, a gradient
+  or nested pattern its content paints with, the device scale, or an edit that makes tiles of one
+  size trade textures (`PatternEditsReachTheNextFrameOfAWarmRenderer`). Two gaps outside the
+  pattern path are not covered: a warm renderer keeps a marker's old context paint after the
+  context element's paint changes (#2617), and setting a pattern's `width` with `setAttribute`
+  does not reach the tile (#2616).
 - **Residency gates.** Residence is taken only when no clip polygon, clip mask, or mask pass is
   active, and once per slot per frame. Draws that fail a gate use the per-frame arena path.
 - **Ordered batching.** An eligible resident draw publishes its instance record into the

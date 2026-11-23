@@ -2669,20 +2669,12 @@ void GeoEncoder::fillPathPatternResident(GeodeResidentSlot& slot, const EncodedP
     return;
   }
 
-  // The same pattern-fill args fillPathPattern builds, except that the tile view and the linear
-  // repeat sampler outlive the frame, so the resident bind group can keep naming them.
-  FillDrawArgs args = {};
-  args.path = nullptr;
-  args.rule = rule;
-  args.precomputedEncoded = &encoded;
-  args.paintMode = 1u;
-  args.patternView = paint.tileView;
-  args.patternSampler = *impl_->gpuContext->dummyPatternSampler;
-  args.patternFromPath = paint.patternFromPath;
-  args.tileSize = paint.tileSize;
-  args.patternOpacity = static_cast<float>(paint.opacity);
-
-  submitResidentOrArenaFill(slot, encoded, args, frameId);
+  // The tile view and the device's linear repeat sampler outlive the frame, so the resident bind
+  // group can keep naming them. The sampler has the descriptor the arena fill creates per draw.
+  submitResidentOrArenaFill(slot, encoded,
+                            PatternFillArgs(nullptr, encoded, rule, paint, paint.tileView,
+                                            *impl_->gpuContext->dummyPatternSampler),
+                            frameId);
 }
 
 void GeoEncoder::submitResidentOrArenaFill(GeodeResidentSlot& slot, const EncodedPath& encoded,
@@ -2985,23 +2977,32 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   }
   const gpu::Sampler& sampler = impl_->transientResources.retain(std::move(samplerResult).result());
 
-  FillDrawArgs args = {};
-  args.path = &path;
-  args.rule = rule;
-  args.precomputedEncoded = encoded;
-  args.paintMode = 1u;
   gpu::Result<gpu::TextureView> tileView = impl_->gpuContext->gpuDevice->createTextureView(
       *paint.tile, gpu::TextureViewDescriptor{"GeoEncoderPatternTileView"});
   if (tileView.hasError()) {
     return;
   }
-  args.patternView = impl_->transientResources.retain(std::move(tileView).result());
+  const FillDrawArgs args =
+      PatternFillArgs(&path, *encoded, rule, paint,
+                      impl_->transientResources.retain(std::move(tileView).result()), sampler);
+  submitFillDraw(args, {}, /*requireAdmission=*/false);
+}
+
+GeoEncoder::FillDrawArgs GeoEncoder::PatternFillArgs(const Path* path, const EncodedPath& encoded,
+                                                     FillRule rule, const PatternPaint& paint,
+                                                     gpu::TextureViewRef tileView,
+                                                     gpu::SamplerRef sampler) {
+  FillDrawArgs args = {};
+  args.path = path;
+  args.rule = rule;
+  args.precomputedEncoded = &encoded;
+  args.paintMode = 1u;
+  args.patternView = tileView;
   args.patternSampler = sampler;
   args.patternFromPath = paint.patternFromPath;
   args.tileSize = paint.tileSize;
   args.patternOpacity = static_cast<float>(paint.opacity);
-
-  submitFillDraw(args, {}, /*requireAdmission=*/false);
+  return args;
 }
 
 void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms,

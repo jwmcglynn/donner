@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -2929,11 +2930,12 @@ SVGDocument ParsePatternDocument(std::string_view source) {
 }
 
 /// A rect filled with a pattern whose tile holds a solid cell, a gradient-painted cell, and a cell
-/// painted with a nested pattern, and two lines stroked with different patterns whose shared
-/// marker paints a square with each line's stroke as its context paint, so one marker content
-/// draws with two pattern tiles in a frame.
+/// painted with a nested pattern; two lines stroked with different patterns whose shared marker
+/// paints a square with each line's stroke as its context paint, so one marker content draws with
+/// two pattern tiles in a frame; and three rects filled with three different patterns whose tiles
+/// have one size, so they share a pool bucket.
 constexpr std::string_view kPatternEditSvg = R"svg(
-<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64" viewBox="0 0 96 64">
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="80" viewBox="0 0 96 80">
   <defs>
     <linearGradient id="g">
       <stop offset="0" stop-color="#2050c0"/>
@@ -2950,6 +2952,15 @@ constexpr std::string_view kPatternEditSvg = R"svg(
     <pattern id="q" patternUnits="userSpaceOnUse" width="6" height="6">
       <rect width="3" height="6" fill="#806020"/>
     </pattern>
+    <pattern id="r" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="4" height="8" fill="#a02080"/>
+    </pattern>
+    <pattern id="s" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="8" height="4" fill="#20a080"/>
+    </pattern>
+    <pattern id="t" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="4" height="4" fill="#2080a0"/>
+    </pattern>
     <marker id="m" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="20"
             overflow="visible">
       <rect width="20" height="20" fill="context-stroke"/>
@@ -2958,6 +2969,9 @@ constexpr std::string_view kPatternEditSvg = R"svg(
   <rect x="4" y="4" width="60" height="56" fill="url(#p)"/>
   <path d="M 70 4 L 90 30" stroke="url(#p)" stroke-width="2" marker-start="url(#m)"/>
   <path d="M 70 40 L 90 60" stroke="url(#q)" stroke-width="2" marker-start="url(#m)"/>
+  <rect x="4" y="64" width="24" height="12" fill="url(#r)"/>
+  <rect x="36" y="64" width="24" height="12" fill="url(#s)"/>
+  <rect x="68" y="64" width="24" height="12" fill="url(#t)"/>
 </svg>)svg";
 
 /// An edit applied to a document drawn with \ref kPatternEditSvg.
@@ -2965,23 +2979,39 @@ struct PatternEdit {
   /// How the edit reaches the document.
   enum class Kind {
     Attribute,     //!< `setAttribute` on \ref selector.
-    PatternWidth,  //!< `SVGPatternElement::setWidth` on `#p`, to \ref value user units.
+    PatternWidth,  //!< `SVGPatternElement::setWidth` on \ref selector, to \ref value user units.
     Zoom,          //!< The canvas doubles in size, so the viewBox maps to twice the pixels.
   };
   const char* name;       //!< Names the case and its diff images.
   Kind kind;              //!< How the edit is applied.
-  const char* selector;   //!< Element edited by an attribute edit.
+  const char* selector;   //!< Element an attribute or pattern width edit changes.
   const char* attribute;  //!< Attribute set by an attribute edit.
   const char* value;      //!< New attribute value, or the new pattern width.
 };
+
+/// Number of pixels that differ between \p a and \p b, a premise check that an edit changes what
+/// is drawn, or every pixel of the larger bitmap when their dimensions differ.
+std::size_t DifferingPixelCount(const RendererBitmap& a, const RendererBitmap& b) {
+  if (a.dimensions != b.dimensions || a.rowBytes != b.rowBytes) {
+    return std::max(a.pixels.size(), b.pixels.size()) / 4u;
+  }
+  std::size_t differing = 0;
+  for (std::size_t offset = 0; offset + 4u <= a.pixels.size(); offset += 4u) {
+    if (!std::equal(a.pixels.begin() + offset, a.pixels.begin() + offset + 4u,
+                    b.pixels.begin() + offset)) {
+      ++differing;
+    }
+  }
+  return differing;
+}
 
 /// Applies \p edit to \p document.
 void ApplyPatternEdit(SVGDocument& document, const PatternEdit& edit) {
   switch (edit.kind) {
     case PatternEdit::Kind::Zoom: document.setCanvasSize(192, 128); return;
     case PatternEdit::Kind::PatternWidth: {
-      std::optional<SVGElement> pattern = document.querySelector("#p");
-      ASSERT_TRUE(pattern.has_value());
+      std::optional<SVGElement> pattern = document.querySelector(edit.selector);
+      ASSERT_TRUE(pattern.has_value()) << edit.selector;
       pattern->cast<SVGPatternElement>().setWidth(Lengthd(std::stod(edit.value)));
       return;
     }
@@ -2996,20 +3026,26 @@ void ApplyPatternEdit(SVGDocument& document, const PatternEdit& edit) {
 
 /// A renderer that drew a document's patterns on earlier frames draws an edit of anything a tile's
 /// pixels depend on exactly as a renderer that never saw the document before: a shape inside the
-/// pattern, the pattern's own attributes, a gradient or a nested pattern its content paints with,
-/// and the device scale. Every case also draws one marker's content with two context paints in a
-/// frame, so a tile can never stand in for another context's tile.
+/// pattern, the pattern's size and transform, a gradient or a nested pattern its content paints
+/// with, the device scale, and an edit that makes tiles of one size trade textures, so a resident
+/// fill must rebind. Every case also draws one marker's content with two context paints in a
+/// frame. Context paint edits are not covered: a warm renderer keeps a marker's old context paint
+/// (#2617), and `setAttribute` of a pattern's `width` does not reach the tile (#2616), so the size
+/// edit goes through `SVGPatternElement::setWidth`.
 TEST_F(RendererGeodeTest, PatternEditsReachTheNextFrameOfAWarmRenderer) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   using Kind = PatternEdit::Kind;
   constexpr PatternEdit kEdits[] = {
       {"shape_paint", Kind::Attribute, "#cell", "fill", "#20a0c0"},
       {"shape_geometry", Kind::Attribute, "#cell", "width", "4"},
-      {"pattern_size", Kind::PatternWidth, nullptr, nullptr, "24"},
+      {"pattern_size", Kind::PatternWidth, "#p", nullptr, "24"},
       {"pattern_transform", Kind::Attribute, "#p", "patternTransform", "rotate(30)"},
       {"gradient_stop", Kind::Attribute, "#g-end", "stop-color", "#f0f020"},
       {"nested_pattern", Kind::Attribute, "#inner-cell", "fill", "#f0a000"},
       {"zoom", Kind::Zoom, nullptr, nullptr, nullptr},
+      // The first rect's tile changes size, so the second and third rects' tiles, still of the
+      // old size, take the textures the first and second of that size used.
+      {"tile_textures_trade", Kind::PatternWidth, "#r", nullptr, "12"},
   };
   for (const PatternEdit& edit : kEdits) {
     SCOPED_TRACE(edit.name);
@@ -3031,9 +3067,9 @@ TEST_F(RendererGeodeTest, PatternEditsReachTheNextFrameOfAWarmRenderer) {
     RendererGeode fresh = createRenderer();
     fresh.draw(reference);
     const RendererBitmap expected = fresh.takeSnapshot();
-    ASSERT_FALSE(beforeEdit.dimensions == expected.dimensions &&
-                 beforeEdit.pixels == expected.pixels)
-        << "Premise: the edit must change the rendering, or a stale tile would pass unnoticed";
+    ASSERT_THAT(DifferingPixelCount(beforeEdit, expected), testing::Gt(0u))
+        << "Premise: the edit must change the rendering, or a stale tile would pass unnoticed. "
+        << "Before: " << beforeEdit.dimensions << ", after: " << expected.dimensions;
 
     editor::tests::CompareBitmapToBitmap(afterEdit, expected,
                                          std::string("pattern_edit_") + edit.name,
@@ -3044,7 +3080,8 @@ TEST_F(RendererGeodeTest, PatternEditsReachTheNextFrameOfAWarmRenderer) {
 /// A resident pattern fill paints exactly what the per-frame arena pattern fill paints. In the
 /// second document a clip path sends the triangle's fill through the arena: the clip cuts a notch
 /// from the corner of the triangle's bounds, several pixels away from any pixel the triangle
-/// covers, so the clip itself changes no pixel.
+/// covers, so the clip itself changes no pixel. The pattern is rotated, so a wrong mapping from
+/// path to tile cannot match.
 TEST_F(RendererGeodeTest, ResidentPatternFillMatchesTheArenaPatternFill) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   constexpr std::string_view kDefs = R"svg(
@@ -3055,29 +3092,38 @@ TEST_F(RendererGeodeTest, ResidentPatternFillMatchesTheArenaPatternFill) {
     </pattern>
     <clipPath id="notch"><path d="M -10 -10 L 75 -10 L 88 6 L 120 6 L 120 80 L -10 80 Z"/>
     </clipPath>)svg";
-  const auto triangle = [](std::string_view clip) {
-    return R"svg(<path d="M 8 4 L 88 12 L 60 60 Z" fill="url(#p)" fill-opacity="0.6")svg" +
-           std::string(clip) + "/>";
+  const auto triangle = [](std::string_view fill, std::string_view clip) {
+    return R"svg(<path d="M 8 4 L 88 12 L 60 60 Z" fill-opacity="0.6" fill=")svg" +
+           std::string(fill) + "\"" + std::string(clip) + "/>";
   };
+  constexpr std::string_view kClip = R"svg( clip-path="url(#notch)")svg";
   const std::string head =
       std::string(
           R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64"><defs>)svg") +
       std::string(kDefs) + "</defs>";
-  SVGDocument resident = ParsePatternDocument(head + triangle("") + "</svg>");
-  SVGDocument arena =
-      ParsePatternDocument(head + triangle(R"svg( clip-path="url(#notch)")svg") + "</svg>");
+  SVGDocument resident = ParsePatternDocument(head + triangle("url(#p)", "") + "</svg>");
+  SVGDocument arena = ParsePatternDocument(head + triangle("url(#p)", kClip) + "</svg>");
+  // A clipped solid fill always draws from the arena, which builds a bind group for each draw on
+  // every frame, so its steady frame creates the clip's bind groups plus one for the fill.
+  SVGDocument clippedSolid = ParsePatternDocument(head + triangle("#808080", kClip) + "</svg>");
 
   const auto steadyFrame = [&](SVGDocument& document) {
     RendererGeode renderer = createRenderer();
     renderer.draw(document);
     renderer.draw(document);
-    return std::make_pair(renderer.lastFrameTimings().counters.bufferWrites,
-                          renderer.takeSnapshot());
+    const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+    return std::make_tuple(counters.bufferWrites, counters.bindgroupCreates,
+                           renderer.takeSnapshot());
   };
-  const auto [residentWrites, residentBitmap] = steadyFrame(resident);
-  const auto [arenaWrites, arenaBitmap] = steadyFrame(arena);
+  const auto [residentWrites, residentBindGroups, residentBitmap] = steadyFrame(resident);
+  const auto [arenaWrites, arenaBindGroups, arenaBitmap] = steadyFrame(arena);
+  const uint64_t clippedSolidBindGroups = std::get<1>(steadyFrame(clippedSolid));
   ASSERT_THAT(residentWrites, testing::Eq(0u)) << "Premise: the unclipped fill is resident";
-  ASSERT_THAT(arenaWrites, testing::Gt(0u)) << "Premise: the clipped fill draws from the arena";
+  ASSERT_THAT(residentBindGroups, testing::Eq(0u)) << "Premise: the unclipped fill is resident";
+  ASSERT_THAT(clippedSolidBindGroups, testing::Gt(0u));
+  ASSERT_THAT(arenaBindGroups, testing::Eq(clippedSolidBindGroups))
+      << "Premise: the clipped pattern fill builds a bind group of its own, as an arena fill of "
+         "the same shape does, so it draws from the arena";
   ASSERT_THAT(test::CountNonTransparentPixels(residentBitmap), testing::Gt(0u));
 
   editor::tests::CompareBitmapToBitmap(residentBitmap, arenaBitmap, "resident_vs_arena_pattern",

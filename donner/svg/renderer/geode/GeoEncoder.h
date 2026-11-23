@@ -976,6 +976,18 @@ private:
   void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {},
                       bool requireAdmission = true);
 
+  /// The draw arguments of a pattern fill, built in one place for the arena and the resident
+  /// pattern fills so the two paint the same tile with the same mapping and opacity.
+  /// @param path Path to encode when \p encoded is not used, or null.
+  /// @param encoded The fill's encode.
+  /// @param rule Fill rule.
+  /// @param paint Pattern tile, mapping and opacity.
+  /// @param tileView View of the tile to bind.
+  /// @param sampler Linear repeat sampler to bind.
+  static FillDrawArgs PatternFillArgs(const Path* path, const EncodedPath& encoded, FillRule rule,
+                                      const PatternPaint& paint, gpu::TextureViewRef tileView,
+                                      gpu::SamplerRef sampler);
+
   /// Shared path for the solid and pattern resident fills: draws through \p slot when residence
   /// is allowed and falls back to \ref submitFillDraw otherwise.
   void submitResidentOrArenaFill(GeodeResidentSlot& slot, const EncodedPath& encoded,
