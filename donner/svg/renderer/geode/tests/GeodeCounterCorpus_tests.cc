@@ -156,6 +156,15 @@ constexpr CounterField kCounterFields[] = {
      "bind groups should be cached per pipeline, not rebuilt per draw"},
 };
 
+/// Why the filter scenes still miss the steady state: their filter passes upload and bind nothing
+/// on an unchanged frame, but each filter result reaches its parent through the same composite blit
+/// an opacity group uses.
+constexpr std::string_view kFilterResultCompositeReason =
+    "the composite blit of each filter result rewrites its uniform every frame; the filter passes "
+    "themselves upload and bind nothing new";
+constexpr std::string_view kFilterResultCompositeTracking =
+    "clears when the isolated-layer composite reuses a stable uniform allocation across frames";
+
 // ---------------------------------------------------------------------------
 // Known violations.
 // ---------------------------------------------------------------------------
@@ -195,13 +204,13 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
     {
         /*scene=*/"donner_splash",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{2, 0, 64, 24},
+        /*ceiling=*/{2, 0, 10, 9},
         /*reason=*/
-        "filters, clip paths, and dozens of nested opacity groups re-encode and re-upload "
-        "their layer geometry every frame",
+        "clip paths re-encode and re-upload their geometry, and filter and opacity group "
+        "composites rewrite their blit uniforms, every frame",
         /*tracking=*/
-        "clears when filter and clip-mask layers cache their geometry and bind groups across "
-        "frames",
+        "clears when clip-mask geometry stays resident and layer composites reuse a stable "
+        "uniform allocation across frames",
     },
     {
         /*scene=*/"geode_splash",
@@ -225,54 +234,48 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
     },
     {
         /*scene=*/"filter_displacement_map",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 11, 10},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 1, 1},
         /*reason=*/
-        "filter passes rewrite their per-pass uniform scratch and rebuild a bind group per "
-        "pass every frame",
+        kFilterResultCompositeReason,
         /*tracking=*/
-        "clears when filter passes keep their uniform allocations and bind groups across "
-        "unchanged frames",
+        kFilterResultCompositeTracking,
     },
     {
         /*scene=*/"filter_drop_shadow",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 16, 16},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 3, 3},
         /*reason=*/
-        "three separate drop-shadow filters each rewrite per-pass uniform scratch and "
-        "rebuild a bind group per pass every frame",
+        kFilterResultCompositeReason,
         /*tracking=*/
-        "clears when filter passes keep their uniform allocations and bind groups across "
-        "unchanged frames",
+        kFilterResultCompositeTracking,
     },
     {
         /*scene=*/"filter_fill_paint",
         /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 6},
+        /*ceiling=*/{0, 0, 1, 1},
         /*reason=*/
-        "filter passes rewrite their per-pass uniform scratch every frame",
+        kFilterResultCompositeReason,
         /*tracking=*/
-        "clears when filter passes keep their uniform allocations across unchanged frames",
+        kFilterResultCompositeTracking,
     },
     {
         /*scene=*/"filter_spot_light",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 10, 10},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 1, 1},
         /*reason=*/
-        "filter passes rewrite their per-pass uniform scratch and rebuild a bind group per "
-        "pass every frame",
+        kFilterResultCompositeReason,
         /*tracking=*/
-        "clears when filter passes keep their uniform allocations and bind groups across "
-        "unchanged frames",
+        kFilterResultCompositeTracking,
     },
     {
         /*scene=*/"filter_stroke_paint",
         /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 6},
+        /*ceiling=*/{0, 0, 1, 1},
         /*reason=*/
-        "filter passes rewrite their per-pass uniform scratch every frame",
+        kFilterResultCompositeReason,
         /*tracking=*/
-        "clears when filter passes keep their uniform allocations across unchanged frames",
+        kFilterResultCompositeTracking,
     },
     {
         /*scene=*/"geode_pattern_checker",
