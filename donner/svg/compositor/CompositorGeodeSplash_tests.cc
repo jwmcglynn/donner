@@ -1862,6 +1862,9 @@ TEST(CompositorGeodeSplashTest, AdmissionReservesOneCanvasSizedSurface) {
   };
   CompositorConfig config;
   config.deferFirstFrameWarmup = false;
+  // The three controllers must retain identical tiles, so the tile partition cannot depend on
+  // measured raster time.
+  config.dynamicImmediateStaticSpans = false;
 
   CompositorController::BitmapMemoryBreakdown retained;
   CompositorController::PromoteResult result{CompositorController::PromoteResult::InvalidEntity};
@@ -1871,13 +1874,14 @@ TEST(CompositorGeodeSplashTest, AdmissionReservesOneCanvasSizedSurface) {
   const size_t retainedBytes = retainedTotal(retained);
   ASSERT_GT(retainedBytes, 0u);
 
-  // The retained tiles fit under this threshold, but a canvas-sized surface beside them does not.
+  // The retained tiles fit under this threshold, but a canvas-sized frame target beside them does
+  // not.
   config.retainedMemoryBudgetBytes = retainedBytes + kCanvasBytes;
   ASSERT_NO_FATAL_FAILURE(
       PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
   ASSERT_EQ(retainedTotal(retained), retainedBytes);
   EXPECT_EQ(result, CompositorController::PromoteResult::MemoryLimit)
-      << "A promotion needs room for one canvas-sized surface beside the retained tiles";
+      << "Admission must leave room for one canvas-sized frame target beside the retained tiles";
 
   config.retainedMemoryBudgetBytes = retainedBytes + kCanvasBytes + 1u;
   ASSERT_NO_FATAL_FAILURE(

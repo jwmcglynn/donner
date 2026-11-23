@@ -2688,15 +2688,16 @@ bool CompositorController::retainedMemoryAtBudget() const {
   const size_t heapBitmapBytes = breakdown.segmentBitmapBytes + breakdown.layerBitmapBytes;
   const size_t retainedBytes =
       heapBitmapBytes + breakdown.segmentTextureBytes + breakdown.layerTextureBytes;
-  // Rasterizing the promoted layer and the segments it splits needs at least one fresh surface of
-  // the canvas size while every retained tile is still held.
-  size_t promotionReserveBytes = 0;
+  // A frame that rebuilds every tile charges each of them and its frame target, one canvas-sized
+  // surface, against the renderer's per-frame surface budget.
+  std::uint64_t frameTargetBytes = 0;
   if (hasLastViewport_) {
     const Vector2i canvasSize = BitmapDimensionsForViewport(lastViewport_);
-    promotionReserveBytes = static_cast<size_t>(std::max(canvasSize.x, 0)) *
-                            static_cast<size_t>(std::max(canvasSize.y, 0)) * 4u;
+    frameTargetBytes = static_cast<std::uint64_t>(std::max(canvasSize.x, 0)) *
+                       static_cast<std::uint64_t>(std::max(canvasSize.y, 0)) * 4u;
   }
-  return retainedBytes + promotionReserveBytes >= retainedMemoryBudgetBytes() ||
+  return static_cast<std::uint64_t>(retainedBytes) + frameTargetBytes >=
+             static_cast<std::uint64_t>(retainedMemoryBudgetBytes()) ||
          heapBitmapBytes >= heapBitmapBudgetBytes();
 }
 
