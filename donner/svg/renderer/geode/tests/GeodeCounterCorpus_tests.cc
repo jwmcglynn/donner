@@ -200,24 +200,6 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         "across unchanged frames",
     },
     {
-        /*scene=*/"image_data_url_opacity",
-        /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 1, 1},
-        /*reason=*/
-        "the image quad allocates a texture and re-uploads its quad geometry every frame",
-        /*tracking=*/
-        "clears when decoded images keep their texture and the image quad gains residency",
-    },
-    {
-        /*scene=*/"image_data_url_pixelated",
-        /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 1, 1},
-        /*reason=*/
-        "the image quad allocates a texture and re-uploads its quad geometry every frame",
-        /*tracking=*/
-        "clears when decoded images keep their texture and the image quad gains residency",
-    },
-    {
         /*scene=*/"marker",
         /*violated=*/kBufferWrites | kBindgroupCreates,
         /*ceiling=*/{0, 0, 6, 14},

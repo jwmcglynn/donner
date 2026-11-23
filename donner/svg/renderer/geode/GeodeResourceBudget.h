@@ -230,6 +230,30 @@ public:
     releaseResidentBytes(released);
   }
 
+  /**
+   * Charges \p bytes of a decoded image's texture kept across frames as GPU residence under the
+   * same limit and refusal rules as \ref reserveResidentBytes, and counts them in
+   * \ref imageBytes.
+   *
+   * @param bytes Bytes to charge.
+   * @return Whether they were charged.
+   */
+  [[nodiscard]] bool reserveImageBytes(std::uint64_t bytes) {
+    if (!reserveResidentBytes(bytes)) {
+      return false;
+    }
+    imageBytes_ += bytes;
+    return true;
+  }
+
+  /// Release up to \p bytes of kept image textures from the resident charge.
+  /// @param bytes Image bytes to release.
+  void releaseImageBytes(std::uint64_t bytes) {
+    const std::uint64_t released = std::min(bytes, imageBytes_);
+    imageBytes_ -= released;
+    releaseResidentBytes(released);
+  }
+
   /// Tighten cache and resident limits for a test; production limits cannot be raised.
   /// @param limits Requested upper bounds for both document charges.
   void setLimitsForTesting(Limits limits) {
@@ -243,6 +267,8 @@ public:
   [[nodiscard]] std::uint64_t residentBytes() const { return residentBytes_; }
   /// Bytes of gradient stop ramps kept across frames, a part of \ref residentBytes.
   [[nodiscard]] std::uint64_t rampBytes() const { return rampBytes_; }
+  /// Bytes of decoded image textures kept across frames, a part of \ref residentBytes.
+  [[nodiscard]] std::uint64_t imageBytes() const { return imageBytes_; }
   /// Whether a cache or resident request has ever been refused.
   [[nodiscard]] bool rejected() const { return cacheRejected_ || residentRejected_; }
 
@@ -270,6 +296,7 @@ private:
   bool cacheRejected_ = false;
   bool residentRejected_ = false;
   std::uint64_t rampBytes_ = 0;
+  std::uint64_t imageBytes_ = 0;
 };
 
 /** Movable ownership of one cached geometry reservation. */

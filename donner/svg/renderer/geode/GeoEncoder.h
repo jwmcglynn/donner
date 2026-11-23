@@ -564,6 +564,42 @@ public:
   void drawPremultipliedImage(const svg::ImageResource& image, const Box2d& destRect,
                               double opacity, svg::ImageRendering imageRendering);
 
+  /**
+   * Whether \ref drawImage would draw \p image into \p destRect: the payload is a non-empty,
+   * exactly sized RGBA8 buffer within this device's texture size limit, and the destination is
+   * not empty.
+   *
+   * @param image Decoded RGBA8 image resource.
+   * @param destRect Destination rectangle in local (pre-transform) space.
+   */
+  [[nodiscard]] bool acceptsImage(const svg::ImageResource& image, const Box2d& destRect) const;
+
+  /**
+   * Upload \p image's straight-alpha pixels, premultiplied, to a new sampled texture that
+   * \ref drawImageTexture can draw. The texture is not retained by this encoder.
+   *
+   * @param image Decoded RGBA8 image that \ref acceptsImage accepts.
+   * @return The texture, or an empty one when the device refused it.
+   */
+  [[nodiscard]] gpu::Texture uploadImageTexture(const svg::ImageResource& image);
+
+  /**
+   * Draw a premultiplied texture uploaded by \ref uploadImageTexture exactly as \ref drawImage
+   * draws the image it was uploaded from.
+   *
+   * @param texture Premultiplied RGBA8 texture holding the image's pixels.
+   * @param imageSize Width and height of the image in pixels.
+   * @param destRect Destination rectangle in local (pre-transform) space.
+   * @param opacity Overall opacity in [0, 1].
+   * @param imageRendering Resolved smooth, crisp, or two-stage pixelated sampling policy.
+   * @param retained Uniform buffer and bind group this draw keeps across frames, or null to
+   *   allocate both for this frame only. See \ref GeodeTextureEncoder::RetainedQuadBinding for
+   *   when a caller may pass one.
+   */
+  void drawImageTexture(const gpu::Texture& texture, const Vector2i& imageSize,
+                        const Box2d& destRect, double opacity, svg::ImageRendering imageRendering,
+                        GeodeTextureEncoder::RetainedQuadBinding* retained = nullptr);
+
   /// Source-compatible legacy overload. New callers pass the resolved image-rendering enum.
   void drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
                  bool pixelated) {

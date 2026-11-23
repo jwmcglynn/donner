@@ -589,6 +589,7 @@ public:
   struct RetainedCompositeCounts {
     size_t layers = 0;         //!< Isolated-layer composite entries.
     size_t filterResults = 0;  //!< Filter-result composite entries.
+    size_t images = 0;         //!< Blit entries of image textures kept across frames.
   };
 
   /// The retained composite entries this renderer holds, including any not yet dropped.

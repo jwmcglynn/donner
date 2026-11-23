@@ -729,6 +729,7 @@ private:
 };
 
 class GeodeDevice;
+struct GeodeResidentImage;
 
 /**
  * A gradient's stops laid out in a stop ramp texture (see `stopRamp` in
@@ -893,6 +894,7 @@ public:
     lastMergedFrame_ = frameIndex;
     retiredBindGroups_.clear();
     retiredRamps_.clear();
+    retiredImages_.clear();
     for (const FreeRange& range : pendingFrees_) {
       auto it = freeRanges_.begin();
       while (it != freeRanges_.end() &&
@@ -1047,11 +1049,22 @@ public:
     }
   }
 
+  /// Park an image texture an entity is dropping until the next frame boundary, for the same
+  /// reason as \ref retireBindGroup: draws recorded earlier in the frame may still sample it.
+  /// @param image Image to release at the next frame boundary.
+  void retireImage(std::shared_ptr<const GeodeResidentImage> image) {
+    if (image != nullptr) {
+      retiredImages_.push_back(std::move(image));
+    }
+  }
+
 private:
   /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
   std::vector<gpu::BindGroup> retiredBindGroups_;
   /// Stop ramps dropped by slots this frame, released at the next \ref beginFrame.
   std::vector<std::shared_ptr<const GeodeGradientRamp>> retiredRamps_;
+  /// Image textures dropped by entities this frame, released at the next \ref beginFrame.
+  std::vector<std::shared_ptr<const GeodeResidentImage>> retiredImages_;
 
   static constexpr uint64_t kInitialChunkBytes = 1u << 20;  // 1 MiB.
 

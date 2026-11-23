@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 
+#include <cassert>
 #include <utility>
 
 namespace donner::geode {
@@ -39,6 +40,25 @@ std::size_t GeodeHandleRetirement::retire(std::vector<gpu::Buffer>& buffers,
   return remaining;
 }
 
+std::size_t GeodeHandleRetirement::retireTextures(std::vector<gpu::Texture>& textures) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const std::size_t before = textures_.size();
+  const std::size_t remaining = TakeHandlesOf(runtimeDeviceId_, textures, textures_);
+  if (textures_.size() > before && wakeCallback_) {
+    wakeCallback_();
+  }
+  return remaining;
+}
+
+void GeodeHandleRetirement::setTextureReleaseListener(TextureReleaseListener listener,
+                                                      std::function<bool()> isLive) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  assert((!textureReleaseListenerLive_ || !textureReleaseListenerLive_()) &&
+         "a live texture release listener must not be replaced");
+  textureReleaseListener_ = std::move(listener);
+  textureReleaseListenerLive_ = std::move(isLive);
+}
+
 void GeodeHandleRetirement::setWakeCallback(std::function<void()> callback) {
   std::lock_guard<std::mutex> lock(mutex_);
   wakeCallback_ = std::move(callback);
@@ -46,16 +66,27 @@ void GeodeHandleRetirement::setWakeCallback(std::function<void()> callback) {
 
 bool GeodeHandleRetirement::hasPending() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return !buffers_.empty() || !bindGroups_.empty();
+  return !buffers_.empty() || !bindGroups_.empty() || !textures_.empty();
 }
 
 void GeodeHandleRetirement::release() {
   std::vector<gpu::Buffer> buffers;
   std::vector<gpu::BindGroup> bindGroups;
+  std::vector<gpu::Texture> textures;
+  TextureReleaseListener textureReleaseListener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     buffers.swap(buffers_);
     bindGroups.swap(bindGroups_);
+    textures.swap(textures_);
+    if (!textures.empty()) {
+      textureReleaseListener = textureReleaseListener_;
+    }
+  }
+  if (textureReleaseListener) {
+    for (const gpu::Texture& texture : textures) {
+      textureReleaseListener(gpu::ResourceIdentity{texture.slotIndex(), texture.generation()});
+    }
   }
   // Released as the vectors go out of scope, outside the lock and on the calling thread: a release
   // reaches the runtime device, and a retirement from another thread must not wait on it.
@@ -72,7 +103,7 @@ void GeodeHandleRetirement::close() {
 
 GeodeHandleRetirement::HeldCounts GeodeHandleRetirement::heldCountsForTesting() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return HeldCounts{buffers_.size(), bindGroups_.size()};
+  return HeldCounts{buffers_.size(), bindGroups_.size(), textures_.size()};
 }
 
 }  // namespace donner::geode

@@ -3,11 +3,11 @@
 **Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes,
 including painted text, re-encode, create and re-upload nothing, including the second and later
 draws of one entity in a frame such as marker placements, filter passes upload and bind nothing new,
-opacity, blend-mode and filter-result composites without a clip mask write and create nothing, and
-ordered batching draws runs of resident draws as instanced draws. Steady-state residency for images,
-clip and mask geometry (including composites under a clip mask), and draws under a clip polygon
-(among them turned marker placements) are still open (Milestone 8). `geode_counter_corpus_tests`
-records the corpus scenes measured to miss the steady state.
+opacity, blend-mode and filter-result composites and decoded images without a clip mask write and
+create nothing, and ordered batching draws runs of resident draws as instanced draws. Steady-state
+residency for clip and mask geometry (including composites and images under a clip mask), and draws
+under a clip polygon (among them turned marker placements) are still open (Milestone 8).
+`geode_counter_corpus_tests` records the corpus scenes measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -55,8 +55,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the next independent Milestone 8 item, image residency (8.4), whose opacity case 8.3
-  unblocked.
+- Start the remaining Milestone 8 items: clip, mask, and nested-viewport geometry (8.7) and
+  residency under a clip polygon (8.9).
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -264,10 +264,11 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     the surfaces it already composited (`LayerCompositeRetainedStateIsCappedAcrossFrameSplits`).
     An entry holds a 224-byte uniform buffer on the GPU, a 224-byte CPU mirror of it, and the
     handles of that buffer, at most two texture views and one bind group; its host record is at
-    most 512 bytes (a `static_assert` on `RetainedCompositeSequence::Entry`). A renderer therefore
-    retains at most 512 entries: 112 KiB of uniform buffers on the GPU, 256 KiB of host records, and
-    the runtime objects behind 512 buffers, 1024 views and 512 bind groups. These bytes are not
-    charged to a byte budget. Entries the frame did not reach are dropped once it is submitted, a
+    most 512 bytes (a `static_assert` on `RetainedCompositeSequence::Entry`). The two composite
+    sequences therefore retain at most 512 entries: 112 KiB of uniform buffers on the GPU, 256 KiB
+    of host records, and the runtime objects behind 512 buffers, 1024 views and 512 bind groups.
+    These bytes are not charged to a byte budget. Entries the frame did not reach are dropped once
+    it is submitted, a
     texture pool trim to nothing releases every entry, and all are released with the renderer
     (`LayerCompositeEntriesFollowTheLastFrame`). An entry's textures go back to the device's
     shared pool at each frame end while its views stay, so entries release their views and bind
@@ -299,11 +300,66 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     path clip mask binds a clip-mask view created for that frame, so it rebuilds its bind group
     every frame, and composites through a `<mask>` keep the per-frame path; neither is part of this
     item.
-  - [ ] 8.4: Image residency. Decoded images allocate a texture and re-upload their quad every
-    frame. Clears `image_data_url_opacity`, `image_data_url_pixelated`. Depends on 8.3 for the
-    opacity case. `image_external_svg_par` and `image_external_svg_viewbox`, which draw one
-    external SVG at two sizes, meet the steady state with 8.2: their second draws of each path were
-    same-frame repeats.
+  - [x] 8.4: Image residency. An image drawn from its element's `LoadedImageComponent` keeps its
+    premultiplied RGBA8 texture on each device that draws it (`GeodeResidentImageComponent`,
+    `geode/GeodeResidentImageComponent.h`), and the blit of a kept texture draws through a retained
+    quad binding claimed in draw order, a third sequence beside the two 8.3 composite sequences. An
+    unchanged frame therefore creates, uploads and writes nothing for an image and creates no bind
+    group (`DecodedImages_UnchangedFrameWritesAndCreatesNothing`). Without it, each unchanged frame
+    created and uploaded a texture per image (512 bytes for a 2x2 or 3x2 image, rows padded to 256
+    bytes), wrote the blit uniform through the per-frame arena and built a bind group; there is no
+    image quad geometry, the quad is expanded from the uniform. A kept texture is keyed by the
+    component's revision and the image size, both compared before every draw, so new pixels upload
+    once, whether `href` changed or the decoded pixels were rewritten in place under a new revision
+    (`ImageEditsReachTheNextFrameOfAWarmRenderer`); the component's update and destroy listener
+    drops the textures of an image whose pixels go away. Every writer of the component removes and
+    re-emplaces it, which the destroy path covers; a component replaced in place reaches the update
+    path (both in `ImageTexturesGoWithTheirElementDeviceAndDocument`). Each texture charges width x
+    height x 4 bytes to the document's resident limit
+    (`GeodeDocumentGeometryBudget::reserveImageBytes`, counted in `imageBytes()`); an image the
+    limit refuses uploads a texture for each frame that draws it
+    (`KeptImageTexturesStayWithinTheDocumentResidentLimit`). A replaced texture stays charged until
+    it is released, so near the limit the first frame after an edit can refuse the new texture and
+    upload it for that frame only; the next frame keeps it. A dropped or replaced texture waits in
+    the document's resident slab for its device until no open frame on the device can still sample
+    it (`NestedPassKeepsTheImageTextureAnOuterFrameLeftPending`). A frame that `RendererGeode::draw`
+    draws live, under the document's write access, takes back at its start what the document's slabs
+    released before it, so a texture goes at the next such frame even when it draws nothing that
+    looks the slabs up, as in a document whose only drawable was the image
+    (`ImageTexturesGoWhenTheDocumentHasNothingElseToDraw`). A concurrent-DOM document's frames
+    replay a snapshot, which must not touch the live document, and leave its residence alone
+    (`ConcurrentDomReplayLeavesTheDocumentsResidenceAlone`); there, in frames driven through
+    `RendererDriver` directly, and in a document that is not drawn again, a released texture waits
+    for the document's next resident lookup or its destruction. The texture's handle then goes to
+    its device's handle retirement, which releases it on that device's thread
+    (`RetiredTexturesWaitForTheOwnerAndForeignOnesStayWithTheCaller`). Before releasing a texture,
+    the retirement reports it to the device's texture pool, whose destroy listeners are the 8.3
+    ones, so every renderer on the device drops the views and bind groups of blit entries built from
+    it; tested when the pixels change, when they go away, when the resident limit refuses the new
+    pixels, and when the document is destroyed, each with the entry held by a renderer other than
+    the one whose frame releases the texture
+    (`ImageBlitsReleaseViewsBeforeTheirTexturesAreDestroyed`). A frame that ends without submitting
+    releases every image entry's views (`ImageBlitsReleaseViewsWhenAFrameIsAbandoned`), and an image
+    under a path clip mask rebuilds its bind group every frame and releases it at the frame's end
+    (`ClippedImageBlitsReleaseTheFramesClipMaskView`). A device that goes takes its renderers and
+    their entries with it; its textures stop counting against the document, and a document destroyed
+    outside a frame hands its textures to the retirement
+    (`ImageTexturesGoWithTheirElementDeviceAndDocument`). The image blit sequence keeps at most 256
+    entries of the 8.3 entry shape (56 KiB of uniform buffers, 128 KiB of host records), uncharged
+    like the composite entries, so a renderer's three sequences retain at most 768 entries (168 KiB
+    of uniform buffers, 384 KiB of host records); blits past it allocate for their frame, and its
+    entries follow the last frame and a pool trim
+    (`ImageBlitEntriesStayCappedAndFollowTheLastFrame`). Placement, size, sampling and transform
+    edits match a fresh renderer (`ImageBlitEditsMatchAFreshRenderer`). Each draw of a kept texture
+    takes its own entry, so `<use>` repeats of one image share the texture. The host record of a
+    kept texture, two shared pointers per device and the texture's record, is fixed per drawn image
+    element and device and is not charged. The device check on a kept texture is defensive and
+    untested, since every device keeps its own entry. A render snapshot clears the image's entity
+    handle at capture and replays a copy of its pixels, so replay keeps nothing and neither reads
+    nor writes the document (`ReplayedImageSnapshotLeavesTheDocumentUntouched`).
+    `image_data_url_opacity` and `image_data_url_pixelated` meet the steady state.
+    `image_external_svg_par` and `image_external_svg_viewbox`, which draw one external SVG at two
+    sizes, meet it with 8.2: their second draws of each path were same-frame repeats.
   - [x] 8.5: Pattern residency. A pattern fill or pattern stroke draws from its entity's resident
     fill or stroke slot (`GeoEncoder::fillPathPatternResident`), whose cached bind group binds the
     tile's view. The pool hands a bucket's textures out in the order the previous frame took them,
@@ -441,8 +497,9 @@ removing per-draw resource churn in Geode directly benefits the `DragFrameOverhe
   `GeodeFrameGeometryBudget` (`geode/GeodeResourceBudget.h`) bounds the encoded geometry a frame
   admits; once a frame exceeds it, the frame refuses further geometry.
   `GeodeDocumentGeometryBudget` bounds the encodes a document keeps across frames (64 MiB) and
-  its resident geometry (64 MiB). Once it refuses a cache charge it refuses every later charge
-  that would grow the document's total; a replacement that does not grow it is still accepted.
+  its resident geometry, which includes kept stop ramps and image textures (64 MiB). Once it
+  refuses a cache charge it refuses every later charge that would grow the document's total; a
+  replacement that does not grow it is still accepted.
   From then on an encode that would add bytes, such as an outline for a new stroke key, draws
   from a per-frame encode while the encodes already cached keep serving. A document's stroke
   outlines count against that budget: up to two per stroke style and eight per path.
@@ -526,6 +583,9 @@ Entity with <path d="...">
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
   order.
+- **Images.** A decoded image keeps its texture per device on its element
+  (`GeodeResidentImageComponent`), keyed by the loaded image's revision and size and charged to
+  the document's resident limit (Milestone 8, item 8.4).
 - **Glyphs.** `GeodeGlyphCache` (`geode/GeodeGlyphResidency.h`) caches each glyph outline once per
   glyph identity (font, glyph, scale, stretch, rotation, and tolerance), bounded by entry and byte
   budgets. Solid-filled glyph occurrences draw from those resident outlines through instance records
@@ -534,10 +594,11 @@ Entity with <path d="...">
 - **Invalidation.** Path geometry invalidates through `on_update<ComputedPathComponent>`, which
   fires only when `ShapeSystem` changes the geometry; no separate dirty flag is involved.
 - **Uniform storage.** Resident slots hold their own uniforms, and each isolated-layer or
-  filter-result composite keeps a uniform buffer and bind group of its own across frames. Per-frame
-  draws bump-allocate from per-encoder arenas, image blits from the encoder's uniform scratch, and
-  filter passes from the filter engine's scratch blocks, which skip uploading a slot that already
-  holds the same bytes. Nothing uses a uniform ring or dynamic offsets.
+  filter-result composite and each blit of a kept image texture keeps a uniform buffer and bind
+  group of its own across frames. Per-frame draws bump-allocate from per-encoder arenas, other
+  image blits from the encoder's uniform scratch, and filter passes from the filter engine's
+  scratch blocks, which skip uploading a slot that already holds the same bytes. Nothing uses a
+  uniform ring or dynamic offsets.
 - **Eviction.** Geometry changes remove the entity's cache and residence components; document
   teardown destroys them and returns their slab ranges. Residence is tracked per device, so a
   document drawn by another device uploads there instead of borrowing this device's buffers

@@ -41,9 +41,11 @@
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGPatternElement.h"
 #include "donner/svg/SVGTextContentElement.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -640,6 +642,160 @@ TEST_F(GeodeDocumentResidencyTest, StrokeOutlinesGoWithTheirPathDeviceAndDocumen
   }
   EXPECT_THAT(first_->liveResidentBytesForTesting(), Eq(firstBaseline))
       << "the document's stroke residence must be released with the document";
+}
+
+/// One rectangle and one decoded 3x2 image, whose texture each drawing device keeps.
+constexpr std::string_view kImageSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <rect x="10" y="10" width="80" height="60" fill="#c33"/>
+    <image id="img" x="100" y="20" width="60" height="40"
+           href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAI0lEQVR42mP438Dwn2HB/wMaJwIaGE5oLPj//z+DAwMDw38Ari8MarxRuBEAAAAASUVORK5CYII="/>
+  </svg>)";
+
+/// An image's kept texture is charged to the document once per device that keeps one. A device
+/// that goes stops counting; an image whose pixels are dropped releases its charge at the next
+/// frame boundary;
+/// and a document destroyed outside any frame hands its textures to their device's retirement
+/// instead of releasing them on the destroying thread.
+TEST_F(GeodeDocumentResidencyTest, ImageTexturesGoWithTheirElementDeviceAndDocument) {
+  constexpr uint64_t kTextureBytes = 3u * 2u * 4u;
+  RendererGeode onFirst(first_);
+  {
+    SVGDocument document = ParseShapes(kImageSvg);
+    onFirst.draw(document);
+    const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+    ASSERT_THAT(budget, NotNull());
+    EXPECT_THAT(budget->imageBytes(), Eq(kTextureBytes));
+
+    {
+      RendererGeode onSecond(second_);
+      onSecond.draw(document);
+    }
+    EXPECT_THAT(budget->imageBytes(), Eq(2u * kTextureBytes))
+        << "each device keeps and is charged for its own texture";
+    second_.reset();
+    onFirst.draw(document);
+    EXPECT_THAT(budget->imageBytes(), Eq(kTextureBytes))
+        << "the texture of a device that went must stop counting against the document";
+
+    std::optional<SVGElement> image = document.querySelector("#img");
+    ASSERT_THAT(image, testing::Optional(testing::_));
+    image->cast<SVGImageElement>().setHref("");
+    onFirst.draw(document);
+    EXPECT_THAT(budget->imageBytes(), Eq(0u))
+        << "an image that no longer loads must release its texture at the next frame boundary";
+
+    // Every writer today removes and re-emplaces the component; one replaced in place reaches the
+    // update listener instead.
+    SVGDocument replaced = ParseShapes(kImageSvg);
+    onFirst.draw(replaced);
+    ASSERT_THAT(DocumentBudgetOf(replaced)->imageBytes(), Eq(kTextureBytes));
+    std::optional<SVGElement> replacedImage = replaced.querySelector("#img");
+    ASSERT_THAT(replacedImage, testing::Optional(testing::_));
+    replacedImage->unsafeEntityHandle().replace<components::LoadedImageComponent>();
+    onFirst.draw(replaced);
+    EXPECT_THAT(DocumentBudgetOf(replaced)->imageBytes(), Eq(0u))
+        << "an image component replaced in place must release its texture";
+
+    SVGDocument kept = ParseShapes(kImageSvg);
+    onFirst.draw(kept);
+    EXPECT_THAT(DocumentBudgetOf(kept)->imageBytes(), Eq(kTextureBytes));
+    first_->releaseRetiredHandles();
+    ASSERT_THAT(first_->retiredHandleCountsForTesting().textures, Eq(0u));
+  }
+  EXPECT_THAT(first_->retiredHandleCountsForTesting().textures, Eq(1u))
+      << "a document destroyed outside a frame must hand its texture to the device's retirement";
+  first_->releaseRetiredHandles();
+  EXPECT_THAT(first_->retiredHandleCountsForTesting().textures, Eq(0u));
+}
+
+/// A document whose only drawable is one decoded image.
+constexpr std::string_view kOnlyImageSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <image id="img" x="20" y="20" width="60" height="40"
+           href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAI0lEQVR42mP438Dwn2HB/wMaJwIaGE5oLPj//z+DAwMDw38Ari8MarxRuBEAAAAASUVORK5CYII="/>
+  </svg>)";
+
+/// The same canvas with nothing to draw.
+constexpr std::string_view kEmptySvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"/>)";
+
+/// A document's texture of an image that goes away is released at the start of the next frame
+/// drawn through `RendererGeode::draw`, even when that frame draws nothing that looks the
+/// document's residence up: here the image was the document's only drawable. Both removals park
+/// the texture before that frame opens, so one frame suffices.
+TEST_F(GeodeDocumentResidencyTest, ImageTexturesGoWhenTheDocumentHasNothingElseToDraw) {
+  constexpr uint64_t kTextureBytes = 3u * 2u * 4u;
+  struct Removal {
+    const char* name;
+    void (*apply)(SVGElement& image);
+  };
+  constexpr std::array<Removal, 2> kRemovals = {{
+      {"href_cleared", [](SVGElement& image) { image.cast<SVGImageElement>().setHref(""); }},
+      {"element_removed", [](SVGElement& image) { image.remove(); }},
+  }};
+
+  RendererGeode renderer(first_);
+  for (const Removal& removal : kRemovals) {
+    SCOPED_TRACE(removal.name);
+    SVGDocument document = ParseShapes(kOnlyImageSvg);
+    renderer.draw(document);
+    const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+    ASSERT_THAT(budget, NotNull());
+    ASSERT_THAT(budget->imageBytes(), Eq(kTextureBytes));
+    {
+      std::optional<SVGElement> image = document.querySelector("#img");
+      ASSERT_THAT(image, testing::Optional(testing::_));
+      removal.apply(*image);
+    }
+    first_->releaseRetiredHandles();
+
+    renderer.draw(document);
+    EXPECT_THAT(budget->imageBytes(), Eq(0u))
+        << "the image's texture stayed charged after the next frame of a document with nothing "
+           "else to draw";
+    EXPECT_THAT(first_->retiredHandleCountsForTesting().textures, Eq(0u))
+        << "the texture must be released, not left with the retirement";
+
+    SVGDocument empty = ParseShapes(kEmptySvg);
+    RendererGeode reference(first_);
+    reference.draw(empty);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                         std::string("only_image_gone_") + removal.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A concurrent-DOM document drawn through `RendererGeode::draw` is captured into a snapshot and
+/// replayed, and replay must not touch the live document, so its frames leave the document's
+/// residence alone: a texture parked before the draw is still parked, and charged, after it. A
+/// later live draw takes it back. The caller holds write access, as `RendererGeode::draw` requires
+/// for a concurrent-DOM document.
+TEST_F(GeodeDocumentResidencyTest, ConcurrentDomReplayLeavesTheDocumentsResidenceAlone) {
+  constexpr uint64_t kTextureBytes = 3u * 2u * 4u;
+  RendererGeode renderer(first_);
+  SVGDocument document = ParseShapes(kOnlyImageSvg);
+  renderer.draw(document);
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+  ASSERT_THAT(budget, NotNull());
+  ASSERT_THAT(budget->imageBytes(), Eq(kTextureBytes));
+  {
+    std::optional<SVGElement> image = document.querySelector("#img");
+    ASSERT_THAT(image, testing::Optional(testing::_));
+    image->cast<SVGImageElement>().setHref("");
+  }
+
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  {
+    const DocumentWriteAccess access = document.writeAccess();
+    renderer.draw(document);
+  }
+  EXPECT_THAT(budget->imageBytes(), Eq(kTextureBytes))
+      << "a snapshot replay settled the live document's residence";
+
+  document.setThreadingMode(ThreadingMode::SingleThreaded);
+  renderer.draw(document);
+  EXPECT_THAT(budget->imageBytes(), Eq(0u)) << "the next live draw must take the texture back";
 }
 
 /// A document whose path is stroked through `<use>` instances with the given stroke widths, one

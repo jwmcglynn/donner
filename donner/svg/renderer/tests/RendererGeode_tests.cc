@@ -43,13 +43,16 @@
 #endif
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/SVGPatternElement.h"
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep - provides UnpremultiplyRgba
 #include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/renderer/RenderSnapshot.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -63,6 +66,7 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
+#include "donner/svg/renderer/geode/GeodeResidentImageComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -6437,6 +6441,495 @@ TEST_F(RendererGeodeTest, KeptStopRampsStayWithinTheDocumentResidentLimit) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// Three independently authored 3x2 PNGs with translucent texels, as data URLs.
+constexpr std::array<std::string_view, 3> kImagePngDataUrls = {
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAI0lEQVR42mP438Dwn2HB/"
+    "wMaJwIaGE5oLPj//z+DAwMDw38Ari8MarxRuBEAAAAASUVORK5CYII=",
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAIklEQVR42mNgaPj///"
+    "8ChgMnNAIaGDROLPjP8P+/A1DoPwC1KA9nEqdknwAAAABJRU5ErkJggg==",
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAI0lEQVR42mOIior6/"
+    "0tE5L/IL5H/DCIiv/43MDQsYGhoSAAAmmkLcb1bg0sAAAAASUVORK5CYII=",
+};
+
+/// Bytes a 3x2 RGBA8 image texture charges to the document.
+constexpr std::uint64_t kImageTextureBytes = 3u * 2u * 4u;
+
+/// A 64x64 document with a background and one `<image>` per entry of \p images, each placed in its
+/// own cell and drawn from the PNG at that index of \ref kImagePngDataUrls, or hidden when the
+/// entry is negative.
+/// @param images Per image, the PNG index to draw or -1 to hide it.
+std::string ImagesDocument(std::span<const int> images) {
+  std::string svg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg"
+                    R"svg(<rect width="64" height="64" fill="#204060"/>)svg";
+  for (size_t i = 0; i < images.size(); ++i) {
+    const int png = images[i] < 0 ? static_cast<int>(i) : images[i];
+    svg += "<image id=\"i" + std::to_string(i) + "\" x=\"" + std::to_string(4 + 20 * i) +
+           R"svg(" y="8" width="18" height="12" image-rendering="smooth" href=")svg" +
+           std::string(kImagePngDataUrls[static_cast<size_t>(png)]) + "\"" +
+           (images[i] < 0 ? R"svg( visibility="hidden")svg" : "") + "/>";
+  }
+  return svg + "</svg>";
+}
+
+/// Renders a fresh parse of \p source with a fresh renderer, a reference that shares no cached
+/// state with the renderer under test.
+RendererBitmap RenderFreshGeode(const std::shared_ptr<geode::GeodeDevice>& device,
+                                const std::string& source) {
+  std::optional<SVGDocument> document;
+  ParseDocumentWithoutWarnings(source, document);
+  if (!document.has_value()) {
+    return {};
+  }
+  RendererGeode reference(device);
+  reference.draw(*document);
+  return reference.takeSnapshot();
+}
+
+/// A warm renderer that keeps an image's texture draws an edited image's new pixels on the next
+/// frame: after the image's `href` changes, and after its decoded pixels are rewritten in place,
+/// which marks a new revision without an update signal.
+TEST_F(RendererGeodeTest, ImageEditsReachTheNextFrameOfAWarmRenderer) {
+  const std::array<int, 1> showsA = {0};
+  const std::array<int, 1> showsB = {1};
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsA), document));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  renderer.draw(*document);
+  ASSERT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u)
+      << "Premise: the unchanged frame draws the image from its kept texture";
+  const RendererBitmap showingA = renderer.takeSnapshot();
+
+  const RendererBitmap expectedA = RenderFreshGeode(sharedDevice(), ImagesDocument(showsA));
+  const RendererBitmap expectedB = RenderFreshGeode(sharedDevice(), ImagesDocument(showsB));
+  editor::tests::CompareBitmapToBitmap(showingA, expectedA, "image_edit_before",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::BitmapGoldenCompareParams premiseParams =
+      editor::tests::PixelmatchIdentityParams();
+  premiseParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int changedPixels = -1;
+  editor::tests::CompareBitmapToBitmap(expectedA, expectedB, "image_edit_premise", premiseParams,
+                                       &changedPixels);
+  ASSERT_THAT(changedPixels, testing::Gt(0)) << "the two images must render differently";
+
+  std::optional<SVGElement> image = document->querySelector("#i0");
+  ASSERT_THAT(image, testing::Optional(testing::_));
+  image->cast<SVGImageElement>().setHref(kImagePngDataUrls[1]);
+  renderer.draw(*document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 1u)
+      << "the new pixels upload once";
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expectedB, "image_edit_href",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // Rewrite the decoded pixels in place with image A's, marking a new revision but sending no
+  // update signal.
+  std::optional<SVGDocument> documentA;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsA), documentA));
+  RendererGeode loader = createRenderer();
+  loader.draw(*documentA);
+  std::optional<SVGElement> imageA = documentA->querySelector("#i0");
+  ASSERT_THAT(imageA, testing::Optional(testing::_));
+  const auto* loadedA = imageA->unsafeEntityHandle().try_get<components::LoadedImageComponent>();
+  ASSERT_THAT(loadedA, testing::NotNull());
+  ASSERT_THAT(loadedA->image, testing::Optional(testing::_));
+  auto* loaded = image->unsafeEntityHandle().try_get<components::LoadedImageComponent>();
+  ASSERT_THAT(loaded, testing::NotNull());
+  ASSERT_THAT(loaded->image, testing::Optional(testing::_));
+  loaded->image->data = loadedA->image->data;
+  loaded->markImageModified();
+  renderer.draw(*document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 1u)
+      << "the rewritten pixels upload once";
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expectedA,
+                                       "image_edit_pixels_in_place",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Image textures kept across frames are charged to the document's resident limit. Three images
+/// appear one per frame under a limit with room for two textures: two are kept, the third uploads
+/// a texture for each frame it is drawn in, and every frame matches a fresh rendering.
+TEST_F(RendererGeodeTest, KeptImageTexturesStayWithinTheDocumentResidentLimit) {
+  std::array<int, 3> shown = {-1, -1, -1};
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(shown), document));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  auto* budgetSlot =
+      document->registry().ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
+  ASSERT_THAT(budgetSlot, testing::NotNull());
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = *budgetSlot;
+  ASSERT_EQ(budget->imageBytes(), 0u);
+
+  const std::uint64_t limit = budget->residentBytes() + 2u * kImageTextureBytes;
+  budget->setLimitsForTesting({.cacheBytes = geode::GeodeDocumentGeometryBudget::kMaximumCacheBytes,
+                               .residentBytes = limit});
+
+  for (int image = 0; image < 3; ++image) {
+    SCOPED_TRACE(image);
+    shown[static_cast<size_t>(image)] = image;
+    std::optional<SVGElement> element = document->querySelector("#i" + std::to_string(image));
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    element->removeAttribute("visibility");
+    renderer.draw(*document);
+    EXPECT_LE(budget->residentBytes(), limit);
+    EXPECT_EQ(budget->imageBytes(),
+              static_cast<std::uint64_t>(std::min(image + 1, 2)) * kImageTextureBytes);
+    editor::tests::CompareBitmapToBitmap(
+        renderer.takeSnapshot(), RenderFreshGeode(sharedDevice(), ImagesDocument(shown)),
+        "kept_images_frame_" + std::to_string(image), editor::tests::PixelmatchIdentityParams());
+  }
+
+  // An unchanged frame keeps the two kept textures, uploads the third again, and still matches.
+  renderer.draw(*document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 1u);
+  EXPECT_EQ(budget->imageBytes(), 2u * kImageTextureBytes);
+  editor::tests::CompareBitmapToBitmap(
+      renderer.takeSnapshot(), RenderFreshGeode(sharedDevice(), ImagesDocument(shown)),
+      "kept_images_unchanged_frame", editor::tests::PixelmatchIdentityParams());
+}
+
+/// A document with one image element and \p repeats `<use>` references to it, each drawing the
+/// image at its own position.
+/// @param repeats Number of `<use>` references.
+std::string RepeatedImageDocument(size_t repeats) {
+  std::string svg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg"
+      R"svg(<rect width="64" height="64" fill="#204060"/><defs>)svg"
+      R"svg(<image id="img" width="6" height="4" image-rendering="smooth" href=")svg" +
+      std::string(kImagePngDataUrls[0]) + R"svg("/></defs>)svg";
+  for (size_t i = 0; i < repeats; ++i) {
+    svg += "<use href=\"#img\" x=\"" + std::to_string(i % 10 * 6) + "\" y=\"" +
+           std::to_string(i / 10 % 16 * 4) + "\"/>";
+  }
+  return svg + "</svg>";
+}
+
+/// Matches retained entry counts with \p images image blit entries, whatever the composite counts.
+/// @param images Expected image blit entries.
+testing::Matcher<RendererGeode::RetainedCompositeCounts> ImageBlitEntries(size_t images) {
+  return testing::Field("images", &RendererGeode::RetainedCompositeCounts::images, images);
+}
+
+/// A renderer keeps a blit entry for each kept image texture its last frame drew, at most
+/// \ref RendererGeode::maxRetainedCompositesForTesting: blits past that draw with a uniform and
+/// bind group of their own frame, entries the last frame did not reach are dropped when it ends,
+/// and trimming the texture pool to nothing releases them all. Every frame matches a fresh
+/// rendering.
+TEST_F(RendererGeodeTest, ImageBlitEntriesStayCappedAndFollowTheLastFrame) {
+  const size_t cap = RendererGeode::maxRetainedCompositesForTesting();
+  const std::string manySource = RepeatedImageDocument(cap + 3);
+  const std::string fewSource = RepeatedImageDocument(2);
+  std::optional<SVGDocument> many;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(manySource, many));
+  std::optional<SVGDocument> few;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(fewSource, few));
+
+  RendererGeode renderer = createRenderer();
+  for (int frame = 1; frame <= 2; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    renderer.draw(*many);
+    EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(cap));
+    if (frame == 2) {
+      EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u);
+      EXPECT_GT(renderer.lastFrameTimings().counters.bufferWrites, 0u)
+          << "the blits past the cap write their uniforms for this frame";
+    }
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
+                                         RenderFreshGeode(sharedDevice(), manySource),
+                                         "image_blits_past_the_cap_frame_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+
+  renderer.draw(*few);
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(2))
+      << "entries the last frame did not reach must be dropped when it ends";
+  renderer.draw(*few);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bufferWrites, 0u);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
+
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(0));
+  renderer.draw(*few);
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(2));
+  editor::tests::CompareBitmapToBitmap(
+      renderer.takeSnapshot(), RenderFreshGeode(sharedDevice(), fewSource),
+      "image_blit_entries_after_trim", editor::tests::PixelmatchIdentityParams());
+}
+
+/// Edits that change only what a kept image's blit draws with, its placement and its sampling,
+/// reach a warm renderer's next frame: each matches a fresh rendering of the edited document.
+TEST_F(RendererGeodeTest, ImageBlitEditsMatchAFreshRenderer) {
+  struct Edit {
+    const char* attribute;
+    const char* value;
+  };
+  constexpr std::array<Edit, 4> kEdits = {{{"x", "9"},
+                                           {"width", "30"},
+                                           {"image-rendering", "pixelated"},
+                                           {"transform", "rotate(10 20 20)"}}};
+  const std::array<int, 1> showsA = {0};
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsA), document));
+  std::optional<SVGElement> image = document->querySelector("#i0");
+  ASSERT_THAT(image, testing::Optional(testing::_));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  renderer.draw(*document);
+
+  editor::tests::BitmapGoldenCompareParams premiseParams =
+      editor::tests::PixelmatchIdentityParams();
+  premiseParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  for (const Edit& edit : kEdits) {
+    SCOPED_TRACE(edit.attribute);
+    const RendererBitmap before = renderer.takeSnapshot();
+    image->setAttribute(edit.attribute, edit.value);
+    renderer.draw(*document);
+    RendererGeode reference = createRenderer();
+    reference.draw(*document);
+    const RendererBitmap expected = reference.takeSnapshot();
+    int changedPixels = -1;
+    editor::tests::CompareBitmapToBitmap(before, expected,
+                                         std::string("image_blit_edit_premise_") + edit.attribute,
+                                         premiseParams, &changedPixels);
+    ASSERT_THAT(changedPixels, testing::Gt(0)) << "the edit must change the rendering";
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         std::string("image_blit_edit_") + edit.attribute,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A kept image texture can be destroyed while renderers other than the one drawing still hold
+/// blit entries built from it: its pixels change or go away, a resident limit refuses the new
+/// pixels, or its document is destroyed. The device's handle retirement reports it to every
+/// renderer on the device before letting go of it, so no entry keeps a view of a destroyed
+/// texture, and the next frame rebuilds from live textures.
+TEST_F(RendererGeodeTest, ImageBlitsReleaseViewsBeforeTheirTexturesAreDestroyed) {
+  const std::array<int, 1> showsA = {0};
+  const std::array<int, 1> showsB = {1};
+  // A device of its own, so only these renderers hold entries and only this test retires textures.
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode drawing(device);
+  RendererGeode holding(device);
+
+  struct Path {
+    const char* name;
+    std::function<void(SVGDocument&, SVGElement&)> destroy;
+  };
+  const std::array<Path, 3> kPaths = {{
+      {"new_pixels",
+       [](SVGDocument&, SVGElement& image) {
+         image.cast<SVGImageElement>().setHref(kImagePngDataUrls[1]);
+       }},
+      {"pixels_dropped",
+       [](SVGDocument&, SVGElement& image) { image.cast<SVGImageElement>().setHref(""); }},
+      {"new_pixels_refused",
+       [](SVGDocument& document, SVGElement& image) {
+         auto* budget =
+             document.registry().ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
+         ASSERT_THAT(budget, testing::NotNull());
+         (*budget)->setLimitsForTesting(
+             {.cacheBytes = geode::GeodeDocumentGeometryBudget::kMaximumCacheBytes,
+              .residentBytes = 0});
+         image.cast<SVGImageElement>().setHref(kImagePngDataUrls[1]);
+       }},
+  }};
+  for (const Path& path : kPaths) {
+    SCOPED_TRACE(path.name);
+    std::optional<SVGDocument> document;
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsA), document));
+    drawing.draw(*document);
+    holding.draw(*document);
+    ASSERT_THAT(holding.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(1));
+    std::optional<SVGElement> image = document->querySelector("#i0");
+    ASSERT_THAT(image, testing::Optional(testing::_));
+    ASSERT_NO_FATAL_FAILURE(path.destroy(*document, *image));
+
+    // The drawing renderer's frame retires the old texture and releases it at its end.
+    drawing.draw(*document);
+    EXPECT_THAT(holding.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(0))
+        << "an entry of another renderer kept a view of a destroyed image texture";
+
+    holding.draw(*document);
+    EXPECT_THAT(holding.deviceLost(), testing::IsFalse());
+    editor::tests::CompareBitmapToBitmap(
+        holding.takeSnapshot(),
+        RenderFreshGeode(device, ImagesDocument(std::string_view(path.name) == "pixels_dropped"
+                                                    ? std::span<const int>()
+                                                    : std::span<const int>(showsB))),
+        std::string("image_blit_views_after_") + path.name,
+        editor::tests::PixelmatchIdentityParams());
+  }
+
+  // Document teardown, outside any frame: its textures are released at the next frame's end on
+  // the device, whichever document that frame draws.
+  {
+    std::optional<SVGDocument> document;
+    ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsA), document));
+    drawing.draw(*document);
+    holding.draw(*document);
+    ASSERT_THAT(holding.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(1));
+  }
+  std::optional<SVGDocument> other;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsB), other));
+  drawing.draw(*other);
+  EXPECT_THAT(holding.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(0))
+      << "an entry kept a view of a texture of a destroyed document";
+}
+
+/// A frame that ends without submitting releases the views and bind group of every image blit
+/// entry, like the composite entries, and the next frame rebuilds them.
+TEST_F(RendererGeodeTest, ImageBlitsReleaseViewsWhenAFrameIsAbandoned) {
+  const std::array<int, 1> showsA = {0};
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsA), document));
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  std::optional<SVGElement> image = document->querySelector("#i0");
+  ASSERT_THAT(image, testing::Optional(testing::_));
+  const EntityHandle source = image->unsafeEntityHandle();
+  const auto drawImage = [&] {
+    const auto* loaded = source.try_get<components::LoadedImageComponent>();
+    ASSERT_THAT(loaded, testing::NotNull());
+    ASSERT_THAT(loaded->image, testing::Optional(testing::_));
+    renderer.drawImage(*loaded->image,
+                       ImageParams{.targetRect = Box2d({4, 8}, {22, 20}), .sourceEntity = source});
+  };
+
+  renderer.draw(*document);
+  ASSERT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(1));
+  beginFrame(renderer);
+  ASSERT_NO_FATAL_FAILURE(drawImage());
+  beginFrame(renderer);
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(0))
+      << "a frame that never reached endFrame must release every image entry's views";
+  renderer.endFrame();
+
+  renderer.draw(*document);
+  ASSERT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(1));
+  beginFrame(renderer);
+  ASSERT_NO_FATAL_FAILURE(drawImage());
+  renderer.injectActiveArenaWriteFailureForTesting();
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(0))
+      << "a frame abandoned at endFrame must release every image entry's views";
+
+  ASSERT_THAT(device->waitForQueueIdle(), testing::Eq(geode::GpuWaitResult::Complete));
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(1));
+  editor::tests::CompareBitmapToBitmap(
+      renderer.takeSnapshot(), RenderFreshGeode(device, ImagesDocument(showsA)),
+      "image_blits_after_abandoned_frames", editor::tests::PixelmatchIdentityParams());
+}
+
+/// An image under a path clip binds the frame's clip mask view, which the next frame replaces, so
+/// its blit entry lets go of its views and bind group when the frame ends and every frame still
+/// matches a fresh rendering.
+TEST_F(RendererGeodeTest, ClippedImageBlitsReleaseTheFramesClipMaskView) {
+  const std::string source =
+      std::string(
+          R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg"
+          R"svg(<clipPath id="tri"><path d="M2 2 L60 6 L10 60 Z"/></clipPath>)svg"
+          R"svg(<image clip-path="url(#tri)" x="4" y="4" width="54" height="36" href=")svg") +
+      std::string(kImagePngDataUrls[2]) + R"svg("/></svg>)svg";
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+  RendererGeode renderer = createRenderer();
+  for (int frame = 1; frame <= 2; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(1))
+        << "Premise: the clipped image draws through a retained entry";
+    EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(0))
+        << "the entry must not keep the ended frame's clip mask view";
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
+                                         RenderFreshGeode(sharedDevice(), source),
+                                         "clipped_image_blit_frame_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A render snapshot carries a copy of each image's pixels and no handle into the document, so
+/// replaying it draws every image from a texture uploaded for that frame: the document gains no
+/// resident image component and no budget, and the snapshot holds no live reference to it.
+TEST_F(RendererGeodeTest, ReplayedImageSnapshotLeavesTheDocumentUntouched) {
+  const std::array<int, 3> shown = {0, 1, 2};
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(shown), document));
+  RendererGeode renderer = createRenderer();
+  RendererDriver driver(renderer);
+  const RenderSnapshot snapshot = driver.captureRenderSnapshot(*document);
+  EXPECT_THAT(snapshot.liveRegistryReferenceCountForTesting(document->registry()), testing::Eq(0u));
+
+  for (int frame = 1; frame <= 2; ++frame) {
+    SCOPED_TRACE(testing::Message() << "replay " << frame);
+    driver.draw(snapshot);
+    EXPECT_THAT(renderer.lastFrameTimings().counters.textureCreates, testing::Ge(3u))
+        << "a replayed image uploads a texture for its frame";
+    EXPECT_THAT(document->registry().view<geode::GeodeResidentImageComponent>().size(),
+                testing::Eq(0u))
+        << "replay must not install a resident image component on the live document";
+    EXPECT_THAT(
+        document->registry().ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>(),
+        testing::IsNull())
+        << "replay must not create or charge the live document's budget";
+    EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(0));
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
+                                         RenderFreshGeode(sharedDevice(), ImagesDocument(shown)),
+                                         "replayed_image_snapshot_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// An open frame that drew an image from its kept texture still samples that texture when, before
+/// the frame ends, another renderer on the device draws the document after the image's pixels
+/// changed.
+TEST_F(RendererGeodeTest, NestedPassKeepsTheImageTextureAnOuterFrameLeftPending) {
+  const std::array<int, 1> showsA = {0};
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(ImagesDocument(showsA), document));
+  RendererGeode warm = createRenderer();
+  warm.draw(*document);
+  std::optional<SVGElement> image = document->querySelector("#i0");
+  ASSERT_THAT(image, testing::Optional(testing::_));
+  const EntityHandle source = image->unsafeEntityHandle();
+  const auto* loaded = source.try_get<components::LoadedImageComponent>();
+  ASSERT_THAT(loaded, testing::NotNull());
+  ASSERT_THAT(loaded->image, testing::Optional(testing::_));
+  const ImageParams params{.targetRect = Box2d({8, 8}, {56, 40}), .sourceEntity = source};
+
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  reference.drawImage(*loaded->image, ImageParams{.targetRect = params.targetRect});
+  reference.endFrame();
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+  RendererGeode outer = createRenderer();
+  beginFrame(outer);
+  outer.drawImage(*loaded->image, params);
+
+  // The image now holds other pixels; the document is drawn while the outer frame is open.
+  image->cast<SVGImageElement>().setHref(kImagePngDataUrls[1]);
+  warm.draw(*document);
+  auto* budget =
+      document->registry().ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
+  ASSERT_THAT(budget, testing::NotNull());
+  EXPECT_THAT((*budget)->imageBytes(), testing::Eq(2u * kImageTextureBytes))
+      << "the texture the open outer frame samples must stay held, and charged, until no open "
+         "frame can read it; it was let go of when the image changed";
+
+  outer.endFrame();
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expected,
+                                       "nested_pass_keeps_pending_image_texture",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// A draw the frame's gradient-stop budget refuses keeps every draw before it, whatever queued
 /// it, and drops every draw after it, as on the CPU renderer. Each case renders a document whose
 /// refused gradient, 20 stops or a batchable 10, sits after `before` and before `after`, under a
@@ -10694,7 +11187,8 @@ namespace donner::svg {
 
 /// Prints retained composite entry counts by sequence in test failures.
 inline void PrintTo(const RendererGeode::RetainedCompositeCounts& counts, std::ostream* os) {
-  *os << "{layers: " << counts.layers << ", filterResults: " << counts.filterResults << "}";
+  *os << "{layers: " << counts.layers << ", filterResults: " << counts.filterResults
+      << ", images: " << counts.images << "}";
 }
 
 namespace {
