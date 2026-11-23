@@ -9500,7 +9500,7 @@ TEST_F(RendererGeodeTest, UseRepeatsMatchPlainGeometryAndFollowEdits) {
     <rect x="10" y="10" width="12" height="12" fill="#0000ff"/>
     <use href="#r" x="16" y="16" fill="#00ff00"/>
     <use href="#r" x="22" y="22" fill="#00ff00"/>
-    <use href="#r" x="28" y="28" fill="#ffff00"/>
+    <use id="u5" href="#r" x="28" y="28" fill="#ffff00"/>
     <use href="#r" x="40" y="8" fill="#ff00ff"/>
   </svg>)svg";
   const std::string plain = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
@@ -9533,7 +9533,9 @@ TEST_F(RendererGeodeTest, UseRepeatsMatchPlainGeometryAndFollowEdits) {
   for (const auto& [label, edit] :
        std::vector<std::pair<std::string, std::function<void(SVGDocument&)>>>{
            {"source_width", SetAttributeEdit("r", "width", "6")},
-           {"instance_position", SetAttributeEdit("u1", "x", "2")}}) {
+           {"first_instance_position", SetAttributeEdit("u1", "x", "2")},
+           {"repeat_instance_position", SetAttributeEdit("u5", "x", "30")},
+           {"repeat_instance_paint", SetAttributeEdit("u5", "fill", "#00ffff")}}) {
     SCOPED_TRACE(label);
     SVGDocument edited = ParseDocumentOrFail(source);
     RendererGeode editedRenderer = createRenderer();
