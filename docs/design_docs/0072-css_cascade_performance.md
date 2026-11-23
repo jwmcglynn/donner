@@ -1826,8 +1826,10 @@ Stylesheets and documents are untrusted input.
   `css::Stylesheet` must equal a fresh parse of the new text, rule ranges included. The edit
   generator is biased toward the resynchronization cases: text typed between rules and at the
   sheet end, deleted and inserted braces, a stray top-level `}`, unterminated comments, strings
-  and `url(`, trailing backslashes, and entity references in the source (which must take the full
-  reparse path).
+  and `url(`, trailing backslashes, entity references in the source (which must take the full
+  reparse path), and edits that change cross-rule parser state: deleting or inserting the last
+  rule before an `@import`, `@namespace` or `@layer` statement, and edits that move a sheet across
+  a parser limit.
 - **Stylesheet edit cases** in the differential edit test: the four measured keystrokes, a rule
   insertion and deletion, and an edit that changes a selector so the rule moves between elements.
 - **Editor tests** with headless `TextEditorCore` and the autocomplete functions: classification

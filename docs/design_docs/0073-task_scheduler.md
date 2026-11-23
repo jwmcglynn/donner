@@ -336,8 +336,8 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   2. If the scope's counter is zero, return.
   3. Otherwise every unfinished task of the scope is running on another worker. The waiter steals
      unrelated work while its stack has more than the margin left (checked against the stack
-     pointer), and past the margin sleeps on the scope's counter until the last task decrements
-     it.
+     pointer), and past the margin sleeps on the scope until its counter reaches zero or its
+     shared queue receives a task, then starts again at rule 1.
 
   **Liveness.** The invariant is that every queued task of a scope is runnable by that scope's
   creator through rule 1: it is either on the creator's deque above the scope's watermark or in
@@ -369,7 +369,10 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   **Skipping the wake on a push.** A creator pushing a scope's task onto its own deque may skip the
   event count, because it runs that task by rule 1 before its wait can sleep, so a missed wake costs
   parallelism only. Pushes into a scope's shared queue, the injection queue and coroutine
-  resumptions always take the fenced wake protocol.
+  resumptions always take the fenced wake protocol. A push into a scope's shared queue also wakes
+  that scope's creator if it is sleeping on the scope, with the same fence and re-check on both
+  sides, so a creator never sleeps while rule 1 could run a task; without this, a flat spawn that
+  arrives while the creator sleeps would depend on another worker being free to take it.
 - **Worker stacks.** Workers are created with an explicit stack size (512 KiB by default, an option)
   instead of the platform default, which differs between platforms and toolchains. The margin
   limits only stealing. Rule 1 runs regardless of it, so a stolen task's own nested waits recurse
