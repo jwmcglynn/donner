@@ -274,10 +274,11 @@ removing per-draw resource churn in Geode directly benefits the `DragFrameOverhe
   `GeodeFrameGeometryBudget` (`geode/GeodeResourceBudget.h`) bounds the encoded geometry a frame
   admits; once a frame exceeds it, the frame refuses further geometry.
   `GeodeDocumentGeometryBudget` bounds the encodes a document keeps across frames (64 MiB) and
-  its resident geometry (64 MiB). Once it refuses a cache charge it refuses every later one for
-  that document, so from then on a new fill or stroke encode draws from a per-frame encode while
-  the encodes already cached keep serving. A document's stroke outlines count against that
-  budget: up to two per stroke style and eight per path.
+  its resident geometry (64 MiB). Once it refuses a cache charge it refuses every later charge
+  that would grow the document's total; a replacement that does not grow it is still accepted.
+  From then on an encode that would add bytes, such as an outline for a new stroke key, draws
+  from a per-frame encode while the encodes already cached keep serving. A document's stroke
+  outlines count against that budget: up to two per stroke style and eight per path.
 
 ## Proposed Architecture
 
