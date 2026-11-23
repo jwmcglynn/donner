@@ -1419,6 +1419,14 @@ SPEC_UB_ALLOWLIST: Mapping[str, tuple[str, str, str]] = {
         "https://www.w3.org/TR/css-text-decor-3/#text-underline-position-property",
         "Archived image records one renderer's underline position and thickness.",
     ),
+    # The objectBoundingBox subregion runs from 112.5 to 187.5 device pixels. Filter Effects 1
+    # sections 8, 9.1 and 9.4 give no rule for an edge inside a device pixel: Donner covers pixels
+    # 112 to 187 and the reference 112 to 186, the whole difference between them.
+    "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-3.svg": (
+        "specification-undefined",
+        "https://www.w3.org/TR/filter-effects-1/#FilterPrimitiveSubRegion",
+        "Archived image records one renderer's mapping of a fractional subregion edge to pixels.",
+    ),
 }
 
 # Features removed from or deprecated in SVG 2 that Donner deliberately does not implement. Every

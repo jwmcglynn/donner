@@ -67,7 +67,7 @@ result permits this difference in the underlying clip coverage.
 References from the resvg release: these tests live in the resvg repository
 (https://github.com/linebender/resvg, crates/resvg/tests/tests/). resvg is licensed
 Apache-2.0 OR MIT; these files are used under MIT, with its notice in LICENSE-resvg-MIT.
-The 229 files listed in resvg-v0.50.0.sha256 (170 PNGs, each 300x300, and 59 SVGs) are
+The 231 files listed in resvg-v0.50.0.sha256 (171 PNGs, each 300x300, and 60 SVGs) are
 byte-identical to crates/resvg/tests/<path> at the resvg v0.50.0 release tag, revision
 5bdbae64eefadc4bf0caa56dcf91702037929086, where <path> is the tests/... path the list gives.
 The tag's source archive holds them under resvg-0.50.0/crates/resvg/tests/:
@@ -81,18 +81,19 @@ this directory and to the archive's crates/resvg/tests/ directory alike.
 digest, or when the counts and PNG size in the sentence above do not match the list, so a
 changed file must update this provenance too. resvg release v0.49.0 (revision
 66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba) holds the same bytes for each of them except the
-SVG and PNG of the 16 tests listed below, which upstream added after v0.49.0. The harness
+SVG and PNG of the 17 tests listed below, which upstream added after v0.49.0. The harness
 takes each case's canvas from its reference image, so these cases render on the 300x300
 canvas of their references.
 
-49 of the listed tests, both SVG and PNG, are tests the snapshot does not have, named in
+50 of the listed tests, both SVG and PNG, are tests the snapshot does not have, named in
 resvg-v0.50.0-additions.txt. They have no results.csv row; the head-to-head report leaves them
-unscored, and fails for any other case without a row. These 16 of them are newer than resvg
+unscored, and fails for any other case without a row. These 17 of them are newer than resvg
 v0.49.0:
 
   tests/filters/feDropShadow/flood-color=currentColor.svg
   tests/filters/feFlood/partial-subregion-with-primitiveUnits=objectBoundingBox.svg
   tests/filters/filter/on-group-with-an-empty-filtered-child.svg
+  tests/filters/filter/subregion-and-primitiveUnits=objectBoundingBox-3.svg
   tests/filters/flood-color/currentColor.svg
   tests/masking/clipPath/recursive-indirect-on-child.svg
   tests/masking/clipPath/recursive-indirect-on-self.svg

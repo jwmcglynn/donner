@@ -40,7 +40,7 @@ comparison hides every regression in its output, so it needs one of two factorie
   (`third_party/resvg-test-suite/resources/ub.png`, SHA-256
   `131f32bfb5bcdb78b9e97021ee94fa0f6c5cb4564254a15bc02add2cedb168e2`). Its reference must be the
   marker unless `SPEC_UB_ALLOWLIST` in `tools/resvg_parity/parity_report.py` lists the case with
-  its specification-level reason (today only `feGaussianBlur/huge-stdDeviation`, an
+  its specification-level reason (for example `feGaussianBlur/huge-stdDeviation`, an
   implementation-defined blur resource limit).
   A marker records the absence of a qualified upstream pixel reference. The report keeps that
   provenance separate from normative classification. Known valid examples such as the tile
@@ -100,19 +100,19 @@ one lane is not counted among that lane's comparisons.
 
 | Registered SVG fixtures | Count |
 | --- | ---: |
-| Total | 1,728 |
+| Total | 1,729 |
 | Pixel comparisons | 1,640 |
 | Comparisons with a numeric setting or custom golden | 79 |
-| Render-only, undefined-behavior registration | 54 |
+| Render-only, undefined-behavior registration | 55 |
 | Render-only, legacy feature | 33 |
 | Explicit skips | 1 |
 | Fixtures in disabled categories | 0 |
 
 | Configured lane | Pixel comparisons | Render-only | Capability-gated | Explicit skips |
 | --- | ---: | ---: | ---: | ---: |
-| `default_text` | 1,611 | 87 | 29 | 1 |
-| `max` | 1,640 | 87 | 0 | 1 |
-| `geode` | 1,607 | 87 | 24 | 1 |
+| `default_text` | 1,611 | 88 | 29 | 1 |
+| `max` | 1,640 | 88 | 0 | 1 |
+| `geode` | 1,607 | 88 | 24 | 1 |
 | `geode_max_text` | 369 | 30 | 0 | 1 |
 
 <!-- END RESVG INVENTORY -->
