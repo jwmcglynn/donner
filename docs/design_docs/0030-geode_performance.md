@@ -194,10 +194,10 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `stroking_complex`, and `nested_svg_aspectratio` build no bind group per repeated `<use>`
     draw.
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
-    group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Clears `Edzample_Anim3`. The
-    corpus also records `donner_icon`, whose gradient-painted paths under an opacity group
-    re-upload geometry and build bind groups per draw; why those draws miss gradient residency is
-    not traced, so this item starts by tracing it.
+    group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Clears `Edzample_Anim3`,
+    `marker_segments`, and `marker_spec_example`. The corpus also records `donner_icon`, whose
+    gradient-painted paths under an opacity group re-upload geometry and build bind groups per
+    draw; why those draws miss gradient residency is not traced, so this item starts by tracing it.
   - [ ] 8.4: Image residency. Decoded images allocate a texture and re-upload their quad every
     frame. Clears `image_data_url_opacity`, `image_data_url_pixelated`. Depends on 8.3 for the
     opacity case.
@@ -291,11 +291,19 @@ Entity with <path d="...">
 - **Repeats within a frame.** A slot's uniform and primary record serve its first draw of a frame.
   Its second and later draws in the frame (each marker placement, a repeated `<use>` source) take
   persistent records from `GeodeResidentSlot::repeatRecords`: the `i`-th repeat writes record `i`,
-  only when its bytes change, so an edit that moves or repaints a placement rewrites exactly the
-  records it changed. A slot keeps at most 4096 such records, each a 256-byte GPU record plus a few
-  hundred bytes of CPU bookkeeping charged to the document's geometry budget, so under 3 MiB per
-  slot; repeats past that write a record that lives for one frame. Gradient-painted repeats keep
-  the arena path, because a gradient's parameters live in the slot's single paint block.
+  only when its bytes change, so an unchanged frame writes none of them
+  (`MarkerInstances_SecondFrameIsSteadyState`, `UseRepeatsMatchPlainGeometryAndFollowEdits`) and an
+  edit that moves or repaints a placement rewrites the records it changed
+  (`MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem`). A slot keeps at most 4096 such
+  records, each a 256-byte GPU record plus a few hundred bytes of CPU bookkeeping charged to the
+  document's geometry budget, so under 3 MiB per slot (`MarkerRepeatRecordsStopAtTheSlotLimit`).
+  Repeats past that, or refused by the budget, write a record that lives for one frame, and repeats
+  that cannot have even that draw through the arena
+  (`MarkerRepeatsPastTheRecordLimitDrawTheSamePicture`,
+  `MarkerRepeatsFallBackWhenTheDocumentRefusesTheirRecords`). An offscreen pass inside an open
+  frame that already wrote a slot's records takes one-frame records instead
+  (`OffscreenPassLeavesTheOuterFramesRepeatRecordsAlone`). Gradient-painted repeats keep the arena
+  path, because a gradient's parameters live in the slot's single paint block.
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
   order.
