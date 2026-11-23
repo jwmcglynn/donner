@@ -1,4 +1,4 @@
-# Design: CSS Cascade Performance, Features and Live Editing
+# Design: CSS Cascade Performance, Features, Live Editing and Parallel Style
 
 **Status:** Draft
 **Author:** Claude Fable 5.2
@@ -6,6 +6,7 @@
 **Requested by:** Jeff McGlynn
 **Created:** 2026-11-23
 **Tracking:** [#2660](https://github.com/jwmcglynn/donner/issues/2660)
+**Depends on:** [0073-task_scheduler](0073-task_scheduler.md) for Part D
 
 ## Summary
 
@@ -20,7 +21,7 @@ the source editor has no CSS-aware highlighting or value completion.
 
 This design measures that cost, surveys how browser engines make style resolution fast and how
 they implement the missing features, and commits to
-three parts:
+four parts:
 
 **Part A: Performance.**
 
@@ -42,6 +43,11 @@ blocks and statements, nested and anonymous layers, `@import ... layer()`, impor
 **Part C: Live stylesheet editing.** Rule-level incremental stylesheet reparse, so a keystroke in
 a `<style>` element restyles only the elements matched by the rules it changed, and a scoped plan
 for CSS syntax highlighting and completion in the editor's source pane.
+
+**Part D: Parallel style traversal.** Cascade independent subtrees on worker threads, as the first
+client of the work-stealing task scheduler designed in
+[0073-task_scheduler](0073-task_scheduler.md), with results bit-identical to the serial path and a
+measured threshold below which style stays serial.
 
 Computed style stays bit-identical for documents that use only today's features. On the measured
 documents style is 47 to 89 percent of preparing the first frame without rasterization, and 80 to
@@ -120,13 +126,27 @@ same harness, machine class and method. Each goal names the counter or timer tha
   names, keyword values, `var()` names and supported at-rules from live data sources (see
   [CSS Highlighting and Completion](#css-highlighting-and-completion)).
 
+### Part D: Parallel Style Traversal
+
+- **Speedup where it pays.** With four scheduler workers, first-frame style time on the
+  bootstrap-icons sprite (5,137 elements) and the synthetic `<use>` document (4,425 elements) is
+  at most half of the same build's serial style time.
+- **No cost where it does not.** Passes below the serial threshold (initially 1,000 elements to
+  cascade, calibrated in Milestone D3) run the serial path; style time on the splash and tiger
+  documents does not regress by more than 2 percent with a scheduler present.
+- **Bit-identical.** Computed styles, matched-rule lists, warnings and budget outcomes are the
+  same at 0, 1, 2, 4 and 8 workers and under the scheduler's seeded-schedule mode, enforced by the
+  differential tests.
+
 ## Non-Goals
 
 - No change to computed style, cascade order or selector semantics for documents that use only
   features supported today. Known deviations found while doing this work are reported separately
   (see [Decisions](#decisions)).
 - No selector JIT or code generation.
-- No parallel style traversal. Style resolution stays single-threaded inside the document lock.
+- No parallel traversal of anything but style in this design: the scheduler's other clients are
+  named in [0073-task_scheduler](0073-task_scheduler.md) and designed separately. No parallel
+  style for animated documents or external-use documents, which keep the serial path.
 - No `@property` registration. Registered custom properties add typed values, computed-value
   resolution of lengths and their font-size dependency cycles, and non-inherited custom
   properties; untyped custom properties cover `var()` without them. A later design can add it.
@@ -289,12 +309,34 @@ Part B estimate: 16 engineering days.
 
 Part C estimate: 12 engineering days.
 
+### Part D Milestones
+
+- [ ] Milestone D1: Parallel style pass (3 days). After A7, A9 and scheduler milestones S1 to S3.
+  - [ ] Decompose the full and selective passes into subtree tasks on the scheduler, with per-worker
+        budget shares, warning buffers, ancestor filters and caches, a serial commit of warnings,
+        and the serial fallback on budget pressure.
+  - Done when: the differential tests are green at every worker count and the serial threshold
+    keeps the splash and tiger documents on the serial path.
+- [ ] Milestone D2: Race and determinism coverage (2 days). After D1.
+  - [ ] Add `//donner/svg/components/style:style_parallel_tests` to the scheduler's ThreadSanitizer
+        lane, run the differential corpus under the seeded-schedule mode, and add an
+        injected-delay test that is red with a deliberately broken commit order.
+  - Done when: the lane is green, and the injected-delay test was observed red with the broken
+    order and green with the real one.
+- [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
+  - Done when: the threshold and subtree grain are set from a measured curve recorded here, and
+    the Part D speedup goal is met.
+
+Part D estimate: 6 engineering days.
+
 ### Order and Total
 
 A1 first; A2, A3, A6, A8, B4, C1 and C3 can then proceed in parallel; A4 follows A3; A7 follows
 A3 and A6; A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B;
-C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2. Total committed estimate: 54
-engineering days (A 26, B 16, C 12).
+C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D1 follows A7, A9 and the
+scheduler milestones S1 to S3 of [0073-task_scheduler](0073-task_scheduler.md); D2 and D3 follow
+D1. Total committed estimate for this document: 60 engineering days (A 26, B 16, C 12, D 6); the
+scheduler is estimated in 0073.
 
 ## Background
 
@@ -798,22 +840,22 @@ user and author, so every author layer overrides them.
 
 Ranked by expected effect on the measured baseline per unit of complexity.
 
-| Rank | Technique                                      | Decision        | Reason                                                                                                                                                                                                                        |
-| ---: | ---------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|    1 | Cascade once per full restyle                  | Adopt           | Halves the style time of every measured edit; a few lines in one function.                                                                                                                                                    |
-|    2 | Rule index on the rightmost compound           | Adopt           | On the stylesheet-heavy documents 97.6 to 99.2 percent of rule tests reject; the simulated index leaves 1,384 of 57,838 tests on the splash document.                                                                         |
-|    3 | Narrowed invalidation for single-element edits | Adopt           | Turns an edit from two whole-document cascades into a subtree cascade. Reuses the existing selective pass and dirty flags.                                                                                                    |
-|    4 | Matched properties cache and shared records    | Adopt           | 66 to 99.8 percent of elements reuse an earlier element's computed style on the measured documents, and shared records remove up to 24.9 MB of duplicated computed style. Needs the storage change of Milestone A8.           |
-|    5 | Matcher constant factors                       | Adopt, measured | 155 ns per rejected test points at per-attempt overhead; each fix is local and independently testable.                                                                                                                        |
-|    6 | Per-element base cost (copies)                 | Adopt, measured | 4.6 microseconds per element dominates rule-light documents; the breakdown comes first, and the copy removal ships with the storage change of Milestone A8.                                                                   |
-|    7 | Ancestor Bloom filter                          | Adopt           | Requested regardless of payoff. After indexing it removes one failing walk per real document and 47 percent of candidates on descendant-heavy stylesheets; its effect is measured by a rejection counter, not by time.        |
-|    8 | Sibling and cousin style sharing               | Reject          | Correctness depends on a complete revalidation set over Donner's full selector support, including shadow-tree adapters; the matched properties cache captures the same reuse with a simpler key.                              |
-|    9 | Rule tree                                      | Reject          | Its benefit, restyle without re-matching, is delivered by narrowed invalidation and the matched properties cache with far less machinery.                                                                                     |
-|   10 | Selector JIT                                   | Reject          | Large complexity, no executable memory on WebAssembly, and a 2x ceiling on a cost the index already removes.                                                                                                                  |
-|   11 | Parallel traversal                             | Reject          | Style runs under the single-owner document lock; most documents are smaller than a work-stealing unit.                                                                                                                        |
-|   12 | Custom properties, with shared maps            | Adopt           | Part B, by operator decision: `var()` is a missing feature, not a speedup. An element that declares no custom property shares its parent's map, as Ladybird and Stylo do, so documents without custom properties pay nothing. |
-|   13 | Cascade layers, ordered inside the priority    | Adopt           | Part B, by operator decision. The layer rank joins `css::Specificity`, as Blink and Stylo pack it into their priority, so the source-order cascade needs no sort.                                                             |
-|   14 | Range-based incremental stylesheet edits       | Adopt           | Part C: a keystroke costs a 19.2 ms whole-document restyle today; a rule-window reparse plus a restyle of the matched elements removes it.                                                                                    |
+| Rank | Technique                                      | Decision        | Reason                                                                                                                                                                                                                                  |
+| ---: | ---------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|    1 | Cascade once per full restyle                  | Adopt           | Halves the style time of every measured edit; a few lines in one function.                                                                                                                                                              |
+|    2 | Rule index on the rightmost compound           | Adopt           | On the stylesheet-heavy documents 97.6 to 99.2 percent of rule tests reject; the simulated index leaves 1,384 of 57,838 tests on the splash document.                                                                                   |
+|    3 | Narrowed invalidation for single-element edits | Adopt           | Turns an edit from two whole-document cascades into a subtree cascade. Reuses the existing selective pass and dirty flags.                                                                                                              |
+|    4 | Matched properties cache and shared records    | Adopt           | 66 to 99.8 percent of elements reuse an earlier element's computed style on the measured documents, and shared records remove up to 24.9 MB of duplicated computed style. Needs the storage change of Milestone A8.                     |
+|    5 | Matcher constant factors                       | Adopt, measured | 155 ns per rejected test points at per-attempt overhead; each fix is local and independently testable.                                                                                                                                  |
+|    6 | Per-element base cost (copies)                 | Adopt, measured | 4.6 microseconds per element dominates rule-light documents; the breakdown comes first, and the copy removal ships with the storage change of Milestone A8.                                                                             |
+|    7 | Ancestor Bloom filter                          | Adopt           | Requested regardless of payoff. After indexing it removes one failing walk per real document and 47 percent of candidates on descendant-heavy stylesheets; its effect is measured by a rejection counter, not by time.                  |
+|    8 | Sibling and cousin style sharing               | Reject          | Correctness depends on a complete revalidation set over Donner's full selector support, including shadow-tree adapters; the matched properties cache captures the same reuse with a simpler key.                                        |
+|    9 | Rule tree                                      | Reject          | Its benefit, restyle without re-matching, is delivered by narrowed invalidation and the matched properties cache with far less machinery.                                                                                               |
+|   10 | Selector JIT                                   | Reject          | Large complexity, no executable memory on WebAssembly, and a 2x ceiling on a cost the index already removes.                                                                                                                            |
+|   11 | Parallel traversal                             | Adopt           | Part D, on the 0073 scheduler. Pays on the measured documents above about 1,000 elements (the sprite and the `<use>` document); the splash and tiger stay serial below the threshold. Costs a decomposition and a ThreadSanitizer lane. |
+|   12 | Custom properties, with shared maps            | Adopt           | Part B, by operator decision: `var()` is a missing feature, not a speedup. An element that declares no custom property shares its parent's map, as Ladybird and Stylo do, so documents without custom properties pay nothing.           |
+|   13 | Cascade layers, ordered inside the priority    | Adopt           | Part B, by operator decision. The layer rank joins `css::Specificity`, as Blink and Stylo pack it into their priority, so the source-order cascade needs no sort.                                                                       |
+|   14 | Range-based incremental stylesheet edits       | Adopt           | Part C: a keystroke costs a 19.2 ms whole-document restyle today; a rule-window reparse plus a restyle of the matched elements removes it.                                                                                              |
 
 ## Proposed Architecture, Part A: Performance
 
@@ -1314,6 +1356,95 @@ Contexts are detected from the CSS token state instead of the character scan in
 templates, color pickers, documentation on hover, browser-compatibility data, formatting and
 linting.
 
+## Proposed Architecture, Part D: Parallel Style Traversal
+
+### Opportunity and Threshold
+
+Per-element style cost in the baseline (first-frame style time divided by elements cascaded) is
+17.4 microseconds on the splash, 6.1 on the sprite, 6.7 on the tiger, 38.8 on the synthetic
+2,000-element document and 8.8 on the `<use>` document. Part A lowers these; Milestone A8 measures
+the floor. A subtree task of 64 elements therefore carries roughly 0.3 to 1 ms of work, far above
+the per-task cost of a work-stealing deque, so the costs that decide the threshold are waking idle
+workers and the serial work around the parallel region (setup, warning commit, font
+synchronization). [0073-task_scheduler](0073-task_scheduler.md) measures the wake latency. With
+four workers, a pass of 1,000 elements at 5 microseconds (5 ms serial) can finish in roughly a
+quarter of that plus the wake latency; a pass of 200 elements (1 ms) cannot repay a wake that costs
+a meaningful fraction of a millisecond. The initial threshold is therefore 1,000 elements to
+cascade, below which the serial path runs unchanged; Milestone D3 replaces it with a measured
+curve. On the measured documents the splash (622) and tiger (484) stay serial and the sprite
+(5,137) and `<use>` document (4,425) go parallel. Most single illustrations are below the
+threshold; documents with thousands of elements, `<use>`-heavy documents and full restyles of
+large documents are what this part serves.
+
+Stylo, the engine that ships parallel style, does the same kind of chunking: "The traversal starts
+in sequential mode, and optionally parallelizes as it discovers work"
+([driver.rs](https://github.com/servo/stylo/blob/main/style/driver.rs)); it hands children to
+other workers only in chunks of `work_unit_max`, keeps at least `local_queue_size` of work for the
+current thread, advances one DOM level at a time, and gives each job a thread-local style context
+holding its Bloom filter and sharing cache
+([parallel.rs](https://github.com/servo/stylo/blob/main/style/parallel.rs),
+[context.rs](https://github.com/servo/stylo/blob/main/style/context.rs)). Firefox's defaults are 16
+nodes per work unit and a local queue of 32 on the main thread
+([StaticPrefList.yaml](https://github.com/mozilla-firefox/firefox/blob/main/modules/libpref/init/StaticPrefList.yaml)),
+for a browser's per-node cost; Donner's initial grain of 64 elements reflects its higher measured
+per-element cost and is calibrated in Milestone D3.
+
+### What Must Hold for Parallel Cascading
+
+- **No structural registry change inside the parallel region.** EnTT storage is not safe for
+  concurrent structural changes. `computeAllStyles` already emplaces a placeholder
+  `ComputedStyleComponent` for every tree entity before computing, shadow-tree instantiation runs
+  between the two `computeAllStyles` calls, outside any parallel region, and the style context's
+  budgets and caches are created before workers start. Inside the region a worker reads
+  components and writes only the computed-style pointer of the entity it owns. By reading the
+  code, a full pass makes no registry structural change per element once the placeholders exist:
+  `computeStyle` and `inheritProperties` use `get_or_emplace`, which only emplaces when the
+  placeholder is missing, and the remaining shared writes (the budget's reservation map, the
+  warning sink) are moved to per-worker state below. This is the conservative route: parallel
+  compute into pre-existing slots and per-worker buffers, then a serial commit. Whether Donner's
+  storage can be made safe for structural changes during a parallel phase is being evaluated
+  separately; Part D adopts whichever route that evaluation supports, and the conservative route
+  needs no storage change.
+- **Parents before children.** Inheritance needs the parent's computed record. The pass is a
+  top-down traversal from each root: a task cascades its root, then runs each child subtree inline
+  when it is smaller than the grain (initially 64 elements) or spawns it as a task otherwise. A
+  child never starts before its parent's record is published, which the spawn order guarantees.
+  The on-demand parent computation in `computePropertiesInto` stays for the serial path and is an
+  assertion failure in the parallel path. Offscreen shadow trees are separate roots, started after
+  the main tree; entities that no root reaches are cascaded by a serial sweep afterwards, as the
+  storage-order loop reaches them today.
+- **Budgets.** `StyleResourceBudget` counters and its reservation map are shared mutable state.
+  Each worker charges a private share (the remaining allowance divided by the worker count). If
+  any share runs out, the parallel pass is abandoned, its computed styles are cleared, and the pass
+  reruns serially, so a budget-limited document gets exactly the serial result and only documents
+  near their limits pay twice.
+- **Warnings.** Each task records diagnostics into its own buffer, tagged with the entity; after
+  the join they are sent to the caller's `ParseWarningSink` in the order the serial pass would
+  produce them.
+- **Ancestor filter and cache.** Each worker owns a `StyleAncestorFilter`; its chain
+  synchronization already makes it independent of visit order. Each worker owns a matched
+  properties cache; records are immutable and shared through atomic reference counts, so a hit
+  on any worker returns a correct style, and only the number of distinct records can vary with
+  scheduling. The memory goal of Part A is measured at zero workers.
+- **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
+  external-use registries, passes below the threshold, and builds or runtimes without workers run
+  the serial path.
+- **Document access.** Style runs inside the caller's document access (the renderer's or the
+  editor worker's). Workers act on its behalf and never acquire document guards; the caller joins
+  before its access ends, so in `ThreadingMode::ConcurrentDom` other threads stay excluded for the
+  whole pass, exactly as with the serial pass.
+
+### Correctness
+
+The parallel pass must produce the same computed styles as the serial pass. The differential
+cascade test and fuzzer of Part A gain a worker-count dimension (0, 1, 2, 4, 8) and the
+scheduler's seeded-schedule mode, which replays one steal order from a seed so a failure
+reproduces. `style_parallel_tests` runs in the ThreadSanitizer lane that
+[0073-task_scheduler](0073-task_scheduler.md) adds. A race test counts as proven only when it was
+observed red: the injected-delay test delays one worker between computing a child and publishing
+it, together with a deliberately broken publish order, and must fail; with the real order it
+passes. No correctness test has a wall-clock deadline; generous hang guards only.
+
 ## Security / Privacy
 
 Stylesheets and documents are untrusted input.
@@ -1345,6 +1476,10 @@ Stylesheets and documents are untrusted input.
   deep reference chains cannot exhaust the native stack.
 - **Layers.** Nesting depth and layer count are capped in the parser, and the layer rank is 16
   bits by construction of the cap.
+- **Parallel style.** Task count is bounded by the element count, subtrees below the grain run
+  inline, and the traversal uses the scheduler's explicit task objects, so a deep or wide hostile
+  tree creates no unbounded recursion on worker stacks; budgets are enforced per worker share with
+  the serial rerun as the fallback.
 - **Incremental reparse.** The window parse runs the same parser with the same limits, and the
   stylesheet's resource stats are recomputed for the spliced result; any limit failure falls back
   to the full reparse, which already enforces them. The differential fuzzer feeds random edits,
@@ -1431,6 +1566,16 @@ Stylesheets and documents are untrusted input.
   of every CSS byte in the corpus' `<style>` elements and `style` attributes, and one test per
   completion context returning suggestions from its source.
 
+### Part D Tests
+
+- The differential cascade test and fuzzer at worker counts 0, 1, 2, 4 and 8 and under the
+  seeded-schedule mode, over the whole corpus.
+- `//donner/svg/components/style:style_parallel_tests` (new): the serial fallback on budget
+  pressure, warning order, offscreen shadow roots, and the injected-delay red/green pair; run in the
+  ThreadSanitizer lane.
+- Counter assertions in the perf test's correctness target: the splash and tiger passes take the
+  serial path, the sprite pass takes the parallel path.
+
 ## Alternatives Considered
 
 - **Port the differential engine approach (Ladybird #11088).** Retaining match results and
@@ -1456,6 +1601,12 @@ Stylesheets and documents are untrusted input.
 - **Tarjan's algorithm for custom property cycles (Stylo).** It finds cycles across all of an
   element's custom properties in one pass; the depth-first walk with in-progress marks (Blink)
   does the same for the few properties an element declares, with less code.
+- **Level-synchronous parallelism (all elements of one depth at once).** Simple, but each level
+  needs a barrier and SVG trees are shallow and wide in places and deep in others; subtree tasks
+  with a grain adapt to both.
+- **Shared, locked budgets and caches.** Exact budget accounting across workers needs a lock or
+  atomics on every charge and makes the exhaustion point depend on scheduling; per-worker shares
+  with a serial rerun keep the outcome deterministic.
 - **A general incremental parser (tree-sitter or Lezer style).** Reusing arbitrary subtrees
   needs an error-tolerant grammar of its own; Donner's rules are flat and carry source ranges, so
   a rule window gives the same reuse with the existing parser and its limits.
@@ -1483,6 +1634,10 @@ Stylesheets and documents are untrusted input.
   `donner/base/` helper; its effect is reported by counter.
 - **Custom properties and cascade layers** are in scope (Part B).
 - **Incremental stylesheet reparse, CSS highlighting and completion** are in scope (Part C).
+- **Parallel style traversal** is in scope (Part D) on a base-library work-stealing scheduler with
+  `co_await` support, designed as its own document,
+  [0073-task_scheduler](0073-task_scheduler.md), because it is a general facility with its own
+  goals, risks and tests and other clients.
 - **Document scale.** Documents above the XML parser's default 8,192-node cap are not a target of
   these goals. The techniques scale with elements and rules, so larger documents benefit, but no
   goal is stated or measured for them.
@@ -1501,6 +1656,14 @@ Stylesheets and documents are untrusted input.
   through an unbalanced brace changes the rendering until it is closed. Recommendation: keep the
   engine exact (it equals export and reload) and, if the flicker bothers users, add an editor-side
   debounce that defers applying a stylesheet edit while the source has an unclosed block.
+
+- **Storage safety for structural changes.** Part D is designed on the conservative route (no
+  structural change in the parallel phase, serial commit). A separate evaluation of whether the
+  storage can be made safe for structural changes in parallel decides whether Part D changes
+  route; no decision is needed before Milestone D1 starts.
+- **Parallel threshold.** The initial 1,000-element threshold keeps most single illustrations
+  serial. Recommendation: keep it until Milestone D3 measures the curve, and do not lower it to
+  make small documents parallel unless the measured wake cost allows.
 
 ## Future Work
 
