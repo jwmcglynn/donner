@@ -112,8 +112,14 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - **Hostile input.** A substituted value is capped at 65,536 component values and 1 MiB of source
   bytes; past the cap the value is the guaranteed-invalid value. The exponential-expansion and
   long-reference cases finish within the existing style budgets.
-- **No cost when unused.** On documents with no custom properties and no layers, style time does
-  not regress by more than 2 percent and computed styles are unchanged.
+- **No cost when unused.** On documents with no custom properties and no layers, computed styles
+  are unchanged. Target, not yet measured: style time does not regress by more than 2 percent, in
+  quiet-machine perf runs.
+- **Intended behavior changes, stated.** Documents that use these features today get different
+  results, by design: a declaration containing `var()` is dropped today, so
+  `fill: red; fill: var(--missing)` renders red, and after Part B it is invalid at computed-value
+  time and `fill` inherits; rules inside `@layer` blocks, dropped today, start applying; and imports
+  declared with `layer` or `layer()`, dropped today, start loading.
 
 ### Part C: Live Stylesheet Editing
 
@@ -268,7 +274,7 @@ Part A estimate: 27.5 engineering days.
 
 ### Part B Milestones
 
-- [ ] Milestone B1: Custom property declarations and storage (3 days). After A8.
+- [ ] Milestone B1: Custom property declarations and storage (3.5 days). After A8.
   - [ ] Route `--*` declarations from rules and `style` attributes into a per-element custom
         cascade instead of the "Unknown property" diagnostic, and store computed custom
         properties as shared immutable maps in the computed-style record.
@@ -282,7 +288,7 @@ Part A estimate: 27.5 engineering days.
     exponential-expansion cases pass.
 - [ ] Milestone B3: `var()` in presentation attributes and shorthands (2 days). After B2.
   - Done when: the ported presentation-attribute and shorthand cases pass.
-- [ ] Milestone B4: `@layer` and `@import ... layer` parsing (3 days). No dependency.
+- [ ] Milestone B4: `@layer` and `@import ... layer` parsing (3.5 days). No dependency.
   - [ ] Parse layer statements and blocks (nested, dotted, anonymous) and assign each retained
         rule a layer; compute the document's layer order.
   - Done when: parser tests and `stylesheet_parser_fuzzer` cover every form, and rules inside
@@ -296,7 +302,7 @@ Part A estimate: 27.5 engineering days.
 - [ ] Milestone B6: Conformance cases (2 days). After B3 and B5.
   - Done when: the full set in [Part B tests](#part-b-tests) is committed and green.
 
-Part B estimate: 16 engineering days.
+Part B estimate: 17 engineering days.
 
 ### Part C Milestones
 
@@ -1276,11 +1282,14 @@ arise.
 
 **Substituting into ordinary properties.** In the local registry a declaration with
 `containsSubstitution` does not parse; it sets a pending-substitution entry for its property at
-its specificity, which wins or loses the cascade exactly as a parsed value would. A shorthand sets
-a pending entry on every longhand it covers. After the custom map is computed, each pending entry
-is substituted (the fallback is used when the referenced name is absent), and the result is
-parsed with `PropertyRegistry::parseProperty` at the entry's specificity into a property slot
-reset to unset. A parse failure, a guaranteed-invalid reference without fallback, or a value past
+its specificity, which wins or loses the cascade exactly as a parsed value would. A shorthand
+records one pending entry for the shorthand declaration and marks every longhand it covers as
+pending on that entry; after substitution the shorthand is parsed once and its result is
+distributed to the longhands that still hold the mark (a longhand a later declaration replaced
+keeps its own value). After the custom map is computed, each pending entry is substituted (the
+fallback is used when the referenced name is absent), and the result is parsed with
+`PropertyRegistry::parseProperty` at the entry's specificity into a property slot reset to
+unset. A parse failure, a guaranteed-invalid reference without fallback, or a value past
 the size cap makes the property invalid at computed-value time: it is left unset, so an inherited
 property inherits and any other takes its initial value. Inheritance then runs as today.
 
@@ -1291,10 +1300,21 @@ The parse model is not yet specified, so this is an open question below.
 
 **Limits.** A substituted value is capped at 65,536 component values and 1 MiB of source bytes,
 below the 2 MiB both Blink and Stylo use, because an SVG document's whole parsed-payload budget is
-smaller than a web page's. Substitution charges each produced component value to
+smaller than a web page's. The caps are checked while substitution appends, and the first append
+that would cross one aborts the substitution, so an exponential value is never built in full.
+Substitution also charges each produced component value to
 `StyleResourceBudget::reserveDeclarationApplication`'s component work and its bytes to the byte
 work, so one document's total expansion is bounded by the existing aggregate limits (16 Mi units
-each). Past either cap the value is guaranteed-invalid and a diagnostic is reported once.
+each). Past any cap the value is guaranteed-invalid and a diagnostic is reported once. Each new
+`CustomPropertyMap` is charged to the retained-byte budget (`reserveComplexPropertyBytes`) with
+the record that first holds it; maps shared by pointer are charged once.
+
+**`revert` and `revert-layer`.** Donner does not support `revert` today: it is not a CSS-wide
+keyword in `PropertyRegistry` (only a reserved font-family name), so a declaration using it fails
+to parse and is dropped. Supporting it means rolling the cascade back to the previous origin or
+layer, which the single "replace unless higher" slot per property cannot do; it needs every
+candidate declaration kept per property. Part B keeps them unsupported, with today's behavior,
+and lists them as an open question.
 
 **Interactions.** The rule index is unchanged: custom properties do not affect matching. The
 matched properties cache key is complete without change, because the custom map is a function of
@@ -1310,8 +1330,13 @@ recursively, with nested blocks producing dotted names (`@layer a { @layer b {} 
 nameless blocks producing anonymous layers with a unique internal name. `@import url() layer(x)`
 and `@import url() layer` are retained with their layer instead of dropped. Each `SelectorRule`
 gains a `layer` id into the stylesheet's layer table; unlayered rules use a reserved id. Nesting is
-capped at 32 levels and a stylesheet at 4,096 layers; past either cap the block is dropped with a
-diagnostic.
+capped at 32 levels and a stylesheet at 4,096 layers, and a document at 16,384 distinct layers
+across all its stylesheets and imports, so the document-wide rank always fits in 16 bits; past any
+cap the block or import is dropped with a diagnostic.
+
+**Imports.** Imports with a layer start loading where they are dropped today. They go through the
+same loader, resource limits and import-nesting limits as other imports
+(`ResourceManagerContext::loadStylesheetImports`); no new loading path or origin is added.
 
 **Order.** The document's layer order is the order of first declaration across all applicable
 stylesheets in cascade order (imports first, as today), computed when stylesheets are parsed or
@@ -1575,8 +1600,10 @@ Stylesheets and documents are untrusted input.
   several times) is stopped by the per-value cap and the aggregate component and byte budgets;
   reference cycles are detected before expansion; the reference walk uses an explicit stack, so
   deep reference chains cannot exhaust the native stack.
-- **Layers.** Nesting depth and layer count are capped in the parser, and the layer rank is 16
-  bits by construction of the cap.
+- **Layers.** Nesting depth, per-stylesheet layer count and document-wide layer count are capped,
+  so the 16-bit rank cannot overflow. Imports declared with a layer, dropped today, are fetched
+  after Part B; that is new resource-loading exposure, and it uses the existing import loader with
+  its limits, so a document can make no more fetches than it could with unlayered imports.
 - **Parallel style.** Task count is bounded by the element count, subtrees below the grain run
   inline, and the traversal uses the scheduler's explicit task objects, so a deep or wide hostile
   tree creates no unbounded recursion on worker stacks; budgets are enforced per worker share with
@@ -1765,6 +1792,10 @@ Stylesheets and documents are untrusted input.
   through an unbalanced brace changes the rendering until it is closed. Recommendation: keep the
   engine exact (it equals export and reload) and, if the flicker bothers users, add an editor-side
   debounce that defers applying a stylesheet edit while the source has an unclosed block.
+- **`revert` and `revert-layer`.** Unsupported today (dropped as invalid). Supporting them needs
+  every candidate declaration per property kept through the cascade instead of one winning slot.
+  Recommendation: keep them out of Part B and take them up with `@property` in a later design,
+  since both change how the cascade stores candidates.
 
 - **Storage safety for structural changes.** Part D is designed on the conservative route (no
   structural change in the parallel phase, serial commit). A separate evaluation of whether the
