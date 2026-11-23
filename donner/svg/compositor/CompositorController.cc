@@ -639,7 +639,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   if (activeHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
     return refusePromotion(entity, PromoteRefusalReason::LayerLimit);
   }
-  if (totalBitmapMemory() >= EffectiveCompositorMemoryBudget()) {
+  if (retainedMemoryAtBudget()) {
     return refusePromotion(entity, PromoteRefusalReason::MemoryLimit);
   }
 
@@ -2668,11 +2668,45 @@ size_t CompositorController::layerCount() const {
 
 size_t EffectiveCompositorMemoryBudget() {
 #ifdef __EMSCRIPTEN__
-  const size_t heapBytes = emscripten_get_heap_size();
-  return std::min(kMaxCompositorMemoryBytes, heapBytes / 3);
+  return kBrowserCompositorMemoryBytes;
 #else
   return kMaxCompositorMemoryBytes;
 #endif
+}
+
+size_t EffectiveCompositorHeapBitmapBudget() {
+#ifdef __EMSCRIPTEN__
+  const size_t heapBytes = emscripten_get_heap_size();
+  return std::min(kBrowserCompositorMemoryBytes, heapBytes / 3);
+#else
+  return kMaxCompositorMemoryBytes;
+#endif
+}
+
+bool CompositorController::retainedMemoryAtBudget() const {
+  const BitmapMemoryBreakdown breakdown = bitmapMemoryBreakdown();
+  const size_t heapBitmapBytes = breakdown.segmentBitmapBytes + breakdown.layerBitmapBytes;
+  const size_t retainedBytes =
+      heapBitmapBytes + breakdown.segmentTextureBytes + breakdown.layerTextureBytes;
+  // A frame that rebuilds every tile charges each of them and its frame target, one canvas-sized
+  // surface, against the renderer's per-frame surface budget.
+  std::uint64_t frameTargetBytes = 0;
+  if (hasLastViewport_) {
+    const Vector2i canvasSize = BitmapDimensionsForViewport(lastViewport_);
+    frameTargetBytes = static_cast<std::uint64_t>(std::max(canvasSize.x, 0)) *
+                       static_cast<std::uint64_t>(std::max(canvasSize.y, 0)) * 4u;
+  }
+  return static_cast<std::uint64_t>(retainedBytes) + frameTargetBytes >=
+             static_cast<std::uint64_t>(retainedMemoryBudgetBytes()) ||
+         heapBitmapBytes >= heapBitmapBudgetBytes();
+}
+
+size_t CompositorController::retainedMemoryBudgetBytes() const {
+  return config_.retainedMemoryBudgetBytes.value_or(EffectiveCompositorMemoryBudget());
+}
+
+size_t CompositorController::heapBitmapBudgetBytes() const {
+  return config_.heapBitmapBudgetBytes.value_or(EffectiveCompositorHeapBitmapBudget());
 }
 
 size_t CompositorController::totalBitmapMemory() const {

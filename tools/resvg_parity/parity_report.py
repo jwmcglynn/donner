@@ -1424,7 +1424,6 @@ SPEC_UB_ALLOWLIST: Mapping[str, tuple[str, str, str]] = {
 DEPRECATED_IN_SVG2_FEATURES = {
     "filters/enable-background": "enable-background and the BackgroundImage it defines",
     "filters/filter/in=BackgroundAlpha-with-enable-background.svg": "enable-background",
-    "filters/filter/in=BackgroundImage-with-enable-background.svg": "enable-background",
     "masking/clip": "CSS `clip` property (deprecated by CSS Masking in favor of clip-path)",
     "painting/display/none-on-tref.svg": "<tref>",
     "painting/fill/icc-color.svg": "icc-color() paint",
@@ -2310,8 +2309,11 @@ DEFINED_MARKER_CASES = {
         f"filters/feConvolveMatrix/{stem}.svg": (
             "defined-input-no-reference", "https://www.w3.org/TR/filter-effects-1/#feConvolveMatrixElement",
         )
-        for stem in ("bias=-0.5", "bias=0.5", "bias=9999", "edgeMode=wrap-with-matrix-larger-than-target")
+        for stem in ("bias=-0.5", "bias=0.5", "bias=9999")
     },
+    "painting/stroke-width/negative.svg": (
+        "known-renderer-divergence", "https://www.w3.org/TR/SVG2/painting.html#StrokeWidth",
+    ),
     **{
         f"filters/filter/in={stem}.svg": (
             "defined-input-no-reference", "https://www.w3.org/TR/filter-effects-1/#attr-valuedef-in-fillpaint",
@@ -2320,6 +2322,81 @@ DEFINED_MARKER_CASES = {
                      "FillPaint-with-pattern", "FillPaint-with-target-on-g", "StrokePaint")
     },
 }
+
+# UB-marker cases whose behavior the governing specification leaves undefined, mapped to that text.
+UNDEFINED_MARKER_CASES = {
+    # Section 9.9 defines edgeMode=wrap only as extending the input with its opposite edge, which
+    # does not say what a kernel larger than the whole input reads.
+    "filters/feConvolveMatrix/edgeMode=wrap-with-matrix-larger-than-target.svg":
+        "https://www.w3.org/TR/filter-effects-1/#element-attrdef-feconvolvematrix-edgemode",
+}
+
+# The spec audit ledger that records each known renderer divergence, by category prefix.
+_DIVERGENCE_AUDIT = {
+    "filters/": "docs/spec_audit/filters_generators_lighting.md",
+    "painting/": "docs/spec_audit/painting_properties.md",
+}
+
+
+def _divergence_audit(path: str) -> str:
+    """The spec audit ledger that records a known renderer divergence for `path`."""
+
+    for prefix, doc in _DIVERGENCE_AUDIT.items():
+        if path.startswith(prefix):
+            return doc
+    raise ParityReportError(f"{path}: no spec audit ledger in _DIVERGENCE_AUDIT for its category")
+
+
+def marker_case_violations(
+    report: dict[str, object],
+    tests_root: Path,
+    marker_path: Path,
+    defined: Mapping[str, tuple[str, str]] = DEFINED_MARKER_CASES,
+    undefined: Mapping[str, str] = UNDEFINED_MARKER_CASES,
+) -> list[str]:
+    """Return entries of the marker classification maps that no longer describe their case.
+
+    Every entry must name an active undefined-behavior case whose vendored reference is the resvg UB
+    marker image, no case may be in both maps, and a known renderer divergence needs a spec audit
+    ledger, so neither map can silently outlive a reclassification.
+    """
+
+    try:
+        marker = marker_path.read_bytes()
+    except OSError as error:
+        raise ParityReportError(f"cannot read UB marker reference {marker_path}: {error}") from error
+    undefined_cases = {
+        str(case["path"]) for case in _active_render_only_cases(report)
+        if case["render_only_kind"] == "undefined-behavior"
+    }
+    violations: list[str] = []
+    for path in sorted(set(defined) | set(undefined)):
+        if path in defined and path in undefined:
+            violations.append(f"{path}: listed as both defined and undefined")
+        if path not in undefined_cases:
+            violations.append(f"{path}: listed, but not an active undefined-behavior case")
+            continue
+        violations += _marker_entry_violations(path, defined.get(path), tests_root, marker)
+    return violations
+
+
+def _marker_entry_violations(
+    path: str, defined: tuple[str, str] | None, tests_root: Path, marker: bytes
+) -> list[str]:
+    """Return why an active undefined-behavior case cannot keep its marker-map entry."""
+
+    violations: list[str] = []
+    try:
+        is_marker = (tests_root / path).with_suffix(".png").read_bytes() == marker
+    except OSError:
+        is_marker = False
+    if not is_marker:
+        violations.append(f"{path}: listed, but its reference is not the UB marker")
+    if defined and defined[0] == "known-renderer-divergence" and not any(
+        path.startswith(prefix) for prefix in _DIVERGENCE_AUDIT
+    ):
+        violations.append(f"{path}: known renderer divergence without a spec audit ledger")
+    return violations
 
 
 def _marker_policy(path: str) -> dict[str, object]:
@@ -2333,7 +2410,10 @@ def _marker_policy(path: str) -> dict[str, object]:
         classification, specification = DEFINED_MARKER_CASES[path]
         evidence.append(specification)
         if classification == "known-renderer-divergence":
-            evidence.append("docs/spec_audit/filters_generators_lighting.md")
+            evidence.append(_divergence_audit(path))
+    elif path in UNDEFINED_MARKER_CASES:
+        classification = "specification-undefined"
+        evidence.append(UNDEFINED_MARKER_CASES[path])
     return {
         "classification": classification,
         "disposition": "Retain no-crash execution while the case lacks a qualified pixel reference.",

@@ -286,14 +286,16 @@
       "kinds": [
         "threshold"
       ],
-      "classification": "reference-disagreement",
-      "disposition": "Retain the measured allowance around the skewed ramp.",
+      "classification": "deliberate-compatibility",
+      "disposition": "Keep Donner's device-space lighting under the skew (maintainer decision) and the measured allowance around the skewed ramp. An informative note in Filter Effects 1 section 9.1 notes that light source values cannot be mapped to the operating coordinate space, and the specification gives no rule for a skewed light, so neither convention is required; results.csv grades Firefox and Safari as matching the archived reference and Chrome as not.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
+        "https://www.w3.org/TR/filter-effects-1/#FilterPrimitivesOverviewIntro",
+        "third_party/resvg-test-suite/results.csv",
         "https://github.com/jwmcglynn/donner/pull/2406"
       ],
-      "removal_criteria": "Remove after a reference independently reproduces the transformed ramp and full image at default limits.",
-      "reference_provenance": "Archived reference shades the ramp before skew.",
+      "removal_criteria": "Remove after a reference rendered with Donner's device-space lighting convention reproduces the transformed ramp and full image at default limits.",
+      "reference_provenance": "Archived reference shades the ramp before the skew, the other convention the specification permits.",
       "max_threshold": 0.11,
       "max_pixels": 100
     },
@@ -305,14 +307,16 @@
       "kinds": [
         "threshold"
       ],
-      "classification": "reference-disagreement",
-      "disposition": "Retain the measured allowance around the skewed point light.",
+      "classification": "deliberate-compatibility",
+      "disposition": "Keep Donner's device-space lighting under the skew (maintainer decision) and the measured allowance around the skewed point light. An informative note in Filter Effects 1 section 9.1 notes that light source values cannot be mapped to the operating coordinate space, and the specification gives no rule for a skewed light, so neither convention is required; results.csv grades Firefox and Safari as matching the archived reference and Chrome as not.",
       "evidence": [
         "donner/svg/renderer/tests/resvg_test_suite.cc",
+        "https://www.w3.org/TR/filter-effects-1/#FilterPrimitivesOverviewIntro",
+        "third_party/resvg-test-suite/results.csv",
         "https://github.com/jwmcglynn/donner/pull/2406"
       ],
-      "removal_criteria": "Remove after a reference reproduces the point-light metric and full image at default limits.",
-      "reference_provenance": "Archived reference evaluates the light before skew.",
+      "removal_criteria": "Remove after a reference rendered with Donner's device-space lighting convention reproduces the point-light metric and full image at default limits.",
+      "reference_provenance": "Archived reference evaluates the light before the skew, the other convention the specification permits.",
       "max_threshold": 0.11,
       "max_pixels": 100
     },
@@ -324,11 +328,13 @@
       "kinds": [
         "shared_golden"
       ],
-      "classification": "reference-disagreement",
-      "disposition": "Keep the existing spotlight image qualified by the independent full-scene model and hard-cone control.",
+      "classification": "deliberate-compatibility",
+      "disposition": "Keep Donner's device-space lighting under the skew (maintainer decision) and the spotlight image built on it, qualified by the independent full-scene model and hard-cone control. An informative note in Filter Effects 1 section 9.1 notes that light source values cannot be mapped to the operating coordinate space, and the specification gives no rule for a skewed light, so neither convention is required; section 11.4 leaves the smoothing at the cone boundary to the user agent.",
       "evidence": [
         "donner/svg/renderer/testdata/golden/README.md",
         "tools/resvg_parity/spotlight_reference.py",
+        "https://www.w3.org/TR/filter-effects-1/#FilterPrimitivesOverviewIntro",
+        "https://www.w3.org/TR/filter-effects-1/#element-attrdef-fespotlight-limitingconeangle",
         "https://github.com/jwmcglynn/donner/pull/2406"
       ],
       "removal_criteria": "Use the adjacent reference when it agrees with the independent 500-pixel scene and the documented transformed lighting and soft cone at ordinary settings.",
@@ -756,7 +762,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-embedded-svg-with-text.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-embedded-svg-with-text.png"
       }
     },
     {
@@ -779,7 +785,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-hanging-on-vertical.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-hanging-on-vertical.png"
       }
     },
     {
@@ -801,7 +807,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-font-size-adjust-simple-case.png"
       }
     },
     {
@@ -1060,7 +1066,7 @@
       "max_threshold": 0.02,
       "max_pixels": 100,
       "references": {
-        "shared_golden": "donner/svg/renderer/testdata/golden/resvg-method=stretch.png"
+        "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-method=stretch.png"
       }
     },
     {
@@ -1086,13 +1092,13 @@
       "max_pixels": 100,
       "references_by_fixture": {
         "text/textPath/mixed-children-1.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-1.png"
         },
         "text/textPath/mixed-children-2.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-2.png"
         },
         "text/textPath/very-long-text.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-very-long-text.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-textPath-very-long-text.png"
         }
       }
     },
@@ -1194,13 +1200,13 @@
       "max_pixels": 100,
       "references_by_fixture": {
         "text/writing-mode/japanese-with-tb.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-japanese-with-tb.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-japanese-with-tb.png"
         },
         "text/writing-mode/mixed-languages-with-tb.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-mixed-languages-with-tb.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-mixed-languages-with-tb.png"
         },
         "text/writing-mode/tb-and-punctuation.svg": {
-          "shared_golden": "donner/svg/renderer/testdata/golden/resvg-tb-and-punctuation.png"
+          "shared_golden": "donner/svg/renderer/testdata/golden/donner-tb-and-punctuation.png"
         }
       }
     }

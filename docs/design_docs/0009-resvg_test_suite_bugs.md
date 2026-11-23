@@ -7,7 +7,7 @@ golden's provenance and SHA-256.
 
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
 golden is _not_ the right thing to compare against, the test pins
-`Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-<name>.png")`
+`Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/donner-<name>.png")`
 so it compares against a Donner-blessed golden instead. This doc describes the main override
 groups and their reasons; the registrations in
 `donner/svg/renderer/tests/resvg_test_suite.cc` and the golden README's "Registered golden
@@ -26,9 +26,13 @@ README's digest table. A difference whose root cause is in Donner is fixed in th
 pinned with a golden, and a pixel budget in the hundreds is not accepted as a substitute. Some
 rows below are regression goldens whose provenance is not recorded; their reasons say so.
 
-Custom goldens live in `donner/svg/renderer/testdata/golden/`: `resvg-<test-name>.png`,
-named with the test stem, and `donner-<test-name>.png` for the Donner renderings whose evidence
-is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md). The rationale for each is
+Custom goldens live in `donner/svg/renderer/testdata/golden/`, named with the test stem and a
+prefix for the renderer that produced them: `donner-` for a Donner rendering, `resvg-` for a resvg
+rendering (of the corpus file or of an independent scene), `firefox-` for a Firefox rendering, and
+the `geode/` subdirectory for goldens only the Geode comparison uses. The
+[golden README](../../donner/svg/renderer/testdata/golden/README.md) records each one's renderer
+and evidence. `resvg-tspan-with-absolute-position.png`, `resvg-with-underline.png` and
+`resvg-complex-transform.png` predate the rule and their renderer is not recorded. The rationale for each is
 the `.withReason("…")` argument chained onto the override in
 [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc) — grep
 the test name there to find it inline.
@@ -69,9 +73,8 @@ requires the clipped render to equal the visible part of the rect blurred with r
 
 | Category                   | Test                                  | Reason (`withReason`)                                          |
 | -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
-| filters/feSpotLight        | complex-transform                     | Reference shades before skew and attenuates the cone edge differently |
 | filters/filter             | complex-order-and-xlink-href          | Reference disagreement: resvg drops blur spill at the region edge |
-| filters/filter             | subregion-and-primitiveUnits=objectBoundingBox-1/-2 | Explicit half-box clip; opaque interior and exact crosshair ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
+| filters/filter             | subregion-and-primitiveUnits=objectBoundingBox-1/-2 | Reference disagreement: the PNG stores reduced alpha in the opaque interior; the golden clips the half-size primitive explicitly ([reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gaussian-blur-primitive-subregions)) |
 | filters/feColorMatrix      | (7 identity forms, shared golden)     | Reference disagreement: the reference stores linearRGB in 8 bits |
 | filters/filter-functions   | drop-shadow-function (4 rows)         | Reference disagreement: the references truncate the shadow offset |
 | painting/stroke            | linear-gradient-on-text               | Reference disagreement: paint mapped by glyph ink extents      |
@@ -92,7 +95,7 @@ gradient through glyph ink extents. SVG's text bounding box uses full glyph cell
 [reference evidence](../../donner/svg/renderer/testdata/golden/README.md#gradient-strokes-on-text).
 
 `structure/image/embedded-svg-with-text` is a harness mismatch: it runs against a Donner CPU
-rendering (`resvg-embedded-svg-with-text.png`), with SVG image documents given the suite's test
+rendering (`donner-embedded-svg-with-text.png`), with SVG image documents given the suite's test
 fonts by the harness; see [0021](0021-resvg_feature_gaps.md) and
 [`testdata/golden/README.md`](../../donner/svg/renderer/testdata/golden/README.md).
 
@@ -102,7 +105,7 @@ empty, short or long value lists, and type=saturate and type=hueRotate without a
 is in the [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `textPath/mixed-children-2` runs against a committed Donner render
-(`resvg-mixed-children-2.png`). SVG 2 continues the text after a `textPath` from the
+(`donner-textPath-mixed-children-2.png`). SVG 2 continues the text after a `textPath` from the
 end point of the path; the vendored PNG continues `long` and the trailing `.` from the
 end of the glyphs laid out on each path. The golden's ink matches a Chrome rendering of
 the case within one device pixel. The evidence and the regeneration command are in the
@@ -116,7 +119,7 @@ renders match Chrome's ink. The evidence and the regeneration command are in the
 [golden README](../../donner/svg/renderer/testdata/golden/README.md).
 
 `font-size-adjust/simple-case` runs against a committed Donner render
-(`resvg-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
+(`donner-font-size-adjust-simple-case.png`). The vendored PNG kerns `Text` but centers
 it on the unkerned advance, 4.03 device px left of the kerned center, while SVG 2
 anchors a text chunk on its shaped advance. resvg v0.49.0 does not implement
 `font-size-adjust`, so no upstream rendering exists. The evidence and the regeneration
@@ -173,7 +176,7 @@ coordinates-list differently. `testdata/golden/README.md` has the evidence.
 | text/textPath | method=stretch | Reference disagreement: the vendored PNG is align placement |
 
 `textPath/method=stretch` runs against a committed Donner render
-(`resvg-method=stretch.png`). The vendored PNG is byte-identical to the original snapshot’s `simple-case.png`,
+(`donner-textPath-method=stretch.png`). The vendored PNG is byte-identical to the original snapshot’s `simple-case.png`,
 which is align placement, so it cannot assert the stretch warp. The golden is a
 regression guard for the warp rather than an independent oracle;
 `RendererPublicApiTest.TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText`, which
@@ -222,6 +225,25 @@ current browsers use.
 | --- | --- | --- |
 | text/font-size | named-value | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
 | text/font-size | named-value-without-a-parent | Reference disagreement: CSS Fonts 4 table versus 1.2 steps |
+
+### Lighting under a skew (a maintainer decision)
+
+An informative note in Filter Effects 1 section 9.1 notes that some light source values cannot be
+mapped from the `primitiveUnits` coordinate space to the operating coordinate space, and the
+specification gives no rule for a light under a skewed transform, so neither convention is
+required. Section 11.4 also leaves the smoothing at a spot light's cone boundary to the
+user agent. Donner keeps its device-space convention: it shades the filtered alpha in the final
+raster and maps point and spot light positions there. The vendored references light the surface
+before the skew. For the diffuse and point-light rows, results.csv grades Firefox and Safari as
+matching the vendored PNG and Chrome as not. Keeping Donner's convention is a maintainer
+decision, so the two thresholds and the spot-light golden below record that decision, not an
+open defect.
+
+| Category | Test | Comparison |
+| --- | --- | --- |
+| filters/feDiffuseLighting | complex-transform | Vendored PNG at a 0.11 color threshold on the three lanes that run it; it shades the alpha ramp before the skew |
+| filters/fePointLight | complex-transform | Vendored PNG at a 0.11 color threshold on the three lanes that run it; it evaluates the point light before the skew |
+| filters/feSpotLight | complex-transform | Shared golden built on Donner's convention and qualified by an independent model (`resvg-complex-transform.png`, see the golden README) |
 
 ### Backend-difference goldens (text)
 

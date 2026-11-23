@@ -173,7 +173,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 ## Donner-rendered textPath/method=stretch reference
 
-`resvg-method=stretch.png` is Donner's own rendering of the unchanged corpus
+`donner-textPath-method=stretch.png` is Donner's own rendering of the unchanged corpus
 `text/textPath/method=stretch.svg`. It is used because the vendored PNG does not depict
 the feature: it is byte-identical to the original snapshot’s `text/textPath/simple-case.png`, which is
 `method="align"` placement, and the suite's `results.csv` flags every engine except svgnet
@@ -196,8 +196,7 @@ The image was created from the simple text tier on TinySkia with the suite's
 golden-creation path, with the renderer sources of main at
 `630d99965cc3d65f05a5c1819b334bbf30cbf133`. The simple text tier matches it with no
 differing pixels and the full text tier differs in 3 pixels, within the default
-100-pixel budget; the Geode resvg lane skips `text/*` rows through its backend
-feature gate.
+100-pixel budget; both Geode lanes compare against it at default settings.
 
 Corpus SVG SHA-256: `bcd6cbd182b1055635b780924dd32e2021f3a5994177fd616ebd0f98d0c7fc28`.
 
@@ -208,13 +207,13 @@ command below from the repository root, and review the new image before
 committing it:
 
 ```sh
-rm donner/svg/renderer/testdata/golden/resvg-method=stretch.png
+rm donner/svg/renderer/testdata/golden/donner-textPath-method=stretch.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*method_stretch'
 ```
 
 ## Donner-rendered textPath continuation references
 
-`resvg-mixed-children-1.png` and `resvg-very-long-text.png` are Donner's own renderings of
+`donner-textPath-mixed-children-1.png` and `donner-textPath-very-long-text.png` are Donner's own renderings of
 the unchanged corpus `text/textPath/mixed-children-1.svg` and `very-long-text.svg`. In both,
 a `textPath` ends with a space and a green `Text` follows it.
 [SVG 2 text on a path layout rules](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules)
@@ -240,8 +239,8 @@ point.
 
 `TextEngineScriptedTest.PostTextPathCursorBoundarySpaceStaysOnThePath` pins the collapse
 rule. The images were created from the simple text tier on TinySkia with the suite's
-golden-creation path, at the collapse rule change. The Geode resvg lane skips `text/*` rows
-through its backend feature gate.
+golden-creation path, at the collapse rule change. Both Geode lanes compare against them at
+default settings.
 
 | Case             | Corpus SVG SHA-256                                                 | Reference PNG SHA-256                                              |
 | ---------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
@@ -252,13 +251,13 @@ To regenerate after an intended rendering change, delete the images, run the com
 from the repository root, and review the new images before committing them:
 
 ```sh
-rm donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png donner/svg/renderer/testdata/golden/resvg-very-long-text.png
+rm donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-1.png donner/svg/renderer/testdata/golden/donner-textPath-very-long-text.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_1:TextTextPath/*very_long_text'
 ```
 
 ## Donner-rendered textPath/mixed-children-2 reference
 
-`resvg-mixed-children-2.png` is Donner's own rendering of the unchanged corpus
+`donner-textPath-mixed-children-2.png` is Donner's own rendering of the unchanged corpus
 `text/textPath/mixed-children-2.svg`. It is used because the vendored PNG does not follow
 [SVG 2 text on a path layout rules](https://www.w3.org/TR/SVG2/text.html#TextpathLayoutRules),
 which continue the text after a `textPath` from the end point of the path: the PNG continues
@@ -298,8 +297,8 @@ continued text to equal the same text placed explicitly at the end point.
 
 The image was created from the simple text tier on TinySkia with the suite's golden-creation
 path, with the renderer sources of commit `913bb7fd2d7872f18ea80236017b6ea9a2ffb0a5`; a
-re-render from those sources reproduces it byte for byte. The Geode resvg lane skips `text/*`
-rows through its backend feature gate.
+re-render from those sources reproduces it byte for byte. Both Geode lanes compare against it
+at default settings.
 
 Corpus SVG SHA-256: `7db835973f2d650ee3a698f207831e313c95e2973fb70382d4efeabac658941d`.
 
@@ -310,7 +309,7 @@ command below from the repository root, and review the new image before
 committing it:
 
 ```sh
-rm donner/svg/renderer/testdata/golden/resvg-mixed-children-2.png
+rm donner/svg/renderer/testdata/golden/donner-textPath-mixed-children-2.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=TextTextPath/*mixed_children_2'
 ```
 
@@ -707,7 +706,7 @@ resvg --skip-system-fonts --use-font-file "$corpus/fonts/NotoSans-Regular.ttf" -
 
 ## Donner-rendered font-size-adjust reference
 
-`resvg-font-size-adjust-simple-case.png` is Donner's own rendering of the unchanged
+`donner-font-size-adjust-simple-case.png` is Donner's own rendering of the unchanged
 corpus `text/font-size-adjust/simple-case.svg`. It is used because no valid
 upstream rendering exists: the vendored PNG kerns `Text` but centers it on the
 unkerned advance, and resvg v0.49.0 does not implement `font-size-adjust` (it draws
@@ -736,7 +735,7 @@ adjusted rendering to equal the text drawn at the explicit used size.
 The image was created from the simple text tier on TinySkia with the suite's
 golden-creation path, with the renderer sources of main at
 `21c59c7588b1f64ecd4df30496e975544d194c61`. The suite compares it at default settings on both CPU text
-tiers; the Geode resvg lane skips `text/*` rows through its backend feature gate.
+tiers and on both Geode lanes.
 
 Corpus SVG SHA-256: `db28cd3a01650a98afe5d8f7a718434c1e71802b68b8b7a3d8d2feb8f97f11ea`.
 
@@ -747,7 +746,7 @@ command below from the repository root, and review the new image before
 committing it:
 
 ```sh
-rm donner/svg/renderer/testdata/golden/resvg-font-size-adjust-simple-case.png
+rm donner/svg/renderer/testdata/golden/donner-font-size-adjust-simple-case.png
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:resvg_test_suite_impl -- '--gtest_filter=*TextFontSizeAdjust*'
 ```
 
@@ -816,7 +815,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run \
 
 ## structure/image: embedded SVG with text
 
-Disposition: harness mismatch. `resvg-embedded-svg-with-text.png` is a Donner CPU rendering of the
+Disposition: harness mismatch. `donner-embedded-svg-with-text.png` is a Donner CPU rendering of the
 unchanged corpus file `tests/structure/image/embedded-svg-with-text.svg`, at the 500x500 size of its
 vendored reference, rendered by the resvg suite harness (which gives SVG image documents the corpus
 fonts as a system font set) at the commit that adds it. Both CPU text tiers match it exactly; Geode
@@ -1544,7 +1543,7 @@ is not quantized, a horizontal one is. Geode counts are on Metal.
 | Golden | Renderer | Quantized share (golden / Geode) | Geode pixels counted without and with the rule | PNG SHA-256 |
 | --- | --- | --- | --- | --- |
 | `donner-coordinates-list.png` | Donner software renderer | 0.55 / 0.005 of 608 | 392 / 0 | `f036660ed5d2f21cbbedbbba1f04c8aa94f31cc33958a3dd63e5cf13bb52f5bb` |
-| `resvg-hanging-on-vertical.png` | Donner software renderer | 0.66 / 0.003 of 1,186 | 415 / 12 | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
+| `donner-hanging-on-vertical.png` | Donner software renderer | 0.66 / 0.003 of 1,186 | 415 / 12 | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` |
 | `donner-emojis.png` | Donner software renderer | 0.69 / 0.003 of 340 | 134 / 13 | `dd0f1fe2b2c53a07e40c49b029e44d783dce9b2f2f54c87d33622711f7f4ffd6` |
 
 Two custom goldens are not quantized: `donner-named-value.png`, whose row's Geode comparison is
@@ -1559,10 +1558,10 @@ counts, so its row does not opt in; it compares Geode with a Geode golden instea
 
 Four more Donner software renderings, compared only with full shaping, are not recorded. Geode
 differs from `donner-compound-emojis.png`, `donner-compound-emojis-and-coordinates-list.png` and
-`resvg-japanese-with-tb.png` only on the crosshair's quantized row y = 250 (309, 341 and 384
+`donner-japanese-with-tb.png` only on the crosshair's quantized row y = 250 (309, 341 and 384
 pixels), but the measurement above, which leaves out the crosshair, does not show them quantized:
 0.00 of 15, 0.07 of 84 and 0.19 of 396 (Geode 0.010 on the last). The emoji goldens' other edges
-are resampled bitmap glyphs. `resvg-tb-and-punctuation.png` measures 0.30 of 558 (Geode 0.016),
+are resampled bitmap glyphs. `donner-tb-and-punctuation.png` measures 0.30 of 558 (Geode 0.016),
 and Geode differs from it on glyph edges by 128 pixels, 104 with the rule. Their rows keep their
 Geode comparison disabled.
 
@@ -1761,6 +1760,13 @@ with the SHA-256 of the committed file and the section that records its provenan
 carries a different digest. Update the row in the same change that
 regenerates or adds a golden.
 
+A golden's file name starts with the renderer that produced it: `donner-` for a Donner rendering,
+`resvg-` for a resvg rendering, `firefox-` for a Firefox rendering; goldens only the Geode
+comparison uses live in `geode/`. Three older files predate this rule and their renderer is not
+recorded: `resvg-tspan-with-absolute-position.png` and `resvg-with-underline.png` (see "Legacy
+PNGs") and `resvg-complex-transform.png`, which an independent model reproduces (see
+`filters/feSpotLight/complex-transform`).
+
 | Golden | SHA-256 | Provenance |
 | --- | --- | --- |
 | `donner-circle-shorthand-with-stroke-box.png` | `5bddc6ef292d0970c3571dead6e4d6a7b9588329d86183c633a7632f9915c3a3` | Donner renderings of disputed rows |
@@ -1777,18 +1783,28 @@ regenerates or adds a golden.
 | `donner-drop-shadow-function-em-values.png` | `3bc724817809d4ed92c53c1b655a45f9f3a5a2a031efd4f0f99e48100abd9020` | `filters/filter-functions/drop-shadow-function*` |
 | `donner-drop-shadow-function-mm-values.png` | `044fe3cb0fe0176ab7dcbe86831dd49998e68e55d0b77143c2a4ce5a4b04aa3f` | `filters/filter-functions/drop-shadow-function*` |
 | `donner-drop-shadow-function.png` | `b5f628d66da78e36f887fedd444eeb9bcd0111b0d62a01ba79ceed9f53405c3c` | `filters/filter-functions/drop-shadow-function*` |
+| `donner-embedded-svg-with-text.png` | `0f0c328a6c2c99e3ff09b3e4e0c8173d0720737fcafee7c4dbfb8f316cff0bf8` | structure/image: embedded SVG with text |
 | `donner-emojis.png` | `dd0f1fe2b2c53a07e40c49b029e44d783dce9b2f2f54c87d33622711f7f4ffd6` | Donner renderings of the color emoji rows |
 | `donner-feColorMatrix-identity.png` | `da52a1059a66c0ae3155dd5b3b5d5d155e6f6d4b88fab102e538f4183bc04916` | `filters/feColorMatrix` identity rows |
 | `donner-font-simple-case.png` | `f4a40c7b0fe7dbc476eda3ce0fff92a35a00a38249b14dafa22625ba1120473c` | Donner renderings of disputed rows |
+| `donner-font-size-adjust-simple-case.png` | `7493132a5ca79910e11d3ece3c025cab71a14360162feb6e1e550df1c2762abb` | Donner-rendered font-size-adjust reference |
+| `donner-hanging-on-vertical.png` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` | Donner-rendered references |
 | `donner-in-BackgroundAlpha.png` | `31f0653e11fdba78f6f23ff4c5abf93d52168c3d6a19d169eef1e29f0be4a990` | `filters/filter/in=BackgroundAlpha` |
 | `donner-invalid-FuncIRI.png` | `e1409e0b459dfb962a6c6a38ffe82fdaa57a4435a016696fb85ff0555558a50f` | Donner renderings of disputed rows |
+| `donner-japanese-with-tb.png` | `f750e889461dea59c46ceb3945aac85f06ff5baa312ad7fb5b9300dc5e291812` | Donner-rendered references |
+| `donner-mixed-languages-with-tb.png` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` | Donner-rendered references |
 | `donner-named-value-without-a-parent.png` | `65f5aa8f898bdb0f1586dd47b3db48ab830af39fe0cee350a8b01ac27e499e16` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
 | `donner-named-value.png` | `52f758743a31018c94d2b16df37bdd4e8cf5c1b59237358a18c5f8e5f6234c12` | Donner renderings of `text/font-size/named-value` and `named-value-without-a-parent` |
 | `donner-no-size.png` | `d999792b03ca8bb92b6bf440e030ea9f2b1ff803c0bd1567e34ebf45844c9d2a` | Donner renderings of disputed rows |
 | `donner-one-invalid-url-in-list.png` | `383d16d1523001752ac353ce8875e1b900a1efa3561eb95fab9fb1d7a0ad598a` | Donner renderings of disputed rows |
 | `donner-pattern-recursive-on-child.png` | `52f05db1cdf008bd95245a6c635bf7101858f885d200f45193905332721c2d65` | Donner renderings of recursive pattern references |
 | `donner-pattern-self-recursive.png` | `0095bce42a5f9fde3bd33886679e07ba7d247a8265087e82fc8aed9175d7bb17` | Donner renderings of recursive pattern references |
+| `donner-tb-and-punctuation.png` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` | Donner-rendered references |
 | `donner-textPath-closed-path.png` | `5f3626753b794115604b30ade45817c59ff9764e3407163ed82699f42f9166ce` | textPath/closed-path references |
+| `donner-textPath-method=stretch.png` | `ba6c92599b34f0327da5a06536fa4b2f36d8487b83cab4138caa6be03f0e7626` | Donner-rendered textPath/method=stretch reference |
+| `donner-textPath-mixed-children-1.png` | `2ea922a8be96b59e9ed1950eae3bfcda2368710c80a8a6d4a24eb5db6d92a054` | Donner-rendered textPath continuation references |
+| `donner-textPath-mixed-children-2.png` | `15bb577cfdb17641732110e9ba2c3da36ec24b1761ee972d2e5881676fbd61a0` | Donner-rendered textPath/mixed-children-2 reference |
+| `donner-textPath-very-long-text.png` | `6392266f206470a9459514291d4b7b811f3a0b9d406c7fc2d81fdb3ded914021` | Donner-rendered textPath continuation references |
 | `donner-textPath-with-filter.png` | `93f1635326d9c48da16ef58d4d2cfe90e74bf49ae992428510e5ad7686308a9b` | Donner renderings of disputed rows |
 | `donner-textPath-with-path.png` | `8e17141e31f90ea34371c432c95e7aa5870d7e068c76eece8c8a2190fa85f2d7` | `text/textPath/with-path` and `with-path-and-xlink-href` |
 | `donner-textPath-writing-mode-tb.png` | `53f79bd0f51dea2d8499227ac55958e2e1bf3c32f5f124ad50018d4d95e88b1c` | Donner renderings of disputed rows |
@@ -1813,20 +1829,10 @@ regenerates or adds a golden.
 | `resvg-complex-graphemes-and-coordinates-list.png` | `0c37edfeafdd94c8a9b8414f1c5794fee897b933a0dbd6a3e1ad8087bcba6b83` | Cyrillic combining mark position |
 | `resvg-complex-transform.png` | `6621a9e1494d58d650380f1683ddf75ec790bcda3aab84ffd990cee73fd3343a` | `filters/feSpotLight/complex-transform` |
 | `resvg-dy-with-tiny-coordinates.png` | `518e1ba79b2d93a906aecf1d109fdb3362794b36fc2b7ac4df28cc4b80fa26a4` | Text path reference images |
-| `resvg-embedded-svg-with-text.png` | `0f0c328a6c2c99e3ff09b3e4e0c8173d0720737fcafee7c4dbfb8f316cff0bf8` | structure/image: embedded SVG with text |
 | `resvg-filter-input-and-subregion.png` | `f999add4a549c79697a68a2995f7d59b3cc2f09b69f4dfba8ae44058b7f3296f` | Filter input clipping and a narrower primitive subregion |
-| `resvg-font-size-adjust-simple-case.png` | `7493132a5ca79910e11d3ece3c025cab71a14360162feb6e1e550df1c2762abb` | Donner-rendered font-size-adjust reference |
 | `resvg-half-box-blur.png` | `0832ea8ff38488e742fcabc57b5ab408fb6ae85f852a310cda57674e7192a130` | Gaussian blur primitive subregions |
-| `resvg-hanging-on-vertical.png` | `7adf76966bf9ae515051db400b4f29bd5f61952c8c37acd2b2ff2db4715e398d` | Donner-rendered references |
-| `resvg-japanese-with-tb.png` | `f750e889461dea59c46ceb3945aac85f06ff5baa312ad7fb5b9300dc5e291812` | Donner-rendered references |
-| `resvg-method=stretch.png` | `ba6c92599b34f0327da5a06536fa4b2f36d8487b83cab4138caa6be03f0e7626` | Donner-rendered textPath/method=stretch reference |
-| `resvg-mixed-children-1.png` | `2ea922a8be96b59e9ed1950eae3bfcda2368710c80a8a6d4a24eb5db6d92a054` | Donner-rendered textPath continuation references |
-| `resvg-mixed-children-2.png` | `15bb577cfdb17641732110e9ba2c3da36ec24b1761ee972d2e5881676fbd61a0` | Donner-rendered textPath/mixed-children-2 reference |
-| `resvg-mixed-languages-with-tb.png` | `b3cd1778a62622798def3373bd7fe7c4e2188f9ba48a85a2c91129fbeb88eda7` | Donner-rendered references |
 | `resvg-nested-rectangles.png` | `ce5bdadc7ee47341ac56618873b538017f97ad32532f228f0915536590b715bf` | Explicit tile geometry for nested and skewed patterns |
 | `resvg-skewed-text-tiles.png` | `11804d5374ecb1b2777cae2540d0493764f47b9117e4bd9e837bb65651f6f477` | Explicit tile geometry for nested and skewed patterns |
-| `resvg-tb-and-punctuation.png` | `808ecdad9093a3ae53788d51c85da384f842eee74ba6bf439c80e035e4caf6b7` | Donner-rendered references |
 | `resvg-tspan-with-absolute-position.png` | `754eba7cfe125e9ae873187015247f89d7e9f5e8614f604a0ef7880c8c03eaa7` | Legacy PNGs (renderer and generation command not recorded) |
-| `resvg-very-long-text.png` | `6392266f206470a9459514291d4b7b811f3a0b9d406c7fc2d81fdb3ded914021` | Donner-rendered textPath continuation references |
 | `resvg-with-underline.png` | `3ff550f2200e10a348a24a74aef99196e867fbd4a9249c7c109ea85aca982af2` | Legacy PNGs (renderer and generation command not recorded) |
 | `resvg-xlink-filter-bounds.png` | `9ebb7922a3da396ec9a892db7850c929acf2f1af071c7a0db672e38be1ad18e9` | Filter input clipping and a narrower primitive subregion |
