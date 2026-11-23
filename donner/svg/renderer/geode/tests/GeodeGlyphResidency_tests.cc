@@ -9,6 +9,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <optional>
 
 #include "donner/base/Path.h"
@@ -441,6 +442,43 @@ TEST(GeodeOccurrenceRecordsTest, MoveLeavesTheSourceWithNoSlotsToRelease) {
   assigned = std::move(moved);
   EXPECT_EQ(assigned.occurrences.size(), 1u);
   EXPECT_TRUE(moved.occurrences.empty());
+}
+
+/// A shape kept past an ordinal that holds nothing (a draw that could not be kept) keeps its own
+/// ordinal, the empty ordinal stays empty, and releasing a shape gives back exactly its charge.
+TEST(GeodeTextShapeCacheTest, AShapeAfterAnEmptyOrdinalIsKeptAndReleaseReturnsItsCharge) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  GeodeTextShapeCache cache;
+  const Path first = MakeOutlineWithPoints(4);
+  const Path third = MakeOutlineWithPoints(6);
+  EncodedPath firstEncode = MakeEncodeWithCurves(2);
+  EncodedPath thirdEncode = MakeEncodeWithCurves(3);
+  ASSERT_THAT(cache.store(0, first, FillRule::NonZero, 0.25, firstEncode, budget, 8),
+              testing::NotNull());
+  const uint64_t oneShape = cache.retainedBytes();
+  ASSERT_THAT(cache.store(2, third, FillRule::NonZero, 0.25, thirdEncode, budget, 8),
+              testing::NotNull())
+      << "an empty ordinal before it must not refuse a later shape";
+
+  EXPECT_THAT(cache.size(), testing::Eq(3u));
+  EXPECT_THAT(cache.keptShapes(), testing::Eq(2u));
+  EXPECT_THAT(cache.find(1, first, FillRule::NonZero, 0.25), testing::IsNull());
+  EXPECT_THAT(cache.find(2, third, FillRule::NonZero, 0.25), testing::NotNull());
+  EXPECT_THAT(budget->cacheBytes(), testing::Eq(cache.retainedBytes()));
+
+  cache.release(2);
+  EXPECT_THAT(cache.keptShapes(), testing::Eq(1u));
+  EXPECT_THAT(cache.find(2, third, FillRule::NonZero, 0.25), testing::IsNull());
+  // The owner vector grew from one owner to three for ordinal 2 and keeps that capacity, so only
+  // the released shape's bytes come back.
+  const uint64_t ownerGrowth = 2u * sizeof(GeodeTextShapeCache::ShapeOwner);
+  EXPECT_THAT(cache.retainedBytes(), testing::Eq(oneShape + ownerGrowth));
+  EXPECT_THAT(budget->cacheBytes(), testing::Eq(oneShape + ownerGrowth));
+
+  EncodedPath pastTheCap = MakeEncodeWithCurves(1);
+  EXPECT_THAT(cache.store(8, third, FillRule::NonZero, 0.25, pastTheCap, budget, 8),
+              testing::IsNull());
+  EXPECT_THAT(pastTheCap.curves.size(), testing::Eq(1u)) << "a refused encode is not consumed";
 }
 
 }  // namespace donner::geode

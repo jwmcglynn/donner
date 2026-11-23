@@ -8,6 +8,7 @@
 /// changing or destroying.
 
 #include <gmock/gmock.h>
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -17,6 +18,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -40,6 +42,8 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGPatternElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -1186,6 +1190,300 @@ TEST_F(GeodeDocumentResidencyTest, AnOffscreenPassLetsGoOfTheDocumentItDrewWhenI
   renderer.endFrame();
   EXPECT_THAT(renderer.resourceStats().geometryRetainedBytes, Ge(nestedBytes))
       << "the frame still reports what its offscreen pass drew";
+}
+
+/// Text whose glyph fills, glyph strokes and decoration lines are all painted shapes the text keeps
+/// outside the glyph cache: pattern and gradient glyph fills in spans of their own, pattern,
+/// gradient, solid and `currentColor` glyph strokes, and an underline filled with a pattern and
+/// stroked with a gradient, all inside one group.
+constexpr std::string_view kPaintedTextSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"
+       font-family="Noto Sans" font-size="30">
+    <defs>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="6" height="6">
+        <rect id="cell" width="3" height="3" fill="#2050c0"/>
+        <rect x="3" y="3" width="3" height="3" fill="#c05020"/>
+      </pattern>
+      <linearGradient id="g">
+        <stop offset="0" stop-color="#c02050"/>
+        <stop id="g-end" offset="1" stop-color="#20a050"/>
+      </linearGradient>
+    </defs>
+    <g id="group" color="#336699">
+      <text id="fills" x="8" y="40" fill="url(#p)"><tspan id="a">Pat</tspan><tspan id="b"
+        fill="url(#g)">Gr</tspan></text>
+      <text id="strokes" x="8" y="90" fill="none" stroke="url(#p)" stroke-width="2"
+        >St<tspan stroke="url(#g)">Gr</tspan><tspan id="solid" stroke="#208040">So</tspan><tspan
+        stroke="currentColor">Cc</tspan></text>
+      <text id="lines" x="8" y="140" fill="url(#p)" stroke="url(#g)" stroke-width="1"
+            text-decoration="underline">Dec</text>
+    </g>
+  </svg>)svg";
+
+/// Pixels in which \p actual and \p expected differ, counted by the canonical comparison with its
+/// mismatch report captured, for premises that two renderings must differ.
+int IdentityMismatchCount(const RendererBitmap& actual, const RendererBitmap& expected,
+                          std::string_view label) {
+  int mismatchedPixels = -1;
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, label, editor::tests::PixelmatchIdentityParams(), &mismatchedPixels);
+  }
+  return mismatchedPixels;
+}
+
+/// Sets the text content of the text content element \p selector of \p document to \p text.
+void SetTextOf(SVGDocument& document, const char* selector, std::string_view text) {
+  std::optional<SVGElement> element = document.querySelector(selector);
+  ASSERT_THAT(element, testing::Optional(testing::_)) << selector;
+  element->cast<SVGTextContentElement>().setTextContent(text);
+}
+
+/// Sets attribute \p name of \p selector in \p document to \p value.
+void SetAttributeOf(SVGDocument& document, const char* selector, const char* name,
+                    const char* value) {
+  std::optional<SVGElement> element = document.querySelector(selector);
+  ASSERT_THAT(element, testing::Optional(testing::_)) << selector;
+  element->setAttribute(name, value);
+}
+
+/// One edit of \ref kPaintedTextSvg.
+struct TextPaintEdit {
+  const char* name;                         //!< Names the case and its diff images.
+  std::function<void(SVGDocument&)> apply;  //!< Applies the edit.
+};
+
+/// A renderer that drew painted text on earlier frames draws an edit of anything its shapes or
+/// their paint depend on exactly as a fresh renderer draws it: the text content, the font size, the
+/// pattern's content, size and transform, the gradient, the span boundaries, the decoration, the
+/// device scale, a translation of the element, a rotation of its group, a solid stroke color,
+/// fill opacity, opacity and `currentColor`. Each edit is checked to change the rendering first.
+TEST_F(GeodeDocumentResidencyTest, TextPaintEditsReachTheNextFrameOfAWarmRenderer) {
+  const TextPaintEdit edits[] = {
+      {"text_content", [](SVGDocument& d) { SetTextOf(d, "#a", "Pot"); }},
+      {"font_size", [](SVGDocument& d) { SetAttributeOf(d, "#fills", "font-size", "36"); }},
+      {"pattern_content", [](SVGDocument& d) { SetAttributeOf(d, "#cell", "fill", "#f0a000"); }},
+      {"pattern_size",
+       [](SVGDocument& d) {
+         std::optional<SVGElement> pattern = d.querySelector("#p");
+         ASSERT_THAT(pattern, testing::Optional(testing::_));
+         pattern->cast<SVGPatternElement>().setWidth(Lengthd(9.0));
+       }},
+      {"pattern_transform",
+       [](SVGDocument& d) { SetAttributeOf(d, "#p", "patternTransform", "rotate(30)"); }},
+      {"gradient", [](SVGDocument& d) { SetAttributeOf(d, "#g-end", "stop-color", "#f0f020"); }},
+      {"span_boundaries",
+       [](SVGDocument& d) {
+         SetTextOf(d, "#a", "Pa");
+         SetTextOf(d, "#b", "tGr");
+       }},
+      {"decoration",
+       [](SVGDocument& d) {
+         SetAttributeOf(d, "#lines", "text-decoration", "overline line-through");
+       }},
+      {"device_scale", [](SVGDocument& d) { d.setCanvasSize(400, 400); }},
+      // Edits that change what is drawn while every shape's path, fill rule and tolerance can stay
+      // the same, so they reach the frame only through the draws' uniforms and paint.
+      {"element_translation",
+       [](SVGDocument& d) { SetAttributeOf(d, "#fills", "transform", "translate(3 2)"); }},
+      {"ancestor_rotation",
+       [](SVGDocument& d) { SetAttributeOf(d, "#group", "transform", "rotate(5 100 100)"); }},
+      {"solid_stroke_color",
+       [](SVGDocument& d) { SetAttributeOf(d, "#solid", "stroke", "#c08020"); }},
+      {"fill_opacity", [](SVGDocument& d) { SetAttributeOf(d, "#fills", "fill-opacity", "0.5"); }},
+      {"opacity", [](SVGDocument& d) { SetAttributeOf(d, "#lines", "opacity", "0.6"); }},
+      {"current_color", [](SVGDocument& d) { SetAttributeOf(d, "#group", "color", "#c03030"); }},
+  };
+  for (const TextPaintEdit& edit : edits) {
+    SCOPED_TRACE(edit.name);
+    SVGDocument document = ParseText(kPaintedTextSvg);
+    SVGDocument reference = ParseText(kPaintedTextSvg);
+    RendererGeode warm(first_);
+    warm.draw(document);
+    warm.draw(document);
+    const RendererBitmap beforeEdit = warm.takeSnapshot();
+    ASSERT_THAT(warm.textShapeResidencyForTesting(document).shapes, Gt(0u))
+        << "Premise: the text keeps painted shapes before the edit";
+
+    ASSERT_NO_FATAL_FAILURE(edit.apply(document));
+    ASSERT_NO_FATAL_FAILURE(edit.apply(reference));
+    warm.draw(document);
+    const RendererBitmap afterEdit = warm.takeSnapshot();
+    RendererGeode fresh(first_);
+    fresh.draw(reference);
+    const RendererBitmap expected = fresh.takeSnapshot();
+    if (beforeEdit.dimensions == expected.dimensions) {
+      ASSERT_THAT(IdentityMismatchCount(beforeEdit, expected,
+                                        std::string("text_paint_edit_premise_") + edit.name),
+                  Gt(0))
+          << "Premise: the edit must change the rendering, or a stale shape would pass unnoticed";
+    }
+    editor::tests::CompareBitmapToBitmap(afterEdit, expected,
+                                         std::string("text_paint_edit_") + edit.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A text element keeps at most its shape cap of painted shapes; the shapes past it are encoded for
+/// each frame and still draw what a renderer without the cap draws, and the kept shapes stay
+/// resident.
+TEST_F(GeodeDocumentResidencyTest, TextShapesPastTheCapDrawFromPerFrameEncodes) {
+  constexpr std::size_t kCap = 2;
+  SVGDocument document = ParseText(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"
+         font-family="Noto Sans" font-size="30">
+      <linearGradient id="g"><stop offset="0" stop-color="#c02050"/>
+        <stop offset="1" stop-color="#20a050"/></linearGradient>
+      <text id="t" x="8" y="60" fill="url(#g)">ABCDEF</text>
+    </svg>)svg");
+  RendererGeode uncapped(first_);
+  uncapped.draw(document);
+  const std::size_t shapes = uncapped.textShapeResidencyForTesting(document).shapes;
+  ASSERT_THAT(shapes, Gt(kCap)) << "Premise: the text paints more shapes than the cap";
+
+  SVGDocument capped = ParseText(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"
+         font-family="Noto Sans" font-size="30">
+      <linearGradient id="g"><stop offset="0" stop-color="#c02050"/>
+        <stop offset="1" stop-color="#20a050"/></linearGradient>
+      <text id="t" x="8" y="60" fill="url(#g)">ABCDEF</text>
+    </svg>)svg");
+  RendererGeode renderer(first_);
+  renderer.setTextShapeLimitForTesting(kCap);
+  renderer.draw(capped);
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    renderer.draw(capped);
+    EXPECT_THAT(renderer.lastFrameTimings().counters.pathEncodes, Eq(shapes - kCap))
+        << "only the shapes past the cap may encode on an unchanged frame";
+    EXPECT_THAT(renderer.textShapeResidencyForTesting(capped).shapes, Eq(kCap));
+  }
+  uncapped.draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), uncapped.takeSnapshot(),
+                                       "text_shapes_past_the_cap",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Painted text shapes are charged to the document's cache budget; shapes an element no longer
+/// paints release their charge at its next draw; their residence on a device that goes stops
+/// counting against the document; and the rest goes with the document.
+TEST_F(GeodeDocumentResidencyTest, TextShapesGoWithTheirElementDeviceAndDocument) {
+  const int64_t firstBaseline = first_->liveResidentBytesForTesting();
+  {
+    SVGDocument document = ParseText(kPaintedTextSvg);
+    RendererGeode onFirst(first_);
+    onFirst.draw(document);
+    const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+    ASSERT_THAT(budget, NotNull());
+    const RendererGeode::TextShapeResidency kept = onFirst.textShapeResidencyForTesting(document);
+    ASSERT_THAT(kept.shapes, Gt(0u));
+    EXPECT_THAT(kept.chargedBytes, Gt(0u)) << "the kept shapes must be charged to the document";
+    const uint64_t cacheBytes = budget->cacheBytes();
+    const uint64_t firstShare = budget->residentBytes();
+    ASSERT_THAT(cacheBytes, Ge(kept.chargedBytes));
+
+    {
+      RendererGeode onSecond(second_);
+      onSecond.draw(document);
+      EXPECT_THAT(onSecond.textShapeResidencyForTesting(document).shapes, Eq(kept.shapes))
+          << "the second device keeps shapes of its own";
+    }
+    ASSERT_THAT(budget->residentBytes(), Gt(firstShare));
+    second_.reset();
+    onFirst.draw(document);
+    EXPECT_THAT(budget->residentBytes(), Eq(firstShare))
+        << "the text residence of a device that went must stop counting against the document";
+    EXPECT_THAT(budget->cacheBytes(), Eq(cacheBytes))
+        << "an unchanged frame keeps every shape it cached, and caches nothing more";
+
+    // Solid glyph fills draw from the glyph cache, so the first element stops painting shapes of
+    // its own, and its next draw drops them and their charge.
+    const RendererGeode::TextShapeResidency before = onFirst.textShapeResidencyForTesting(document);
+    SetAttributeOf(document, "#fills", "fill", "#000");
+    SetAttributeOf(document, "#b", "fill", "#000");
+    onFirst.draw(document);
+    const RendererGeode::TextShapeResidency after = onFirst.textShapeResidencyForTesting(document);
+    ASSERT_THAT(after.shapes, testing::Lt(before.shapes));
+    const uint64_t releasedCharge = before.chargedBytes - after.chargedBytes;
+    EXPECT_THAT(releasedCharge, Gt(0u));
+    EXPECT_THAT(budget->cacheBytes(), testing::Le(cacheBytes - releasedCharge))
+        << "shapes an element no longer paints must give back what they charged";
+  }
+  EXPECT_THAT(first_->liveResidentBytesForTesting(), Eq(firstBaseline))
+      << "the text residence must be released with the document";
+}
+
+/// An offscreen pass on the same device inside an open frame that drew painted text draws the same
+/// text at another scale. The pass must not replace or free shapes the outer frame's recorded draws
+/// read: the outer frame still draws what a fresh renderer draws.
+TEST_F(GeodeDocumentResidencyTest, NestedPassLeavesTheTextShapesAnOuterFrameDrew) {
+  SVGDocument document = ParseText(kPaintedTextSvg);
+  SVGDocument reference = ParseText(kPaintedTextSvg);
+  RendererGeode fresh(first_);
+  fresh.draw(reference);
+  const RendererBitmap expected = fresh.takeSnapshot();
+
+  RendererGeode outer(first_);
+  outer.draw(document);  // The shapes exist before the frame under test.
+  const RenderViewport viewport = DocumentViewport();
+  {
+    const DocumentWriteAccess access = document.writeAccess();
+    outer.beginFrame(viewport);
+    RendererDriver outerDriver(outer);
+    outerDriver.drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+    const std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+    ASSERT_THAT(inner, NotNull());
+    inner->beginFrame(viewport);
+    RendererDriver innerDriver(*inner);
+    innerDriver.drawDocumentIntoCurrentFrame(document, viewport, Transform2d::Scale(3.0));
+    inner->endFrame();
+    outer.endFrame();
+  }
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expected,
+                                       "nested_pass_leaves_text_shapes",
+                                       editor::tests::PixelmatchIdentityParams());
+  // The pass drew from per-frame encodes, so the outer renderer's shapes are still its own.
+  outer.draw(document);
+  EXPECT_THAT(outer.lastFrameTimings().counters.pathEncodes, Eq(0u))
+      << "the offscreen pass replaced shapes the outer renderer keeps";
+}
+
+/// The same, for text whose shapes are first kept inside the frame under test: the frame that
+/// creates the element's shapes claims them as it creates them, so the offscreen pass inside it
+/// draws from per-frame encodes, and the outer renderer's next unchanged frame encodes nothing.
+TEST_F(GeodeDocumentResidencyTest, NestedPassLeavesTheTextShapesTheOuterFrameJustKept) {
+  SVGDocument document = ParseText(kPaintedTextSvg);
+  SVGDocument reference = ParseText(kPaintedTextSvg);
+  RendererGeode fresh(first_);
+  fresh.draw(reference);
+  const RendererBitmap expected = fresh.takeSnapshot();
+
+  RendererGeode outer(first_);
+  const RenderViewport viewport = DocumentViewport();
+  {
+    const DocumentWriteAccess access = document.writeAccess();
+    outer.beginFrame(viewport);
+    RendererDriver outerDriver(outer);
+    outerDriver.drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+    ASSERT_THAT(outer.textShapeResidencyForTesting(document).shapes, Gt(0u))
+        << "Premise: the frame under test keeps the text's first shapes";
+    const std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+    ASSERT_THAT(inner, NotNull());
+    inner->beginFrame(viewport);
+    RendererDriver innerDriver(*inner);
+    innerDriver.drawDocumentIntoCurrentFrame(document, viewport, Transform2d::Scale(3.0));
+    inner->endFrame();
+    outer.endFrame();
+  }
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expected,
+                                       "nested_pass_leaves_just_kept_text_shapes",
+                                       editor::tests::PixelmatchIdentityParams());
+  outer.draw(document);
+  EXPECT_THAT(outer.lastFrameTimings().counters.pathEncodes, Eq(0u))
+      << "the offscreen pass replaced shapes the outer frame had just kept";
 }
 
 TEST_F(GeodeSharedRootResidencyTest, EachRetirementOutlivesTheDeviceItReleasesInto) {

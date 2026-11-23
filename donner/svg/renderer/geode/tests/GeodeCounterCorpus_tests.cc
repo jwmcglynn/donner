@@ -200,53 +200,6 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         "across unchanged frames",
     },
     {
-        /*scene=*/"geode_text_decoration_underline",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{1, 0, 6, 1},
-        /*reason=*/
-        "the solid glyphs draw their resident encodings from the glyph cache, but the underline "
-        "is a decoration line, encoded as transient geometry and uploaded through the per-frame "
-        "arena every frame",
-        /*tracking=*/
-        "clears when text decoration lines keep their encoded geometry across unchanged frames",
-    },
-    {
-        /*scene=*/"geode_text_pattern_fill",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{4, 0, 6, 4},
-        /*reason=*/
-        "only solid, unwarped fills draw a glyph's resident encoding, so each pattern-painted "
-        "glyph is placed from its cached outline, encoded as transient geometry and drawn "
-        "through the per-frame arena every frame",
-        /*tracking=*/
-        "clears when pattern-painted glyphs draw resident glyph encodings and the tiled fill "
-        "gains residency",
-    },
-    {
-        /*scene=*/"geode_text_span_gradient_over_pattern",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{3, 0, 6, 3},
-        /*reason=*/
-        "only solid, unwarped fills draw a glyph's resident encoding, so the pattern-painted "
-        "glyphs and the gradient-painted span glyph are each placed from their cached outlines, "
-        "encoded as transient geometry and drawn through the per-frame arena every frame",
-        /*tracking=*/
-        "clears when gradient- and pattern-painted glyphs draw resident glyph encodings and the "
-        "tiled fill gains residency",
-    },
-    {
-        /*scene=*/"geode_text_span_gradient_over_pattern_stroke",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{3, 0, 6, 3},
-        /*reason=*/
-        "glyph strokes have no resident encoding whatever their paint: each run's stroke outline "
-        "(pattern or gradient here) is expanded from the cached glyph outlines, encoded as "
-        "transient geometry and drawn through the per-frame arena every frame",
-        /*tracking=*/
-        "clears when glyph stroke outlines keep their encoded geometry across unchanged frames "
-        "and the tiled stroke gains residency",
-    },
-    {
         /*scene=*/"image_data_url_opacity",
         /*violated=*/kTextureCreates | kBufferWrites,
         /*ceiling=*/{0, 1, 1, 1},

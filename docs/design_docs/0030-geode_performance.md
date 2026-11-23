@@ -1,12 +1,12 @@
 # Design: Geode Rendering Performance
 
-**Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes
-re-encode, create and re-upload nothing, including the second and later draws of one entity in a
-frame such as marker placements, filter passes upload and bind nothing new, opacity, blend-mode
-and filter-result composites without a clip mask write and create nothing, and ordered batching
-draws runs of resident draws as instanced draws. Steady-state residency for images, clip and mask
-geometry (including composites under a clip mask), draws under a clip polygon (among them turned
-marker placements), and painted text is still open (Milestone 8). `geode_counter_corpus_tests`
+**Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes,
+including painted text, re-encode, create and re-upload nothing, including the second and later
+draws of one entity in a frame such as marker placements, filter passes upload and bind nothing new,
+opacity, blend-mode and filter-result composites without a clip mask write and create nothing, and
+ordered batching draws runs of resident draws as instanced draws. Steady-state residency for images,
+clip and mask geometry (including composites under a clip mask), and draws under a clip polygon
+(among them turned marker placements) are still open (Milestone 8). `geode_counter_corpus_tests`
 records the corpus scenes measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
@@ -348,16 +348,61 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     remaining counters are its clip geometry. `nested_svg_aspectratio`'s per-frame uploads were
     same-frame repeats of resident slots, not nested-viewport geometry, and cleared with 8.1 and
     8.2.
-  - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`), and
-    only solid, unwarped glyph fills draw the cache's resident encodings. Pattern- and
-    gradient-painted glyphs are placed from their cached outlines, glyph strokes are expanded from
-    them, glyphs stretched along a text path are warped from the font outline, text decorations are
-    built from the run, and all of these are encoded as transient geometry every frame. Clears
-    `geode_text_decoration_underline`, `geode_text_pattern_fill`,
-    `geode_text_span_gradient_over_pattern`, `geode_text_span_gradient_over_pattern_stroke`. The
-    three pattern-painted scenes depend on 8.5: placed-glyph pattern fills still draw through
-    the arena path, and `GeoEncoder::fillPathPatternResident` is the resident form available to
-    them.
+  - [x] 8.8: Painted-text geometry. Solid, unwarped glyph fills draw the glyph cache's resident
+    encodings. Every other shape a text element paints (a placed glyph outline filled with a
+    gradient or a pattern, or with a solid along a text path; a joined glyph stroke outline; a
+    decoration line and its stroke) is kept on the element by a `GeodeTextShapeCache`
+    (`geode/GeodeGlyphResidency.h`), one per device, with its encode and resident slots, and draws
+    through `fillPathResident`, `fillPathPatternResident` or the resident gradient fills. Shape `i`
+    is the element's `i`th such draw, and is reused only when the path about to be painted, its fill
+    rule and the encode tolerance are bitwise identical to what it holds; anything else replaces it
+    with fresh residence. An unchanged frame therefore encodes, uploads and binds nothing for
+    painted text (`PaintedTextUnchangedFrameEncodesWritesAndCreatesNothing`,
+    `GeodeGlyphInstancing_tests.cc`), and a warm renderer draws an edit of the text content, font
+    size, pattern content, size or transform, gradient, span boundaries, decoration, device scale,
+    element transform, ancestor transform, solid stroke color, fill opacity, opacity or
+    `currentColor` exactly as a fresh renderer does
+    (`TextPaintEditsReachTheNextFrameOfAWarmRenderer`, `GeodeDocumentResidency_tests.cc`). The
+    shapes are built and drawn in the element's space, as the per-frame draws are, so the resident
+    draw paints the same pixels. An element keeps at most `kDefaultMaximumShapes` (4096) shapes per
+    device; a draw past it, or one the document's cache budget refuses, encodes for the frame
+    (`TextShapesPastTheCapDrawFromPerFrameEncodes`) and leaves its ordinal empty, so the shapes
+    after it keep their ordinals; a draw whose new geometry is refused also drops the old shape at
+    that ordinal and its charge (`AShapeAfterAnEmptyOrdinalIsKeptAndReleaseReturnsItsCharge`,
+    `GeodeGlyphResidency_tests.cc`). The document budget refuses every later charge that would grow
+    its total once it refuses one (Requirements and Constraints), so after a budget refusal the
+    element keeps only a new shape that replaces an old one without growing the charge, as every
+    other cache under that budget does. A joined stroke group the encoder refuses whole takes no
+    ordinal: its glyph strokes are drawn and kept in its place, and an unchanged frame repeats only
+    the refused encode attempt (`RefusedJoinedStrokeKeepsTheGlyphStrokesDrawnInItsPlace`). Each kept
+    shape charges `sizeof(Shape)` (at most 2 KiB by a `static_assert`; 1,400 bytes measured in a
+    64-bit Linux build) plus its path and encode capacities, and the shape owner vector its
+    capacity, to the document's cache budget; its GPU geometry and uniform mirrors are charged
+    through the slab as for any resident slot. Shapes past the last one an element's draw reaches
+    are dropped at the end of that draw, and the rest go with a device that goes and with the
+    document (`TextShapesGoWithTheirElementDeviceAndDocument`), or with the element when it is
+    destroyed; an element that is detached or not drawn keeps its shapes until it is destroyed or
+    drawn again. The per-element component is created at the element's first attempt to keep a
+    shape, so text that paints only solid glyph fills carries none, and a first attempt the cap or
+    budget refuses leaves an empty, uncharged component; the frame that creates it claims it at once
+    (`NestedPassLeavesTheTextShapesTheOuterFrameJustKept`). Kept shapes draw solo from slots of
+    their own and take no instance record: the shared occurrence records (`GeodeOccurrenceRecords`)
+    serve the glyph cache's solid fills and the resident slots' repeat draws, and a kept text shape
+    is drawn at most once per frame. A shape is replaced or dropped only by a draw of the element
+    that no unsubmitted frame on the device has drawn; a second draw of the element in one frame, or
+    an offscreen pass inside a frame that drew it, draws from per-frame encodes, so the shapes the
+    first draw keeps survive it (`NestedPassLeavesTheTextShapesAnOuterFrameDrew`: the outer frame
+    draws what a fresh renderer draws, and its next unchanged frame encodes nothing). That replaced
+    and dropped residence returns through the slab's deferred free and bind-group retirement, so a
+    recorded draw never loses its geometry, is structural; no test replaces a shape under an open
+    frame. A glyph run painted with a gradient of more than 16 stops keeps its encodes but draws
+    them through the per-frame arena, so its glyphs share one stop-ramp lookup through the run's
+    resolution (`GradientTextRunLooksUpItsStopRampOnce`); a decoration line resolves its own
+    gradient for each draw and looks its ramp up once either way, so it keeps its gradient
+    residence. Glyph and decoration strokes are still expanded on the CPU every frame
+    (`strokeOutlineFlattens`, which no gate checks). Clears `geode_text_decoration_underline`,
+    `geode_text_pattern_fill`, `geode_text_span_gradient_over_pattern`,
+    `geode_text_span_gradient_over_pattern_stroke`.
   - [ ] 8.9: Residency under a clip polygon. A clip polygon reaches the shader only through the
     draw-level uniform, and no resident path writes one: a slot's solo resident draw
     (`GeoEncoder::submitResidentOrArenaFill`) and a repeat's record (`tryAppendRepeatDraw`) both
@@ -484,7 +529,8 @@ Entity with <path d="...">
 - **Glyphs.** `GeodeGlyphCache` (`geode/GeodeGlyphResidency.h`) caches each glyph outline once per
   glyph identity (font, glyph, scale, stretch, rotation, and tolerance), bounded by entry and byte
   budgets. Solid-filled glyph occurrences draw from those resident outlines through instance records
-  and join ordered batches.
+  and join ordered batches. Every other shape a text element paints is kept on the element by a
+  `GeodeTextShapeCache` (same header), one per device, with its encode and resident slots (8.8).
 - **Invalidation.** Path geometry invalidates through `on_update<ComputedPathComponent>`, which
   fires only when `ShapeSystem` changes the geometry; no separate dirty flag is involved.
 - **Uniform storage.** Resident slots hold their own uniforms, and each isolated-layer or

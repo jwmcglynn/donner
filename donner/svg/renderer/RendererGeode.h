@@ -624,6 +624,9 @@ public:
   /// Lower the outline points joined into one text stroke shape (65536) for tests; never raises it.
   void setTextStrokeGroupPointLimitForTesting(std::size_t maximumPoints);
 
+  /// Lower the painted shapes one text element keeps per device (4096) for tests; never raises it.
+  void setTextShapeLimitForTesting(std::size_t maximumShapes);
+
   /// Lower the gradient stops one frame may draw (the CPU renderer's per-frame cap) for boundary
   /// tests; never raises it.
   void setGradientStopBudgetForTesting(std::size_t maximumStops);
@@ -686,6 +689,16 @@ public:
 
   /// Number of glyph outlines currently resident for `document`.
   [[nodiscard]] size_t residentGlyphCountForTesting(SVGDocument& document);
+
+  /// Painted text shapes this renderer's device keeps for `document`, summed over its elements,
+  /// and the cache bytes they charge.
+  struct TextShapeResidency {
+    size_t shapes = 0;          //!< Retained shapes.
+    uint64_t chargedBytes = 0;  //!< Bytes charged to the document's cache budget for them.
+  };
+
+  /// Painted text shapes this renderer's device keeps for `document`; see \ref TextShapeResidency.
+  [[nodiscard]] TextShapeResidency textShapeResidencyForTesting(SVGDocument& document);
 
   /// Number of pattern tile texture views this renderer keeps between frames.
   [[nodiscard]] size_t patternTileViewCountForTesting() const;
