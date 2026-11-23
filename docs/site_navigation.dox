@@ -61,6 +61,7 @@ kept separate from project-internal developer notes, design history, tooling, an
 - \subpage CompileTimeMap
 - \subpage GpuRuntime
 - \subpage EmbeddingGeode
+- \subpage GeodePerformance
 */
 
 /**

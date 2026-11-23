@@ -703,18 +703,19 @@ public:
    * `slot` is a per-entity `GeodeResidentSlot` (owned by
    * `GeodeResidentPathComponent`, invalidated by the same
    * `ComputedPathComponent` listener that clears the CPU encode cache). On
-   * first use the encoder uploads `encoded` into a persistent combined
-   * Vertex|Storage|Uniform buffer and builds a cached bind group; on every
+   * first use the encoder uploads `encoded` into a range of the document's
+   * Storage|Uniform resident slab and builds a cached bind group; on every
    * subsequent unchanged frame it re-uses both and writes zero geometry
-   * bytes. Only the 288-byte per-draw uniform is rewritten, and only when
+   * bytes. Only the 448-byte per-draw uniform is rewritten, and only when
    * it actually changed (camera/color move), so a static document's
-   * steady-state frame writes ~zero bytes and creates zero bind groups.
+   * steady-state frame writes zero bytes and creates zero bind groups.
    *
-   * A draw under an active path-clip mask stays resident: its uniform
-   * carries the clip flag exactly as the arena draw's does, and the cached
-   * bind group binds the mask's view, rebuilt only when the draw is clipped
-   * by a different view. Under a clip polygon or an open mask pass the call
-   * falls back to the per-frame arena path (a fresh per-draw bind group).
+   * A draw under an active path-clip mask or a clip polygon stays resident:
+   * its uniform carries the clip flag and the polygon's planes exactly as the
+   * arena draw's does, and the cached bind group binds the mask's view,
+   * rebuilt only when the draw is clipped by a different view. Under an open
+   * mask pass the call falls back to the per-frame arena path (a fresh
+   * per-draw bind group).
    *
    * @param slot Persistent residence for this entity's fill or stroke
    *   encode. Must outlive the frame's submit (it does: the ECS component
@@ -992,9 +993,10 @@ public:
    * the 704-byte gradient uniform block; on an unchanged frame the draw
    * rewrites nothing and reuses the cached 11-binding bind group, which
    * binds the active path-clip mask's view (or the identity dummy) and is
-   * rebuilt when the draw is clipped by a different view. Falls back to the
-   * per-frame arena path internally when a clip polygon or mask pass is
-   * active.
+   * rebuilt when the draw is clipped by a different view. A draw under a
+   * clip polygon stays resident, its uniform carrying the polygon's planes.
+   * Falls back to the per-frame arena path internally under an open mask
+   * pass, or for a second draw of the slot in one frame.
    *
    * @param slot Resident gradient slot for this entity's fill.
    * @param encoded Precomputed encode from the cached-path encode cache.
@@ -1056,8 +1058,8 @@ public:
    * @ref fillPathResident: the geometry is uploaded once, the slot's uniform is rewritten only
    * when its bytes change, and the cached bind group is rebuilt only when the bound tile view
    * changes. Pixels match @ref fillPathPattern. Falls back to the per-frame arena path under an
-   * active clip polygon or mask pass, or for a second draw of the slot in one frame; under a
-   * path-clip mask it stays resident like @ref fillPathResident.
+   * open mask pass, or for a second draw of the slot in one frame; under a path-clip mask or a
+   * clip polygon it stays resident like @ref fillPathResident.
    *
    * @param slot Persistent residence for this entity's fill encode.
    * @param encoded Cached encode (stable across frames).

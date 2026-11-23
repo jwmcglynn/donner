@@ -1036,10 +1036,11 @@ const gpu::BindGroup* GeodeDevice::findSceneBatchBindGroup(const SceneBatchBindG
 
 const gpu::BindGroup& GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
                                                             gpu::BindGroup group) {
-  // The deque holds one entry per live map key, in insertion order: a key is
-  // pushed only when it was newly inserted, and popped only together with the
-  // erase of that same key. Nothing else touches either container, so the two
-  // stay the same size and eviction always finds a key that is really there.
+  // The deque holds one entry per live map key, least recently used first: a
+  // key is pushed only when it was newly inserted, moved to the back on a hit
+  // in findSceneBatchBindGroup, and popped only together with the erase of
+  // that same key. Nothing else touches either container, so the two stay the
+  // same size and eviction always finds a key that is really there.
   assert(sceneBatchBindGroupOrder_.size() == sceneBatchBindGroups_.size());
   while (sceneBatchBindGroups_.size() >= kSceneBatchBindGroupCacheCap &&
          !sceneBatchBindGroupOrder_.empty()) {

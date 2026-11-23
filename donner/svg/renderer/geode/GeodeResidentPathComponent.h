@@ -1539,8 +1539,9 @@ private:
 /// uniform region holds the 704-byte gradient uniform block (stops inline,
 /// `donner/gpu/shader/programs/SlugGradientSource.h`) and the cached bind group uses the
 /// reflected gradient pipeline layout with the active clip mask's view (or the device-owned
-/// placeholder) and the placeholder stop-ramp texture. Residence is not taken while a clip
-/// polygon or a mask pass is active, exactly like the solid-fill residence gate.
+/// placeholder) and the placeholder stop-ramp texture. Residence is not taken while a mask pass
+/// is open, exactly like the solid-fill residence gate; a draw under a clip polygon stays
+/// resident, its uniform carrying the polygon's planes.
 struct GeodeResidentGradientSlot {
   /// Combined Storage|Uniform|CopyDst buffer, borrowed from the owning
   /// `GeodeResidentSlab` chunk; region offsets are ABSOLUTE buffer

@@ -586,14 +586,13 @@ public:
   [[nodiscard]] const gpu::BindGroup* findSceneBatchBindGroup(const SceneBatchBindGroupKey& key);
 
   /// Store a scene-batch bind group under `key`, taking ownership of the
-  /// +1 handle. At the cap, the OLDEST entries are evicted one at a time
-  /// rather than the whole cache being dropped: the cache is device-wide and
-  /// a key belongs to one document's buffers, so wholesale clearing punished
-  /// the live document for documents that had already been torn down, and a
-  /// steady frame then rebuilt every batch group it had just been using.
-  /// Insertion order puts those dead entries first. Recorded command buffers
-  /// keep their own references, so dropping the cache's handle mid-frame is
-  /// safe either way.
+  /// +1 handle. At the cap, the least recently used entries are evicted one
+  /// at a time rather than the whole cache being dropped: the cache is
+  /// device-wide and a key belongs to one document's buffers, so wholesale
+  /// clearing would punish the live document for documents already torn
+  /// down, whose entries a steady frame no longer uses and which therefore
+  /// go first. An evicted group goes to the frame-boundary destroy pass, so
+  /// draws recorded earlier in the frame keep naming a live group.
   const gpu::BindGroup& storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
                                                  gpu::BindGroup group);
 
@@ -1104,8 +1103,9 @@ private:
 
   // Scene-batch bind groups cached across frames (see
   // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap, with
-  // `sceneBatchBindGroupOrder_` recording insertion order so the eviction at
-  // the cap drops the oldest entries instead of everything.
+  // `sceneBatchBindGroupOrder_` ordering keys from least to most recently
+  // used (a hit moves its key to the back), so the eviction at the cap drops
+  // the least recently used entries instead of everything.
   static constexpr std::size_t kSceneBatchBindGroupCacheCap = 256;
   std::map<SceneBatchBindGroupKey, gpu::BindGroup> sceneBatchBindGroups_;
   std::deque<SceneBatchBindGroupKey> sceneBatchBindGroupOrder_;
