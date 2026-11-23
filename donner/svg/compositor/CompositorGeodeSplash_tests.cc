@@ -8,11 +8,13 @@
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Utils.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -1888,6 +1890,141 @@ TEST(CompositorGeodeSplashTest, AdmissionReservesOneCanvasSizedSurface) {
       PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
   ASSERT_EQ(retainedTotal(retained), retainedBytes);
   EXPECT_EQ(result, CompositorController::PromoteResult::PromotedLayer);
+}
+
+// Renders \p document through \p compositor on a whole-document canvas of \p canvasSize, with
+// the document content scaled by \p zoom about the canvas origin.
+void RenderWholeDocumentAt(SVGDocument& document, CompositorController& compositor,
+                           const Vector2i& canvasSize, double zoom = 1.0) {
+  document.setCanvasSize(canvasSize.x, canvasSize.y);
+  RenderViewport viewport;
+  viewport.size = Vector2d(canvasSize.x, canvasSize.y);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport, Transform2d::Scale(zoom));
+}
+
+/// The splash with a compositor whose admission threshold is exactly what the tiles and frame
+/// target of a whole-document \p fullCanvas reach, so a promotion there is refused.
+struct SplashAtFullCanvasThreshold {
+  /// Sets up the compositor; call through `ASSERT_NO_FATAL_FAILURE`.
+  void init(std::string_view source, const Vector2i& fullCanvas) {
+    CompositorConfig config;
+    config.deferFirstFrameWarmup = false;
+    config.dynamicImmediateStaticSpans = false;
+    {
+      SVGDocument measured;
+      ASSERT_NO_FATAL_FAILURE(ParseSplash(source, measured));
+      CompositorController compositor(measured, renderer, config);
+      RenderWholeDocumentAt(measured, compositor, fullCanvas);
+      config.retainedMemoryBudgetBytes =
+          compositor.totalBitmapMemory() +
+          static_cast<size_t>(fullCanvas.x) * static_cast<size_t>(fullCanvas.y) * 4u;
+    }
+    ASSERT_NO_FATAL_FAILURE(ParseSplash(source, document));
+    compositor.emplace(document, renderer, config);
+    const auto letter = document.querySelector("#letter-G");
+    ASSERT_THAT(letter, ::testing::Optional(::testing::_));
+    entity = letter->unsafeEntityHandle().entity();
+  }
+
+  /// Parses @p source into @p document; call through `ASSERT_NO_FATAL_FAILURE`.
+  static void ParseSplash(std::string_view source, SVGDocument& document) {
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_FALSE(parsed.hasError());
+    document = std::move(parsed.result());
+  }
+
+  RendererGeode renderer;
+  SVGDocument document;
+  std::optional<CompositorController> compositor;
+  Entity entity = entt::null;
+};
+
+// A promotion requested after a small frame, such as the editor's low-resolution overview, is
+// admitted against that frame's small tiles and canvas. Any number of frames at that size may
+// follow before the full-size one; the full-size frame must not rasterize the promotion.
+TEST(CompositorGeodeSplashTest, PromotionAdmittedOnASmallerCanvasIsWithdrawnByALargerFrame) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  const Vector2i fullCanvas(384, 256);
+  const Vector2i overviewCanvas(96, 64);
+  SplashAtFullCanvasThreshold splash;
+  ASSERT_NO_FATAL_FAILURE(splash.init(source.contents, fullCanvas));
+  CompositorController& compositor = *splash.compositor;
+
+  RenderWholeDocumentAt(splash.document, compositor, fullCanvas);
+  ASSERT_EQ(compositor.promoteEntity(splash.entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::MemoryLimit);
+  RenderWholeDocumentAt(splash.document, compositor, overviewCanvas);
+  ASSERT_EQ(compositor.promoteEntity(splash.entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::PromotedLayer);
+  // The editor's worker renders the same request again after a promotion it added.
+  RenderWholeDocumentAt(splash.document, compositor, overviewCanvas);
+  ASSERT_THAT(compositor.isPromoted(splash.entity), ::testing::IsTrue())
+      << "Frames at the admitted size keep the promotion";
+
+  RenderWholeDocumentAt(splash.document, compositor, fullCanvas);
+  EXPECT_THAT(compositor.isPromoted(splash.entity), ::testing::IsFalse())
+      << "A promotion admitted against the overview canvas must not be rasterized at the full one";
+  EXPECT_EQ(compositor.promoteEntity(splash.entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::MemoryLimit)
+      << "Requested again, the promotion is admitted against the full canvas's own tiles";
+}
+
+// The editor's canvas stops growing above a moderate zoom while the content keeps scaling: a
+// promotion admitted at one zoom is re-checked when the next frame zooms in.
+TEST(CompositorGeodeSplashTest, PromotionAdmittedAtALowerZoomIsWithdrawnByAZoomIn) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  const Vector2i canvas(384, 256);
+  SplashAtFullCanvasThreshold splash;
+  ASSERT_NO_FATAL_FAILURE(splash.init(source.contents, canvas));
+  CompositorController& compositor = *splash.compositor;
+
+  RenderWholeDocumentAt(splash.document, compositor, canvas, /*zoom=*/0.25);
+  ASSERT_EQ(compositor.promoteEntity(splash.entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::PromotedLayer);
+  RenderWholeDocumentAt(splash.document, compositor, canvas, /*zoom=*/1.0);
+  EXPECT_THAT(compositor.isPromoted(splash.entity), ::testing::IsFalse())
+      << "The same canvas at a higher zoom holds larger tiles than the admission measured";
+  EXPECT_EQ(compositor.promoteEntity(splash.entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::MemoryLimit);
+}
+
+// Withdrawing is a re-evaluation, not a refusal, and only a larger raster triggers it: a held
+// promotion survives a smaller frame and the return to its own raster, and a withdrawn one is
+// admitted again when the larger raster has room.
+TEST(CompositorGeodeSplashTest, AdmittedPromotionSurvivesSmallerFramesAndIsReadmittedWhenItFits) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  SVGDocument document;
+  ASSERT_NO_FATAL_FAILURE(SplashAtFullCanvasThreshold::ParseSplash(source.contents, document));
+  RendererGeode renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  const Entity entity = document.querySelector("#letter-G")->unsafeEntityHandle().entity();
+
+  RenderWholeDocumentAt(document, compositor, Vector2i(384, 256));
+  ASSERT_EQ(compositor.promoteEntity(entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::PromotedLayer);
+  RenderWholeDocumentAt(document, compositor, Vector2i(96, 64));
+  RenderWholeDocumentAt(document, compositor, Vector2i(384, 256), /*zoom=*/0.5);
+  RenderWholeDocumentAt(document, compositor, Vector2i(384, 256));
+  EXPECT_THAT(compositor.isPromoted(entity), ::testing::IsTrue())
+      << "Smaller frames and the return to the admitted raster keep the promotion";
+
+  RenderWholeDocumentAt(document, compositor, Vector2i(768, 512));
+  ASSERT_THAT(compositor.isPromoted(entity), ::testing::IsFalse());
+  EXPECT_EQ(compositor.promoteEntity(entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::PromotedLayer);
+  RenderWholeDocumentAt(document, compositor, Vector2i(768, 512));
+  EXPECT_THAT(compositor.isPromoted(entity), ::testing::IsTrue());
+  EXPECT_THAT(compositor.hasCompleteTileSetForPresentation(), ::testing::IsTrue());
 }
 
 TEST(CompositorGeodeSplashTest, ZoomedSelectionFallsBackToCompleteOwningTiles) {

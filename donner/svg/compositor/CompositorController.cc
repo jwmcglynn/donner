@@ -48,6 +48,21 @@ namespace donner::svg::compositor {
 
 namespace {
 
+/// Surface pixels per canvas unit of @p surfaceFromCanvas.
+double ContentScale(const Transform2d& surfaceFromCanvas) {
+  return std::sqrt(std::abs(surfaceFromCanvas.data[0] * surfaceFromCanvas.data[3] -
+                            surfaceFromCanvas.data[1] * surfaceFromCanvas.data[2]));
+}
+
+/// True when @p raster is larger than @p admitted along either canvas axis or in content scale.
+bool RasterOutgrows(const CompositorLayer::AdmissionRaster& raster,
+                    const CompositorLayer::AdmissionRaster& admitted) {
+  constexpr double kScaleTolerance = 1e-9;
+  return raster.canvasSize.x > admitted.canvasSize.x ||
+         raster.canvasSize.y > admitted.canvasSize.y ||
+         raster.contentScale > admitted.contentScale * (1.0 + kScaleTolerance);
+}
+
 /// Whether any entity still carries a `Style` dirty flag from a write the next prepare has not
 /// consumed yet.
 bool HasPendingStyleWrite(const Registry& registry) {
@@ -529,6 +544,32 @@ bool CompositorController::hasDirtyMarkedInteraction(
   return false;
 }
 
+void CompositorController::withdrawOutgrownAdmissions(Registry& registry,
+                                                      const RenderViewport& viewport,
+                                                      const Transform2d& surfaceFromCanvas) {
+  const CompositorLayer::AdmissionRaster raster{.canvasSize = BitmapDimensionsForViewport(viewport),
+                                                .contentScale = ContentScale(surfaceFromCanvas)};
+  std::vector<Entity> outgrown;
+  for (CompositorLayer& layer : layers_) {
+    if (layer.admissionRaster().has_value() && activeHints_.contains(layer.entity()) &&
+        RasterOutgrows(raster, *layer.admissionRaster())) {
+      layer.setAdmissionRaster(std::nullopt);
+      outgrown.push_back(layer.entity());
+    }
+  }
+  if (outgrown.empty()) {
+    return;
+  }
+  // The raster change already marked every tile dirty; only the layer set changes here.
+  for (const Entity entity : outgrown) {
+    activeHints_.erase(entity);
+    pendingDemotions_.erase(entity);
+    clearTransientInteractionOwner(entity);
+  }
+  resolveLayerAssignments(registry);
+  reconcileLayers(registry);
+}
+
 void CompositorController::dropOversizedInteractionHintsForViewport(
     Registry& registry, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
     bool firstViewport, bool surfaceChanged, bool viewportSizeChanged,
@@ -594,6 +635,12 @@ bool CompositorController::assignInteractionLayer(Registry& registry, Entity ent
   reconcileLayers(registry);
   const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
   if (assignment != nullptr && assignment->layerId != 0) {
+    CompositorLayer* layer = findLayer(entity);
+    if (layer != nullptr && hasLastViewport_ && hasLastSurfaceFromCanvas_) {
+      layer->setAdmissionRaster(
+          CompositorLayer::AdmissionRaster{.canvasSize = BitmapDimensionsForViewport(lastViewport_),
+                                           .contentScale = ContentScale(lastSurfaceFromCanvas_)});
+    }
     return true;
   }
   activeHints_.erase(entity);
@@ -2260,6 +2307,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     }
   }
 
+  withdrawOutgrownAdmissions(registry, viewport, surfaceFromCanvas);
   // Promotion used the preceding overview raster. Recheck complete selected-object geometry
   // against this frame's zoom before allocating any tiles, and restore owning tiles now if it
   // no longer fits. The old complete frame remains presentable until this frame is ready.
