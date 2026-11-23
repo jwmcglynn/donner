@@ -1687,11 +1687,13 @@ private:
   std::uint64_t nextSerial_ = 0;
 };
 
-/// Device-pixel tolerance for the convex clip intersection below. Two intersection vertices closer
-/// than this are one vertex, and a vertex closer than this to the chord between its neighbours is
-/// dropped, which shrinks the convex polygon by a sliver at most this wide. 1e-3 px changes any
-/// pixel's coverage by at most a quarter of one 8-bit step (1/255), so the edge count is decided
-/// by the geometry, not by floating-point noise from near-parallel edges.
+/// Device-pixel distance for simplifying the convex clip intersection below. Two intersection
+/// vertices closer than this are one vertex, and a vertex closer than this to the chord between its
+/// neighbours is dropped, which moves the clip boundary by at most about this distance per removed
+/// vertex. The shader tests each pixel centre against the clip's half-planes, so this can only
+/// change a pixel whose centre lies within that distance of the boundary: the same order as the
+/// shader's own plane tolerance (1e-4) and float rounding. It keeps near-parallel edges from
+/// counting as extra edges through floating-point noise alone.
 constexpr double kClipPolygonEpsilonPx = 1e-3;
 
 /// Twice the signed area of \p polygon; its sign gives the winding.
@@ -3014,12 +3016,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// rect - which over-reports coverage. In that case the entry also
   /// carries the 4 polygon corners of the clip in device-pixel space,
   /// and the fragment shader tests each sample against the polygon's
-  /// half-planes on top of the scissor rect. We honour one polygon-bearing
-  /// entry (`setClipPolygon` has no in-shader intersection with a previous
-  /// polygon): an entry whose polygon contains the one already chosen keeps
-  /// it, since their intersection is the chosen one, and otherwise the
-  /// topmost wins. Partly overlapping nested rotated clips are rare enough
-  /// that we accept the over-coverage fallback.
+  /// half-planes on top of the scissor rect. The shader tests one polygon of
+  /// at most four edges, so `FoldClipPolygon` intersects the stacked
+  /// polygons and keeps the intersection while it has at most four edges;
+  /// beyond that it falls back as that function describes.
   struct ClipStackEntry {
     ClipStackEntry() = default;
     ~ClipStackEntry() = default;
