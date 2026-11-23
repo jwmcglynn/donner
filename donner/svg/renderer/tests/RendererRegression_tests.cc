@@ -486,45 +486,26 @@ RendererBitmap RenderMarkerInTurnedViewport(std::string_view markerAttributes,
       </g>)svg");
 }
 
-/// An axis-aligned rectangle in the coordinates of the 40 by 40 nested viewport turned 30 degrees.
-struct TurnedViewportRect {
-  double x0, y0, x1, y1;
+/// Renders \p body inside the 40 by 40 nested `svg` that RenderMarkerInTurnedViewport turns.
+RendererBitmap RenderInTurnedViewport(std::string_view body) {
+  return RenderReferenceContract(std::string(R"svg(
+      <g transform="rotate(30 32 32)">
+        <svg x="12" y="12" width="40" height="40">)svg") +
+                                 std::string(body) + R"svg(</svg></g>)svg");
+}
 
-  /// The distance of \p point inside the rectangle along the nearest axis, negative outside.
-  /// Outside, its magnitude is at most the true distance to the rectangle.
-  double inset(const Vector2d& point) const {
-    return std::min({point.x - x0, x1 - point.x, point.y - y0, y1 - point.y});
+/// Expects each of \p filled to be exactly the blue fill and each of \p clear to be exactly
+/// transparent. The tests pick these pixels at least 2.5 px from every clip edge, where Geode's
+/// pixel-centre polygon test and the software renderer's coverage agree exactly.
+void ExpectProbes(const RendererBitmap& actual, std::initializer_list<std::pair<int, int>> filled,
+                  std::initializer_list<std::pair<int, int>> clear) {
+  for (const auto& [x, y] : filled) {
+    EXPECT_THAT(PixelAt(actual, x, y), testing::ElementsAre(0, 0, 255, 255))
+        << "pixel (" << x << ", " << y << ")";
   }
-};
-
-/// Checks \p actual, a render of content that fills the \p clips, on a 3 px grid of pixel
-/// centres: a pixel at least 1.5 px inside \p expected (their intersection) must be exactly the
-/// fill, and one at least 1.5 px outside it must be exactly transparent. Pixels within 1.5 px of
-/// any edge of \p expected or of a clip are not checked. A whole-bitmap identity comparison is not
-/// used: Geode decides each pixel by testing its centre against the clip polygon, so its turned
-/// edges are hard, while a rendered rectangle oracle is anti-aliased along the same edges.
-void ExpectTurnedViewportFill(const RendererBitmap& actual, const TurnedViewportRect& expected,
-                              std::initializer_list<TurnedViewportRect> clips) {
-  const double c = std::cos(MathConstants<double>::kPi / 6.0);
-  const double s = std::sin(MathConstants<double>::kPi / 6.0);
-  for (int y = 1; y < 64; y += 3) {
-    for (int x = 1; x < 64; x += 3) {
-      // Undo rotate(30 32 32), then the nested viewport's x="12" y="12".
-      const double dx = x + 0.5 - 32.0;
-      const double dy = y + 0.5 - 32.0;
-      const Vector2d nested(dx * c + dy * s + 20.0, -dx * s + dy * c + 20.0);
-      const double inset = expected.inset(nested);
-      bool nearEdge = std::abs(inset) < 1.5;
-      for (const TurnedViewportRect& clip : clips) {
-        nearEdge = nearEdge || std::abs(clip.inset(nested)) < 1.5;
-      }
-      if (nearEdge) {
-        continue;
-      }
-      EXPECT_THAT(PixelAt(actual, x, y), inset > 0.0 ? testing::ElementsAre(0, 0, 255, 255)
-                                                     : testing::ElementsAre(0, 0, 0, 0))
-          << "pixel (" << x << ", " << y << ")";
-    }
+  for (const auto& [x, y] : clear) {
+    EXPECT_THAT(PixelAt(actual, x, y), testing::ElementsAre(0, 0, 0, 0))
+        << "pixel (" << x << ", " << y << ")";
   }
 }
 
@@ -535,9 +516,14 @@ TEST_F(RendererRegressionTests, MarkerClipPartlyOutsideTurnedNestedViewportKeeps
   // x = 10 to 40 in the nested viewport. (57, 44) is inside the marker viewport but outside it.
   const auto partial =
       RenderMarkerInTurnedViewport(R"(markerWidth="40" markerHeight="40")", "M 10 0 L 20 0");
-  EXPECT_THAT(PixelAt(partial, 57, 44), testing::ElementsAre(0, 0, 0, 0));
-  EXPECT_THAT(PixelAt(partial, 40, 36), testing::ElementsAre(0, 0, 255, 255));
-  ExpectTurnedViewportFill(partial, {10, 0, 40, 40}, {{0, 0, 40, 40}, {10, 0, 50, 40}});
+  ExpectProbes(partial, {{40, 36}, {37, 32}, {36, 34}},
+               {{57, 44}, {60, 28}, {56, 35}, {25, 8}, {17, 22}});
+  // The same two clips as two nested viewports draw the same pixels: a nested `svg` at the marker
+  // viewport's place, holding the marker's content in the same coordinates.
+  editor::tests::CompareBitmapToBitmap(
+      partial, RenderInTurnedViewport(R"svg(<svg x="10" y="0" width="40" height="40">
+          <rect x="-20" y="-20" width="100" height="100" fill="blue"/></svg>)svg"),
+      "marker_partial_overlap_as_viewports", editor::tests::PixelmatchIdentityParams());
 
   // The 10 by 10 marker viewport starting at x = 42 lies wholly outside the nested viewport.
   const auto disjoint =
@@ -567,30 +553,26 @@ TEST_F(RendererRegressionTests, MarkerClipOctagonIntersectionKeepsTheEnclosingCl
 // A nested `svg` partly outside a turned `svg`, turned with it, and a marker partly outside both:
 // every stacked viewport is a polygon clip, and what draws is the intersection of all of them.
 TEST_F(RendererRegressionTests, StackedTurnedViewportsDrawTheirIntersection) {
-  const auto twoViewports = RenderReferenceContract(R"svg(
-      <g transform="rotate(30 32 32)">
-        <svg x="12" y="12" width="40" height="40">
-          <svg x="10" y="-10" width="40" height="40">
-            <rect x="-20" y="-20" width="100" height="100" fill="blue"/>
-          </svg>
-        </svg>
-      </g>)svg");
-  EXPECT_THAT(PixelAt(twoViewports, 57, 44), testing::ElementsAre(0, 0, 0, 0));
-  ExpectTurnedViewportFill(twoViewports, {10, 0, 40, 30}, {{0, 0, 40, 40}, {10, -10, 50, 30}});
+  // Intersection x = 10 to 40, y = 0 to 30 in the outer nested viewport.
+  const auto twoViewports = RenderInTurnedViewport(R"svg(<svg x="10" y="-10" width="40" height="40">
+          <rect x="-20" y="-20" width="100" height="100" fill="blue"/></svg>)svg");
+  ExpectProbes(twoViewports, {{38, 30}, {39, 30}},
+               {{57, 44}, {39, 5}, {53, 13}, {25, 8}, {21, 15}});
 
-  const auto threeClips = RenderReferenceContract(R"svg(
-      <g transform="rotate(30 32 32)">
-        <svg x="12" y="12" width="40" height="40">
-          <svg x="10" y="-10" width="40" height="40">
-            <marker id="m" markerUnits="userSpaceOnUse" markerWidth="40" markerHeight="40">
-              <rect x="-20" y="-20" width="100" height="100" fill="blue"/>
-            </marker>
-            <path d="M 0 15 L 5 15" fill="none" marker-start="url(#m)"/>
-          </svg>
-        </svg>
-      </g>)svg");
-  ExpectTurnedViewportFill(threeClips, {10, 5, 40, 30},
-                           {{0, 0, 40, 40}, {10, -10, 50, 30}, {10, 5, 50, 45}});
+  // Intersection x = 10 to 40, y = 5 to 30.
+  const auto threeClips = RenderInTurnedViewport(R"svg(
+      <svg x="10" y="-10" width="40" height="40">
+        <marker id="m" markerUnits="userSpaceOnUse" markerWidth="40" markerHeight="40">
+          <rect x="-20" y="-20" width="100" height="100" fill="blue"/>
+        </marker>
+        <path d="M 0 15 L 5 15" fill="none" marker-start="url(#m)"/>
+      </svg>)svg");
+  ExpectProbes(threeClips, {{36, 31}, {39, 33}}, {{39, 5}, {46, 9}, {25, 8}, {21, 15}});
+  editor::tests::CompareBitmapToBitmap(
+      threeClips, RenderInTurnedViewport(R"svg(<svg x="10" y="-10" width="40" height="40">
+          <svg x="0" y="15" width="40" height="40">
+            <rect x="-20" y="-20" width="100" height="100" fill="blue"/></svg></svg>)svg"),
+      "three_clips_as_viewports", editor::tests::PixelmatchIdentityParams());
 }
 
 // SVG 2 section 8.6: a viewBox with a zero width or height disables rendering of the element.
