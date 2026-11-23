@@ -289,10 +289,13 @@ Part B estimate: 16 engineering days.
 
 ### Part C Milestones
 
-- [ ] Milestone C1: Rule-level incremental stylesheet reparse (4 days). No dependency.
+- [ ] Milestone C1: Rule-level incremental stylesheet reparse (5.5 days). No dependency.
+  - [ ] Carry the source edit to the style projection: `SVGDocument::applySourceEdit` passes the
+        `XMLSourceDelta` it already returns alongside the `NodeValueChanged` mutation, and the
+        projection maps it to stylesheet offsets through the stylesheet's source map.
   - [ ] Add `StylesheetComponent::applyTextEdit` that reparses the window of rules an edit
-        touches and splices the result, falling back to a full stylesheet reparse where the
-        window does not resynchronize.
+        touches and splices the result, extending the window until it resynchronizes and falling
+        back to a full stylesheet reparse where the edit cannot be mapped.
   - [ ] Add the incremental-versus-full differential fuzzer.
   - Done when: the fuzzer is green and `ProjectStyleContents` uses the incremental path for
     `<style>` text edits.
@@ -307,7 +310,7 @@ Part B estimate: 16 engineering days.
     [CSS Highlighting and Completion](#css-highlighting-and-completion) has a headless test
     returning suggestions from its data source.
 
-Part C estimate: 12 engineering days.
+Part C estimate: 13.5 engineering days.
 
 ### Part D Milestones
 
@@ -1287,20 +1290,44 @@ of custom properties, as listed under [Non-Goals](#non-goals).
 
 ### Incremental Stylesheet Reparse
 
-**Entry point.** `ProjectStyleContents` keeps building the element's concatenated text and source
-map; for a node-value mutation that carries an edit range, `SVGDocument` maps the edit into the
-stylesheet's local offsets through the source map and calls `StylesheetComponent::applyTextEdit`
-instead of `parseStylesheet`.
+**Entry point.** An `XMLMutation` carries only the node and its new `value`, not where the text
+changed. `SVGDocument::applySourceEdit` already holds the edit's `XMLSourceDelta` (offset, removed
+and inserted lengths, in document source bytes) in its `ApplySourceEditResult`; it passes that
+delta to the style projection together with the `NodeValueChanged` mutation. `ProjectStyleContents`
+keeps building the element's concatenated text and its source map, then maps the delta's start and
+end through the old source map (`mapToLocalCssOffset`) to stylesheet offsets and calls
+`StylesheetComponent::applyTextEdit` instead of `parseStylesheet`.
+
+**When the edit cannot be mapped.** The source map has a segment for a text or CDATA child only
+when the child's source bytes and its decoded value have the same length, which is the case when
+the child contains no entity or character references (`ProjectStyleContents` adds the segment only
+then). Decoding is not proportional to bytes: typing the third character of `&amp;` changes the
+decoded text from three characters to one. So the incremental path runs only when the edited child
+has a segment both before and after the edit, and the old and new bytes of the edited range contain
+no `&`; otherwise the stylesheet is reparsed as today. Edits to CDATA content map one to one, since
+CDATA is not decoded.
 
 **Rule window.** Every retained rule already carries its `ruleSourceRange`. The window starts at
 the start of the last top-level rule that begins at or before the edit start (or at the sheet
 start) and ends at the end of the first top-level rule that ends at or after the edit end (or at
-the sheet end). The window text is parsed with the same rule parser and limits. The parse
-resynchronizes when it consumes exactly the window: it ends at the window's end at top level, with
-no open block, comment or string. If it does not (an edit that deletes a closing brace or opens a
-comment swallows what follows), the window extends to the end of the sheet. If the window contains
-or produces an `@import`, `@namespace`, `@font-face` or `@layer` rule, or the stylesheet's
-resource stats would exceed a limit, the whole sheet is reparsed as today.
+the sheet end). The window text is parsed with the same rule parser and limits.
+
+**Resynchronization.** The window parse is accepted only when its token stream ends, at top
+level, exactly at the token that completed its last rule (the `}` closing a qualified rule or
+block at-rule, or the `;` ending a statement at-rule), with nothing after it in the window but
+whitespace and closed comments, and that end lies on an old rule boundary. Anything else is a
+pending state that a fresh parse would carry into the following text: an unfinished qualified-rule
+or at-rule prelude (`.ne` typed before a rule, or a deleted `{` leaving `b c}` that would absorb
+the next rule), a stray top-level `}`, which CSS consumes as prelude text, an open block, comment,
+string or `url(`, or a trailing backslash that would escape the next character. In that case the
+window end moves to the end of the next old rule and the window is parsed again, until it is
+accepted or reaches the sheet end. The equality argument: the old parse was at top level with no
+pending tokens at the window start (a rule began there), the text before the window is unchanged,
+and CSS tokenizing and rule-list parsing carry no state past a completed rule's final token, so a
+fresh parse of the new text is the old parse of the prefix, the window parse, and the old parse of
+the suffix. If the window contains or produces an `@import`, `@namespace`, `@font-face` or
+`@layer` rule, or the stylesheet's resource stats would exceed a limit, the whole sheet is reparsed
+as today.
 
 **Splice.** The new rule vector is the rules before the window, the window's rules with source
 ranges shifted to sheet offsets, and the rules after the window with ranges shifted by the edit's
@@ -1318,12 +1345,24 @@ the text is invalid is an editor policy question below; the engine does not keep
 ### Restyle from Changed Rules
 
 The rules removed from the window and the rules added to it are the changed rules; a window rule
-whose text equals the rule it replaces is unchanged. For each changed rule, old and new, the
-elements it matches are found by testing it against the elements that carry its index keys (or
-all elements for a universal entry) through the same matcher, charged to the style budget. Those
-elements, their descendants and their `<use>` instances are marked for the selective pass; the
-matched properties cache is cleared because rule identities changed. A changed rule that uses
-`:has()`, or a change in layer order, falls back to one full restyle.
+whose text equals the rule it replaces is unchanged. The elements a changed rule matches, old or
+new, are found by a scan, not a reverse map: every styled entity in the registry, light and shadow
+alike, is checked against the rule's index keys with the same key test candidate collection uses
+(id equality, a class in the element's class list, the tag, an attribute name), and only entities
+that pass get the full `MatchSelectorRule`, through `ShadowedElementAdapter` so a shadow entity is
+matched against its own shadow-tree structure. No key-to-element map exists, and none is added: it
+would have to be maintained on every class, id, attribute and tree mutation. The scan's cost is
+one key test per entity per changed rule; at the measured upper bound of 155 ns per full rule
+test, a 5,137-entity document costs at most 0.8 ms per changed rule, and a key test is a fraction
+of a full test. A keystroke changes one rule, so this stays under the 1 ms goal on the measured
+documents. The scan is charged to the rule-element budget. Matching elements, their descendants and
+their `<use>` instances are marked for the selective pass; the matched properties cache is cleared
+because rule identities changed. A changed rule that uses `:has()`, or a change in layer order,
+falls back to one full restyle.
+
+A keystroke in a `class`, `id` or `style` attribute is an attribute edit, not a stylesheet edit:
+it takes the `AttributeValue` scope and reaches `SVGElement`, where Part A's narrowed invalidation
+(Milestone A5) handles it.
 
 ### CSS Highlighting and Completion
 
@@ -1336,10 +1375,15 @@ Presentation attribute values are CSS values too, and are classified as values o
 
 **Classification.** Each region is tokenized with `css::parser::details::Tokenizer`, and a small
 state machine over the tokens tracks whether it is in a selector prelude, an at-rule prelude, a
-declaration name or a declaration value. Tokens map to the existing `ColorIndex` classes
-(selector parts, property names, keywords, numbers with units, strings, functions, comments,
-punctuation); unknown property names and invalid tokens use the error class. Classification works
-on one region at a time and, after an edit, reclassifies only the edited region.
+declaration name or a declaration value. `ColorIndex` in `donner/editor/TextBuffer.h` has generic
+classes only, and the mapping uses them without adding new ones: selector type names and at-rule
+names map to `Keyword`, class and id selectors and custom property names to `Identifier`, known
+property names to `KnownIdentifier`, numbers and dimensions to `Number`, strings and `url()` to
+`String`, comments to `Comment`, braces, colons, semicolons and combinators to `Punctuation`, and
+unknown property names and bad tokens to `ErrorMarker`. Distinct selector and property colors would
+need new `ColorIndex` values and palette entries; that is a visual-design choice left out of this
+plan. Classification works on one region at a time and, after an edit, reclassifies only the edited
+region.
 
 **Completion contexts and data sources.**
 
@@ -1557,9 +1601,12 @@ Stylesheets and documents are untrusted input.
 ### Part C Tests
 
 - **Incremental reparse fuzzer** (`//donner/svg/components:stylesheet_edit_differential_fuzzer`,
-  new): a stylesheet and a sequence of random edits (including braces, quotes and comment
-  delimiters); after each edit, the incrementally updated `css::Stylesheet` must equal a fresh
-  parse of the new text, rule ranges included.
+  new): a stylesheet and a sequence of random edits; after each edit, the incrementally updated
+  `css::Stylesheet` must equal a fresh parse of the new text, rule ranges included. The edit
+  generator is biased toward the resynchronization cases: text typed between rules and at the
+  sheet end, deleted and inserted braces, a stray top-level `}`, unterminated comments, strings
+  and `url(`, trailing backslashes, and entity references in the source (which must take the full
+  reparse path).
 - **Stylesheet edit cases** in the differential edit test: the four measured keystrokes, a rule
   insertion and deletion, and an edit that changes a selector so the rule moves between elements.
 - **Editor tests** with headless `TextEditorCore` and the autocomplete functions: classification
