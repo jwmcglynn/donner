@@ -3193,9 +3193,17 @@ TEST_F(RendererGeodeTest, PatternEditsReachTheNextFrameOfAWarmRenderer) {
     fresh.draw(reference);
     const RendererBitmap expected = fresh.takeSnapshot();
     // Premise: the edit changes the rendering, or a stale tile would pass unnoticed. An edit that
-    // changes the canvas size changes it by construction.
+    // changes the canvas size changes it by construction. The comparison only measures the
+    // difference, so its pixel budget is unbounded.
     if (beforeEdit.dimensions == expected.dimensions) {
-      ASSERT_NE(beforeEdit.pixels, expected.pixels)
+      editor::tests::BitmapGoldenCompareParams signalParams =
+          editor::tests::PixelmatchIdentityParams();
+      signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+      int editedPixels = -1;
+      editor::tests::CompareBitmapToBitmap(beforeEdit, expected,
+                                           std::string("pattern_edit_premise_") + edit.name,
+                                           signalParams, &editedPixels);
+      ASSERT_THAT(editedPixels, testing::Gt(0))
           << "Premise: the edit must change the rendering, or a stale tile would pass unnoticed";
     }
 
