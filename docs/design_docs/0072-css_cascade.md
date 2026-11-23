@@ -368,8 +368,8 @@ Part C estimate: 13.5 engineering days.
     order and green with the real one.
 - [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
   - Done when: the threshold and subtree grain are set from a measured curve recorded here, the
-    deepest stack use of a cascade task is measured and set as this client's help margin in the
-    scheduler, and the Part D speedup goal is met.
+    deepest stack use of a cascade task is measured and declared as this client's stack bound to
+    the scheduler, and the Part D speedup goal is met.
 
 Part D estimate: 9 engineering days.
 
@@ -1160,8 +1160,14 @@ positives).
 E's ancestor chain, which is the chain `ShadowedElementAdapter::parentElement()` produces (shadow
 tree parents for shadow entities, stopping where the adapter stops). Synchronization pops stack
 entries that are not on the chain, from the top, removing their hashes, then pushes the missing
-ancestors from the outermost down. This makes the filter's content a function of E alone, so it
-is correct in every traversal mode:
+ancestors from the outermost down. A counter that would reach 255 saturates and could then never
+be decremented, which would leave the filter's content depending on history rather than on E. So
+when an insertion would saturate a counter, the filter is cleared and disabled (every probe
+answers "may contain") until synchronization pops back above the ancestor whose insertion
+saturated it, and then rebuilt from the chain. Saturation needs 255 live insertions into one
+counter, so it happens only on very deep chains of repeated keys. With that rule, whether the filter is
+enabled and what it contains are functions of E's ancestor chain alone, so the filter is correct
+in every traversal mode and makes the same decisions in the serial and parallel passes:
 
 - Full pass in storage order: consecutive elements usually share most of their chain, so the
   cost is the difference between two chains. A later change may visit in tree order to make it
@@ -1718,28 +1724,29 @@ per-element cost and is calibrated in Milestone D3.
   budget could have refused in either path. The `StyleResourceBudget` work counters (rule-element
   matches, declaration applications and their component and byte work, selector traversal) are
   charged against per-worker shares of the remaining allowance. Matching and traversal work is the
-  same per element in both paths, but declaration-application work depends on cache hits, and a
-  per-worker cache can hit where the serial cache, with its clock eviction, misses. So in a
-  parallel pass declaration work is charged as if every element missed the cache: each element is
-  charged the declaration applications, component work and byte work its matched rules and local
-  declarations would cost on a miss, which is at least what the serial pass charges for it.
-  Retained computed-style bytes go through the shared `RetainedStyleBytes` account of Part A,
-  whose reserve is a compare-exchange loop that never overshoots the limit. With per-worker caches
-  a parallel pass can create a different number of distinct records than the serial pass, so the
-  retained total differs by schedule and cannot decide a refusal by itself. Each worker therefore
-  also sums, for every element it styles, the bytes of the record that element ends up holding,
-  which is what a per-entity charge would be; every distinct-record total, serial or parallel, is
-  at most that sum. Both comparisons are against the allowance remaining when the pass starts,
-  since records held by entities outside a selective pass already occupy the account. The
-  parallel pass is abandoned whenever any work share runs out, any reserve on the account is
-  refused, or the per-entity sum reaches the remaining retained-byte allowance. Abandoning drops
-  every computed style the pass wrote, the per-worker caches and the per-worker warning buffers
-  (so their record references and charges go), restores the work counters to their values at the
-  start of the pass, and reruns the pass serially. Below the abandon point neither path can refuse
-  anything, because every quantity the parallel pass checks bounds the serial pass's from above,
-  so their outcomes match; at or above it the serial rerun decides which element is refused, so a
-  budget-limited document gets exactly the serial result and only documents near their limits pay
-  twice.
+  same per element in both paths, because the ancestor filter's decisions are a function of each
+  element's chain (Part A clears and disables it on saturation rather than keeping stuck counters),
+  but declaration-application work depends on cache hits, and a per-worker cache can hit where the
+  serial cache, with its clock eviction, misses. So in a parallel pass declaration work is charged
+  as if every element missed the cache: each element is charged the declaration applications,
+  component work and byte work its matched rules and local declarations would cost on a miss, which
+  is at least what the serial pass charges for it. Retained computed-style bytes go through the
+  shared `RetainedStyleBytes` account of Part A, whose reserve is a compare-exchange loop that never
+  overshoots the limit. With per-worker caches a parallel pass can create a different number of
+  distinct records than the serial pass, so the retained total differs by schedule and cannot decide
+  a refusal by itself. Each worker therefore also sums, for every element it styles, the bytes of
+  the record that element ends up holding, which is what a per-entity charge would be; every
+  distinct-record total, serial or parallel, is at most that sum. Both comparisons are against the
+  allowance remaining when the pass starts, since records held by entities outside a selective pass
+  already occupy the account. The parallel pass is abandoned whenever any work share runs out, any
+  reserve on the account is refused, or the per-entity sum reaches the remaining retained-byte
+  allowance. Abandoning drops every computed style the pass wrote, the per-worker caches and the
+  per-worker warning buffers (so their record references and charges go), restores the work counters
+  to their values at the start of the pass, and reruns the pass serially. Below the abandon point
+  neither path can refuse anything, because every quantity the parallel pass checks bounds the
+  serial pass's from above, so their outcomes match; at or above it the serial rerun decides which
+  element is refused, so a budget-limited document gets exactly the serial result and only documents
+  near their limits pay twice.
 - **Warnings.** Each task records an entity's diagnostics in two per-entity buffers: those from
   before its parent is computed in the serial `computePropertiesInto` (rule application) and those
   from after (animation, colors, inheritance, fonts). After the join the commit replays the serial
