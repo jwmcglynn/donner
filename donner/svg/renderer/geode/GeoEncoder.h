@@ -909,6 +909,9 @@ public:
   struct PatternPaint {
     /// Pre-rendered tile texture (RGBA8, premultiplied).
     const gpu::Texture* tile = nullptr;
+    /// View of \ref tile that outlives the frame, for @ref fillPathPatternResident, whose cached
+    /// bind group names it. Null when the caller has none; the arena fill creates its own.
+    gpu::TextureViewRef tileView;
     /// Size of the tile rectangle in pattern space (width, height). The
     /// shader uses this to wrap sample positions via `fract()`.
     Vector2d tileSize;
@@ -933,6 +936,23 @@ public:
                        const EncodedPath* precomputedEncoded = nullptr);
 
   /**
+   * Pattern fill of a cached path through a persistent GPU residence slot, on the same terms as
+   * @ref fillPathResident: the geometry is uploaded once, the slot's uniform is rewritten only
+   * when its bytes change, and the cached bind group is rebuilt only when the bound tile view
+   * changes. Pixels match @ref fillPathPattern. Falls back to the per-frame arena path under an
+   * active clip mask, clip polygon or mask pass, or for a second draw of the slot in one frame.
+   *
+   * @param slot Persistent residence for this entity's fill encode.
+   * @param encoded Cached encode (stable across frames).
+   * @param rule Fill rule.
+   * @param paint Pattern tile to sample; draws nothing without a tile and a \ref
+   *   PatternPaint::tileView.
+   * @param frameId Monotonic frame index (drives the once-per-frame gate).
+   */
+  void fillPathPatternResident(GeodeResidentSlot& slot, const EncodedPath& encoded, FillRule rule,
+                               const PatternPaint& paint, uint64_t frameId);
+
+  /**
    * Submit all encoded commands to the GPU queue.
    *
    * After this call, the encoder is in a "finished" state and no further
@@ -955,6 +975,23 @@ private:
   /// build bind group, record draw call.
   void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {},
                       bool requireAdmission = true);
+
+  /// The draw arguments of a pattern fill, built in one place for the arena and the resident
+  /// pattern fills so the two paint the same tile with the same mapping and opacity.
+  /// @param path Path to encode when \p encoded is not used, or null.
+  /// @param encoded The fill's encode.
+  /// @param rule Fill rule.
+  /// @param paint Pattern tile, mapping and opacity.
+  /// @param tileView View of the tile to bind.
+  /// @param sampler Linear repeat sampler to bind.
+  static FillDrawArgs PatternFillArgs(const Path* path, const EncodedPath& encoded, FillRule rule,
+                                      const PatternPaint& paint, gpu::TextureViewRef tileView,
+                                      gpu::SamplerRef sampler);
+
+  /// Shared path for the solid and pattern resident fills: draws through \p slot when residence
+  /// is allowed and falls back to \ref submitFillDraw otherwise.
+  void submitResidentOrArenaFill(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                 const FillDrawArgs& args, uint64_t frameId);
 
   /// Shared construction helpers used by both constructors. Factored out
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.

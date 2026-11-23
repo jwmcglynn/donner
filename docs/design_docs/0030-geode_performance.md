@@ -1,11 +1,11 @@
 # Design: Geode Rendering Performance
 
-**Status:** Design. On an unchanged frame, resident solid and gradient fills and strokes re-encode,
-create and re-upload nothing, filter passes upload and bind nothing new, and ordered batching draws
-runs of resident draws as instanced draws. Steady-state residency for markers, patterns, images,
-layer composites, clip and mask geometry, and painted text is still open (Milestone 8), as are
-index-keyed filter results (Milestone 5). `geode_counter_corpus_tests` records the corpus scenes
-measured to miss the steady state.
+**Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes
+re-encode, create and re-upload nothing, filter passes upload and bind nothing new, and ordered
+batching draws runs of resident draws as instanced draws. Steady-state residency for markers,
+images, layer composites, clip and mask geometry, and painted text is still open (Milestone 8), as
+are index-keyed filter results (Milestone 5). `geode_counter_corpus_tests` records the corpus
+scenes measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -53,9 +53,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the independent Milestone 8 items: layer-composite uniforms (8.3) and pattern residency
-  (8.5), together with the Milestone 5 named-result keys. 8.3 also clears the five filter scenes
-  8.6 left listed.
+- Start the independent Milestone 8 item, layer-composite uniforms (8.3), together with the
+  Milestone 5 named-result keys. 8.3 also clears the five filter scenes 8.6 left listed.
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -225,9 +224,17 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     SVG drawn at two sizes re-uploads one of them. Clears `image_data_url_opacity`,
     `image_data_url_pixelated`, `image_external_svg_par`, `image_external_svg_viewbox`. Depends on
     8.3 for the opacity case.
-  - [ ] 8.5: Pattern residency. Cache each pattern tile per paint server across frames and give the
-    tiled fill a resident slot. Clears `geode_pattern_checker`, `geode_pattern_nonrect`,
-    `geode_pattern_offset`, `geode_pattern_solid`.
+  - [x] 8.5: Pattern residency. A pattern fill or pattern stroke draws from its entity's resident
+    fill or stroke slot (`GeoEncoder::fillPathPatternResident`), whose cached bind group binds the
+    tile's view. The pool hands a bucket's textures out in the order the previous frame took them,
+    so on an unchanged frame each tile draws into the texture it used before, and the frame uploads
+    nothing and creates no bind group
+    (`PatternFills_UnchangedFrameWritesAndCreatesNothing`). Clears `geode_pattern_checker`,
+    `geode_pattern_nonrect`, `geode_pattern_offset`, `geode_pattern_solid`. The tile itself is
+    rendered again every frame, which costs one render pass and its content draws but no gated
+    counter; skipping that pass is Future Work. A pattern painted by several elements renders its
+    tile once per element, and its content entities are then drawn more than once in the frame, so
+    the draws after the first take the arena path, the repeat-draw limit 8.2 also meets.
   - [x] 8.6: Filter-pass steady state. A pass's parameters land in the slot they had the frame
     before, and an upload of bytes the slot already holds is skipped
     (`ReusedFilterSlotsUploadEditedParameters` checks that an edit still reaches the GPU). Texture
@@ -273,7 +280,9 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     built from the run, and all of these are encoded as transient geometry every frame. Clears
     `geode_text_decoration_underline`, `geode_text_pattern_fill`,
     `geode_text_span_gradient_over_pattern`, `geode_text_span_gradient_over_pattern_stroke`. The
-    three pattern-painted scenes depend on 8.5.
+    three pattern-painted scenes depend on 8.5: placed-glyph pattern fills still draw through
+    the arena path, and `GeoEncoder::fillPathPatternResident` is the resident form available to
+    them.
 
 ## Background
 
@@ -329,7 +338,7 @@ Entity with <path d="...">
   +-- ComputedPathComponent        (ShapeSystem; on_update fires only on real changes)
   +-- GeodePathCacheComponent      (CPU encodes: fill variants per tolerance, stroke variants
   |                                 per stroke key)
-  +-- GeodeResidentPathComponent   (GPU residence: solid and gradient slots per variant)
+  +-- GeodeResidentPathComponent   (GPU residence: solid/pattern and gradient slots per variant)
          +-- slot range in GeodeResidentSlab  (document-scoped chunks, first-fit free list)
          +-- cached bind group
          +-- record slot in GeodeRecordSlab   (instance record for ordered batching)
@@ -342,6 +351,21 @@ Entity with <path d="...">
   reads. Up to 16 stops travel inline in a gradient's parameters; a gradient with more reads its
   stops from a stop-ramp texture (`GeodeGradientRamp`), which resident slots keep across frames, so
   an unchanged frame uploads no ramp (`ManyStopGradient_OneRampThenZeroWrites`).
+- **Pattern fills.** A pattern fill or stroke draws from the entity's solid fill or stroke slot,
+  with a bind group that binds the pattern tile's view instead of the placeholder texture and is
+  rebuilt when the tile's view changes. The renderer renders every tile again each frame, into a
+  pool texture; because the pool hands a bucket's textures out in the order the previous frame took
+  them, an unchanged frame draws each tile into the texture it used before. The renderer keeps a
+  view of each tile texture for one frame after its last use
+  (`PatternTileViewsStayBoundedBetweenFrames`). A view owns no memory of its own; the tile textures
+  go back to the pool at every frame end and are charged to the pool's byte budget. Because every
+  tile is rendered again, a warm renderer's next frame matches a fresh render after an edit of a
+  shape inside the pattern, the pattern's size or transform, a gradient or nested pattern its
+  content paints with, the device scale, or an edit that makes tiles of one size trade textures
+  (`PatternEditsReachTheNextFrameOfAWarmRenderer`). Two gaps outside the pattern path are not
+  covered: a warm renderer keeps a marker's old context paint after the context element's paint
+  changes (#2617), and setting a pattern's `width` with `setAttribute` does not reach the tile
+  (#2616).
 - **Residency gates.** Residence is taken only when no clip polygon, clip mask, or mask pass is
   active, and once per slot per frame. Draws that fail a gate use the per-frame arena path.
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
@@ -476,3 +500,11 @@ required for the per-frame goals here.
   timestamp queries today, `RendererGeode::enableTimestamps` has no effect, and the
   `FrameTimings::renderPassNs` and `totalGpuNs` fields stay zero. Per-pass GPU time in
   `lastFrameTimings` would let the compositor attribute frame cost to specific draws.
+- [ ] Skip the render pass of a pattern tile whose pixels cannot have changed. The renderer cannot
+  tell that from the draws it receives, so the key has to come from the driver, and it has to
+  cover everything the tile's content reads: elements outside the pattern subtree (`<use>`
+  targets, referenced gradients and nested patterns), the pattern element's own attributes and
+  its content transform, context paint, the patterns already open around the tile (a pattern that
+  reaches itself draws nothing at the inner level), document time, loaded fonts and images, and
+  the tile's raster size and device. Today every tile renders each frame, which is always current
+  and costs one render pass plus the tile's resident content draws.

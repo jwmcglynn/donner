@@ -278,42 +278,6 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         kFilterResultCompositeTracking,
     },
     {
-        /*scene=*/"geode_pattern_checker",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
-    },
-    {
-        /*scene=*/"geode_pattern_nonrect",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
-    },
-    {
-        /*scene=*/"geode_pattern_offset",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
-    },
-    {
-        /*scene=*/"geode_pattern_solid",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 1},
-        /*reason=*/
-        "the tiled fill draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a pattern tile is cached per paint server and its fill gains residency",
-    },
-    {
         /*scene=*/"geode_text_decoration_underline",
         /*violated=*/kPathEncodes | kBufferWrites,
         /*ceiling=*/{1, 0, 6, 1},
