@@ -2535,7 +2535,7 @@ test("responsiveness cases wait for the splash to be displayed before using it",
     spec,
     /"data-active-sample-id",\s*"donner-splash",\s*\);\s*(?:checkpoint\([^)]*\);\s*)?await waitForIdle\(page\);/,
   );
-  assert.equal(spec.split("await waitForSplashDisplayed(page);").length - 1, 3);
+  assert.equal(spec.split("await waitForSplashDisplayed(page);").length - 1, 4);
 });
 
 test("responsiveness cases render at their project's device scale", () => {

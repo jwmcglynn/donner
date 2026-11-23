@@ -655,6 +655,9 @@ public:
   /// Number of glyph outlines currently resident for `document`.
   [[nodiscard]] size_t residentGlyphCountForTesting(SVGDocument& document);
 
+  /// Number of pattern tile texture views this renderer keeps between frames.
+  [[nodiscard]] size_t patternTileViewCountForTesting() const;
+
   /**
    * Captures the current resolved render target as a directly sampleable
    * GPU runtime texture.
