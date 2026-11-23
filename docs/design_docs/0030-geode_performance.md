@@ -1,11 +1,12 @@
 # Design: Geode Rendering Performance
 
 **Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes
-re-encode, create and re-upload nothing, filter passes upload and bind nothing new, and ordered
-batching draws runs of resident draws as instanced draws. Steady-state residency for markers,
-images, layer composites, clip and mask geometry, and painted text is still open (Milestone 8), as
-are index-keyed filter results (Milestone 5). `geode_counter_corpus_tests` records the corpus
-scenes measured to miss the steady state.
+re-encode, create and re-upload nothing, including the second and later draws of one entity in a
+frame such as marker placements, filter passes upload and bind nothing new, and ordered batching
+draws runs of resident draws as instanced draws. Steady-state residency for images, layer
+composites, clip and mask geometry, and painted text is still open (Milestone 8), as are index-keyed
+filter results (Milestone 5). `geode_counter_corpus_tests` records the corpus scenes measured to miss
+the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -202,28 +203,36 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `StrokeStylesPastTheCache_ReEncodeOnlyTheOverflow`; staleness under an edit to each key
     component and to the path: `RendererGeodeStrokeKeyTest` in `RendererGeode_tests.cc`). It
     removes the path encodes of `poker_chips`, `stroking_complex`, and `nested_svg_aspectratio`.
-    The remaining uploads and bind groups of the first two come from same-frame repeats of one
+    The remaining uploads and bind groups of all three come from same-frame repeats of one
     resident slot: several `<use>` instances draw the same fill or stroke variant at different
-    transforms or paints, and every draw after the first goes through the per-frame arena.
-    Clearing their entries needs residence for those same-frame repeats, the mechanism marker
-    residency (8.2) needs for one marker drawn at many vertices; until a change provides it, the
-    two entries stay listed for that reason. Those of `nested_svg_aspectratio` are 8.7.
-  - [ ] 8.2: Marker instance residency. Every drawn marker re-uploads its geometry through the
-    per-frame arena and builds its own bind group. Clears `marker`, `marker_segments`,
-    `marker_spec_example`. A design that batches markers through instance records and needs new
-    record fields changes the `SlugFillInstance` layout.
+    transforms or paints, and every draw after the first went through the per-frame arena. 8.2
+    gives those repeats resident records, and with both items landed the three entries meet the
+    steady state and are deleted.
+  - [x] 8.2: Marker instance residency. A marker's content is one entity drawn once per placement;
+    its first placement of a frame draws from its resident slot's uniform, and every later one
+    takes a persistent record of its own (`GeodeResidentSlot::repeatRecords`) over the same
+    resident geometry and joins ordered batches. The record's existing transform, paint, and clip
+    rectangle carry the placement, so the `SlugFillInstance` layout is unchanged.
+    `MarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame. Clears `marker`.
+    `marker_segments` and `marker_spec_example` put `opacity` on the marker content, so each
+    placement also composites an isolated layer; they clear with 8.3. Repeats of other entities
+    hold the steady state the same way, each stroke variant of a path keeping its own records:
+    `image_external_svg_par` and `image_external_svg_viewbox`, which draw one external SVG's paths
+    twice per frame, clear here, and with 8.1 so do `poker_chips`, `stroking_complex`, and
+    `nested_svg_aspectratio` (`UseStrokeStylesRepeated_SecondFrameIsSteadyState`).
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
     group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Filter results reach their parent
     through the same blit. Clears `Edzample_Anim3`, `filter_displacement_map`, `filter_drop_shadow`,
-    `filter_fill_paint`, `filter_spot_light`, and `filter_stroke_paint`, and the composite part of
-    `donner_splash`. The corpus also records `donner_icon`, whose gradient-painted paths under an
-    opacity group re-upload geometry and build bind groups per draw; why those draws miss gradient
-    residency is not traced, so this item starts by tracing it.
+    `filter_fill_paint`, `filter_spot_light`, `filter_stroke_paint`, `marker_segments`, and
+    `marker_spec_example`, and the composite part of `donner_splash`. The corpus also records
+    `donner_icon`, whose gradient-painted paths under an opacity group re-upload geometry and build
+    bind groups per draw; why those draws miss gradient residency is not traced, so this item starts
+    by tracing it.
   - [ ] 8.4: Image residency. Decoded images allocate a texture and re-upload their quad every
-    frame, and the nested-document raster cache holds one entry per source, so the same external
-    SVG drawn at two sizes re-uploads one of them. Clears `image_data_url_opacity`,
-    `image_data_url_pixelated`, `image_external_svg_par`, `image_external_svg_viewbox`. Depends on
-    8.3 for the opacity case.
+    frame. Clears `image_data_url_opacity`, `image_data_url_pixelated`. Depends on 8.3 for the
+    opacity case. `image_external_svg_par` and `image_external_svg_viewbox`, which draw one
+    external SVG at two sizes, meet the steady state with 8.2: their second draws of each path were
+    same-frame repeats.
   - [x] 8.5: Pattern residency. A pattern fill or pattern stroke draws from its entity's resident
     fill or stroke slot (`GeoEncoder::fillPathPatternResident`), whose cached bind group binds the
     tile's view. The pool hands a bucket's textures out in the order the previous frame took them,
@@ -268,11 +277,9 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     counters are its composites (8.3) and its clip geometry (8.7).
   - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
     clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
-    re-uploads every frame. `nested_svg_aspectratio` re-encodes no path on an unchanged frame;
-    its nested viewports re-upload geometry and build bind groups every frame. Clears
-    `donner_splash`, `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3 for
-    `donner_splash`'s composites. `nested_svg_aspectratio` also carries text inside nested
-    viewports; whether its text needs 8.8 is not traced.
+    re-uploads every frame. Clears `donner_splash` and `geode_splash`. Depends on 8.3 for
+    `donner_splash`'s composites. `nested_svg_aspectratio`'s per-frame uploads were same-frame
+    repeats of resident slots, not nested-viewport geometry, and cleared with 8.1 and 8.2.
   - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`), and
     only solid, unwarped glyph fills draw the cache's resident encodings. Pattern- and
     gradient-painted glyphs are placed from their cached outlines, glyph strokes are expanded from
@@ -367,7 +374,36 @@ Entity with <path d="...">
   changes (#2617), and setting a pattern's `width` with `setAttribute` does not reach the tile
   (#2616).
 - **Residency gates.** Residence is taken only when no clip polygon, clip mask, or mask pass is
-  active, and once per slot per frame. Draws that fail a gate use the per-frame arena path.
+  active. Draws that fail a gate use the per-frame arena path.
+- **Repeats within a frame.** A slot's uniform and primary record serve its first draw of a frame.
+  Its second and later draws in the frame (each marker placement, a repeated `<use>` source) take
+  persistent records from `GeodeResidentSlot::repeatRecords`: the `i`-th repeat writes record `i`,
+  only when its bytes change, so an unchanged frame writes none of them
+  (`MarkerInstances_SecondFrameIsSteadyState`, `UseRepeatsMatchPlainGeometryAndFollowEdits`) and an
+  edit that moves or repaints a placement rewrites the records it changed
+  (`MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem`). A slot keeps at most 4096 such
+  records, each a 256-byte GPU record plus a few hundred bytes of CPU bookkeeping charged to the
+  document's geometry budget, so under 3 MiB per slot (`MarkerRepeatRecordsStopAtTheSlotLimit`).
+  Repeats past that, or refused by the budget, write a record that lives for one frame, and repeats
+  that cannot have even that draw through the arena
+  (`MarkerRepeatsPastTheRecordLimitDrawTheSamePicture`,
+  `MarkerRepeatsFallBackWhenTheDocumentRefusesTheirRecords`). An offscreen pass inside an open
+  frame that already wrote a slot's records takes one-frame records instead
+  (`OffscreenPassLeavesTheOuterFramesRepeatRecordsAlone`). Gradient-painted repeats keep the arena
+  path, because a gradient's parameters live in the slot's single paint block; pattern-painted
+  draws take their own resident path and keep no repeat records. Only the solid fill and solid
+  stroke slots hold repeat records: per path and device, two fill slots and eight stroke slots, a
+  bound fixed by the slot arrays rather than by a test, so a path retains under about 30 MiB of
+  repeat records, all charged to the document's geometry budget. The records are kept at each
+  slot's high-water mark and reused: a slot reset for new geometry, including a replaced stroke or
+  fill variant, keeps its records (structural: `reset()` leaves them in place), and they are
+  released only when the path's residence component is removed
+  (`MarkerRepeatRecordsAreReplacedWhenTheContentChanges`), when the device is dropped
+  (`MarkerRepeatRecordsGoWithTheDeviceThatKeptThem`), or with the document
+  (`MarkerRepeatRecordsAreKeptAcrossFramesAndGoWithTheDocument`). Repeat detection keys on the
+  slot itself, so a draw of another slot of the same path, such as a stroke after its own pending
+  fill, is a first draw (`ADrawOfAnotherSlotOfThePathIsNotARepeat`), and each stroke variant counts
+  its own repeats (`EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats`).
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
   order.

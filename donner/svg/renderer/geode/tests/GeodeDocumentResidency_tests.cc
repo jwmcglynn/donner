@@ -48,12 +48,14 @@
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
+#include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
 namespace donner::svg {
 namespace {
 
+using testing::ElementsAre;
 using testing::Eq;
 using testing::Ge;
 using testing::Gt;
@@ -97,6 +99,21 @@ constexpr std::string_view kRepeatedTextSvg = R"(
     <use href="#words" y="50"/>
     <use href="#words" y="100"/>
   </svg>)";
+
+/// One marker placed at seven vertices. Its content draws once for the first placement, through its
+/// resident slot's own uniform, and six more times from records the slot keeps for its repeats.
+constexpr std::string_view kMarkerSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <marker id="m" markerWidth="10" markerHeight="10" refX="5" refY="5">
+      <path id="content" d="M0 0 L10 5 L0 10 Z" fill="#c33"/>
+    </marker>
+    <polyline points="10,180 40,20 70,160 100,40 130,150 160,30 190,170" fill="none"
+              stroke="#036" stroke-width="2" marker-start="url(#m)" marker-mid="url(#m)"
+              marker-end="url(#m)"/>
+  </svg>)svg";
+
+/// Placements of `kMarkerSvg`'s marker after the first.
+constexpr size_t kMarkerRepeats = 6;
 
 /// One path stroked through `<use>` with four stroke styles, so the path keeps four stroke
 /// outlines, each with residence of its own.
@@ -197,6 +214,90 @@ std::shared_ptr<geode::GeodeDocumentGeometryBudget> DocumentBudgetOf(SVGDocument
 uint64_t RetainedBytesOf(SVGDocument& document) {
   const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
   return budget ? budget->cacheBytes() + budget->residentBytes() : 0;
+}
+
+/// Persistent repeat records held by every resident slot, on every device, in \p document.
+/// @param document Document to inspect.
+size_t RepeatRecordsOf(SVGDocument& document) {
+  size_t records = 0;
+  const auto count = [&](const geode::GeodeResidentSlot& slot) {
+    if (slot.repeatRecords) {
+      records += slot.repeatRecords->occurrences.size();
+    }
+  };
+  for (auto&& [entity, residence] :
+       document.registry().view<geode::GeodeResidentPathComponent>().each()) {
+    residence.devices.forEach([&](geode::GeodeResidentPathSlots& slots) {
+      for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
+        count(slot);
+      }
+      for (const std::unique_ptr<geode::GeodeResidentStrokeSlots>& stroke : slots.strokeSlots) {
+        if (stroke) {
+          count(stroke->solid);
+        }
+      }
+    });
+  }
+  return records;
+}
+
+/// Persistent repeat records held by each solid stroke slot that holds any, on every device, in
+/// \p document, in ascending order. @param document Document to inspect.
+std::vector<size_t> StrokeRepeatRecordsPerSlot(SVGDocument& document) {
+  std::vector<size_t> counts;
+  for (auto&& [entity, residence] :
+       document.registry().view<geode::GeodeResidentPathComponent>().each()) {
+    residence.devices.forEach([&](geode::GeodeResidentPathSlots& slots) {
+      for (const std::unique_ptr<geode::GeodeResidentStrokeSlots>& stroke : slots.strokeSlots) {
+        if (stroke && stroke->solid.repeatRecords &&
+            !stroke->solid.repeatRecords->occurrences.empty()) {
+          counts.push_back(stroke->solid.repeatRecords->occurrences.size());
+        }
+      }
+    });
+  }
+  std::sort(counts.begin(), counts.end());
+  return counts;
+}
+
+/// Counts the repeat records held by every resident-path component the registry destroys.
+struct DestroyedRepeatRecords {
+  size_t records = 0;  ///< Repeat records released with destroyed components so far.
+
+  /// `on_destroy` listener for `GeodeResidentPathComponent`.
+  void onDestroy(Registry& registry, Entity entity) {
+    registry.get<geode::GeodeResidentPathComponent>(entity).devices.forEach(
+        [&](geode::GeodeResidentPathSlots& slots) {
+          const auto count = [&](const geode::GeodeResidentSlot& slot) {
+            if (slot.repeatRecords) {
+              records += slot.repeatRecords->occurrences.size();
+            }
+          };
+          for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
+            count(slot);
+          }
+          for (const std::unique_ptr<geode::GeodeResidentStrokeSlots>& stroke : slots.strokeSlots) {
+            if (stroke) {
+              count(stroke->solid);
+            }
+          }
+        });
+  }
+};
+
+/// A marker placed at \p placements vertices of one unclipped run.
+/// @param placements Number of vertices, each carrying the marker.
+std::string ManyPlacementMarkerSvg(int placements) {
+  std::string d = "M0 100";
+  for (int i = 1; i < placements; ++i) {
+    d += i % 2 == 0 ? " H0" : " H200";
+  }
+  return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200"
+      height="200"><marker id="m" markerWidth="4" markerHeight="4" refX="2" refY="2"
+      overflow="visible"><rect width="4" height="4" fill="#c33"/></marker>
+    <path d=")svg" +
+         d + R"svg(" fill="none" marker-start="url(#m)" marker-mid="url(#m)"
+      marker-end="url(#m)"/></svg>)svg";
 }
 
 /// Draws \p document into one frame of \p renderer, holding the document for the whole frame as a
@@ -678,6 +779,245 @@ TEST_F(GeodeDocumentResidencyTest, ADocumentBudgetRefusalRecoversWhenTheDeviceHo
 
   EXPECT_THAT(third->liveResidentBytesForTesting(), Gt(int64_t{0}))
       << "an earlier refusal must not refuse residence once the budget has room again";
+}
+
+TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsAreKeptAcrossFramesAndGoWithTheDocument) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  std::optional<SVGDocument> document = ParseShapes(kMarkerSvg);
+  RendererGeode renderer(first_);
+  renderer.draw(*document);
+  renderer.draw(*document);
+  EXPECT_THAT(RepeatRecordsOf(*document), Eq(kMarkerRepeats))
+      << "each placement after the first keeps one record, and an unchanged frame adds none";
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(*document);
+  ASSERT_THAT(budget, NotNull());
+  ASSERT_THAT(budget->residentBytes(), Gt(0u));
+  ASSERT_THAT(budget->cacheBytes(), Gt(0u));
+
+  document.reset();
+  EXPECT_THAT(budget->residentBytes(), Eq(0u)) << "the records' slab must go with the document";
+  EXPECT_THAT(budget->cacheBytes(), Eq(0u)) << "and so must the records' CPU bookkeeping";
+}
+
+TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsAreReplacedWhenTheContentChanges) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  SVGDocument document = ParseShapes(kMarkerSvg);
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  ASSERT_THAT(RepeatRecordsOf(document), Eq(kMarkerRepeats));
+
+  // New content geometry drops the content's residence, records included, and the next frame
+  // builds a fresh set rather than adding to a stale one or keeping the old one.
+  DestroyedRepeatRecords destroyed;
+  document.registry()
+      .on_destroy<geode::GeodeResidentPathComponent>()
+      .connect<&DestroyedRepeatRecords::onDestroy>(destroyed);
+  std::optional<SVGElement> content = document.querySelector("#content");
+  ASSERT_THAT(content, testing::Optional(testing::_));
+  content->setAttribute("d", "M0 0 L10 3 L0 10 Z");
+  renderer.draw(document);
+  renderer.draw(document);
+  document.registry()
+      .on_destroy<geode::GeodeResidentPathComponent>()
+      .disconnect<&DestroyedRepeatRecords::onDestroy>(destroyed);
+  EXPECT_THAT(destroyed.records, Eq(kMarkerRepeats)) << "the old records go with the old residence";
+  EXPECT_THAT(RepeatRecordsOf(document), Eq(kMarkerRepeats)) << "and a fresh set replaces them";
+}
+
+TEST_F(GeodeDocumentResidencyTest, ADrawOfAnotherSlotOfThePathIsNotARepeat) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  // Each element is filled and stroked once, so its stroke draws while its own fill is still the
+  // pending singleton. The stroke uses another slot of the same path, so it is that slot's first
+  // draw, and nothing in the frame is a repeat.
+  SVGDocument document = ParseShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+      <path d="M20 40 C60 0 120 80 180 30 Z" fill="#06c" stroke="#000" stroke-width="2"/>
+      <rect x="20" y="100" width="80" height="60" fill="#c00" stroke="#0a0" stroke-width="6"/>
+    </svg>)");
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  renderer.draw(document);
+  EXPECT_THAT(RepeatRecordsOf(document), Eq(0u))
+      << "a stroke drawn after its own pending fill took a repeat record of the stroke slot";
+}
+
+TEST_F(GeodeDocumentResidencyTest, OnlyTheSolidRepeatsOfAPatternPaintedSlotKeepRecords) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  // One path's fill slot drawn six times a frame: first with a pattern, then solid and pattern
+  // paint alternating. The three solid draws are repeats and keep a record each; the later
+  // pattern draws take their own resident path and keep none. (The pattern's content rectangle is
+  // drawn once per pattern-painted element, so it keeps repeat records of its own; only `#r` is
+  // counted here.)
+  SVGDocument document = ParseShapes(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <pattern id="pt" width="8" height="8" patternUnits="userSpaceOnUse">
+        <rect width="4" height="4" fill="#c20"/>
+      </pattern>
+      <defs><rect id="r" width="16" height="16"/></defs>
+      <use href="#r" x="8" y="8" fill="url(#pt)"/>
+      <use href="#r" x="24" y="8" fill="#0a0"/>
+      <use href="#r" x="40" y="8" fill="url(#pt)"/>
+      <use href="#r" x="8" y="32" fill="#0a0"/>
+      <use href="#r" x="24" y="32" fill="#a0a"/>
+      <use href="#r" x="40" y="32" fill="url(#pt)"/>
+    </svg>)svg");
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  renderer.draw(document);
+  std::optional<SVGElement> source = document.querySelector("#r");
+  ASSERT_THAT(source, testing::Optional(testing::_));
+  auto* residence = source->entityHandle().try_get<geode::GeodeResidentPathComponent>();
+  ASSERT_THAT(residence, NotNull());
+  size_t records = 0;
+  residence->devices.forEach([&](geode::GeodeResidentPathSlots& slots) {
+    for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
+      records += slot.repeatRecords ? slot.repeatRecords->occurrences.size() : 0;
+    }
+  });
+  EXPECT_THAT(records, Eq(3u));
+}
+
+TEST_F(GeodeDocumentResidencyTest, EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  // Two styles of one path, drawn interleaved: style A three times, style B twice. Each style's
+  // repeats are counted against its own variant's slot, not against whichever slot drew last.
+  SVGDocument document = ParseShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+      <defs><path id="p" d="M20 40 C60 0 120 80 180 30" fill="none"/></defs>
+      <use href="#p" stroke="#000" stroke-width="2"/>
+      <use href="#p" y="40" stroke="#c00" stroke-width="6"/>
+      <use href="#p" y="80" stroke="#0a0" stroke-width="2"/>
+      <use href="#p" y="120" stroke="#00c" stroke-width="6"/>
+      <use href="#p" y="160" stroke="#0cc" stroke-width="2"/>
+    </svg>)");
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  renderer.draw(document);
+  EXPECT_THAT(StrokeRepeatRecordsPerSlot(document), ElementsAre(1u, 2u))
+      << "style B keeps one repeat record and style A two, each on its own variant's slot";
+}
+
+TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsStopAtTheSlotLimit) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  constexpr size_t kSlotLimit = 4096;
+  SVGDocument document = ParseShapes(ManyPlacementMarkerSvg(kSlotLimit + 8));
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  renderer.draw(document);
+  EXPECT_THAT(RepeatRecordsOf(document), Eq(kSlotLimit))
+      << "a slot keeps at most this many repeat records however many placements it draws";
+
+  // The slot's records stay under 3 MiB: their GPU records plus their charged CPU bookkeeping.
+  uint64_t retainedBytes = 0;
+  for (auto&& [entity, residence] :
+       document.registry().view<geode::GeodeResidentPathComponent>().each()) {
+    residence.devices.forEach([&](geode::GeodeResidentPathSlots& slots) {
+      for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
+        if (slot.repeatRecords) {
+          retainedBytes += slot.repeatRecords->cpuRetainedBytesForTesting() +
+                           slot.repeatRecords->occurrences.size() * sizeof(geode::InstanceRecord);
+        }
+      }
+    });
+  }
+  EXPECT_THAT(retainedBytes, testing::Le(uint64_t{3} << 20));
+}
+
+TEST_F(GeodeDocumentResidencyTest, MarkerRepeatsFallBackWhenTheDocumentRefusesTheirRecords) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  constexpr uint64_t kUnlimited = 64u << 20;
+  SVGDocument referenceDocument = ParseShapes(kMarkerSvg);
+  RendererGeode reference(first_);
+  reference.draw(referenceDocument);
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  // Cache bytes the document holds without a single repeat record.
+  SVGDocument probe = ParseShapes(kMarkerSvg);
+  RendererGeode probeRenderer(first_);
+  probeRenderer.setRepeatRecordLimitForTesting(0);
+  probeRenderer.draw(probe);
+  probeRenderer.draw(probe);
+  const uint64_t cacheWithoutRecords = DocumentBudgetOf(probe)->cacheBytes();
+
+  // Exactly that much cache: record reservations run out (slot mirrors charged later in the frame
+  // take part of it), and each refused repeat takes a record for one frame instead, written every
+  // frame.
+  {
+    SVGDocument document = ParseShapes(kMarkerSvg);
+    RendererGeode renderer(first_);
+    renderer.setGeometryBudgetForTesting(geode::GeodeFrameGeometryBudget::kMaximumDraws,
+                                         geode::GeodeFrameGeometryBudget::kMaximumItems,
+                                         geode::GeodeFrameGeometryBudget::kMaximumRetainedBytes,
+                                         cacheWithoutRecords, kUnlimited);
+    renderer.draw(document);
+    renderer.draw(document);
+    const size_t kept = RepeatRecordsOf(document);
+    EXPECT_THAT(kept, testing::Lt(kMarkerRepeats));
+    EXPECT_THAT(renderer.lastFrameTimings().counters.bufferWrites,
+                Ge(uint64_t{kMarkerRepeats - kept}));
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         "marker_records_refused",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+
+  // No resident bytes at all: no record, temporary or kept, can be had, and the repeats draw
+  // through the per-frame arena.
+  {
+    SVGDocument document = ParseShapes(kMarkerSvg);
+    RendererGeode renderer(first_);
+    renderer.setGeometryBudgetForTesting(geode::GeodeFrameGeometryBudget::kMaximumDraws,
+                                         geode::GeodeFrameGeometryBudget::kMaximumItems,
+                                         geode::GeodeFrameGeometryBudget::kMaximumRetainedBytes,
+                                         kUnlimited, 0u);
+    renderer.draw(document);
+    renderer.draw(document);
+    EXPECT_THAT(RepeatRecordsOf(document), Eq(0u));
+    EXPECT_THAT(renderer.lastFrameTimings().counters.bufferWrites, Gt(0u));
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected, "marker_records_arena",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsGoWithTheDeviceThatKeptThem) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  SVGDocument document = ParseShapes(kMarkerSvg);
+  RendererGeode onFirst(first_);
+  onFirst.draw(document);
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+  ASSERT_THAT(budget, NotNull());
+  const uint64_t firstResident = budget->residentBytes();
+  const uint64_t firstCache = budget->cacheBytes();
+  ASSERT_THAT(RepeatRecordsOf(document), Eq(kMarkerRepeats));
+
+  {
+    RendererGeode onSecond(second_);
+    onSecond.draw(document);
+  }
+  ASSERT_THAT(RepeatRecordsOf(document), Eq(2 * kMarkerRepeats))
+      << "each device keeps records in its own record slab";
+  second_.reset();
+
+  // The next draw finds the second device gone and drops its slots, records with them.
+  onFirst.draw(document);
+  EXPECT_THAT(RepeatRecordsOf(document), Eq(kMarkerRepeats));
+  EXPECT_THAT(budget->residentBytes(), Eq(firstResident));
+  EXPECT_THAT(budget->cacheBytes(), Eq(firstCache));
 }
 
 TEST_F(GeodeDocumentResidencyTest, RecordsARepeatBorrowedGoWithTheDocumentOnceItsFrameEnds) {

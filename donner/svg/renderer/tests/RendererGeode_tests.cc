@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <future>
 #include <latch>
 #include <limits>
@@ -41,6 +42,7 @@
 #endif
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/SVGPatternElement.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -56,6 +58,7 @@
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFillTolerance.h"
+#include "donner/svg/renderer/geode/GeodeFillVariants.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
@@ -9878,6 +9881,546 @@ TEST_F(RendererGeodeTest, RotatedAnisotropicFilterNearCanvasEdgeMatchesFilterWit
       R"svg(<g transform="translate(8 60) rotate(40)" filter="url(#stretch)"><rect x="-14" y="-14" width="28" height="28" fill="#c02040"/></g>)svg",
       96, 64, "filter_edge_parity_rotated_anisotropic",
       editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/true));
+}
+
+// Marker placements after the first draw their content from a record of their own over the
+// content's resident geometry, and the clipped ones apply their marker viewport in the fragment
+// stage rather than through the scissor. The reference draws every placement through a marker of
+// its own, placed once, so each content entity takes the ordinary first-draw path. Every edge sits
+// on a pixel boundary, so the two must agree exactly, and the overlaps (stroke under the markers,
+// each placement over the previous one, later elements over the markers) pin painter order on both
+// the first frame and the steady frame.
+TEST_F(RendererGeodeTest, MarkerPlacementsMatchSinglePlacementMarkersInPainterOrder) {
+  // `#clipped` keeps the default `overflow: hidden`; its green square spills out of the marker
+  // viewport and is cut by it. `#loose` is unclipped, and each placement's magenta covers the cyan
+  // edge of the one before it.
+  const auto clippedMarker = [](const std::string& id) {
+    return R"svg(<marker id=")svg" + id +
+           R"svg(" markerWidth="12" markerHeight="12" refX="2" refY="2"
+               markerUnits="userSpaceOnUse">
+        <rect x="1" y="1" width="10" height="10" fill="#0000ff" stroke="#ffffff" stroke-width="2"/>
+        <rect x="6" y="6" width="12" height="12" fill="#00ff00"/>
+      </marker>)svg";
+  };
+  const auto looseMarker = [](const std::string& id) {
+    return R"svg(<marker id=")svg" + id +
+           R"svg(" markerWidth="8" markerHeight="8" refX="4" refY="4"
+               markerUnits="userSpaceOnUse" overflow="visible">
+        <rect width="8" height="8" fill="#ff00ff"/>
+        <rect x="4" y="2" width="4" height="4" fill="#00ffff"/>
+      </marker>)svg";
+  };
+  const std::string head =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg";
+  const std::string host =
+      R"svg(<path d="M10 10 H20 V20 H30 V40 H10" fill="#ff0000" stroke="#000000" stroke-width="6")svg";
+  const std::string yellow = R"svg(<rect x="24" y="30" width="20" height="16" fill="#ffff00"/>)svg";
+  const std::string gray = R"svg(<rect x="44" y="50" width="6" height="14" fill="#808080"/>)svg";
+
+  const std::string markers =
+      head + clippedMarker("clipped") + looseMarker("loose") + host +
+      R"svg( marker-start="url(#clipped)" marker-mid="url(#clipped)" marker-end="url(#clipped)"/>)svg" +
+      yellow +
+      R"svg(<path d="M40 56 H46 H52 H58" fill="none" marker-start="url(#loose)"
+          marker-mid="url(#loose)" marker-end="url(#loose)"/>)svg" +
+      gray + "</svg>";
+
+  // One marker element and one zero-length path per placement, in the same order.
+  std::string singles = head;
+  std::string placements;
+  int index = 0;
+  for (const Vector2i vertex : {Vector2i(10, 10), Vector2i(20, 10), Vector2i(20, 20),
+                                Vector2i(30, 20), Vector2i(30, 40), Vector2i(10, 40)}) {
+    const std::string id = "c" + std::to_string(index++);
+    singles += clippedMarker(id);
+    const std::string at = std::to_string(vertex.x) + " " + std::to_string(vertex.y);
+    placements += "<path d=\"M" + at + " L" + at + "\" marker-start=\"url(#" + id + ")\"/>";
+  }
+  placements += yellow;
+  for (const int x : {40, 46, 52, 58}) {
+    const std::string id = "l" + std::to_string(index++);
+    singles += looseMarker(id);
+    const std::string at = std::to_string(x) + " 56";
+    placements += "<path d=\"M" + at + " L" + at + "\" marker-start=\"url(#" + id + ")\"/>";
+  }
+  singles += host + "/>" + placements + gray + "</svg>";
+
+  SVGDocument referenceDocument = ParseDocumentOrFail(singles);
+  RendererGeode reference = createRenderer();
+  reference.draw(referenceDocument);
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  // Premises: a later placement covers the one before it, and the marker viewport cuts the
+  // spilling green square.
+  ASSERT_THAT(PixelAt(expected, 43, 55), RgbaEq(255, 0, 255, 255));
+  ASSERT_THAT(PixelAt(expected, 12, 42), RgbaEq(0, 0, 255, 255));
+  ASSERT_THAT(PixelAt(expected, 21, 49), IsTransparent());
+
+  SVGDocument document = ParseDocumentOrFail(markers);
+  RendererGeode renderer = createRenderer();
+  for (const char* frame : {"first", "steady"}) {
+    SCOPED_TRACE(frame);
+    renderer.draw(document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         std::string("marker_placements_") + frame,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+// A slot keeps a bounded number of repeat records. Repeats past the bound take a record for one
+// frame instead: the picture is the same, and each such repeat writes its one 256-byte instance
+// record every frame while the bounded ones write nothing.
+TEST_F(RendererGeodeTest, MarkerRepeatsPastTheRecordLimitDrawTheSamePicture) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <marker id="m" markerWidth="8" markerHeight="8" refX="4" refY="4">
+      <rect width="8" height="8" fill="#3366cc"/>
+    </marker>
+    <polyline points="4,60 12,4 20,60 28,4 36,60 44,4 52,60" fill="none" stroke="#000000"
+              marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
+  </svg>)svg";
+  constexpr uint64_t kRepeats = 6;
+  constexpr uint64_t kKeptRecords = 2;
+
+  SVGDocument unlimitedDocument = ParseDocumentOrFail(source);
+  RendererGeode unlimited = createRenderer();
+  unlimited.draw(unlimitedDocument);
+  unlimited.draw(unlimitedDocument);
+  ASSERT_THAT(unlimited.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
+  const RendererBitmap expected = unlimited.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode limited = createRenderer();
+  limited.setRepeatRecordLimitForTesting(kKeptRecords);
+  limited.draw(document);
+  limited.draw(document);
+  const geode::GeodeCounters& counters = limited.lastFrameTimings().counters;
+  EXPECT_THAT(counters.pathEncodes, testing::Eq(0u));
+  EXPECT_THAT(counters.bufferWrites, testing::Eq(kRepeats - kKeptRecords));
+  EXPECT_THAT(counters.bufferWriteBytes, testing::Eq((kRepeats - kKeptRecords) * 256u));
+  editor::tests::CompareBitmapToBitmap(limited.takeSnapshot(), expected, "marker_record_limit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Pixels where \p actual differs from \p expected under the canonical identity comparison, as a
+/// signal: every count passes, so a premise asserts on the returned count instead.
+int DifferingPixels(const RendererBitmap& actual, const RendererBitmap& expected,
+                    const std::string& label) {
+  editor::tests::BitmapGoldenCompareParams signalParams = editor::tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int mismatchedPixels = -1;
+  editor::tests::CompareBitmapToBitmap(actual, expected, label, signalParams, &mismatchedPixels);
+  return mismatchedPixels;
+}
+
+/// One edit for \ref MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem: one or more DOM
+/// steps, each followed by a render.
+struct MarkerEdit {
+  const char* label;                                     ///< Name in failure output and diffs.
+  std::vector<std::function<void(SVGDocument&)>> steps;  ///< DOM steps, in order.
+};
+
+/// Sets \p attribute of the element with id \p id to \p value.
+std::function<void(SVGDocument&)> SetAttributeEdit(std::string id, std::string attribute,
+                                                   std::string value) {
+  return [=](SVGDocument& document) {
+    std::optional<SVGElement> element = document.querySelector("#" + id);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    element->setAttribute(xml::XMLQualifiedNameRef(attribute), value);
+  };
+}
+
+/// Removes \p attribute from the element with id \p id.
+std::function<void(SVGDocument&)> RemoveAttributeEdit(std::string id, std::string attribute) {
+  return [=](SVGDocument& document) {
+    std::optional<SVGElement> element = document.querySelector("#" + id);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    element->removeAttribute(xml::XMLQualifiedNameRef(attribute));
+  };
+}
+
+/// Applies \p edit to the document's `#m` marker through its typed setters; the generic
+/// `setAttribute` does not reach a marker's own attributes (#2621).
+std::function<void(SVGDocument&)> MarkerElementEdit(std::function<void(SVGMarkerElement&)> edit) {
+  return [=](SVGDocument& document) {
+    std::optional<SVGElement> element = document.querySelector("#m");
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    SVGMarkerElement marker = element->cast<SVGMarkerElement>();
+    edit(marker);
+  };
+}
+
+// Each edit changes what some marker placement draws. A placement after the first keeps its
+// record across frames and rewrites it only when its bytes change, so an edit applied after two
+// frames must render exactly what a fresh document carrying the same edit renders. A multi-step
+// edit renders after every step and compares every step's frame with a fresh document carrying
+// the steps so far.
+TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <linearGradient id="g"><stop offset="0" stop-color="#ff00ff"/>
+      <stop offset="1" stop-color="#00ffff"/></linearGradient>
+    <clipPath id="cp"><rect width="3" height="6"/></clipPath>
+    <marker id="m" viewBox="0 0 6 6" markerWidth="6" markerHeight="4" refX="3" refY="3"
+            orient="auto">
+      <path id="content" d="M0 0 L6 3 L0 6 Z" fill="context-stroke" stroke="context-fill"
+            stroke-width="0.75"/>
+      <rect id="dot" width="2" height="2" fill="currentColor" color="#00aa00"/>
+    </marker>
+    <g id="hostgroup">
+      <path id="host" d="M6 52 L18 10 L30 52 L42 10 L58 40" fill="#ffcc00" stroke="#cc0000"
+            stroke-width="1.5" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/>
+    </g>
+  </svg>)svg";
+
+  const MarkerEdit edits[] = {
+      {"path_vertices", {SetAttributeEdit("host", "d", "M6 52 L18 14 L30 48 L42 14 L58 40")}},
+      {"path_vertex_count", {SetAttributeEdit("host", "d", "M6 52 L18 10 L58 40")}},
+      {"host_transform", {SetAttributeEdit("host", "transform", "rotate(5 32 32)")}},
+      {"ancestor_transform", {SetAttributeEdit("hostgroup", "transform", "translate(2 3)")}},
+      {"stroke_width_scales_markers", {SetAttributeEdit("host", "stroke-width", "2.5")}},
+      {"marker_ref_x", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setRefX(Lengthd(1, Lengthd::Unit::None));
+       })}},
+      {"marker_orient", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setOrient(MarkerOrient::AngleDegrees(30));
+       })}},
+      {"marker_ref_y", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setRefY(Lengthd(1, Lengthd::Unit::None));
+       })}},
+      {"marker_width", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setMarkerWidth(Lengthd(3, Lengthd::Unit::None));
+       })}},
+      {"marker_height", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setMarkerHeight(Lengthd(6, Lengthd::Unit::None));
+       })}},
+      {"marker_view_box", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setViewBox(Box2d::FromXYWH(0, 0, 8, 8));
+       })}},
+      {"marker_aspect_ratio", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setPreserveAspectRatio(PreserveAspectRatio::None());
+       })}},
+      {"marker_units", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setMarkerUnits(MarkerUnits::UserSpaceOnUse);
+       })}},
+      {"marker_overflow", {SetAttributeEdit("m", "overflow", "visible")}},
+      {"content_geometry", {SetAttributeEdit("content", "d", "M0 0 L6 2 L0 6 Z")}},
+      {"content_stroke_width", {SetAttributeEdit("content", "stroke-width", "1.5")}},
+      {"content_fill_color", {SetAttributeEdit("dot", "fill", "#123456")}},
+      {"content_fill_opacity", {SetAttributeEdit("dot", "fill-opacity", "0.5")}},
+      {"current_color", {SetAttributeEdit("dot", "color", "#aa00aa")}},
+      {"content_visibility", {SetAttributeEdit("dot", "visibility", "hidden")}},
+      {"content_display", {SetAttributeEdit("dot", "display", "none")}},
+      {"content_clip_path_added_then_removed",
+       {SetAttributeEdit("dot", "clip-path", "url(#cp)"), RemoveAttributeEdit("dot", "clip-path")}},
+      {"content_solid_gradient_solid",
+       {SetAttributeEdit("dot", "fill", "url(#g)"), SetAttributeEdit("dot", "fill", "#0000aa")}},
+      // Removing a marker property drops placements and shifts the repeat each later placement
+      // takes. Switching it to another marker after a render is a separate defect (#2620).
+      {"marker_property", {RemoveAttributeEdit("host", "marker-mid")}},
+      {"context_stroke", {SetAttributeEdit("host", "stroke", "#0066ff")}},
+      {"context_fill", {SetAttributeEdit("host", "fill", "#00ccff")}},
+  };
+
+  for (const MarkerEdit& edit : edits) {
+    SCOPED_TRACE(edit.label);
+    SVGDocument document = ParseDocumentOrFail(source);
+    RendererGeode renderer = createRenderer();
+    renderer.draw(document);
+    renderer.draw(document);
+    // Premise: the steady frame rewrites nothing, so the placements are drawing from records
+    // kept across frames and the edit is what has to reach them.
+    ASSERT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
+    const RendererBitmap before = renderer.takeSnapshot();
+
+    ASSERT_THAT(before.empty(), testing::IsFalse());
+    for (size_t stepCount = 1; stepCount <= edit.steps.size(); ++stepCount) {
+      SCOPED_TRACE(stepCount);
+      ASSERT_NO_FATAL_FAILURE(edit.steps[stepCount - 1](document));
+      renderer.draw(document);
+      const RendererBitmap actual = renderer.takeSnapshot();
+
+      // A document of its own per step: a document drawn before carries residence of its own.
+      SVGDocument freshDocument = ParseDocumentOrFail(source);
+      for (size_t i = 0; i < stepCount; ++i) {
+        ASSERT_NO_FATAL_FAILURE(edit.steps[i](freshDocument));
+      }
+      RendererGeode freshRenderer = createRenderer();
+      freshRenderer.draw(freshDocument);
+      const RendererBitmap expected = freshRenderer.takeSnapshot();
+      ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+      // Premise: the first step changes the picture, so matching the fresh render is not vacuous.
+      if (stepCount == 1) {
+        const int changed =
+            DifferingPixels(actual, before, std::string("marker_edit_premise_") + edit.label);
+        EXPECT_THAT(changed, testing::Gt(0)) << "the first step does not change the picture";
+        if (changed <= 0) {
+          break;
+        }
+      }
+      editor::tests::CompareBitmapToBitmap(
+          actual, expected,
+          std::string("marker_edit_") + edit.label + "_step_" + std::to_string(stepCount),
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+// An offscreen pass that draws the same document inside an open outer frame must not rewrite the
+// repeat records the outer frame's recorded draws read when it submits: every buffer write in a
+// frame executes before every draw. The document changes between the outer draw and the inner
+// one, so a rewrite would move the outer frame's placements to the inner frame's positions.
+TEST_F(RendererGeodeTest, OffscreenPassLeavesTheOuterFramesRepeatRecordsAlone) {
+  const std::string head = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <marker id="m" markerWidth="8" markerHeight="8" refX="4" refY="4">
+      <rect width="8" height="8" fill="#3366cc"/>
+    </marker>)svg";
+  const std::string original = head + R"svg(<path id="host" d="M6 32 H18 H30 H42 H54" fill="none"
+      marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/></svg>)svg";
+  const std::string edited = head + R"svg(<path id="host" d="M6 12 H18 H30 H42 H54" fill="none"
+      marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/></svg>)svg";
+  const auto render = [this](const std::string& source) {
+    SVGDocument document = ParseDocumentOrFail(source);
+    RendererGeode renderer = createRenderer();
+    renderer.draw(document);
+    return renderer.takeSnapshot();
+  };
+  const RendererBitmap expectedOuter = render(original);
+  const RendererBitmap expectedInner = render(edited);
+  ASSERT_THAT(DifferingPixels(expectedInner, expectedOuter, "offscreen_repeat_premise"),
+              testing::Gt(0))
+      << "the edit must move the placements, or the outer frame cannot show a rewrite";
+
+  SVGDocument document = ParseDocumentOrFail(original);
+  RendererGeode outer = createRenderer();
+  outer.draw(document);  // The repeat records exist and hold the original placements.
+  RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  outer.beginFrame(viewport);
+  RendererDriver(outer).drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+
+  std::optional<SVGElement> host = document.querySelector("#host");
+  ASSERT_THAT(host, testing::Optional(testing::_));
+  host->setAttribute("d", "M6 12 H18 H30 H42 H54");
+  std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+  ASSERT_THAT(inner, testing::NotNull());
+  inner->draw(document);
+  const RendererBitmap innerBitmap = inner->takeSnapshot();
+  outer.endFrame();
+
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expectedOuter,
+                                       "offscreen_repeat_outer_frame",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(innerBitmap, expectedInner, "offscreen_repeat_inner_pass",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// One source path stroked with several styles keeps one resident slot per stroke variant, and a
+// repeat draw of one variant takes a record of that variant's slot. Here the outer frame draws
+// three repeats of variant A and then, inside the still-open frame, an offscreen pass on the same
+// device draws a document state whose new style finds the stroke cache full and replaces another
+// variant of the same path. Variant A is not a candidate, since the open outer frame may still
+// read it; the replaced variant's slot is reset while the outer frame's draws of A are recorded
+// and not yet submitted. Both images must match fresh renders of their states exactly.
+TEST_F(RendererGeodeTest, OffscreenPassReplacingAStrokeVariantLeavesTheOuterFramesRepeatsAlone) {
+  const auto document_source = [](int repeatX, int replacedWidth, bool othersShown) {
+    std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <defs><path id="p" d="M4 6 C20 0 36 14 56 6" fill="none"/></defs>)svg";
+    for (int i = 0; i < 3; ++i) {
+      source += "<use id=\"a" + std::to_string(i) + "\" href=\"#p\" x=\"" +
+                std::to_string(repeatX + i * 4) + "\" y=\"" + std::to_string(i * 6) +
+                "\" stroke=\"#cc2200\" stroke-width=\"2\"/>";
+    }
+    // One instance per other cached style, so the source path's stroke cache is full.
+    for (std::size_t i = 1; othersShown && i < geode::kGeodeStrokeVariantCount; ++i) {
+      const std::size_t width = i == 1 ? replacedWidth : 2 + i;
+      source += "<use id=\"o" + std::to_string(i) + "\" href=\"#p\" y=\"" +
+                std::to_string(20 + 4 * i) + "\" stroke=\"#2255aa\" stroke-width=\"" +
+                std::to_string(width) + "\"/>";
+    }
+    return source + "</svg>";
+  };
+  const std::string repeatsOnly = document_source(0, 3, false);
+  const std::string replacedStyle = document_source(6, 11, true);
+
+  const auto render = [this](const std::string& source) {
+    SVGDocument document = ParseDocumentOrFail(source);
+    RendererGeode renderer = createRenderer();
+    renderer.draw(document);
+    return renderer.takeSnapshot();
+  };
+  const RendererBitmap expectedOuter = render(repeatsOnly);
+  const RendererBitmap expectedInner = render(replacedStyle);
+  ASSERT_THAT(DifferingPixels(expectedInner, expectedOuter, "stroke_variant_offscreen_premise"),
+              testing::Gt(0))
+      << "the two states must differ, or the outer frame cannot show the inner pass's draws";
+
+  SVGDocument document = ParseDocumentOrFail(document_source(0, 3, true));
+  const auto element = [&document](const std::string& id) {
+    std::optional<SVGElement> found = document.querySelector("#" + id);
+    EXPECT_THAT(found, testing::Optional(testing::_)) << id;
+    return found;
+  };
+  RendererGeode outer = createRenderer();
+  outer.draw(document);  // Fills every stroke variant of the source path.
+  for (std::size_t i = 1; i < geode::kGeodeStrokeVariantCount; ++i) {
+    element("o" + std::to_string(i))->setAttribute("display", "none");
+  }
+  outer.draw(document);  // Variant A's repeat records now hold the repeats-only placements.
+  RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  outer.beginFrame(viewport);
+  RendererDriver(outer).drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+
+  // The inner pass's state: the other styles are drawn again, one of them with a new width that
+  // replaces a cached variant, and variant A's repeats move.
+  for (std::size_t i = 1; i < geode::kGeodeStrokeVariantCount; ++i) {
+    element("o" + std::to_string(i))->removeAttribute("display");
+  }
+  element("o1")->setAttribute("stroke-width", "11");
+  for (int i = 0; i < 3; ++i) {
+    element("a" + std::to_string(i))->setAttribute("x", std::to_string(6 + i * 4));
+  }
+  std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+  ASSERT_THAT(inner, testing::NotNull());
+  inner->draw(document);
+  const RendererBitmap innerBitmap = inner->takeSnapshot();
+  outer.endFrame();
+
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expectedOuter,
+                                       "stroke_variant_offscreen_outer_frame",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(innerBitmap, expectedInner,
+                                       "stroke_variant_offscreen_inner_pass",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // Premise: the inner pass replaced a cached variant rather than drawing the new style from a
+  // per-frame encode, so the next frame of the same state encodes nothing.
+  outer.draw(document);
+  EXPECT_THAT(outer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
+      << "the new style must have taken a cached stroke variant in the inner pass";
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expectedInner,
+                                       "stroke_variant_offscreen_next_frame",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A path's fill slot serves both its solid and its pattern fills. Here `<use>` instances of one
+// path alternate pattern and solid paint, so in each frame a solid repeat follows a draw that bound
+// a pattern tile to the slot, and a pattern draw follows a solid one. A solid repeat draws through
+// a scene batch, which binds no pattern tile, and a pattern-painted draw never takes a repeat
+// record. Every edge sits on a pixel boundary, so the instances must match the same paint on
+// separate rectangles exactly, on the first and the steady frame.
+TEST_F(RendererGeodeTest, UseRepeatsOfAPatternPaintedSlotMatchPlainGeometry) {
+  const std::string pattern = R"svg(
+    <pattern id="pt" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="4" height="4" fill="#cc2200"/><rect x="4" y="4" width="4" height="4"
+      fill="#2255aa"/>
+    </pattern>)svg";
+  const std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg" + pattern +
+      R"svg(<defs><rect id="r" width="16" height="16"/></defs>
+    <use href="#r" x="8" y="8" fill="url(#pt)"/>
+    <use href="#r" x="24" y="8" fill="#00aa00"/>
+    <use href="#r" x="40" y="8" fill="url(#pt)"/>
+    <use href="#r" x="8" y="32" fill="#00aa00"/>
+    <use href="#r" x="24" y="32" fill="#aa00aa"/>
+    <use href="#r" x="40" y="32" fill="url(#pt)"/>
+  </svg>)svg";
+  const std::string plain =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg" + pattern +
+      R"svg(
+    <rect x="8" y="8" width="16" height="16" fill="url(#pt)"/>
+    <rect x="24" y="8" width="16" height="16" fill="#00aa00"/>
+    <rect x="40" y="8" width="16" height="16" fill="url(#pt)"/>
+    <rect x="8" y="32" width="16" height="16" fill="#00aa00"/>
+    <rect x="24" y="32" width="16" height="16" fill="#aa00aa"/>
+    <rect x="40" y="32" width="16" height="16" fill="url(#pt)"/>
+  </svg>)svg";
+
+  SVGDocument plainDocument = ParseDocumentOrFail(plain);
+  RendererGeode reference = createRenderer();
+  reference.draw(plainDocument);
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode renderer = createRenderer();
+  for (const char* frame : {"first", "steady"}) {
+    SCOPED_TRACE(frame);
+    renderer.draw(document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         std::string("pattern_slot_repeats_") + frame,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+// Repeated draws of a `<use>` source take the same repeat records as marker placements: adjacent
+// and non-adjacent repeats, with differing inherited paint, interleaved with an overlapping
+// element. Every edge sits on a pixel boundary, so the instances must match plain rectangles
+// exactly, on the first and the steady frame, and an edit to the source or to one instance must
+// match a fresh document carrying the same edit.
+TEST_F(RendererGeodeTest, UseRepeatsMatchPlainGeometryAndFollowEdits) {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <defs><rect id="r" width="12" height="12"/></defs>
+    <use id="u1" href="#r" x="4" y="4" fill="#ff0000"/>
+    <rect x="10" y="10" width="12" height="12" fill="#0000ff"/>
+    <use href="#r" x="16" y="16" fill="#00ff00"/>
+    <use href="#r" x="22" y="22" fill="#00ff00"/>
+    <use id="u5" href="#r" x="28" y="28" fill="#ffff00"/>
+    <use href="#r" x="40" y="8" fill="#ff00ff"/>
+  </svg>)svg";
+  const std::string plain = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+    <rect x="4" y="4" width="12" height="12" fill="#ff0000"/>
+    <rect x="10" y="10" width="12" height="12" fill="#0000ff"/>
+    <rect x="16" y="16" width="12" height="12" fill="#00ff00"/>
+    <rect x="22" y="22" width="12" height="12" fill="#00ff00"/>
+    <rect x="28" y="28" width="12" height="12" fill="#ffff00"/>
+    <rect x="40" y="8" width="12" height="12" fill="#ff00ff"/>
+  </svg>)svg";
+
+  SVGDocument plainDocument = ParseDocumentOrFail(plain);
+  RendererGeode reference = createRenderer();
+  reference.draw(plainDocument);
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode renderer = createRenderer();
+  for (const char* frame : {"first", "steady"}) {
+    SCOPED_TRACE(frame);
+    renderer.draw(document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         std::string("use_repeats_") + frame,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  // Premise: the steady frame draws every repeat from records kept across frames.
+  EXPECT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.bindgroupCreates, testing::Eq(0u));
+
+  for (const auto& [label, edit] :
+       std::vector<std::pair<std::string, std::function<void(SVGDocument&)>>>{
+           {"source_width", SetAttributeEdit("r", "width", "6")},
+           {"first_instance_position", SetAttributeEdit("u1", "x", "2")},
+           {"repeat_instance_position", SetAttributeEdit("u5", "x", "30")},
+           {"repeat_instance_paint", SetAttributeEdit("u5", "fill", "#00ffff")}}) {
+    SCOPED_TRACE(label);
+    SVGDocument edited = ParseDocumentOrFail(source);
+    RendererGeode editedRenderer = createRenderer();
+    editedRenderer.draw(edited);
+    editedRenderer.draw(edited);
+    ASSERT_NO_FATAL_FAILURE(edit(edited));
+    editedRenderer.draw(edited);
+
+    SVGDocument fresh = ParseDocumentOrFail(source);
+    ASSERT_NO_FATAL_FAILURE(edit(fresh));
+    RendererGeode freshRenderer = createRenderer();
+    freshRenderer.draw(fresh);
+    const RendererBitmap freshBitmap = freshRenderer.takeSnapshot();
+    ASSERT_THAT(DifferingPixels(freshBitmap, expected, "use_repeats_premise_" + label),
+                testing::Gt(0))
+        << "the edit must change the picture, or matching the fresh render is vacuous";
+    editor::tests::CompareBitmapToBitmap(editedRenderer.takeSnapshot(), freshBitmap,
+                                         "use_repeats_edit_" + label,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 }  // namespace

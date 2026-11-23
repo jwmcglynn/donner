@@ -4653,10 +4653,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       /// retransforms the earlier draw that references the primary
       /// (buffer writes execute before every draw at submit).
       const geode::GeodeRecordSlab::Slot* recordSlotOverride = nullptr;
-      /// Last-written bytes of `recordSlotOverride`, when that slot persists
-      /// across frames (per-occurrence text records). Non-null turns the
-      /// override write into a skip-when-unchanged write. Null for per-frame
-      /// temporary slots, which are always fresh and always written.
+      /// Last-written bytes of `recordSlotOverride`: across frames for a
+      /// persistent occurrence record (text glyphs, a slot's repeats), or within
+      /// this frame for a repeat's temporary record, so its batch's flush does
+      /// not publish it a second time. Non-null turns the override write into a
+      /// skip-when-unchanged write. Null for the temporary slot of a converted
+      /// singleton, which is always written.
       std::vector<uint8_t>* recordCacheOverride = nullptr;
       /// The record fields that come from encoder-side state - the paint
       /// scalars published into the slot, and the clip rectangle - captured
@@ -4708,6 +4710,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   struct SceneTempRecordSlot {
     geode::GeodeRecordSlab::Slot slot;
     std::shared_ptr<geode::GeodeRecordSlab> slab;
+    /// Bytes written to `slot` this frame, for callers that publish through it.
+    std::vector<uint8_t> lastRecord;
   };
   std::deque<SceneTempRecordSlot> sceneTempRecordSlots;
 
@@ -4745,8 +4749,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// `sceneTempRecordSlots` so its address stays valid until the frame ends
   /// and returns it to `slab`. Returns null when `slab` is absent or the
   /// device cannot back the allocation.
+  /// @param slab Record slab to allocate from.
+  /// @param recordCache When non-null, receives the slot's within-frame record cache.
   const geode::GeodeRecordSlab::Slot* allocateTempRecordSlot(
-      const std::shared_ptr<geode::GeodeRecordSlab>& slab) {
+      const std::shared_ptr<geode::GeodeRecordSlab>& slab,
+      std::vector<uint8_t>** recordCache = nullptr) {
     if (!slab) {
       return nullptr;
     }
@@ -4754,7 +4761,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!slab->allocateSlot(*device, tempSlot)) {
       return nullptr;
     }
-    sceneTempRecordSlots.push_back(SceneTempRecordSlot{tempSlot, slab});
+    sceneTempRecordSlots.push_back(SceneTempRecordSlot{tempSlot, slab, {}});
+    if (recordCache != nullptr) {
+      *recordCache = &sceneTempRecordSlots.back().lastRecord;
+    }
     return &sceneTempRecordSlots.back().slot;
   }
 
@@ -5478,7 +5488,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// this pass takes per-frame temporaries instead (no source entity, batching
   /// off, or the element already drew once this frame).
   struct TextRecordCursor {
-    geode::GeodeTextInstanceRecordComponent* component = nullptr;
+    geode::GeodeOccurrenceRecords* component = nullptr;
     size_t next = 0;
   };
 
@@ -5496,7 +5506,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!handle) {
       return cursor;
     }
-    geode::GeodeTextInstanceRecordComponent& component =
+    geode::GeodeOccurrenceRecords& component =
         handle.get_or_emplace<geode::GeodeTextInstanceResidencyComponent>().devices.forDevice(
             deviceKey());
     std::shared_ptr<geode::GeodeRecordSlab> slab = recordSlab(registry);
@@ -5530,19 +5540,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     outCache = nullptr;
     if (cursor.component != nullptr) {
       auto& occurrences = cursor.component->occurrences;
-      if (cursor.next == occurrences.size() && cursor.component->recordSlab) {
-        std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
-            documentGeometryBudget(registry);
-        if (cursor.component->reserveOccurrence(documentBudget)) {
-          geode::GeodeRecordSlab::Slot slot;
-          if (cursor.component->recordSlab->allocateSlot(*device, slot)) {
-            if (!cursor.component->appendReservedOccurrence(slot)) {
-              cursor.component->recordSlab->freeSlot(slot);
-            }
-          } else {
-            cursor.component->rollbackOccurrence();
-          }
-        }
+      if (cursor.next == occurrences.size()) {
+        appendOccurrence(*cursor.component, registry);
       }
       if (cursor.next < occurrences.size()) {
         outSlot = &occurrences[cursor.next]->slot;
@@ -5555,6 +5554,214 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
     outSlot = allocateTempRecordSlot(recordSlab(registry));
+  }
+
+  /// Grow \p records by one persistent slot, charging the document budget and
+  /// allocating from its record slab. Leaves \p records unchanged when either
+  /// refuses.
+  void appendOccurrence(geode::GeodeOccurrenceRecords& records, Registry& registry) {
+    if (!records.recordSlab) {
+      return;
+    }
+    std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+        documentGeometryBudget(registry);
+    if (!records.reserveOccurrence(documentBudget)) {
+      return;
+    }
+    geode::GeodeRecordSlab::Slot slot;
+    if (!records.recordSlab->allocateSlot(*device, slot)) {
+      records.rollbackOccurrence();
+      return;
+    }
+    if (!records.appendReservedOccurrence(slot)) {
+      records.recordSlab->freeSlot(slot);
+    }
+  }
+
+  /// Most persistent repeat records one resident slot keeps. Each costs one
+  /// 256-byte record in the document's record slab plus
+  /// `GeodeOccurrenceRecords::kProjectedBytesPerOccurrence` (a few hundred
+  /// bytes) of CPU bookkeeping, both charged to the document's geometry budget,
+  /// so a slot retains under 3 MiB however many vertices carry its marker.
+  /// Repeats past the cap draw from per-frame temporary records: they still
+  /// read the slot's resident geometry, but write their record every frame.
+  static constexpr std::size_t kMaxRepeatOccurrencesPerSlot = 4096;
+  /// The cap in force; tests may lower it.
+  std::size_t repeatRecordLimit = kMaxRepeatOccurrencesPerSlot;
+
+  /// Record storage for a second or later draw of \p slot in this frame: the
+  /// slot's next persistent repeat record, or a per-frame temporary when the
+  /// persistent set is full, refused, or still read by another open frame.
+  /// Leaves \p outSlot null when no record can be had at all.
+  ///
+  /// Repeats of a slot arrive in the same order on every unchanged frame, so
+  /// the `i`-th repeat keeps writing record `i` and its compare-before-write
+  /// skips the write. Anything that moves or repaints a repeat - the path's
+  /// vertices, a stroke-width change under `markerUnits="strokeWidth"`, the
+  /// marker's attributes, a context paint - changes its record bytes and so
+  /// rewrites exactly the records that changed.
+  void nextRepeatRecord(geode::GeodeResidentSlot& slot, Registry& registry,
+                        const geode::GeodeRecordSlab::Slot*& outSlot,
+                        std::vector<uint8_t>*& outCache) {
+    outSlot = nullptr;
+    outCache = nullptr;
+    // The repeat's record is published through `slot.recordSlab`, so the records come from that
+    // same slab: wiring the slot first makes the two one object by construction.
+    if (!ensureRecordSlot(slot, registry)) {
+      return;
+    }
+    const std::shared_ptr<geode::GeodeRecordSlab>& slab = slot.recordSlab;
+    if (!slot.repeatRecords) {
+      slot.repeatRecords = std::make_unique<geode::GeodeOccurrenceRecords>();
+    }
+    geode::GeodeOccurrenceRecords& records = *slot.repeatRecords;
+    if (records.recordSlab.get() != slab.get()) {
+      // The held slots belong to another slab, so drop them and start fresh.
+      records.freeRecordSlots();
+      records.recordSlab = slab;
+    }
+    bool persistent = true;
+    if (records.lastFrame != currentFrameIndex) {
+      if (records.lastFrame >= device->oldestOpenFrameGeneration()) {
+        // Another frame that wrote these records has not submitted (an outer
+        // frame around an offscreen pass of the same document). Rewriting them
+        // would retransform its recorded draws.
+        persistent = false;
+      } else {
+        records.lastFrame = currentFrameIndex;
+        slot.nextRepeatOccurrence = 0;
+      }
+    }
+    if (persistent) {
+      auto& occurrences = records.occurrences;
+      if (slot.nextRepeatOccurrence == occurrences.size() &&
+          occurrences.size() < repeatRecordLimit) {
+        appendOccurrence(records, registry);
+      }
+      if (slot.nextRepeatOccurrence < occurrences.size()) {
+        outSlot = &occurrences[slot.nextRepeatOccurrence]->slot;
+        outCache = &occurrences[slot.nextRepeatOccurrence]->lastRecord;
+        ++slot.nextRepeatOccurrence;
+        return;
+      }
+    }
+    outSlot = allocateTempRecordSlot(slab, &outCache);
+  }
+
+  /// Whether a draw of \p slot now would be its second or later draw in an
+  /// open frame: the slot's uniform or primary record is already claimed, or
+  /// its first draw is still waiting in the pending batch.
+  bool isRepeatDraw(const geode::GeodeResidentSlot& slot) const {
+    return device->frameStampClaimed(slot.lastResidentFrame) ||
+           device->frameStampClaimed(slot.lastSceneFrame) ||
+           (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity &&
+            pendingBatch->residentSlot == &slot);
+  }
+
+  /// Offer a draw to the repeat path when it is a same-frame repeat of a resident slot - a marker
+  /// drawn at several vertices, a `<use>` source drawn again. The slot's uniform and primary record
+  /// serve only its first draw of the frame, so without this a repeat falls back to the per-frame
+  /// arena: alone, or through the instanced append, whose instances are arena data too. Gradient
+  /// paint lives in the slot's single paint block, so a gradient repeat keeps the existing paths.
+  /// The target-state guards are the ordered batch's own.
+  /// @return True when the draw was taken.
+  bool tryAppendRepeatDraw(Registry* sourceRegistry, const geode::EncodedPath* encoded,
+                           geode::GeodeResidentSlot* residentSlot, const Path& path,
+                           const geode::GeoEncoder::ScenePaint& paint, FillRule rule) {
+    if (!kEnableSceneBatching || paint.isGradient() || residentSlot == nullptr ||
+        encoded == nullptr || sourceRegistry == nullptr || encoder->hasActiveClipState() ||
+        encoder->hasOpenMaskPass() || !isRepeatDraw(*residentSlot)) {
+      return false;
+    }
+    return tryAppendRepeatInstance(*sourceRegistry, *encoded, *residentSlot, path, paint.color,
+                                   rule);
+  }
+
+  /// Draw a repeat of \p slot through a record of its own over the slot's
+  /// resident geometry, joining the pending ordered batch when its record
+  /// extends it and opening a new one otherwise. Returns false, having drawn
+  /// nothing, when the repeat cannot take that form.
+  ///
+  /// The first draw of the frame keeps the slot's uniform and primary record;
+  /// every later one owns a distinct record, so no record a recorded draw reads
+  /// is rewritten later in the frame and painter order is the order of the
+  /// records in each batch, as for any other ordered batch.
+  bool tryAppendRepeatInstance(Registry& registry, const geode::EncodedPath& encoded,
+                               geode::GeodeResidentSlot& slot, const Path& path,
+                               const css::RGBA& color, FillRule rule) {
+    const geode::GeodeRecordSlab::Slot* recordSlot = nullptr;
+    std::vector<uint8_t>* recordCache = nullptr;
+    nextRepeatRecord(slot, registry, recordSlot, recordCache);
+    if (recordSlot == nullptr) {
+      return false;
+    }
+    const uint64_t clipVersion = encoder->clipStateVersion();
+    settlePendingSingletonForRepeat(clipVersion);
+    geode::GeoEncoder::SceneRecordState recordState;
+    if (!encoder->ensureResidentSceneRecord(slot, encoded, geode::GeoEncoder::ScenePaint{color},
+                                            rule, deviceFromLocalTransform, recordSlot, recordCache,
+                                            &recordState)) {
+      return false;
+    }
+    appendOrOpenSceneBatch(
+        PendingBatch::SceneInstance{&slot, &encoded, &path, color, rule, deviceFromLocalTransform,
+                                    encoded.boundingDrawVertexCount(), recordSlot, recordCache,
+                                    recordState},
+        *recordSlot, clipVersion);
+    slot.lastSceneFrame = currentFrameIndex;
+    return true;
+  }
+
+  /// Before a repeat joins a batch: a pending singleton, typically the repeated slot's own first
+  /// draw, becomes the first instance of a scene batch, so a run of repeats still draws as one
+  /// batch. One that cannot convert is flushed now, taking its solo resident path before the repeat
+  /// claims the slot.
+  /// @param clipVersion Encoder clip-state version of the repeat.
+  void settlePendingSingletonForRepeat(uint64_t clipVersion) {
+    if (!pendingBatch.has_value() || pendingBatch->mode != PendingBatch::Mode::SameEntity) {
+      return;
+    }
+    if (pendingBatch->deviceFromLocalTransforms.size() != 1 ||
+        pendingBatch->sameEntityClipVersion != clipVersion ||
+        !convertPendingSingletonToScene(clipVersion)) {
+      flushPendingBatch();
+    }
+  }
+
+  /// Append \p instance to the pending scene batch when its record extends that batch under the
+  /// same clip state; otherwise flush what is pending and open a new scene batch holding it.
+  /// @param instance Instance whose record and geometry are already ensured.
+  /// @param recordSlot Record slot \p instance draws from.
+  /// @param clipVersion Encoder clip-state version of \p instance.
+  void appendOrOpenSceneBatch(const PendingBatch::SceneInstance& instance,
+                              const geode::GeodeRecordSlab::Slot& recordSlot,
+                              uint64_t clipVersion) {
+    const uint64_t chunkId = instance.slot->bufferId;
+    if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene &&
+        pendingBatch->sceneChunkBufferId == chunkId &&
+        pendingBatch->sceneRecordBufferId == recordSlot.bufferId &&
+        pendingBatch->sceneClipVersion == clipVersion &&
+        pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
+            recordSlot.index) {
+      pendingBatch->sceneInstances.push_back(instance);
+      pendingBatch->sceneVertexCount =
+          std::max(pendingBatch->sceneVertexCount, instance.vertexCount);
+      return;
+    }
+    flushPendingBatch();
+    pendingBatch = PendingBatch{};
+    pendingBatch->mode = PendingBatch::Mode::Scene;
+    pendingBatch->sceneChunkBuffer = instance.slot->buffer;
+    pendingBatch->sceneChunkBytes =
+        instance.slot->slab != nullptr ? instance.slot->slab->chunkBytesForId(chunkId) : 0;
+    pendingBatch->sceneRecordBuffer = recordSlot.buffer;
+    pendingBatch->sceneChunkBufferId = chunkId;
+    pendingBatch->sceneRecordBufferId = recordSlot.bufferId;
+    pendingBatch->sceneFirstInstance = recordSlot.index;
+    pendingBatch->sceneFirstRecordOffset = recordSlot.offset;
+    pendingBatch->sceneClipVersion = clipVersion;
+    pendingBatch->sceneVertexCount = instance.vertexCount;
+    pendingBatch->sceneInstances.push_back(instance);
   }
 
   /// Resident CPU encode + GPU geometry for one glyph identity, creating it on
@@ -6313,6 +6520,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const css::RGBA& color = paint.color;
     const bool gradientPaint = paint.isGradient();
 
+    // A same-frame repeat of a resident slot takes a record of its own over the slot's geometry.
+    if (tryAppendRepeatDraw(sourceRegistry, encoded, residentSlot, path, paint, rule)) {
+      return true;
+    }
+
     // Same-entity mode: consecutive draws of the SAME entity with the
     // same paint AND the same encode extend the same-entity instanced batch.
     // The encode comparison separates a repeated `<use>` - one shape at many
@@ -6334,12 +6546,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // Scene mode: distinct entities whose records are painter-ordered
     // and whose geometry shares a slab chunk. Scene batches always form
     // by converting a pending size-1 same-entity entry (the first entity
-    // starts as SameEntity(1); the second, different entity converts it),
-    // so a same-entity `<use>` repeat still prefers the instanced path.
-    // Scene batches cover entities drawn ONCE per frame. A same-frame
-    // repeat (markers, repeated <use>) belongs to the same-entity
-    // path and the solo flush's arena fallback, whose semantics predate
-    // ordered batching and are already exact for repeated draws.
+    // starts as SameEntity(1); the second, different entity converts it).
+    // A same-frame repeat that reaches this point could not take a record of
+    // its own above, and keeps the instanced path or the solo flush's arena
+    // fallback, which are exact for repeated draws.
     const geode::GeodeRecordSlab::Slot* recordSlotPtr = nullptr;
     const uint64_t clipVersion = encoder->clipStateVersion();
 
@@ -6449,67 +6659,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // marked the slot yet), the later write wins because every buffer write
       // in a submit executes before every draw, and the earlier instance is
       // silently repainted with this draw's colour and transform. Two draws of
-      // one entity that differ only in paint therefore stay unconverted; the
-      // singleton flushes solo and this draw opens a fresh one. Same-encode
-      // same-paint repeats are the instanced same-entity path above and never
-      // reach here.
+      // one entity therefore stay unconverted here; such a repeat takes a
+      // record of its own in `tryAppendRepeatInstance` before reaching this
+      // point, and one that could not have one leaves the singleton to flush
+      // solo while this draw opens a fresh one.
       if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity &&
           pendingBatch->deviceFromLocalTransforms.size() == 1 &&
           pendingBatch->sameEntityClipVersion == clipVersion &&
           pendingBatch->residentSlot != residentSlot) {
-        // Convert the pending size-1 same-entity entry into the scene
-        // batch's first instance.
-        PendingBatch::SceneInstance first{pendingBatch->residentSlot,
-                                          pendingBatch->encoded,
-                                          pendingBatch->path,
-                                          pendingBatch->color,
-                                          pendingBatch->rule,
-                                          pendingBatch->deviceFromLocalTransforms.front(),
-                                          pendingBatch->encoded->boundingDrawVertexCount()};
-        // Resolve the first entity's record slot: its primary slot on its
-        // first scene use this frame, or a fresh temporary slot when it
-        // was already batched earlier this frame (its primary record is
-        // referenced by that earlier batch and must not be overwritten).
-        // The singleton reached the batcher without being scene eligible
-        // itself, so it may still hold a slot from a slab this device does
-        // not own (another device rendered the document in between): ensure
-        // it against the current slab before resolving.
-        const geode::GeodeRecordSlab::Slot* firstRecordSlotPtr = nullptr;
-        if (first.slot != nullptr && first.encoded != nullptr &&
-            pendingBatch->sourceRegistry != nullptr &&
-            ensureRecordSlot(*first.slot, *pendingBatch->sourceRegistry) &&
-            resolveSceneRecordSlot(*first.slot, firstRecordSlotPtr) &&
-            encoder->ensureResidentSceneRecord(
-                *first.slot, *first.encoded, geode::GeoEncoder::ScenePaint{first.color}, first.rule,
-                first.deviceFromLocal, firstRecordSlotPtr, /*overrideRecordCache=*/nullptr,
-                &first.recordState)) {
-          first.slot->lastSceneFrame = currentFrameIndex;
-          // Carry the resolved slot on the instance so the flush-time
-          // re-ensure targets the same record this batch draws from.
-          first.recordSlotOverride = firstRecordSlotPtr;
-          const geode::GeodeRecordSlab::Slot& effectiveFirstRecordSlot =
-              firstRecordSlotPtr != nullptr ? *firstRecordSlotPtr : first.slot->recordSlot;
-          const gpu::BufferRef firstChunk = first.slot->buffer;
-          const gpu::BufferRef firstRecordBuf = effectiveFirstRecordSlot.buffer;
-          const uint64_t firstChunkId = first.slot->bufferId;
-          const uint64_t firstChunkBytes =
-              first.slot->slab != nullptr ? first.slot->slab->chunkBytesForId(firstChunkId) : 0;
-          const uint64_t firstRecordBufId = effectiveFirstRecordSlot.bufferId;
-          const uint32_t firstIndex = effectiveFirstRecordSlot.index;
-          pendingBatch = PendingBatch{};
-          pendingBatch->mode = PendingBatch::Mode::Scene;
-          pendingBatch->sceneChunkBuffer = firstChunk;
-          pendingBatch->sceneChunkBytes = firstChunkBytes;
-          pendingBatch->sceneRecordBuffer = firstRecordBuf;
-          pendingBatch->sceneChunkBufferId = firstChunkId;
-          pendingBatch->sceneRecordBufferId = firstRecordBufId;
-          pendingBatch->sceneFirstInstance = firstIndex;
-          pendingBatch->sceneFirstRecordOffset = effectiveFirstRecordSlot.offset;
-          pendingBatch->sceneClipVersion = clipVersion;
-          pendingBatch->sceneVertexCount = first.vertexCount;
-          pendingBatch->sceneInstances.push_back(first);
-          if (firstChunkId == chunkId && firstRecordBufId == recordBufId &&
-              firstIndex + 1 == recordIndex) {
+        if (convertPendingSingletonToScene(clipVersion)) {
+          if (pendingBatch->sceneChunkBufferId == chunkId &&
+              pendingBatch->sceneRecordBufferId == recordBufId &&
+              pendingBatch->sceneFirstInstance + 1 == recordIndex) {
             appendSceneInstance(*pendingBatch, current);
           } else {
             flushPendingBatch();
@@ -6582,6 +6743,62 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     startSameEntitySingleton(sourceRegistry, sourceEntity, path, color, rule, encoded,
                              residentSlot);
+    return true;
+  }
+
+  /// Turn the pending size-1 same-entity singleton into the first instance of
+  /// a scene batch drawn from a record: its primary record on its first scene
+  /// use this frame, or a fresh temporary one when an earlier batch of this
+  /// frame already reads the primary. Returns false, leaving the singleton
+  /// pending, when it cannot take scene form.
+  ///
+  /// @param clipVersion Encoder clip-state version the singleton was queued
+  ///   under, which the new batch carries.
+  bool convertPendingSingletonToScene(uint64_t clipVersion) {
+    if (pendingBatch->residentSlot == nullptr || pendingBatch->encoded == nullptr ||
+        pendingBatch->sourceRegistry == nullptr) {
+      return false;
+    }
+    PendingBatch::SceneInstance first{pendingBatch->residentSlot,
+                                      pendingBatch->encoded,
+                                      pendingBatch->path,
+                                      pendingBatch->color,
+                                      pendingBatch->rule,
+                                      pendingBatch->deviceFromLocalTransforms.front(),
+                                      pendingBatch->encoded->boundingDrawVertexCount()};
+    // The singleton reached the batcher without being scene eligible itself,
+    // so it may still hold a slot from a slab this device does not own
+    // (another device rendered the document in between): ensure it against
+    // the current slab before resolving.
+    const geode::GeodeRecordSlab::Slot* firstRecordSlotPtr = nullptr;
+    if (!ensureRecordSlot(*first.slot, *pendingBatch->sourceRegistry) ||
+        !resolveSceneRecordSlot(*first.slot, firstRecordSlotPtr) ||
+        !encoder->ensureResidentSceneRecord(*first.slot, *first.encoded,
+                                            geode::GeoEncoder::ScenePaint{first.color}, first.rule,
+                                            first.deviceFromLocal, firstRecordSlotPtr,
+                                            /*overrideRecordCache=*/nullptr, &first.recordState)) {
+      return false;
+    }
+    first.slot->lastSceneFrame = currentFrameIndex;
+    // Carry the resolved slot on the instance so the flush-time re-ensure
+    // targets the same record this batch draws from.
+    first.recordSlotOverride = firstRecordSlotPtr;
+    const geode::GeodeRecordSlab::Slot& effectiveFirstRecordSlot =
+        firstRecordSlotPtr != nullptr ? *firstRecordSlotPtr : first.slot->recordSlot;
+    const uint64_t firstChunkId = first.slot->bufferId;
+    pendingBatch = PendingBatch{};
+    pendingBatch->mode = PendingBatch::Mode::Scene;
+    pendingBatch->sceneChunkBuffer = first.slot->buffer;
+    pendingBatch->sceneChunkBytes =
+        first.slot->slab != nullptr ? first.slot->slab->chunkBytesForId(firstChunkId) : 0;
+    pendingBatch->sceneRecordBuffer = effectiveFirstRecordSlot.buffer;
+    pendingBatch->sceneChunkBufferId = firstChunkId;
+    pendingBatch->sceneRecordBufferId = effectiveFirstRecordSlot.bufferId;
+    pendingBatch->sceneFirstInstance = effectiveFirstRecordSlot.index;
+    pendingBatch->sceneFirstRecordOffset = effectiveFirstRecordSlot.offset;
+    pendingBatch->sceneClipVersion = clipVersion;
+    pendingBatch->sceneVertexCount = first.vertexCount;
+    pendingBatch->sceneInstances.push_back(first);
     return true;
   }
 
@@ -7805,6 +8022,10 @@ void RendererGeode::drawDocument(SVGDocument& document, ParseWarningSink* warnin
 
 bool RendererGeode::sceneBatchingEnabledForTesting() {
   return kEnableSceneBatching;
+}
+
+void RendererGeode::setRepeatRecordLimitForTesting(std::size_t maximumRecords) {
+  impl_->repeatRecordLimit = std::min(impl_->repeatRecordLimit, maximumRecords);
 }
 
 void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,

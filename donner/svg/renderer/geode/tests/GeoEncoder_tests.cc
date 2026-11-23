@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <vector>
 
 #include "donner/base/FillRule.h"
@@ -560,6 +561,55 @@ TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
     EXPECT_FALSE(next.bufferId == survivorSlot.bufferId && next.offset == survivorSlot.offset)
         << "The survivor's record slot leaked back to the slab through the moved-from shell";
   }
+}
+
+// Repeats past a slot's record limit take a record for one frame, so a frame can allocate and free
+// thousands of records whose count untrusted content sets. Reusing them must cost linear work and
+// hand indices out lowest first, so records allocated in draw order stay consecutive for batching.
+TEST_F(GeoEncoderTest, RecordSlabFreeListReuseIsLinearAndOrdered) {
+  geode::GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement());
+  constexpr size_t kCount = 3000;
+  std::vector<geode::GeodeRecordSlab::Slot> slots(kCount);
+  for (geode::GeodeRecordSlab::Slot& slot : slots) {
+    ASSERT_THAT(slab.allocateSlot(*device_, slot), testing::IsTrue()) << "allocation of slot";
+  }
+  constexpr uint64_t kFrames = 4;
+  for (uint64_t frame = 1; frame <= kFrames; ++frame) {
+    SCOPED_TRACE(frame);
+    for (const geode::GeodeRecordSlab::Slot& slot : slots) {
+      slab.freeSlot(slot);
+    }
+    slab.beginFrame(frame);
+    std::vector<uint32_t> indices;
+    for (geode::GeodeRecordSlab::Slot& slot : slots) {
+      ASSERT_THAT(slab.allocateSlot(*device_, slot), testing::IsTrue()) << "allocation of slot";
+      indices.push_back(slot.index);
+    }
+    std::vector<uint32_t> ascending(kCount);
+    std::iota(ascending.begin(), ascending.end(), indices.front());
+    EXPECT_THAT(indices, testing::ElementsAreArray(ascending));
+  }
+  // One merge pass and one step per allocation each frame.
+  EXPECT_THAT(slab.freeListStepsForTesting(), testing::Le(kFrames * 2u * kCount));
+}
+
+TEST_F(GeoEncoderTest, RecordSlabSlotFreedTwiceIsHandedOutOnce) {
+  geode::GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement());
+  geode::GeodeRecordSlab::Slot freed;
+  geode::GeodeRecordSlab::Slot kept;
+  ASSERT_THAT(slab.allocateSlot(*device_, freed), testing::IsTrue()) << "allocation of freed";
+  ASSERT_THAT(slab.allocateSlot(*device_, kept), testing::IsTrue()) << "allocation of kept";
+  slab.freeSlot(freed);
+  slab.freeSlot(freed);
+  slab.beginFrame(1);
+
+  geode::GeodeRecordSlab::Slot first;
+  geode::GeodeRecordSlab::Slot second;
+  ASSERT_THAT(slab.allocateSlot(*device_, first), testing::IsTrue()) << "allocation of first";
+  ASSERT_THAT(slab.allocateSlot(*device_, second), testing::IsTrue()) << "allocation of second";
+  EXPECT_THAT(std::vector<uint32_t>({first.index, second.index}),
+              testing::ElementsAre(freed.index, testing::Gt(kept.index)))
+      << "the twice-freed slot must be reused once, and the next slot must be a fresh one";
 }
 
 TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {

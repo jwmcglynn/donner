@@ -2688,11 +2688,12 @@ void GeoEncoder::submitResidentOrArenaFill(GeodeResidentSlot& slot, const Encode
   }
   // A slot's single uniform buffer can only carry one draw's uniform per
   // frame, and its cached bind group only one pattern tile. If a frame that
-  // drew this slot resident is still open - a repeat
-  // earlier in THIS frame (markers, non-adjacent repeated `<use>` at
-  // distinct transforms), or an outer renderer's frame on this device that
-  // recorded a draw against the slot while an offscreen pass renders the
-  // same document - route this draw through the arena path so it gets its
+  // drew this slot resident is still open - an earlier draw in THIS frame,
+  // when this repeat could not take a repeat record of its own (a clip
+  // polygon or mask, gradient or pattern paint, a refused record), or an
+  // outer renderer's frame on this device that recorded a draw against the
+  // slot while an offscreen pass renders the same document - route this draw
+  // through the arena path so it gets its
   // own uniform + bind group instead of clobbering the parameters that
   // recorded draw reads at submit. Frame stamps are device-scoped
   // generations, so the claim compares against the device's oldest open

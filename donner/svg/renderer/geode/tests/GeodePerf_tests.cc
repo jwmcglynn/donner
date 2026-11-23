@@ -2238,6 +2238,56 @@ TEST_F(GeodePerfTest, RecordSourcedAndUniformSourcedDrawsAgree) {
 }
 
 // ---------------------------------------------------------------------------
+// Marker instances.
+//
+// A marker's content is one entity drawn once per vertex, each placement at
+// its own transform. `#clipped` keeps the default `overflow: hidden`, so each
+// placement also draws inside its own viewport clip, and its content has both a
+// fill and a stroke. `#loose` is unclipped and sits on an unstroked path, so its
+// first placement is a lone pending draw that the next placement repeats
+// exactly. Every placement after the first of each content entity is a repeat
+// of a resident slot whose uniform and primary record already serve the first.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kMarkerInstancesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+  <marker id="clipped" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+    <path d="M0 0 L8 4 L0 8 Z" fill="#c00" stroke="#003"/>
+  </marker>
+  <marker id="loose" viewBox="0 0 6 6" markerWidth="6" markerHeight="6" refX="3" refY="3"
+          overflow="visible">
+    <circle cx="3" cy="3" r="3" fill="#06c"/>
+  </marker>
+  <polyline points="10,90 40,20 70,80 100,30 130,70 160,25 190,85" fill="none" stroke="#333"
+            stroke-width="2" marker-start="url(#clipped)" marker-mid="url(#clipped)"
+            marker-end="url(#clipped)"/>
+  <path d="M10 110 H60 H110 H160 H190" fill="none" marker-start="url(#loose)"
+        marker-mid="url(#loose)" marker-end="url(#loose)"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, MarkerInstances_SecondFrameIsSteadyState) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kMarkerInstancesSvg, device);
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
+  ASSERT_THAT(frame.bitmap.pixels, testing::Not(testing::IsEmpty()))
+      << "renderer produced no snapshot";
+  ASSERT_GT(frame.counters.drawCalls, 0u) << "the scene must reach the fill path";
+
+  // Every placement after the first reuses its content's resident geometry and
+  // keeps a record of its own across frames, so an unchanged frame encodes,
+  // uploads and binds nothing new.
+  EXPECT_EQ(frame.counters.pathEncodes, 0u);
+  EXPECT_EQ(frame.counters.textureCreates, 0u);
+  EXPECT_EQ(frame.counters.bufferWrites, 0u)
+      << "repeated marker placements must not re-upload geometry or rewrite their records";
+  EXPECT_EQ(frame.counters.bufferWriteBytes, 0u);
+  EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
+      << "repeated marker placements must not build a bind group per draw";
+}
+
+// ---------------------------------------------------------------------------
 // One source path stroked with several styles through `<use>`.
 //
 // Every `<use>` instance of a path draws through the source path's entity, so
@@ -2279,6 +2329,41 @@ TEST_F(GeodePerfTest, UseInstancesWithDistinctStrokeStyles_NoDirtyPath_ZeroEncod
          "own resident outline.";
   EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
       << "An unchanged frame built bind groups for resident stroke outlines.";
+}
+
+// Two stroke styles of one source path, each drawn by several `<use>` instances. Each style
+// keeps its own stroke variant and resident slot, and every instance after a style's first is a
+// repeat of that variant's slot, so an unchanged frame must also write no repeat record and build
+// no bind group.
+constexpr std::string_view kRepeatedStrokeStylesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+  <defs>
+    <path id="p" d="M10,30 L40,10 C60,0 80,20 70,40" fill="none"/>
+  </defs>
+  <use href="#p" stroke="#000" stroke-width="4"/>
+  <use href="#p" x="60" stroke="#c00" stroke-width="4"/>
+  <use href="#p" y="50" stroke="#00c" stroke-width="7" stroke-linejoin="round"/>
+  <use href="#p" x="120" stroke="#0a0" stroke-width="4"/>
+  <use href="#p" x="60" y="50" stroke="#c0c" stroke-width="7" stroke-linejoin="round"/>
+  <use href="#p" x="120" y="50" stroke="#0cc" stroke-width="7" stroke-linejoin="round"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, UseStrokeStylesRepeated_SecondFrameIsSteadyState) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kRepeatedStrokeStylesSvg, device);
+  ASSERT_THAT(frame.bitmap.pixels, testing::Not(testing::IsEmpty()))
+      << "renderer produced no snapshot";
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
+
+  EXPECT_EQ(frame.counters.pathEncodes, 0u);
+  EXPECT_EQ(frame.counters.bufferWrites, 0u)
+      << "repeated instances of each stroke style must keep their records across frames";
+  EXPECT_EQ(frame.counters.bufferWriteBytes, 0u);
+  EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
+      << "repeated instances of each stroke style must not build a bind group per draw";
 }
 
 /// More stroke styles on one source path than the stroke cache keeps per entity. The styles

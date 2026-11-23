@@ -22,6 +22,7 @@
 /// Lives in `donner::geode` (not `donner::svg::geode`) to match the other
 /// Geode types referenced unqualified via `geode::` inside `donner::svg`.
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -152,11 +153,26 @@ public:
     }
     lastMergedFrame_ = frameIndex;
     retiredBindGroups_.clear();
-    for (uint32_t index : pendingFrees_) {
-      freeIndices_.insert(std::upper_bound(freeIndices_.begin(), freeIndices_.end(), index), index);
-    }
+    // Drop the prefix allocations consumed, then merge the sorted frees in: linear in the list
+    // plus k log k for k frees, where inserting each free in place was quadratic in k.
+    freeIndices_.erase(freeIndices_.begin(),
+                       freeIndices_.begin() + static_cast<std::ptrdiff_t>(freeHead_));
+    freeHead_ = 0;
+    std::sort(pendingFrees_.begin(), pendingFrees_.end());
+    const auto merged = static_cast<std::ptrdiff_t>(freeIndices_.size());
+    freeIndices_.insert(freeIndices_.end(), pendingFrees_.begin(), pendingFrees_.end());
+    std::inplace_merge(freeIndices_.begin(), freeIndices_.begin() + merged, freeIndices_.end());
+    // A slot freed more than once before this merge, or freed again while still on the free list,
+    // is listed once, so it is handed out once. This cannot catch a stale free of a slot that has
+    // already been handed out again: that slot would be listed free while it is live.
+    freeIndices_.erase(std::unique(freeIndices_.begin(), freeIndices_.end()), freeIndices_.end());
+    freeListSteps_ += freeIndices_.size();
     pendingFrees_.clear();
   }
+
+  /// Free-list entries visited by \ref beginFrame merges and allocations so far, so a test can
+  /// hold the free list to linear work.
+  [[nodiscard]] uint64_t freeListStepsForTesting() const { return freeListSteps_; }
 
   /// Park a bind group a slot is dropping until the next frame boundary.
   ///
@@ -176,17 +192,15 @@ public:
   /// Allocate the next record slot (free-list first, then bump in the
   /// newest buffer). Returns false when the device cannot create a buffer.
   bool allocateSlot(GeodeDevice& device, Slot& out) {
-    if (!freeIndices_.empty()) {
-      const uint32_t index = freeIndices_.front();
+    if (freeHead_ < freeIndices_.size()) {
+      // Lowest free index first, so slots handed out in draw order stay consecutive. The cursor
+      // consumes the sorted list from the front in constant time; the next merge drops the prefix.
+      const uint32_t index = freeIndices_[freeHead_++];
+      ++freeListSteps_;
       out = slotAt(index);
-      if (!out.buffer.isValid()) {
-        // A stale index that no longer resolves stays out of the free list,
-        // but never silently consumes the allocation attempt.
-        freeIndices_.erase(freeIndices_.begin());
-        return false;
-      }
-      freeIndices_.erase(freeIndices_.begin());
-      return true;
+      // A stale index that no longer resolves stays out of the free list, but never silently
+      // consumes the allocation attempt.
+      return out.buffer.isValid();
     }
     if (chunks_.empty() || usedBytes_ + sizeof(InstanceRecord) > chunks_.back().size) {
       uint64_t newSize = chunks_.empty() ? kInitialRecordSlabBytes : chunks_.back().size * 2u;
@@ -419,7 +433,10 @@ private:
   uint64_t lastMergedFrame_ = ~uint64_t{0};
   uint64_t usedBytes_ = 0;
   std::vector<Chunk> chunks_;
+  /// Free indices in ascending order; entries before `freeHead_` are already handed out.
   std::vector<uint32_t> freeIndices_;
+  size_t freeHead_ = 0;
+  uint64_t freeListSteps_ = 0;
   std::vector<uint32_t> pendingFrees_;
   /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
   std::vector<gpu::BindGroup> retiredBindGroups_;
@@ -431,6 +448,284 @@ private:
   uint64_t accountedBytes_ = 0;
   /// Retirement of the owning context; see the constructor.
   std::weak_ptr<GeodeHandleRetirement> owner_;
+};
+
+/**
+ * Persistent per-occurrence instance records for content drawn more than once
+ * over shared resident geometry: the glyph occurrences of one text element, or
+ * the second and later draws of one resident slot within a frame (each marker
+ * placement of a marker's content, a non-adjacent repeat of a `<use>` source).
+ *
+ * The geometry is shared, so the thing that has to exist once per OCCURRENCE is
+ * the record: transform, colour, clip rectangle, and the shared geometry's
+ * chunk-relative bases. Handing every occurrence a fresh record slot each frame
+ * would work, but it would also write 256 bytes per occurrence per frame
+ * forever, which keeps a static frame off the zero-bytes steady state the rest
+ * of the renderer reaches.
+ *
+ * So the slots live on their owner (a text element, one set per device that
+ * draws it, see \ref GeodeTextInstanceResidencyComponent; or a resident slot,
+ * see `GeodeResidentSlot::repeatRecords`) and persist. Occurrence `i` of the
+ * owner always writes slot `i`, the bytes are compared before writing, and an
+ * unchanged frame writes nothing. Slots are allocated together on first use,
+ * in draw order, which keeps their indices consecutive - exactly the property a
+ * batch needs to cover them with one draw.
+ *
+ * No explicit invalidation is needed when the content changes: a changed
+ * occurrence simply produces different record bytes for the affected slots, the
+ * compare misses, and those slots are rewritten. A frame with fewer occurrences
+ * leaves trailing slots unused (and free for the owner to grow back into); a
+ * frame with more appends.
+ *
+ * `lastFrame` guards the one case the compare cannot: the same owner written
+ * twice while an earlier writer's draws are still unsubmitted - a text element
+ * drawn twice in one frame (a `<use>` of the text), or an offscreen pass
+ * rendering the same document inside an outer frame that has already recorded
+ * its batch. The second writer must not rewrite those records, because every
+ * buffer write in a frame executes before every draw in that frame's submit.
+ * `lastFrame` holds a DEVICE-scoped generation
+ * (`GeodeDevice::beginFrameGeneration`) so the comparison covers renderers
+ * sharing a device, and the renderer diverts the second writer to per-frame
+ * temporary slots instead.
+ */
+struct GeodeOccurrenceRecords {
+  /// One occurrence's record slot plus the bytes last written to it.
+  struct Occurrence {
+    GeodeRecordSlab::Slot slot;
+    std::vector<uint8_t> lastRecord;
+  };
+  /// Stable owner for a separately allocated occurrence record.
+  using OccurrenceOwner = std::unique_ptr<Occurrence>;
+  /// Estimated retained bytes in one occurrence and its instance record.
+  static constexpr uint64_t kOccurrencePayloadBytes = sizeof(Occurrence) + sizeof(InstanceRecord);
+  /// Per-occurrence charge including the owner's vector entry.
+  static constexpr uint64_t kProjectedBytesPerOccurrence =
+      sizeof(OccurrenceOwner) + kOccurrencePayloadBytes;
+
+  /// Occurrence slots in paint order. Index is the occurrence's ordinal
+  /// among its owner's draws in one frame, so it is stable across unchanged
+  /// frames.
+  /// Owners may move when the vector grows, but each separately allocated
+  /// occurrence stays put while a pending batch holds pointers into it.
+  std::vector<OccurrenceOwner> occurrences;
+  /// Slab the slots were allocated from, this device's record slab for the
+  /// document; also keeps that slab alive for as long as the slots are.
+  std::shared_ptr<GeodeRecordSlab> recordSlab;
+  /// Device-scoped frame generation of the last draw that wrote these slots.
+  /// Zero means "never written": generations start at 1, and the guard reads
+  /// this as "older than every open frame", which is what untouched records
+  /// are.
+  uint64_t lastFrame = 0;
+  std::shared_ptr<GeodeDocumentGeometryBudget> cpuBudget;  ///< Document budget for CPU records.
+  GeodeGeometryCacheReservation cpuReservation;            ///< Owned CPU-byte reservation.
+  uint64_t cpuRetainedBytes = 0;                           ///< Charged owner and record bytes.
+
+  GeodeOccurrenceRecords() = default;
+  ~GeodeOccurrenceRecords() { freeRecordSlots(); }
+
+  GeodeOccurrenceRecords(const GeodeOccurrenceRecords&) = delete;
+  GeodeOccurrenceRecords& operator=(const GeodeOccurrenceRecords&) = delete;
+
+  /// Transfer occurrence slots and CPU reservations without freeing live slab records.
+  /// @param other Component whose records are moved into this object.
+  GeodeOccurrenceRecords(GeodeOccurrenceRecords&& other) noexcept
+      : occurrences(std::move(other.occurrences)),
+        recordSlab(std::move(other.recordSlab)),
+        lastFrame(other.lastFrame),
+        cpuBudget(std::move(other.cpuBudget)),
+        cpuReservation(std::move(other.cpuReservation)),
+        cpuRetainedBytes(other.cpuRetainedBytes),
+        cpuOccurrenceBytes(other.cpuOccurrenceBytes),
+        occurrenceReservationPending(other.occurrenceReservationPending) {
+    std::vector<OccurrenceOwner>().swap(other.occurrences);
+    other.cpuRetainedBytes = 0;
+    other.cpuOccurrenceBytes = 0;
+    other.occurrenceReservationPending = false;
+  }
+
+  /// Release current slots and take ownership of another component's records.
+  /// @param other Component whose records are moved into this object.
+  /// @return This component after the transfer.
+  GeodeOccurrenceRecords& operator=(GeodeOccurrenceRecords&& other) noexcept {
+    if (this != &other) {
+      // Release ours first, then take the source's slots and clear the
+      // source's view of them: entt's swap-and-pop removal move-assigns the
+      // surviving component over the removed one, and a source that kept its
+      // slots would free the SURVIVOR's records from its own destructor,
+      // handing live batch bindings to whatever allocates next.
+      freeRecordSlots();
+      occurrences = std::move(other.occurrences);
+      recordSlab = std::move(other.recordSlab);
+      lastFrame = other.lastFrame;
+      cpuBudget = std::move(other.cpuBudget);
+      cpuReservation = std::move(other.cpuReservation);
+      cpuRetainedBytes = other.cpuRetainedBytes;
+      cpuOccurrenceBytes = other.cpuOccurrenceBytes;
+      occurrenceReservationPending = other.occurrenceReservationPending;
+      std::vector<OccurrenceOwner>().swap(other.occurrences);
+      other.cpuRetainedBytes = 0;
+      other.cpuOccurrenceBytes = 0;
+      other.occurrenceReservationPending = false;
+    }
+    return *this;
+  }
+
+  /// Reserve CPU bytes and vector capacity before appending one occurrence.
+  /// @param budget Document budget that will own the new reservation.
+  /// @return False if capacity growth or byte admission fails.
+  bool reserveOccurrence(std::shared_ptr<GeodeDocumentGeometryBudget> budget) {
+    if (!canReserveOccurrence(budget) ||
+        kOccurrencePayloadBytes > std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
+      return false;
+    }
+    const size_t nextSize = occurrences.size() + 1u;
+    const uint64_t payloadBytes = cpuOccurrenceBytes + kOccurrencePayloadBytes;
+    const bool charged = nextSize > occurrences.capacity()
+                             ? growOwnersAndCharge(budget, nextSize, payloadBytes)
+                             : chargeAtCurrentCapacity(budget, payloadBytes);
+    if (!charged) {
+      return false;
+    }
+    cpuBudget = std::move(budget);
+    occurrenceReservationPending = true;
+    return true;
+  }
+
+  /// Append a slab slot after reserveOccurrence has admitted its CPU payload.
+  /// @param slot GPU record slab slot assigned to the new occurrence.
+  /// @return False if the pending reservation cannot be completed.
+  bool appendReservedOccurrence(const GeodeRecordSlab::Slot& slot) {
+    if (!occurrenceReservationPending) {
+      return false;
+    }
+    if (!cpuBudget || occurrences.size() == occurrences.capacity()) {
+      rollbackOccurrence();
+      return false;
+    }
+    auto occurrence = std::make_unique<Occurrence>();
+    occurrence->slot = slot;
+    occurrence->lastRecord.reserve(sizeof(InstanceRecord));
+    const uint64_t lastRecordBytes = occurrence->lastRecord.capacity();
+    if (lastRecordBytes > std::numeric_limits<uint64_t>::max() - sizeof(Occurrence) ||
+        sizeof(Occurrence) + lastRecordBytes >
+            std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
+      rollbackOccurrence();
+      return false;
+    }
+    const uint64_t occurrenceBytes = sizeof(Occurrence) + lastRecordBytes;
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    if (cpuOccurrenceBytes + occurrenceBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+        !cpuReservation.replace(cpuBudget, ownerBytes + cpuOccurrenceBytes + occurrenceBytes)) {
+      rollbackOccurrence();
+      return false;
+    }
+    occurrences.push_back(std::move(occurrence));
+    cpuOccurrenceBytes += occurrenceBytes;
+    cpuRetainedBytes = ownerBytes + cpuOccurrenceBytes;
+    occurrenceReservationPending = false;
+    return true;
+  }
+
+  /// Restore the CPU reservation after an occurrence append fails.
+  void rollbackOccurrence() {
+    if (!cpuBudget) {
+      occurrenceReservationPending = false;
+      return;
+    }
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    cpuRetainedBytes = ownerBytes + cpuOccurrenceBytes;
+    (void)cpuReservation.replace(cpuBudget, cpuRetainedBytes);
+    occurrenceReservationPending = false;
+  }
+
+  /// CPU bytes currently charged for this component, exposed to tests.
+  uint64_t cpuRetainedBytesForTesting() const { return cpuRetainedBytes; }
+
+  /// Return every slot to the slab (deferred to the next frame's merge, like
+  /// every other record free) and drop them.
+  void freeRecordSlots() {
+    if (recordSlab) {
+      for (const OccurrenceOwner& occurrence : occurrences) {
+        if (occurrence && occurrence->slot.buffer.isValid()) {
+          recordSlab->freeSlot(occurrence->slot);
+        }
+      }
+    }
+    std::vector<OccurrenceOwner>().swap(occurrences);
+    cpuReservation.reset();
+    cpuBudget.reset();
+    cpuRetainedBytes = 0;
+    cpuOccurrenceBytes = 0;
+    occurrenceReservationPending = false;
+  }
+
+private:
+  /// Whether one more occurrence may be reserved against \p budget: no reservation is pending,
+  /// the records charge no other budget, and the list can still grow.
+  bool canReserveOccurrence(const std::shared_ptr<GeodeDocumentGeometryBudget>& budget) const {
+    return !occurrenceReservationPending && budget &&
+           (!cpuBudget || cpuBudget.get() == budget.get()) &&
+           occurrences.size() != std::numeric_limits<size_t>::max();
+  }
+
+  /// Grow the owner vector to hold \p nextSize occurrences and charge its new capacity plus
+  /// \p payloadBytes, restoring the previous charge when the grown vector cannot be charged.
+  /// @return False, with the vector unchanged, if the growth or the charge is refused.
+  bool growOwnersAndCharge(const std::shared_ptr<GeodeDocumentGeometryBudget>& budget,
+                           size_t nextSize, uint64_t payloadBytes) {
+    const uint64_t oldBytes = cpuRetainedBytes;
+    size_t targetCapacity = occurrences.capacity() == 0u ? 1u : occurrences.capacity();
+    while (targetCapacity < nextSize) {
+      if (targetCapacity > std::numeric_limits<size_t>::max() / 2u) {
+        return false;
+      }
+      targetCapacity *= 2u;
+    }
+    if (targetCapacity > occurrences.max_size()) {
+      return false;
+    }
+    const uint64_t projectedOwnerBytes =
+        static_cast<uint64_t>(targetCapacity) * sizeof(OccurrenceOwner);
+    if (payloadBytes > std::numeric_limits<uint64_t>::max() - projectedOwnerBytes ||
+        !cpuReservation.replace(budget, projectedOwnerBytes + payloadBytes)) {
+      return false;
+    }
+
+    std::vector<OccurrenceOwner> replacement;
+    replacement.reserve(targetCapacity);
+    const uint64_t actualOwnerBytes =
+        static_cast<uint64_t>(replacement.capacity()) * sizeof(OccurrenceOwner);
+    if (payloadBytes > std::numeric_limits<uint64_t>::max() - actualOwnerBytes ||
+        !cpuReservation.replace(budget, actualOwnerBytes + payloadBytes)) {
+      (void)cpuReservation.replace(budget, oldBytes);
+      return false;
+    }
+    for (OccurrenceOwner& occurrence : occurrences) {
+      replacement.push_back(std::move(occurrence));
+    }
+    occurrences.swap(replacement);
+    cpuRetainedBytes = actualOwnerBytes + payloadBytes;
+    return true;
+  }
+
+  /// Charge the owner vector's current capacity plus \p payloadBytes.
+  /// @return False if the charge is refused.
+  bool chargeAtCurrentCapacity(const std::shared_ptr<GeodeDocumentGeometryBudget>& budget,
+                               uint64_t payloadBytes) {
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    if (payloadBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+        !cpuReservation.replace(budget, ownerBytes + payloadBytes)) {
+      return false;
+    }
+    cpuRetainedBytes = ownerBytes + payloadBytes;
+    return true;
+  }
+
+  uint64_t cpuOccurrenceBytes = 0;
+  bool occurrenceReservationPending = false;
 };
 
 class GeodeDevice;
@@ -883,10 +1178,11 @@ struct GeodeResidentSlot {
   /// draw per frame (all draws recorded against a frame's command buffer
   /// read the buffer's final contents at submit time). When the same slot
   /// is drawn again in the same frame at a different transform/color
-  /// (markers, non-adjacent repeated `<use>`), the second and later draws
-  /// fall back to the per-frame arena path so each gets its own uniform. The
-  /// steady-state win is unaffected for the common case of a path drawn
-  /// once per frame (Tiger / Lion). Sentinel `~0` means "never drawn".
+  /// (markers, repeated `<use>`), the second and later draws take records of
+  /// their own from `repeatRecords` and join ordered batches; a repeat that
+  /// cannot (a clip polygon or mask, gradient paint, a refused record) falls
+  /// back to the per-frame arena path so it still gets its own uniform.
+  /// Sentinel `~0` means "never drawn".
   uint64_t lastResidentFrame = ~uint64_t{0};
 
   /// Process-unique id (see `GeodeDevice::deviceId()`) of the device that
@@ -900,11 +1196,26 @@ struct GeodeResidentSlot {
 
   /// Frame index in which this slot's record was last referenced by a
   /// recorded scene-batch draw. A record slot holds ONE record; an entity
-  /// drawn again in the same frame (markers, repeated `<use>`) needs a
-  /// fresh record slot so earlier recorded batches keep reading their own
-  /// content at submit time. The scene batcher consults this to decide
-  /// between the slot's primary record and a per-frame temporary one.
+  /// drawn again in the same frame (markers, repeated `<use>`) needs another
+  /// record so earlier recorded batches keep reading their own content at
+  /// submit time. Such a repeat takes one of `repeatRecords`; a pending
+  /// singleton converted into a batch after its slot's primary is claimed
+  /// takes a per-frame temporary one.
   uint64_t lastSceneFrame = ~uint64_t{0};
+
+  /// Records for the second and later draws of this slot within one frame,
+  /// created on the first such repeat; occurrence `i` is the slot's `i + 1`-th
+  /// draw of the frame. The slot's own uniform and primary record can carry
+  /// only one draw per frame, so without these a repeat (each placement of a
+  /// marker's content, a non-adjacent `<use>` of one source) would re-upload
+  /// its geometry through the per-frame arena and build its own bind group
+  /// every frame. The records read this slot's resident geometry and persist,
+  /// so an unchanged frame writes none of them. They survive \ref reset for
+  /// the same reason `recordSlot` does: a re-upload changes the bases inside
+  /// the record bytes, which the compare-before-write already catches.
+  std::unique_ptr<GeodeOccurrenceRecords> repeatRecords;
+  /// Ordinal of the next repeat in the frame `repeatRecords->lastFrame`.
+  size_t nextRepeatOccurrence = 0;
 
   /// True once `buffer` + `bindGroup` hold the current encode. Cleared
   /// when the slot is reset or when a re-upload is required.
@@ -1004,6 +1315,8 @@ struct GeodeResidentSlot {
       recordSlab = std::move(other.recordSlab);
       other.recordSlot = GeodeRecordSlab::Slot{};
       lastSceneFrame = other.lastSceneFrame;
+      repeatRecords = std::move(other.repeatRecords);
+      nextRepeatOccurrence = other.nextRepeatOccurrence;
       bindGroup = std::move(other.bindGroup);
       boundPatternView = other.boundPatternView;
       other.boundPatternView = gpu::TextureViewRef();

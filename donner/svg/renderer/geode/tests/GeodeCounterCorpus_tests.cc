@@ -344,91 +344,28 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         "clears when decoded images keep their texture and the image quad gains residency",
     },
     {
-        /*scene=*/"image_external_svg_par",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 36, 4},
-        /*reason=*/
-        "the same external SVG is drawn by two image elements at different sizes; one size "
-        "stays resident and the other re-uploads its geometry every frame (the single-image "
-        "image_external_svg_basic scene is clean)",
-        /*tracking=*/
-        "clears when the nested-document raster cache is keyed per destination size rather "
-        "than holding one entry per source",
-    },
-    {
-        /*scene=*/"image_external_svg_viewbox",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 36, 4},
-        /*reason=*/
-        "the same external SVG is drawn by two image elements at different sizes; one size "
-        "stays resident and the other re-uploads its geometry every frame (the single-image "
-        "image_external_svg_basic scene is clean)",
-        /*tracking=*/
-        "clears when the nested-document raster cache is keyed per destination size rather "
-        "than holding one entry per source",
-    },
-    {
-        /*scene=*/"marker",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 414, 46},
-        /*reason=*/
-        "every drawn marker instance re-uploads its geometry through the per-frame arena and "
-        "builds its own bind group",
-        /*tracking=*/"clears when marker instance geometry gains per-entity residency",
-    },
-    {
         /*scene=*/"marker_segments",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 203, 43},
+        /*ceiling=*/{0, 0, 23, 23},
         /*reason=*/
-        "every drawn marker instance re-uploads its geometry and rebuilds its bind groups each "
-        "frame",
+        "the marker content carries opacity, so every marker instance draws inside its own "
+        "opacity group, whose composite rewrites its blit uniform and builds a bind group "
+        "every frame",
         /*tracking=*/
-        "clears when marker instance geometry gains per-entity residency",
+        "clears when the isolated-layer composite keeps its uniform and bind group across "
+        "unchanged frames",
     },
     {
         /*scene=*/"marker_spec_example",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 92, 20},
+        /*ceiling=*/{0, 0, 11, 11},
         /*reason=*/
-        "every drawn marker instance re-uploads its geometry through the per-frame arena and "
-        "builds its own bind group",
-        /*tracking=*/"clears when marker instance geometry gains per-entity residency",
-    },
-    {
-        /*scene=*/"nested_svg_aspectratio",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 8, 77},
-        /*reason=*/
-        "nested viewports carrying text and use instances re-upload geometry and build bind "
-        "groups every frame",
+        "two of the three markers' content carries opacity, so each of their instances draws "
+        "inside its own opacity group, whose composite rewrites its blit uniform and builds a "
+        "bind group every frame",
         /*tracking=*/
-        "clears when nested-viewport subtrees, placed text, and use instances all keep their "
-        "cached geometry",
-    },
-    {
-        /*scene=*/"poker_chips",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 6, 16},
-        /*reason=*/
-        "each chip's use instances draw the shared source path's fill and stroke outlines and "
-        "the shared circles again; a resident slot carries one draw's uniform per frame, so "
-        "every repeat after the first chip draws through the per-frame arena",
-        /*tracking=*/
-        "clears when a resident slot drawn more than once in a frame keeps residence for each "
-        "occurrence",
-    },
-    {
-        /*scene=*/"stroking_complex",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 6, 2},
-        /*reason=*/
-        "two stroke styles of the shared source path are each drawn by two use instances; a "
-        "resident slot carries one draw's uniform per frame, so each repeat draws through the "
-        "per-frame arena",
-        /*tracking=*/
-        "clears when a resident slot drawn more than once in a frame keeps residence for each "
-        "occurrence",
+        "clears when the isolated-layer composite keeps its uniform and bind group across "
+        "unchanged frames",
     },
 });
 
