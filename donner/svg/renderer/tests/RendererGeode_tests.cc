@@ -4496,7 +4496,7 @@ TEST_P(RendererGeodeStrokeKeyTest, EditRendersLikeAFreshDocument) {
   ASSERT_THAT(target, testing::Optional(testing::_));
   if (edit.attribute == "pathLength") {
     // Written through the DOM setter: a runtime `setAttribute("pathLength", ...)` does not
-    // reach the element's path length.
+    // reach the element's path length (#2609).
     target->cast<SVGGeometryElement>().setPathLength(std::stod(std::string(edit.after)));
   } else {
     target->setAttribute(edit.attribute, edit.after);
@@ -4593,6 +4593,62 @@ TEST_F(RendererGeodeTest, NestedPassKeepsTheStrokeOutlineAnOuterFrameLeftPending
   outer.endFrame();
   editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expected,
                                        "nested_pass_keeps_pending_stroke_outline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// The fill counterpart of `NestedPassKeepsTheStrokeOutlineAnOuterFrameLeftPending`. The outer
+/// frame leaves a fill of the entity pending; the pass then draws the entity at two finer
+/// tolerance buckets, which fill the entity's two fill variants, the second by replacement. The
+/// pass draws different geometry through the same entity, so an encode replaced under the outer
+/// frame's pending batch would show as the wrong shape.
+TEST_F(RendererGeodeTest, NestedPassKeepsTheFillEncodeAnOuterFrameLeftPending) {
+  const Path outerShape =
+      PathBuilder().moveTo({8, 40}).curveTo({20, 8}, {44, 8}, {56, 40}).closePath().build();
+  const Path innerShape =
+      PathBuilder().moveTo({4, 4}).curveTo({30, 2}, {30, 30}, {4, 30}).closePath().build();
+  const css::RGBA red(200, 0, 0, 255);
+
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  reference.setPaint(solidFill(red));
+  reference.drawPath(PathShape{.path = &outerShape}, StrokeParams{});
+  reference.endFrame();
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <path id="p" d="M8,40 C20,8 44,8 56,40 Z" fill="red"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#p");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const EntityHandle source = target->unsafeEntityHandle();
+
+  RendererGeode outer = createRenderer();
+  beginFrame(outer);
+  outer.setPaint(solidFill(red));
+  outer.drawPath(PathShape{.path = &outerShape, .sourceEntity = source}, StrokeParams{});
+
+  std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+  ASSERT_THAT(inner, testing::NotNull());
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  inner->beginFrame(viewport);
+  inner->setPaint(solidFill(css::RGBA(0, 0, 200, 255)));
+  for (const double scale : {4.0, 16.0}) {
+    inner->setTransform(Transform2d::Scale(scale));
+    inner->drawPath(PathShape{.path = &innerShape, .sourceEntity = source}, StrokeParams{});
+  }
+  inner->endFrame();
+
+  outer.endFrame();
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expected,
+                                       "nested_pass_keeps_pending_fill_encode",
                                        editor::tests::PixelmatchIdentityParams());
 }
 

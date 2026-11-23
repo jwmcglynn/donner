@@ -15,6 +15,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -604,6 +605,45 @@ TEST_F(GeodeDocumentResidencyTest, ReplacedStrokeOutlinesHandOverTheirChargeAndR
   path->setAttribute("d", "");
   renderer.draw(document);
   EXPECT_THAT(DocumentBudgetOf(document)->cacheBytes(), Eq(0u));
+}
+
+/// A stroked path with curves, so its outline depends on the device scale it is drawn at, inside
+/// a group whose transform zooms it.
+constexpr std::string_view kZoomedStrokeSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <g id="zoom"><path d="M2 4 C6 0 12 8 18 3" fill="none" stroke="#c00" stroke-width="1"/></g>
+  </svg>)";
+
+/// Cache bytes charged to \p document after drawing it once at each of \p scales.
+uint64_t StrokeCacheBytesAfterZooming(const std::shared_ptr<geode::GeodeDevice>& device,
+                                      SVGDocument& document, std::span<const double> scales) {
+  std::optional<SVGElement> zoom = document.querySelector("#zoom");
+  EXPECT_TRUE(zoom.has_value());
+  RendererGeode renderer(device);
+  for (const double scale : scales) {
+    zoom->setAttribute("transform", "scale(" + std::to_string(scale) + ")");
+    renderer.draw(document);
+    std::fprintf(stderr, "[zoom] scale=%g cacheBytes=%llu\n", scale,
+                 static_cast<unsigned long long>(DocumentBudgetOf(document)->cacheBytes()));
+  }
+  return DocumentBudgetOf(document)->cacheBytes();
+}
+
+/// Zooming one stroked element through five power-of-two scale buckets keeps only the outlines
+/// of the last two buckets, as a fill keeps its last two tolerance buckets, so a zoom cannot fill
+/// the element's stroke cache, or the document's budget, with one style's outlines.
+TEST_F(GeodeDocumentResidencyTest, ZoomingKeepsTwoStrokeOutlinesPerStyle) {
+  SVGDocument zoomed = ParseShapes(kZoomedStrokeSvg);
+  const std::array<double, 5> buckets = {1.0, 2.0, 4.0, 8.0, 16.0};
+  const uint64_t zoomedBytes = StrokeCacheBytesAfterZooming(first_, zoomed, buckets);
+
+  SVGDocument lastTwo = ParseShapes(kZoomedStrokeSvg);
+  const std::array<double, 2> lastTwoBuckets = {8.0, 16.0};
+  const uint64_t lastTwoBytes = StrokeCacheBytesAfterZooming(first_, lastTwo, lastTwoBuckets);
+
+  ASSERT_THAT(lastTwoBytes, Gt(0u));
+  EXPECT_THAT(zoomedBytes, Eq(lastTwoBytes))
+      << "a zoomed stroke must keep only the outlines of its last two scale buckets";
 }
 
 TEST_F(GeodeDocumentResidencyTest, ADocumentBudgetRefusalRecoversWhenTheDeviceHoldingItGoes) {
