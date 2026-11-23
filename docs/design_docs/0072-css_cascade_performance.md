@@ -301,8 +301,12 @@ Part A estimate: 27.5 engineering days.
   - [ ] Build the document layer tree, assign post-order ranks, add the layer rank to
         `css::Specificity` with importance reversal, place presentation attributes below every
         author layer, and check `Property::inheritFrom` with layered declarations.
-  - [ ] Cover nested layers declared out of order (`@layer a, b;` then `@layer a.x`), layers
-        extended in a later stylesheet, and rank recomputation after an edit adds a layer.
+  - [ ] Record per-stylesheet layer streams with import markers and the import origin of each
+        flattened imported sheet, and build the tree from those streams in source order.
+  - [ ] Cover nested layers declared out of order (`@layer a, b;` then `@layer a.x`), a layer
+        statement before a layered import whose sheet sets the same property (the `a, b` example
+        under [Cascade Layers](#cascade-layers)), layers extended in a later stylesheet, an import
+        that loads after the first frame, and rank recomputation after an edit adds a layer.
   - Done when: the ported layer cases pass and computed styles of documents without layers are
     unchanged.
 - [ ] Milestone B6: Conformance cases (2 days). After B3 and B5.
@@ -417,10 +421,16 @@ comparison yields the cascade order. `css::Specificity::SpecialType` encodes ori
 importance (user agent, author, style attribute, animation, important variants, override).
 A declaration whose name starts with `--` reaches `PropertyRegistry::parseProperty`, which reports
 "Unknown property" and drops it; `var()` is not recognized anywhere. The stylesheet parser keeps
-`@layer` statements only for import ordering (`AtRuleEndsImportSection` in
-`StylesheetParser.cc`) and drops `@layer` blocks with their rules, and it drops imports that name
-a layer ("CSS @import cascade layers are unsupported"). `css::Declaration` already stores its
-value as a `std::vector<ComponentValue>`, which is the token sequence custom properties need.
+`@layer` statements only for import ordering and drops `@layer` blocks with their rules, and it
+drops imports that name a layer ("CSS @import cascade layers are unsupported").
+`AtRuleEndsImportSection` in `StylesheetParser.cc` ends the import section at an `@namespace`
+statement or at any block at-rule it lists (an `@layer` block among them); an `@layer` statement
+does not end it, as Cascade Level 5 allows layer statements before imports. Retained imports are
+loaded later and stored flattened in `StylesheetComponent::importedStylesheets`, each imported
+sheet after the sheets it imports and all of them before the importing sheet's own rules; the
+position of an import relative to the `@layer` statements around it is not kept. `css::Declaration`
+already stores its value as a `std::vector<ComponentValue>`, which is the token sequence custom
+properties need.
 
 **Computed style.** After the cascade, `ApplyAnimatedStyle`, contextual font sizes, scalar and
 paint animation styles and symbol display are applied, then `inheritComputedParent` merges the
@@ -1385,11 +1395,28 @@ declarations of the implicit outermost layer. For a stylesheet of `@layer a, b;`
 `@layer b { rect { fill: blue } }`, then `@layer a.x { rect { fill: red } }`, every normal
 declaration in `b` outranks every one in `a` and `a.x`, although `a.x` is declared after `b`.
 
-The document therefore builds one layer tree across all applicable stylesheets, walking them in
-cascade order (imports first, as today): each `@layer` statement, block or layered import adds its
-dotted path to the tree if absent, appending new children after their existing siblings. A
-sheet imported with `layer(x)` or `layer` adds its own layers under that layer's node, so
-`@layer y` inside a sheet imported into `x` is `x.y`. Ranks
+The tree is built from source order, not from the flattened imports-first order the cascade uses
+for rules. Cascade Level 5 treats an imported sheet's contents as if written at the position of
+its `@import`, and allows `@layer` statements before imports, so the position of each import among
+the layer statements around it decides order. For example, with `@layer a, b;`, then
+`@import url("b.css") layer(b);`, then `@layer a { rect { fill: red } }`, and `b.css` containing
+`rect { fill: blue }`, the statement declares `a` before `b`, so `b` ranks above `a` and blue
+wins. Building the tree imports-first would create `b` first and make red win.
+
+So each parsed stylesheet records, in source order, one layer stream: its `@layer` statement
+names, its `@layer` blocks (with their nested blocks), and a marker for each retained `@import`
+with the import's layer (`layer(x)`, the anonymous `layer`, or none). The flattened
+`importedStylesheets` gain, per entry, the index of the import that loaded it and its parent
+entry, so each import marker can find its sheet. The document builds one layer tree by walking the
+applicable stylesheets in the order the cascade applies them and, within each, its stream in
+source order: a statement or block adds its dotted path if absent; an import marker walks the
+imported sheet's own stream at that point, under the import's layer node (`layer(x)` adds `x` if
+absent, `layer` adds a fresh anonymous node, an unlayered import uses the current node). New
+children are appended after their existing siblings, so sibling order within a parent is the
+order of first appearance across that whole ordered stream. A sheet imported into `x` therefore
+places `@layer y` at `x.y`. An import that has not loaded yet contributes nothing, so the tree is
+provisional until imports resolve; when one loads, the tree and ranks are recomputed and one full
+restyle follows, as below. Ranks
 are assigned only after the whole tree is known, by a post-order walk: a node's children receive
 ranks in sibling order, then the node's own declarations receive the next rank. The root's own
 declarations, the unlayered author styles, therefore get the highest rank. Presentation attributes
@@ -1476,8 +1503,9 @@ Reading `StylesheetParser::Parse`, `StylesheetParseState`, `HandleAtRule` and
 `RuleParserImpl::consumeListOfRules`, that state is:
 
 - `StylesheetParseState::importsAllowed`: true until a retained qualified rule or an at-rule that
-  ends the import section (`AtRuleEndsImportSection`: `@namespace` with a block, and any of the
-  block at-rules it lists) has been seen. It decides whether a later `@import` is kept.
+  ends the import section (`AtRuleEndsImportSection`: an `@namespace` statement, or any of the
+  block at-rules it lists, including `@layer` blocks; an `@layer` statement does not end it) has
+  been seen. It decides whether a later `@import` is kept.
 - The accumulated `imports` and `fontFaces` lists, in order.
 - Cumulative resource accounting: `Stylesheet::SecurityStats` (rules, declarations, component
   values, `rejected`), the rule-count cap `RuleParser::kMaximumRules` checked against the running
@@ -1809,7 +1837,11 @@ Stylesheets and documents are untrusted input.
   `layer-import.html`, `layer-important.html`, `layer-vs-inline-style.html`,
   `layer-statement-before-import.html`, `layer-rule-invalid-name.html` and
   `presentational-hints-cascade.html` (its HTML `width` attribute becomes an SVG presentation
-  attribute). The resvg suite has no custom-property or layer rows.
+  attribute). The resvg suite has no custom-property or layer rows. A Donner case adds the layer
+  order example from [Cascade Layers](#cascade-layers): `@layer a, b;`, then
+  `@import url("b.css") layer(b);` with `b.css` setting `rect { fill: blue }`, then
+  `@layer a { rect { fill: red } }`, resolved through a test resource loader; the rectangle is
+  blue. The case must be observed red against an imports-first tree before it counts.
 - **Rendering cases** in the Donner SVG 2 suite for a custom property feeding `fill` through a
   `<use>` instance, a layered `!important` override, and a presentation attribute losing to the
   first declared layer.
