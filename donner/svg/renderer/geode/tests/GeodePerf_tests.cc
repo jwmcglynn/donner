@@ -2640,5 +2640,76 @@ TEST_F(GeodePerfTest, ClippedDraws_UnchangedFrameEncodesWritesAndCreatesNothing)
   }
 }
 
+/// Composites through `<mask>` elements and under path clips: a luminance mask, an alpha mask with
+/// user-space bounds, a linearRGB luminance mask, a mask whose content is itself masked, a masked
+/// element under a clip, and two group opacities. On the group that carries both `opacity` and
+/// `clip-path` the clip applies inside the layer, so its composite binds no clip mask; the group
+/// nested in a clipped group composites its layer under the clip mask.
+constexpr std::string_view kMaskCompositesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100">
+  <defs>
+    <mask id="luminance">
+      <rect width="160" height="100" fill="white"/>
+      <circle cx="20" cy="20" r="12" fill="#404040"/>
+    </mask>
+    <mask id="alpha" mask-type="alpha" maskUnits="userSpaceOnUse" x="44" y="4" width="32"
+          height="32">
+      <rect width="160" height="100" fill="black" fill-opacity="0.6"/>
+    </mask>
+    <mask id="linear" color-interpolation="linearRGB">
+      <rect width="160" height="100" fill="#808080"/>
+    </mask>
+    <mask id="inner"><rect x="120" y="0" width="20" height="40" fill="white"/></mask>
+    <mask id="outer">
+      <rect x="120" y="0" width="40" height="40" fill="white" mask="url(#inner)"/>
+    </mask>
+    <clipPath id="round"><circle cx="40" cy="70" r="26"/></clipPath>
+    <clipPath id="diamond"><polygon points="120,46 156,73 120,98 84,73"/></clipPath>
+  </defs>
+  <rect width="160" height="100" fill="#204080"/>
+  <rect x="4" y="4" width="32" height="32" fill="orange" mask="url(#luminance)"/>
+  <rect x="44" y="4" width="32" height="32" fill="lime" mask="url(#alpha)"/>
+  <rect x="84" y="4" width="32" height="32" fill="yellow" mask="url(#linear)"/>
+  <rect x="124" y="4" width="32" height="32" fill="red" mask="url(#outer)"/>
+  <g opacity="0.6" clip-path="url(#round)"><rect x="0" y="40" width="80" height="60" fill="red"/></g>
+  <g clip-path="url(#round)">
+    <g opacity="0.5"><rect x="0" y="40" width="40" height="30" fill="blue"/></g>
+  </g>
+  <g clip-path="url(#diamond)">
+    <rect x="80" y="40" width="80" height="60" fill="white" mask="url(#luminance)"/>
+  </g>
+</svg>
+)SVG";
+
+/// Composites through a mask and composites under a path clip keep their uniforms and bind groups
+/// across frames: on an unchanged frame they write no buffer and create no bind group.
+TEST_F(GeodePerfTest, MaskComposites_UnchangedFrameWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kMaskCompositesSvg, sink);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  ASSERT_GT(test::CountNonTransparentPixels(renderer.takeSnapshot()), 0u)
+      << "Premise: the masked and clipped content must paint, or zero counters below prove nothing";
+  ASSERT_THAT(renderer.maskCompositeTexturesForTesting(), testing::SizeIs(6u))
+      << "Premise: every mask composites its content, the nested one included";
+
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "unchanged frame " << frame);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("MaskComposites (unchanged frame)", c);
+    EXPECT_EQ(c.pathEncodes, 0u);
+    EXPECT_EQ(c.textureCreates, 0u);
+    EXPECT_EQ(c.bufferWrites, 0u) << "Mask and clipped composites keep their uniforms";
+    EXPECT_EQ(c.bindgroupCreates, 0u)
+        << "Mask and clipped composites keep the bind groups naming their textures and clip views";
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg

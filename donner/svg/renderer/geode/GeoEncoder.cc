@@ -3850,7 +3850,8 @@ void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity,
 void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Texture& mask,
                                       svg::MaskType maskType,
                                       const std::optional<Box2d>& maskBounds,
-                                      svg::ColorInterpolation colorInterpolation) {
+                                      svg::ColorInterpolation colorInterpolation,
+                                      GeodeTextureEncoder::RetainedQuadBinding* retained) {
   if (!content.isValid() || !mask.isValid()) {
     return;
   }
@@ -3890,9 +3891,7 @@ void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Te
     qp.maskBounds = *maskBounds;
   }
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->gpuContext, *impl_->imagePipeline, *impl_->pass,
-                                        content, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources, impl_.get());
+  impl_->drawRetainableQuad(content, mvp, qp, retained);
 }
 
 void GeoEncoder::blitFullTargetBlended(const gpu::Texture& layer, const gpu::Texture& dstSnapshot,

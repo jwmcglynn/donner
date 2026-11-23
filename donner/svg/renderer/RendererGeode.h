@@ -585,11 +585,17 @@ public:
   [[nodiscard]] std::vector<std::optional<gpu::ResourceIdentity>>
   filterOutputCompositeTexturesForTesting() const;
 
+  /// The content texture each `<mask>` composited in the last frame was drawn from, in the order
+  /// the masks were popped. Lists only the composites that hold a retained entry.
+  [[nodiscard]] std::vector<std::optional<gpu::ResourceIdentity>> maskCompositeTexturesForTesting()
+      const;
+
   /// Retained composite entries this renderer holds right now, per sequence.
   struct RetainedCompositeCounts {
     size_t layers = 0;         //!< Isolated-layer composite entries.
     size_t filterResults = 0;  //!< Filter-result composite entries.
     size_t images = 0;         //!< Blit entries of image textures kept across frames.
+    size_t masks = 0;          //!< Composite entries of `<mask>` contents through their masks.
   };
 
   /// The retained composite entries this renderer holds, including any not yet dropped.

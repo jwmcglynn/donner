@@ -513,11 +513,15 @@ public:
    * @param maskType Whether mask coverage comes from luminance or alpha.
    * @param maskBounds Optional clip rect in target-pixel space.
    * @param colorInterpolation Color space for luminance conversion; auto chooses sRGB.
+   * @param retained Uniform buffer and bind group this composite keeps across frames, or null to
+   *   allocate both for this frame only. See \ref GeodeTextureEncoder::RetainedQuadBinding for
+   *   when a caller may pass one.
    */
   void blitFullTargetMasked(
       const gpu::Texture& content, const gpu::Texture& mask, svg::MaskType maskType,
       const std::optional<Box2d>& maskBounds,
-      svg::ColorInterpolation colorInterpolation = svg::ColorInterpolation::SRGB);
+      svg::ColorInterpolation colorInterpolation = svg::ColorInterpolation::SRGB,
+      GeodeTextureEncoder::RetainedQuadBinding* retained = nullptr);
 
   /**
    * `mix-blend-mode` compositing. Blits `layer` across the

@@ -1560,9 +1560,10 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
 /// after the frame that last bound it has been submitted. The textures themselves go back to the
 /// pool at every frame end; the renderer drops a texture's view when the pool, or the device's
 /// handle retirement, reports the texture destroyed (\ref forget), and drops every view when a
-/// frame ends without submitting. A view owns no memory of its own, so the entries are bounded by
-/// the textures one frame uses, which the frame's surface budget bounds, and charged to no byte
-/// budget.
+/// frame ends without submitting. \ref beginFrame and \ref forget report each view they drop
+/// before it goes, so an owner can first release what it built on the view. A view owns no memory
+/// of its own, so the entries are bounded by the textures one frame uses, which the frame's surface
+/// budget bounds, and charged to no byte budget.
 class RetainedTextureViews {
 public:
   /// @param label Label of the views created.
@@ -1589,18 +1590,32 @@ public:
   }
 
   /// Starts a frame: drops the views the finished frame did not use.
-  void beginFrame() {
+  /// @param onDrop Called with the runtime identity of each view before it is dropped.
+  template <typename OnDrop>
+  void beginFrame(OnDrop&& onDrop) {
     ++frame_;
-    std::erase_if(views_,
-                  [&](const auto& entry) { return entry.second.lastUsedFrame + 1 < frame_; });
+    for (auto it = views_.begin(); it != views_.end();) {
+      if (it->second.lastUsedFrame + 1 < frame_) {
+        onDrop(IdentityOf(it->second.view));
+        it = views_.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   /// Drops the view of \p texture, if one is kept. Called when the texture is about to be
   /// destroyed, so its view goes with it instead of lingering until the owner's frames stop using
   /// it.
   /// @param texture Runtime identity of the texture.
-  void forget(const gpu::ResourceIdentity& texture) {
-    views_.erase(Key{texture.slotIndex, texture.generation});
+  /// @param onDrop Called with the runtime identity of the view before it is dropped.
+  template <typename OnDrop>
+  void forget(const gpu::ResourceIdentity& texture, OnDrop&& onDrop) {
+    const auto it = views_.find(Key{texture.slotIndex, texture.generation});
+    if (it != views_.end()) {
+      onDrop(IdentityOf(it->second.view));
+      views_.erase(it);
+    }
   }
 
   /// Drops every view.
@@ -1608,6 +1623,11 @@ public:
 
   /// Number of views kept.
   std::size_t size() const { return views_.size(); }
+
+  /// Runtime identity of \p view, as a bind group built on it records it.
+  static gpu::ResourceIdentity IdentityOf(const gpu::TextureView& view) {
+    return gpu::ResourceIdentity{view.slotIndex(), view.generation()};
+  }
 
 private:
   using Key = std::pair<uint32_t, uint32_t>;
@@ -2716,8 +2736,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Start a frame's bookkeeping of retained views: views the finished frame did not use are
   /// dropped.
   void beginFrameRetainedViews() {
-    patternTileViews.beginFrame();
-    clipMaskViews.beginFrame();
+    patternTileViews.beginFrame([](const gpu::ResourceIdentity&) {});
+    clipMaskViews.beginFrame([this](const gpu::ResourceIdentity& view) {
+      releaseCompositeBindingsOfClipMaskView(view);
+    });
   }
 
   void promotePatternTile(PatternStackFrame& frame, bool forStroke,
@@ -3277,11 +3299,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                       std::is_nothrow_move_constructible_v<Entry>,
                   "Vector growth must move entries, never copy their GPU handles.");
     /// Host bytes one entry may take. With \ref kMaxEntries entries per sequence this bounds the
-    /// host storage a sequence retains, and a renderer keeps three sequences.
+    /// host storage a sequence retains, and a renderer keeps four sequences.
     static constexpr size_t kMaxEntryHostBytes = 512;
     static_assert(sizeof(Entry) <= kMaxEntryHostBytes);
 
     std::vector<Entry> entries;
+    /// Bindings of dropped entries, holding only their uniform buffers, for the next entries a
+    /// frame claims. A renderer whose frames alternate between documents, or between a
+    /// compositor's layers, drops the entries of the frames that draw no such composite; reusing
+    /// their buffers keeps the next frame that does from creating them again. Together with
+    /// \ref entries they never exceed \ref kMaxEntries.
+    std::vector<geode::GeodeTextureEncoder::RetainedQuadBinding> spareBindings;
     /// Entries claimed so far in the open frame.
     size_t claimedThisFrame = 0;
 
@@ -3294,6 +3322,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       const size_t index = claimedThisFrame++;
       if (index >= entries.size()) {
         entries.resize(index + 1);
+        if (!spareBindings.empty()) {
+          entries[index].binding = std::move(spareBindings.back());
+          spareBindings.pop_back();
+        }
       }
       entries[index].texture.reset();
       return index;
@@ -3309,11 +3341,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return &entries[index].binding;
     }
 
-    /// Drop the entries the frame did not reach. Only once nothing recorded can still be submitted:
-    /// a dropped entry's bind group must not be named by a pending submission.
+    /// Drop the entries the frame did not reach, keeping their uniform buffers as spares. Only once
+    /// nothing recorded can still be submitted: a dropped entry's bind group must not be named by a
+    /// pending submission.
     void dropUnclaimed() {
-      if (entries.size() > claimedThisFrame) {
-        entries.resize(claimedThisFrame);
+      while (entries.size() > claimedThisFrame) {
+        entries.back().binding.releaseTextureViews();
+        spareBindings.push_back(std::move(entries.back().binding));
+        entries.pop_back();
       }
     }
 
@@ -3323,9 +3358,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       claimedThisFrame = 0;
     }
 
-    /// Release every entry. Only while no frame is recording.
+    /// Release every entry and spare buffer. Only while no frame is recording.
     void clear() {
       entries.clear();
+      spareBindings.clear();
       claimedThisFrame = 0;
     }
 
@@ -3346,13 +3382,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
     }
 
-    /// Release the views and bind group of every entry whose bind group names a clip mask view.
-    /// The renderer keeps clip-mask views across frames, but the next frame may clip the composite
-    /// by another one, and these bindings are not yet keyed by the view they name, so they are
-    /// rebuilt each frame.
-    void releaseClipMaskBindings() {
+    /// Release the views and bind group of every entry whose bind group names the clip-mask view
+    /// \p view, keeping its uniform buffer. The renderer keeps clip-mask views across frames, so
+    /// an unchanged frame reuses these bind groups; it calls this before it drops a view.
+    void releaseBindingsOfClipMaskView(const gpu::ResourceIdentity& view) {
       for (Entry& entry : entries) {
-        if (entry.binding.bindsClipMask()) {
+        if (entry.binding.bindsClipMaskView(view)) {
           entry.binding.releaseTextureViews();
         }
       }
@@ -3382,9 +3417,32 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// texture is written only when it is created, so an entry that finds the same texture samples
   /// the pixels it was built for.
   RetainedCompositeSequence imageBlits;
+  /// Composites of the `<mask>` contents a frame draws through their masks, in the order the frame
+  /// pops the masks. Both textures of such a composite are drawn by the frame that composites them.
+  RetainedCompositeSequence maskComposites;
   /// Set by a pool trim to nothing while a frame records; the frame's end then releases every
   /// retained composite entry.
   bool releaseRetainedCompositesAtFrameEnd = false;
+
+  /// Every retained composite sequence of this renderer.
+  std::array<RetainedCompositeSequence*, 4> retainedCompositeSequences() {
+    return {&layerComposites, &filterOutputComposites, &imageBlits, &maskComposites};
+  }
+
+  /// Release every retained composite entry. Only while no frame is recording.
+  void clearRetainedComposites() {
+    for (RetainedCompositeSequence* sequence : retainedCompositeSequences()) {
+      sequence->clear();
+    }
+  }
+
+  /// Start counting a new frame's entries in every sequence, dropping any the last frame did not
+  /// reach.
+  void beginFrameRetainedComposites() {
+    for (RetainedCompositeSequence* sequence : retainedCompositeSequences()) {
+      sequence->beginFrame();
+    }
+  }
 
   /// Release every retained composite entry now, or at the open frame's end if one is recording.
   void releaseRetainedComposites() {
@@ -3392,31 +3450,31 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       releaseRetainedCompositesAtFrameEnd = true;
       return;
     }
-    layerComposites.clear();
-    filterOutputComposites.clear();
-    imageBlits.clear();
+    clearRetainedComposites();
   }
 
-  /// After the frame's submission: drop the entries it did not reach, release the bind groups that
-  /// name the frame's clip mask views, and release every entry if a pool trim asked for it during
-  /// the frame. A frame that was abandoned releases every entry's views instead: what it touched is
-  /// retained or destroyed outside the pool.
+  /// After the frame's submission: drop the entries it did not reach, and release every entry if a
+  /// pool trim asked for it during the frame. A frame that was abandoned releases every entry's
+  /// views first: what it touched is retained or destroyed outside the pool.
   void finishRetainedCompositeFrame() {
     if (std::exchange(releaseRetainedCompositesAtFrameEnd, false)) {
-      layerComposites.clear();
-      filterOutputComposites.clear();
-      imageBlits.clear();
+      clearRetainedComposites();
       return;
     }
     if (frameRecordingAbandoned || frameArenaWriteFailed) {
       releaseAllRetainedViews();
     }
-    layerComposites.dropUnclaimed();
-    filterOutputComposites.dropUnclaimed();
-    imageBlits.dropUnclaimed();
-    layerComposites.releaseClipMaskBindings();
-    filterOutputComposites.releaseClipMaskBindings();
-    imageBlits.releaseClipMaskBindings();
+    for (RetainedCompositeSequence* sequence : retainedCompositeSequences()) {
+      sequence->dropUnclaimed();
+    }
+  }
+
+  /// Release the bind group of every retained composite that names the clip-mask view \p view,
+  /// which \ref clipMaskViews is about to drop.
+  void releaseCompositeBindingsOfClipMaskView(const gpu::ResourceIdentity& view) {
+    for (RetainedCompositeSequence* sequence : retainedCompositeSequences()) {
+      sequence->releaseBindingsOfClipMaskView(view);
+    }
   }
 
   /// Registration of \ref releaseRetainedViewsOf with the texture pool; zero when not registered.
@@ -3430,20 +3488,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * so this never touches a bind group a pending command names.
    */
   void releaseRetainedViewsOf(const gpu::ResourceIdentity& texture) {
-    layerComposites.releaseViewsOf(texture);
-    filterOutputComposites.releaseViewsOf(texture);
-    imageBlits.releaseViewsOf(texture);
-    patternTileViews.forget(texture);
-    clipMaskViews.forget(texture);
+    for (RetainedCompositeSequence* sequence : retainedCompositeSequences()) {
+      sequence->releaseViewsOf(texture);
+    }
+    patternTileViews.forget(texture, [](const gpu::ResourceIdentity&) {});
+    clipMaskViews.forget(texture, [this](const gpu::ResourceIdentity& view) {
+      releaseCompositeBindingsOfClipMaskView(view);
+    });
   }
 
   /// Release the views and bind group of every retained entry, keeping the uniform buffers. For a
   /// frame that ends without submitting: its textures leave the pool's path, and its clip mask
   /// views go with it.
   void releaseAllRetainedViews() {
-    layerComposites.releaseAllViews();
-    filterOutputComposites.releaseAllViews();
-    imageBlits.releaseAllViews();
+    for (RetainedCompositeSequence* sequence : retainedCompositeSequences()) {
+      sequence->releaseAllViews();
+    }
     patternTileViews.clear();
     clipMaskViews.clear();
   }
@@ -8410,9 +8470,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     beginFrameRetainedViews();
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
-    layerComposites.beginFrame();
-    filterOutputComposites.beginFrame();
-    imageBlits.beginFrame();
+    beginFrameRetainedComposites();
     // Nothing to give back after an endFrame. A frame that never reached one gives its loans back
     // here.
     releaseFrameLoans();
@@ -8626,9 +8684,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
     waitForQueueIdleAtTeardown();
     // Retained views go before any texture this teardown destroys, inside the pool or not.
-    layerComposites.clear();
-    filterOutputComposites.clear();
-    imageBlits.clear();
+    clearRetainedComposites();
     if (texturePool) {
       texturePool->removeDestroyListener(std::exchange(texturePoolDestroyListener, 0));
     }
@@ -8929,17 +8985,22 @@ RendererGeode::filterOutputCompositeTexturesForTesting() const {
   return impl_->filterOutputComposites.textures();
 }
 
+std::vector<std::optional<gpu::ResourceIdentity>> RendererGeode::maskCompositeTexturesForTesting()
+    const {
+  return impl_->maskComposites.textures();
+}
+
 RendererGeode::RetainedCompositeCounts RendererGeode::retainedCompositeCountsForTesting() const {
-  return RetainedCompositeCounts{impl_->layerComposites.entries.size(),
-                                 impl_->filterOutputComposites.entries.size(),
-                                 impl_->imageBlits.entries.size()};
+  return RetainedCompositeCounts{
+      impl_->layerComposites.entries.size(), impl_->filterOutputComposites.entries.size(),
+      impl_->imageBlits.entries.size(), impl_->maskComposites.entries.size()};
 }
 
 RendererGeode::RetainedCompositeCounts RendererGeode::retainedCompositeViewHoldersForTesting()
     const {
-  return RetainedCompositeCounts{impl_->layerComposites.viewHolderCount(),
-                                 impl_->filterOutputComposites.viewHolderCount(),
-                                 impl_->imageBlits.viewHolderCount()};
+  return RetainedCompositeCounts{
+      impl_->layerComposites.viewHolderCount(), impl_->filterOutputComposites.viewHolderCount(),
+      impl_->imageBlits.viewHolderCount(), impl_->maskComposites.viewHolderCount()};
 }
 
 size_t RendererGeode::maxRetainedCompositesForTesting() {
@@ -9799,8 +9860,10 @@ void RendererGeode::popMask() {
   }
 
   // Composite content through the selected luminance or alpha mask onto the outer target.
-  impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, frame.maskType,
-                                       pixelMaskBounds, frame.maskColorInterpolation);
+  impl_->encoder->blitFullTargetMasked(
+      frame.contentTexture, frame.maskTexture, frame.maskType, pixelMaskBounds,
+      frame.maskColorInterpolation,
+      impl_->maskComposites.binding(impl_->maskComposites.claim(), frame.contentTexture));
   if (hasCompositeRegionClip) {
     // The final blit is the only consumer; pop restores parent clipping for the next sibling.
     popClip();

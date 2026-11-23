@@ -182,16 +182,6 @@ struct KnownViolation {
 // The size is deduced so that deleting an entry touches only that entry.
 constexpr auto kKnownViolations = std::to_array<KnownViolation>({
     {
-        /*scene=*/"geode_splash",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 3, 3},
-        /*reason=*/
-        "the composites of its three masks rewrite their blit uniforms and rebuild their bind "
-        "groups every frame; its clip shapes, clipped draws, repeated contours and filter "
-        "composite are resident",
-        /*tracking=*/"clears when composites through a mask keep their uniform and bind group",
-    },
-    {
         /*scene=*/"marker",
         /*violated=*/kBufferWrites | kBindgroupCreates,
         /*ceiling=*/{0, 0, 6, 14},
