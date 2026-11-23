@@ -438,8 +438,12 @@ donner_cc_test(
     opens_gpu_device = True,
     # About 200 independent render-and-compare cases. Unsharded under ASan on the hosted nightly
     # runner, the base target ran 55 s and the text_full variant timed out at the 60 s
-    # `size = "small"` limit. Sharding keeps each shard well under that limit; the variants inherit
-    # the shard count.
+    # `size = "small"` limit, so the target is sharded. Shards are uneven: under ASan the geode
+    # variant's slowest shard measured 20 to 26 s on most nights and 47.7 s on 2026-11-22, close to
+    # the gtest_timeout_main deadline of 55 s that a 60 s timeout gives. Raise only the time limit,
+    # keeping the resource class; the variants inherit size, timeout and shard count.
+    size = "small",
+    timeout = "moderate",
     shard_count = 4,
     variants = [
         "text_full",
