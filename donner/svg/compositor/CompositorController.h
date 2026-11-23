@@ -498,6 +498,14 @@ public:
    * `Interaction` hint tagged with @p interactionKind. When the gate is off it falls back
    * to an `Explicit` hint, ignoring @p interactionKind.
    *
+   * A new promotion is admitted against the retained pixels, canvas size and content scale of the
+   * most recent frame. A later frame with a larger canvas or a larger content scale (a zoom in)
+   * than that raster withdraws the promotion before rasterizing anything, because the retained
+   * total of a smaller raster does not bound what the larger one allocates: \ref isPromoted
+   * reports false afterwards, and the caller requests the promotion again so it is admitted
+   * against the larger raster's tiles. A frame at the same or a smaller raster, such as a
+   * low-resolution overview, keeps it.
+   *
    * @param entity The entity to promote.
    * @param interactionKind Semantic kind for the Interaction hint. Use `Selection` for
    *   selection-driven pre-warm (no drag in progress) and `ActiveDrag` for an active
@@ -1562,6 +1570,10 @@ private:
                                    const std::vector<Entity>& transformDirtyEntities) const;
   bool hasDirtyMarkedInteraction(Registry& registry,
                                  const std::vector<Entity>& dirtyEntities) const;
+  /// Withdraw interaction promotions admitted against a raster that @p viewport and
+  /// @p surfaceFromCanvas outgrow in canvas size or content scale.
+  void withdrawOutgrownAdmissions(Registry& registry, const RenderViewport& viewport,
+                                  const Transform2d& surfaceFromCanvas);
   void dropOversizedInteractionHintsForViewport(Registry& registry, const RenderViewport& viewport,
                                                 const Transform2d& surfaceFromCanvas,
                                                 bool firstViewport, bool surfaceChanged,

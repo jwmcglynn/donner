@@ -215,6 +215,20 @@ public:
     bool styleWorkIncomplete = false;
   };
 
+  /// Raster an interaction promotion's memory admission was measured on: the retained total of
+  /// tiles drawn at this canvas size and content scale bounds what a frame at that raster, or a
+  /// smaller one, allocates.
+  struct AdmissionRaster {
+    Vector2i canvasSize = Vector2i::Zero();  //!< Canvas size in device pixels.
+    double contentScale = 1.0;               //!< Surface pixels per canvas unit.
+  };
+  /// Raster the layer's interaction promotion was admitted against, or nullopt when it was not
+  /// admitted against a rendered frame.
+  [[nodiscard]] const std::optional<AdmissionRaster>& admissionRaster() const UTILS_LIFETIME_BOUND {
+    return admissionRaster_;
+  }
+  /// Record the raster the layer's interaction promotion was admitted against.
+  void setAdmissionRaster(std::optional<AdmissionRaster> raster) { admissionRaster_ = raster; }
   /// Raster the current payload was drawn under, or nullopt when the layer holds no payload. Each
   /// payload setter records it with the payload.
   [[nodiscard]] const std::optional<PayloadRaster>& payloadRaster() const UTILS_LIFETIME_BOUND {
@@ -435,6 +449,8 @@ private:
   Vector2d canvasOffset_ = Vector2d::Zero();
   /// Raster the payload was drawn under; set and reset with the payload.
   std::optional<PayloadRaster> payloadRaster_;
+  /// Raster the interaction promotion was admitted against.
+  std::optional<AdmissionRaster> admissionRaster_;
   ImmediateLayerPlan immediatePlan_;
 };
 
