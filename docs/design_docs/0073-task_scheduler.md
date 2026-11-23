@@ -340,8 +340,12 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   soon as its creator sees it complete, so no thread may touch the scope after the change that
   lets the creator return. Sleeping therefore does not happen on a word inside the scope. Every
   thread that can create a scope (each worker, and each other thread when it first creates one)
-  owns a parker: an atomic epoch word that lives as long as the thread or the scheduler, whichever
-  is shorter. A scope records its creator's parker when it is constructed. The rules:
+  has a parker: an atomic epoch word that the scheduler allocates from stable storage and keeps
+  until the scheduler itself is destroyed, even if the thread it was made for exits first. The
+  scheduler's destructor joins every worker before it frees parkers, so no finisher or mover can
+  still hold one; a parker tied to its thread's lifetime would move the same lifetime race from
+  the scope to the parker. The storage grows only with the number of distinct threads that ever
+  created a scope. A scope records its creator's parker when it is constructed. The rules:
 
   - A finishing task reads the creator's parker pointer from the scope, then decrements the
     scope's counter with release ordering. That decrement is its last access to the scope: if it
