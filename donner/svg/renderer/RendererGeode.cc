@@ -5046,10 +5046,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// True when a cache variant last used in frame generation \p stamp of device \p stampDeviceId
-  /// may still be read by a frame that has not ended: the current frame, or an outer frame still
-  /// open on this device while an offscreen pass draws, which can hold a pending batch pointing at
-  /// the variant. A stamp from another device is not in use: a frame holds its document's write
-  /// access from beginning to end, so no frame of another device is open on this document.
+  /// may still be read by a frame of this device that has not ended: the current frame, or an
+  /// outer frame still open around an offscreen pass (`createOffscreenInstance` shares the device
+  /// and its generations), which can hold a pending batch pointing at the variant. A stamp from
+  /// another device is not checked: its generations are not comparable with this device's, and
+  /// the per-entity caches rely on callers not drawing one document on two devices at once.
   [[nodiscard]] bool cacheVariantInUse(std::uint64_t stamp, std::uint64_t stampDeviceId) const {
     return stampDeviceId == device->deviceId() &&
            (stamp == currentFrameIndex || device->frameStampClaimed(stamp));
@@ -6297,23 +6298,42 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  /// Index of the stroke variant a new stroke key replaces: an empty one when there is one,
-  /// otherwise the least recently used one no open frame may still read (`cacheVariantInUse`).
-  /// Nullopt when every variant may still be read.
-  std::optional<std::size_t> strokeVariantToReplace(
-      const geode::GeodePathCacheComponent& cache) const {
+  /// Index of the stroke variant an outline for \p style replaces. A style that already holds
+  /// `kStrokeVariantsPerStyle` outlines (other tolerance buckets or host transforms) replaces
+  /// its own least recently used one, so zooming through scale buckets cannot fill the cache with
+  /// one style's outlines. Otherwise an empty variant, or else the least recently used one. Only
+  /// variants no open frame may still read (`cacheVariantInUse`) are candidates; nullopt when
+  /// there is none.
+  /// @param cache Stroke cache to choose in.
+  /// @param style Stroke style of the outline to store.
+  std::optional<std::size_t> strokeVariantToReplace(const geode::GeodePathCacheComponent& cache,
+                                                    const StrokeStyle& style) const {
+    std::size_t sameStyle = 0;
+    std::optional<std::size_t> sameStyleIndex;
+    std::optional<std::size_t> emptyIndex;
     std::optional<std::size_t> index;
     for (std::size_t i = 0; i < cache.strokeVariants.size(); ++i) {
       const auto& variant = cache.strokeVariants[i];
       if (!variant) {
-        return i;
+        emptyIndex = emptyIndex.value_or(i);
+        continue;
       }
-      if (!cacheVariantInUse(variant->lastUseFrame, variant->lastUseDeviceId) &&
-          (!index || variant->lastUse < cache.strokeVariants[*index]->lastUse)) {
+      const bool replaceable = !cacheVariantInUse(variant->lastUseFrame, variant->lastUseDeviceId);
+      if (variant->strokeKey == style) {
+        ++sameStyle;
+        if (replaceable && (!sameStyleIndex ||
+                            variant->lastUse < cache.strokeVariants[*sameStyleIndex]->lastUse)) {
+          sameStyleIndex = i;
+        }
+      }
+      if (replaceable && (!index || variant->lastUse < cache.strokeVariants[*index]->lastUse)) {
         index = i;
       }
     }
-    return index;
+    if (sameStyle >= geode::GeodePathCacheComponent::kStrokeVariantsPerStyle) {
+      return sameStyleIndex;
+    }
+    return emptyIndex ? emptyIndex : index;
   }
 
   /// Stores \p candidate in the stroke variant of \p cache that `strokeVariantToReplace` picks,
@@ -6326,7 +6346,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::optional<std::size_t> storeStrokeVariant(
       EntityHandle source, geode::GeodePathCacheComponent& cache,
       std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& candidate) {
-    const std::optional<std::size_t> replaceable = strokeVariantToReplace(cache);
+    const std::optional<std::size_t> replaceable =
+        strokeVariantToReplace(cache, candidate->strokeKey);
     const std::optional<std::size_t> retainedBytes = candidate->retainedBytes();
     if (!replaceable.has_value() || !retainedBytes.has_value()) {
       return std::nullopt;

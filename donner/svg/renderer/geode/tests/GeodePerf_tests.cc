@@ -29,6 +29,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -2032,6 +2033,18 @@ TEST_F(GeodePerfTest, StrokeStylesPastTheCache_ReEncodeOnlyTheOverflow) {
     EXPECT_EQ(c.pathEncodes, kOverflow)
         << "Frame " << frame << ": only the styles past the per-entity cache may re-encode.";
   }
+
+  // The styles drawn from a per-frame outline render what a fresh document renders.
+  const RendererBitmap steady = renderer.takeSnapshot();
+  ParseWarningSink freshSink = ParseWarningSink::Disabled();
+  auto freshParsed = parser::SVGParser::ParseSVG(svg, freshSink);
+  ASSERT_FALSE(freshParsed.hasError()) << freshParsed.error().reason;
+  SVGDocument fresh = std::move(freshParsed.result());
+  RendererGeode reference(device);
+  reference.draw(fresh);
+  editor::tests::CompareBitmapToBitmap(steady, reference.takeSnapshot(),
+                                       "stroke_styles_past_the_cache",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

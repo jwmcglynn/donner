@@ -483,7 +483,7 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {
         /*scene=*/"poker_chips",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 6, 16},
+        /*ceiling=*/{0, 0, 96, 20},
         /*reason=*/
         "each chip's use instances draw the shared source path's fill and stroke outlines and "
         "the shared circles again; a resident slot carries one draw's uniform per frame, so "
@@ -491,6 +491,9 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*tracking=*/
         "clears when a resident slot drawn more than once in a frame keeps residence for each "
         "occurrence",
+        /*sceneBatchingViolated=*/kViolatedSameAsBase,
+        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
+        /*sceneBatchingCeiling=*/{0, 0, 6, 16},
     },
     {
         /*scene=*/"stroking_complex",

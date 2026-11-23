@@ -175,12 +175,17 @@ struct GeodePathCacheComponent {
   };
 
   /// Number of stroke keys cached at once. Eight covers an element whose `<use>` instances apply
-  /// several stroke styles to it, together with a second tolerance bucket while a zoom animates.
-  /// A further key replaces the least recently used variant, unless every variant may still be
-  /// read by an open frame (the current one, or an outer frame an offscreen pass runs inside);
-  /// then it draws from a per-frame outline, so the keys of one frame cannot evict each other and
-  /// a pending batch never loses the outline it points at.
+  /// several stroke styles to it. A further key replaces the least recently used variant, unless
+  /// every variant may still be read by an open frame (the current one, or an outer frame an
+  /// offscreen pass runs inside); then it draws from a per-frame outline, so the keys of one frame
+  /// cannot evict each other and a pending batch never loses the outline it points at.
   static constexpr std::size_t kStrokeVariantCount = kGeodeStrokeVariantCount;
+
+  /// Most outlines one stroke style keeps across tolerance buckets and host transforms, the same
+  /// bound fills keep across tolerance buckets: a rest scale and an animated one. Zooming through
+  /// further scale buckets replaces the style's own least recently used outline instead of
+  /// filling the cache.
+  static constexpr std::size_t kStrokeVariantsPerStyle = kGeodeFillVariantCount;
 
   /// Stroke outlines, one per recently drawn stroke key. Each is allocated on first use, so an
   /// entity that is never stroked keeps only the pointers, and stays at one address while cached,

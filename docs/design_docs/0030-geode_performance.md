@@ -95,13 +95,18 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `kGeodeStrokeVariantCount` (8) stroke variants, each holding a `strokeToFill` outline and its
     encode. A stroke variant is keyed by the stroke style (width, cap, join, miter limit, dash
     array, dash offset, and `pathLength`), the device-derived flattening tolerance, which must
-    match exactly, and the host transform of a `non-scaling-stroke` centerline. A new key replaces
-    the least recently used variant that no open frame on the device may still read (the current
-    frame, or an outer frame an offscreen pass runs inside); when every variant may still be read,
-    the draw uses a per-frame outline. Fill variants are replaced under the same rule. Each
-    variant's bytes are charged to the document's cache-byte budget, a replacement taking over
-    the evicted variant's charge, and each has its own resident slots, released with the variant,
-    the entity, or the device
+    match exactly, and the host transform of a `non-scaling-stroke` centerline. One stroke style
+    keeps at most `kStrokeVariantsPerStyle` (2) outlines across tolerance buckets and host
+    transforms, so a zoom through further scale buckets replaces the style's own least recently
+    used outline (`ZoomingKeepsTwoStrokeOutlinesPerStyle`). Otherwise a new key takes an empty
+    variant or replaces the least recently used one. A variant is replaced only when no open frame
+    on the device may still read it: neither the current frame nor an outer frame that an
+    offscreen pass runs inside, whose pending batch can still point at it; when every candidate
+    may still be read, the draw uses a per-frame outline or encode. Fill variants are replaced
+    under the same rule (`NestedPassKeepsTheStrokeOutlineAnOuterFrameLeftPending`,
+    `NestedPassKeepsTheFillEncodeAnOuterFrameLeftPending`). Each variant's bytes are charged to the
+    document's cache-byte budget, a replacement taking over the evicted variant's charge, and each
+    has its own resident slots, released with the variant, the entity, or the device
     (`ReplacedStrokeOutlinesHandOverTheirChargeAndResidence`,
     `StrokeOutlinesGoWithTheirPathDeviceAndDocument`).
   - [x] The driver passes the source entity to the backend in `PathShape::sourceEntity`
@@ -194,8 +199,10 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     removes the path encodes of `poker_chips`, `stroking_complex`, and `nested_svg_aspectratio`.
     The remaining uploads and bind groups of the first two come from same-frame repeats of one
     resident slot: several `<use>` instances draw the same fill or stroke variant at different
-    transforms or paints, and every draw after the first goes through the per-frame arena. That
-    is the repeat case 8.2 covers. Those of `nested_svg_aspectratio` are 8.7.
+    transforms or paints, and every draw after the first goes through the per-frame arena.
+    Clearing their entries needs residence for those same-frame repeats, the mechanism marker
+    residency (8.2) needs for one marker drawn at many vertices; until a change provides it, the
+    two entries stay listed for that reason. Those of `nested_svg_aspectratio` are 8.7.
   - [ ] 8.2: Marker instance residency. Every drawn marker re-uploads its geometry through the
     per-frame arena and builds its own bind group. Clears `marker`, `marker_segments`,
     `marker_spec_example`. A design that batches markers through instance records and needs new
@@ -266,6 +273,11 @@ removing per-draw resource churn in Geode directly benefits the `DragFrameOverhe
   ([texture memory between frames](../guides/embedding_geode.md#EmbeddingGeodeTexturePool)).
   `GeodeFrameGeometryBudget` (`geode/GeodeResourceBudget.h`) bounds the encoded geometry a frame
   admits; once a frame exceeds it, the frame refuses further geometry.
+  `GeodeDocumentGeometryBudget` bounds the encodes a document keeps across frames (64 MiB) and
+  its resident geometry (64 MiB). Once it refuses a cache charge it refuses every later one for
+  that document, so from then on a new fill or stroke encode draws from a per-frame encode while
+  the encodes already cached keep serving. A document's stroke outlines count against that
+  budget: up to two per stroke style and eight per path.
 
 ## Proposed Architecture
 
