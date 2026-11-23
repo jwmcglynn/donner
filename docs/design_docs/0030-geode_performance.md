@@ -137,9 +137,10 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `(width, height, format, usage, sampleCount)`. Release is deferred to the frame boundary so
     recorded GPU work completes before a texture is handed out again. A bucket hands its textures
     out in the order the most recent frame took them, whatever order they came back in, so a frame
-    that repeats the previous frame's acquisitions gets back the same texture for each one. A
-    return, a hand-out, and an eviction each cost O(log n) in the bucket's size
-    (`TextureHandOutQueue`, `LargeBucketMovesEachItemAConstantNumberOfTimes`).
+    that repeats the previous frame's acquisitions gets back the same texture for each one. Within
+    a bucket, queuing a returned texture, handing one out, and taking an eviction victim each cost
+    O(log n) (`TextureHandOutQueue`, `LargeBucketMovesEachItemAConstantNumberOfTimes`); choosing the
+    bucket to evict from scans every bucket (#2619).
   - [x] `{SimpleShapes,Moderate,Lion,GhostscriptTiger,GaussianBlur}_NoDirtyPath_ZeroTextures`
     assert `textureCreates == 0` on an unchanged second frame.
 - [ ] Milestone 5: Filter engine caching.
@@ -204,25 +205,32 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     tiled fill a resident slot. Clears `geode_pattern_checker`, `geode_pattern_nonrect`,
     `geode_pattern_offset`, `geode_pattern_solid`.
   - [x] 8.6: Filter-pass steady state. A pass's parameters land in the slot they had the frame
-    before, and an upload of bytes the slot already holds is skipped. Texture views and bind groups
-    are cached in the filter engine under the identities (slot and generation) of the textures and
-    buffers they name, so a lookup returns only an object built from the live resources being bound,
-    and a texture destroyed and replaced in its runtime slot misses; entries unused since the
-    previous frame boundary are destroyed at the next one, once every frame that recorded against
-    them has submitted. The engine therefore holds at most the views and bind groups of the passes
-    recorded in the current and the previous interval between sweeps, each bounded by the filter
-    execution and work budgets. The sweep runs only when no frame on the device is open, so
-    overlapping frames delay it, as they delay the parameter cursor's rewind. The cache holds no
-    texture, so pooled textures stay inside the pool's byte budget and per-key cap. Each 64 KiB
-    parameter block keeps a CPU copy of its uploaded bytes (64 KiB) and 2 KiB of per-slot lengths;
-    `retainedBufferBytes` counts the GPU blocks, and the copies add the same amount of CPU memory.
-    Keying on texture identity rather than pass role works because the pool hands textures out in
-    the previous frame's acquisition order: in release order, the intermediates two filters share in
-    one frame come back reversed on alternate frames, and every pass misses under either key. A
-    filter region that changes size takes new textures and rebuilds its bindings once
-    (`UnchangedFilterPassesUploadAndBindNothing`; reuse and replacement in
-    `CachedFilterBindingsFollowTextureReuseAndReplacement`, edits in
-    `ReusedFilterSlotsUploadEditedParameters`). What keeps `filter_displacement_map`,
+    before, and an upload of bytes the slot already holds is skipped
+    (`ReusedFilterSlotsUploadEditedParameters` checks that an edit still reaches the GPU). Texture
+    views and bind groups are cached in the filter engine under the identities (slot and generation)
+    of the textures and buffers they name, so a lookup returns only an object built from the live
+    resources being bound, and a texture destroyed and replaced in its runtime slot misses
+    (`CachedFilterBindingsFollowTextureReuseAndReplacement`). Entries unused since the previous
+    sweep are destroyed at the next one; that test also checks the cache returns to one frame's
+    entries after textures are replaced. The sweep, like the parameter cursor's rewind, runs at a
+    renderer's beginFrame only when no frame on the device is open, so it never destroys an entry a
+    recorded frame still names. While frames overlap nothing is swept and the cache grows with the
+    passes recorded meanwhile; the scratch those passes grow is retained bytes that each filter
+    admission counts (`retainedBufferBytes`, with per-execution growth bounded by
+    `ParameterGrowthIsBoundedAfterEarlierExecutions`), so admission also bounds the cache, but that
+    bound is structural and no test overlaps frames to measure it. The pool's frame counter and the
+    sweep advance at every renderer's beginFrame on the device: one renderer drawing filters reaches
+    the steady state (`UnchangedFilterPassesUploadAndBindNothing`), while renderers that alternate
+    frames on one device sweep each other's bindings and rebuild them, which no test measures. The
+    cache holds no texture, so pooled textures stay inside the pool's byte budget and per-key cap
+    (structural). Each 64 KiB parameter block keeps a CPU copy of its uploaded bytes (64 KiB) and 2
+    KiB of per-slot lengths; `retainedBufferBytes` counts the GPU blocks, and the copies add the
+    same amount of CPU memory, which no counter reports. Keying on texture identity rather than pass
+    role works because the pool hands textures out in the previous frame's acquisition order: in
+    release order, the intermediates two filters share in one frame come back reversed on alternate
+    frames, and every pass misses under either key (the two-filter case of
+    `UnchangedFilterPassesUploadAndBindNothing`). A filter region that changes size takes new
+    textures and rebuilds its bindings once. What keeps `filter_displacement_map`,
     `filter_drop_shadow`, `filter_fill_paint`, `filter_spot_light`, and `filter_stroke_paint` listed
     is the composite blit of each filter result, one uniform write per filtered element, which is
     the 8.3 composite. `donner_splash`'s filter passes meet the steady state too; its remaining

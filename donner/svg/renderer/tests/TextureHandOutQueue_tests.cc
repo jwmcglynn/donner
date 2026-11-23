@@ -71,6 +71,19 @@ TEST(TextureHandOutQueue, HandsOutTheLatestFrameInItsAcquisitionOrderThenOlderFr
   EXPECT_THAT(TakeAllInHandOutOrder(queue), ElementsAre(4, 6, 3, 2, 1, 5));
 }
 
+/// The pool's first frame is frame zero, so an item it handed out then also has a zero frame; only
+/// its nonzero order tells it from an item never handed out.
+TEST(TextureHandOutQueue, ItemsHandedOutInTheFirstFrameGoOutBeforeNeverHandedOutOnes) {
+  MoveTally tally;
+  TextureHandOutQueue<CountedItem> queue;
+  queue.push(CountedItem(1, &tally), TextureHandOutStamp{});
+  queue.push(CountedItem(2, &tally), TextureHandOutStamp{.frame = 0, .order = 4});
+  queue.push(CountedItem(3, &tally), TextureHandOutStamp{.frame = 0, .order = 2});
+  queue.push(CountedItem(4, &tally), TextureHandOutStamp{});
+
+  EXPECT_THAT(TakeAllInHandOutOrder(queue), ElementsAre(3, 2, 1, 4));
+}
+
 TEST(TextureHandOutQueue, TakeLastRemovesWhatWouldGoOutLast) {
   MoveTally tally;
   TextureHandOutQueue<CountedItem> queue;

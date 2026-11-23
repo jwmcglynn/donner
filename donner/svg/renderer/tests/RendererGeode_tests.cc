@@ -8982,6 +8982,38 @@ TEST_F(RendererGeodeTest, VariedFilterSizesCreateNoTexturesOnceWarm) {
 
 // An embedder can give the pool's free textures back: to the floor when rendering goes idle, and
 // all of them when the app is hidden.
+// A bucket left unused for longer than the pool keeps idle buckets is destroyed whole. The pool's
+// texture count and bytes must both drop by everything it held, so a trim to nothing leaves both
+// at zero.
+TEST_F(RendererGeodeTest, StaleBucketEvictionKeepsThePoolTotalsConsistent) {
+  RendererGeode renderer = createRenderer();
+  const auto frameWithNestedLayers = [&](double width, int layers) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(width, kViewportSize);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    for (int layer = 0; layer < layers; ++layer) {
+      renderer.pushIsolatedLayer(0.5, MixBlendMode::Normal);
+    }
+    for (int layer = 0; layer < layers; ++layer) {
+      renderer.popIsolatedLayer();
+    }
+    renderer.endFrame();
+  };
+  frameWithNestedLayers(96.0, 3);
+  ASSERT_THAT(renderer.texturePoolStats().textureCount, testing::Ge(3u));
+
+  // Frames of another size leave the first size's bucket idle well past the stale-bucket age.
+  for (int frame = 0; frame < 130; ++frame) {
+    frameWithNestedLayers(kViewportSize, 0);
+  }
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+
+  const RendererGeodeTexturePoolStats stats = renderer.texturePoolStats();
+  EXPECT_THAT(stats.textureCount, testing::Eq(0u));
+  EXPECT_THAT(stats.bytes, testing::Eq(0u));
+}
+
 TEST_F(RendererGeodeTest, TrimTexturePoolFreesFreeTextures) {
   SVGDocument document = ParseDocumentOrFail(VariedGlowSource());
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();

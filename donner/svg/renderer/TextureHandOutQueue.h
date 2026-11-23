@@ -14,7 +14,8 @@ namespace donner::svg {
 struct TextureHandOutStamp {
   /// Pool frame of the last hand-out; zero when the pool never handed the item out.
   uint64_t frame = 0;
-  /// Pool-wide sequence number of that hand-out, ordering hand-outs within one frame.
+  /// Pool-wide sequence number of that hand-out, ordering hand-outs within one frame; zero when
+  /// the pool never handed the item out.
   uint64_t order = 0;
 };
 
@@ -24,7 +25,8 @@ struct TextureHandOutStamp {
  *
  * A frame that repeats the previous frame's acquisitions therefore gets back the same item for
  * each one, which keeps caches keyed on item identity valid across unchanged frames. Items never
- * handed out, and items whose stamp was dropped, carry a zero stamp and go out last, oldest first.
+ * handed out, and items whose stamp was dropped, carry a zero stamp: they go out after every item
+ * handed out, including those of the pool's first frame, in the order they were queued.
  *
  * \ref push, \ref takeNext and \ref takeLast each cost O(log n) and move the item a constant
  * number of times, for in-order and out-of-order returns alike, so a bucket of many small textures
@@ -65,10 +67,14 @@ public:
   }
 
 private:
-  /// Orders stamps from the next hand-out to the last.
+  /// Orders stamps from the next hand-out to the last. A zero order marks an item never handed
+  /// out, which follows every handed-out item of the same frame.
   struct HandsOutFirst {
     bool operator()(const TextureHandOutStamp& lhs, const TextureHandOutStamp& rhs) const {
-      return lhs.frame > rhs.frame || (lhs.frame == rhs.frame && lhs.order < rhs.order);
+      if (lhs.frame != rhs.frame) {
+        return lhs.frame > rhs.frame;
+      }
+      return lhs.order != 0 && (rhs.order == 0 || lhs.order < rhs.order);
     }
   };
 
