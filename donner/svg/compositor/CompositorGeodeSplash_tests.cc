@@ -1787,6 +1787,109 @@ TEST(CompositorGeodeSplashTest, SelectionBudgetRefusalDoesNotMakePartialTilesPre
       << "the last complete frame must remain available while selected tiles cannot be allocated";
 }
 
+// Renders one overview frame of \p source with \p config, then reports the retained pixels and the
+// admission result for a letter that has not been selected before.
+void PromoteFreshLetterAfterOverviewFrame(std::string_view source, const CompositorConfig& config,
+                                          CompositorController::BitmapMemoryBreakdown* retained,
+                                          CompositorController::PromoteResult* result) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(1536, 1024);
+  RendererGeode renderer;
+  CompositorController compositor(document, renderer, config);
+  RenderViewport viewport;
+  viewport.size = Vector2d(1536, 1024);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  *retained = compositor.bitmapMemoryBreakdown();
+  const auto letter = document.querySelector("#letter-G");
+  ASSERT_TRUE(letter.has_value());
+  *result =
+      compositor.promoteEntity(letter->unsafeEntityHandle().entity(), InteractionHint::Selection);
+}
+
+TEST(CompositorGeodeSplashTest, RetainedTexturesDoNotCountAgainstTheHeapBitmapBudget) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  constexpr size_t kHeapBitmapBudget = 1u * 1024u * 1024u;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  config.heapBitmapBudgetBytes = kHeapBitmapBudget;
+
+  CompositorController::BitmapMemoryBreakdown retained;
+  CompositorController::PromoteResult result{CompositorController::PromoteResult::InvalidEntity};
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+
+  ASSERT_GT(retained.segmentTextureBytes + retained.layerTextureBytes, kHeapBitmapBudget)
+      << "The retained tiles must exceed the heap bitmap budget for this case to mean anything";
+  ASSERT_LT(retained.segmentBitmapBytes + retained.layerBitmapBytes, kHeapBitmapBudget);
+  EXPECT_EQ(result, CompositorController::PromoteResult::PromotedLayer)
+      << "GPU textures do not live in the heap, so they must not exhaust the heap bitmap budget";
+}
+
+TEST(CompositorGeodeSplashTest, RetainedTexturesCountAgainstTheTotalBudget) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  constexpr size_t kRetainedBudget = 1u * 1024u * 1024u;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  config.retainedMemoryBudgetBytes = kRetainedBudget;
+
+  CompositorController::BitmapMemoryBreakdown retained;
+  CompositorController::PromoteResult result{CompositorController::PromoteResult::InvalidEntity};
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+
+  ASSERT_GT(retained.segmentTextureBytes + retained.layerTextureBytes, kRetainedBudget);
+  EXPECT_EQ(result, CompositorController::PromoteResult::MemoryLimit);
+}
+
+TEST(CompositorGeodeSplashTest, AdmissionReservesOneCanvasSizedSurface) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  // The helper renders a 1536x1024 canvas at device scale 1.
+  constexpr size_t kCanvasBytes = 1536u * 1024u * 4u;
+  const auto retainedTotal = [](const CompositorController::BitmapMemoryBreakdown& retained) {
+    return retained.segmentBitmapBytes + retained.segmentTextureBytes + retained.layerBitmapBytes +
+           retained.layerTextureBytes;
+  };
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  // The three controllers must retain identical tiles, so the tile partition cannot depend on
+  // measured raster time.
+  config.dynamicImmediateStaticSpans = false;
+
+  CompositorController::BitmapMemoryBreakdown retained;
+  CompositorController::PromoteResult result{CompositorController::PromoteResult::InvalidEntity};
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+  ASSERT_EQ(result, CompositorController::PromoteResult::PromotedLayer);
+  const size_t retainedBytes = retainedTotal(retained);
+  ASSERT_GT(retainedBytes, 0u);
+
+  // The retained tiles fit under this threshold, but a canvas-sized frame target beside them does
+  // not.
+  config.retainedMemoryBudgetBytes = retainedBytes + kCanvasBytes;
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+  ASSERT_EQ(retainedTotal(retained), retainedBytes);
+  EXPECT_EQ(result, CompositorController::PromoteResult::MemoryLimit)
+      << "Admission must leave room for one canvas-sized frame target beside the retained tiles";
+
+  config.retainedMemoryBudgetBytes = retainedBytes + kCanvasBytes + 1u;
+  ASSERT_NO_FATAL_FAILURE(
+      PromoteFreshLetterAfterOverviewFrame(source.contents, config, &retained, &result));
+  ASSERT_EQ(retainedTotal(retained), retainedBytes);
+  EXPECT_EQ(result, CompositorController::PromoteResult::PromotedLayer);
+}
+
 TEST(CompositorGeodeSplashTest, ZoomedSelectionFallsBackToCompleteOwningTiles) {
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("geode_splash.svg");

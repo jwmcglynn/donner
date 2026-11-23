@@ -2538,6 +2538,33 @@ test("responsiveness cases wait for the splash to be displayed before using it",
   assert.equal(spec.split("await waitForSplashDisplayed(page);").length - 1, 3);
 });
 
+test("responsiveness cases render at their project's device scale", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  // A case that sets its own deviceScaleFactor measures another project's configuration under
+  // this project's name (#2470): the scale is read only from the project.
+  assert.doesNotMatch(
+    spec.replaceAll("info.project.use.deviceScaleFactor", ""),
+    /deviceScaleFactor/,
+    "only the project may declare a responsiveness case's device scale",
+  );
+  // Every passing case then checks that scale against the page's own pixel ratio and canvas.
+  const start = spec.indexOf("test.afterEach(async ({ page }, info) => {");
+  assert.ok(start >= 0, "the device scale check must run after every case");
+  const check = spec.slice(start, spec.indexOf("\n});", start));
+  for (
+    const statement of [
+      'if (info.status !== "passed") return;',
+      "const scale = projectDeviceScale(info);",
+      "const raster = await rasterIdentity(page);",
+      "dpr: scale,",
+      "backingWidth: raster.cssWidth * scale,",
+      "backingHeight: raster.cssHeight * scale,",
+    ]
+  ) {
+    assert.ok(check.includes(statement), `the device scale check must keep \`${statement}\``);
+  }
+});
+
 test("a presented-frame drag summary counts presented frames, not GPU submissions", async () => {
   const { kHeldDragPresentationBounds, presentedDragSummary, presentedDragFailures } = await import(
     "./presented-frame-samples.mjs"

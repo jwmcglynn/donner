@@ -268,6 +268,41 @@ ImageComparisonParams ColorAdjustReference(std::string_view cpuPath, std::string
       .withGeodeGoldenOverride(geodePath);
 }
 
+/// Params for an undefined-behavior row whose vendored reference is the resvg UB marker image, so
+/// no render can match it; \p reason states what governs the behavior. The params keep a view of
+/// \p reason, so it must be a string literal.
+ImageComparisonParams UbMarker(std::string_view reason) {
+  return Params::UndefinedBehavior(reason);
+}
+
+/// Params for a FillPaint or StrokePaint input row: the input is defined and implemented, but the
+/// vendored reference is the resvg UB marker image.
+ImageComparisonParams UbMarkerForFillOrStrokePaintInput() {
+  return Params::UndefinedBehavior(
+      "Filter Effects 1 section 9.2 defines the FillPaint and StrokePaint inputs");
+}
+
+/// Params for a feConvolveMatrix bias row: bias is defined and implemented, but the vendored
+/// reference is the resvg UB marker image.
+ImageComparisonParams UbMarkerForConvolveBias() {
+  return Params::UndefinedBehavior(
+      "Filter Effects 1 section 9.9 defines bias as an alpha-scaled additive term");
+}
+
+/// Params for a paint server row whose transform is singular, which SVG 2 does not define.
+ImageComparisonParams UbMarkerForSingularPaintTransform() {
+  return Params::UndefinedBehavior(
+      "SVG 2 does not define a paint server whose transform is not invertible");
+}
+
+/// Params for an image row that sizes an SVG image from its intrinsic size: defined and
+/// implemented, but the vendored reference is the resvg UB marker image.
+ImageComparisonParams UbMarkerForAutoSizedSvgImage() {
+  return Params::UndefinedBehavior(
+      "SVG 2 sizes an image with a missing width or height from the referenced SVG's "
+      "intrinsic size");
+}
+
 }  // namespace
 
 TEST_P(ImageComparisonTestFixture, ResvgTest) {
@@ -295,7 +330,22 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
 INSTANTIATE_TEST_SUITE_P(
     FiltersEnableBackground, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
-                "filters/enable-background", {},
+                "filters/enable-background",
+                {
+                    // Donner implements the Filter Effects isolation-group backdrop and ignores
+                    // enable-background, so these rows match the snapshot their references take:
+                    // nothing precedes the enable-background="new" element in the root isolation
+                    // group, or that element is itself the isolation group.
+                    {"accumulate-with-new.svg", Params()},
+                    {"filter-on-shape.svg", Params()},
+                    {"inherit.svg", Params()},
+                    {"new.svg", Params()},
+                    {"shapes-after-filter.svg", Params()},
+                    {"with-clip-path.svg", Params()},
+                    {"with-filter-on-the-same-element.svg", Params()},
+                    {"with-opacity-1.svg", Params()},
+                    {"with-opacity-2.svg", Params()},
+                },
                 // The references take BackgroundImage from an enable-background snapshot, which
                 // SVG 2 removed; Donner reads the Filter Effects isolation-group backdrop instead.
                 Params::DeprecatedInSVG2("enable-background / BackgroundImage (SVG 1.1, removed "
@@ -325,9 +375,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"type=matrix-with-too-many-values.svg", ColorMatrixIdentityGolden()},
                     {"type=matrix-without-values.svg", ColorMatrixIdentityGolden()},
                     {"type=saturate-with-a-large-coefficient.svg",
-                     Params::UndefinedBehavior("saturate 99999")},
+                     UbMarker("Filter Effects 1 section 9.6 defines saturate values outside 0..1 "
+                              "by the same matrix")},
                     {"type=saturate-with-negative-coefficient.svg",
-                     Params::UndefinedBehavior("saturate -0.5")},
+                     UbMarker("Filter Effects 1 section 9.6 defines saturate values outside 0..1 "
+                              "by the same matrix")},
                     {"type=saturate-without-a-coefficient.svg", ColorMatrixIdentityGolden()},
                     {"type=saturate.svg",
                      Params::WithThreshold(
@@ -348,18 +400,21 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeComposite, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FiltersFeConvolveMatrix, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory(
-                                     "filters/feConvolveMatrix",
-                                     {
-                                         {"bias=-0.5.svg", Params::UndefinedBehavior("bias=-0.5")},
-                                         {"bias=0.5.svg", Params::UndefinedBehavior("bias=0.5")},
-                                         {"bias=9999.svg", Params::UndefinedBehavior("bias=9999")},
-                                         {"edgeMode=wrap-with-matrix-larger-than-target.svg",
-                                          Params::UndefinedBehavior("wrap with oversized kernel")},
-                                     })),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFeConvolveMatrix, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feConvolveMatrix",
+                {
+                    {"bias=-0.5.svg", UbMarkerForConvolveBias()},
+                    {"bias=0.5.svg", UbMarkerForConvolveBias()},
+                    {"bias=9999.svg", UbMarkerForConvolveBias()},
+                    {"edgeMode=wrap-with-matrix-larger-than-target.svg",
+                     UbMarker("Filter Effects 1 section 9.9 defines edgeMode=wrap only as "
+                              "extending the input with the opposite edge, which leaves a kernel "
+                              "larger than the input undefined")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeDiffuseLighting, ImageComparisonTestFixture,
@@ -491,22 +546,27 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeTile, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/feTile",
-                                        {
-                                            {"complex-transform.svg",
-                                             Params::UndefinedBehavior("complex transform")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feTile",
+                {
+                    {"complex-transform.svg",
+                     UbMarker("Bug #2582: under rotation or skew Donner tiles the device-space "
+                              "bounding box of the input subregion, not the transformed tile")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeTurbulence, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/feTurbulence",
-                                        {
-                                            {"stitchTiles=stitch.svg",
-                                             Params::UndefinedBehavior("stitchTiles=stitch")},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feTurbulence",
+            {
+                {"stitchTiles=stitch.svg",
+                 UbMarker("Bug #2583: Donner's stitching lacks the base-frequency adjustment and "
+                          "tile origin of the Filter Effects 1 section 9.21 reference code")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -551,20 +611,14 @@ INSTANTIATE_TEST_SUITE_P(
                 {"in=BackgroundAlpha-with-enable-background.svg",
                  Params::DeprecatedInSVG2("enable-background: BackgroundAlpha of an SVG 1.1 "
                                           "enable-background=new snapshot (removed in SVG 2)")},
-                {"in=BackgroundImage-with-enable-background.svg",
-                 Params::DeprecatedInSVG2("enable-background: BackgroundImage of an SVG 1.1 "
-                                          "enable-background=new snapshot (removed in SVG 2)")},
-                {"in=FillPaint-on-g-without-children.svg",
-                 Params::UndefinedBehavior("in=FillPaint on empty group")},
-                {"in=FillPaint-with-gradient.svg",
-                 Params::UndefinedBehavior("in=FillPaint gradient")},
-                {"in=FillPaint-with-pattern.svg",
-                 Params::UndefinedBehavior("in=FillPaint pattern")},
-                {"in=FillPaint-with-target-on-g.svg",
-                 Params::UndefinedBehavior("in=FillPaint on group")},
-                {"in=FillPaint.svg", Params::UndefinedBehavior("in=FillPaint")},
-                {"in=StrokePaint.svg", Params::UndefinedBehavior("in=StrokePaint")},
-                {"on-the-root-svg.svg", Params::UndefinedBehavior("Filter on the root `svg`")},
+                {"in=FillPaint-on-g-without-children.svg", UbMarkerForFillOrStrokePaintInput()},
+                {"in=FillPaint-with-gradient.svg", UbMarkerForFillOrStrokePaintInput()},
+                {"in=FillPaint-with-pattern.svg", UbMarkerForFillOrStrokePaintInput()},
+                {"in=FillPaint-with-target-on-g.svg", UbMarkerForFillOrStrokePaintInput()},
+                {"in=FillPaint.svg", UbMarkerForFillOrStrokePaintInput()},
+                {"in=StrokePaint.svg", UbMarkerForFillOrStrokePaintInput()},
+                {"on-the-root-svg.svg", UbMarker("Filter Effects 1 section 5 applies filter to "
+                                                 "container elements, the root svg included")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-half-box-blur.png",
@@ -659,10 +713,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "donner/svg/renderer/testdata/golden/donner-drop-shadow-function.png",
                          "Reference disagreement: resvg truncates the fractional shadow offset")},
                     {"two-exact-urls.svg",
-                     Params::UndefinedBehavior(
-                         "reference is the resvg UB marker image; the valid "
-                         "repeated filter URL has an independent equivalent-graph "
-                         "comparison (#1169)")},
+                     UbMarker("the valid repeated filter URL has an independent equivalent-graph "
+                              "comparison (#1169)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -704,7 +756,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"clip-path-with-transform-on-text.svg",
                      Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"on-the-root-svg-without-size.svg",
-                     Params::UndefinedBehavior("on root `<svg>` without size")},
+                     UbMarker("CSS Masking 1 applies clip-path to the root svg, whose unsized "
+                              "canvas is the caller's")},
 
                     // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                     {"circle-shorthand-with-stroke-box.svg",
@@ -727,31 +780,32 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     MaskingMask, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("masking/mask",
-                                        {
-                                            {"recursive-on-child.svg",
-                                             Params::UndefinedBehavior("Recursive on child")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "masking/mask",
+                {
+                    {"recursive-on-child.svg",
+                     UbMarker("the masks reference each other, and which reference of the cycle is "
+                              "the circular one is not specified")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(PaintServersLinearGradient, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory(
-                                     "paint-servers/linearGradient",
-                                     {
-                                         {"invalid-gradientTransform.svg",
-                                          Params::UndefinedBehavior("Invalid `gradientTransform`")},
-                                     })),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    PaintServersLinearGradient, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory("paint-servers/linearGradient",
+                                        {
+                                            {"invalid-gradientTransform.svg",
+                                             UbMarkerForSingularPaintTransform()},
+                                        })),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     PaintServersPattern, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "paint-servers/pattern",
                 {
-                    {"invalid-patternTransform.svg",
-                     Params::UndefinedBehavior("Invalid patternTransform")},
+                    {"invalid-patternTransform.svg", UbMarkerForSingularPaintTransform()},
                     {"out-of-order-referencing.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-nested-rectangles.png",
@@ -759,7 +813,9 @@ INSTANTIATE_TEST_SUITE_P(
                          "Reference disagreement: against the authored nested tile geometry, 832 "
                          "pixels are opaque in one image and empty in the other; resvg 0.49.0 "
                          "renders the tiles drawn explicitly")},
-                    {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
+                    {"overflow=visible.svg",
+                     UbMarker("SVG 2 section 14.3.2 leaves pattern content outside the tile "
+                              "undefined under overflow=visible")},
                     // The references resample a rasterized tile, blurring the tile-edge strokes.
                     // Donner also rasterizes each tile, at 2x device scale, and samples it
                     // bilinearly; at these tiles' alignment that keeps the seams sharp.
@@ -796,30 +852,22 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     PaintServersRadialGradient, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "paint-servers/radialGradient",
-            {
-                {"fr=-1.svg",
-                 Params::UndefinedBehavior("reference is the resvg UB marker image; "
-                                           "invalid negative focal radius: no paint (#1186)")},
-                {"fr=0.5.svg",
-                 Params::UndefinedBehavior("reference is the resvg UB marker image; coincident "
-                                           "start/end circles paint nothing today, an open "
-                                           "question in svgwg issue 648 (#1186)")},
-                {"invalid-gradientTransform.svg",
-                 Params::UndefinedBehavior(
-                     "reference is the resvg UB marker image; singular transform: no paint "
-                     "(#1186)")},
-                {"invalid-gradientUnits.svg",
-                 Params::UndefinedBehavior("reference is the resvg UB marker image; invalid units "
-                                           "retain the objectBoundingBox default (#1186)")},
-                {"negative-r.svg",
-                 Params::UndefinedBehavior(
-                     "reference is the resvg UB marker image; invalid negative radius: no "
-                     "paint (#1186)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "paint-servers/radialGradient",
+                {
+                    {"fr=-1.svg", UbMarker("invalid negative focal radius: no paint (#1186)")},
+                    {"fr=0.5.svg",
+                     UbMarker("SVG 2 Notes on radial gradients: when the start circle fully "
+                              "overlaps the end circle no gradient is drawn, as Donner does "
+                              "(#1186)")},
+                    {"invalid-gradientTransform.svg",
+                     UbMarker("singular gradientTransform, which SVG 2 does not define: no paint "
+                              "(#1186)")},
+                    {"invalid-gradientUnits.svg",
+                     UbMarker("invalid units retain the objectBoundingBox default (#1186)")},
+                    {"negative-r.svg", UbMarker("invalid negative radius: no paint (#1186)")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintServersStop, ImageComparisonTestFixture,
@@ -866,8 +914,7 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::DeprecatedInSVG2("SVG 1.1 icc-color() paint (removed in SVG 2); the "
                                               "reference is the resvg UB marker image")},
                     {"rgb-int-int-int.svg",
-                     Params::UndefinedBehavior("reference is the resvg UB marker image; valid CSS "
-                                               "Color 4 space-separated RGB (#1186)")},
+                     UbMarker("valid CSS Color 4 space-separated RGB (#1186)")},
                     {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
                      Params::DeprecatedInSVG2("SVG 1.1 icc-color() paint fallback (removed in "
                                               "SVG 2); the invalid declaration is rejected "
@@ -909,7 +956,8 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "painting/marker",
             {
-                {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
+                {"target-with-subpaths-2.svg", UbMarker("SVG 2 section 13.7.2 defines vertex "
+                                                        "markers on a path with several subpaths")},
                 {"with-a-text-child.svg", GeodeUnresolvedEdgeCoverageGate(Params().requireFeature(
                                               RendererBackendFeature::Text, "text rendering"))},
                 // Geode-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
@@ -920,7 +968,8 @@ INSTANTIATE_TEST_SUITE_P(
                      "Accepted rasterization difference: the reference draws the 0.40 device px "
                      "letter strokes as 1 px hairlines with alpha scaled by the width, and Geode "
                      "covers their exact geometry; total dark ink agrees within 0.2%")},
-                {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
+                {"with-viewBox-1.svg",
+                 UbMarker("SVG 2 scales the marker viewBox with the default xMidYMid meet")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -996,10 +1045,9 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke-linejoin",
                 {
-                    {"arcs.svg", Params::UndefinedBehavior(
-                                     "reference is the resvg UB marker image; SVG "
-                                     "Strokes draft arcs is not implemented, documented miter "
-                                     "fallback (#1186)")},
+                    {"arcs.svg",
+                     UbMarker("Not impl: the SVG Strokes draft arcs join, which SVG 2 does not "
+                              "list; Donner draws the documented miter fallback (#1186)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1019,7 +1067,10 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke-width",
                 {
-                    {"negative.svg", Params::UndefinedBehavior("Nothing should be rendered")},
+                    {"negative.svg",
+                     UbMarker("Bug #2581: SVG 2 makes a negative stroke-width invalid, so the "
+                              "presentation attribute falls back to the initial 1 px, but Donner "
+                              "keeps the negative value and draws no stroke")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1101,11 +1152,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "structure/image",
                 {
-                    {"float-size.svg", Params::UndefinedBehavior("Float size")},
-                    {"no-height-on-svg.svg", Params::UndefinedBehavior("No height")},
-                    {"no-width-and-height-on-svg.svg",
-                     Params::UndefinedBehavior("No width and height")},
-                    {"no-width-on-svg.svg", Params::UndefinedBehavior("No width")},
+                    {"float-size.svg",
+                     UbMarker("SVG 2 sizes the image box from its fractional width and height")},
+                    {"no-height-on-svg.svg", UbMarkerForAutoSizedSvgImage()},
+                    {"no-width-and-height-on-svg.svg", UbMarkerForAutoSizedSvgImage()},
+                    {"no-width-on-svg.svg", UbMarkerForAutoSizedSvgImage()},
                     // Harness mismatch: the harness gives SVG image documents the suite's test
                     // fonts as a stand-in for system fonts, so the row compares against a Donner
                     // rendering of that configuration. The vendored reference omits the embedded
@@ -1150,12 +1201,15 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "structure/svg",
             {
-                {"funcIRI-parsing.svg", Params::UndefinedBehavior("FuncIRI parsing")},
+                {"funcIRI-parsing.svg", UbMarker("CSS allows whitespace inside url( )")},
                 {"funcIRI-with-invalid-characters.svg",
-                 Params::UndefinedBehavior(
-                     "The upstream reference is the UB marker for a digit-leading XML ID")},
-                {"invalid-id-attribute-1.svg", Params::UndefinedBehavior("Invalid id attribute")},
-                {"invalid-id-attribute-2.svg", Params::UndefinedBehavior("Invalid id attribute")},
+                 UbMarker("SVG 2 section 5.11.2 asks user agents to process ids irrespective of "
+                          "XML validity, so url(#0-1) resolves")},
+                {"invalid-id-attribute-1.svg",
+                 UbMarker("SVG 2 section 5.11.2 asks user agents to process ids irrespective of "
+                          "XML validity, so id=\"1\" resolves")},
+                {"invalid-id-attribute-2.svg",
+                 UbMarker("Cyrillic letters are XML name characters, so the id is valid")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"no-size.svg",
                  Params::WithGoldenOverride(
@@ -1230,16 +1284,13 @@ INSTANTIATE_TEST_SUITE_P(
                     {"mathematical.svg", QuarterPixelEdgeReference()},
                     {"middle.svg", QuarterPixelEdgeReference()},
                     {"text-before-edge.svg", QuarterPixelEdgeReference()},
-                    // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
-                    // match it. Render for no-crash coverage only.
                     {"after-edge.svg",
-                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
-                    {"baseline.svg",
-                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
-                    {"ideographic.svg",
-                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
+                     UbMarker("after-edge is not a CSS Inline 3 value, so the presentation "
+                              "attribute falls back to the initial value")},
+                    {"baseline.svg", UbMarker("CSS Inline 3 section 4.2.2 defines the value")},
+                    {"ideographic.svg", UbMarker("CSS Inline 3 section 4.2.2 defines the value")},
                     {"text-after-edge.svg",
-                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
+                     UbMarker("CSS Inline 3 section 4.2.2.1 maps it to text-bottom")},
 
                     {"hanging-on-vertical.svg",
                      Params::WithGoldenOverride(
@@ -1393,7 +1444,9 @@ INSTANTIATE_TEST_SUITE_P(
                          "donner/svg/renderer/testdata/golden/donner-named-value.png")
                          .withReason("Reference disagreement: Donner follows the CSS Fonts 4 "
                                      "absolute-size table; the PNG steps by 1.2 as CSS 2 did"))},
-                {"negative-size.svg", Params::UndefinedBehavior("negative font size")},
+                {"negative-size.svg",
+                 UbMarker("CSS Fonts 4 makes a negative font-size invalid, so the presentation "
+                          "attribute falls back to the initial value, medium")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1491,7 +1544,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"5percent.svg", QuarterPixelEdgeReference()},
                     {"mixed-spacing.svg", QuarterPixelEdgeReference()},
                     {"normal.svg", QuarterPixelEdgeReference()},
-                    {"large-negative.svg", Params::UndefinedBehavior("negative letter-spacing")},
+                    {"large-negative.svg",
+                     UbMarker("CSS Text 3 section 7.2 allows implementation-dependent limits on "
+                              "negative spacing")},
                     {"mixed-scripts.svg",
                      Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
                          "Arabic shaping")},
@@ -1542,7 +1597,7 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
                          "Arabic shaping")},
                     {"complex-grapheme-split-by-tspan.svg",
-                     Params::UndefinedBehavior("grapheme split by tspan")},
+                     UbMarker("styling part of a grapheme cluster is open (svgwg#634)")},
                     {"complex-graphemes-and-coordinates-list.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-complex-graphemes-and-coordinates-list.png")
@@ -1720,9 +1775,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .withGeodeGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-closed-path.png")
                      .setCanvasSize(300, 300)},
-                {"complex.svg",
-                 Params::UndefinedBehavior("reference is the resvg UB marker image; vertical text "
-                                           "on a circular path")},
+                {"complex.svg", UbMarker("vertical text on a circular path")},
                 {"dy-with-tiny-coordinates.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png")
@@ -1760,7 +1813,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/donner-textPath-very-long-text.png")
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
-                 Params::UndefinedBehavior("baseline-shift + rotate")},
+                 UbMarker("SVG 2 defines baseline-shift and rotate on a textPath")},
                 // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-filter.svg",
                  GeodeUnresolvedBlurGate(HeavyGlyphReferenceGolden(
@@ -1861,17 +1914,19 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextWordSpacing, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("text/word-spacing",
-                                        {
-                                            {"-5.svg", QuarterPixelEdgeReference()},
-                                            {"0.svg", QuarterPixelEdgeReference()},
-                                            {"10.svg", QuarterPixelEdgeReference()},
-                                            {"2mm.svg", QuarterPixelEdgeReference()},
-                                            {"5percent.svg", QuarterPixelEdgeReference()},
-                                            {"normal.svg", QuarterPixelEdgeReference()},
-                                            {"large-negative.svg",
-                                             Params::UndefinedBehavior("word-spacing=-10000")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/word-spacing",
+                {
+                    {"-5.svg", QuarterPixelEdgeReference()},
+                    {"0.svg", QuarterPixelEdgeReference()},
+                    {"10.svg", QuarterPixelEdgeReference()},
+                    {"2mm.svg", QuarterPixelEdgeReference()},
+                    {"5percent.svg", QuarterPixelEdgeReference()},
+                    {"normal.svg", QuarterPixelEdgeReference()},
+                    {"large-negative.svg",
+                     UbMarker("CSS Text 3 section 7.1 allows implementation-dependent limits on "
+                              "negative spacing")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1923,8 +1978,9 @@ INSTANTIATE_TEST_SUITE_P(
                                      "forms and vmtx origin CSS Writing Modes 3 5.1.1 requires "
                                      "(golden README)"))},
                 {"tb-with-rotate-and-underline.svg",
-                 Params::UndefinedBehavior("tb with rotate and underline")},
-                {"tb-with-rotate.svg", Params::UndefinedBehavior("tb with rotate")},
+                 UbMarker("underline position and thickness are user-agent defined (CSS Text "
+                          "Decoration 3)")},
+                {"tb-with-rotate.svg", UbMarker("SVG 2 defines rotate in vertical text")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

@@ -65,6 +65,28 @@ test.beforeEach(({ page }) => {
   echoGpuSessionConsole(page);
 });
 
+/** The device scale the running project declares; no case may override it (#2470). */
+function projectDeviceScale(info: import("@playwright/test").TestInfo) {
+  return Number(info.project.use.deviceScaleFactor ?? 1);
+}
+
+// Every passing case must have rendered at its project's device scale, as the page itself reports,
+// so that a project's name keeps saying what it measured.
+test.afterEach(async ({ page }, info) => {
+  if (info.status !== "passed") return;
+  const scale = projectDeviceScale(info);
+  const raster = await rasterIdentity(page);
+  console.log(
+    `device-scale ${JSON.stringify({ project: info.project.name, case: info.title, raster })}`,
+  );
+  expect(raster, `${info.project.name} must render at device scale ${scale}`).toEqual({
+    ...raster,
+    dpr: scale,
+    backingWidth: raster.cssWidth * scale,
+    backingHeight: raster.cssHeight * scale,
+  });
+});
+
 interface Diagnostics extends Window {
   __donnerBackend?: string;
   __donnerFirstFramePresented?: boolean;
@@ -1311,10 +1333,11 @@ async function stopPresentedFrameSampler(page: Page) {
 }
 
 test.describe("UI presentation diagnosis", () => {
-  test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+  test.use({ viewport: { width: 1600, height: 900 } });
   test(
     "held drag advances UI submissions while composited pixels are sampled",
     async ({ page, browser, browserName }, info) => {
+      test.skip(projectDeviceScale(info) !== 1, "its sample bounds were set at device scale 1");
       // Firefox observes the drag through the editor's presented-frame statistics rather than by
       // reading the canvas back every frame, which stalled it on the hosted runner (#1668).
       const pixelProbe = browserName !== "firefox";
@@ -1618,10 +1641,11 @@ test("first sample click after boot", async ({ page, browser }, info) => {
 // DONNER_CAROUSEL_CANVAS_GPU_DELAY=<everyFrames>:<iterations> queues fixed GPU work after the first
 // canvas write of every Nth frame from the click on, as the negative control of this gate.
 test.describe("nominal completed-result handoff", () => {
-  test.use({ viewport: kCarouselViewport, deviceScaleFactor: 1 });
+  test.use({ viewport: kCarouselViewport });
   for (const sample of kCarouselSamples) {
     test(`carousel ${sample.id}`, async ({ page, browserName }, info) => {
       test.skip(browserName !== "chromium", "the bound is calibrated for Chromium");
+      test.skip(projectDeviceScale(info) !== 1, "the bound is calibrated at device scale 1");
       const failures: string[] = [];
       page.on("pageerror", (error) => failures.push(error.message));
       await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
@@ -1859,7 +1883,7 @@ async function maskedCrownDragWithCounters(
 }
 
 test.describe("Geode detailed interactions", () => {
-  test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 2 });
+  test.use({ viewport: { width: 1600, height: 900 } });
   for (const sourceVisible of [false, true]) {
     test(
       `masked crown drag with source ${sourceVisible ? "open" : "closed"}`,

@@ -332,7 +332,7 @@ void PublishWorkerTimingStats(const RenderResult& result, const EditorApp& app,
           'receivedDuringCanvasFrame' : heap[b + 87],
         });
         // The most recent interaction-layer promotion request of this result, with the retained
-        // bytes and the budget the compositor's admission check compared.
+        // bytes and the total admission threshold sampled when it was made.
         stats['interactionPromotion'] = ({
           'requested' : heap[b + 88] > 0,
           'result' : UTF8ToString($7),
