@@ -73,8 +73,11 @@ same harness, machine class and method. Each goal names the counter or timer tha
   31.5 ms to at most 15 ms after it.
 - **Edit cost.** A class, `style` or presentation-attribute write on one leaf element whose new
   and old values no selector depends on in a combinator position cascades at most the element, its
-  descendants and its `<use>` instances. On the splash document the style time of the next frame
-  falls from 18.8 ms to at most 1 ms, and on the bootstrap-icons sprite from 63 ms to at most 1 ms.
+  descendants and its `<use>` instances, and, when none of the restyled elements is text or
+  references a paint server, marker, clip path, mask or filter before or after the edit, the frame
+  takes the retained update instead of the full rebuild. On the splash document the style time of
+  the next frame falls from 18.8 ms to at most 1 ms, and on the bootstrap-icons sprite from 63 ms to
+  at most 1 ms.
 - **Ancestor filter.** On the synthetic descendant-only document (1,000 elements, 100 rules), the
   new counter of candidates rejected by the filter reaches at least 857 of the 902 candidates that
   today fail after an ancestor walk (95 percent), with no false negative (enforced by the
@@ -94,7 +97,10 @@ same harness, machine class and method. Each goal names the counter or timer tha
   styles completely under unchanged limits.
 - **No behavior change.** For every document whose cascade completes within its budgets today,
   every computed style is identical before and after each Part A step, enforced by differential
-  tests and fuzzers (see [Testing and Validation](#testing-and-validation)).
+  tests and fuzzers (see [Testing and Validation](#testing-and-validation)). A document whose
+  cascade ends budget-rejected today can style further, because the rule index and the ancestor
+  filter skip work for rules that cannot match; that is the one intended behavior change (see
+  [Decisions](#decisions)).
 - **Bounded memory.** The rule index costs at most 16 bytes per selector-list entry plus shared
   key strings; the ancestor filter costs 4 KiB per style traversal; both and the cache are
   charged to existing document budgets.
@@ -236,17 +242,23 @@ including tests and review fixes. "After" names the milestones that must land fi
   - [ ] Resolve pseudo-class names to an enumeration at parse time.
   - Done when: each kept change shows a median improvement of at least 5 percent in candidate
     match time on the benchmark; a change that does not is dropped.
-- [ ] Milestone A5: Narrowed invalidation for single-element edits (6.5 days). After A2.
+- [ ] Milestone A5: Narrowed invalidation for single-element edits (9.5 days). After A2.
   - [ ] Compute a `SelectorDependencySummary` per stylesheet at parse time, including the
         directional dependencies of filtered `:nth-child` and `:nth-last-child` selectors.
   - [ ] Route class, `id`, `style` and presentation-attribute writes in `SVGElement` through it,
         marking the affected entities dirty for the existing selective style pass instead of
         setting `RenderTreeState::needsFullStyleRecompute`.
   - [ ] Restyle the `<use>` shadow instances of a written element.
+  - [ ] Make a style-only change eligible for the retained update (`FlagsAreRetainable` in
+        `RetainedRenderTreeUpdate.cc`) and recompute the style-derived components of the
+        restyled entities, falling back to the full rebuild where they cannot be recomputed
+        locally (see [Retained Update](#retained-update-for-style-only-changes)).
   - [ ] Add the narrow-versus-full differential edit test, comparing computed styles, render-tree
-        and resolved-reference state, and rendered output.
-  - Done when: the edit goals are met and the differential edit test is green on all three
-    comparisons for every edit routed to the narrowed path.
+        and resolved-reference state, and rendered output, and asserting the retained-update and
+        full-rebuild counters.
+  - Done when: the edit goals are met, the differential edit test is green on all three
+    comparisons for every edit routed to the narrowed path, and every eligible edit in it took
+    the retained update.
 - [ ] Milestone A6: Base-library Bloom filter (2 days). No dependency.
   - [ ] Add `donner/base/BloomFilter.h` with `BloomFilter`, `CountingBloomFilter` and `BloomHash`,
         unit tests in `//donner/base:base_tests` and `//donner/base:bloom_filter_fuzzer`.
@@ -256,7 +268,8 @@ including tests and review fixes. "After" names the milestones that must land fi
   - [ ] Store up to four ancestor hashes per selector-list entry in `RuleIndex`.
   - [ ] Maintain the filter with `StyleAncestorFilter` in every traversal mode and check it
         before `MatchSelectorRule`; count filter rejections.
-  - [ ] Run the differential test and fuzzer with the filter on and off.
+  - [ ] Run the differential test and fuzzer with the filter on and off, including the
+        low-traversal-limit case.
   - Done when: the ancestor-filter goal is met and the differential targets are green.
 - [ ] Milestone A8: Per-element cost and shared computed-style storage (4 days). After A1.
   - [ ] Break down the measured 4.6 microseconds of per-element style work outside rule matching
@@ -274,16 +287,18 @@ including tests and review fixes. "After" names the milestones that must land fi
   - Done when: the shared-computed-style goals and the bootstrap-icons style-time goal are met and
     the differential targets are green.
 
-Part A estimate: 27.5 engineering days.
+Part A estimate: 30.5 engineering days.
 
 ### Part B Milestones
 
-- [ ] Milestone B1: Custom property declarations and storage (3.5 days). After A8.
+- [ ] Milestone B1: Custom property declarations and storage (4 days). After A8.
   - [ ] Route `--*` declarations from rules and `style` attributes into a per-element custom
         cascade instead of the "Unknown property" diagnostic, and store computed custom
         properties as shared immutable maps in the computed-style record.
-  - Done when: custom properties cascade and inherit in unit tests, and computed styles of the
-    existing corpus are unchanged.
+  - [ ] Charge each map and token-sequence allocation to `RetainedStyleBytes` through its own
+        deleter.
+  - Done when: custom properties cascade and inherit in unit tests, computed styles of the
+    existing corpus are unchanged, and the shared-map release regression is green.
 - [ ] Milestone B2: `var()` substitution (4 days). After B1.
   - [ ] Mark declarations containing `var()` at parse time, hold them as pending substitutions in
         the cascade, substitute after the custom properties are computed, and parse the result;
@@ -312,7 +327,7 @@ Part A estimate: 27.5 engineering days.
 - [ ] Milestone B6: Conformance cases (2 days). After B3 and B5.
   - Done when: the full set in [Part B tests](#part-b-tests) is committed and green.
 
-Part B estimate: 17.5 engineering days.
+Part B estimate: 18 engineering days.
 
 ### Part C Milestones
 
@@ -379,7 +394,7 @@ A1 first; A2, A3, A6, A8, B4, C1 and C3 can then proceed in parallel; A4 follows
 A3 and A6; A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B;
 C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D0 follows A8; D1 follows D0,
 A7, A9 and the scheduler milestones S1 to S3 of [0073-task_scheduler](0073-task_scheduler.md); D2
-and D3 follow D1. Total committed estimate for this document: 67.5 engineering days (A 27.5, B 17.5,
+and D3 follow D1. Total committed estimate for this document: 71 engineering days (A 30.5, B 18,
 C 13.5, D 9); the scheduler is estimated in 0073.
 
 ## Background
@@ -1068,8 +1083,9 @@ attribute path in `MarkPresentationAttributeDirty` compute the affected set inst
   map from light entity to shadow entities, maintained by `ShadowTreeSystem` when it creates and
   tears down clones.
 
-Every affected entity is restyled by the existing selective pass in `computeAllStyles`, and the
-frame can take `RenderingContext::tryRetainedUpdate` instead of the full rebuild.
+Every affected entity is restyled by the existing selective pass in `computeAllStyles`. Taking
+`RenderingContext::tryRetainedUpdate` instead of the full rebuild needs more than the routing
+change; see [Retained Update for Style-Only Changes](#retained-update-for-style-only-changes).
 
 **Render-side dependents.** A full restyle also sends the frame through the full rebuild, which
 recomputes things that depend on an element without being its style: gradients and patterns built
@@ -1101,6 +1117,45 @@ missing dependent is identified.
 **Stylesheet edits.** Loading imports keeps the full restyle, now one cascade per frame. Rule
 edits restyle only the elements the changed rules match; see
 [Restyle from Changed Rules](#restyle-from-changed-rules).
+
+#### Retained Update for Style-Only Changes
+
+Removing `needsFullStyleRecompute` alone does not reach the retained path. `PlanRetainedUpdate`
+asks `FlagsAreRetainable` (`donner/svg/renderer/RetainedRenderTreeUpdate.cc`) about every dirty
+entity, and it refuses `DirtyFlagsComponent::Style` unless `Compositing` is also set: today the
+only style change known to be local is an `opacity` write (`markCompositingDirty`). A class edit
+marked `Style` alone would still send `RenderingContext::ensureComputedComponents` down the full
+rebuild, which tears down and re-instantiates every shadow tree. When the retained path does run,
+`ApplyRetainedUpdate` re-runs the selective restyle and recomputes layout for entities flagged
+`Layout`, and the next instantiation rebuilds the render instances (`needsInstanceRebuild`), which
+re-resolves fill, stroke, clip, mask and marker references from the new computed styles. Every
+other computed component that `createComputedComponents` builds from a computed style is not
+touched, so A5 adds:
+
+- **A narrowed-style flag.** The router marks every entity it restyles with `Style` and
+  `RenderInstance` plus a new `DirtyFlagsComponent::NarrowedStyle` bit, and `FlagsAreRetainable`
+  accepts `Style` when either `Compositing` or `NarrowedStyle` is set. Other writers that set
+  `Style` keep today's refusal.
+- **Per-entity recomputation.** For each entity carrying `NarrowedStyle`, after the selective
+  restyle, `ApplyRetainedUpdate` recomputes its layout (`LayoutSystem::recomputeInvalidatedLayout`)
+  and its computed path (`ShapeSystem::createComputedPathIfShape`), since geometry properties and
+  `display` and `visibility` can come from a class.
+- **Fallback for dependents that are not per-entity.** Styled paint trees, nested marker trees,
+  filters, gradient stops and text layout are built by whole-document steps
+  (`InstantiateStyledPaintTrees`, `InstantiateNestedMarkerTrees`, `FilterSystem`, `PaintSystem`,
+  `TextSystem`). The plan therefore declines when a restyled entity is, or is inside, a text
+  element, or when its computed style references a paint server, marker, clip path, mask or
+  filter. That check runs both before the restyle (on the old computed style, read while
+  planning) and after it (on the new one); when the post-restyle check fails, `tryRetainedUpdate`
+  returns false and the frame takes the full rebuild, whose selective pass restyles the same
+  dirty entities again. The edit's result is then exactly today's.
+- **Shadow instances.** The `<use>` instances of a restyled light element are restyled through
+  the reverse map and carry `NarrowedStyle` themselves; `ChangeStaysLocal` keeps refusing the own
+  changes it refuses today (transform, compositing, shadow tree) on shadow sources, which a class
+  edit does not make.
+
+Making more dependents local (per-entity styled paint trees, for example) is future work; each
+needs its own differential edit cases first.
 
 ### Ancestor Bloom Filter
 
@@ -1152,7 +1207,17 @@ the filter.
 
 **Check.** After the index produces a candidate rule, the rule is skipped when every one of its
 entries has a hash the filter does not contain. A skipped candidate is still charged to the
-rule-element budget, so the budget outcome is the same with the filter on or off. Two counters
+rule-element budget, but the ancestor walk it skips would have consumed `SelectorTraversalBudget`
+steps (`ComplexSelector::matchesCandidate` and `SelectorTraversalNavigation` charge each one), and
+once that budget rejects, `StyleResourceBudget::reserveRuleElementMatch` refuses every later
+rule. So for a document whose filter-off pass ends traversal-rejected, the filter-on pass can
+apply rules the filter-off pass refused. This is permitted, with the same scope as the rule
+index's change: a skipped walk only ever fails, so the filter-on pass consumes no more of any
+budget than the filter-off pass, and every document whose filter-off pass completes within its
+budgets completes with the filter on and produces identical results. Charging the saved steps is
+not done, because only the walk itself knows how many steps it would have taken. Serial and
+parallel passes (Part D) both run with the filter and make the same filter decisions, so their
+traversal charges agree and Part D's parity is unaffected. Two counters
 record filter rejections and filter passes that then failed in an ancestor walk (false
 positives).
 
@@ -1186,10 +1251,10 @@ correct in every traversal mode and makes the same decisions in the serial and p
 The filter belongs to one style pass object, created when `computeAllStyles` or
 `computeStylesFor` starts and destroyed when it returns. A pass abandoned by a budget rejection
 destroys its filter with it, so no later pass can see a half-maintained set. Chain
-synchronization is not charged to `SelectorTraversalBudget` or any other style budget, so the
-budget outcome, and with it the computed styles, are the same with the filter on or off. Its cost
-is bounded instead by the parser's nesting-depth limit: at most one pop and one push per
-ancestor level per element.
+synchronization is not charged to `SelectorTraversalBudget` or any other style budget, so it adds
+nothing to any budget outcome; the only budget difference the filter makes is the skipped walks
+above. Its cost is bounded instead by the parser's nesting-depth limit: at most one pop and one
+push per ancestor level per element.
 
 **Expected effect.** See [Ancestor Filter Opportunity](#ancestor-filter-opportunity): no
 measurable time on the real documents, and up to 902 of 1,913 candidates on the descendant-only
@@ -1366,9 +1431,20 @@ that would cross one aborts the substitution, so an exponential value is never b
 Substitution also charges each produced component value to
 `StyleResourceBudget::reserveDeclarationApplication`'s component work and its bytes to the byte
 work, so one document's total expansion is bounded by the existing aggregate limits (16 Mi units
-each). Past any cap the value is guaranteed-invalid and a diagnostic is reported once. Each new
-`CustomPropertyMap` is charged to the retained-byte budget (`reserveComplexPropertyBytes`) with
-the record that first holds it; maps shared by pointer are charged once.
+each). Past any cap the value is guaranteed-invalid and a diagnostic is reported once.
+
+**Retained bytes of maps and token sequences.** A map or token sequence can outlive the record
+that created it: a child's record shares its parent's map, an overlaid map shares the parent's
+unchanged token sequences, and any record can be kept alive through `ExternalUseStyleRetention`.
+Charging such an allocation to the first record that holds it would release the reservation while
+the allocation stays live. So each `CustomPropertyMap` and each `TokenSequence` is created through
+one factory that reserves its heap bytes against the `RetainedStyleBytes` account of Part A and
+gives the `std::shared_ptr` a deleter holding the account and the byte count, exactly like a
+computed-style record. The reservation is released when the allocation's last reference goes,
+whichever record or map held it last. A record charges only its own bytes; a map charges its
+entry vector, and each token sequence charges itself once however many maps share it. A refused
+reservation makes the custom property guaranteed-invalid with the same one-time diagnostic as a
+size cap.
 
 **`revert` and `revert-layer`.** Donner does not support `revert` today: it is not a CSS-wide
 keyword in `PropertyRegistry` (only a reserved font-family name), so a declaration using it fails
@@ -1840,8 +1916,12 @@ Stylesheets and documents are untrusted input.
   The "every rule" candidate source is a test-only option on `StyleSystem`; the matcher, cascade
   and inheritance code are shared, so the oracle differs from production only in skipping no
   rule. The same test runs with the ancestor filter and the matched properties cache each on and
-  off. Documents whose unindexed pass ends budget-rejected are reported separately and must not
-  produce fewer matched rules with the index.
+  off. Documents whose unindexed or filter-off pass ends budget-rejected are reported separately
+  and must not produce fewer matched rules with the index or the filter. A low-traversal-limit
+  case runs the corpus again with `StyleResourceBudget::Limits::selectorTraversalSteps` lowered
+  until some documents end traversal-rejected with the filter off, and asserts that every
+  document that completes with the filter off is identical with it on, and that every rejected
+  one matches, with the filter on, at least the rules the filter-off pass matched.
 - **Differential fuzzer** (`//donner/svg/components/style:style_cascade_differential_fuzzer`,
   new). Generates a small element tree and a stylesheet from the fuzzer input, built on the
   existing `selector_parser_fuzzer` and `stylesheet_parser_fuzzer` inputs, and asserts identical
@@ -1858,7 +1938,13 @@ Stylesheets and documents are untrusted input.
   used by shapes elsewhere, patterns, markers, text, `id` changes that re-target references,
   sibling and descendant selectors, and filtered structural selectors (`:nth-child(1 of .selected)`,
   `:nth-last-child(2 of .a, .b)`, and both nested in `:is()` and left of a combinator) where the
-  edited element is before, after and equal to the subject.
+  edited element is before, after and equal to the subject. Because the narrow-versus-full output
+  comparison passes even if every edit still rebuilds, each edit also asserts the
+  `RenderTreeState` counters: an eligible edit (a class edit on an element with no text and no
+  paint-server, marker, clip-path, mask or filter reference before or after) increments
+  `retainedUpdates` and leaves `fullRebuilds` unchanged, and an ineligible one increments
+  `fullRebuilds`. The eligible class edit must be observed red with `FlagsAreRetainable`
+  unchanged before it counts.
 - **Index unit tests** for key extraction on every selector shape in
   [Donner Today](#donner-today), including namespaces, case, `:is()`, `:not()` and `:has()` in
   the subject compound; **filter unit tests** for selector-hash extraction (stopping at sibling
@@ -1895,6 +1981,13 @@ Stylesheets and documents are untrusted input.
   `@import url("b.css") layer(b);` with `b.css` setting `rect { fill: blue }`, then
   `@layer a { rect { fill: red } }`, resolved through a test resource loader; the rectangle is
   blue. The case must be observed red against an imports-first tree before it counts.
+- **Shared custom-map release regression** (in `style_cascade_feature_tests`): a parent declares
+  a large custom property and a child inherits its map; the parent's record is released while the
+  child's record is kept alive through `ExternalUseStyleRetention`, and the `RetainedStyleBytes`
+  total must still include the map and its token sequences; then the child is released and the
+  total returns to its starting value. A second case shares one token sequence between two
+  independently overlaid maps and releases them in both orders. Both must be observed red with the
+  map charged to its first record before they count.
 - **Rendering cases** in the Donner SVG 2 suite for a custom property feeding `fill` through a
   `<use>` instance, a layered `!important` override, and a presentation attribute losing to the
   first declared layer.
@@ -1973,7 +2066,10 @@ Stylesheets and documents are untrusted input.
   every edit, and the index shrinks what each remaining full restyle costs.
 - **Budget semantics.** The rule-element budget is charged per candidate tested. Documents that
   exhaust the budget today only because of rules that cannot match style completely afterwards,
-  under unchanged limits. This is the one intended behavior change of Part A.
+  under unchanged limits. The ancestor filter extends the same change to the selector-traversal
+  budget: walks it skips are not charged, so a document that ends traversal-rejected today can
+  apply more rules. This is the one intended behavior change of Part A, limited to documents that
+  end budget-rejected today.
 - **Test-only unindexed candidate source.** The differential tests use a test-only option on
   `StyleSystem` that offers every rule as a candidate. It is a switch on the shared matcher and
   cascade path, not a second implementation; the filter and cache have the same kind of switch.
