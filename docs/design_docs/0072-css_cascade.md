@@ -1145,8 +1145,10 @@ touched, so A5 adds:
   (`InstantiateStyledPaintTrees`, `InstantiateNestedMarkerTrees`, `FilterSystem`, `PaintSystem`,
   `TextSystem`). The plan therefore declines when a restyled entity is, or is inside, a text
   element, or when its computed style references a paint server, marker, clip path, mask or
-  filter. That check runs both before the restyle (on the old computed style, read while
-  planning) and after it (on the new one); when the post-restyle check fails, `tryRetainedUpdate`
+  filter. That check runs both before the restyle and after it. The router performs the first
+  one when it marks the entity, while the old computed style still exists (marking removes it),
+  and sets `NarrowedStyle` only when it passes; `ApplyRetainedUpdate` performs the second on the
+  new computed style. When the post-restyle check fails, `tryRetainedUpdate`
   returns false and the frame takes the full rebuild, whose selective pass restyles the same
   dirty entities again. The edit's result is then exactly today's.
 - **Shadow instances.** The `<use>` instances of a restyled light element are restyled through
@@ -1665,6 +1667,39 @@ are marked for the selective pass; the matched properties cache is cleared becau
 changed. A changed rule that uses `:has()`, or a change in layer order, falls back to one full
 restyle.
 
+**When the scan's allowance runs out.** The scan runs on its own pass allowance (a fresh
+`StyleResourceBudget` with the document's limits), charging rule-element matches and
+`SelectorTraversalBudget` steps like a cascade. An element the scan did not reach cannot be
+treated as a non-match: it may still hold a style from a removed or modified rule without being
+marked dirty. This can happen even when a fresh cascade of the new text completes, because an
+edit that replaces several rules scans both their old and new versions while a fresh cascade
+tests only the new ones. So when the scan is refused by any limit, its partial marks are
+discarded and one full restyle is requested (`needsFullStyleRecompute`), which runs with fresh
+pass allowances and gives exactly the result of a fresh cascade, budget outcome included.
+
+**Budget rejection in the other new scans and pre-passes.** Each one this design adds either
+charges nothing and cannot be refused, or has a stated fallback:
+
+- **Narrowed invalidation (Part A).** The dependency lookups are hash lookups in the stylesheet's
+  `SelectorDependencySummary`, one per changed name, and the marking walks visit at most every
+  entity once; neither is charged to a style budget, so neither can be refused. The selective
+  pass they feed has its existing budget behavior, the same as when it follows today's full
+  restyle request.
+- **Retained-update eligibility (Part A).** Both checks read component presence and computed
+  values of the restyled entities and charge nothing. If the selective restyle inside
+  `ApplyRetainedUpdate` is refused by a budget, the update declines exactly as when the
+  post-restyle check fails: `tryRetainedUpdate` returns false and the full rebuild runs with
+  fresh pass allowances, so the frame's result is today's.
+- **Layer-tree rebuild (Part B).** The walk visits each layer statement, block and import marker
+  of the applicable stylesheets once; their number is bounded by the stylesheet parse limit
+  (`RuleParser::kMaximumRules` per sheet) and the number of loaded imports, so it is not charged
+  and cannot be refused. A rebuild is always followed by one full restyle, which has the normal
+  budgets.
+- **Parallel pre-region step (Part D).** It emplaces the computed-style slots the serial pass
+  also emplaces and creates context objects; it charges nothing. A refusal inside the parallel
+  region abandons the pass and reruns it serially, as described under budgets, and the
+  pre-emplaced slots are what that serial rerun would create, so they stay.
+
 A keystroke in a `class`, `id` or `style` attribute is an attribute edit, not a stylesheet edit:
 it takes the `AttributeValue` scope and reaches `SVGElement`, where Part A's narrowed invalidation
 (Milestone A5) handles it.
@@ -2010,6 +2045,10 @@ Stylesheets and documents are untrusted input.
   a parser limit.
 - **Stylesheet edit cases** in the differential edit test: the four measured keystrokes, a rule
   insertion and deletion, and an edit that changes a selector so the rule moves between elements.
+  An exhaustion case replaces several rules in a document whose limits are lowered so that a
+  fresh cascade completes but the old-and-new scan is refused; it asserts that a full restyle was
+  requested and that every computed style equals the fresh cascade's. It must be observed red
+  with the scan's partial result kept before it counts.
 - **Editor tests** with headless `TextEditorCore` and the autocomplete functions: classification
   of every CSS byte in the corpus' `<style>` elements and `style` attributes, and one test per
   completion context returning suggestions from its source.
