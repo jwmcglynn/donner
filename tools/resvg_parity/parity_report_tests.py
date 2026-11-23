@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter
 
 import base64
+import contextlib
 import gzip
 import hashlib
 import io
@@ -1858,11 +1859,15 @@ class ParityReportTests(unittest.TestCase):
         # a deleted or renamed row for a snapshot case must still fail.
         stdout = self._release_fixture("title,resvg\npainting/fill/a.svg,1\n")
 
-        result = parity_report.main(
-            ["--repo-root", str(self.fixture.root), "--head-to-head"], stdout=stdout
-        )
+        stderr = io.StringIO()
 
-        self.assertNotEqual(result, 0)
+        with contextlib.redirect_stderr(stderr):
+            result = parity_report.main(
+                ["--repo-root", str(self.fixture.root), "--head-to-head"], stdout=stdout
+            )
+
+        self.assertEqual(result, 1)
+        self.assertIn("1 cases without a result ['painting/fill/b.svg']", stderr.getvalue())
 
     def test_head_to_head_leaves_only_listed_additions_unscored(self) -> None:
         stdout = self._release_fixture("title,resvg\npainting/fill/a.svg,1\n")
@@ -1876,6 +1881,19 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(stdout.getvalue())["unscored_release_additions"],
                          [{"path": "painting/fill/b.svg", "state": "compare"}])
+
+    def test_head_to_head_rejects_a_release_addition_outside_the_corpus(self) -> None:
+        report = self._head_to_head_fixture()
+        results = {path: 1 for path in (
+            "painting/fill/both.svg", "painting/fill/budget.svg", "painting/fill/golden.svg",
+            "painting/fill/gated.svg", "painting/fill/unknown.svg", "painting/fill/skip.svg",
+            "painting/fill/ub.svg", "painting/fill/neither.svg", "painting/stroke/off.svg")}
+
+        with self.assertRaisesRegex(parity_report.ParityReportError,
+                                    r"release additions are not vendored cases: "
+                                    r"\['painting/fill/missing.svg'\]"):
+            parity_report.build_head_to_head(
+                report, results, release_additions=frozenset({"painting/fill/missing.svg"}))
 
     def test_head_to_head_rejects_a_release_addition_with_a_result(self) -> None:
         report = self._head_to_head_fixture()

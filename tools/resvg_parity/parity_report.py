@@ -2693,6 +2693,19 @@ RENDER_PASS_CONTRACTS = {
 }
 
 
+def _check_release_additions(
+    release_additions: frozenset[str], cases: set[str], scored: set[str]
+) -> None:
+    """Fail when a release addition is not a vendored case or has a recorded result."""
+
+    if absent_additions := sorted(release_additions - cases):
+        raise ParityReportError(
+            f"release additions are not vendored cases: {absent_additions[:5]}")
+    if scored_additions := sorted(release_additions & scored):
+        raise ParityReportError(
+            f"release additions have a results.csv row: {scored_additions[:5]}")
+
+
 def build_head_to_head(
     report: dict[str, object], engine_results: dict[str, int], engine: str = HEAD_TO_HEAD_ENGINE,
     release_additions: frozenset[str] = frozenset(),
@@ -2705,14 +2718,12 @@ def build_head_to_head(
 
     `release_additions` are cases vendored from a later upstream release than the snapshot
     whose results.csv the engine column comes from; they have no recorded result, so both
-    sides leave them unscored and the report lists them. One with a result fails, as does any
-    other case without a result.
+    sides leave them unscored and the report lists them. One that is not a vendored case or that
+    has a result fails, as does any other case without a result.
     """
 
     all_cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
-    if scored_additions := sorted(release_additions & set(engine_results)):
-        raise ParityReportError(
-            f"release additions have a results.csv row: {scored_additions[:5]}")
+    _check_release_additions(release_additions, set(all_cases), set(engine_results))
     unscored = sorted(set(all_cases) & release_additions)
     cases = {path: case for path, case in all_cases.items() if path not in unscored}
     missing = sorted(set(cases) - set(engine_results))
