@@ -376,6 +376,9 @@ public:
   /// Forwards the test-only in-constructor hook to the active backend.
   void setOffscreenCreationHookForTesting(std::function<void()> hook) override;
 
+  /// Forwards the test-only surface budget limits to the active backend.
+  void replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits limits) override;
+
   /// Forwards filter-budget chunk diagnostics from the active backend.
   [[nodiscard]] std::uint64_t filterBudgetChunksForTesting() const override;
 

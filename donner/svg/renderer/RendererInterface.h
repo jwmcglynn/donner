@@ -259,6 +259,14 @@ public:
     limits_.surfaces = std::min(limits_.surfaces, limits.surfaces);
   }
 
+  /// Sets the limits for a test to \p limits, clamped to the production defaults: unlike
+  /// \ref setLimitsForTesting it may raise a limit a test lowered earlier, but never above
+  /// \ref kMaximumBytes or \ref kMaximumSurfaces.
+  void replaceLimitsWithinDefaultsForTesting(Limits limits) {
+    limits_.bytes = std::min(limits.bytes, kMaximumBytes);
+    limits_.surfaces = std::min(limits.surfaces, kMaximumSurfaces);
+  }
+
 private:
   Limits limits_;
   std::uint64_t bytes_ = 0;
@@ -1520,6 +1528,15 @@ public:
 
   /// Install a zero-default hook entered from inside offscreen backend construction.
   virtual void setOffscreenCreationHookForTesting(std::function<void()> /*hook*/) {}
+
+  /// Sets the per-frame surface budget this renderer shares with its offscreens to \p limits,
+  /// clamped to the production defaults. Unlike the tighten-only budget hooks it can raise a
+  /// limit lowered earlier, which tests of the budget-direct fallback need: a budget below one
+  /// canvas-sized surface refuses every tile until the slots are drawn directly, and only a raised
+  /// budget then holds the frame target that composes them. The limits apply to the next
+  /// reservation; a refusal already latched this frame stays until the frame's budget resets.
+  /// Renderers without a surface budget ignore it.
+  virtual void replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits /*limits*/) {}
 
   /// Number of filter-budget command-buffer chunks submitted by this renderer family.
   [[nodiscard]] virtual std::uint64_t filterBudgetChunksForTesting() const { return 0; }

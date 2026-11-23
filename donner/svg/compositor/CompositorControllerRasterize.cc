@@ -1669,6 +1669,60 @@ bool CompositorController::hasCompleteTileSetForPresentation() const {
   return true;
 }
 
+bool CompositorController::hasBudgetDirectSlot(const Vector2i& canvasSize) const {
+  const bool directLayer = std::ranges::any_of(layers_, [&](const CompositorLayer& layer) {
+    return layer.immediatePlan().budgetImmediate &&
+           layer.immediatePlan().budgetCanvasSize == canvasSize;
+  });
+  return directLayer || std::ranges::any_of(staticSpanPlans_, [&](const StaticSpanPlan& plan) {
+           return plan.budgetImmediate && plan.budgetCanvasSize == canvasSize &&
+                  plan.mode == StaticSpanMode::Immediate;
+         });
+}
+
+bool CompositorController::layersHavePayloadOrDrawDirectly(const Vector2i& canvasSize) const {
+  return std::ranges::all_of(layers_, [&](const CompositorLayer& layer) {
+    const ImmediateLayerPlan& plan = layer.immediatePlan();
+    return layer.hasRenderablePayload() ||
+           (plan.budgetImmediate && plan.budgetCanvasSize == canvasSize);
+  });
+}
+
+bool CompositorController::spansHavePayloadOrDrawDirectly(const Vector2i& canvasSize) const {
+  for (size_t index = 0; index < staticSpanPlans_.size(); ++index) {
+    const StaticSpanPlan& plan = staticSpanPlans_[index];
+    const bool emptySpan = plan.firstEntity == entt::null || plan.lastEntity == entt::null;
+    const bool hasBitmap = index < staticSegments_.size() && !staticSegments_[index].empty();
+    const bool hasTexture =
+        index < staticSegmentTextures_.size() && staticSegmentTextures_[index] != nullptr;
+    const bool drawnDirectly = plan.budgetImmediate && plan.budgetCanvasSize == canvasSize &&
+                               plan.mode == StaticSpanMode::Immediate;
+    if (!emptySpan && !hasBitmap && !hasTexture && !drawnDirectly) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CompositorController::composedFrameStandsInForTiles() const {
+  const bool frameComplete = mainFrameComposedThisFrame_ &&
+                             lastRenderFrameStats_.textureAllocationFailureCount == 0 &&
+                             lastRenderFrameStats_.composePayloadRefusalCount == 0;
+  if (!frameComplete || !hasLastViewport_ || hasCompleteTileSetForPresentation()) {
+    return false;
+  }
+  const Vector2i canvasSize = BitmapDimensionsForViewport(lastViewport_);
+  return hasBudgetDirectSlot(canvasSize) && layersHavePayloadOrDrawDirectly(canvasSize) &&
+         spansHavePayloadOrDrawDirectly(canvasSize);
+}
+
+bool CompositorController::canSkipMainCompose(const RenderViewport& viewport) const {
+  // A slot presented directly after budget strikes has no tile: only the composed frame shows it.
+  return skipMainComposeDuringSplit_ && hasSplitStaticLayers() && mainRendererHasCachedFrame_ &&
+         !config_.verifyPixelIdentity &&
+         !hasBudgetDirectSlot(BitmapDimensionsForViewport(viewport));
+}
+
 void CompositorController::recordComposePayloadRefusal() {
   ++lastRenderFrameStats_.composePayloadRefusalCount;
   ++lastRenderFrameStats_.composePayloadRefusalTotal;
@@ -1762,9 +1816,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
 
   // Tile-only callers do not consume the main frame. Keep the cold-frame guard and force
   // composition when pixel verification reads the main renderer as its actual image.
-  const bool skipMainCompose = skipMainComposeDuringSplit_ && hasSplitStaticLayers() &&
-                               mainRendererHasCachedFrame_ && !config_.verifyPixelIdentity;
-  if (skipMainCompose) {
+  if (canSkipMainCompose(viewport)) {
     return;
   }
 
@@ -1898,6 +1950,9 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   markRefusedTilesDirty(refusedLayers, refusedSegments);
 
   renderer().endFrame();
+  // A refused frame target latches the shared budget, so a frame composed without one reads as
+  // rejected here.
+  mainFrameComposedThisFrame_ = !renderer().resourceStats().surfaceBudgetRejected;
   lastRenderFrameStats_.mainComposeMs =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - composeStart)
           .count();

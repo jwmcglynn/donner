@@ -3310,12 +3310,54 @@ TEST(AsyncRendererTest, PartialBudgetZoomKeepsPreviousCompletePresentation) {
     const std::optional<RenderResult> unallocatable =
         renderSelected(version, UnallocatableRasterViewport());
     ASSERT_TRUE(unallocatable.has_value());
+    // The slots the budget refused are drawn directly into the main frame, but no frame target of
+    // this raster can be allocated either, so no composed frame can stand in for the tiles.
     EXPECT_FALSE(unallocatable->compositedPreview.has_value())
-        << "a budget-immediate fallback must not publish only its surviving layer: "
+        << "a budget-immediate fallback must not publish only its surviving layer, nor a "
+           "full-canvas frame its target could not hold: "
         << DescribePresentation(*unallocatable);
+    EXPECT_FALSE(ContainsFullCanvasTile(*unallocatable)) << DescribePresentation(*unallocatable);
     EXPECT_TRUE(unallocatable->workerTiming.nothingToPresent)
         << DescribePresentation(*unallocatable);
   }
+}
+
+/// Sets @p renderer's per-frame surface budget to @p canvasSurfaces 64x64 surfaces.
+void SetSurfaceBudgetIn64PxCanvases(svg::Renderer& renderer, double canvasSurfaces) {
+  renderer.replaceSurfaceBudgetLimitsForTesting(
+      {.bytes = static_cast<std::uint64_t>(canvasSurfaces * 64.0 * 64.0 * 4.0),
+       .surfaces = svg::RendererSurfaceBudget::kMaximumSurfaces});
+}
+
+// A budget below one surface switches every slot to direct presentation; once it holds the frame
+// target again, the composed frame of direct draws is presented as one full-canvas frame.
+TEST(AsyncRendererTest, ComposedFrameOfDirectlyDrawnSlotsIsPresented) {
+  svg::SVGDocument document = svg::instantiateSubtree(kSmallFilteredTargetSvg);
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, ::testing::Optional(::testing::_));
+  svg::Renderer renderer;
+  SetSurfaceBudgetIn64PxCanvases(renderer, 0.5);
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = target->unsafeEntityHandle().entity();
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+  for (std::uint64_t version = 1; version <= 10; ++version) {
+    const std::optional<RenderResult> starved = renderSelected(version);
+    ASSERT_THAT(starved, ::testing::Optional(::testing::_));
+    EXPECT_TRUE(starved->workerTiming.nothingToPresent) << DescribePresentation(*starved);
+  }
+
+  SetSurfaceBudgetIn64PxCanvases(renderer, 8.0);
+  const std::optional<RenderResult> presented = renderSelected(11);
+  ASSERT_THAT(presented, ::testing::Optional(::testing::_));
+  EXPECT_FALSE(presented->workerTiming.nothingToPresent) << DescribePresentation(*presented);
+  EXPECT_TRUE(ContainsFullCanvasTile(*presented)) << DescribePresentation(*presented);
 }
 
 TEST(AsyncRendererTest, UnboundedStaticBudgetFallbackNeverPublishesLayerAlone) {

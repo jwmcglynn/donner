@@ -402,7 +402,8 @@ public:
       /// The compositor cannot add another layer without exceeding the layer limit.
       LayerLimit,
       /// The promotion was refused for memory: retained pixels plus one canvas-sized frame target
-      /// reached the total threshold;
+      /// (two while a slot is drawn directly and the editor presents the composed frame in place
+      /// of its tiles) reached the total threshold;
       /// retained CPU bitmaps reached the heap bitmap threshold; the entity's complete interaction
       /// tile exceeds the largest tile the compositor admits; or the request repeats, at the same
       /// raster size and surface transform, one that was refused because its complete tile was
@@ -1187,6 +1188,13 @@ public:
   /// failure leaves only part of a new layer/segment topology rasterized.
   [[nodiscard]] bool hasCompleteTileSetForPresentation() const;
 
+  /// True when this frame's composed main frame shows the whole document although the tile set
+  /// is incomplete: every non-empty slot without a payload is one the budget refused twice on its
+  /// own and that the compose drew directly, and the compose allocated its frame target. The
+  /// editor then presents the composed frame as one full-canvas texture in place of the tiles.
+  /// False whenever the tile set is complete, or a slot is missing for any other reason.
+  [[nodiscard]] bool composedFrameStandsInForTiles() const;
+
   /// True when every nonempty layer and static span has a current tile payload.
   /// Direct composition alone does not make the editor's split-tile preview complete.
   [[nodiscard]] bool hasCompletePaintOrderTilePayloads() const;
@@ -1376,6 +1384,17 @@ private:
   void recordLayerAllocationFailure(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
                                     const ImmediateLayerPlan& freshPlan, const Vector2i& canvasSize,
                                     std::unique_ptr<RendererInterface> offscreen, bool failedAlone);
+  /// True when a layer or static span is presented directly because the budget refused it twice
+  /// on its own at `canvasSize`.
+  [[nodiscard]] bool hasBudgetDirectSlot(const Vector2i& canvasSize) const;
+  /// True when every layer holds a payload or is drawn directly at `canvasSize` after strikes.
+  [[nodiscard]] bool layersHavePayloadOrDrawDirectly(const Vector2i& canvasSize) const;
+  /// True when every non-empty static span holds a payload or is drawn directly at `canvasSize`
+  /// after strikes.
+  [[nodiscard]] bool spansHavePayloadOrDrawDirectly(const Vector2i& canvasSize) const;
+  /// True when a tile-only drag frame may skip the main compose: nothing reads the main frame,
+  /// and no slot is drawn directly into it in place of a tile.
+  [[nodiscard]] bool canSkipMainCompose(const RenderViewport& viewport) const;
   /// Carries a span that was switched to immediate presentation at `canvasSize` into this
   /// frame's plan without allocating; returns false when the span rasterizes normally.
   bool adoptBudgetImmediateSpan(size_t slotIndex, const StaticSpanPlan& previousPlan,
@@ -1816,6 +1835,8 @@ private:
   /// Whether a tile payload was allocated in the current frame. A budget rejection before any is
   /// the tile's own: it does not fit beside the frame target even with no other tile.
   bool tileAllocatedThisFrame_ = false;
+  /// Whether this frame's compose ran and allocated its frame target.
+  bool mainFrameComposedThisFrame_ = false;
   /// Consecutive frames in which the main renderer declined each static segment's texture
   /// payload; a slot stops re-rasterizing after two strikes. Sized lazily in `composeLayers`.
   std::vector<uint8_t> staticSegmentComposeDeclines_;

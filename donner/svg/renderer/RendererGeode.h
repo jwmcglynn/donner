@@ -641,6 +641,8 @@ public:
   /// Shrink the aggregate frame-surface budget for boundary tests.
   void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes);
 
+  void replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits limits) override;
+
   /// Shrink the aggregate text-materialization budget for boundary tests.
   void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits,
                                               std::size_t maximumGlyphOccurrences);

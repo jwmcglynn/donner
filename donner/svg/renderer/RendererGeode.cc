@@ -9298,6 +9298,10 @@ void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,
   impl_->surfaceBudget->setLimitsForTesting({.bytes = maximumBytes, .surfaces = maximumSurfaces});
 }
 
+void RendererGeode::replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits limits) {
+  impl_->surfaceBudget->replaceLimitsWithinDefaultsForTesting(limits);
+}
+
 void RendererGeode::setTextMaterializationBudgetForTesting(
     RendererTextMaterializationBudget::Cost limits, std::size_t maximumGlyphOccurrences) {
   impl_->textMaterializationBudget->setLimitsForTesting(limits);

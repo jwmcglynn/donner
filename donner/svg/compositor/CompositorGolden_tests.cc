@@ -1737,6 +1737,142 @@ TEST_F(CompositorGoldenTest, OffCanvasLayerIsDrawnAfterAPanBringsItOn) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// Bytes of one RGBA surface the size of the 200x100 golden-test canvas.
+constexpr std::uint64_t kGoldenCanvasBytes = 200u * 100u * 4u;
+
+/// Sets @p renderer's per-frame surface budget to @p canvasSurfaces canvas-sized surfaces.
+void SetSurfaceBudgetInCanvases(svg::Renderer& renderer, double canvasSurfaces) {
+  renderer.replaceSurfaceBudgetLimitsForTesting(
+      {.bytes = static_cast<std::uint64_t>(canvasSurfaces * kGoldenCanvasBytes),
+       .surfaces = RendererSurfaceBudget::kMaximumSurfaces});
+}
+
+/// A flat render of @p source on the 200x100 canvas, the reference a stand-in frame must match.
+RendererBitmap FlatRender(std::string_view source) {
+  SVGDocument reference = parseDocument(source);
+  svg::Renderer referenceRenderer;
+  RendererDriver(referenceRenderer)
+      .draw(reference, RenderViewport{Vector2d(200, 100)}, Transform2d());
+  return referenceRenderer.takeSnapshot();
+}
+
+// A budget below one canvas-sized surface refuses every tile on its own, so after two strikes
+// each slot is drawn directly into the main frame. Once the budget holds the frame target again,
+// the composed frame of direct draws stands in for the tile set and matches a flat render.
+TEST_F(CompositorGoldenTest, ComposedFrameOfDirectlyDrawnSlotsMatchesAFlatRender) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+        <rect width="200" height="100" fill="white"/>
+        <g opacity="0.5"><rect x="20" y="10" width="120" height="80" fill="blue"/></g>
+        <rect x="60" y="30" width="20" height="20" fill="green"/>
+      </svg>)svg";
+  SVGDocument document = parseDocument(kSource);
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  config.complexityBucketing = false;
+  config.dynamicImmediateStaticSpans = false;
+  SetSurfaceBudgetInCanvases(renderer_, 0.5);
+  CompositorController compositor(document, renderer_, config);
+  for (int frame = 0; frame < 8; ++frame) {
+    compositor.renderFrame(viewport_);
+  }
+  ASSERT_FALSE(compositor.composedFrameStandsInForTiles())
+      << "the frame target does not fit either, so no frame holds the document yet";
+
+  SetSurfaceBudgetInCanvases(renderer_, 4.0);
+  compositor.renderFrame(viewport_);
+  EXPECT_FALSE(compositor.hasCompleteTileSetForPresentation())
+      << "the slots stay drawn directly at this canvas size, so no tile is attempted again";
+  ASSERT_TRUE(compositor.composedFrameStandsInForTiles());
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, ::testing::Gt(0));
+  editor::tests::CompareBitmapToBitmap(renderer_.takeSnapshot(), FlatRender(kSource),
+                                       "composed_frame_of_direct_slots",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A 200x100 document with a small drag target and a small second shape over a white background.
+constexpr std::string_view kDragStandInSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="20" y="20" width="30" height="30" fill="red"/>
+      <rect id="other" x="150" y="60" width="10" height="10" fill="blue"/>
+    </svg>)svg";
+
+/// Settings that keep every static span a cached tile, so the budget decides how it is presented.
+CompositorConfig CachedSpanBudgetConfig() {
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  config.complexityBucketing = false;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  return config;
+}
+
+// During a drag the editor asks the compositor to skip the main compose, since it presents the
+// tiles. A span drawn directly has no tile, so the compose must still run: the composed frame
+// stands in for the tiles, matches a flat render, and follows the dragged shape.
+TEST_F(CompositorGoldenTest, DragFrameComposesAndStandsInWhileASpanIsDrawnDirectly) {
+  SVGDocument document = parseDocument(kDragStandInSvg);
+  SetSurfaceBudgetInCanvases(renderer_, 0.5);
+  CompositorController compositor(document, renderer_, CachedSpanBudgetConfig());
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, ::testing::Optional(::testing::_));
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag));
+  compositor.setSkipMainComposeDuringSplit(true);
+  for (int frame = 0; frame < 8; ++frame) {
+    compositor.renderFrame(viewport_);
+  }
+
+  SetSurfaceBudgetInCanvases(renderer_, 4.0);
+  compositor.renderFrame(viewport_);
+  ASSERT_TRUE(compositor.hasSplitStaticLayers())
+      << "the drag layer must split the static content for the compose skip to apply";
+  ASSERT_FALSE(compositor.hasCompleteTileSetForPresentation());
+  ASSERT_TRUE(compositor.composedFrameStandsInForTiles());
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, ::testing::Gt(0));
+  editor::tests::CompareBitmapToBitmap(renderer_.takeSnapshot(), FlatRender(kDragStandInSvg),
+                                       "drag_stand_in_at_rest",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 10.0)));
+  compositor.renderFrame(viewport_);
+  ASSERT_TRUE(compositor.composedFrameStandsInForTiles());
+  SVGDocument moved = parseDocument(kDragStandInSvg);
+  moved.querySelector("#target")->cast<SVGGraphicsElement>().setTransform(
+      Transform2d::Translate(Vector2d(40.0, 10.0)));
+  svg::Renderer movedRenderer;
+  RendererDriver(movedRenderer).draw(moved, RenderViewport{Vector2d(200, 100)}, Transform2d());
+  editor::tests::CompareBitmapToBitmap(renderer_.takeSnapshot(), movedRenderer.takeSnapshot(),
+                                       "drag_stand_in_moved",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// While a slot is drawn directly the editor holds the composed frame it presents beside the next
+// frame's target, so admission counts two canvas-sized surfaces. With a retained budget of two
+// canvases and almost nothing retained, a new promotion is then refused for memory.
+TEST_F(CompositorGoldenTest, AdmissionCountsThePresentedFrameWhileASlotIsDrawnDirectly) {
+  SVGDocument document = parseDocument(kDragStandInSvg);
+  CompositorConfig config = CachedSpanBudgetConfig();
+  config.retainedMemoryBudgetBytes = 2u * kGoldenCanvasBytes;
+  SetSurfaceBudgetInCanvases(renderer_, 0.5);
+  CompositorController compositor(document, renderer_, config);
+  const auto target = document.querySelector("#target");
+  const auto other = document.querySelector("#other");
+  ASSERT_THAT(target, ::testing::Optional(::testing::_));
+  ASSERT_THAT(other, ::testing::Optional(::testing::_));
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag));
+  for (int frame = 0; frame < 8; ++frame) {
+    compositor.renderFrame(viewport_);
+  }
+  ASSERT_THAT(compositor.totalBitmapMemory(), ::testing::Lt(kGoldenCanvasBytes / 2))
+      << "one frame target alone would leave room for the promotion";
+  EXPECT_EQ(
+      compositor.promoteEntity(other->unsafeEntityHandle().entity(), InteractionHint::Selection),
+      CompositorController::PromoteResult::MemoryLimit);
+}
+
 TEST_F(CompositorGoldenTest, OpacityLessThanOneAutoPromotionMatchesFullRender) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">

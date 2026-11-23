@@ -1653,6 +1653,7 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   cancelToken_.emplace(token);
   surfaceBudgetExhaustedThisFrame_ = false;
   tileAllocatedThisFrame_ = false;
+  mainFrameComposedThisFrame_ = false;
   warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
   const bool completed = !token.isCancelled();
   cancelToken_.reset();
@@ -1852,6 +1853,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   }
   surfaceBudgetExhaustedThisFrame_ = false;
   tileAllocatedThisFrame_ = false;
+  mainFrameComposedThisFrame_ = false;
   composedStyleWorkIncomplete_ = false;
   // Interaction promotes arrive between frames; more than one active-drag entity means a
   // multi-selection drag.
@@ -2739,12 +2741,15 @@ bool CompositorController::retainedMemoryAtBudget() const {
   const size_t retainedBytes =
       heapBitmapBytes + breakdown.segmentTextureBytes + breakdown.layerTextureBytes;
   // A frame that rebuilds every tile charges each of them and its frame target, one canvas-sized
-  // surface, against the renderer's per-frame surface budget.
+  // surface, against the renderer's per-frame surface budget. While a slot is presented directly
+  // the editor also holds the composed frame it presents in place of the tiles, a second
+  // canvas-sized surface.
   std::uint64_t frameTargetBytes = 0;
   if (hasLastViewport_) {
     const Vector2i canvasSize = BitmapDimensionsForViewport(lastViewport_);
-    frameTargetBytes = static_cast<std::uint64_t>(std::max(canvasSize.x, 0)) *
-                       static_cast<std::uint64_t>(std::max(canvasSize.y, 0)) * 4u;
+    const std::uint64_t canvasBytes = static_cast<std::uint64_t>(std::max(canvasSize.x, 0)) *
+                                      static_cast<std::uint64_t>(std::max(canvasSize.y, 0)) * 4u;
+    frameTargetBytes = hasBudgetDirectSlot(canvasSize) ? 2u * canvasBytes : canvasBytes;
   }
   return static_cast<std::uint64_t>(retainedBytes) + frameTargetBytes >=
              static_cast<std::uint64_t>(retainedMemoryBudgetBytes()) ||
