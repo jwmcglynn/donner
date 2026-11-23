@@ -407,8 +407,9 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
 
   /// Pooled blit-uniform scratch: bump-allocate image-blit uniforms from
   /// the encoder's uniform arena instead of creating one buffer per blit.
-  /// Consecutive image draws and layer composites share one growing
-  /// buffer; a buffer is only created when the arena grows.
+  /// Consecutive image draws, and layer composites without a retained
+  /// binding, share one growing buffer; a buffer is only created when the
+  /// arena grows.
   GeodeTextureEncoder::UniformAllocation allocate(const void* data, uint64_t size,
                                                   uint64_t alignment) override {
     const Allocation alloc = allocInArena(uniformArena, data, size, alignment);
@@ -1516,6 +1517,21 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       currentPipelineIsGradient = true;
     }
   }
+  /// Draw a textured quad through \p retained when it can serve the draw, otherwise with a uniform
+  /// and bind group allocated for this frame only.
+  void drawRetainableQuad(const gpu::Texture& source, const float mvp[16],
+                          const GeodeTextureEncoder::QuadParams& params,
+                          GeodeTextureEncoder::RetainedQuadBinding* retained) {
+    if (retained != nullptr &&
+        GeodeTextureEncoder::drawRetainedQuad(*gpuContext, *imagePipeline, *pass, source, mvp,
+                                              targetWidth, targetHeight, params, *retained)) {
+      return;
+    }
+    GeodeTextureEncoder::drawTexturedQuad(*gpuContext, *imagePipeline, *pass, source, mvp,
+                                          targetWidth, targetHeight, params, transientResources,
+                                          this);
+  }
+
   void bindImagePipeline(const gpu::RenderPipeline& imageRenderPipeline) {
     if (currentPipeline != BoundPipeline::kImage) {
       (void)pass->setPipeline(imageRenderPipeline);
@@ -3613,7 +3629,8 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
   }
 }
 
-void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity) {
+void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity,
+                                GeodeTextureEncoder::RetainedQuadBinding* retained) {
   if (!src.isValid()) {
     return;
   }
@@ -3651,9 +3668,7 @@ void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity) {
   qp.sourceIsPremultiplied = true;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->gpuContext, *impl_->imagePipeline, *impl_->pass,
-                                        src, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources, impl_.get());
+  impl_->drawRetainableQuad(src, mvp, qp, retained);
 }
 
 void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Texture& mask,
@@ -3705,7 +3720,8 @@ void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Te
 }
 
 void GeoEncoder::blitFullTargetBlended(const gpu::Texture& layer, const gpu::Texture& dstSnapshot,
-                                       uint32_t blendMode, double opacity) {
+                                       uint32_t blendMode, double opacity,
+                                       GeodeTextureEncoder::RetainedQuadBinding* retained) {
   if (!layer.isValid() || !dstSnapshot.isValid() || blendMode == 0u) {
     return;
   }
@@ -3744,9 +3760,7 @@ void GeoEncoder::blitFullTargetBlended(const gpu::Texture& layer, const gpu::Tex
   qp.dstSnapshotTexture = &dstSnapshot;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->gpuContext, *impl_->imagePipeline, *impl_->pass,
-                                        layer, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources, impl_.get());
+  impl_->drawRetainableQuad(layer, mvp, qp, retained);
 }
 
 namespace {
@@ -3855,11 +3869,12 @@ void GeoEncoder::drawPremultipliedImage(const svg::ImageResource& image, const B
 
 void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,
                              const Box2d& sourceUv, double opacity, bool pixelated,
-                             bool sourceIsPremultiplied) {
+                             bool sourceIsPremultiplied,
+                             GeodeTextureEncoder::RetainedQuadBinding* retained) {
   drawTextureWithFilter(
       texture, destRect, sourceUv, opacity,
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear,
-      sourceIsPremultiplied, Vector2i::Zero());
+      sourceIsPremultiplied, Vector2i::Zero(), retained);
 }
 
 void GeoEncoder::drawTextureAnchored(const gpu::Texture& texture, const Box2d& destRect,
@@ -3872,7 +3887,8 @@ void GeoEncoder::drawTextureAnchored(const gpu::Texture& texture, const Box2d& d
 void GeoEncoder::drawTextureWithFilter(const gpu::Texture& texture, const Box2d& destRect,
                                        const Box2d& sourceUv, double opacity,
                                        GeodeTextureEncoder::Filter filter,
-                                       bool sourceIsPremultiplied, const Vector2i& anchor) {
+                                       bool sourceIsPremultiplied, const Vector2i& anchor,
+                                       GeodeTextureEncoder::RetainedQuadBinding* retained) {
   if (!texture.isValid() || destRect.isEmpty() || sourceUv.isEmpty() || opacity <= 0.0) {
     return;
   }
@@ -3899,9 +3915,7 @@ void GeoEncoder::drawTextureWithFilter(const gpu::Texture& texture, const Box2d&
   qp.sourceIsPremultiplied = sourceIsPremultiplied;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->gpuContext, *impl_->imagePipeline, *impl_->pass,
-                                        texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources, impl_.get());
+  impl_->drawRetainableQuad(texture, mvp, qp, retained);
 }
 
 void GeoEncoder::finish() {

@@ -573,6 +573,34 @@ public:
   [[nodiscard]] static bool sceneBatchingEnabledForTesting();
 
   /**
+   * The texture each isolated layer of the last frame was composited from, in the order the
+   * layers were pushed; empty for a layer that was pushed but not composited. Lists only the layers
+   * that hold a retained entry, at most \ref maxRetainedCompositesForTesting.
+   */
+  [[nodiscard]] std::vector<std::optional<gpu::ResourceIdentity>> layerCompositeTexturesForTesting()
+      const;
+
+  /// The texture each filter result composited in the last frame was drawn from, in draw order.
+  /// Lists only the results that hold a retained entry.
+  [[nodiscard]] std::vector<std::optional<gpu::ResourceIdentity>>
+  filterOutputCompositeTexturesForTesting() const;
+
+  /// Retained composite entries this renderer holds right now, per sequence.
+  struct RetainedCompositeCounts {
+    size_t layers = 0;         //!< Isolated-layer composite entries.
+    size_t filterResults = 0;  //!< Filter-result composite entries.
+  };
+
+  /// The retained composite entries this renderer holds, including any not yet dropped.
+  [[nodiscard]] RetainedCompositeCounts retainedCompositeCountsForTesting() const;
+
+  /// The retained composite entries that hold a texture view or a bind group, per sequence.
+  [[nodiscard]] RetainedCompositeCounts retainedCompositeViewHoldersForTesting() const;
+
+  /// The most retained entries one composite sequence keeps.
+  [[nodiscard]] static size_t maxRetainedCompositesForTesting();
+
+  /**
    * Shrink the glyph-residency budget so eviction can be exercised without
    * building a font-sized working set.
    *

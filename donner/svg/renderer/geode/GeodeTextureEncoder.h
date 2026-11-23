@@ -2,13 +2,17 @@
 /// @file
 /// Reusable GPU texture upload + textured-quad draw helpers for Geode.
 
+#include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <type_traits>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/Handles.h"
+#include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 
 namespace donner::geode {
@@ -73,8 +77,8 @@ public:
    * Interface for callers that pool blit uniform uploads into a per-frame
    * scratch arena instead of creating one uniform buffer per blit.
    * `GeoEncoder` implements this over its per-encoder uniform arena, so
-   * consecutive image blits and layer composites share one growing buffer
-   * (the buffer itself is only created when the arena grows).
+   * consecutive image blits, and layer composites without a retained binding, share one growing
+   * buffer (the buffer itself is only created when the arena grows).
    *
    * Implementation contract (GeoEncoder's arena satisfies all four):
    * - The returned buffer carries the Uniform buffer-usage flag.
@@ -178,6 +182,113 @@ public:
   };
 
   /**
+   * Uniform buffer and bind group that one textured quad keeps across frames, so drawing it again
+   * with unchanged inputs writes no buffer and creates no bind group.
+   *
+   * The bind group is reused only with the exact textures it was built from. Each one is matched
+   * by its runtime identity, a slot plus a generation that no later texture ever takes, so a
+   * reused bind group cannot sample a texture that was destroyed, nor one whose slot now holds a
+   * different texture. A texture returned to a pool and handed out again keeps its identity, so a
+   * caller must only pass a binding when the quad's current owner rendered the texture's contents
+   * for this draw. The uniform buffer is rewritten only when the quad's uniform bytes change.
+   *
+   * A binding serves at most one draw per frame: its uniform write reaches the queue ahead of the
+   * frame's command buffers, so a second draw recorded in the same frame would make the first read
+   * the second's bytes.
+   */
+  class RetainedQuadBinding {
+  public:
+    /// GPU bytes one binding keeps: its uniform buffer. It mirrors the same number of bytes on the
+    /// CPU to detect unchanged uniforms.
+    static constexpr uint64_t kRetainedBytes = sizeof(gpu::shader::programs::ImageBlitParams);
+
+    RetainedQuadBinding() = default;
+    RetainedQuadBinding(const RetainedQuadBinding&) = delete;
+    RetainedQuadBinding& operator=(const RetainedQuadBinding&) = delete;
+    /// Move constructor.
+    RetainedQuadBinding(RetainedQuadBinding&&) noexcept = default;
+    /// Move assignment.
+    RetainedQuadBinding& operator=(RetainedQuadBinding&&) noexcept = default;
+
+    /// Whether this binding holds a texture view or a bind group naming one.
+    [[nodiscard]] bool holdsTextureViews() const {
+      return sourceView_.isValid() || backdropView_.isValid() || bindGroup_.isValid();
+    }
+
+    /// Whether this binding holds a view of the texture \p texture, as its source or backdrop.
+    /// @param texture Runtime identity of the texture.
+    [[nodiscard]] bool viewsTexture(const gpu::ResourceIdentity& texture) const;
+
+    /// Whether this binding's bind group names a clip mask view. The binding does not own that
+    /// view, so the bind group must not outlive the frame that supplied it.
+    [[nodiscard]] bool bindsClipMask() const;
+
+    /**
+     * Release the texture views and the bind group, keeping the uniform buffer and the bytes it
+     * holds. The next draw through this binding rebuilds them. Call it before a texture this
+     * binding views is destroyed: on Vulkan a view is a separate object on the image, and nothing
+     * else releases it with the image.
+     */
+    void releaseTextureViews();
+
+  private:
+    friend class GeodeTextureEncoder;
+
+    /// What a bind group is built from. A null identity stands for an absent input.
+    struct Inputs {
+      gpu::ResourceIdentity layout;
+      gpu::ResourceIdentity source;
+      gpu::ResourceIdentity backdrop;
+      gpu::ResourceIdentity clipMask;
+      uint64_t deviceId = 0;
+      bool nearestSampler = false;
+
+      /// Equality operator. @param other Inputs to compare against.
+      bool operator==(const Inputs& other) const = default;
+    };
+
+    /**
+     * Make the uniform buffer hold \p bytes, creating it on first use and writing only when its
+     * contents differ.
+     *
+     * @param device Device the buffer lives on.
+     * @param bytes Uniform block for this draw.
+     * @return False when the buffer could not be created or written.
+     */
+    bool publishUniforms(gpu::Device& device, std::span<const uint8_t> bytes);
+
+    /**
+     * Build the bind group for \p inputs, with views of \p texture and of the quad's backdrop.
+     *
+     * @param device Device to create the views and bind group on.
+     * @param pipeline Image pipeline whose layout the bind group follows.
+     * @param texture Source texture sampled by the quad.
+     * @param params Quad parameters naming the backdrop and clip mask.
+     * @param inputs Identities of what the bind group binds.
+     * @return False, leaving no bind group, when the device refused a view or the bind group.
+     */
+    bool rebuildBindGroup(gpu::Device& device, const GeodeImagePipeline& pipeline,
+                          const gpu::Texture& texture, const QuadParams& params,
+                          const Inputs& inputs);
+
+    gpu::Buffer uniformBuffer_;
+    std::array<uint8_t, kRetainedBytes> uniformBytes_ = {};
+    /// Whether \ref uniformBytes_ holds what the GPU buffer holds.
+    bool uniformCurrent_ = false;
+    /// Whether \ref bindGroup_ binds the current \ref uniformBuffer_.
+    bool bindGroupBindsBuffer_ = false;
+    gpu::TextureView sourceView_;
+    gpu::TextureView backdropView_;
+    gpu::BindGroup bindGroup_;
+    /// Inputs \ref bindGroup_ was built from.
+    Inputs inputs_;
+  };
+  static_assert(!std::is_copy_constructible_v<RetainedQuadBinding> &&
+                    std::is_nothrow_move_constructible_v<RetainedQuadBinding> &&
+                    std::is_nothrow_move_assignable_v<RetainedQuadBinding>,
+                "Containers of bindings must move them, never copy their GPU handles.");
+
+  /**
    * Build the column-major clip-from-local matrix for a quad drawn through \p targetFromLocal
    * into a \p targetWidth x \p targetHeight target (y down in target pixels, up in clip space).
    *
@@ -221,6 +332,31 @@ public:
                                const float mvp[16], uint32_t targetWidth, uint32_t targetHeight,
                                const QuadParams& params, GeodeTransientResources& resourceArena,
                                UniformScratch* scratch = nullptr);
+
+  /**
+   * Record a textured-quad draw through \p binding, reusing its uniform buffer and bind group
+   * when they still match this draw (see \ref RetainedQuadBinding).
+   *
+   * Takes the same draw inputs as \ref drawTexturedQuad. Quads with a mask texture keep using
+   * \ref drawTexturedQuad. Returns false without recording anything when the binding cannot serve
+   * the draw (a mask texture, or a buffer, view or bind group the device refused); the caller then
+   * draws through \ref drawTexturedQuad.
+   *
+   * @param context GPU context used to allocate draw resources.
+   * @param pipeline Image pipeline compatible with the active target.
+   * @param pass Open render pass receiving the draw.
+   * @param texture Source texture sampled by the quad.
+   * @param mvp Column-major 4x4 transform from quad coordinates to clip space.
+   * @param targetWidth Render-target width in physical pixels.
+   * @param targetHeight Render-target height in physical pixels.
+   * @param params Quad placement, sampling, clipping, and compositing settings.
+   * @param binding Binding this quad keeps across frames.
+   * @return Whether the draw was recorded.
+   */
+  static bool drawRetainedQuad(const GeodeGpuContext& context, const GeodeImagePipeline& pipeline,
+                               gpu::RenderPassEncoder& pass, const gpu::Texture& texture,
+                               const float mvp[16], uint32_t targetWidth, uint32_t targetHeight,
+                               const QuadParams& params, RetainedQuadBinding& binding);
 };
 
 }  // namespace donner::geode

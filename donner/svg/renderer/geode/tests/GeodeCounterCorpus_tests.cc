@@ -156,15 +156,6 @@ constexpr CounterField kCounterFields[] = {
      "bind groups should be cached per pipeline, not rebuilt per draw"},
 };
 
-/// Why the filter scenes still miss the steady state: their filter passes upload and bind nothing
-/// on an unchanged frame, but each filter result reaches its parent through the same composite blit
-/// an opacity group uses.
-constexpr std::string_view kFilterResultCompositeReason =
-    "the composite blit of each filter result rewrites its uniform every frame; the filter passes "
-    "themselves upload and bind nothing new";
-constexpr std::string_view kFilterResultCompositeTracking =
-    "clears when the isolated-layer composite reuses a stable uniform allocation across frames";
-
 // ---------------------------------------------------------------------------
 // Known violations.
 // ---------------------------------------------------------------------------
@@ -191,26 +182,11 @@ struct KnownViolation {
 // The size is deduced so that deleting an entry touches only that entry.
 constexpr auto kKnownViolations = std::to_array<KnownViolation>({
     {
-        /*scene=*/"donner_icon",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 20, 20},
-        /*reason=*/
-        "gradient-painted paths under an opacity group re-upload geometry and rebuild bind "
-        "groups per draw",
-        /*tracking=*/
-        "clears when gradient-painted paths and layer composites get the residency the "
-        "solid-fill path already has",
-    },
-    {
         /*scene=*/"donner_splash",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{2, 0, 10, 9},
-        /*reason=*/
-        "clip paths re-encode and re-upload their geometry, and filter and opacity group "
-        "composites rewrite their blit uniforms, every frame",
-        /*tracking=*/
-        "clears when clip-mask geometry stays resident and layer composites reuse a stable "
-        "uniform allocation across frames",
+        /*violated=*/kPathEncodes | kBufferWrites,
+        /*ceiling=*/{2, 0, 6, 4},
+        /*reason=*/"clip paths re-encode and re-upload their geometry every frame",
+        /*tracking=*/"clears when clip-mask geometry stays resident",
     },
     {
         /*scene=*/"geode_splash",
@@ -222,60 +198,6 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         /*tracking=*/
         "clears when clip/mask geometry and layered fill/composite bindings remain resident "
         "across unchanged frames",
-    },
-    {
-        /*scene=*/"Edzample_Anim3",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 4, 4},
-        /*reason=*/"group opacity layers rewrite their composite blit uniform every frame",
-        /*tracking=*/
-        "clears when the isolated-layer composite reuses a stable uniform allocation across "
-        "frames",
-    },
-    {
-        /*scene=*/"filter_displacement_map",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 1, 1},
-        /*reason=*/
-        kFilterResultCompositeReason,
-        /*tracking=*/
-        kFilterResultCompositeTracking,
-    },
-    {
-        /*scene=*/"filter_drop_shadow",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 3, 3},
-        /*reason=*/
-        kFilterResultCompositeReason,
-        /*tracking=*/
-        kFilterResultCompositeTracking,
-    },
-    {
-        /*scene=*/"filter_fill_paint",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 1, 1},
-        /*reason=*/
-        kFilterResultCompositeReason,
-        /*tracking=*/
-        kFilterResultCompositeTracking,
-    },
-    {
-        /*scene=*/"filter_spot_light",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 1, 1},
-        /*reason=*/
-        kFilterResultCompositeReason,
-        /*tracking=*/
-        kFilterResultCompositeTracking,
-    },
-    {
-        /*scene=*/"filter_stroke_paint",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 1, 1},
-        /*reason=*/
-        kFilterResultCompositeReason,
-        /*tracking=*/
-        kFilterResultCompositeTracking,
     },
     {
         /*scene=*/"geode_text_decoration_underline",
@@ -327,10 +249,9 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
     {
         /*scene=*/"image_data_url_opacity",
         /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 2, 2},
+        /*ceiling=*/{0, 1, 1, 1},
         /*reason=*/
-        "the image quad allocates a texture and re-uploads its quad geometry every frame, "
-        "and the opacity layer composites through a fresh blit",
+        "the image quad allocates a texture and re-uploads its quad geometry every frame",
         /*tracking=*/
         "clears when decoded images keep their texture and the image quad gains residency",
     },
@@ -352,30 +273,6 @@ constexpr auto kKnownViolations = std::to_array<KnownViolation>({
         "each turned placement draws under a clip polygon; no resident path draws under a clip "
         "polygon, so those placements take the per-frame arena and build a bind group per draw",
         /*tracking=*/"clears when draws under a clip polygon are resident",
-    },
-    {
-        /*scene=*/"marker_segments",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 23, 23},
-        /*reason=*/
-        "the marker content carries opacity, so every marker instance draws inside its own "
-        "opacity group, whose composite rewrites its blit uniform and builds a bind group "
-        "every frame",
-        /*tracking=*/
-        "clears when the isolated-layer composite keeps its uniform and bind group across "
-        "unchanged frames",
-    },
-    {
-        /*scene=*/"marker_spec_example",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 11, 11},
-        /*reason=*/
-        "two of the three markers' content carries opacity, so each of their instances draws "
-        "inside its own opacity group, whose composite rewrites its blit uniform and builds a "
-        "bind group every frame",
-        /*tracking=*/
-        "clears when the isolated-layer composite keeps its uniform and bind group across "
-        "unchanged frames",
     },
 });
 

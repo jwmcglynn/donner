@@ -476,8 +476,12 @@ public:
    *
    * @param src Source texture (RGBA8, premultiplied).
    * @param opacity Overall alpha multiplier in [0, 1].
+   * @param retained Uniform buffer and bind group this composite keeps across frames, or null to
+   *   allocate both for this frame only. See \ref GeodeTextureEncoder::RetainedQuadBinding for
+   *   when a caller may pass one.
    */
-  void blitFullTarget(const gpu::Texture& src, double opacity);
+  void blitFullTarget(const gpu::Texture& src, double opacity,
+                      GeodeTextureEncoder::RetainedQuadBinding* retained = nullptr);
 
   /**
    * `<mask>` compositing. Same as @ref blitFullTarget but additionally samples a mask texture and
@@ -520,9 +524,13 @@ public:
    *   BEFORE the blend formula so an `opacity` + `mix-blend-mode`
    *   combo on the same element composes correctly - the source
    *   colour that enters the blend is `layer * opacity`.
+   * @param retained Uniform buffer and bind group this composite keeps across frames, or null to
+   *   allocate both for this frame only. See \ref GeodeTextureEncoder::RetainedQuadBinding for
+   *   when a caller may pass one.
    */
   void blitFullTargetBlended(const gpu::Texture& layer, const gpu::Texture& dstSnapshot,
-                             uint32_t blendMode, double opacity);
+                             uint32_t blendMode, double opacity,
+                             GeodeTextureEncoder::RetainedQuadBinding* retained = nullptr);
 
   /**
    * Draw a raster image into the given destination rectangle.
@@ -578,9 +586,13 @@ public:
    * @param sourceIsPremultiplied True when the texels are premultiplied, as Geode
    *   render-target snapshots are. CPU bitmaps uploaded by host presentation code are
    *   straight-alpha and must pass false.
+   * @param retained Uniform buffer and bind group this draw keeps across frames, or null to
+   *   allocate both for this frame only. See \ref GeodeTextureEncoder::RetainedQuadBinding for
+   *   when a caller may pass one.
    */
   void drawTexture(const gpu::Texture& texture, const Box2d& destRect, const Box2d& sourceUv,
-                   double opacity, bool pixelated, bool sourceIsPremultiplied);
+                   double opacity, bool pixelated, bool sourceIsPremultiplied,
+                   GeodeTextureEncoder::RetainedQuadBinding* retained = nullptr);
 
   /**
    * Draw a GPU-resident texture like \ref drawTexture with bilinear filtering, mapping each target
@@ -969,7 +981,8 @@ private:
   void drawTextureWithFilter(const gpu::Texture& texture, const Box2d& destRect,
                              const Box2d& sourceUv, double opacity,
                              GeodeTextureEncoder::Filter filter, bool sourceIsPremultiplied,
-                             const Vector2i& anchor);
+                             const Vector2i& anchor,
+                             GeodeTextureEncoder::RetainedQuadBinding* retained = nullptr);
 
   /// Shared path for solid and pattern fills: encode path, upload buffers,
   /// build bind group, record draw call.
