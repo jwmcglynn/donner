@@ -1201,6 +1201,58 @@ TEST_F(RendererDriverTest, CullingUsesNonScalingStrokeAdjustedWidth) {
          "culled based on the narrower authored stroke width.";
 }
 
+/// A stroke width written in a unit, with the centerline that puts its reach onto the canvas.
+struct UnitStrokeWidthCase {
+  const char* name;
+  const char* path;
+};
+
+class RendererDriverUnitStrokeWidthTest
+    : public RendererDriverTest,
+      public ::testing::WithParamInterface<UnitStrokeWidthCase> {};
+
+// The viewport cull and the range bounds pad a shape by the width the draw resolves: a centerline
+// left of a 400x100 canvas whose stroke reaches onto it (80, 58.3 and 96 user units wide) must be
+// drawn and bounded on the canvas, although its bare number (5, 20 or 1) would keep it off.
+TEST_P(RendererDriverUnitStrokeWidthTest, StrokeWidthUnitsResolveBeforeBounding) {
+  SVGDocument document = makeDocument(GetParam().path, Vector2i(400, 100));
+
+  int drawPathCount = 0;
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    ++drawPathCount;
+  });
+  RenderViewport viewport;
+  viewport.size = Vector2d(400, 100);
+  viewport.devicePixelRatio = 1.0;
+  driver.draw(document, viewport, Transform2d());
+  EXPECT_THAT(drawPathCount, ::testing::Ge(1)) << "The viewport cull dropped a visible stroke";
+
+  const auto element = document.querySelector("#stroke");
+  ASSERT_THAT(element, testing::Ne(std::nullopt));
+  const Entity entity = element->entityHandle().entity();
+  const auto bounds = driver.computeEntityRangeBounds(
+      document.registry(), entity, entity, RenderViewport{.size = Vector2d(400, 100)},
+      Transform2d(), RendererDriver::EntityRangeBoundsOptions{.clipToCanvas = false});
+  ASSERT_THAT(bounds, testing::Ne(std::nullopt));
+  EXPECT_THAT(bounds->bottomRight.x, ::testing::Gt(5.0))
+      << "The range bounds must reach as far as the resolved stroke";
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Units, RendererDriverUnitStrokeWidthTest,
+    ::testing::Values(
+        UnitStrokeWidthCase{"em", R"svg(<path id="stroke" d="M -20 0 L -20 100" stroke="red"
+          stroke-width="5em" font-size="16" stroke-linejoin="round" fill="none"/>)svg"},
+        UnitStrokeWidthCase{"percent", R"svg(<path id="stroke" d="M -20 0 L -20 100" stroke="red"
+          stroke-width="20%" stroke-linejoin="round" fill="none"/>)svg"},
+        UnitStrokeWidthCase{"inch", R"svg(<path id="stroke" d="M -20 0 L -20 100" stroke="red"
+          stroke-width="1in" stroke-linejoin="round" fill="none"/>)svg"}),
+    [](const ::testing::TestParamInfo<UnitStrokeWidthCase>& info) { return info.param.name; });
+
 TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacityWithBlendMode) {
   SVGDocument document = makeDocument(R"svg(
     <g opacity="0.7" style="mix-blend-mode: screen">

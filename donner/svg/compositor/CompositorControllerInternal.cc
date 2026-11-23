@@ -175,6 +175,62 @@ Vector2i BitmapDimensionsForViewport(const RenderViewport& viewport) {
                   static_cast<int>(viewport.size.y * viewport.devicePixelRatio));
 }
 
+namespace {
+
+// Snap to integer pixels and pad for AA. The padding matters: filter
+// primitives (gaussian blur in particular) produce a soft falloff outside the entity's
+// geometric bbox. `computeEntityRangeBounds` returns the filter region (per spec, a hard clip),
+// but the AA at its edge still has sub-pixel contributions that need a 1-2 px halo on either
+// side to stay pixel-identical with the canvas-size rasterize. 2 px is the smallest value that
+// survived `TightBoundedSegmentsSurviveExplicitDragTargetPromote` (a tightly packed scene with
+// two large gaussian blurs); 1 px left a ~0.001 alpha tail clipped at the bitmap edge, producing
+// maxDiff=1 in ~174 boundary pixels.
+constexpr double kLayerEdgePaddingPx = 2.0;
+
+/// A layer's bounds on the canvas, or why it has none.
+struct LayerCanvasBounds {
+  /// Canvas-space bounds; unset when the content cannot be bounded or lies outside the canvas.
+  std::optional<Box2d> bounds;
+  /// The content is bounded and lies wholly outside the canvas.
+  bool offCanvas = false;
+};
+
+// `computeEntityRangeBounds` already accounts for filter expansion, stroke widths, isolated-layer
+// accumulation, and clip rects - see the contract of `RendererDriver::computeEntityRangeBounds`.
+LayerCanvasBounds QueryLayerCanvasBounds(RendererInterface& renderer, Registry& registry,
+                                         Entity firstEntity, Entity lastEntity,
+                                         const RenderViewport& viewport,
+                                         const Transform2d& surfaceFromCanvas, bool clipToCanvas) {
+  ZoneScopedN("Compositor::computeLayerRasterGeometry::computeBounds");
+  RendererDriver boundsDriver(renderer);
+  RendererDriver::EntityRangeBoundsOptions options{
+      .clipToCanvas = clipToCanvas,
+      // A mask can only remove source coverage. Bounding the unmasked source geometry is
+      // conservative, and lets expensive masked layers stay intrinsic-sized instead of
+      // allocating/rasterizing the full visible canvas on every child edit.
+      .allowMaskSuperset = true,
+  };
+  LayerCanvasBounds result;
+  result.bounds = boundsDriver.computeEntityRangeBounds(registry, firstEntity, lastEntity, viewport,
+                                                        surfaceFromCanvas, options);
+  if (result.bounds.has_value() || !clipToCanvas) {
+    return result;
+  }
+  // Clipped bounds are also absent for content wholly outside the canvas; only the unclipped
+  // bounds tell that apart from content that cannot be bounded.
+  options.clipToCanvas = false;
+  const std::optional<Box2d> unclipped = boundsDriver.computeEntityRangeBounds(
+      registry, firstEntity, lastEntity, viewport, surfaceFromCanvas, options);
+  result.offCanvas = unclipped.has_value() &&
+                     PaddedBoundsMissCanvas(*unclipped, kLayerEdgePaddingPx, viewport.size);
+  if (!result.offCanvas) {
+    result.bounds = unclipped;
+  }
+  return result;
+}
+
+}  // namespace
+
 LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Registry& registry,
                                                Entity firstEntity, Entity lastEntity,
                                                const RenderViewport& viewport,
@@ -190,80 +246,53 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
   // `CompositedPreview` carries the layer's `canvasOffset()` so the
   // editor blits the texture at its intrinsic dimensions + position
   // (see RenderPanePresenter). This is no longer gated to
-  // mandatory-detected layers.
-  //
-  // `computeEntityRangeBounds` already accounts for filter expansion,
-  // stroke widths, isolated-layer accumulation, and clip rects - see
-  // `RendererDriver.h §computeEntityRangeBounds`. `nullopt` means "fall
-  // back to canvas-size"; never "empty".
-  std::optional<Box2d> tightBoundsCanvas;
-  {
-    ZoneScopedN("Compositor::computeLayerRasterGeometry::computeBounds");
-    RendererDriver boundsDriver(renderer);
-    tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(
-        registry, firstEntity, lastEntity, viewport, surfaceFromCanvas,
-        RendererDriver::EntityRangeBoundsOptions{
-            .clipToCanvas = !retainFullInteractionBounds,
-            // A mask can only remove source coverage. Bounding the unmasked source geometry is
-            // conservative, and lets expensive masked layers stay intrinsic-sized instead of
-            // allocating/rasterizing the full visible canvas on every child edit.
-            .allowMaskSuperset = true,
-        });
-  }
-  if (retainFullInteractionBounds && !tightBoundsCanvas.has_value()) {
-    result.interactionBoundsRejected = true;
-    result.interactionBoundsUnavailable = true;
+  // mandatory-detected layers. Unbounded content falls back to canvas size.
+  const LayerCanvasBounds query =
+      QueryLayerCanvasBounds(renderer, registry, firstEntity, lastEntity, viewport,
+                             surfaceFromCanvas, /*clipToCanvas=*/!retainFullInteractionBounds);
+  if (!query.bounds.has_value()) {
+    result.interactionBoundsRejected = retainFullInteractionBounds;
+    result.interactionBoundsUnavailable = retainFullInteractionBounds;
+    result.offCanvas = query.offCanvas;
     return result;
   }
+  const Box2d& tightBoundsCanvas = *query.bounds;
 
-  // Snap to integer pixels and pad for AA. The padding matters: filter
-  // primitives (gaussian blur in particular) produce a soft falloff outside the entity's
-  // geometric bbox. `computeEntityRangeBounds` returns the filter region (per spec, a hard clip),
-  // but the AA at its edge still has sub-pixel contributions that need a 1-2 px halo on either
-  // side to stay pixel-identical with the canvas-size rasterize. 2 px is the smallest value that
-  // survived `TightBoundedSegmentsSurviveExplicitDragTargetPromote` (a tightly packed scene with
-  // two large gaussian blurs); 1 px left a ~0.001 alpha tail clipped at the bitmap edge, producing
-  // maxDiff=1 in ~174 boundary pixels.
-  constexpr double kEdgePaddingPx = 2.0;
   Box2d tightBoundsSnapped;
-  if (tightBoundsCanvas.has_value()) {
-    const bool finiteBounds = std::isfinite(tightBoundsCanvas->topLeft.x) &&
-                              std::isfinite(tightBoundsCanvas->topLeft.y) &&
-                              std::isfinite(tightBoundsCanvas->bottomRight.x) &&
-                              std::isfinite(tightBoundsCanvas->bottomRight.y);
-    if (!finiteBounds) {
-      result.interactionBoundsRejected = retainFullInteractionBounds;
-      result.interactionBoundsUnavailable = retainFullInteractionBounds;
-      return result;
-    }
-    const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
-    Box2d padded(tightBoundsCanvas->topLeft - padding, tightBoundsCanvas->bottomRight + padding);
-    const Vector2d snapTL(
-        std::floor(retainFullInteractionBounds ? padded.topLeft.x
-                                               : std::max(0.0, padded.topLeft.x)),
-        std::floor(retainFullInteractionBounds ? padded.topLeft.y
-                                               : std::max(0.0, padded.topLeft.y)));
-    const Vector2d snapBR(
-        std::ceil(retainFullInteractionBounds ? padded.bottomRight.x
-                                              : std::min(viewport.size.x, padded.bottomRight.x)),
-        std::ceil(retainFullInteractionBounds ? padded.bottomRight.y
-                                              : std::min(viewport.size.y, padded.bottomRight.y)));
-    if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
-      tightBoundsSnapped = Box2d(snapTL, snapBR);
-      result.boundsCanvas = tightBoundsSnapped;
-      if (retainFullInteractionBounds) {
-        const double width = tightBoundsSnapped.width();
-        const double height = tightBoundsSnapped.height();
-        result.interactionBoundsRejected =
-            width > kMaximumInteractionTileSidePx || height > kMaximumInteractionTileSidePx ||
-            width * height > static_cast<double>(kMaximumInteractionTilePixels) ||
-            std::abs(snapTL.x) > 10'000'000.0 || std::abs(snapTL.y) > 10'000'000.0 ||
-            std::abs(snapBR.x) > 10'000'000.0 || std::abs(snapBR.y) > 10'000'000.0;
-        result.tight = !result.interactionBoundsRejected;
-      } else {
-        result.tight = tightBoundsSnapped.width() < viewport.size.x ||
-                       tightBoundsSnapped.height() < viewport.size.y;
-      }
+  const bool finiteBounds = std::isfinite(tightBoundsCanvas.topLeft.x) &&
+                            std::isfinite(tightBoundsCanvas.topLeft.y) &&
+                            std::isfinite(tightBoundsCanvas.bottomRight.x) &&
+                            std::isfinite(tightBoundsCanvas.bottomRight.y);
+  if (!finiteBounds) {
+    result.interactionBoundsRejected = retainFullInteractionBounds;
+    result.interactionBoundsUnavailable = retainFullInteractionBounds;
+    return result;
+  }
+  const Vector2d padding(kLayerEdgePaddingPx, kLayerEdgePaddingPx);
+  Box2d padded(tightBoundsCanvas.topLeft - padding, tightBoundsCanvas.bottomRight + padding);
+  const Vector2d snapTL(
+      std::floor(retainFullInteractionBounds ? padded.topLeft.x : std::max(0.0, padded.topLeft.x)),
+      std::floor(retainFullInteractionBounds ? padded.topLeft.y : std::max(0.0, padded.topLeft.y)));
+  const Vector2d snapBR(
+      std::ceil(retainFullInteractionBounds ? padded.bottomRight.x
+                                            : std::min(viewport.size.x, padded.bottomRight.x)),
+      std::ceil(retainFullInteractionBounds ? padded.bottomRight.y
+                                            : std::min(viewport.size.y, padded.bottomRight.y)));
+  if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
+    tightBoundsSnapped = Box2d(snapTL, snapBR);
+    result.boundsCanvas = tightBoundsSnapped;
+    if (retainFullInteractionBounds) {
+      const double width = tightBoundsSnapped.width();
+      const double height = tightBoundsSnapped.height();
+      result.interactionBoundsRejected =
+          width > kMaximumInteractionTileSidePx || height > kMaximumInteractionTileSidePx ||
+          width * height > static_cast<double>(kMaximumInteractionTilePixels) ||
+          std::abs(snapTL.x) > 10'000'000.0 || std::abs(snapTL.y) > 10'000'000.0 ||
+          std::abs(snapBR.x) > 10'000'000.0 || std::abs(snapBR.y) > 10'000'000.0;
+      result.tight = !result.interactionBoundsRejected;
+    } else {
+      result.tight = tightBoundsSnapped.width() < viewport.size.x ||
+                     tightBoundsSnapped.height() < viewport.size.y;
     }
   }
 
@@ -598,6 +627,34 @@ bool IsBoundedMultiDrawStaticSpan(const CompositorController::StaticSpanPlan& sp
 // snapshots and composition should ignore those bookkeeping placeholders.
 bool HasPublicTileBitmap(const RendererBitmap& bitmap) {
   return !bitmap.empty() && !IsTransparentPlaceholderBitmap(bitmap);
+}
+
+const RendererBitmap* PublicLayerBitmap(const CompositorLayer& layer) {
+  // `hasValidBitmap` first: `bitmap()` reads a texture payload back when no CPU bitmap is held.
+  if (!layer.hasValidBitmap() || !HasPublicTileBitmap(layer.bitmap())) {
+    return nullptr;
+  }
+  return &layer.bitmap();
+}
+
+bool PaddedBoundsMissCanvas(const Box2d& bounds, double paddingPx, const Vector2d& canvasSize) {
+  const Vector2d padding(paddingPx, paddingPx);
+  const Box2d padded(bounds.topLeft - padding, bounds.bottomRight + padding);
+  const bool finite = std::isfinite(padded.topLeft.x) && std::isfinite(padded.topLeft.y) &&
+                      std::isfinite(padded.bottomRight.x) && std::isfinite(padded.bottomRight.y);
+  return finite && (std::ceil(std::min(canvasSize.x, padded.bottomRight.x)) <=
+                        std::floor(std::max(0.0, padded.topLeft.x)) ||
+                    std::ceil(std::min(canvasSize.y, padded.bottomRight.y)) <=
+                        std::floor(std::max(0.0, padded.topLeft.y)));
+}
+
+RendererBitmap TransparentPlaceholderBitmap() {
+  RendererBitmap placeholder;
+  placeholder.dimensions = Vector2i(1, 1);
+  placeholder.rowBytes = 4u;
+  placeholder.pixels.assign(4u, 0u);
+  placeholder.alphaType = AlphaType::Premultiplied;
+  return placeholder;
 }
 
 // Returns true when two bitmaps are byte-for-byte identical (same format,

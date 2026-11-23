@@ -1072,7 +1072,7 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
       }
       char id[48];
       std::snprintf(id, sizeof(id), "layer:%u", static_cast<unsigned>(layer.entity()));
-      const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
+      const RendererBitmap* layerBitmap = PublicLayerBitmap(layer);
       pushPayloadTile(CompositeTileSnapshot::Kind::Layer, id, label, layerBitmap,
                       layer.textureSnapshot(), layer.generation(), layer.lastRasterizeMs(),
                       isDragTarget, /*spanPlan=*/nullptr, &layer.immediatePlan());

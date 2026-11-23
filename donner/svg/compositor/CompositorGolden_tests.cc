@@ -1,4 +1,5 @@
 #include <gmock/gmock.h>
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
@@ -1515,6 +1517,224 @@ TEST_F(CompositorGoldenTest, EmptyStaticSegmentsArePrunedFromPublicTileSnapshots
   }
   EXPECT_EQ(inspectorSegmentCount, 2u);
   EXPECT_EQ(inspectorLayerCount, 2u);
+}
+
+/// A stroked shape whose geometry lies outside the canvas while its stroke reaches onto it.
+struct StrokeReachCase {
+  const char* name;
+  /// Markup of the slot under test; `ANCHOR` marks where a transparent anchor rect can be placed.
+  const char* slot;
+};
+
+/// Composes @p slot between a white background and a trailing isolated group, with the slot's
+/// `ANCHOR` replaced by @p anchor, and returns the composed main frame.
+RendererBitmap ComposeStrokeReachScene(svg::Renderer& renderer, std::string_view slot,
+                                       std::string_view anchor) {
+  std::string body(slot);
+  body.replace(body.find("ANCHOR"), 6, anchor);
+  SVGDocument document = parseDocument(
+      std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+        <rect width="200" height="100" fill="white"/>)svg") +
+      body + R"svg(<g style="isolation:isolate"><rect x="150" y="70" width="20" height="20"
+        fill="green"/></g></svg>)svg");
+  CompositorConfig config;
+  config.complexityBucketing = false;
+  config.deferFirstFrameWarmup = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer, config);
+  // The first frame is drawn flat; the second is composed from the tiles.
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, ::testing::Gt(0));
+  EXPECT_THAT(compositor.hasCompleteTileSetForPresentation(), ::testing::IsTrue());
+  return renderer.takeSnapshot();
+}
+
+/// Number of pixels in which @p actual differs from @p expected under identity comparison, for
+/// premises; the comparison's own failure is captured rather than reported.
+int IdentityMismatchCount(const RendererBitmap& actual, const RendererBitmap& expected,
+                          std::string_view label) {
+  int mismatchedPixels = -1;
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, label, editor::tests::PixelmatchIdentityParams(), &mismatchedPixels);
+  }
+  return mismatchedPixels;
+}
+
+class CompositorStrokeReachTest : public testing::TestWithParam<StrokeReachCase> {
+protected:
+  svg::Renderer renderer_;
+};
+
+// A transparent anchor on the canvas makes the slot's tile cover the canvas, so that composition
+// is the reference: without the anchor the tile must still hold every pixel the stroke paints on
+// the canvas, square-cap corners, miter-like join tips and host-space widths included.
+TEST_P(CompositorStrokeReachTest, StrokeReachingOntoTheCanvasKeepsItsPixels) {
+  const StrokeReachCase& item = GetParam();
+  const RendererBitmap background = ComposeStrokeReachScene(renderer_, "ANCHOR", "");
+  const RendererBitmap reference = ComposeStrokeReachScene(
+      renderer_, item.slot,
+      R"svg(<rect x="100" y="50" width="1" height="1" fill-opacity="0"/>)svg");
+  ASSERT_THAT(IdentityMismatchCount(reference, background, std::string(item.name) + "_premise"),
+              ::testing::Gt(0))
+      << "The stroke must paint pixels on the canvas for this case to mean anything";
+
+  editor::tests::CompareBitmapToBitmap(ComposeStrokeReachScene(renderer_, item.slot, ""), reference,
+                                       item.name, editor::tests::PixelmatchIdentityParams());
+}
+
+// Each path's geometry, padded by half its stroke width, misses the canvas; its true stroke reach
+// does not. Round joins isolate the cap, width and host-width cases from the default miter's
+// reach. Diagonal square caps reach sqrt(2) times half the width and `arcs` joins extend like
+// miters. A stroke width in font, viewport or physical units reaches as far as the width it
+// resolves to (80, 79.1 and 96 user units here), not its bare number. The miter and non-scaling
+// cases were bounded correctly before these checks were added and guard against regressions.
+INSTANTIATE_TEST_SUITE_P(
+    Strokes, CompositorStrokeReachTest,
+    testing::Values(
+        StrokeReachCase{"square_cap_layer", R"svg(<g id="owner" style="isolation:isolate">
+          <path d="M -84 -30 L -34 20" stroke="blue" stroke-width="60" stroke-linecap="square"
+                stroke-linejoin="round" fill="none"/>ANCHOR</g>)svg"},
+        StrokeReachCase{"square_cap_span", R"svg(<g style="isolation:isolate"><rect x="150"
+          y="10" width="20" height="20" fill="green"/></g>
+          <path d="M -84 -30 L -34 20" stroke="blue" stroke-width="60" stroke-linecap="square"
+                stroke-linejoin="round" fill="none"/>ANCHOR)svg"},
+        StrokeReachCase{"arcs_join_layer", R"svg(<g id="owner" style="isolation:isolate">
+          <path d="M -64 30 L -14 50 L -64 70" stroke="blue" stroke-width="20"
+                stroke-linejoin="arcs" stroke-miterlimit="10" fill="none"/>ANCHOR</g>)svg"},
+        StrokeReachCase{"miter_join_layer", R"svg(<g id="owner" style="isolation:isolate">
+          <path d="M -64 30 L -14 50 L -64 70" stroke="blue" stroke-width="20"
+                stroke-linejoin="miter" stroke-miterlimit="10" fill="none"/>ANCHOR</g>)svg"},
+        StrokeReachCase{"non_scaling_stroke_layer", R"svg(<g id="owner" style="isolation:isolate"
+          transform="scale(0.25)"><path d="M -32 0 L -32 400" stroke="blue" stroke-width="40"
+          vector-effect="non-scaling-stroke" stroke-linejoin="round" fill="none"/>ANCHOR</g>)svg"},
+        StrokeReachCase{"em_width_layer", R"svg(<g id="owner" style="isolation:isolate"
+          font-size="16"><path d="M -20 0 L -20 100" stroke="blue" stroke-width="5em"
+          stroke-linejoin="round" fill="none"/>ANCHOR</g>)svg"},
+        StrokeReachCase{"percent_width_layer", R"svg(<g id="owner" style="isolation:isolate">
+          <path d="M -30 0 L -30 100" stroke="blue" stroke-width="50%" stroke-linejoin="round"
+                fill="none"/>ANCHOR</g>)svg"},
+        StrokeReachCase{"inch_width_layer", R"svg(<g id="owner" style="isolation:isolate">
+          <path d="M -30 0 L -30 100" stroke="blue" stroke-width="1in" stroke-linejoin="round"
+                fill="none"/>ANCHOR</g>)svg"}),
+    [](const testing::TestParamInfo<StrokeReachCase>& info) { return info.param.name; });
+
+// A layer or static span whose content lies wholly outside the canvas has no pixels on it. It must
+// not hold a canvas-sized transparent tile: on a zoomed-in canvas several such slots made up a
+// large share of the retained pixels.
+TEST_F(CompositorGoldenTest, ContentOutsideTheCanvasRetainsNoTile) {
+  // Paint order: the background span, the off-canvas group's layer, the off-canvas span, and the
+  // visible group's layer.
+  const auto makeDocument = [](bool withOffCanvasContent) {
+    std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>)svg";
+    if (withOffCanvasContent) {
+      source += R"svg(
+      <g id="off-canvas-layer" opacity="0.5">
+        <rect x="400" y="20" width="30" height="30" fill="red"/>
+      </g>
+      <rect x="20" y="300" width="30" height="30" fill="green"/>)svg";
+    }
+    source += R"svg(
+      <g opacity="0.5"><rect x="40" y="20" width="30" height="30" fill="blue"/></g>
+    </svg>)svg";
+    return parseDocument(source);
+  };
+  CompositorConfig config;
+  config.complexityBucketing = false;
+  config.deferFirstFrameWarmup = false;
+  config.dynamicImmediateStaticSpans = false;
+
+  SVGDocument withoutOffCanvas = makeDocument(false);
+  RendererBitmap expected;
+  {
+    CompositorController compositor(withoutOffCanvas, renderer_, config);
+    // The first frame is drawn flat; the second is composed from the tiles.
+    compositor.renderFrame(viewport_);
+    compositor.renderFrame(viewport_);
+    ASSERT_THAT(compositor.hasCompleteTileSetForPresentation(), ::testing::IsTrue());
+    ASSERT_THAT(compositor.lastRenderFrameStats().mainComposeCount, ::testing::Gt(0));
+    expected = renderer_.takeSnapshot();
+  }
+
+  SVGDocument document = makeDocument(true);
+  const auto offCanvasLayer = document.querySelector("#off-canvas-layer");
+  ASSERT_THAT(offCanvasLayer, ::testing::Optional(::testing::_));
+  const Entity offCanvasEntity = offCanvasLayer->unsafeEntityHandle().entity();
+  CompositorController compositor(document, renderer_, config);
+  compositor.renderFrame(viewport_);
+  compositor.renderFrame(viewport_);
+  ASSERT_NE(compositor.findLayerForTest(offCanvasEntity), nullptr)
+      << "The off-canvas opacity group must own a mandatory layer for this case to mean anything";
+
+  constexpr size_t kCanvasBytes = 200u * 100u * 4u;
+  EXPECT_LT(compositor.totalBitmapMemory(), 2u * kCanvasBytes)
+      << "Only the background span should hold a canvas-sized tile; the off-canvas layer and the "
+         "off-canvas span between the two groups have no pixels on this canvas";
+  const std::vector<CompositorTile> tiles =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
+  const auto layerTile = std::ranges::find(tiles, offCanvasEntity, &CompositorTile::layerEntity);
+  ASSERT_NE(layerTile, tiles.end());
+  EXPECT_THAT(layerTile->bitmapDims, ::testing::Eq(Vector2i::Zero()))
+      << "The off-canvas layer publishes no pixels";
+  for (const auto& tile : compositor.snapshotCompositeTiles()) {
+    if (tile.kind == CompositorController::CompositeTileSnapshot::Kind::Layer) {
+      EXPECT_THAT(tile.bitmapDims, ::testing::Ne(Vector2i(1, 1)))
+          << tile.label << ": the inspector must not show the placeholder as pixels";
+    }
+  }
+  EXPECT_THAT(compositor.hasCompleteTileSetForPresentation(), ::testing::IsTrue());
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, ::testing::Gt(0));
+  editor::tests::CompareBitmapToBitmap(renderer_.takeSnapshot(), expected,
+                                       "content_outside_the_canvas_composite",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Composes @p source on a 200x100 canvas through a fresh compositor at @p surfaceFromCanvas.
+RendererBitmap ComposeFresh(svg::Renderer& renderer, std::string_view source,
+                            const Transform2d& surfaceFromCanvas) {
+  SVGDocument document = parseDocument(source);
+  CompositorController compositor(document, renderer);
+  // The first frame is drawn flat; the second is composed from the tiles.
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)}, surfaceFromCanvas);
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)}, surfaceFromCanvas);
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, ::testing::Gt(0));
+  return renderer.takeSnapshot();
+}
+
+// Content that held no tile because it lay outside the canvas is drawn once a pan brings it on.
+TEST_F(CompositorGoldenTest, OffCanvasLayerIsDrawnAfterAPanBringsItOn) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+        <rect width="400" height="100" fill="white"/>
+        <g id="off-canvas" style="isolation:isolate"><rect x="250" y="20" width="40" height="40"
+          fill="blue"/></g>
+      </svg>)svg";
+  const Transform2d surfaceFromCanvas = Transform2d::Translate(Vector2d(-150, 0));
+  const RendererBitmap expected = ComposeFresh(renderer_, kSource, surfaceFromCanvas);
+
+  SVGDocument document = parseDocument(kSource);
+  const auto offCanvas = document.querySelector("#off-canvas");
+  ASSERT_THAT(offCanvas, ::testing::Optional(::testing::_));
+  const Entity offCanvasEntity = offCanvas->unsafeEntityHandle().entity();
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(viewport_);
+  compositor.renderFrame(viewport_);
+  const std::vector<CompositorTile> before =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
+  const auto beforeTile = std::ranges::find(before, offCanvasEntity, &CompositorTile::layerEntity);
+  ASSERT_NE(beforeTile, before.end());
+  ASSERT_THAT(beforeTile->bitmapDims, ::testing::Eq(Vector2i::Zero()))
+      << "Before the pan the group lies outside the canvas and must hold no pixels for this case "
+         "to mean anything";
+  compositor.renderFrame(viewport_, surfaceFromCanvas);
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, ::testing::Gt(0));
+  editor::tests::CompareBitmapToBitmap(renderer_.takeSnapshot(), expected, "off_canvas_after_pan",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(CompositorGoldenTest, OpacityLessThanOneAutoPromotionMatchesFullRender) {
