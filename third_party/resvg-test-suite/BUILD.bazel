@@ -67,7 +67,7 @@ result permits this difference in the underlying clip coverage.
 References from the resvg release: these tests live in the resvg repository
 (https://github.com/linebender/resvg, crates/resvg/tests/tests/). resvg is licensed
 Apache-2.0 OR MIT; these files are used under MIT, with its notice in LICENSE-resvg-MIT.
-The 131 files listed in resvg-v0.50.0.sha256 (121 PNGs, each 300x300, and 10 SVGs) are
+The 229 files listed in resvg-v0.50.0.sha256 (170 PNGs, each 300x300, and 59 SVGs) are
 byte-identical to crates/resvg/tests/<path> at the resvg v0.50.0 release tag, revision
 5bdbae64eefadc4bf0caa56dcf91702037929086, where <path> is the tests/... path the list gives.
 The tag's source archive holds them under resvg-0.50.0/crates/resvg/tests/:
@@ -80,9 +80,43 @@ this directory and to the archive's crates/resvg/tests/ directory alike.
 //tools/resvg_parity:parity_report_tests fails when a listed file does not have its recorded
 digest, or when the counts and PNG size in the sentence above do not match the list, so a
 changed file must update this provenance too. resvg release v0.49.0 (revision
-66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba) holds the same bytes for each of them. The harness
+66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba) holds the same bytes for each of them except the
+SVG and PNG of the 16 tests listed below, which upstream added after v0.49.0. The harness
 takes each case's canvas from its reference image, so these cases render on the 300x300
 canvas of their references.
+
+49 of the listed tests, both SVG and PNG, are tests the snapshot does not have, named in
+resvg-v0.50.0-additions.txt. They have no results.csv row; the head-to-head report leaves them
+unscored, and fails for any other case without a row. These 16 of them are newer than resvg
+v0.49.0:
+
+  tests/filters/feDropShadow/flood-color=currentColor.svg
+  tests/filters/feFlood/partial-subregion-with-primitiveUnits=objectBoundingBox.svg
+  tests/filters/filter/on-group-with-an-empty-filtered-child.svg
+  tests/filters/flood-color/currentColor.svg
+  tests/masking/clipPath/recursive-indirect-on-child.svg
+  tests/masking/clipPath/recursive-indirect-on-self.svg
+  tests/masking/clipPath/same-clip-path-on-multiple-children.svg
+  tests/masking/mask/recursive-indirect-on-child.svg
+  tests/paint-servers/linearGradient/recursive-xlink-href-into-loop.svg
+  tests/paint-servers/pattern/defs-with-indirect-reference-to-self.svg
+  tests/painting/color/currentColor.svg
+  tests/painting/context/with-gradient-in-nested-use.svg
+  tests/structure/style/comment-between-rules.svg
+  tests/structure/style/empty-type.svg
+  tests/structure/style/uppercase-type.svg
+  tests/text/textPath/with-error-path.svg
+
+fonts/NotoSansMalayalam-Regular.ttf and fonts/NotoSansMalayalam-LICENSE-OFL.txt are
+byte-identical to crates/resvg/tests/fonts/ at the same v0.50.0 tag; text/font-family/
+noto-sans-malayalam-1 draws in that face. It is the Noto Sans Malayalam 2.104 Regular face from
+https://github.com/notofonts/malayalam, whose name table and license file state the SIL Open
+Font License 1.1.
+
+  fonts/NotoSansMalayalam-Regular.ttf
+  SHA256: 68cbfeac7177700d87671f2a3bdb3db70fa26016e41cdac24e20877bf3736485
+  fonts/NotoSansMalayalam-LICENSE-OFL.txt
+  SHA256: e2564e3c6bf166a5d01889c664ea9850422d9a3c58534b71b596c13ebf6bb638
 
 Two more 300x300 PNGs are byte-identical to crates/resvg/tests/<path> at the resvg v0.49.0
 release tag (revision 66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba), under the same license, and
@@ -516,6 +550,7 @@ exports_files([
     "fonts/Noto-LICENSE-OFL.txt",
     "resources/ub.png",
     "results.csv",
+    "resvg-v0.50.0-additions.txt",
     "resvg-v0.50.0.sha256",
 ])
 

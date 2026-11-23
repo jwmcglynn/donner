@@ -1367,10 +1367,16 @@ INSTANTIATE_TEST_SUITE_P(
 // directly in FontSelection_tests.cc; an all-unknown family list resolves to the harness's default
 // family, serif, as in resvg's harness
 // (FontSelection.UnmatchedFamilyListUsesTheSuiteDefaultFamily).
-INSTANTIATE_TEST_SUITE_P(TextFontFamily, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory("text/font-family")),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    TextFontFamily, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory(
+                "text/font-family",
+                {
+                    {"noto-sans-malayalam-1.svg",
+                     Params().onlyTextFull().withReason("Malayalam shaping needs HarfBuzz")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     TextFontKerning, ImageComparisonTestFixture,
@@ -1665,6 +1671,8 @@ INSTANTIATE_TEST_SUITE_P(
                                            "Reference has a wider horizontal fill "
                                            "gradient across rotated glyphs")
                          .withGeodeQuarterPixelEdgeCoverage()},
+                    {"underline-with-dy-on-arabic.svg",
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1881,6 +1889,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "and every counted pixel is on the crosshair's two rows, where Geode "
                          "and an area-coverage control store 159 and the CPU golden 128 and "
                          "192")},
+                    {"arabic-with-dy.svg",
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

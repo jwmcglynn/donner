@@ -1320,6 +1320,9 @@ UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
 # third_party/resvg-test-suite/BUILD.bazel.
 UPSTREAM_RELEASE_MANIFEST = Path("third_party/resvg-test-suite/resvg-v0.50.0.sha256")
 UPSTREAM_RELEASE_NOTES = Path("third_party/resvg-test-suite/BUILD.bazel")
+# The manifest's tests that the snapshot does not have, one `tests/...svg` path per line; the
+# head-to-head report leaves them unscored because results.csv has no verdict for them.
+UPSTREAM_RELEASE_ADDITIONS = Path("third_party/resvg-test-suite/resvg-v0.50.0-additions.txt")
 _MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (tests/[^\s].*)")
 
 
@@ -2690,17 +2693,39 @@ RENDER_PASS_CONTRACTS = {
 }
 
 
+def _check_release_additions(
+    release_additions: frozenset[str], cases: set[str], scored: set[str]
+) -> None:
+    """Fail when a release addition is not a vendored case or has a recorded result."""
+
+    if absent_additions := sorted(release_additions - cases):
+        raise ParityReportError(
+            f"release additions are not vendored cases: {absent_additions[:5]}")
+    if scored_additions := sorted(release_additions & scored):
+        raise ParityReportError(
+            f"release additions have a results.csv row: {scored_additions[:5]}")
+
+
 def build_head_to_head(
-    report: dict[str, object], engine_results: dict[str, int], engine: str = HEAD_TO_HEAD_ENGINE
+    report: dict[str, object], engine_results: dict[str, int], engine: str = HEAD_TO_HEAD_ENGINE,
+    release_additions: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
     """Compare configured Donner outcomes with an engine's published results.
 
     The score assumes green corpus runs. It includes pixel comparisons and explicitly
     credited render-only contracts. Strict passes count only pixel comparisons without
     a numerical budget or a custom golden. The engine score uses its recorded passes.
+
+    `release_additions` are cases vendored from a later upstream release than the snapshot
+    whose results.csv the engine column comes from; they have no recorded result, so both
+    sides leave them unscored and the report lists them. One that is not a vendored case or that
+    has a result fails, as does any other case without a result.
     """
 
-    cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
+    all_cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
+    _check_release_additions(release_additions, set(all_cases), set(engine_results))
+    unscored = sorted(set(all_cases) & release_additions)
+    cases = {path: case for path, case in all_cases.items() if path not in unscored}
     missing = sorted(set(cases) - set(engine_results))
     extra = sorted(set(engine_results) - set(cases))
     if missing or extra:
@@ -2749,7 +2774,8 @@ def build_head_to_head(
             "gap": len(gap),
             "gap_by_state": dict(Counter(_gap_state(cases[path]) for path in gap)),
             "margin": len(donner_passes) - len(engine_passes),
-            "total_cases": len(cases),
+            "total_cases": len(all_cases),
+            "unscored_release_additions": len(unscored),
         },
         "render_passes": [
             {"path": path, "contract": RENDER_PASS_CONTRACTS[path]} for path in sorted(render_passes)
@@ -2760,6 +2786,9 @@ def build_head_to_head(
             {"path": path, "reason": cases[path]["reason"], "state": _gap_state(cases[path])}
             for path in gap
         ],
+        "unscored_release_additions": [
+            {"path": path, "state": _gap_state(all_cases[path])} for path in unscored
+        ],
     }
 
 
@@ -2769,7 +2798,36 @@ def generate_head_to_head(repo_root: Path) -> dict[str, object]:
         text = results_path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as error:
         raise ParityReportError(f"cannot read engine results {results_path}: {error}") from error
-    return build_head_to_head(generate_report(repo_root), parse_engine_results(text))
+    return build_head_to_head(generate_report(repo_root), parse_engine_results(text),
+                              release_additions=release_addition_cases(repo_root))
+
+
+def release_addition_cases(repo_root: Path) -> frozenset[str]:
+    """Return the cases listed in the upstream release additions list.
+
+    The list names the release's tests that the snapshot does not have. Each entry must have both
+    its SVG and its PNG recorded in the release manifest. A tree without the list has none.
+    """
+
+    path = repo_root / UPSTREAM_RELEASE_ADDITIONS
+    if not path.exists():
+        return frozenset()
+    try:
+        entries = path.read_text(encoding="utf-8").splitlines()
+        manifest = (repo_root / UPSTREAM_RELEASE_MANIFEST).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ParityReportError(f"cannot read the release additions: {error}") from error
+    listed = {match.group(2) for match in map(_MANIFEST_LINE.fullmatch, manifest.splitlines())
+              if match}
+    if len(set(entries)) != len(entries):
+        raise ParityReportError(f"{UPSTREAM_RELEASE_ADDITIONS} lists a case more than once")
+    for entry in entries:
+        if not (entry.startswith("tests/") and entry.endswith(".svg") and entry in listed
+                and entry[:-4] + ".png" in listed):
+            raise ParityReportError(
+                f"{UPSTREAM_RELEASE_ADDITIONS}: {entry!r} is not a tests/...svg case whose SVG and "
+                f"PNG are both in {UPSTREAM_RELEASE_MANIFEST.name}")
+    return frozenset(entry.removeprefix("tests/") for entry in entries)
 
 
 def _default_repo_root() -> Path:
