@@ -9475,6 +9475,17 @@ TEST_F(RendererGeodeTest, MarkerRepeatsPastTheRecordLimitDrawTheSamePicture) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// Pixels where \p actual differs from \p expected under the canonical identity comparison, as a
+/// signal: every count passes, so a premise asserts on the returned count instead.
+int DifferingPixels(const RendererBitmap& actual, const RendererBitmap& expected,
+                    const std::string& label) {
+  editor::tests::BitmapGoldenCompareParams signalParams = editor::tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int mismatchedPixels = -1;
+  editor::tests::CompareBitmapToBitmap(actual, expected, label, signalParams, &mismatchedPixels);
+  return mismatchedPixels;
+}
+
 /// One edit for \ref MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem: one or more DOM
 /// steps, each followed by a render.
 struct MarkerEdit {
@@ -9612,9 +9623,13 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
       ASSERT_THAT(expected.empty(), testing::IsFalse());
 
       // Premise: the first step changes the picture, so matching the fresh render is not vacuous.
-      if (stepCount == 1 && before.pixels == actual.pixels) {
-        ADD_FAILURE() << "the first step does not change the picture";
-        break;
+      if (stepCount == 1) {
+        const int changed =
+            DifferingPixels(actual, before, std::string("marker_edit_premise_") + edit.label);
+        EXPECT_THAT(changed, testing::Gt(0)) << "the first step does not change the picture";
+        if (changed <= 0) {
+          break;
+        }
       }
       editor::tests::CompareBitmapToBitmap(
           actual, expected,
@@ -9645,7 +9660,9 @@ TEST_F(RendererGeodeTest, OffscreenPassLeavesTheOuterFramesRepeatRecordsAlone) {
   };
   const RendererBitmap expectedOuter = render(original);
   const RendererBitmap expectedInner = render(edited);
-  ASSERT_THAT(expectedOuter.pixels, testing::Ne(expectedInner.pixels));
+  ASSERT_THAT(DifferingPixels(expectedInner, expectedOuter, "offscreen_repeat_premise"),
+              testing::Gt(0))
+      << "the edit must move the placements, or the outer frame cannot show a rewrite";
 
   SVGDocument document = ParseDocumentOrFail(original);
   RendererGeode outer = createRenderer();
@@ -9732,7 +9749,9 @@ TEST_F(RendererGeodeTest, UseRepeatsMatchPlainGeometryAndFollowEdits) {
     RendererGeode freshRenderer = createRenderer();
     freshRenderer.draw(fresh);
     const RendererBitmap freshBitmap = freshRenderer.takeSnapshot();
-    ASSERT_THAT(freshBitmap.pixels, testing::Ne(expected.pixels));
+    ASSERT_THAT(DifferingPixels(freshBitmap, expected, "use_repeats_premise_" + label),
+                testing::Gt(0))
+        << "the edit must change the picture, or matching the fresh render is vacuous";
     editor::tests::CompareBitmapToBitmap(editedRenderer.takeSnapshot(), freshBitmap,
                                          "use_repeats_edit_" + label,
                                          editor::tests::PixelmatchIdentityParams());
