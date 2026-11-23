@@ -4,6 +4,14 @@ load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load(
+    ":constexpr_budgets.bzl",
+    "GAUSSIAN_BLUR_ALL_PROJECTIONS_CONSTEXPR_COPTS",
+    "IMAGE_BLIT_CONSTEXPR_COPTS",
+    "SLUG_FILL_CONSTEXPR_COPTS",
+    "SLUG_GRADIENT_CONSTEXPR_COPTS",
+    "SLUG_MASK_CONSTEXPR_COPTS",
+)
+load(
     ":shader_families.bzl",
     "PRODUCTION_SHADER_FAMILIES",
     "native_shader_artifacts",
@@ -176,6 +184,7 @@ donner_cc_library(
     testonly = 1,
     srcs = ["tests/CompiledGaussian.cc"],
     hdrs = ["tests/CompiledGaussian.h"],
+    copts = GAUSSIAN_BLUR_ALL_PROJECTIONS_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",
@@ -268,7 +277,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_mask_artifact",
     srcs = ["programs/SlugMask.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_MASK_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":slug_mask_api",
@@ -280,7 +289,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_mask_native_artifact",
     srcs = ["programs/SlugMaskNative.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_MASK_CONSTEXPR_COPTS,
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -299,7 +308,7 @@ donner_cc_library(
     testonly = 1,
     srcs = ["tests/CompiledSlugMask.cc"],
     hdrs = ["tests/CompiledSlugMask.h"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_MASK_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",
@@ -334,7 +343,7 @@ donner_cc_library(
 donner_cc_library(
     name = "image_blit_artifact",
     srcs = ["programs/ImageBlit.cc"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = IMAGE_BLIT_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":image_blit_api",
@@ -346,7 +355,7 @@ donner_cc_library(
 donner_cc_library(
     name = "image_blit_native_artifact",
     srcs = ["programs/ImageBlitNative.cc"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = IMAGE_BLIT_CONSTEXPR_COPTS,
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -365,7 +374,7 @@ donner_cc_library(
     testonly = 1,
     srcs = ["tests/CompiledImageBlit.cc"],
     hdrs = ["tests/CompiledImageBlit.h"],
-    copts = ["-fconstexpr-steps=2097152"],
+    copts = IMAGE_BLIT_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",
@@ -1353,14 +1362,10 @@ donner_cc_library(
     deps = [":slug_fill_api"],
 )
 
-# Slug fill compilation uses a measured, bounded target-local evaluator budget. The ported
-# ray-event source needs about 4.07M Apple Clang evaluation steps, 97 percent of the former
-# 4,194,304 budget, so its three artifact targets and the all-projection probe use 8,388,608 to
-# keep headroom for other toolchains' step accounting. The other Slug programs stay at 4,194,304.
 donner_cc_library(
     name = "slug_fill_artifact",
     srcs = ["programs/SlugFill.cc"],
-    copts = ["-fconstexpr-steps=8388608"],
+    copts = SLUG_FILL_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":slug_fill_api",
@@ -1372,7 +1377,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_fill_native_artifact",
     srcs = ["programs/SlugFillNative.cc"],
-    copts = ["-fconstexpr-steps=8388608"],
+    copts = SLUG_FILL_CONSTEXPR_COPTS,
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -1391,7 +1396,7 @@ donner_cc_library(
     testonly = 1,
     srcs = ["tests/CompiledSlugFill.cc"],
     hdrs = ["tests/CompiledSlugFill.h"],
-    copts = ["-fconstexpr-steps=8388608"],
+    copts = SLUG_FILL_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",
@@ -1424,7 +1429,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_gradient_artifact",
     srcs = ["programs/SlugGradient.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_GRADIENT_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":slug_gradient_api",
@@ -1436,7 +1441,7 @@ donner_cc_library(
 donner_cc_library(
     name = "slug_gradient_native_artifact",
     srcs = ["programs/SlugGradientNative.cc"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_GRADIENT_CONSTEXPR_COPTS,
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -1455,7 +1460,7 @@ donner_cc_library(
     testonly = 1,
     srcs = ["tests/CompiledSlugGradient.cc"],
     hdrs = ["tests/CompiledSlugGradient.h"],
-    copts = ["-fconstexpr-steps=4194304"],
+    copts = SLUG_GRADIENT_CONSTEXPR_COPTS,
     visibility = donner_internal_visibility(),
     deps = [
         ":compiled_shader",
