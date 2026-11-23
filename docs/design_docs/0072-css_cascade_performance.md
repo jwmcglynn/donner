@@ -1,4 +1,4 @@
-# Design: CSS Cascade Performance
+# Design: CSS Cascade Performance and Features
 
 **Status:** Draft
 **Author:** Claude Fable 5.2
@@ -14,9 +14,13 @@ then re-parsing each matched declaration into the element's `PropertyRegistry`. 
 class, `id`, `style` attribute, presentation attribute or stylesheet restyles the whole document,
 and the frame that follows runs the whole-document cascade twice. Each element keeps its own
 4,840-byte computed `PropertyRegistry`, even when hundreds of elements compute the same style.
+Custom properties (`var()`) and cascade layers (`@layer`) are not supported.
 
-This design measures that cost, surveys how browser engines make style resolution fast, and
-commits to the subset that pays for Donner, as **Part A: Performance**:
+This design measures that cost, surveys how browser engines make style resolution fast and how
+they implement the missing features, and commits to
+two parts:
+
+**Part A: Performance.**
 
 1. Cascade each element once per full restyle (today a full restyle cascades every element twice).
 2. A per-stylesheet rule index keyed on the rightmost compound selector, so an element tests only
@@ -28,6 +32,10 @@ commits to the subset that pays for Donner, as **Part A: Performance**:
    built on a reusable Bloom filter in `donner/base/`.
 6. Shared immutable computed-style records and a matched properties cache, so elements with the
    same cascade inputs share one computed style.
+
+**Part B: Cascade features.** CSS custom properties with `var()` substitution (cycles, fallback,
+guaranteed-invalid values, inheritance, hostile-input limits) and cascade layers (`@layer`
+blocks and statements, nested and anonymous layers, `@import ... layer()`, importance reversal).
 
 Computed style stays bit-identical for documents that use only today's features. On the measured
 documents style is 47 to 89 percent of preparing the first frame without rasterization, and 80 to
@@ -76,6 +84,22 @@ same harness, machine class and method. Each goal names the counter or timer tha
   key strings; the ancestor filter costs 4 KiB per style traversal; both and the cache are
   charged to existing document budgets.
 
+### Part B: Cascade Features
+
+- **Custom properties.** `--*` declarations cascade and inherit, and `var()` substitutes them in
+  stylesheet rules, `style` attributes and presentation attributes with fallback, cycle detection
+  and guaranteed-invalid handling as specified. Done when the SVG conformance cases ported from the
+  web-platform-tests files named in [Part B tests](#part-b-tests) pass.
+- **Cascade layers.** `@layer` blocks and statements, nested and anonymous layers and
+  `@import ... layer` order declarations as Cascade Level 5 specifies, including importance
+  reversal and presentation attributes below every author layer. Done when the ported layer cases
+  pass.
+- **Hostile input.** A substituted value is capped at 65,536 component values and 1 MiB of source
+  bytes; past the cap the value is the guaranteed-invalid value. The exponential-expansion and
+  long-reference cases finish within the existing style budgets.
+- **No cost when unused.** On documents with no custom properties and no layers, style time does
+  not regress by more than 2 percent and computed styles are unchanged.
+
 ## Non-Goals
 
 - No change to computed style, cascade order or selector semantics for documents that use only
@@ -83,8 +107,12 @@ same harness, machine class and method. Each goal names the counter or timer tha
   (see [Decisions](#decisions)).
 - No selector JIT or code generation.
 - No parallel style traversal. Style resolution stays single-threaded inside the document lock.
-- No `var()`, custom-property cascade or `@layer` support; those are added by a later revision of
-  this design.
+- No `@property` registration. Registered custom properties add typed values, computed-value
+  resolution of lengths and their font-size dependency cycles, and non-inherited custom
+  properties; untyped custom properties cover `var()` without them. A later design can add it.
+- No `env()`, `attr()` or other substitution functions, and no `@media`, `@supports`,
+  `@container` or `@scope` (unsupported today and unchanged).
+- No SMIL animation of custom properties.
 - No change to the public API. The index, filter, cache, counters and invalidation summaries are
   internal; public documentation keeps describing documents, elements and styles.
 - No full document reparse, and no new trigger for one.
@@ -186,10 +214,43 @@ including tests and review fixes. "After" names the milestones that must land fi
 
 Part A estimate: 26 engineering days.
 
+### Part B Milestones
+
+- [ ] Milestone B1: Custom property declarations and storage (3 days). After A8.
+  - [ ] Route `--*` declarations from rules and `style` attributes into a per-element custom
+        cascade instead of the "Unknown property" diagnostic, and store computed custom
+        properties as shared immutable maps in the computed-style record.
+  - Done when: custom properties cascade and inherit in unit tests, and computed styles of the
+    existing corpus are unchanged.
+- [ ] Milestone B2: `var()` substitution (4 days). After B1.
+  - [ ] Mark declarations containing `var()` at parse time, hold them as pending substitutions in
+        the cascade, substitute after the custom properties are computed, and parse the result;
+        detect cycles and enforce the size caps.
+  - Done when: the ported cycle, fallback, keyword, invalid-at-computed-value-time and
+    exponential-expansion cases pass.
+- [ ] Milestone B3: `var()` in presentation attributes and shorthands (2 days). After B2.
+  - Done when: the ported presentation-attribute and shorthand cases pass.
+- [ ] Milestone B4: `@layer` and `@import ... layer` parsing (3 days). No dependency.
+  - [ ] Parse layer statements and blocks (nested, dotted, anonymous) and assign each retained
+        rule a layer; compute the document's layer order.
+  - Done when: parser tests and `stylesheet_parser_fuzzer` cover every form, and rules inside
+    `@layer` blocks are retained instead of dropped.
+- [ ] Milestone B5: Layer order in the cascade (2 days). After B4.
+  - [ ] Add the layer rank to `css::Specificity` with importance reversal, place presentation
+        attributes below every author layer, and check `Property::inheritFrom` with layered
+        declarations.
+  - Done when: the ported layer cases pass and computed styles of documents without layers are
+    unchanged.
+- [ ] Milestone B6: Conformance cases (2 days). After B3 and B5.
+  - Done when: the full set in [Part B tests](#part-b-tests) is committed and green.
+
+Part B estimate: 16 engineering days.
+
 ### Order and Total
 
-A1 first; A2, A3, A6 and A8 can then proceed in parallel; A4 follows A3; A7 follows A3 and A6;
-A5 follows A2; A9 follows A3 and A8. Total committed estimate: 26 engineering days.
+A1 first; A2, A3, A6, A8 and B4 can then proceed in parallel; A4 follows A3; A7 follows A3 and A6;
+A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B. Total
+committed estimate: 42 engineering days (A 26, B 16).
 
 ## Background
 
@@ -228,6 +289,12 @@ and replaces the stored value unless that value has a higher `css::Specificity`.
 specificity replaces, the later rule wins ties, so applying in source order with a monotonic
 comparison yields the cascade order. `css::Specificity::SpecialType` encodes origin and
 importance (user agent, author, style attribute, animation, important variants, override).
+A declaration whose name starts with `--` reaches `PropertyRegistry::parseProperty`, which reports
+"Unknown property" and drops it; `var()` is not recognized anywhere. The stylesheet parser keeps
+`@layer` statements only for import ordering (`AtRuleEndsImportSection` in
+`StylesheetParser.cc`) and drops `@layer` blocks with their rules, and it drops imports that name
+a layer ("CSS @import cascade layers are unsupported"). `css::Declaration` already stores its
+value as a `std::vector<ComponentValue>`, which is the token sequence custom properties need.
 
 **Computed style.** After the cascade, `ApplyAnimatedStyle`, contextual font sizes, scalar and
 paint animation styles and symbol display are applied, then `inheritComputedParent` merges the
@@ -551,10 +618,28 @@ it walked ([Igalia, 2023](https://blogs.igalia.com/blee/posts/2023/05/31/how-bli
 to 2x on root-level changes ([CL 2117143003](https://codereview.chromium.org/2117143003)). Stylo
 keeps custom properties in shared inherited and non-inherited maps
 ([custom_properties.rs](https://github.com/servo/stylo/blob/main/style/custom_properties.rs)).
+Stylo removes dependency cycles during substitution with a variant of Tarjan's
+strongly-connected-components algorithm, invalidating every member of a cycle, and caps a value
+at 2 MiB (`MAX_VALUE_LENGTH_IN_BYTES`, with a comment that values can otherwise grow
+exponentially). Blink detects cycles with a depth-first walk that locks the properties it is
+applying (`CascadeResolver` in
+[cascade_resolver.h](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/css/resolver/cascade_resolver.h))
+and caps a variable at 2 MiB (`kMaxVariableBytes` in
+[css_variable_data.h](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/css/css_variable_data.h),
+"This matches Firefox"). Ladybird shares custom properties between parent and child through a
+parent-linked chain
+([PR #7928](https://github.com/LadybirdBrowser/ladybird/pull/7928),
+[February 2026](https://ladybird.org/newsletter/2026-02-28)).
 
 **Cascade ordering.** Stylo sorts matched declarations by layer, specificity, scope proximity and
 source order, packed into a 24-byte record because its size drives sort cost
 ([applicable_declarations.rs](https://github.com/servo/stylo/blob/main/style/applicable_declarations.rs)).
+Its `CascadePriority` packs cascade level and layer order into 32 bits and reverses the layer
+comparison for important declarations. Blink packs origin, importance, tree order, layer order,
+inline-style bit and rule position into one comparable integer and flips the layer bits for
+important declarations: "Layer order bits are flipped for important declarations to reverse the
+priority"
+([cascade_priority.h](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/css/resolver/cascade_priority.h)).
 
 **Ladybird.** The recent Ladybird work is "Differential style resolution"
 ([PR #11088](https://github.com/LadybirdBrowser/ladybird/pull/11088), merged in August 2026). It
@@ -574,26 +659,64 @@ Earlier 2026 updates landed narrower pieces of the same direction: scoped rule-c
 ([March 2026](https://ladybird.org/newsletter/2026-03-31)) and a per-element `:has()` result cache
 ([January 2026](https://ladybird.org/newsletter/2026-01-31)).
 
+### Specifications
+
+**Custom properties.** [CSS Custom Properties Level 1](https://drafts.csswg.org/css-variables-1/)
+defines `--*` properties: names are case-sensitive, the value is an unresolved token sequence,
+custom properties inherit, and the initial value is the guaranteed-invalid value; CSS-wide
+keywords apply, and `all` does not reset custom properties. The substitution mechanics are in
+[CSS Values Level 5, arbitrary substitution](https://drafts.csswg.org/css-values-5/#arbitrary-substitution):
+a declaration containing `var()` is assumed valid at parse time and checked against its grammar
+after substitution at computed-value time; a failure makes it invalid at computed-value time, so
+the property takes its inherited value if it inherits and its initial value otherwise. The
+fallback is everything after the first comma and is used when the referenced property is the
+guaranteed-invalid value. A cycle makes every participant guaranteed-invalid. A shorthand with
+`var()` fills its longhands with a pending-substitution value and is parsed after substitution.
+User agents must defend against exponential expansion: "UAs must impose a UA-defined limit on the
+allowed length of the token stream", past which the result is guaranteed-invalid.
+
+**Custom properties in presentation attributes.**
+[SVG 2](https://www.w3.org/TR/SVG2/styling.html) says presentation attributes are parsed as values
+of their property, contribute to the author level with specificity 0, and is silent on `var()`.
+The SVG Working Group resolved on 2025-11-20 to allow substitution functions such as `var()` in
+presentation attributes, leaving the parsing algorithm to later discussion, and recorded that
+Firefox and Safari already do this and Chromium does it partially
+([minutes](https://www.w3.org/2025/11/20-svg-minutes.html)). The web-platform-tests file
+`css/css-variables/variable-presentation-attribute.html` expects `stroke-width="var(--x)"` to
+apply and inherit.
+
+**Cascade layers.** [CSS Cascade Level 5](https://www.w3.org/TR/css-cascade-5/) sorts by origin
+and importance, context, element-attached styles (the `style` attribute), layers, specificity and
+order of appearance. `@layer name { ... }` and `@layer a, b;` declare layers; a block without a
+name is an anonymous layer that cannot be referenced again; dotted names are nested layers; layers
+are ordered by first declaration; unlayered styles form an implicit final layer. For normal
+declarations the last layer wins; for important ones the first layer wins, so unlayered important
+styles lose to every layer's important styles. `@import url() layer(name)` and `layer` put an
+imported sheet into a named or anonymous layer. Presentational hints, which is where SVG
+presentation attributes fall, are either user-agent rules or a presentational-hint origin between
+user and author, so every author layer overrides them.
+
 ### Which Techniques Apply
 
 Ranked by expected effect on the measured baseline per unit of complexity.
 
-| Rank | Technique                                      | Decision        | Reason                                                                                                                                                                                                                 |
-| ---: | ---------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|    1 | Cascade once per full restyle                  | Adopt           | Halves the style time of every measured edit; a few lines in one function.                                                                                                                                             |
-|    2 | Rule index on the rightmost compound           | Adopt           | On the stylesheet-heavy documents 97.6 to 99.2 percent of rule tests reject; the simulated index leaves 1,384 of 57,838 tests on the splash document.                                                                  |
-|    3 | Narrowed invalidation for single-element edits | Adopt           | Turns an edit from two whole-document cascades into a subtree cascade. Reuses the existing selective pass and dirty flags.                                                                                             |
-|    4 | Matched properties cache and shared records    | Adopt           | 66 to 99.8 percent of elements reuse an earlier element's computed style on the measured documents, and shared records remove up to 24.9 MB of duplicated computed style. Needs the storage change of Milestone A8.    |
-|    5 | Matcher constant factors                       | Adopt, measured | 155 ns per rejected test points at per-attempt overhead; each fix is local and independently testable.                                                                                                                 |
-|    6 | Per-element base cost (copies)                 | Adopt, measured | 4.6 microseconds per element dominates rule-light documents; the breakdown comes first, and the copy removal ships with the storage change of Milestone A8.                                                            |
-|    7 | Ancestor Bloom filter                          | Adopt           | Requested regardless of payoff. After indexing it removes one failing walk per real document and 47 percent of candidates on descendant-heavy stylesheets; its effect is measured by a rejection counter, not by time. |
-|    8 | Sibling and cousin style sharing               | Reject          | Correctness depends on a complete revalidation set over Donner's full selector support, including shadow-tree adapters; the matched properties cache captures the same reuse with a simpler key.                       |
-|    9 | Rule tree                                      | Reject          | Its benefit, restyle without re-matching, is delivered by narrowed invalidation and the matched properties cache with far less machinery.                                                                              |
-|   10 | Selector JIT                                   | Reject          | Large complexity, no executable memory on WebAssembly, and a 2x ceiling on a cost the index already removes.                                                                                                           |
-|   11 | Parallel traversal                             | Reject          | Style runs under the single-owner document lock; most documents are smaller than a work-stealing unit.                                                                                                                 |
-|   12 | Custom property and layer fast paths           | Not applicable  | `var()` and `@layer` are unsupported until a later revision of this design.                                                                                                                                            |
+| Rank | Technique                                      | Decision        | Reason                                                                                                                                                                                                                        |
+| ---: | ---------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|    1 | Cascade once per full restyle                  | Adopt           | Halves the style time of every measured edit; a few lines in one function.                                                                                                                                                    |
+|    2 | Rule index on the rightmost compound           | Adopt           | On the stylesheet-heavy documents 97.6 to 99.2 percent of rule tests reject; the simulated index leaves 1,384 of 57,838 tests on the splash document.                                                                         |
+|    3 | Narrowed invalidation for single-element edits | Adopt           | Turns an edit from two whole-document cascades into a subtree cascade. Reuses the existing selective pass and dirty flags.                                                                                                    |
+|    4 | Matched properties cache and shared records    | Adopt           | 66 to 99.8 percent of elements reuse an earlier element's computed style on the measured documents, and shared records remove up to 24.9 MB of duplicated computed style. Needs the storage change of Milestone A8.           |
+|    5 | Matcher constant factors                       | Adopt, measured | 155 ns per rejected test points at per-attempt overhead; each fix is local and independently testable.                                                                                                                        |
+|    6 | Per-element base cost (copies)                 | Adopt, measured | 4.6 microseconds per element dominates rule-light documents; the breakdown comes first, and the copy removal ships with the storage change of Milestone A8.                                                                   |
+|    7 | Ancestor Bloom filter                          | Adopt           | Requested regardless of payoff. After indexing it removes one failing walk per real document and 47 percent of candidates on descendant-heavy stylesheets; its effect is measured by a rejection counter, not by time.        |
+|    8 | Sibling and cousin style sharing               | Reject          | Correctness depends on a complete revalidation set over Donner's full selector support, including shadow-tree adapters; the matched properties cache captures the same reuse with a simpler key.                              |
+|    9 | Rule tree                                      | Reject          | Its benefit, restyle without re-matching, is delivered by narrowed invalidation and the matched properties cache with far less machinery.                                                                                     |
+|   10 | Selector JIT                                   | Reject          | Large complexity, no executable memory on WebAssembly, and a 2x ceiling on a cost the index already removes.                                                                                                                  |
+|   11 | Parallel traversal                             | Reject          | Style runs under the single-owner document lock; most documents are smaller than a work-stealing unit.                                                                                                                        |
+|   12 | Custom properties, with shared maps            | Adopt           | Part B, by operator decision: `var()` is a missing feature, not a speedup. An element that declares no custom property shares its parent's map, as Ladybird and Stylo do, so documents without custom properties pay nothing. |
+|   13 | Cascade layers, ordered inside the priority    | Adopt           | Part B, by operator decision. The layer rank joins `css::Specificity`, as Blink and Stylo pack it into their priority, so the source-order cascade needs no sort.                                                             |
 
-## Proposed Architecture
+## Proposed Architecture, Part A: Performance
 
 ### Single Cascade per Full Restyle
 
@@ -855,6 +978,7 @@ documents and measures the effect by counter.
 
 **Storage.** A new immutable `ComputedStyle` record holds what a computed style is today:
 `PropertyRegistry properties` and `ComputedResourceOpacities resourceOpacities`.
+In Part B it also holds the element's computed custom properties.
 `ComputedStyleComponent` holds `std::shared_ptr<const ComputedStyle> style` and keeps
 `externalFill` and `externalStroke`, which depend on the element's external-use context. Readers
 change from `style.properties.value()`, `*style.properties` and `style.properties->` to a const
@@ -916,6 +1040,108 @@ an adversary who forces distinct keys gets today's behavior, not unbounded growt
   handling.
 - No path in this design reparses the document.
 
+## Proposed Architecture, Part B: Cascade Features
+
+### Custom Properties and var()
+
+**Parsing.** Declarations whose name starts with `--` are already kept by the declaration parser
+as `css::Declaration` with their component values; they stop reaching
+`PropertyRegistry::parseProperty`. The bare name `--` is rejected, as the specification reserves
+it. When a stylesheet, `style` attribute or presentation attribute is parsed, each declaration
+records whether its component values contain a `var()` function at any depth
+(`Declaration::containsSubstitution`), so the cascade never rescans values. A malformed `var()`
+(no `--` name, or tokens other than a fallback after the name) makes the declaration invalid at
+parse time, as today.
+
+**Custom cascade.** `computePropertiesInto` keeps, next to the local `PropertyRegistry`, a small
+vector of winning custom declarations `(name, declaration, specificity)`, filled by
+`ApplyRuleDeclarations` and by the element's `style` attribute with the same "replace unless the
+stored specificity is higher" rule as other properties, so source order breaks ties exactly as
+today.
+
+**Computed custom properties.** A `CustomPropertyMap` is an immutable sorted vector of
+`(RcString name, std::shared_ptr<const TokenSequence> value)`. An element that declares no custom
+property shares its parent's map pointer, which is the common case and costs nothing per element.
+An element that declares some builds a new map: the parent's entries overlaid with its own, after
+substituting `var()` references inside its own declarations. Only the element's own declarations
+can form a cycle, because inherited values were substituted on the parent. Substitution walks
+references depth-first with an explicit stack and an in-progress mark per name, as Blink's
+`CascadeResolver` does; meeting an in-progress name marks every name on the stack from it
+upward as cyclic, and cyclic names become the guaranteed-invalid value (absent from the map).
+CSS-wide keywords in a custom property follow the specification: `initial` is the
+guaranteed-invalid value, `inherit` and `unset` take the parent's value. Untyped custom properties
+hold tokens, never lengths, so the font-size dependency cycles of registered properties cannot
+arise.
+
+**Substituting into ordinary properties.** In the local registry a declaration with
+`containsSubstitution` does not parse; it sets a pending-substitution entry for its property at
+its specificity, which wins or loses the cascade exactly as a parsed value would. A shorthand sets
+a pending entry on every longhand it covers. After the custom map is computed, each pending entry
+is substituted (the fallback is used when the referenced name is absent), and the result is
+parsed with `PropertyRegistry::parseProperty` at the entry's specificity into a property slot
+reset to unset. A parse failure, a guaranteed-invalid reference without fallback, or a value past
+the size cap makes the property invalid at computed-value time: it is left unset, so an inherited
+property inherits and any other takes its initial value. Inheritance then runs as today.
+
+**Presentation attributes.** A presentation attribute whose value contains `var()` is stored as a
+pending-substitution entry at presentation-attribute priority and substituted like any other,
+which is the behavior the SVG Working Group resolved to allow and Firefox and Safari implement.
+The parse model is not yet specified, so this is an open question below.
+
+**Limits.** A substituted value is capped at 65,536 component values and 1 MiB of source bytes,
+below the 2 MiB both Blink and Stylo use, because an SVG document's whole parsed-payload budget is
+smaller than a web page's. Substitution charges each produced component value to
+`StyleResourceBudget::reserveDeclarationApplication`'s component work and its bytes to the byte
+work, so one document's total expansion is bounded by the existing aggregate limits (16 Mi units
+each). Past either cap the value is guaranteed-invalid and a diagnostic is reported once.
+
+**Interactions.** The rule index is unchanged: custom properties do not affect matching. The
+matched properties cache key is complete without change, because the custom map is a function of
+the matched rules, the local declarations and the parent record. Narrowed invalidation already
+recomputes the descendants of every restyled element, which is what a changed custom property
+needs; the future "stop when equal" optimization must include the custom map in its equality.
+`collectMatchedStyleRules` and the editor's annotations show custom declarations like any other.
+
+### Cascade Layers
+
+**Parsing.** `StylesheetParser` parses `@layer a, b;` statements and `@layer name? { ... }` blocks,
+recursively, with nested blocks producing dotted names (`@layer a { @layer b {} }` is `a.b`) and
+nameless blocks producing anonymous layers with a unique internal name. `@import url() layer(x)`
+and `@import url() layer` are retained with their layer instead of dropped. Each `SelectorRule`
+gains a `layer` id into the stylesheet's layer table; unlayered rules use a reserved id. Nesting is
+capped at 32 levels and a stylesheet at 4,096 layers; past either cap the block is dropped with a
+diagnostic.
+
+**Order.** The document's layer order is the order of first declaration across all applicable
+stylesheets in cascade order (imports first, as today), computed when stylesheets are parsed or
+replaced. Each rule's layer id maps to a rank: the first declared layer has rank 1, later layers
+higher ranks, and unlayered author rules the highest rank. Presentation attributes get rank 0,
+below every author layer, placing them in the presentational-hint origin the specification
+describes; with no layers present this keeps today's result, since presentation attributes
+already lose to every author rule.
+
+**Priority.** `css::Specificity` gains a 16-bit layer rank compared after `SpecialType` and before
+the `(a, b, c)` tuple. For the important types (`Important`) the comparison inverts the rank, as
+Blink flips its layer bits, so an earlier layer's important declaration wins and unlayered
+important declarations lose to every layer's. The `style` attribute is element-attached and is not
+layered (its special types already order it). Because layer and specificity are compared as one
+value, the existing source-order application with "replace unless higher" still yields the
+specified order with no sort.
+
+**Risk.** `Property::inheritFrom` compares a parent's specificity with the child's to decide
+inheritance. Adding the layer rank changes that comparison for layered declarations; Milestone B5
+pins the current behavior for unlayered documents with tests and adds layered cases before
+changing it.
+
+**Interactions.** The index stores layer-agnostic keys; the matched properties cache key carries
+the specificity each rule was applied at, which now includes the rank; a change in layer order
+is a stylesheet change and takes the stylesheet path (Part C).
+
+### Out of Scope
+
+`@property`, `env()`, `attr()`, `@media`, `@supports`, `@container`, `@scope` and SMIL animation
+of custom properties, as listed under [Non-Goals](#non-goals).
+
 ## Security / Privacy
 
 Stylesheets and documents are untrusted input.
@@ -941,6 +1167,12 @@ Stylesheets and documents are untrusted input.
 - **Invalidation.** Under-invalidation is a correctness bug, not a safety bug, but it can show
   stale content. Every uncertain case (`:has()`, key-less attribute selectors, attributes with
   unidentified dependents) falls back to the full restyle.
+- **Substitution.** Exponential expansion (each custom property referencing the previous one
+  several times) is stopped by the per-value cap and the aggregate component and byte budgets;
+  reference cycles are detected before expansion; the reference walk uses an explicit stack, so
+  deep reference chains cannot exhaust the native stack.
+- **Layers.** Nesting depth and layer count are capped in the parser, and the layer rank is 16
+  bits by construction of the cap.
 
 ## Testing and Validation
 
@@ -987,6 +1219,28 @@ Stylesheets and documents are untrusted input.
   above; the rule "a full restyle cascades each element once" and "the filter rejects the
   expected candidates" by the counter test.
 
+### Part B Tests
+
+- **Feature tests** (`//donner/svg/components/style:style_cascade_feature_tests`, new): SVG cases
+  authored for Donner that cover the behaviors of these web-platform-tests files, which are HTML
+  and are not run directly: in `css/css-variables`, `variable-cycles.html`,
+  `variable-exponential-blowup.html`, `long-variable-reference-crash.html`,
+  `variable-substitution-shorthands.html`, `variable-css-wide-keywords.html`,
+  `variables-substitute-guaranteed-invalid.html`, `var-fallback-braces.html` and
+  `variable-presentation-attribute.html`; in `css/css-cascade`, `layer-basic.html`,
+  `layer-import.html`, `layer-important.html`, `layer-vs-inline-style.html`,
+  `layer-statement-before-import.html`, `layer-rule-invalid-name.html` and
+  `presentational-hints-cascade.html` (its HTML `width` attribute becomes an SVG presentation
+  attribute). The resvg suite has no custom-property or layer rows.
+- **Rendering cases** in the Donner SVG 2 suite for a custom property feeding `fill` through a
+  `<use>` instance, a layered `!important` override, and a presentation attribute losing to the
+  first declared layer.
+- **Parser tests and fuzzers**: `stylesheet_parser_fuzzer` and `declaration_list_parser_fuzzer`
+  gain `@layer` and `var()` dictionaries; the differential cascade fuzzer generates custom
+  properties and layers.
+- **Unchanged documents**: the Part A differential test also compares the corpus before and after
+  each Part B milestone, which must be identical for documents without `--*`, `var()` or `@layer`.
+
 ## Alternatives Considered
 
 - **Port the differential engine approach (Ladybird #11088).** Retaining match results and
@@ -1009,6 +1263,9 @@ Stylesheets and documents are untrusted input.
   the ancestor chain for every element needs no removal, but costs the whole chain per element;
   the counting filter with chain synchronization costs only the difference between consecutive
   chains.
+- **Tarjan's algorithm for custom property cycles (Stylo).** It finds cycles across all of an
+  element's custom properties in one pass; the depth-first walk with in-progress marks (Blink)
+  does the same for the few properties an element declares, with less code.
 
 ## Decisions
 
@@ -1031,6 +1288,7 @@ Stylesheets and documents are untrusted input.
   and A9).
 - **Ancestor Bloom filter** is built regardless of its measured payoff, on a reusable
   `donner/base/` helper; its effect is reported by counter.
+- **Custom properties and cascade layers** are in scope (Part B).
 - **Document scale.** Documents above the XML parser's default 8,192-node cap are not a target of
   these goals. The techniques scale with elements and rules, so larger documents benefit, but no
   goal is stated or measured for them.
@@ -1041,6 +1299,10 @@ Stylesheets and documents are untrusted input.
   distinct record instead of per entity lets documents that exceed the 64 MiB retained-property
   limit today only through duplication style completely. Recommendation: charge per record, the
   same reasoning as the per-candidate decision.
+- **`var()` in presentation attributes.** The SVG Working Group resolved to allow it but has not
+  specified the parse model; Firefox and Safari support it, Chromium partially. Recommendation:
+  support it as a pending substitution at presentation-attribute priority, matching
+  `variable-presentation-attribute.html`, and revisit if the specified parse model differs.
 
 ## Future Work
 
@@ -1051,3 +1313,4 @@ Stylesheets and documents are untrusted input.
 - [ ] Mine `:is()` and `:where()` arguments for index keys.
 - [ ] Restyle only elements carrying the keys of added, removed or edited rules on stylesheet
       edits.
+- [ ] `@property` registration, as a separate design.
