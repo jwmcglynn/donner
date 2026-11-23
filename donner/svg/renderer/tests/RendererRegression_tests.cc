@@ -473,10 +473,10 @@ TEST_F(RendererRegressionTests, MarkerClipInsideTurnedNestedViewportKeepsTheView
 TEST_F(RendererRegressionTests, MarkerWithZeroSizeViewBoxDrawsNothing) {
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
-  ExpectVisibleBitmap(expected, "marker_zero_viewbox_sibling_visible");
+  AssertVisibleFixture(expected, "marker_zero_viewbox_sibling_visible");
   for (std::string_view viewBox : {"0 0 0 10", "0 0 20 0"}) {
     SCOPED_TRACE(viewBox);
-    ExpectBitmapsIdentical(
+    editor::tests::CompareBitmapToBitmap(
         RenderReferenceContract(
             std::string(R"svg(<marker id="m" markerUnits="userSpaceOnUse" markerWidth="20"
                                 markerHeight="20" viewBox=")svg") +
@@ -485,7 +485,7 @@ TEST_F(RendererRegressionTests, MarkerWithZeroSizeViewBoxDrawsNothing) {
             </marker>
             <path d="M 20 20 L 40 20" fill="none" marker-start="url(#m)"/>
             <rect x="1" y="1" width="3" height="3" fill="lime"/>)svg"),
-        expected, "marker_zero_viewbox_draws_nothing");
+        expected, "marker_zero_viewbox_draws_nothing", editor::tests::PixelmatchIdentityParams());
   }
 }
 
