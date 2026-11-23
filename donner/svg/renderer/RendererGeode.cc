@@ -391,22 +391,6 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
   return style;
 }
 
-/// Returns whether \p slot's cached stroke outline is reusable for the given stroke parameters.
-/// The key covers the stroke style, the device-derived flattening tolerance, and whether the
-/// outline was built from a host-space `non-scaling-stroke` centerline.
-bool StrokeSlotMatches(const geode::GeodePathCacheComponent::StrokeSlot& slot,
-                       const StrokeStyle& strokeStyle, double flattenTolerance,
-                       const std::optional<Transform2d>& hostFromLocal) {
-  if (slot.hostFromLocal.has_value() != hostFromLocal.has_value()) {
-    return false;
-  }
-  if (hostFromLocal.has_value() && *slot.hostFromLocal != *hostFromLocal) {
-    return false;
-  }
-
-  return slot.strokeKey == strokeStyle && slot.flattenTolerance == flattenTolerance;
-}
-
 /// Coerce a `Lengthd` into a percent-bearing length when the gradient is in
 /// `objectBoundingBox` mode. Mirrors the helper used by the software renderer
 /// for gradient coordinate resolution.
@@ -4585,6 +4569,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const geode::EncodedPath* encoded = nullptr;
     /// True when both `strokedPath` and `encoded` live in the entity cache.
     bool persistent = false;
+    /// Index of the `GeodePathCacheComponent::strokeVariants` entry holding a persistent outline,
+    /// which also selects its resident slots.
+    std::size_t variant = 0;
     /// Stroke pieces use NonZero so their covered regions form a union.
     FillRule fillRule = FillRule::NonZero;
   };
@@ -5076,6 +5063,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       auto& variant = cache.fillVariants[*hit];
       variant.lastUse = ++cache.fillUseClock;
       variant.lastUseFrame = currentFrameIndex;
+      variant.lastUseDeviceId = device->deviceId();
       return {&*variant.encode, true, *hit};
     }
 
@@ -5083,11 +5071,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!encoded.has_value()) {
       return {&rejectedGeometry, false};
     }
-    const std::optional<std::size_t> replaceable = fillVariantToReplace(cache, currentFrameIndex);
+    const std::optional<std::size_t> replaceable = fillVariantToReplace(cache);
     if (!replaceable) {
-      // Every variant already served a draw this frame. Replacing one would make this frame's
-      // buckets evict each other on every draw, re-encoding and re-uploading each time, so this
-      // draw uses a scratch encode and the cached variants and their residence stay put.
+      // Every variant may still be read by an open frame. Replacing one would make this frame's
+      // buckets evict each other on every draw, or pull an encode from under an outer frame's
+      // pending batch, so this draw uses a scratch encode and the cached variants and their
+      // residence stay put.
       fillScratchEncode = std::move(*encoded);
       return {&*fillScratchEncode, false};
     }
@@ -5115,24 +5104,36 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       variant.encode = std::move(*encoded);
       variant.lastUse = ++cache.fillUseClock;
       variant.lastUseFrame = currentFrameIndex;
+      variant.lastUseDeviceId = device->deviceId();
       return {&*variant.encode, true, index};
     }
     fillScratchEncode = std::move(*encoded);
     return {&*fillScratchEncode, false};
   }
 
+  /// True when a cache variant last used in frame generation \p stamp of device \p stampDeviceId
+  /// may still be read by a frame of this device that has not ended: the current frame, or an
+  /// outer frame still open around an offscreen pass (`createOffscreenInstance` shares the device
+  /// and its generations), which can hold a pending batch pointing at the variant. A stamp from
+  /// another device is not checked: its generations are not comparable with this device's, and
+  /// the per-entity caches rely on callers not drawing one document on two devices at once.
+  [[nodiscard]] bool cacheVariantInUse(std::uint64_t stamp, std::uint64_t stampDeviceId) const {
+    return stampDeviceId == device->deviceId() &&
+           (stamp == currentFrameIndex || device->frameStampClaimed(stamp));
+  }
+
   /// Index of the fill variant a new tolerance bucket replaces: an empty one when there is one,
-  /// otherwise the least recently used one that served no draw in frame \p frame. Nullopt when
-  /// every variant served a draw in \p frame.
-  static std::optional<std::size_t> fillVariantToReplace(
-      const geode::GeodePathCacheComponent& cache, std::uint64_t frame) {
+  /// otherwise the least recently used one no open frame may still read (`cacheVariantInUse`).
+  /// Nullopt when every variant may still be read.
+  std::optional<std::size_t> fillVariantToReplace(
+      const geode::GeodePathCacheComponent& cache) const {
     std::optional<std::size_t> index;
     for (std::size_t i = 0; i < cache.fillVariants.size(); ++i) {
       const auto& variant = cache.fillVariants[i];
       if (!variant.encode.has_value()) {
         return i;
       }
-      if (variant.lastUseFrame != frame &&
+      if (!cacheVariantInUse(variant.lastUseFrame, variant.lastUseDeviceId) &&
           (!index || variant.lastUse < cache.fillVariants[*index].lastUse)) {
         index = i;
       }
@@ -5676,17 +5677,28 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return &slot;
   }
 
-  /// GPU-residence slot for `source`'s stroke encode. See `residentFillSlot`.
-  geode::GeodeResidentSlot* residentStrokeSlot(EntityHandle source) {
+  /// This device's residence slots for stroke variant \p variant of `source` (see
+  /// `GeodePathCacheComponent::strokeVariants`), created empty on first use.
+  geode::GeodeResidentStrokeSlots& residentStrokeSlots(EntityHandle source, std::size_t variant) {
+    std::unique_ptr<geode::GeodeResidentStrokeSlots>& slots =
+        residentPathSlots(source).strokeSlots[variant];
+    if (!slots) {
+      slots = std::make_unique<geode::GeodeResidentStrokeSlots>();
+    }
+    return *slots;
+  }
+
+  /// GPU-residence slot for stroke variant \p variant of `source`. See `residentFillSlot`.
+  geode::GeodeResidentSlot* residentStrokeSlot(EntityHandle source, std::size_t variant) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentPathSlots& slots = residentPathSlots(source);
+    geode::GeodeResidentStrokeSlots& slots = residentStrokeSlots(source, variant);
     // Only a solid stroke takes this slot, and it binds no stop ramp, so the gradient stroke slot
     // lets go of any it kept from an earlier gradient paint.
-    releaseGradientRamp(&slots.gradientStrokeSlot);
-    geode::GeodeResidentSlot& slot = slots.strokeSlot;
+    releaseGradientRamp(&slots.gradient);
+    geode::GeodeResidentSlot& slot = slots.solid;
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -5695,15 +5707,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return &slot;
   }
 
-  /// GPU-residence slot for `source`'s gradient-painted stroke.
-  /// See `residentGradientFillSlot`; the slot holds the cached
-  /// stroke-outline encode plus the resolved gradient uniform.
-  geode::GeodeResidentGradientSlot* residentGradientStrokeSlot(EntityHandle source) {
+  /// GPU-residence slot for the gradient-painted stroke of stroke variant \p variant of
+  /// `source`. See `residentGradientFillSlot`; the slot holds the cached stroke-outline encode
+  /// plus the resolved gradient uniform.
+  geode::GeodeResidentGradientSlot* residentGradientStrokeSlot(EntityHandle source,
+                                                               std::size_t variant) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    geode::GeodeResidentGradientSlot& slot = residentPathSlots(source).gradientStrokeSlot;
+    geode::GeodeResidentGradientSlot& slot = residentStrokeSlots(source, variant).gradient;
     std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
     if (slot.slab.get() != slab.get()) {
       slot.reset();
@@ -5793,7 +5806,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     syncTransform();
     emitPatternFill(*stroked.strokedPath, stroked.fillRule,
                     buildPatternPaint(*patternStrokePaint, paint.strokeOpacity), stroked.encoded,
-                    stroked.persistent ? residentStrokeSlot(source) : nullptr);
+                    stroked.persistent ? residentStrokeSlot(source, stroked.variant) : nullptr);
     releasePatternPaintSlot(patternStrokePaint);
   }
 
@@ -6380,88 +6393,169 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     residentSlot->lastSceneFrame = currentFrameIndex;
   }
 
-  /// Stroke-side of the cache. Builds (or reuses) the `strokeToFill`
-  /// output and its encode on `source`'s `GeodePathCacheComponent`.
-  /// Returns a `StrokeDerived` pointing into the cache (entity path) or
-  /// into `strokeScratchPath` (no-entity fallback). The caller must
-  /// check `strokedPath == nullptr` for the "zero-stroke" case.
-  /// Flushes the pending batch when it still references the cached stroke encode, then drops the
-  /// resident stroke slots so a replacement or removal cannot leave a stale resident binding.
-  void releaseCachedStrokeSlots(EntityHandle source, geode::GeodePathCacheComponent& cache) {
-    if (cache.strokeSlot.has_value() && pendingBatchReferences(&cache.strokeSlot->strokedEncode)) {
+  /// Flushes the pending batch when it still draws from stroke variant \p index of \p source,
+  /// then drops that variant's resident slots on every device, so replacing the variant cannot
+  /// leave a stale resident binding.
+  void releaseStrokeVariant(EntityHandle source, geode::GeodePathCacheComponent& cache,
+                            std::size_t index) {
+    const std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& variant =
+        cache.strokeVariants[index];
+    if (variant && pendingBatchReferences(&variant->strokedEncode)) {
       flushPendingBatch();
     }
     if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-      // Every device's residence was uploaded from the stroke encode being replaced.
-      resident->devices.forEach([](geode::GeodeResidentPathSlots& slots) {
-        slots.strokeSlot.reset();
-        slots.gradientStrokeSlot.reset();
+      // Every device's residence for this variant was uploaded from the outline being replaced.
+      resident->devices.forEach([index](geode::GeodeResidentPathSlots& slots) {
+        if (slots.strokeSlots[index]) {
+          slots.strokeSlots[index]->solid.reset();
+          slots.strokeSlots[index]->gradient.reset();
+        }
       });
     }
   }
 
+  /// Index of the stroke variant an outline for \p style replaces. A style that already holds
+  /// `kStrokeVariantsPerStyle` outlines (other tolerance buckets or host transforms) replaces
+  /// its own least recently used one, so zooming through scale buckets cannot fill the cache with
+  /// one style's outlines. Otherwise an empty variant, or else the least recently used one. Only
+  /// variants no open frame may still read (`cacheVariantInUse`) are candidates; nullopt when
+  /// there is none.
+  /// @param cache Stroke cache to choose in.
+  /// @param style Stroke style of the outline to store.
+  std::optional<std::size_t> strokeVariantToReplace(const geode::GeodePathCacheComponent& cache,
+                                                    const StrokeStyle& style) const {
+    const auto sameStyle = [&style](const geode::GeodePathCacheComponent::StrokeVariant& variant) {
+      return variant.strokeKey == style;
+    };
+    const auto anyStyle = [](const geode::GeodePathCacheComponent::StrokeVariant&) { return true; };
+    const std::size_t sameStyleCount = static_cast<std::size_t>(
+        std::count_if(cache.strokeVariants.begin(), cache.strokeVariants.end(),
+                      [&](const auto& variant) { return variant && sameStyle(*variant); }));
+    if (sameStyleCount >= geode::GeodePathCacheComponent::kStrokeVariantsPerStyle) {
+      return leastRecentlyUsedReplaceableStrokeVariant(cache, sameStyle);
+    }
+    for (std::size_t i = 0; i < cache.strokeVariants.size(); ++i) {
+      if (!cache.strokeVariants[i]) {
+        return i;
+      }
+    }
+    return leastRecentlyUsedReplaceableStrokeVariant(cache, anyStyle);
+  }
+
+  /// Index of the least recently used stroke variant of \p cache that satisfies \p matches and
+  /// that no open frame may still read (`cacheVariantInUse`), or nullopt when there is none.
+  template <typename Predicate>
+  std::optional<std::size_t> leastRecentlyUsedReplaceableStrokeVariant(
+      const geode::GeodePathCacheComponent& cache, const Predicate& matches) const {
+    std::optional<std::size_t> index;
+    for (std::size_t i = 0; i < cache.strokeVariants.size(); ++i) {
+      const auto& variant = cache.strokeVariants[i];
+      if (variant && matches(*variant) &&
+          !cacheVariantInUse(variant->lastUseFrame, variant->lastUseDeviceId) &&
+          (!index || variant->lastUse < cache.strokeVariants[*index]->lastUse)) {
+        index = i;
+      }
+    }
+    return index;
+  }
+
+  /// Stores \p candidate in the stroke variant of \p cache that `strokeVariantToReplace` picks,
+  /// charging its bytes to the document budget in place of the variant it replaces.
+  /// @param source Entity owning \p cache.
+  /// @param cache Stroke cache of \p source.
+  /// @param candidate Outline to store; moved from only when stored.
+  /// @return Index of the stored variant, or nullopt when every variant may still be read by an
+  ///   open frame or the budget refused the outline. The cache is unchanged then.
+  std::optional<std::size_t> storeStrokeVariant(
+      EntityHandle source, geode::GeodePathCacheComponent& cache,
+      std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& candidate) {
+    const std::optional<std::size_t> replaceable =
+        strokeVariantToReplace(cache, candidate->strokeKey);
+    const std::optional<std::size_t> retainedBytes = candidate->retainedBytes();
+    if (!replaceable.has_value() || !retainedBytes.has_value()) {
+      return std::nullopt;
+    }
+    std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& slot =
+        cache.strokeVariants[*replaceable];
+    // A replaced variant hands its charge over, so the budget never holds both outlines.
+    geode::GeodeGeometryCacheReservation& reservation =
+        slot ? slot->reservation : candidate->reservation;
+    if (!reservation.replace(documentGeometryBudget(*source.registry()), *retainedBytes)) {
+      return std::nullopt;
+    }
+    releaseStrokeVariant(source, cache, *replaceable);
+    if (slot) {
+      candidate->reservation = std::move(slot->reservation);
+    }
+    slot = std::move(candidate);
+    return replaceable;
+  }
+
+  /// Stroke-side of the cache. Builds (or reuses) the `strokeToFill` output and its encode in
+  /// one of `source`'s `GeodePathCacheComponent::strokeVariants`, keyed by the stroke style, the
+  /// device-derived flattening tolerance, and the host transform of a `non-scaling-stroke`
+  /// centerline. Returns a `StrokeDerived` pointing into the cached variant, or into
+  /// `strokeScratchPath` for a draw with no entity, past the document budget, or past the
+  /// variants when every one may still be read by an open frame. The caller must check
+  /// `strokedPath == nullptr` for the "zero-stroke" case.
   StrokeDerived getStrokeDerived(EntityHandle source, const Path& geometry,
                                  const StrokeStyle& strokeStyle,
                                  const std::optional<Transform2d>& hostFromLocal) {
     StrokeDerived result;
-    // Device-aware flattening tolerance for this draw. Part of the cache key
-    // below: a zoom change that crosses a scale bucket must re-flatten instead
-    // of serving the outline tessellated for the old scale.
+    // Device-aware flattening tolerance for this draw. Part of the cache key: a zoom change that
+    // crosses a scale bucket must re-flatten instead of serving the outline tessellated for the
+    // old scale.
     const double flattenTolerance = strokeFlattenTolerance();
+    const auto fromVariant = [&](geode::GeodePathCacheComponent& cache, std::size_t index) {
+      geode::GeodePathCacheComponent::StrokeVariant& variant = *cache.strokeVariants[index];
+      variant.lastUse = ++cache.strokeUseClock;
+      variant.lastUseFrame = currentFrameIndex;
+      variant.lastUseDeviceId = device->deviceId();
+      result.strokedPath = &variant.strokedPath;
+      result.encoded = &variant.strokedEncode;
+      result.persistent = true;
+      result.variant = index;
+      result.fillRule = variant.strokeFillRule;
+      return result;
+    };
     if (source) {
       ensureCacheInvalidationWired(*source.registry());
-      std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
-          documentGeometryBudget(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
-      if (cache.strokeSlot.has_value() &&
-          StrokeSlotMatches(*cache.strokeSlot, strokeStyle, flattenTolerance, hostFromLocal)) {
-        result.strokedPath = &cache.strokeSlot->strokedPath;
-        result.encoded = &cache.strokeSlot->strokedEncode;
-        result.persistent = true;
-        result.fillRule = cache.strokeSlot->strokeFillRule;
-        return result;
+      if (const std::optional<std::size_t> hit =
+              cache.strokeVariantFor(strokeStyle, flattenTolerance, hostFromLocal)) {
+        return fromVariant(cache, *hit);
       }
 
-      {
-        // Rebuild the bounded NonZero stroke union when geometry or stroke parameters change.
-        Path stroked = geometry.strokeToFill(strokeStyle, flattenTolerance);
-        if (stroked.empty()) {
-          releaseCachedStrokeSlots(source, cache);
-          cache.strokeReservation.reset();
-          cache.strokeSlot.reset();
-          return result;  // strokedPath stays null.
-        }
-        countStrokeOutline(stroked);
-        const FillRule fillRule = FillRule::NonZero;
-        std::optional<geode::EncodedPath> encoded = encodeGeometry(stroked, fillRule);
-        if (!encoded.has_value()) {
-          return result;
-        }
-        geode::GeodePathCacheComponent::StrokeSlot candidate{
-            .strokeKey = strokeStyle,
-            .flattenTolerance = flattenTolerance,
-            .hostFromLocal = hostFromLocal,
-            .strokedPath = std::move(stroked),
-            .strokedEncode = std::move(*encoded),
-            .strokeFillRule = fillRule,
-        };
-        const std::optional<std::size_t> retainedBytes = candidate.retainedBytes();
-        if (!retainedBytes.has_value() ||
-            !cache.strokeReservation.replace(documentBudget, *retainedBytes)) {
-          strokeScratchPath = std::move(candidate.strokedPath);
-          strokeScratchEncode = std::move(candidate.strokedEncode);
-          result.strokedPath = &strokeScratchPath;
-          result.encoded = &*strokeScratchEncode;
-          result.fillRule = fillRule;
-          return result;
-        }
-        releaseCachedStrokeSlots(source, cache);
-        cache.strokeSlot = std::move(candidate);
+      Path stroked = geometry.strokeToFill(strokeStyle, flattenTolerance);
+      if (stroked.empty()) {
+        return result;  // strokedPath stays null.
       }
-      result.strokedPath = &cache.strokeSlot->strokedPath;
-      result.encoded = &cache.strokeSlot->strokedEncode;
-      result.persistent = true;
-      result.fillRule = cache.strokeSlot->strokeFillRule;
+      countStrokeOutline(stroked);
+      const FillRule fillRule = FillRule::NonZero;
+      std::optional<geode::EncodedPath> encoded = encodeGeometry(stroked, fillRule);
+      if (!encoded.has_value()) {
+        return result;
+      }
+      auto candidate = std::make_unique<geode::GeodePathCacheComponent::StrokeVariant>(
+          geode::GeodePathCacheComponent::StrokeVariant{
+              .strokeKey = strokeStyle,
+              .flattenTolerance = flattenTolerance,
+              .hostFromLocal = hostFromLocal,
+              .strokedPath = std::move(stroked),
+              .strokedEncode = std::move(*encoded),
+              .strokeFillRule = fillRule,
+          });
+      if (const std::optional<std::size_t> stored = storeStrokeVariant(source, cache, candidate)) {
+        return fromVariant(cache, *stored);
+      }
+      // Every variant may still be read by an open frame, or the document budget refused the
+      // outline: draw from a per-frame outline and leave the cached variants and their residence
+      // in place.
+      strokeScratchPath = std::move(candidate->strokedPath);
+      strokeScratchEncode = std::move(candidate->strokedEncode);
+      result.strokedPath = &strokeScratchPath;
+      result.encoded = &*strokeScratchEncode;
+      result.fillRule = fillRule;
       return result;
     }
     // No-entity fallback: compute and admit into Impl-local scratch buffers.
@@ -8683,9 +8777,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // All stroke pieces use NonZero and are composited together once, including
   // overlapping contours, caps, and dashes.
   //
-  // The cache (`GeodePathCacheComponent::strokeSlot`) memoizes the
-  // `strokeToFill` output + its encode + the derived fill rule, keyed
-  // by `StrokeStyle` equality. A cache hit skips all three computations.
+  // The cache (`GeodePathCacheComponent::strokeVariants`) memoizes the `strokeToFill` output, its
+  // encode, and the derived fill rule per stroke key. A cache hit skips all three computations.
   const StrokeStyle strokeStyle = toStrokeStyle(stroke);
   const Impl::StrokeDerived strokeDerived =
       impl_->getStrokeDerived(path.sourceEntity, drawPathGeometry, strokeStyle, path.hostFromLocal);
@@ -8712,7 +8805,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // fill of the cached stroke encode).
   geode::GeodeResidentSlot* residentStroke =
       (strokeDerived.persistent && std::holds_alternative<PaintServer::Solid>(strokeServer))
-          ? impl_->residentStrokeSlot(path.sourceEntity)
+          ? impl_->residentStrokeSlot(path.sourceEntity, strokeDerived.variant)
           : nullptr;
   // Gradient residence for gradient-painted strokes: the cached
   // stroke-outline encode lives in a gradient slot so an unchanged outline
@@ -8720,7 +8813,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   geode::GeodeResidentGradientSlot* residentGradientStroke =
       (strokeDerived.persistent &&
        std::holds_alternative<components::PaintResolvedReference>(strokeServer))
-          ? impl_->residentGradientStrokeSlot(path.sourceEntity)
+          ? impl_->residentGradientStrokeSlot(path.sourceEntity, strokeDerived.variant)
           : nullptr;
 
   // A solid stroke is a solid fill of the cached stroke encode, so it is
@@ -8731,7 +8824,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   //
   // The stroked outline is retained by the batch until it flushes. That is
   // safe only when the caller permits deferral: an occurrence may replace this entity's
-  // GeodePathCacheComponent::strokeSlot before another draw or the frame's eventual flush.
+  // GeodePathCacheComponent::strokeVariants before another draw or the frame's eventual flush.
   if (kEnableSceneBatching && residentStroke != nullptr && strokeDerived.persistent &&
       path.canDeferGeometry() && !impl_->patternStrokePaint.has_value()) {
     const auto& solidStroke = std::get<PaintServer::Solid>(strokeServer);

@@ -30,12 +30,14 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFillVariants.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
@@ -2182,6 +2184,104 @@ TEST_F(GeodePerfTest, RecordSourcedAndUniformSourcedDrawsAgree) {
   EXPECT_EQ(differingPixels, 0u)
       << "record-sourced and uniform-sourced draws of the same content diverged; first at ("
       << firstX << ", " << firstY << ")";
+}
+
+// ---------------------------------------------------------------------------
+// One source path stroked with several styles through `<use>`.
+//
+// Every `<use>` instance of a path draws through the source path's entity, so
+// the stroke outline cache on that entity sees one stroke style per instance.
+// Each style keeps its own cached outline and resident geometry, so an
+// unchanged frame flattens, encodes, and uploads nothing.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kSharedSourceStrokeStylesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="200" height="120">
+  <defs>
+    <path id="p" d="M10,30 L40,10 C60,0 80,20 70,40" fill="none" pathLength="100"/>
+  </defs>
+  <use xlink:href="#p" stroke="#000" stroke-width="4"/>
+  <use xlink:href="#p" x="60" stroke="#c00" stroke-width="6" stroke-linejoin="round"/>
+  <use xlink:href="#p" x="120" stroke="#0a0" stroke-width="4" stroke-linecap="square"/>
+  <use xlink:href="#p" y="50" stroke="#00c" stroke-width="4" stroke-miterlimit="1"/>
+  <use xlink:href="#p" x="60" y="50" stroke="#c0c" stroke-width="4" stroke-dasharray="8,4"/>
+  <use xlink:href="#p" x="120" y="50" stroke="#0cc" stroke-width="4" stroke-dasharray="8,4"
+       stroke-dashoffset="3"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, UseInstancesWithDistinctStrokeStyles_NoDirtyPath_ZeroEncodes) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kSharedSourceStrokeStylesSvg, device);
+  ASSERT_FALSE(frame.bitmap.empty()) << "renderer produced no snapshot";
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
+
+  EXPECT_EQ(frame.counters.strokeOutlineFlattens, 0u)
+      << "An unchanged frame re-flattened stroke outlines: the instances' stroke styles evicted "
+         "each other from the source path's stroke cache.";
+  EXPECT_EQ(frame.counters.pathEncodes, 0u)
+      << "An unchanged frame re-encoded stroke outlines of the shared source path.";
+  EXPECT_EQ(frame.counters.bufferWrites, 0u)
+      << "An unchanged frame re-uploaded stroke geometry or uniforms: each stroke style needs its "
+         "own resident outline.";
+  EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
+      << "An unchanged frame built bind groups for resident stroke outlines.";
+}
+
+/// More stroke styles on one source path than the stroke cache keeps per entity. The styles
+/// past the cache draw from a per-frame encode, and must not evict the cached ones, so the
+/// steady state re-encodes exactly the overflow and nothing else.
+std::string StrokeStylesPastTheCacheSvg(std::size_t styles) {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" )svg"
+      R"svg(width="200" height="200"><defs><path id="p" d="M10,10 C40,0 60,20 90,10" )svg"
+      R"svg(fill="none"/></defs>)svg";
+  for (std::size_t i = 0; i < styles; ++i) {
+    source += "<use xlink:href=\"#p\" y=\"" + std::to_string(i * 15) +
+              "\" stroke=\"#000\" stroke-width=\"" + std::to_string(i + 1) + "\"/>";
+  }
+  return source + "</svg>";
+}
+
+TEST_F(GeodePerfTest, StrokeStylesPastTheCache_ReEncodeOnlyTheOverflow) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  constexpr std::size_t kOverflow = 2;
+  constexpr std::size_t kStyles = geode::kGeodeStrokeVariantCount + kOverflow;
+  const std::string svg = StrokeStylesPastTheCacheSvg(kStyles);
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(svg, sink);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.strokeOutlineFlattens, kStyles)
+      << "The first frame flattens every style once.";
+  for (int frame = 2; frame <= 3; ++frame) {
+    renderer.draw(document);
+    const geode::GeodeCounters& c = renderer.lastFrameTimings().counters;
+    printCounters(("StrokeStylesPastTheCache frame " + std::to_string(frame)).c_str(), c);
+    EXPECT_EQ(c.strokeOutlineFlattens, kOverflow)
+        << "Frame " << frame << ": only the styles past the per-entity cache may re-flatten.";
+    EXPECT_EQ(c.pathEncodes, kOverflow)
+        << "Frame " << frame << ": only the styles past the per-entity cache may re-encode.";
+  }
+
+  // The styles drawn from a per-frame outline render what a fresh document renders.
+  const RendererBitmap steady = renderer.takeSnapshot();
+  ParseWarningSink freshSink = ParseWarningSink::Disabled();
+  auto freshParsed = parser::SVGParser::ParseSVG(svg, freshSink);
+  ASSERT_FALSE(freshParsed.hasError()) << freshParsed.error().reason;
+  SVGDocument fresh = std::move(freshParsed.result());
+  RendererGeode reference(device);
+  reference.draw(fresh);
+  editor::tests::CompareBitmapToBitmap(steady, reference.takeSnapshot(),
+                                       "stroke_styles_past_the_cache",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

@@ -121,20 +121,6 @@ ImageComparisonParams GeodeUnresolvedEdgeCoverageGate(ImageComparisonParams para
       "quantization allows");
 }
 
-/// \p params, with the Geode comparison disabled: an edge lies under a translucent layer, so the
-/// reference's quarter-pixel edge coverage changes the composite's straight color, and the layer
-/// covers the rows beside the edge partially, which the quarter-pixel edge coverage rule counts.
-/// Part of the difference exceeds what quantization allows, so it is not shown to be the only
-/// cause.
-ImageComparisonParams GeodeTranslucentEdgeColorGate(ImageComparisonParams params) {
-  return params.disableBackend(
-      RendererBackend::Geode,
-      "Unresolved: the crosshair's quarter-pixel edge coverage under the half-transparent masked "
-      "text changes the composite color and lies beside partially covered rows (109 of the 120 "
-      "px Geode counts with the edge coverage rule, against a CPU count of 19), but 42 of the 120 "
-      "differ by more than quarter-pixel quantization allows");
-}
-
 /// \p params, with the Geode comparison disabled: the row compares against a custom golden that is
 /// not quarter-pixel quantized (its frame is an exact area average), so the quarter-pixel edge
 /// coverage rule does not apply, and Geode's edge coverage differs from it by more than the pixel
@@ -145,30 +131,6 @@ ImageComparisonParams GeodeUnquantizedGoldenGate(ImageComparisonParams params) {
       "Harness mismatch: this custom golden is not quarter-pixel quantized, so the edge coverage "
       "rule does not apply, and Geode's exact edge coverage differs from it beyond the pixel "
       "budget");
-}
-
-/// \p params, with the Geode comparison disabled: the row blurs text over the crosshair and
-/// compares against a Donner software rendering. The golden's quarter-pixel quantized crosshair
-/// rows lie beside the partially covered blurred text, which the quarter-pixel edge coverage rule
-/// counts.
-ImageComparisonParams GeodeBlurredCrosshairGate(ImageComparisonParams params) {
-  return params.disableBackend(
-      RendererBackend::Geode,
-      "Harness mismatch: the golden's quarter-pixel quantized crosshair rows lie beside the "
-      "partially covered blurred text, which the edge coverage rule counts (602 px with the rule, "
-      "all on the crosshair's two rows)");
-}
-
-/// \p params, with the Geode comparison disabled: the row blurs text on paths and compares against
-/// a Donner software rendering that is not quarter-pixel quantized there, so quantization does not
-/// explain the difference.
-ImageComparisonParams GeodeUnresolvedBlurGate(ImageComparisonParams params) {
-  return params.disableBackend(
-      RendererBackend::Geode,
-      "Unresolved: Geode counts 496 px (497 on software Vulkan) against this Donner software "
-      "rendering, which the CPU renderer matches exactly; the golden is not quarter-pixel "
-      "quantized there (share 0.011), and the pixels lie on the blurred glyph edges, the guide "
-      "paths and their overlap");
 }
 
 /// \p params, with the Geode comparison disabled: the text sits on the reference's crosshair, so
@@ -220,15 +182,15 @@ ImageComparisonParams ColorMatrixIdentityGolden() {
       "Reference disagreement: identity output; the reference stores linearRGB in 8 bits");
 }
 
-/// Params for the blurred-text rows, compared against the Donner golden at \p path (see
-/// testdata/golden/README.md): their PNGs draw every glyph edge outside the outline, and the blur
-/// spreads that extra ink into the glyph interiors, where the comparison counts it. The params keep
-/// a view of \p path, so it must be a string literal.
-ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path) {
-  return Params::WithGoldenOverride(
-      path, kDefaultThreshold,
-      "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside the outline; "
-      "Donner's glyph ink equals the outline's area (GlyphInkAreaTest)");
+/// Params for a blurred-text row (see testdata/golden/README.md). The CPU lanes compare against the
+/// Donner golden at \p path: the row's PNG draws every glyph edge outside the outline, and the blur
+/// spreads that extra ink into the glyph interiors, where the comparison counts it. The Geode lanes
+/// compare against Geode's own rendering at \p geodePath. \p reason gives both justifications. The
+/// params keep views of all three arguments, so they must be string literals.
+ImageComparisonParams HeavyGlyphReferenceGolden(std::string_view path, std::string_view geodePath,
+                                                std::string_view reason) {
+  return Params::WithGoldenOverride(path, kDefaultThreshold, reason)
+      .withGeodeGoldenOverride(geodePath);
 }
 
 /// Params for a color emoji row compared against the Donner golden at \p path (see
@@ -1814,10 +1776,19 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Reference disagreement: SVG 2 continues at the path end point")},
                 {"with-baseline-shift-and-rotate.svg",
                  UbMarker("SVG 2 defines baseline-shift and rotate on a textPath")},
-                // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                 {"with-filter.svg",
-                 GeodeUnresolvedBlurGate(HeavyGlyphReferenceGolden(
-                     "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png"))},
+                 HeavyGlyphReferenceGolden(
+                     "donner/svg/renderer/testdata/golden/donner-textPath-with-filter.png",
+                     "donner/svg/renderer/testdata/golden/geode/text_textPath_with-filter.png",
+                     "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px outside "
+                     "the outline; Donner's glyph ink equals the outline's area "
+                     "(GlyphInkAreaTest). Geode compares with its own rendering: its blurred "
+                     "line matches the CPU renderer's (TranslucentTextAcrossBackends), and "
+                     "pixelmatch counts the guide and glyph edge coverage under the blur, "
+                     "which it sets aside as anti-aliasing without it. Against an "
+                     "area-coverage control neither matches: Geode is closer by mean error, "
+                     "the CPU renderer by the share of guide edge pixels within 8 levels")},
                 {"with-underline.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
@@ -1883,7 +1854,15 @@ INSTANTIATE_TEST_SUITE_P(
                     {"tspan-bbox-1.svg", QuarterPixelEdgeReference()},
                     {"with-clip-path.svg", QuarterPixelEdgeReference()},
                     {"with-dy.svg", QuarterPixelEdgeReference()},
-                    {"with-mask.svg", GeodeTranslucentEdgeColorGate(Params())},
+                    // Geode-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                    {"with-mask.svg",
+                     Params().withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/text_tspan_with-mask.png",
+                         "Accepted rasterization difference: the half-transparent masked text lies "
+                         "over the crosshair, whose rows the reference stores as 128 and 192 and "
+                         "Geode and an area-coverage control as 159; Geode's masked text over the "
+                         "CPU renderer's crosshair counts 18 px against the reference, the CPU "
+                         "renderer 19")},
                     {"with-opacity.svg", QuarterPixelEdgeReference()},
                     {"with-x-and-y.svg", QuarterPixelEdgeReference()},
                     {"without-attributes.svg", QuarterPixelEdgeReference()},
@@ -1892,10 +1871,18 @@ INSTANTIATE_TEST_SUITE_P(
                     {"bidi-reordering.svg",
                      Params().withGeodeQuarterPixelEdgeCoverage().onlyTextFull().withReason(
                          "Arabic shaping")},
-                    // Donner-rendered golden; see donner/svg/renderer/testdata/golden/README.md.
+                    // Donner-rendered goldens; see donner/svg/renderer/testdata/golden/README.md.
                     {"with-filter.svg",
-                     GeodeBlurredCrosshairGate(HeavyGlyphReferenceGolden(
-                         "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png"))},
+                     HeavyGlyphReferenceGolden(
+                         "donner/svg/renderer/testdata/golden/donner-tspan-with-filter.png",
+                         "donner/svg/renderer/testdata/golden/geode/text_tspan_with-filter.png",
+                         "Reference disagreement: the PNG draws glyph edges 0.25 to 0.3 px "
+                         "outside the outline; Donner's glyph ink equals the outline's area "
+                         "(GlyphInkAreaTest). Geode compares with its own rendering: its "
+                         "blurred text matches the CPU renderer's (TranslucentTextAcrossBackends), "
+                         "and every counted pixel is on the crosshair's two rows, where Geode "
+                         "and an area-coverage control store 159 and the CPU golden 128 and "
+                         "192")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
