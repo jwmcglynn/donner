@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cinttypes>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -623,8 +624,8 @@ uint64_t StrokeCacheBytesAfterZooming(const std::shared_ptr<geode::GeodeDevice>&
   for (const double scale : scales) {
     zoom->setAttribute("transform", "scale(" + std::to_string(scale) + ")");
     renderer.draw(document);
-    std::fprintf(stderr, "[zoom] scale=%g cacheBytes=%llu\n", scale,
-                 static_cast<unsigned long long>(DocumentBudgetOf(document)->cacheBytes()));
+    std::fprintf(stderr, "[zoom] scale=%g cacheBytes=%" PRIu64 "\n", scale,
+                 DocumentBudgetOf(document)->cacheBytes());
   }
   return DocumentBudgetOf(document)->cacheBytes();
 }
