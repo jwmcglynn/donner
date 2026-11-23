@@ -22,6 +22,7 @@
 /// Lives in `donner::geode` (not `donner::svg::geode`) to match the other
 /// Geode types referenced unqualified via `geode::` inside `donner::svg`.
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -152,11 +153,22 @@ public:
     }
     lastMergedFrame_ = frameIndex;
     retiredBindGroups_.clear();
-    for (uint32_t index : pendingFrees_) {
-      freeIndices_.insert(std::upper_bound(freeIndices_.begin(), freeIndices_.end(), index), index);
-    }
+    // Drop the prefix allocations consumed, then merge the sorted frees in: linear in the list
+    // plus k log k for k frees, where inserting each free in place was quadratic in k.
+    freeIndices_.erase(freeIndices_.begin(),
+                       freeIndices_.begin() + static_cast<std::ptrdiff_t>(freeHead_));
+    freeHead_ = 0;
+    std::sort(pendingFrees_.begin(), pendingFrees_.end());
+    const auto merged = static_cast<std::ptrdiff_t>(freeIndices_.size());
+    freeIndices_.insert(freeIndices_.end(), pendingFrees_.begin(), pendingFrees_.end());
+    std::inplace_merge(freeIndices_.begin(), freeIndices_.begin() + merged, freeIndices_.end());
+    freeListSteps_ += freeIndices_.size();
     pendingFrees_.clear();
   }
+
+  /// Free-list entries visited by \ref beginFrame merges and allocations so far, so a test can
+  /// hold the free list to linear work.
+  [[nodiscard]] uint64_t freeListStepsForTesting() const { return freeListSteps_; }
 
   /// Park a bind group a slot is dropping until the next frame boundary.
   ///
@@ -176,17 +188,15 @@ public:
   /// Allocate the next record slot (free-list first, then bump in the
   /// newest buffer). Returns false when the device cannot create a buffer.
   bool allocateSlot(GeodeDevice& device, Slot& out) {
-    if (!freeIndices_.empty()) {
-      const uint32_t index = freeIndices_.front();
+    if (freeHead_ < freeIndices_.size()) {
+      // Lowest free index first, so slots handed out in draw order stay consecutive. The cursor
+      // consumes the sorted list from the front in constant time; the next merge drops the prefix.
+      const uint32_t index = freeIndices_[freeHead_++];
+      ++freeListSteps_;
       out = slotAt(index);
-      if (!out.buffer.isValid()) {
-        // A stale index that no longer resolves stays out of the free list,
-        // but never silently consumes the allocation attempt.
-        freeIndices_.erase(freeIndices_.begin());
-        return false;
-      }
-      freeIndices_.erase(freeIndices_.begin());
-      return true;
+      // A stale index that no longer resolves stays out of the free list, but never silently
+      // consumes the allocation attempt.
+      return out.buffer.isValid();
     }
     if (chunks_.empty() || usedBytes_ + sizeof(InstanceRecord) > chunks_.back().size) {
       uint64_t newSize = chunks_.empty() ? kInitialRecordSlabBytes : chunks_.back().size * 2u;
@@ -419,7 +429,10 @@ private:
   uint64_t lastMergedFrame_ = ~uint64_t{0};
   uint64_t usedBytes_ = 0;
   std::vector<Chunk> chunks_;
+  /// Free indices in ascending order; entries before `freeHead_` are already handed out.
   std::vector<uint32_t> freeIndices_;
+  size_t freeHead_ = 0;
+  uint64_t freeListSteps_ = 0;
   std::vector<uint32_t> pendingFrees_;
   /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
   std::vector<gpu::BindGroup> retiredBindGroups_;
