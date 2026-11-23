@@ -55,6 +55,7 @@
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFillTolerance.h"
+#include "donner/svg/renderer/geode/GeodeFillVariants.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
@@ -9915,6 +9916,95 @@ TEST_F(RendererGeodeTest, OffscreenPassLeavesTheOuterFramesRepeatRecordsAlone) {
                                        "offscreen_repeat_outer_frame",
                                        editor::tests::PixelmatchIdentityParams());
   editor::tests::CompareBitmapToBitmap(innerBitmap, expectedInner, "offscreen_repeat_inner_pass",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// One source path stroked with several styles keeps one resident slot per stroke variant, and a
+// repeat draw of one variant takes a record of that variant's slot. Here the outer frame draws
+// three repeats of variant A and then, inside the still-open frame, an offscreen pass on the same
+// device draws a document state whose new style finds the stroke cache full and replaces another
+// variant of the same path. Variant A is not a candidate, since the open outer frame may still
+// read it; the replaced variant's slot is reset while the outer frame's draws of A are recorded
+// and not yet submitted. Both images must match fresh renders of their states exactly.
+TEST_F(RendererGeodeTest, OffscreenPassReplacingAStrokeVariantLeavesTheOuterFramesRepeatsAlone) {
+  const auto document_source = [](int repeatX, int replacedWidth, bool othersShown) {
+    std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <defs><path id="p" d="M4 6 C20 0 36 14 56 6" fill="none"/></defs>)svg";
+    for (int i = 0; i < 3; ++i) {
+      source += "<use id=\"a" + std::to_string(i) + "\" href=\"#p\" x=\"" +
+                std::to_string(repeatX + i * 4) + "\" y=\"" + std::to_string(i * 6) +
+                "\" stroke=\"#cc2200\" stroke-width=\"2\"/>";
+    }
+    // One instance per other cached style, so the source path's stroke cache is full.
+    for (std::size_t i = 1; othersShown && i < geode::kGeodeStrokeVariantCount; ++i) {
+      const std::size_t width = i == 1 ? replacedWidth : 2 + i;
+      source += "<use id=\"o" + std::to_string(i) + "\" href=\"#p\" y=\"" +
+                std::to_string(20 + 4 * i) + "\" stroke=\"#2255aa\" stroke-width=\"" +
+                std::to_string(width) + "\"/>";
+    }
+    return source + "</svg>";
+  };
+  const std::string repeatsOnly = document_source(0, 3, false);
+  const std::string replacedStyle = document_source(6, 11, true);
+
+  const auto render = [this](const std::string& source) {
+    SVGDocument document = ParseDocumentOrFail(source);
+    RendererGeode renderer = createRenderer();
+    renderer.draw(document);
+    return renderer.takeSnapshot();
+  };
+  const RendererBitmap expectedOuter = render(repeatsOnly);
+  const RendererBitmap expectedInner = render(replacedStyle);
+  ASSERT_THAT(DifferingPixels(expectedInner, expectedOuter, "stroke_variant_offscreen_premise"),
+              testing::Gt(0))
+      << "the two states must differ, or the outer frame cannot show the inner pass's draws";
+
+  SVGDocument document = ParseDocumentOrFail(document_source(0, 3, true));
+  const auto element = [&document](const std::string& id) {
+    std::optional<SVGElement> found = document.querySelector("#" + id);
+    EXPECT_THAT(found, testing::Optional(testing::_)) << id;
+    return found;
+  };
+  RendererGeode outer = createRenderer();
+  outer.draw(document);  // Fills every stroke variant of the source path.
+  for (std::size_t i = 1; i < geode::kGeodeStrokeVariantCount; ++i) {
+    element("o" + std::to_string(i))->setAttribute("display", "none");
+  }
+  outer.draw(document);  // Variant A's repeat records now hold the repeats-only placements.
+  RenderViewport viewport;
+  viewport.size = Vector2d(64.0, 64.0);
+  outer.beginFrame(viewport);
+  RendererDriver(outer).drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+
+  // The inner pass's state: the other styles are drawn again, one of them with a new width that
+  // replaces a cached variant, and variant A's repeats move.
+  for (std::size_t i = 1; i < geode::kGeodeStrokeVariantCount; ++i) {
+    element("o" + std::to_string(i))->removeAttribute("display");
+  }
+  element("o1")->setAttribute("stroke-width", "11");
+  for (int i = 0; i < 3; ++i) {
+    element("a" + std::to_string(i))->setAttribute("x", std::to_string(6 + i * 4));
+  }
+  std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+  ASSERT_THAT(inner, testing::NotNull());
+  inner->draw(document);
+  const RendererBitmap innerBitmap = inner->takeSnapshot();
+  outer.endFrame();
+
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expectedOuter,
+                                       "stroke_variant_offscreen_outer_frame",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(innerBitmap, expectedInner,
+                                       "stroke_variant_offscreen_inner_pass",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // Premise: the inner pass replaced a cached variant rather than drawing the new style from a
+  // per-frame encode, so the next frame of the same state encodes nothing.
+  outer.draw(document);
+  EXPECT_THAT(outer.lastFrameTimings().counters.pathEncodes, testing::Eq(0u))
+      << "the new style must have taken a cached stroke variant in the inner pass";
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expectedInner,
+                                       "stroke_variant_offscreen_next_frame",
                                        editor::tests::PixelmatchIdentityParams());
 }
 

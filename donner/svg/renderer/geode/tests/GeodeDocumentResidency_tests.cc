@@ -55,6 +55,7 @@
 namespace donner::svg {
 namespace {
 
+using testing::ElementsAre;
 using testing::Eq;
 using testing::Ge;
 using testing::Gt;
@@ -238,6 +239,25 @@ size_t RepeatRecordsOf(SVGDocument& document) {
     });
   }
   return records;
+}
+
+/// Persistent repeat records held by each solid stroke slot that holds any, on every device, in
+/// \p document, in ascending order. @param document Document to inspect.
+std::vector<size_t> StrokeRepeatRecordsPerSlot(SVGDocument& document) {
+  std::vector<size_t> counts;
+  for (auto&& [entity, residence] :
+       document.registry().view<geode::GeodeResidentPathComponent>().each()) {
+    residence.devices.forEach([&](geode::GeodeResidentPathSlots& slots) {
+      for (const std::unique_ptr<geode::GeodeResidentStrokeSlots>& stroke : slots.strokeSlots) {
+        if (stroke && stroke->solid.repeatRecords &&
+            !stroke->solid.repeatRecords->occurrences.empty()) {
+          counts.push_back(stroke->solid.repeatRecords->occurrences.size());
+        }
+      }
+    });
+  }
+  std::sort(counts.begin(), counts.end());
+  return counts;
 }
 
 /// Counts the repeat records held by every resident-path component the registry destroys.
@@ -806,6 +826,28 @@ TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsAreReplacedWhenTheContentC
       .disconnect<&DestroyedRepeatRecords::onDestroy>(destroyed);
   EXPECT_THAT(destroyed.records, Eq(kMarkerRepeats)) << "the old records go with the old residence";
   EXPECT_THAT(RepeatRecordsOf(document), Eq(kMarkerRepeats)) << "and a fresh set replaces them";
+}
+
+TEST_F(GeodeDocumentResidencyTest, EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  // Two styles of one path, drawn interleaved: style A three times, style B twice. Each style's
+  // repeats are counted against its own variant's slot, not against whichever slot drew last.
+  SVGDocument document = ParseShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+      <defs><path id="p" d="M20 40 C60 0 120 80 180 30" fill="none"/></defs>
+      <use href="#p" stroke="#000" stroke-width="2"/>
+      <use href="#p" y="40" stroke="#c00" stroke-width="6"/>
+      <use href="#p" y="80" stroke="#0a0" stroke-width="2"/>
+      <use href="#p" y="120" stroke="#00c" stroke-width="6"/>
+      <use href="#p" y="160" stroke="#0cc" stroke-width="2"/>
+    </svg>)");
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  renderer.draw(document);
+  EXPECT_THAT(StrokeRepeatRecordsPerSlot(document), ElementsAre(1u, 2u))
+      << "style B keeps one repeat record and style A two, each on its own variant's slot";
 }
 
 TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsStopAtTheSlotLimit) {

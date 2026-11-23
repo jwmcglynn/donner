@@ -2224,6 +2224,40 @@ TEST_F(GeodePerfTest, UseInstancesWithDistinctStrokeStyles_NoDirtyPath_ZeroEncod
       << "An unchanged frame built bind groups for resident stroke outlines.";
 }
 
+// Two stroke styles of one source path, each drawn by several `<use>` instances. Each style
+// keeps its own stroke variant and resident slot, and every instance after a style's first is a
+// repeat of that variant's slot, so an unchanged frame must also write no repeat record and build
+// no bind group.
+constexpr std::string_view kRepeatedStrokeStylesSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+  <defs>
+    <path id="p" d="M10,30 L40,10 C60,0 80,20 70,40" fill="none"/>
+  </defs>
+  <use href="#p" stroke="#000" stroke-width="4"/>
+  <use href="#p" x="60" stroke="#c00" stroke-width="4"/>
+  <use href="#p" y="50" stroke="#00c" stroke-width="7" stroke-linejoin="round"/>
+  <use href="#p" x="120" stroke="#0a0" stroke-width="4"/>
+  <use href="#p" x="60" y="50" stroke="#c0c" stroke-width="7" stroke-linejoin="round"/>
+  <use href="#p" x="120" y="50" stroke="#0cc" stroke-width="7" stroke-linejoin="round"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, UseStrokeStylesRepeated_SecondFrameIsSteadyState) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kRepeatedStrokeStylesSvg, device);
+  ASSERT_FALSE(frame.bitmap.empty()) << "renderer produced no snapshot";
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
+
+  EXPECT_EQ(frame.counters.pathEncodes, 0u);
+  EXPECT_EQ(frame.counters.bufferWrites, 0u)
+      << "repeated instances of each stroke style must keep their records across frames";
+  EXPECT_EQ(frame.counters.bufferWriteBytes, 0u);
+  EXPECT_EQ(frame.counters.bindgroupCreates, 0u)
+      << "repeated instances of each stroke style must not build a bind group per draw";
+}
+
 /// More stroke styles on one source path than the stroke cache keeps per entity. The styles
 /// past the cache draw from a per-frame encode, and must not evict the cached ones, so the
 /// steady state re-encodes exactly the overflow and nothing else.

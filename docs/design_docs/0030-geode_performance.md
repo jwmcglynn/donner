@@ -220,7 +220,7 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     hold the steady state the same way, each stroke variant of a path keeping its own records:
     `image_external_svg_par` and `image_external_svg_viewbox`, which draw one external SVG's paths
     twice per frame, clear here, and with 8.1 so do `poker_chips`, `stroking_complex`, and
-    `nested_svg_aspectratio`.
+    `nested_svg_aspectratio` (`UseStrokeStylesRepeated_SecondFrameIsSteadyState`).
   - [ ] 8.3: Isolated-layer composites. The composite blit rewrites its uniform and creates a bind
     group every frame (`GeodeTextureEncoder::drawTexturedQuad`). Filter results reach their parent
     through the same blit. Clears `Edzample_Anim3`, `filter_displacement_map`, `filter_drop_shadow`,
