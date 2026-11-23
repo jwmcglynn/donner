@@ -3269,10 +3269,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * only not free.
    *
    * A sequence keeps at most \ref kMaxEntries entries; composites past that in one frame allocate
-   * their uniform and bind group for that frame only. The surface budget does not bound this on its
-   * own, because a frame split by a memory-limited filter budget returns the surfaces of the layers
-   * it already composited and admits as many again
-   * (`LayerCompositeRetainedStateIsCappedAcrossFrameSplits`). Entries the frame did not reach are
+   * their uniform and bind group for that frame only. The surface budget does not bound how many
+   * composites a frame draws: sibling layers take turns with one surface, and a frame split by a
+   * memory-limited filter budget returns the surfaces of the layers it already composited
+   * (`SiblingLayersPastTheSurfaceBudgetAreAllAdmitted`,
+   * `LayerCompositeRetainedStateIsCappedAcrossFrameSplits`). Entries the frame did not reach are
    * dropped once it is submitted, and every entry is released when the texture pool is trimmed to
    * nothing (`LayerCompositeEntriesFollowTheLastFrame`). Entries release their views before any
    * texture they view is destroyed: the pool reports each texture to \ref releaseRetainedViewsOf
@@ -3285,9 +3286,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * it refuses any use of a view whose texture is gone in any case.
    */
   struct RetainedCompositeSequence {
-    /// Most entries one sequence keeps. Set to the most surfaces a frame's surface budget admits at
-    /// a time, which bounds the composites of one frame; the image blit sequence uses the same cap
-    /// for its kept-texture blits, which no surface budget bounds.
+    /// Most entries one sequence keeps; composites past it in a frame draw with per-frame state.
+    /// The image blit sequence uses the same cap for its kept-texture blits.
     static constexpr size_t kMaxEntries = RendererSurfaceBudget::kMaximumSurfaces;
 
     struct Entry {
@@ -9401,17 +9401,13 @@ void RendererGeode::popClip() {
   impl_->flushPendingBatch();
 
   if (!impl_->clipStack.empty()) {
-    // Defer release of the mask textures to endFrame - the main
-    // encoder that was just drawing under this clip may have recorded
-    // samples from the resolved mask texture into the frame encoder, and
-    // recycling mid-frame could hand the texture to a later acquire
-    // before the submit.
+    // Every draw under this clip is recorded, so a later clip of this frame may take its masks.
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
     for (auto& release : entry.maskLayerTextures) {
       if (impl_->frameRecordingAbandoned) {
         impl_->retainTextureAfterAbandonedFrame(std::move(release.texture), release.desc);
       } else {
-        impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+        impl_->releaseTextureWithinFrame(std::move(release.texture), release.desc);
       }
     }
     entry.maskLayerTextures.clear();
@@ -9564,11 +9560,10 @@ void RendererGeode::popIsolatedLayer() {
       impl_->encoder->blitFullTargetBlended(
           frame.layerTexture, snapshotHandle, static_cast<uint32_t>(frame.blendMode), frame.opacity,
           impl_->layerComposites.binding(frame.compositeIndex, frame.layerTexture));
-      // Defer release: `blitFullTargetBlended` recorded samples from
-      // both `frame.layerTexture` and `snapshot` into the shared
-      // one of the frame's command buffers; they must stay alive until it
-      // is submitted at `endFrame`.
-      impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      // The blend just recorded is the layer's last reader, so a later surface of this frame may
+      // take the layer. The snapshot waits for the frame's submission: its descriptor admits queue
+      // uploads, which would run ahead of the recorded blend.
+      impl_->releaseTextureWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
@@ -9589,8 +9584,9 @@ void RendererGeode::popIsolatedLayer() {
   impl_->encoder->blitFullTarget(
       frame.layerTexture, frame.opacity,
       impl_->layerComposites.binding(frame.compositeIndex, frame.layerTexture));
-  // Same deferred-release rationale as the blend-mode branch above.
-  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  // The composite just recorded is the layer's last reader, so a later surface of this frame may
+  // take the layer: a frame of many sibling layers holds one target-sized texture, not one each.
+  impl_->releaseTextureWithinFrame(std::move(frame.layerTexture), frame.layerDesc);
 }
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
@@ -9919,11 +9915,10 @@ void RendererGeode::popMask() {
     popClip();
   }
 
-  // Defer release to endFrame - `blitFullTargetMasked` recorded
-  // samples from both `contentTexture` and `maskTexture` into the
-  // frame encoder.
-  impl_->releaseTextureAtFrameEnd(std::move(frame.maskTexture), frame.maskDesc);
-  impl_->releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
+  // The composite just recorded is the last reader of both, so a later surface of this frame may
+  // take them.
+  impl_->releaseTextureWithinFrame(std::move(frame.maskTexture), frame.maskDesc);
+  impl_->releaseTextureWithinFrame(std::move(frame.contentTexture), frame.contentDesc);
 }
 
 bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {

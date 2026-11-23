@@ -23,9 +23,11 @@
 #include <cstdio>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
@@ -1235,6 +1237,131 @@ TEST_F(GeodePerfTest, LayerComposites_UnchangedFrameWritesAndCreatesNothing) {
            "last frame.";
   }
 }
+
+/// The kind of canvas-sized offscreen surface a `SiblingSurfacesSvg` scene repeats.
+enum class SiblingSurfaceKind {
+  Layers,     ///< Isolated layers: opacity groups, every sixth a `mix-blend-mode` composite.
+  Masks,      ///< `<mask>` composites, two surfaces each.
+  ClipPaths,  ///< Path clips, each filled into a clip mask.
+};
+
+std::ostream& operator<<(std::ostream& os, SiblingSurfaceKind kind) {
+  switch (kind) {
+    case SiblingSurfaceKind::Layers: return os << "Layers";
+    case SiblingSurfaceKind::Masks: return os << "Masks";
+    case SiblingSurfaceKind::ClipPaths: return os << "ClipPaths";
+  }
+  return os;
+}
+
+/// Twenty-four siblings of \p kind on a 400x200 view box, each drawing an overlapping circle, so
+/// a frame draws twenty-four offscreen surfaces of the canvas's size one after another.
+std::string SiblingSurfacesSvg(SiblingSurfaceKind kind) {
+  std::string source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200">
+  <mask id="m"><rect width="400" height="200" fill="#b3b3b3"/></mask>
+  <clipPath id="c"><circle cx="200" cy="100" r="95"/></clipPath>
+  <rect width="400" height="200" fill="#204080"/>
+)SVG";
+  constexpr std::array<std::string_view, 4> kFills = {"red", "lime", "yellow", "white"};
+  for (int i = 0; i < 24; ++i) {
+    std::string group;
+    switch (kind) {
+      case SiblingSurfaceKind::Layers:
+        group = i % 6 == 5 ? R"(<g style="mix-blend-mode: multiply">)" : R"(<g opacity="0.7">)";
+        break;
+      case SiblingSurfaceKind::Masks: group = "<g mask=\"url(#m)\">"; break;
+      case SiblingSurfaceKind::ClipPaths: group = "<g clip-path=\"url(#c)\">"; break;
+    }
+    source += group + "<circle cx=\"" + std::to_string(20 + (i % 12) * 30) + "\" cy=\"" +
+              std::to_string(50 + (i / 12) * 100) + "\" r=\"22\" fill=\"" +
+              std::string(kFills[i % kFills.size()]) + "\"/></g>\n";
+  }
+  return source + "</svg>";
+}
+
+struct SiblingSurfacesCase {
+  SiblingSurfaceKind kind;
+  int width;
+  int height;
+};
+
+void PrintTo(const SiblingSurfacesCase& c, std::ostream* os) {
+  *os << c.kind << " at " << c.width << "x" << c.height;
+}
+
+class GeodePerfSiblingSurfacesTest : public GeodePerfTest,
+                                     public ::testing::WithParamInterface<SiblingSurfacesCase> {};
+
+/// An unchanged frame of many sibling offscreen surfaces creates no texture and no bind group at
+/// any canvas size, because the siblings take turns with the same few surfaces. A frame that held
+/// one surface per sibling until it ended would return more textures of one size than the texture
+/// pool keeps (sixteen, or as many as fit a quarter of its budget, 16 MiB at its 64 MiB floor),
+/// from 640x320 on for these scenes, and would recreate the surplus, and rebuild the bind groups
+/// that name it, on every frame.
+TEST_P(GeodePerfSiblingSurfacesTest, UnchangedFrameCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+  const SiblingSurfacesCase& param = GetParam();
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(SiblingSurfacesSvg(param.kind), sink);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(param.width, param.height);
+
+  // Premise: at this size, a frame that keeps one surface per sibling is not steady. Each renderer
+  // starts from an empty pool at its starting budget, so earlier tests on the shared device cannot
+  // change what the pool keeps.
+  {
+    RendererGeode singleUse(device);
+    singleUse.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+    singleUse.setWithinFrameTextureReuseForTesting(false);
+    singleUse.draw(document);
+    singleUse.draw(document);
+    ASSERT_THAT(singleUse.lastFrameTimings().counters.textureCreates, testing::Gt(0u))
+        << "one surface per sibling no longer outgrows the pool at this size, so this case no "
+           "longer reaches the per-size retention limit it guards";
+  }
+
+  RendererGeode renderer(device);
+  renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  renderer.draw(document);
+  ASSERT_THAT(test::CountNonTransparentPixels(renderer.takeSnapshot()), testing::Gt(0u));
+
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(::testing::Message() << "frame " << frame);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+    EXPECT_THAT(c.pathEncodes, testing::Eq(0u));
+    EXPECT_THAT(c.textureCreates, testing::Eq(0u))
+        << "the surfaces of an unchanged frame must come back from the pool";
+    EXPECT_THAT(c.bufferWrites, testing::Eq(0u));
+    EXPECT_THAT(c.bindgroupCreates, testing::Eq(0u))
+        << "each draw must find the bind group of the surface it read last frame";
+  }
+}
+
+std::vector<SiblingSurfacesCase> SiblingSurfacesCases() {
+  std::vector<SiblingSurfacesCase> cases;
+  for (const SiblingSurfaceKind kind :
+       {SiblingSurfaceKind::Layers, SiblingSurfaceKind::Masks, SiblingSurfaceKind::ClipPaths}) {
+    for (const int longEdge : {640, 800, 1024, 2048}) {
+      cases.push_back({kind, longEdge, longEdge / 2});
+    }
+  }
+  return cases;
+}
+
+INSTANTIATE_TEST_SUITE_P(AboveNaturalSize, GeodePerfSiblingSurfacesTest,
+                         ::testing::ValuesIn(SiblingSurfacesCases()),
+                         [](const ::testing::TestParamInfo<SiblingSurfacesCase>& info) {
+                           std::ostringstream name;
+                           name << info.param.kind << "_" << info.param.width << "x"
+                                << info.param.height;
+                           return name.str();
+                         });
 
 /// Three patterns with tiles of one size: two fill rects and the third strokes a rect. The three
 /// tiles share one pool bucket, so each keeps its texture only because the pool hands a bucket's
