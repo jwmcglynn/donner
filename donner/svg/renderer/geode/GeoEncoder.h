@@ -434,6 +434,24 @@ public:
   void fillPathIntoMask(const Path& path, FillRule rule,
                         const EncodedPath* precomputedEncoded = nullptr);
 
+  /**
+   * Fill `encoded` into the currently open mask pass from `slot`, which keeps the geometry, the
+   * mask uniform, and the mask bind group across frames. An unchanged frame writes nothing and
+   * creates no bind group: the uniform is rewritten only when its bytes change, and the bind group
+   * is rebuilt only when the nested clip mask it binds is a different view.
+   *
+   * A slot carries one draw's uniform, so a slot an open frame on this device has already drawn
+   * (the same clip built twice in one frame, or an outer frame an offscreen pass runs inside)
+   * draws this fill through the per-frame arena instead, as does a slot whose upload fails.
+   *
+   * @param slot Resident slot of this clip shape on this encoder's device. Its slab must be set.
+   * @param encoded Cached encode of the clip shape at the current transform's tolerance.
+   * @param rule Fill rule the shape was encoded with.
+   * @param frameId Device frame generation of the frame recording this fill.
+   */
+  void fillPathIntoMaskResident(GeodeResidentSlot& slot, const EncodedPath& encoded, FillRule rule,
+                                uint64_t frameId);
+
   /// Close the mask render pass opened by `beginMaskPass`.
   void endMaskPass();
 
@@ -679,10 +697,11 @@ public:
    * it actually changed (camera/color move), so a static document's
    * steady-state frame writes ~zero bytes and creates zero bind groups.
    *
-   * Residency is taken ONLY for the fast, cacheable case: no active clip
-   * mask, no clip polygon, no open mask pass. When any of those hold the
-   * call transparently falls back to the per-frame arena path (a fresh
-   * per-draw bind group) so clipped / masked draws stay bit-exact.
+   * A draw under an active path-clip mask stays resident: its uniform
+   * carries the clip flag exactly as the arena draw's does, and the cached
+   * bind group binds the mask's view, rebuilt only when the draw is clipped
+   * by a different view. Under a clip polygon or an open mask pass the call
+   * falls back to the per-frame arena path (a fresh per-draw bind group).
    *
    * @param slot Persistent residence for this entity's fill or stroke
    *   encode. Must outlive the frame's submit (it does: the ECS component
@@ -923,10 +942,11 @@ public:
    *
    * The slot's combined buffer holds the encoded band/curve/grid data and
    * the 704-byte gradient uniform block; on an unchanged frame the draw
-   * rewrites nothing and reuses the cached 11-binding bind group. Falls
-   * back to the per-frame arena path internally when a clip mask, clip
-   * polygon, or mask pass is active (the cached bind group binds dummy
-   * clip-mask resources, which is only stable when no clip is active).
+   * rewrites nothing and reuses the cached 11-binding bind group, which
+   * binds the active path-clip mask's view (or the identity dummy) and is
+   * rebuilt when the draw is clipped by a different view. Falls back to the
+   * per-frame arena path internally when a clip polygon or mask pass is
+   * active.
    *
    * @param slot Resident gradient slot for this entity's fill.
    * @param encoded Precomputed encode from the cached-path encode cache.
@@ -988,7 +1008,8 @@ public:
    * @ref fillPathResident: the geometry is uploaded once, the slot's uniform is rewritten only
    * when its bytes change, and the cached bind group is rebuilt only when the bound tile view
    * changes. Pixels match @ref fillPathPattern. Falls back to the per-frame arena path under an
-   * active clip mask, clip polygon or mask pass, or for a second draw of the slot in one frame.
+   * active clip polygon or mask pass, or for a second draw of the slot in one frame; under a
+   * path-clip mask it stays resident like @ref fillPathResident.
    *
    * @param slot Persistent residence for this entity's fill encode.
    * @param encoded Cached encode (stable across frames).

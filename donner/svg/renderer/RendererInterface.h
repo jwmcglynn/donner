@@ -1061,6 +1061,11 @@ struct ResolvedClip {
   /// be represented, keep the enclosing polygon and clip to this rectangle's device-space bounds,
   /// instead of replacing the enclosing polygon with this one.
   bool boundsFallbackWhenStacked = false;
+  /// Entity whose computed clip paths produced \ref clipPaths, set by the driver. Backends that
+  /// cache per-clip geometry key it off this entity and index into \ref clipPaths, and drop the
+  /// cache when the entity's computed clip paths change. A null handle (the default) means
+  /// nothing may be cached.
+  EntityHandle sourceEntity;
 
   /// Default constructor.
   ResolvedClip() = default;
@@ -1076,7 +1081,8 @@ struct ResolvedClip {
         clipPathUnitsTransform(other.clipPathUnitsTransform),
         mask(other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
                         : std::nullopt),
-        boundsFallbackWhenStacked(other.boundsFallbackWhenStacked) {}
+        boundsFallbackWhenStacked(other.boundsFallbackWhenStacked),
+        sourceEntity(other.sourceEntity) {}
 
   /// Deep-copy assignment operator.
   ResolvedClip& operator=(const ResolvedClip& other) {
@@ -1087,6 +1093,7 @@ struct ResolvedClip {
       mask = other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
                         : std::nullopt;
       boundsFallbackWhenStacked = other.boundsFallbackWhenStacked;
+      sourceEntity = other.sourceEntity;
     }
     return *this;
   }

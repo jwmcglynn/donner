@@ -704,6 +704,12 @@ public:
   /// Number of pattern tile texture views this renderer keeps between frames.
   [[nodiscard]] size_t patternTileViewCountForTesting() const;
 
+  /// Number of entities of \p document holding cached clip geometry.
+  [[nodiscard]] size_t clipGeometryCacheCountForTesting(SVGDocument& document) const;
+
+  /// Number of clip-mask texture views this renderer keeps between frames.
+  [[nodiscard]] size_t clipMaskViewCountForTesting() const;
+
   /**
    * Captures the current resolved render target as a directly sampleable
    * GPU runtime texture.

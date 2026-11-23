@@ -347,6 +347,32 @@ TEST(RendererSnapshotTests, ImageSourceEntityIsClearedBeforeReplay) {
       << "a replayed drawImage must not carry a handle into the live document registry";
 }
 
+TEST(RendererSnapshotTests, ClipSourceEntityIsClearedBeforeReplay) {
+  SVGDocument document = MakeDocument(R"svg(
+    <clipPath id="c"><circle cx="8" cy="8" r="6"/></clipPath>
+    <rect width="16" height="16" fill="red" clip-path="url(#c)"/>
+  )svg");
+
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RendererDriver driver(renderer);
+
+  RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+  EXPECT_THAT(snapshot.liveRegistryReferenceCountForTesting(document.registry()), testing::Eq(0u))
+      << "a recorded clip must not keep a handle into the live document registry";
+
+  std::vector<ResolvedClip> replayedClips;
+  EXPECT_CALL(renderer, pushClip(_)).WillRepeatedly([&](const ResolvedClip& clip) {
+    replayedClips.push_back(clip);
+  });
+  driver.draw(snapshot);
+
+  ASSERT_THAT(replayedClips, testing::SizeIs(1));
+  EXPECT_THAT(replayedClips.front().clipPaths, testing::SizeIs(1))
+      << "Premise: the replayed clip carries its path";
+  EXPECT_THAT(replayedClips.front().sourceEntity.entity(), testing::Eq(Entity(entt::null)))
+      << "a replayed pushClip must not carry a handle into the live document registry";
+}
+
 TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
   DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
   using components::DocumentResourceFamilyBudget;

@@ -34,6 +34,7 @@
 #include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -1551,6 +1552,78 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
       plan.localPlan};
 }
 
+/// Views of pooled render-target textures that outlive the frame that made them, so a cached bind
+/// group can keep naming the view of a texture the pool hands back each frame.
+///
+/// A view is keyed by its texture's slot and generation. It lives while the owning renderer's
+/// frames keep using its texture and is dropped at the start of the second frame that does not,
+/// after the frame that last bound it has been submitted. The textures themselves go back to the
+/// pool at every frame end; the renderer drops a texture's view when the pool, or the device's
+/// handle retirement, reports the texture destroyed (\ref forget), and drops every view when a
+/// frame ends without submitting. A view owns no memory of its own, so the entries are bounded by
+/// the textures one frame uses, which the frame's surface budget bounds, and charged to no byte
+/// budget.
+class RetainedTextureViews {
+public:
+  /// @param label Label of the views created.
+  explicit RetainedTextureViews(const char* label) : label_(label) {}
+
+  /// The view of \p texture, created on first use and kept for this frame and the next.
+  /// @param runtime Device that owns \p texture.
+  /// @param texture Texture to view.
+  /// @return The view, or null when the runtime refuses one.
+  const gpu::TextureView* view(gpu::Device& runtime, const gpu::Texture& texture) {
+    const Key key{texture.slotIndex(), texture.generation()};
+    Entry& entry = views_[key];
+    if (!entry.view.isValid()) {
+      gpu::Result<gpu::TextureView> created =
+          runtime.createTextureView(texture, gpu::TextureViewDescriptor{label_});
+      if (created.hasError()) {
+        views_.erase(key);
+        return nullptr;
+      }
+      entry.view = std::move(created).result();
+    }
+    entry.lastUsedFrame = frame_;
+    return &entry.view;
+  }
+
+  /// Starts a frame: drops the views the finished frame did not use.
+  void beginFrame() {
+    ++frame_;
+    std::erase_if(views_,
+                  [&](const auto& entry) { return entry.second.lastUsedFrame + 1 < frame_; });
+  }
+
+  /// Drops the view of \p texture, if one is kept. Called when the texture is about to be
+  /// destroyed, so its view goes with it instead of lingering until the owner's frames stop using
+  /// it.
+  /// @param texture Runtime identity of the texture.
+  void forget(const gpu::ResourceIdentity& texture) {
+    views_.erase(Key{texture.slotIndex, texture.generation});
+  }
+
+  /// Drops every view.
+  void clear() { views_.clear(); }
+
+  /// Number of views kept.
+  std::size_t size() const { return views_.size(); }
+
+private:
+  using Key = std::pair<uint32_t, uint32_t>;
+  struct Entry {
+    gpu::TextureView view;       //!< View of the texture.
+    uint64_t lastUsedFrame = 0;  //!< Last frame that used the texture.
+  };
+  const char* label_;
+  /// Views by texture slot and generation. A map, so a view's address stays valid until its entry
+  /// is dropped at a frame start.
+  std::map<Key, Entry> views_;
+  /// The owning renderer's own frame count. Every renderer of a device advances the device's frame
+  /// generation, so this, not that, measures how many of the owner's frames a view went unused.
+  uint64_t frame_ = 0;
+};
+
 /// The GPU residence one device keeps for a document: its geometry slab, record slab and glyph
 /// cache. Declared in destruction order last-first, so cached glyphs return their slab ranges
 /// before the slabs go.
@@ -1559,6 +1632,69 @@ struct DocumentDeviceResidency {
   std::shared_ptr<geode::GeodeRecordSlab> records;     //!< Painter-ordered instance records.
   std::shared_ptr<geode::GeodeGlyphCache> glyphs;      //!< Resident glyph outlines.
 };
+
+/**
+ * Cached clip-mask geometry of one clipped element, kept on the entity whose
+ * `ComputedClipPathsComponent` holds its clip paths (\ref ResolvedClip::sourceEntity).
+ *
+ * Each clip shape, by its index in the resolved clip, keeps its encode at one device-derived
+ * tolerance, and per device a resident slot holding that encode's geometry, its mask uniform and
+ * its mask bind group, so an unchanged frame fills the clip mask without encoding, uploading or
+ * creating a bind group. Each draw compares a shape's path and device-derived tolerance with
+ * those of its cached encode and encodes again on any difference, and a clip with a different
+ * shape count drops every shape. The fill rule (the referencing element's clip-rule) and the
+ * transform are not part of the encode; they reach the GPU through the mask uniform, which is
+ * compared and rewritten every draw. The component is removed when the entity's computed clip
+ * paths are created, replaced or destroyed, so its memory and budget charges go with its clip.
+ *
+ * Only draws from the live document reach it: a render snapshot records clips without their
+ * source entity, so a replayed frame keeps nothing here.
+ *
+ * Bounded by the document: one entry per clip shape per clipped element. Encodes and their path
+ * copies are charged to the document's cache-byte budget and resident geometry to its
+ * resident-byte budget; a shape either budget refuses is filled from a per-frame encode or the
+ * per-frame arena.
+ */
+struct GeodeClipPathCacheComponent {
+  /// One clip shape's encode.
+  struct Shape {
+    std::optional<geode::EncodedPath> encode;  //!< Encode at \ref tolerance, if cached.
+    /// Tolerance of \ref encode; zero for a path without curves, whose encode is the same at
+    /// every scale.
+    double tolerance = 0.0;
+    /// The path \ref encode was built from. A draw of any other path, even one with the same
+    /// command and point counts, is encoded again.
+    Path path;
+    /// Identity of \ref encode, unique within the component; a slot uploaded from another
+    /// identity is stale.
+    std::uint64_t generation = 0;
+    geode::GeodeGeometryCacheReservation reservation;  //!< Charge for \ref encode.
+  };
+
+  /// One clip shape's resident mask fill on one device.
+  struct MaskSlot {
+    geode::GeodeResidentSlot slot;  //!< Geometry, mask uniform and mask bind group.
+    std::uint64_t generation = 0;   //!< \ref Shape::generation \ref slot was uploaded from.
+  };
+
+  /// Resident mask fills of every shape on one device, by shape index.
+  struct DeviceSlots {
+    std::vector<MaskSlot> shapes;  //!< One per clip shape.
+  };
+
+  std::vector<Shape> shapes;                   //!< Encodes, by clip shape index.
+  std::uint64_t encodeClock = 0;               //!< Last \ref Shape::generation handed out.
+  geode::GeodePerDevice<DeviceSlots> devices;  //!< Resident mask fills per drawing device.
+};
+// Host storage per clip shape: one shape record, and one slot record per drawing device.
+static_assert(sizeof(GeodeClipPathCacheComponent::Shape) <= 576,
+              "a clip shape's host record grew past its stated bound");
+static_assert(sizeof(GeodeClipPathCacheComponent::MaskSlot) <= 576,
+              "a clip mask slot's host record grew past its stated bound");
+static_assert(!std::is_copy_constructible_v<GeodeClipPathCacheComponent> &&
+                  std::is_nothrow_move_constructible_v<GeodeClipPathCacheComponent> &&
+                  std::is_nothrow_move_assignable_v<GeodeClipPathCacheComponent>,
+              "the registry moves components when it compacts, and a component owns its slots");
 
 /// Per-entity component types that keep state per device, and the sweep that drops gone devices
 /// from all of them.
@@ -1578,9 +1714,11 @@ private:
 
 /// Every per-entity component that keeps state per device in a `geode::GeodePerDevice`. A new one
 /// must be listed here, or a gone device's slots on it would keep that device's slabs alive.
-using DocumentPerDeviceComponents = PerDeviceComponents<
-    geode::GeodeResidentPathComponent, geode::GeodeTextInstanceResidencyComponent,
-    geode::GeodeTextShapeResidencyComponent, geode::GeodeResidentImageComponent>;
+using DocumentPerDeviceComponents =
+    PerDeviceComponents<geode::GeodeResidentPathComponent,
+                        geode::GeodeTextInstanceResidencyComponent,
+                        geode::GeodeTextShapeResidencyComponent, geode::GeodeResidentImageComponent,
+                        GeodeClipPathCacheComponent>;
 
 /**
  * Drops, from every entity of \p registry, the residence slots of devices that are gone.
@@ -2116,12 +2254,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::deque<std::unique_ptr<gpu::CommandEncoder>> frameGpuEncoders;
   gpu::CommandEncoder* frameGpuEncoder = nullptr;
 
-  // Runtime handles naming render targets this frame's encoders draw into or
-  // sample. The textures themselves belong to the recycling pool or to the
-  // embedding host; these handles only name them, so they are dropped at the
-  // frame boundary, before a recycled texture could be reached through a stale
-  // handle.
-  std::deque<gpu::TextureView> frameImportedTextureViews;
   std::unordered_set<std::shared_ptr<RendererGeodeTextureSnapshot::Backing>> frameSnapshotBackings;
   /// Consumer-local borrowed registrations; the retained backing owns the source texture.
   std::unordered_map<const RendererGeodeTextureSnapshot::Backing*, gpu::Texture>
@@ -2145,15 +2277,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return &found->second;
   }
 
-  /// Opens a runtime view over an already-named texture, valid for the rest of the frame. Views
+  /// The view of clip-mask texture \p texture, kept across frames (see \ref clipMaskViews). Views
   /// cover the whole texture, so this addresses exactly the texels any other full-texture view of
   /// the same texture would.
-  const gpu::TextureView& importTextureView(const gpu::Texture& texture) {
-    gpu::Result<gpu::TextureView> view = device->runtimeDevice().createTextureView(
-        texture, gpu::TextureViewDescriptor{"RendererGeodeImportedView"});
-    UTILS_RELEASE_ASSERT_MSG(view.hasResult(), "Failed to open a view of a render target");
-    frameImportedTextureViews.push_back(std::move(view).result());
-    return frameImportedTextureViews.back();
+  /// @return The view, or null when the runtime refuses one.
+  const gpu::TextureView* clipMaskView(const gpu::Texture& texture) {
+    return clipMaskViews.view(device->runtimeDevice(), texture);
   }
 
   /// The texture a finished filter execution composites, or null when it produced nothing.
@@ -2366,7 +2495,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameGpuEncoder = nullptr;
     frameCommandBuffers.clear();
     frameRecordingOpen = false;
-    frameImportedTextureViews.clear();
     frameSnapshotImports.clear();
     frameSnapshotBackings.clear();
     if (device) {
@@ -2569,46 +2697,27 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                 "A copyable pattern stack frame would let vector growth copy its tile handle.");
   std::vector<PatternStackFrame> patternStack;
 
-  /// A view of a pattern tile texture, kept while frames keep drawing into that texture.
-  struct PatternTileView {
-    gpu::TextureView view;       //!< View of the tile texture.
-    uint64_t lastUsedFrame = 0;  //!< Last \ref patternTileFrame that drew into the texture.
-  };
-  /// Views of pattern tile textures by texture slot and generation. A view lives while this
-  /// renderer's frames keep drawing into its texture and is dropped at the start of the second
-  /// frame that does not, after the frame that last bound it has been submitted. The textures
-  /// themselves go back to the pool at every frame end; a view of a texture the pool has since
-  /// destroyed is stale and is never bound again, because a tile's view is looked up by the
-  /// texture it draws into.
-  std::map<std::pair<uint32_t, uint32_t>, PatternTileView> patternTileViews;
-  /// This renderer's own frame count. Unlike \ref currentFrameIndex, which every renderer of the
-  /// device advances, it measures how many frames of this renderer a view went unused.
-  uint64_t patternTileFrame = 0;
+  /// Views of pattern tile textures, so a resident pattern fill's cached bind group can keep naming
+  /// the view of the tile it samples.
+  RetainedTextureViews patternTileViews{"RendererGeodePatternTileView"};
+  /// Views of path-clip mask textures, so a resident draw under a clip, and a clip shape's
+  /// resident mask fill intersected with a nested clip, keep their cached bind groups across
+  /// frames. The pool hands a clip mask the texture it had the frame before, so an unchanged
+  /// frame looks up the same view.
+  RetainedTextureViews clipMaskViews{"RendererGeodeClipMaskView"};
 
   /// A view of pattern tile \p texture that outlives this frame, created on first use.
   /// @return The view, or null when the runtime refuses one.
   gpu::TextureViewRef patternTileView(const gpu::Texture& texture) {
-    PatternTileView& entry = patternTileViews[{texture.slotIndex(), texture.generation()}];
-    if (!entry.view.isValid()) {
-      gpu::Result<gpu::TextureView> created = device->runtimeDevice().createTextureView(
-          texture, gpu::TextureViewDescriptor{"RendererGeodePatternTileView"});
-      if (created.hasError()) {
-        patternTileViews.erase({texture.slotIndex(), texture.generation()});
-        return gpu::TextureViewRef();
-      }
-      entry.view = std::move(created).result();
-    }
-    entry.lastUsedFrame = patternTileFrame;
-    return gpu::TextureViewRef(entry.view);
+    const gpu::TextureView* view = patternTileViews.view(device->runtimeDevice(), texture);
+    return view != nullptr ? gpu::TextureViewRef(*view) : gpu::TextureViewRef();
   }
 
-  /// Start a frame's pattern tile bookkeeping: views the finished frame did not draw into are
+  /// Start a frame's bookkeeping of retained views: views the finished frame did not use are
   /// dropped.
-  void beginFramePatternTiles() {
-    ++patternTileFrame;
-    std::erase_if(patternTileViews, [&](const auto& entry) {
-      return entry.second.lastUsedFrame + 1 < patternTileFrame;
-    });
+  void beginFrameRetainedViews() {
+    patternTileViews.beginFrame();
+    clipMaskViews.beginFrame();
   }
 
   void promotePatternTile(PatternStackFrame& frame, bool forStroke,
@@ -3238,7 +3347,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
 
     /// Release the views and bind group of every entry whose bind group names a clip mask view.
-    /// That view belongs to the frame that drew the composite, and a new frame supplies a new one.
+    /// The renderer keeps clip-mask views across frames, but the next frame may clip the composite
+    /// by another one, and these bindings are not yet keyed by the view they name, so they are
+    /// rebuilt each frame.
     void releaseClipMaskBindings() {
       for (Entry& entry : entries) {
         if (entry.binding.bindsClipMask()) {
@@ -3322,6 +3433,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     layerComposites.releaseViewsOf(texture);
     filterOutputComposites.releaseViewsOf(texture);
     imageBlits.releaseViewsOf(texture);
+    patternTileViews.forget(texture);
+    clipMaskViews.forget(texture);
   }
 
   /// Release the views and bind group of every retained entry, keeping the uniform buffers. For a
@@ -3331,6 +3444,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     layerComposites.releaseAllViews();
     filterOutputComposites.releaseAllViews();
     imageBlits.releaseAllViews();
+    patternTileViews.clear();
+    clipMaskViews.clear();
   }
 
   /// GPU filter-graph executor. Non-owning pointer into the
@@ -3607,11 +3722,117 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     for (size_t s = begin; s < end; ++s) {
       const ClipPathShape& shape = clip.clipPaths[s];
-      encoder->setTransform(clip.clipPathUnitsTransform * shape.parentFromEntity * deviceFromLocal);
-      encoder->fillPathIntoMask(shape.path, shape.fillRule);
+      const Transform2d deviceFromShape =
+          clip.clipPathUnitsTransform * shape.parentFromEntity * deviceFromLocal;
+      encoder->setTransform(deviceFromShape);
+      fillClipShapeIntoMask(clip, s, shape.path, shape.fillRule, deviceFromShape);
     }
     encoder->endMaskPass();
     return true;
+  }
+
+  /// Fills \p path, shape \p index of \p clip, into the open mask pass from its cached encode and
+  /// resident slot (see `GeodeClipPathCacheComponent`), or, for a clip without a source entity, a
+  /// shape a budget refuses, or a path the encoder's limits reject, from a per-frame encode.
+  /// @param clip Clip the shape belongs to.
+  /// @param index Index of the shape in \p clip: a clip path, or a group marker whose coverage is
+  ///   unioned through \p path.
+  /// @param path Path filled.
+  /// @param rule Fill rule.
+  /// @param deviceFromShape Transform the encoder fills the shape with.
+  void fillClipShapeIntoMask(const ResolvedClip& clip, std::size_t index, const Path& path,
+                             FillRule rule, const Transform2d& deviceFromShape) {
+    const EntityHandle source = clip.sourceEntity;
+    if (!source.valid() || geometryBudget->rejected()) {
+      encoder->fillPathIntoMask(path, rule);
+      return;
+    }
+    Registry& registry = *source.registry();
+    GeodeClipPathCacheComponent& cache = clipPathCache(source, clip.clipPaths.size());
+    GeodeClipPathCacheComponent::Shape& entry = cache.shapes[index];
+    const double tolerance = geode::FillCubicToleranceFor(deviceFromShape);
+    if (!ClipShapeEncodeServes(entry, path, tolerance) &&
+        !encodeClipShape(cache, entry, path, rule, tolerance, registry)) {
+      return;
+    }
+    fillResidentClipShape(cache, index, rule, registry);
+  }
+
+  /// The clip geometry cache on \p source, holding \p shapeCount shapes. A cache holding another
+  /// number of shapes is for another clip, so it forgets every shape; generations keep counting,
+  /// so no slot matches a new encode.
+  GeodeClipPathCacheComponent& clipPathCache(EntityHandle source, std::size_t shapeCount) {
+    ensureCacheInvalidationWired(*source.registry());
+    auto& cache = source.get_or_emplace<GeodeClipPathCacheComponent>();
+    if (cache.shapes.size() != shapeCount) {
+      cache.shapes.clear();
+      cache.shapes.resize(shapeCount);
+      cache.devices.forEach(
+          [](GeodeClipPathCacheComponent::DeviceSlots& slots) { slots.shapes.clear(); });
+    }
+    return cache;
+  }
+
+  /// True when \p entry holds the encode \p path would get at \p tolerance.
+  static bool ClipShapeEncodeServes(const GeodeClipPathCacheComponent::Shape& entry,
+                                    const Path& path, double tolerance) {
+    return entry.encode.has_value() && entry.path == path &&
+           (entry.tolerance == 0.0 || entry.tolerance == tolerance);
+  }
+
+  /// Encodes \p path into \p entry at \p tolerance. When the encoder's limits reject the path or
+  /// the document's cache budget refuses to keep it, fills it into the open mask pass from a
+  /// per-frame encode instead.
+  /// @return True when \p entry holds the new encode; false when the shape was already filled.
+  bool encodeClipShape(GeodeClipPathCacheComponent& cache,
+                       GeodeClipPathCacheComponent::Shape& entry, const Path& path, FillRule rule,
+                       double tolerance, Registry& registry) {
+    device->countPathEncode();
+    geode::EncodedPath encoded =
+        geode::GeodePathEncoder::encode(path, rule, tolerance, pathEncoderLimits);
+    if (encoded.rejected()) {
+      encoder->fillPathIntoMask(path, rule);
+      return false;
+    }
+    // The kept copy of the path is charged with its encode.
+    const std::size_t encodedBytes = encoded.retainedBytes();
+    const std::size_t pathBytes =
+        path.retainedBytes().value_or(std::numeric_limits<std::size_t>::max());
+    if (encodedBytes > std::numeric_limits<std::size_t>::max() - pathBytes ||
+        !entry.reservation.replace(documentGeometryBudget(registry), encodedBytes + pathBytes)) {
+      // Past the document's cache budget: this frame fills from its own encode.
+      clipScratchEncode = std::move(encoded);
+      encoder->fillPathIntoMask(path, rule, &*clipScratchEncode);
+      return false;
+    }
+    entry.encode = std::move(encoded);
+    entry.path = path;
+    const bool curved = std::any_of(
+        path.commands().begin(), path.commands().end(),
+        [](const Path::Command& command) { return command.verb == Path::Verb::CurveTo; });
+    entry.tolerance = curved ? tolerance : 0.0;
+    entry.generation = ++cache.encodeClock;
+    return true;
+  }
+
+  /// Fills shape \p index of \p cache into the open mask pass from this device's resident slot of
+  /// it, which is reset first when it was uploaded from another encode or into another slab.
+  void fillResidentClipShape(GeodeClipPathCacheComponent& cache, std::size_t index, FillRule rule,
+                             Registry& registry) {
+    const GeodeClipPathCacheComponent::Shape& entry = cache.shapes[index];
+    std::vector<GeodeClipPathCacheComponent::MaskSlot>& slots =
+        cache.devices.forDevice(deviceKey()).shapes;
+    slots.resize(cache.shapes.size());
+    GeodeClipPathCacheComponent::MaskSlot& maskSlot = slots[index];
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(registry);
+    if (maskSlot.generation != entry.generation || maskSlot.slot.slab.get() != slab.get()) {
+      // reset() parks the old range and bind group in their slab until no frame that may have
+      // recorded them is open.
+      maskSlot.slot.reset();
+      maskSlot.generation = entry.generation;
+    }
+    maskSlot.slot.slab = std::move(slab);
+    encoder->fillPathIntoMaskResident(maskSlot.slot, *entry.encode, rule, currentFrameIndex);
   }
 
   /// Finds adjacent sibling shapes that do not have their own nested reference.
@@ -3649,7 +3870,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       if (clip.clipPaths[begin].groupPathCount != 0) {
         const gpu::Texture* group = buildClipGroupMask(clip, entry, cursor, layer, lowerBound,
                                                        ancestorMask, deviceFromLocal);
-        if (!unionClipMask(destination, group, loadOp)) {
+        if (!unionClipMask(clip, begin, destination, group, loadOp)) {
           entry.allocationRejected = true;
           return nullptr;
         }
@@ -3667,10 +3888,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         begin = clipSiblingRunBegin(clip, begin, layer, lowerBound);
         cursor = begin;
       }
-      if (nested) {
-        encoder->setClipMask(*nested, importTextureView(*nested));
-      } else {
-        encoder->clearClipMask();
+      if (!bindNestedClipMask(nested)) {
+        entry.allocationRejected = true;
+        return nullptr;
       }
       if (!fillClipLayerMask(destination, clip, begin, end, deviceFromLocal, loadOp)) {
         entry.allocationRejected = true;
@@ -3681,24 +3901,47 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return &destination;
   }
 
-  /// Unions already-computed coverage into a mask without leaving GPU memory.
-  bool unionClipMask(const gpu::Texture& destination, const gpu::Texture* coverage,
-                     gpu::LoadOp loadOp) {
-    if (!coverage) {
+  /// Binds \p nested, the coverage the next mask fills intersect with, or clears the encoder's clip
+  /// mask when it is null. @return False when the runtime refuses a view of \p nested.
+  bool bindNestedClipMask(const gpu::Texture* nested) {
+    if (nested == nullptr) {
+      encoder->clearClipMask();
+      return true;
+    }
+    const gpu::TextureView* view = clipMaskView(*nested);
+    if (view == nullptr) {
       return false;
     }
-    encoder->setClipMask(*coverage, importTextureView(*coverage));
+    encoder->setClipMask(*nested, *view);
+    return true;
+  }
+
+  /// Unions already-computed coverage into a mask without leaving GPU memory, by filling the
+  /// whole target through \p coverage. The fill is a unit square scaled to the target, so its
+  /// encode is the same at every target size and is kept as shape \p markerIndex of \p clip.
+  /// @param clip Clip being built.
+  /// @param markerIndex Index of the group marker in \p clip whose coverage is unioned.
+  bool unionClipMask(const ResolvedClip& clip, std::size_t markerIndex,
+                     const gpu::Texture& destination, const gpu::Texture* coverage,
+                     gpu::LoadOp loadOp) {
+    const gpu::TextureView* coverageView = coverage != nullptr ? clipMaskView(*coverage) : nullptr;
+    if (coverageView == nullptr) {
+      return false;
+    }
+    encoder->setClipMask(*coverage, *coverageView);
     if (!encoder->beginMaskPass(destination, loadOp)) {
       return false;
     }
-    encoder->setTransform(Transform2d());
     const gpu::Extent2d extent = targetExtent();
-    encoder->fillPathIntoMask(
-        PathBuilder().addRect(Box2d::FromXYWH(0, 0, extent.width, extent.height)).build(),
-        FillRule::NonZero);
+    const Transform2d deviceFromUnit = Transform2d::Scale(extent.width, extent.height);
+    encoder->setTransform(deviceFromUnit);
+    fillClipShapeIntoMask(clip, markerIndex, unitSquarePath, FillRule::NonZero, deviceFromUnit);
     encoder->endMaskPass();
     return true;
   }
+
+  /// The unit square a clip group's coverage is unioned through.
+  const Path unitSquarePath = PathBuilder().addRect(Box2d::FromXYWH(0, 0, 1, 1)).build();
 
   /// Applies a clipPath-level reference to its complete counted child union.
   const gpu::Texture* buildClipGroupMask(const ResolvedClip& clip, ClipStackEntry& entry,
@@ -3743,8 +3986,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entry.maskResolveTextureHandle = buildClipLayerMask(
         clip, entry, cursor, clip.clipPaths.back().layer, ancestorMask, savedDeviceFromLocal);
     if (entry.maskResolveTextureHandle && cursor == 0) {
-      entry.maskResolveViewHandle = &importTextureView(*entry.maskResolveTextureHandle);
-    } else {
+      entry.maskResolveViewHandle = clipMaskView(*entry.maskResolveTextureHandle);
+    }
+    if (entry.maskResolveViewHandle == nullptr) {
       entry.allocationRejected = true;
       entry.maskResolveTextureHandle = nullptr;
     }
@@ -5081,6 +5325,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// \ref onComputedPathChanged.
   static void onLoadedImageChanged(Registry& registry, Entity entity);
 
+  /// Drop an entity's cached clip geometry when its computed clip paths are created, replaced or
+  /// destroyed. Connected to entt's `on_construct` / `on_update` / `on_destroy` signals.
+  static void onComputedClipPathsChanged(Registry& registry, Entity entity);
+
   /// Scratch buffer for the no-source-entity stroke path. `getStrokeDerived`
   /// uses this as stable storage when there's no `GeodePathCacheComponent`
   /// to live on (e.g. `drawRect` / `drawEllipse` convenience draws). Only
@@ -5088,6 +5336,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   Path strokeScratchPath;
   std::optional<geode::EncodedPath> fillScratchEncode;
   std::optional<geode::EncodedPath> strokeScratchEncode;
+  /// Encode of the clip shape being filled when the document's cache budget refuses to keep it.
+  std::optional<geode::EncodedPath> clipScratchEncode;
   geode::EncodedPath emptyGeometry;
   geode::EncodedPath rejectedGeometry = [] {
     geode::EncodedPath encoded;
@@ -8157,7 +8407,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     } else {
       ++currentFrameIndex;
     }
-    beginFramePatternTiles();
+    beginFrameRetainedViews();
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
     layerComposites.beginFrame();
@@ -8340,6 +8590,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       tiles->clear();
     }
     patternTileViews.clear();
+    clipMaskViews.clear();
   }
 
   /// Give up this renderer's render targets at teardown.
@@ -8383,7 +8634,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     drainFrameReusableTextures(frameRecordingAbandoned || !device || device->isDeviceLost());
     releaseOpenStackTexturesAtTeardown();
-    frameImportedTextureViews.clear();
     releaseFrameTargetsAtTeardown();
     texturePool.reset();
 
@@ -8429,14 +8679,27 @@ void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
   static_cast<void>(registry.storage<geode::GeodePathCacheComponent>());
   static_cast<void>(registry.storage<geode::GeodeResidentPathComponent>());
   static_cast<void>(registry.storage<geode::GeodeResidentImageComponent>());
+  static_cast<void>(registry.storage<GeodeClipPathCacheComponent>());
   registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   registry.on_update<components::LoadedImageComponent>().connect<&Impl::onLoadedImageChanged>();
   registry.on_destroy<components::LoadedImageComponent>().connect<&Impl::onLoadedImageChanged>();
+  // A clip's cached geometry goes whenever its computed clip paths are made, replaced or dropped.
+  registry.on_construct<components::ComputedClipPathsComponent>()
+      .connect<&Impl::onComputedClipPathsChanged>();
+  registry.on_update<components::ComputedClipPathsComponent>()
+      .connect<&Impl::onComputedClipPathsChanged>();
+  registry.on_destroy<components::ComputedClipPathsComponent>()
+      .connect<&Impl::onComputedClipPathsChanged>();
   // Leaving the connection attached across renderer destruction is
   // intentional: our free-function listener has no `this`-capture,
   // so it's safe to outlive the renderer. Connections die with the
   // registry.
+}
+
+void RendererGeode::Impl::onComputedClipPathsChanged(Registry& registry, Entity entity) {
+  // Slot reset parks bind groups and buffer ranges in their slabs until no older frame is open.
+  registry.remove<GeodeClipPathCacheComponent>(entity);
 }
 
 void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entity) {
@@ -8800,6 +9063,14 @@ size_t RendererGeode::patternTileViewCountForTesting() const {
   return impl_->patternTileViews.size();
 }
 
+size_t RendererGeode::clipGeometryCacheCountForTesting(SVGDocument& document) const {
+  return document.registry().view<GeodeClipPathCacheComponent>().size();
+}
+
+size_t RendererGeode::clipMaskViewCountForTesting() const {
+  return impl_->clipMaskViews.size();
+}
+
 size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
   if (!impl_->device) {
     return 0;
@@ -8909,7 +9180,6 @@ void RendererGeode::endFrame() {
     impl_->frameCommandBuffers.clear();
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
-    impl_->frameImportedTextureViews.clear();
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();
     impl_->device->drainDeferredTextureBackings();

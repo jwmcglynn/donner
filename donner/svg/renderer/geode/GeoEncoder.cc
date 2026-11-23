@@ -837,14 +837,53 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// covering the WHOLE slot, uniform region and trailing padding included,
   /// so the slot leaves no byte of the slab chunk unwritten. The draw path
   /// rewrites the uniform region right after.
-  void uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded);
+  /// @param slot Slot to upload into.
+  /// @param encoded Geometry to upload.
+  /// @param uniformBytes Size of the uniform region: the fill uniform for a fill slot, the mask
+  ///   uniform for a clip-mask slot.
+  /// @param paintBlock Whether to reserve the gradient paint block; a clip-mask slot has no paint.
+  void uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                              uint64_t uniformBytes = sizeof(Uniforms), bool paintBlock = true);
 
   /// Build + cache the eleven-entry fill bind group for `slot`. Every binding references
   /// `slot.buffer` sub-ranges or device dummies, except the pattern texture, which is
-  /// \p patternView when it is non-null.
+  /// \p patternView when it is non-null, and the clip-mask texture, which is \p clipMaskView.
   /// @param slot Slot whose cached bind group is replaced.
   /// @param patternView Pattern tile view to bind, or null for the dummy pattern texture.
-  void buildResidentBindGroup(GeodeResidentSlot& slot, gpu::TextureViewRef patternView);
+  /// @param clipMaskView Clip mask the draw samples: the active clip mask, or the device's
+  ///   identity-coverage dummy when none is active.
+  void buildResidentBindGroup(GeodeResidentSlot& slot, gpu::TextureViewRef patternView,
+                              gpu::TextureViewRef clipMaskView);
+
+  /// Fill the mask uniform of a clip-mask fill of `encoded`. Shared by the arena and the resident
+  /// mask fill, so a clip shape that moves between the two draws byte-identical coverage.
+  void buildMaskParams(gpu::shader::programs::SlugMaskParams& u, const EncodedPath& encoded,
+                       FillRule rule);
+
+  /// Draw `encoded` into the open mask pass from per-frame arena storage, with a bind group of its
+  /// own. The geometry must already be admitted.
+  void submitMaskArenaDraw(const EncodedPath& encoded, FillRule rule);
+
+  /// Resident clip-mask fill: ensure geometry residence, rewrite the mask uniform only if it
+  /// changed, rebuild the cached mask bind group only if the nested clip mask view changed, and
+  /// record the draw. @return False when residence could not be established.
+  bool submitResidentMaskDraw(GeodeResidentSlot& slot, const EncodedPath& encoded, FillRule rule);
+
+  /// Upload \p encoded into clip-mask slot \p slot unless it already holds it on this device.
+  /// @return Whether the slot is resident.
+  bool ensureResidentMaskGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded);
+
+  /// Write mask uniform \p u into \p slot, skipping the write when the slot holds these bytes.
+  void publishResidentMaskUniform(GeodeResidentSlot& slot,
+                                  const gpu::shader::programs::SlugMaskParams& u);
+
+  /// Build \p slot's mask bind group unless the cached one binds the current nested clip mask.
+  /// @return Whether the slot has a bind group to draw with.
+  bool ensureResidentMaskBindGroup(GeodeResidentSlot& slot);
+
+  /// Drop \p slot's cached gradient bind groups when they bind another clip mask than the one
+  /// the next draw is clipped by, and record that mask as the one the rebuilt groups bind.
+  void matchGradientBindGroupsToClipMask(GeodeResidentGradientSlot& slot);
 
   /// Resident solid or pattern fill draw: ensure geometry residence, rewrite
   /// the uniform only if it changed, reuse the cached bind group, and record
@@ -1743,6 +1782,16 @@ void GeoEncoder::clearClipPolygon() {
   }
 }
 
+namespace {
+
+/// True when \p a and \p b name the same texture view, or are both null. Slot and generation
+/// together identify a view, so a recycled slot never compares equal to the view it replaced.
+bool SameView(gpu::TextureViewRef a, gpu::TextureViewRef b) {
+  return a.slotIndex() == b.slotIndex() && a.generation() == b.generation();
+}
+
+}  // namespace
+
 // ============================================================================
 // Clip mask pass
 // ============================================================================
@@ -1829,41 +1878,46 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   if (!impl_->admitGeometry(encoded, 1u) || encoded.empty()) {
     return;
   }
+  impl_->submitMaskArenaDraw(encoded, rule);
+}
 
-  // Analytic dual-ray buffers: H/V bands, curves, references, and grids. The
-  // bounding fan is generated from vertex_index and uniform data.
-  const auto bandsAlloc = impl_->allocStorageOrDummy(
-      impl_->bandArena, encoded.bands.data(), encoded.bands.size() * sizeof(EncodedPath::Band));
-  const auto curvesAlloc = impl_->allocStorageOrDummy(impl_->curveArena, encoded.curves.data(),
-                                                      encoded.curves.size() * 6u * sizeof(float));
-  const auto vBandsAlloc = impl_->allocStorageOrDummy(
-      impl_->vBandArena, encoded.vBands.data(), encoded.vBands.size() * sizeof(EncodedPath::Band));
-  const auto vCurvesAlloc = impl_->allocStorageOrDummy(impl_->vCurveArena, encoded.vCurves.data(),
-                                                       encoded.vCurves.size() * 6u * sizeof(float));
-  const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.hBandGrid.data(),
-                                                     encoded.hBandGrid.size() * sizeof(uint32_t));
-  const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.vBandGrid.data(),
-                                                     encoded.vBandGrid.size() * sizeof(uint32_t));
-  const auto hRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->gridArena, encoded.curveIndices.data(),
-                                 encoded.curveIndices.size() * sizeof(uint32_t));
-  const auto vRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->gridArena, encoded.vCurveIndices.data(),
-                                 encoded.vCurveIndices.size() * sizeof(uint32_t));
+void GeoEncoder::fillPathIntoMaskResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                          FillRule rule, uint64_t frameId) {
+  if (!impl_->maskPassOpen) {
+    return;
+  }
+  if (!impl_->admitGeometry(encoded, 1u) || encoded.empty()) {
+    return;
+  }
+  // A slot's uniform carries one fill per frame. A slot an open frame on this device already
+  // drew - this clip built a second time in the frame, or an outer frame an offscreen pass runs
+  // inside - keeps that fill's uniform, and this fill takes the arena.
+  if (slot.owningDeviceId == impl_->device->deviceId() &&
+      impl_->device->frameStampClaimed(slot.lastResidentFrame)) {
+    impl_->submitMaskArenaDraw(encoded, rule);
+    return;
+  }
+  slot.lastResidentFrame = frameId;
+  if (!impl_->submitResidentMaskDraw(slot, encoded, rule)) {
+    impl_->submitMaskArenaDraw(encoded, rule);
+  }
+}
 
+void GeoEncoder::Impl::buildMaskParams(gpu::shader::programs::SlugMaskParams& u,
+                                       const EncodedPath& encoded, FillRule rule) {
   static_assert(sizeof(EncodedPath::Band) == sizeof(gpu::shader::programs::SlugMaskBand));
   static_assert(offsetof(EncodedPath::Band, curveStart) ==
                 offsetof(gpu::shader::programs::SlugMaskBand, curveStart));
   static_assert(offsetof(EncodedPath::Band, curveCount) ==
                 offsetof(gpu::shader::programs::SlugMaskBand, curveCount));
-  gpu::shader::programs::SlugMaskParams u = {};
-  impl_->buildMvp(u.mvp);
-  writePixelMapping(u, impl_->transform);
-  u.viewport[0] = static_cast<float>(impl_->targetWidth);
-  u.viewport[1] = static_cast<float>(impl_->targetHeight);
+  u = {};
+  buildMvp(u.mvp);
+  writePixelMapping(u, transform);
+  u.viewport[0] = static_cast<float>(targetWidth);
+  u.viewport[1] = static_cast<float>(targetHeight);
   u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
-  u.hasClipMask = impl_->activeClipMaskView != nullptr ? 1u : 0u;
-  u.antialias = impl_->antialias ? 1u : 0u;
+  u.hasClipMask = activeClipMaskView != nullptr ? 1u : 0u;
+  u.antialias = antialias ? 1u : 0u;
   u.gridYBase = encoded.yBase;
   u.gridHStride = encoded.hStride;
   u.gridHBandCount = encoded.hBandCount;
@@ -1871,13 +1925,28 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   u.gridVStride = encoded.vStride;
   u.gridVBandCount = encoded.vBandCount;
   writeBoundingPolygonUniforms(u, encoded);
+}
 
-  const auto uniAlloc =
-      impl_->allocInArena(impl_->uniformArena, &u, sizeof(u), kUniformOffsetAlignment);
+namespace {
 
-  static const auto kBindings = [] {
+/// Binding indices of the clip-mask pipeline, read once from its linked shader.
+struct MaskBindings {
+  uint32_t uniforms;
+  uint32_t bands;
+  uint32_t curves;
+  uint32_t clipMask;
+  uint32_t vBands;
+  uint32_t vCurves;
+  uint32_t hGrid;
+  uint32_t vGrid;
+  uint32_t hRefs;
+  uint32_t vRefs;
+};
+
+const MaskBindings& MaskBindingIndices() {
+  static const MaskBindings kBindings = [] {
     const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugMask);
-    return std::array{
+    return MaskBindings{
         shader.resource("uniforms")->binding,      shader.resource("bands")->binding,
         shader.resource("curveData")->binding,     shader.resource("clipMaskTexture")->binding,
         shader.resource("vBands")->binding,        shader.resource("vCurveData")->binding,
@@ -1885,49 +1954,134 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
         shader.resource("hCurveIndices")->binding, shader.resource("vCurveIndices")->binding,
     };
   }();
-  const auto& [uniformsBinding, bandsBinding, curvesBinding, clipBinding, vBandsBinding,
-               vCurvesBinding, hGridBinding, vGridBinding, hRefsBinding, vRefsBinding] = kBindings;
+  return kBindings;
+}
 
+}  // namespace
+
+void GeoEncoder::Impl::submitMaskArenaDraw(const EncodedPath& encoded, FillRule rule) {
+  // Analytic dual-ray buffers: H/V bands, curves, references, and grids. The
+  // bounding fan is generated from vertex_index and uniform data.
+  const auto bandsAlloc = allocStorageOrDummy(bandArena, encoded.bands.data(),
+                                              encoded.bands.size() * sizeof(EncodedPath::Band));
+  const auto curvesAlloc = allocStorageOrDummy(curveArena, encoded.curves.data(),
+                                               encoded.curves.size() * 6u * sizeof(float));
+  const auto vBandsAlloc = allocStorageOrDummy(vBandArena, encoded.vBands.data(),
+                                               encoded.vBands.size() * sizeof(EncodedPath::Band));
+  const auto vCurvesAlloc = allocStorageOrDummy(vCurveArena, encoded.vCurves.data(),
+                                                encoded.vCurves.size() * 6u * sizeof(float));
+  const auto hGridAlloc = allocStorageOrDummy(gridArena, encoded.hBandGrid.data(),
+                                              encoded.hBandGrid.size() * sizeof(uint32_t));
+  const auto vGridAlloc = allocStorageOrDummy(gridArena, encoded.vBandGrid.data(),
+                                              encoded.vBandGrid.size() * sizeof(uint32_t));
+  const auto hRefsAlloc = allocStorageOrDummy(gridArena, encoded.curveIndices.data(),
+                                              encoded.curveIndices.size() * sizeof(uint32_t));
+  const auto vRefsAlloc = allocStorageOrDummy(gridArena, encoded.vCurveIndices.data(),
+                                              encoded.vCurveIndices.size() * sizeof(uint32_t));
+
+  gpu::shader::programs::SlugMaskParams u;
+  buildMaskParams(u, encoded, rule);
+  const auto uniAlloc = allocInArena(uniformArena, &u, sizeof(u), kUniformOffsetAlignment);
+
+  const MaskBindings& b = MaskBindingIndices();
+  const auto entry = [](uint32_t binding, const Allocation& alloc) {
+    return gpu::BindGroupEntry{binding, gpu::BufferBinding{alloc.buffer, alloc.offset, alloc.size}};
+  };
   gpu::Result<gpu::BindGroup> bindGroupResult =
-      impl_->gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
+      gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
           "GeodeMaskBindGroup",
-          impl_->maskPipelineOwned->bindGroupLayout(),
-          {gpu::BindGroupEntry{uniformsBinding,
-                               gpu::BufferBinding{uniAlloc.buffer, uniAlloc.offset, uniAlloc.size}},
-           gpu::BindGroupEntry{
-               bandsBinding,
-               gpu::BufferBinding{bandsAlloc.buffer, bandsAlloc.offset, bandsAlloc.size}},
-           gpu::BindGroupEntry{
-               curvesBinding,
-               gpu::BufferBinding{curvesAlloc.buffer, curvesAlloc.offset, curvesAlloc.size}},
-           gpu::BindGroupEntry{clipBinding, gpu::TextureViewBinding{impl_->currentClipMaskView()}},
-           gpu::BindGroupEntry{
-               vBandsBinding,
-               gpu::BufferBinding{vBandsAlloc.buffer, vBandsAlloc.offset, vBandsAlloc.size}},
-           gpu::BindGroupEntry{
-               vCurvesBinding,
-               gpu::BufferBinding{vCurvesAlloc.buffer, vCurvesAlloc.offset, vCurvesAlloc.size}},
-           gpu::BindGroupEntry{
-               hGridBinding,
-               gpu::BufferBinding{hGridAlloc.buffer, hGridAlloc.offset, hGridAlloc.size}},
-           gpu::BindGroupEntry{
-               vGridBinding,
-               gpu::BufferBinding{vGridAlloc.buffer, vGridAlloc.offset, vGridAlloc.size}},
-           gpu::BindGroupEntry{
-               hRefsBinding,
-               gpu::BufferBinding{hRefsAlloc.buffer, hRefsAlloc.offset, hRefsAlloc.size}},
-           gpu::BindGroupEntry{
-               vRefsBinding,
-               gpu::BufferBinding{vRefsAlloc.buffer, vRefsAlloc.offset, vRefsAlloc.size}}}});
+          maskPipelineOwned->bindGroupLayout(),
+          {entry(b.uniforms, uniAlloc), entry(b.bands, bandsAlloc), entry(b.curves, curvesAlloc),
+           gpu::BindGroupEntry{b.clipMask, gpu::TextureViewBinding{currentClipMaskView()}},
+           entry(b.vBands, vBandsAlloc), entry(b.vCurves, vCurvesAlloc), entry(b.hGrid, hGridAlloc),
+           entry(b.vGrid, vGridAlloc), entry(b.hRefs, hRefsAlloc), entry(b.vRefs, vRefsAlloc)}});
   if (bindGroupResult.hasError()) {
     return;
   }
-  const gpu::BindGroup& bindGroup =
-      impl_->transientResources.retain(std::move(bindGroupResult).result());
+  const gpu::BindGroup& bindGroup = transientResources.retain(std::move(bindGroupResult).result());
 
-  impl_->recordGeometryDebugDraw(encoded);
-  (void)impl_->maskPass->setBindGroup(0, bindGroup);
-  (void)impl_->maskPass->draw(encoded.boundingDrawVertexCount(), 1, 0, 0);
+  recordGeometryDebugDraw(encoded);
+  (void)maskPass->setBindGroup(0, bindGroup);
+  (void)maskPass->draw(encoded.boundingDrawVertexCount(), 1, 0, 0);
+}
+
+bool GeoEncoder::Impl::submitResidentMaskDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                              FillRule rule) {
+  if (!ensureResidentMaskGeometry(slot, encoded)) {
+    return false;
+  }
+  gpu::shader::programs::SlugMaskParams u;
+  buildMaskParams(u, encoded, rule);
+  publishResidentMaskUniform(slot, u);
+  if (!ensureResidentMaskBindGroup(slot)) {
+    return false;
+  }
+  recordGeometryDebugDraw(encoded);
+  (void)maskPass->setBindGroup(0, slot.bindGroup);
+  (void)maskPass->draw(slot.vertexCount, 1, 0, 0);
+  return true;
+}
+
+bool GeoEncoder::Impl::ensureResidentMaskGeometry(GeodeResidentSlot& slot,
+                                                  const EncodedPath& encoded) {
+  // Same residence and invalidation guards as a resident fill.
+  const uint64_t fingerprint = residentFingerprint(encoded);
+  if (!slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
+      slot.encodedFingerprint != fingerprint || slot.owningDeviceId != device->deviceId()) {
+    uploadResidentGeometry(slot, encoded, sizeof(gpu::shader::programs::SlugMaskParams),
+                           /*paintBlock=*/false);
+    slot.encodedKey = &encoded;
+    slot.encodedFingerprint = fingerprint;
+  }
+  return slot.resident && slot.buffer.isValid();
+}
+
+void GeoEncoder::Impl::publishResidentMaskUniform(GeodeResidentSlot& slot,
+                                                  const gpu::shader::programs::SlugMaskParams& u) {
+  const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
+  if (slot.lastUniform.size() == sizeof(u) &&
+      std::memcmp(slot.lastUniform.data(), uBytes, sizeof(u)) == 0) {
+    return;
+  }
+  (void)gpuContext->gpuDevice->writeBuffer(slot.slab->bufferForId(slot.bufferId),
+                                           slot.uniform.offset,
+                                           std::span<const uint8_t>(uBytes, sizeof(u)));
+  if (slot.reserveUniformMirror(sizeof(u))) {
+    slot.lastUniform.assign(uBytes, uBytes + sizeof(u));
+  }
+}
+
+bool GeoEncoder::Impl::ensureResidentMaskBindGroup(GeodeResidentSlot& slot) {
+  // The bind group names the nested clip mask this fill is intersected with, the identity dummy
+  // when there is none. The renderer keeps each clip-mask texture's view across frames, so an
+  // unchanged frame binds the same view and reuses the group.
+  const gpu::TextureViewRef clipMaskView = currentClipMaskView();
+  if (slot.bindGroup.isValid() && SameView(slot.boundClipMaskView, clipMaskView)) {
+    return true;
+  }
+  const MaskBindings& b = MaskBindingIndices();
+  const gpu::BufferRef buf = slot.buffer;
+  const auto region = [&buf](uint32_t binding, const GeodeResidentSlot::Region& r) {
+    return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
+  };
+  gpu::Result<gpu::BindGroup> created =
+      gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
+          "GeodeResidentMaskBindGroup",
+          maskPipelineOwned->bindGroupLayout(),
+          {region(b.uniforms, slot.uniform), region(b.bands, slot.bands),
+           region(b.curves, slot.curves),
+           gpu::BindGroupEntry{b.clipMask, gpu::TextureViewBinding{clipMaskView}},
+           region(b.vBands, slot.vBands), region(b.vCurves, slot.vCurves),
+           region(b.hGrid, slot.hGrid), region(b.vGrid, slot.vGrid), region(b.hRefs, slot.hRefs),
+           region(b.vRefs, slot.vRefs)}});
+  if (created.hasError()) {
+    return false;
+  }
+  // Draws recorded earlier in this frame may still name the group this replaces.
+  device->deferDestroy(std::move(slot.bindGroup));
+  slot.bindGroup = std::move(created).result();
+  slot.boundClipMaskView = clipMaskView;
+  return true;
 }
 
 void GeoEncoder::endMaskPass() {
@@ -2034,16 +2188,6 @@ void GeoEncoder::setLoadPreserve() {
   }
   impl_->loadPreserve = true;
 }
-
-namespace {
-
-/// True when \p a and \p b name the same texture view, or are both null. Slot and generation
-/// together identify a view, so a recycled slot never compares equal to the view it replaced.
-bool SameView(gpu::TextureViewRef a, gpu::TextureViewRef b) {
-  return a.slotIndex() == b.slotIndex() && a.generation() == b.generation();
-}
-
-}  // namespace
 
 /// Parameters for the shared `submitFillDraw` helper. Solid-color and
 /// pattern-tile fills share the same encode → upload → draw pipeline; only
@@ -2215,7 +2359,8 @@ void GeoEncoder::Impl::populateResidentRecord(InstanceRecord& r, const EncodedPa
                          &recordTransform);
 }
 
-void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
+void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                              uint64_t uniformBytes, bool paintBlock) {
   // Drop any previous residence (first upload, or a re-upload after the stroke
   // slot rebuilt in place or the encode changed). Releases the old handles and settles the
   // live-bytes gauge before we account the new allocation. `reset()` never
@@ -2258,12 +2403,17 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   place(slot.vGrid, vGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
-  // The gradient paint block is reserved unconditionally: paint can change
+  // A fill slot reserves the gradient paint block unconditionally: paint can change
   // from solid to gradient without the geometry changing, and re-laying-out
   // the slot for that would move every region and invalidate the cached bind
   // group. It stays zero-filled for a solid fill, whose record never reads it.
-  place(slot.paint, kPaintBlockBytes, kStorageOffsetAlignment, /*storageDummy=*/false);
-  place(slot.uniform, sizeof(Uniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
+  // A clip-mask slot has no paint and binds no paint block.
+  if (paintBlock) {
+    place(slot.paint, kPaintBlockBytes, kStorageOffsetAlignment, /*storageDummy=*/false);
+  } else {
+    slot.paint = {};
+  }
+  place(slot.uniform, uniformBytes, kUniformOffsetAlignment, /*storageDummy=*/false);
 
   // Round the slot up to the slab's allocation alignment so consecutive
   // slots leave no unwritten hole between them: a hole inside a chunk is a
@@ -2340,7 +2490,8 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
 }
 
 void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot,
-                                              gpu::TextureViewRef patternView) {
+                                              gpu::TextureViewRef patternView,
+                                              gpu::TextureViewRef clipMaskView) {
   const gpu::BufferRef buf = slot.buffer;
   const auto region = [&buf](uint32_t binding, const GeodeResidentSlot::Region& r) {
     return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
@@ -2359,8 +2510,9 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot,
   // slots through one binding and build their own whole-chunk bind group with chunk-relative bases
   // in each instance record.
   //
-  // Residence is only taken with no active clip, so the clip-mask slot is always the identity
-  // coverage dummy - bound directly so the cached bind group is deterministic. A solo resident
+  // The clip-mask slot binds the active path-clip mask, or the identity coverage dummy when no
+  // clip mask is active. The renderer keeps a clip-mask texture's view across frames, so a draw
+  // under an unchanged clip binds the same view and keeps this group. A solo resident
   // draw reads its paint from the slot's uniform, so the record binding only has to supply the
   // vertex stage's identity transform; binding the shared identity record keeps this slot out of
   // the record slab entirely. The paint block binds on the same tight-range terms, so the
@@ -2380,7 +2532,7 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot,
            gpu::BindGroupEntry{FillBinding("patternSampler"),
                                gpu::SamplerBinding{*gpuContext->dummyPatternSampler}},
            gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
-                               gpu::TextureViewBinding{*gpuContext->dummyClipMaskTextureView}},
+                               gpu::TextureViewBinding{clipMaskView}},
            gpu::BindGroupEntry{FillBinding("instances"),
                                gpu::BufferBinding{*gpuContext->identityInstanceRecordBuffer, 0,
                                                   sizeof(InstanceRecord)}},
@@ -2397,6 +2549,7 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot,
   device->deferDestroy(std::move(slot.bindGroup));
   slot.bindGroup = std::move(created).result();
   slot.boundPatternView = patternView;
+  slot.boundClipMaskView = clipMaskView;
 }
 
 bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
@@ -2416,10 +2569,15 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   // A pattern fill binds its tile; a solid fill binds the dummy pattern texture.
   const gpu::TextureViewRef patternView =
       args.paintMode == 1u ? args.patternView : gpu::TextureViewRef();
-  if (!slot.bindGroup.isValid() || !SameView(slot.boundPatternView, patternView)) {
-    buildResidentBindGroup(slot, patternView);
+  const gpu::TextureViewRef clipMaskView = currentClipMaskView();
+  const auto bindGroupMatches = [&] {
+    return slot.bindGroup.isValid() && SameView(slot.boundPatternView, patternView) &&
+           SameView(slot.boundClipMaskView, clipMaskView);
+  };
+  if (!bindGroupMatches()) {
+    buildResidentBindGroup(slot, patternView, clipMaskView);
   }
-  if (!slot.bindGroup.isValid() || !SameView(slot.boundPatternView, patternView)) {
+  if (!bindGroupMatches()) {
     return false;
   }
 
@@ -2695,10 +2853,10 @@ void GeoEncoder::fillPathPatternResident(GeodeResidentSlot& slot, const EncodedP
 
 void GeoEncoder::submitResidentOrArenaFill(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                            const FillDrawArgs& args, uint64_t frameId) {
-  // Residence is only safe (bind group stable, uniform clip flags zero)
-  // when no clip mask / clip polygon / mask pass is active. Otherwise fall
-  // back to the per-frame arena path so clipped / masked draws stay exact.
-  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive || impl_->maskPassOpen) {
+  // A draw under a path clip mask stays resident: its uniform carries the clip flag like the
+  // arena draw's, and its bind group binds the mask's view, which the renderer keeps across frames.
+  // A clip polygon or an open mask pass still takes the per-frame arena path.
+  if (impl_->clipPolygonActive || impl_->maskPassOpen) {
     submitFillDraw(args, {}, /*requireAdmission=*/false);
     return;
   }
@@ -3364,7 +3522,8 @@ gpu::Result<gpu::BindGroup> GeoEncoder::Impl::createResidentGradientBindGroup(
     GeodeResidentGradientSlot& slot, const gpu::TextureView& stopRamp) {
   const gpu::BufferRef buf = slot.buffer;
 
-  // Residence is admitted only without clipping, so the group uses the dummy mask.
+  // The group binds the clip mask the slot's groups were built for: the active path-clip mask, or
+  // the identity coverage dummy without one (see `residentGradientBindGroup`).
   const auto region = [&buf](uint32_t binding, const GeodeResidentGradientSlot::Region& r) {
     return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
   };
@@ -3375,7 +3534,7 @@ gpu::Result<gpu::BindGroup> GeoEncoder::Impl::createResidentGradientBindGroup(
        region(GradientBinding("bands"), slot.bands),
        region(GradientBinding("curveData"), slot.curves),
        gpu::BindGroupEntry{GradientBinding("clipMaskTexture"),
-                           gpu::TextureViewBinding{*gpuContext->dummyClipMaskTextureView}},
+                           gpu::TextureViewBinding{slot.boundClipMaskView}},
        region(GradientBinding("vBands"), slot.vBands),
        region(GradientBinding("vCurveData"), slot.vCurves),
        region(GradientBinding("hBandGrid"), slot.hGrid),
@@ -3387,6 +3546,7 @@ gpu::Result<gpu::BindGroup> GeoEncoder::Impl::createResidentGradientBindGroup(
 
 const gpu::BindGroup* GeoEncoder::Impl::residentGradientBindGroup(GeodeResidentGradientSlot& slot,
                                                                   const GradientUniforms& u) {
+  matchGradientBindGroupsToClipMask(slot);
   if (u.stopCount <= kMaxGradientStops) {
     // A gradient that no longer needs a ramp lets go of the one it held.
     if (slot.ramp != nullptr) {
@@ -3421,6 +3581,22 @@ const gpu::BindGroup* GeoEncoder::Impl::residentGradientBindGroup(GeodeResidentG
   }
   slot.replaceRamp(std::move(ramp), std::move(created).result());
   return &slot.rampBindGroup;
+}
+
+void GeoEncoder::Impl::matchGradientBindGroupsToClipMask(GeodeResidentGradientSlot& slot) {
+  // Both cached groups bind the clip mask they were built for. A draw under a different clip mask
+  // (or none, after one) drops them, and they are made again for its mask.
+  const gpu::TextureViewRef clipMaskView = currentClipMaskView();
+  if (SameView(slot.boundClipMaskView, clipMaskView)) {
+    return;
+  }
+  device->deferDestroy(std::move(slot.bindGroup));
+  slot.bindGroup = gpu::BindGroup();
+  if (slot.rampBindGroup.isValid()) {
+    // Keep the ramp itself; only the group binding it with the old mask goes.
+    slot.replaceRamp(slot.ramp, gpu::BindGroup());
+  }
+  slot.boundClipMaskView = clipMaskView;
 }
 
 bool GeoEncoder::Impl::chargeRetainedRamp(GeodeResidentGradientSlot& slot,
@@ -3588,13 +3764,13 @@ void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
   GradientUniforms u = {};
   impl_->buildLinearGradientUniforms(u, params, rule);
 
-  // Residence is only safe (bind group stable, uniform clip flags zero)
-  // when no clip mask / clip polygon / mask pass is active, and a slot's
-  // single uniform can only carry one draw per still-open frame (the stamp
-  // claim covers a same-frame repeat and an offscreen pass drawing while an
-  // outer frame on this device has recorded against the slot). Fall back to
-  // the per-frame arena path in both cases, mirroring `fillPathResident`.
-  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive || impl_->maskPassOpen ||
+  // A clip polygon or an open mask pass takes the per-frame arena path, as does a
+  // slot whose single uniform an open frame already drew with (the stamp claim
+  // covers a same-frame repeat and an offscreen pass drawing while an outer
+  // frame on this device has recorded against the slot), mirroring
+  // `fillPathResident`. A draw under a path clip mask stays resident and binds
+  // the mask's view.
+  if (impl_->clipPolygonActive || impl_->maskPassOpen ||
       ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
        impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
     impl_->submitGradientArenaFallback(u, encoded);
@@ -3617,7 +3793,7 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
   GradientUniforms u = {};
   impl_->buildRadialGradientUniforms(u, params, rule);
 
-  if (impl_->activeClipMaskView != nullptr || impl_->clipPolygonActive || impl_->maskPassOpen ||
+  if (impl_->clipPolygonActive || impl_->maskPassOpen ||
       ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
        impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
     impl_->submitGradientArenaFallback(u, encoded);

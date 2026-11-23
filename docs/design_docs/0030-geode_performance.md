@@ -2,11 +2,12 @@
 
 **Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes,
 including painted text, re-encode, create and re-upload nothing, including the second and later
-draws of one entity in a frame such as marker placements, filter passes upload and bind nothing new,
+draws of one entity in a frame such as marker placements and draws under a path clip mask, clip
+shapes fill their masks from cached, resident geometry, filter passes upload and bind nothing new,
 opacity, blend-mode and filter-result composites and decoded images without a clip mask write and
 create nothing, and ordered batching draws runs of resident draws as instanced draws. Steady-state
-residency for clip and mask geometry (including composites and images under a clip mask), and draws
-under a clip polygon (among them turned marker placements) are still open (Milestone 8).
+residency for composites and images under a clip mask, composites through a `<mask>`, and draws
+under a clip polygon (among them turned marker placements) is still open (Milestone 8).
 `geode_counter_corpus_tests` records the corpus scenes measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
@@ -55,8 +56,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the remaining Milestone 8 items: clip, mask, and nested-viewport geometry (8.7) and
-  residency under a clip polygon (8.9).
+- Start the remaining Milestone 8 items: composites under a clip mask or through a `<mask>` (the
+  rest of 8.7) and residency under a clip polygon (8.9).
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -398,12 +399,95 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     frames, and every pass misses under either key (the two-filter case of
     `UnchangedFilterPassesUploadAndBindNothing`). A filter region that changes size takes new
     textures and rebuilds its bindings once.
-  - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
-    clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
-    re-uploads every frame. Clears `donner_splash` and `geode_splash`. With 8.3, `donner_splash`'s
-    remaining counters are its clip geometry. `nested_svg_aspectratio`'s per-frame uploads were
-    same-frame repeats of resident slots, not nested-viewport geometry, and cleared with 8.1 and
-    8.2.
+  - [ ] 8.7: Clip, mask, and nested-viewport geometry. Clip geometry and draws under a path clip
+    meet the steady state; composites under a clip mask or through a `<mask>` do not yet. Draws
+    inside a `<mask>`'s content or mask capture were already resident: the clips are suspended while
+    a mask is captured. `nested_svg_aspectratio`'s per-frame uploads were same-frame repeats of
+    resident slots, not nested-viewport geometry, and cleared with 8.1 and 8.2.
+    - Clip shapes. `ResolvedClip::sourceEntity` names the entity whose computed clip paths produced
+      the clip, and a `GeodeClipPathCacheComponent` on it keeps each shape's encode at one
+      device-derived tolerance and, per device, a resident slot with the shape's geometry, its
+      224-byte mask uniform and its mask bind group (`GeoEncoder::fillPathIntoMaskResident`). An
+      unchanged frame encodes, uploads and creates nothing for a shape; the uniform is rewritten
+      only when its bytes change, and the bind group is rebuilt only when the nested clip mask it
+      binds is a different view. A clip group (a `<clipPath>` with a `clip-path` of its own) unions
+      its coverage by filling a unit square scaled to the target, kept like a shape under the
+      group's index.
+    - Invalidation. Each draw compares the shape's path with the path its encode was built from, and
+      its tolerance, and encodes again on any difference; a clip with a different shape count drops
+      all of its shapes. The fill rule and the transforms reach the GPU through the uniform. The
+      component itself is removed when the entity's computed clip paths are created, replaced or
+      destroyed, so its memory and budget charges go with its clip
+      (`ClipGeometryCacheGoesWithItsClip`). Every render-tree rebuild clears every computed clip
+      path in the document, so any edit anywhere that rebuilds the render tree drops every clip
+      cache of the document: the first frame after such an edit encodes and uploads every clip shape
+      again. The compositor's transform-only fast path for a dragged layer skips that rebuild
+      (`CompositorController::renderFrameImpl`), so a drag keeps the clip caches.
+      `ClipEditsReachTheNextFrameOfAWarmRenderer` compares a warm renderer with a fresh one after an
+      edit of the clip shape's geometry and transform, its clip-rule on the shape and on the clipped
+      element, clipPathUnits, the clipped element's bounds and transform, a nested clip, the clip
+      reference, and the device scale at two zooms. `ClipShapeCacheFollowsTheDeviceScale` checks
+      that a shape drawn at a new scale under the same cache is encoded again for it, and
+      `ClipShapeCacheFollowsAPathOfTheSameSize` changes a shape to a path of the same size under the
+      same entity: the new encode takes the old one's storage, and the slot recognizes it by the
+      identity each encode gets when it is made.
+    - Clipped draws. A solid, gradient or pattern fill or stroke under a path clip mask stays
+      resident. Its uniform carries the clip flag exactly as the arena draw's does, and its cached
+      bind group binds the mask's view (`GeodeResidentSlot::boundClipMaskView`), rebuilt when the
+      draw is clipped by another view (`ResidentClippedDrawsMatchTheArenaDraws`). A clip polygon or
+      an open mask pass still takes the arena, also together with a clip mask: residence under a
+      clip polygon is 8.9, which this item does not cover. A same-frame repeat of a slot under a
+      clip mask takes the arena too, since repeat records are not written under any clip state; the
+      arena draw binds the same mask and carries the same clip flag.
+    - Mask views. The renderer keeps the view of each clip-mask texture across frames
+      (`RetainedTextureViews`, the mechanism pattern tile views use), and the pool hands a clip mask
+      the texture it had the frame before, so an unchanged frame binds the same views. A view is
+      dropped at the start of the second frame of its renderer that does not use its texture
+      (`ClipMaskViewsStayBoundedBetweenFrames`), and as soon as the texture is destroyed: the pool's
+      destroy notification and the device's texture retirement reach every renderer's retained
+      views, pattern tile views included, through the same release path the retained composites use,
+      and a frame that ends without submitting drops every view
+      (`TileAndClipMaskViewsGoWithTheirTextures`, for a trim, a stale bucket and a budget eviction
+      caused by another renderer, and an abandoned frame). A view owns no memory, and the textures
+      stay in the pool's budget. A resident slot's cached bind group that names a dropped view is
+      not released with it: it is replaced at the slot's next draw, which finds a different view, or
+      released with the slot. The GPU layer refuses any use of a view whose texture is gone, so no
+      use of such a group is reachable; the group and its view's backend object stay until then, the
+      remaining part of #2632 for these caches.
+    - Snapshot replay. A document in concurrent-DOM mode is drawn by recording a render snapshot and
+      replaying it (`RendererDriver::draw`), and a snapshot holds no handle into the live document:
+      its paths and clips carry no source entity. A replayed frame therefore keeps no per-entity
+      state at all, neither these clip caches nor the resident fill, stroke, gradient and pattern
+      slots, and encodes and uploads its geometry every frame
+      (`SnapshotReplayKeepsNoClipStateOnTheDocument`). Single-threaded documents, the interruptible
+      draw the editor uses, and the compositor's layer rasterization draw from the live document and
+      keep the steady state.
+    - Lifetime. A slot carries one fill's uniform, so a slot an open frame on the device already
+      drew takes the arena; a shape encoded again resets its slot, whose old range and bind group
+      stay parked in the slab until no frame that may have recorded them is open
+      (`NestedPassKeepsTheClipMaskAnOuterFrameLeftPending`). Slots are kept per device, released
+      with the component, the entity or the device, and swept with every other per-device component
+      when a device goes away.
+    - Accounting. Per clip shape and device: the encode (`EncodedPath::retainedBytes()`) and the
+      kept copy of its path (`Path::retainedBytes()`) are charged to the document's cache-byte
+      budget, the resident geometry (the shape's band, curve and grid regions plus a
+      256-byte-aligned uniform region) to its resident-byte budget, and the 224-byte CPU copy of the
+      uniform to the cache budget. A shape either budget refuses fills from a per-frame encode or
+      from the arena, and renders the same (`ClipGeometryPastTheDocumentBudgetStillRenders`). The
+      host records, at most 576 bytes per clip shape and 576 bytes per shape and device (checked by
+      `static_assert`s), are uncharged; their number is linear in the clip shapes the driver copies
+      into each frame's clips, which its text-materialization budget already admits.
+    - `ClippedDraws_UnchangedFrameEncodesWritesAndCreatesNothing` gates the counters. Not covered:
+      the rectangle a transformed `<mask>` region is clipped by has no source entity and is encoded
+      every frame; no corpus scene has one. Nested clip chains (#2499) are unchanged: the cache is
+      indexed by shape, so each shape costs a constant per frame, and the superlinear cost #2499
+      measures is in the driver's clip collection.
+    - Remaining. `donner_splash` meets the steady state. `geode_splash` keeps 3 buffer writes and 3
+      bind groups, the blit uniforms and bindings of the composites of its three masks. Composites
+      through a `<mask>` and composites under a clip mask are the next part of this item. The
+      retained composite sequences release every binding that names a clip-mask view at each frame
+      end; the clip-mask view a composite binds is now the same every frame, so they can keep those
+      bindings, keyed by the identity of the views they bind.
   - [x] 8.8: Painted-text geometry. Solid, unwarped glyph fills draw the glyph cache's resident
     encodings. Every other shape a text element paints (a placed glyph outline filled with a
     gradient or a pattern, or with a solid along a text path; a joined glyph stroke outline; a
@@ -540,7 +624,8 @@ Entity with <path d="...">
   pool texture; because the pool hands a bucket's textures out in the order the previous frame took
   them, an unchanged frame draws each tile into the texture it used before. The renderer keeps a
   view of each tile texture for one frame after its last use
-  (`PatternTileViewsStayBoundedBetweenFrames`). A view owns no memory of its own; the tile textures
+  (`PatternTileViewsStayBoundedBetweenFrames`), and drops it as soon as the texture is destroyed
+  (`TileAndClipMaskViewsGoWithTheirTextures`). A view owns no memory of its own; the tile textures
   go back to the pool at every frame end and are charged to the pool's byte budget. Because every
   tile is rendered again, a warm renderer's next frame matches a fresh render after an edit of a
   shape inside the pattern, the pattern's size or transform, a gradient or nested pattern its
@@ -549,8 +634,9 @@ Entity with <path d="...">
   covered: a warm renderer keeps a marker's old context paint after the context element's paint
   changes (#2617), and setting a pattern's `width` with `setAttribute` does not reach the tile
   (#2616).
-- **Residency gates.** Residence is taken only when no clip polygon, clip mask, or mask pass is
-  active. Draws that fail a gate use the per-frame arena path.
+- **Residency gates.** Residence is taken only when no clip polygon or mask pass is active. A
+  draw under a path clip mask is resident and binds the mask's view, which the renderer keeps
+  across frames. Draws that fail a gate use the per-frame arena path.
 - **Repeats within a frame.** A slot's uniform and primary record serve its first draw of a frame.
   Its second and later draws in the frame (each marker placement, a repeated `<use>` source) take
   persistent records from `GeodeResidentSlot::repeatRecords`: the `i`-th repeat writes record `i`,
@@ -593,12 +679,12 @@ Entity with <path d="...">
   `GeodeTextShapeCache` (same header), one per device, with its encode and resident slots (8.8).
 - **Invalidation.** Path geometry invalidates through `on_update<ComputedPathComponent>`, which
   fires only when `ShapeSystem` changes the geometry; no separate dirty flag is involved.
-- **Uniform storage.** Resident slots hold their own uniforms, and each isolated-layer or
-  filter-result composite and each blit of a kept image texture keeps a uniform buffer and bind
-  group of its own across frames. Per-frame draws bump-allocate from per-encoder arenas, other
-  image blits from the encoder's uniform scratch, and filter passes from the filter engine's
-  scratch blocks, which skip uploading a slot that already holds the same bytes. Nothing uses a
-  uniform ring or dynamic offsets.
+- **Uniform storage.** Resident slots hold their own uniforms, including each clip shape's mask
+  uniform, and each isolated-layer or filter-result composite and each blit of a kept image texture
+  keeps a uniform buffer and bind group of its own across frames. Per-frame draws bump-allocate
+  from per-encoder arenas, other image blits from the encoder's uniform scratch, and filter passes
+  from the filter engine's scratch blocks, which skip uploading a slot that already holds the same
+  bytes. Nothing uses a uniform ring or dynamic offsets.
 - **Eviction.** Geometry changes remove the entity's cache and residence components; document
   teardown destroys them and returns their slab ranges. Residence is tracked per device, so a
   document drawn by another device uploads there instead of borrowing this device's buffers
