@@ -9342,7 +9342,8 @@ std::function<void(SVGDocument&)> MarkerElementEdit(std::function<void(SVGMarker
 // Each edit changes what some marker placement draws. A placement after the first keeps its
 // record across frames and rewrites it only when its bytes change, so an edit applied after two
 // frames must render exactly what a fresh document carrying the same edit renders. A multi-step
-// edit renders after every step and is compared after the last one.
+// edit renders after every step and compares every step's frame with a fresh document carrying
+// the steps so far.
 TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem) {
   const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
     <linearGradient id="g"><stop offset="0" stop-color="#ff00ff"/>
@@ -9372,8 +9373,14 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
       {"marker_orient", {MarkerElementEdit([](SVGMarkerElement& marker) {
          marker.setOrient(MarkerOrient::AngleDegrees(30));
        })}},
+      {"marker_ref_y", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setRefY(Lengthd(1, Lengthd::Unit::None));
+       })}},
       {"marker_width", {MarkerElementEdit([](SVGMarkerElement& marker) {
          marker.setMarkerWidth(Lengthd(3, Lengthd::Unit::None));
+       })}},
+      {"marker_height", {MarkerElementEdit([](SVGMarkerElement& marker) {
+         marker.setMarkerHeight(Lengthd(6, Lengthd::Unit::None));
        })}},
       {"marker_view_box", {MarkerElementEdit([](SVGMarkerElement& marker) {
          marker.setViewBox(Box2d::FromXYWH(0, 0, 8, 8));
@@ -9414,30 +9421,33 @@ TEST_F(RendererGeodeTest, MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem
     ASSERT_THAT(renderer.lastFrameTimings().counters.bufferWrites, testing::Eq(0u));
     const RendererBitmap before = renderer.takeSnapshot();
 
-    SVGDocument freshDocument = ParseDocumentOrFail(source);
-    std::optional<RendererBitmap> afterFirstStep;
-    for (const std::function<void(SVGDocument&)>& step : edit.steps) {
-      ASSERT_NO_FATAL_FAILURE(step(document));
-      ASSERT_NO_FATAL_FAILURE(step(freshDocument));
+    ASSERT_THAT(before.empty(), testing::IsFalse());
+    for (size_t stepCount = 1; stepCount <= edit.steps.size(); ++stepCount) {
+      SCOPED_TRACE(stepCount);
+      ASSERT_NO_FATAL_FAILURE(edit.steps[stepCount - 1](document));
       renderer.draw(document);
-      if (!afterFirstStep.has_value()) {
-        afterFirstStep = renderer.takeSnapshot();
+      const RendererBitmap actual = renderer.takeSnapshot();
+
+      // A document of its own per step: a document drawn before carries residence of its own.
+      SVGDocument freshDocument = ParseDocumentOrFail(source);
+      for (size_t i = 0; i < stepCount; ++i) {
+        ASSERT_NO_FATAL_FAILURE(edit.steps[i](freshDocument));
       }
-    }
-    const RendererBitmap actual = renderer.takeSnapshot();
+      RendererGeode freshRenderer = createRenderer();
+      freshRenderer.draw(freshDocument);
+      const RendererBitmap expected = freshRenderer.takeSnapshot();
+      ASSERT_THAT(expected.empty(), testing::IsFalse());
 
-    RendererGeode freshRenderer = createRenderer();
-    freshRenderer.draw(freshDocument);
-    const RendererBitmap expected = freshRenderer.takeSnapshot();
-
-    ASSERT_THAT(before.empty() || expected.empty(), testing::IsFalse());
-    // Premise: the first step changes the picture, so matching the fresh render is not vacuous.
-    if (before.pixels == afterFirstStep->pixels) {
-      ADD_FAILURE() << "the first step does not change the picture";
-      continue;
+      // Premise: the first step changes the picture, so matching the fresh render is not vacuous.
+      if (stepCount == 1 && before.pixels == actual.pixels) {
+        ADD_FAILURE() << "the first step does not change the picture";
+        break;
+      }
+      editor::tests::CompareBitmapToBitmap(
+          actual, expected,
+          std::string("marker_edit_") + edit.label + "_step_" + std::to_string(stepCount),
+          editor::tests::PixelmatchIdentityParams());
     }
-    editor::tests::CompareBitmapToBitmap(actual, expected, std::string("marker_edit_") + edit.label,
-                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
