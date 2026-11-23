@@ -6308,32 +6308,39 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// @param style Stroke style of the outline to store.
   std::optional<std::size_t> strokeVariantToReplace(const geode::GeodePathCacheComponent& cache,
                                                     const StrokeStyle& style) const {
-    std::size_t sameStyle = 0;
-    std::optional<std::size_t> sameStyleIndex;
-    std::optional<std::size_t> emptyIndex;
+    const auto sameStyle = [&style](const geode::GeodePathCacheComponent::StrokeVariant& variant) {
+      return variant.strokeKey == style;
+    };
+    const auto anyStyle = [](const geode::GeodePathCacheComponent::StrokeVariant&) { return true; };
+    const std::size_t sameStyleCount = static_cast<std::size_t>(
+        std::count_if(cache.strokeVariants.begin(), cache.strokeVariants.end(),
+                      [&](const auto& variant) { return variant && sameStyle(*variant); }));
+    if (sameStyleCount >= geode::GeodePathCacheComponent::kStrokeVariantsPerStyle) {
+      return leastRecentlyUsedReplaceableStrokeVariant(cache, sameStyle);
+    }
+    for (std::size_t i = 0; i < cache.strokeVariants.size(); ++i) {
+      if (!cache.strokeVariants[i]) {
+        return i;
+      }
+    }
+    return leastRecentlyUsedReplaceableStrokeVariant(cache, anyStyle);
+  }
+
+  /// Index of the least recently used stroke variant of \p cache that satisfies \p matches and
+  /// that no open frame may still read (`cacheVariantInUse`), or nullopt when there is none.
+  template <typename Predicate>
+  std::optional<std::size_t> leastRecentlyUsedReplaceableStrokeVariant(
+      const geode::GeodePathCacheComponent& cache, const Predicate& matches) const {
     std::optional<std::size_t> index;
     for (std::size_t i = 0; i < cache.strokeVariants.size(); ++i) {
       const auto& variant = cache.strokeVariants[i];
-      if (!variant) {
-        emptyIndex = emptyIndex.value_or(i);
-        continue;
-      }
-      const bool replaceable = !cacheVariantInUse(variant->lastUseFrame, variant->lastUseDeviceId);
-      if (variant->strokeKey == style) {
-        ++sameStyle;
-        if (replaceable && (!sameStyleIndex ||
-                            variant->lastUse < cache.strokeVariants[*sameStyleIndex]->lastUse)) {
-          sameStyleIndex = i;
-        }
-      }
-      if (replaceable && (!index || variant->lastUse < cache.strokeVariants[*index]->lastUse)) {
+      if (variant && matches(*variant) &&
+          !cacheVariantInUse(variant->lastUseFrame, variant->lastUseDeviceId) &&
+          (!index || variant->lastUse < cache.strokeVariants[*index]->lastUse)) {
         index = i;
       }
     }
-    if (sameStyle >= geode::GeodePathCacheComponent::kStrokeVariantsPerStyle) {
-      return sameStyleIndex;
-    }
-    return emptyIndex ? emptyIndex : index;
+    return index;
   }
 
   /// Stores \p candidate in the stroke variant of \p cache that `strokeVariantToReplace` picks,
