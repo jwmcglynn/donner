@@ -847,6 +847,44 @@ TEST_F(GeodeDocumentResidencyTest, ADrawOfAnotherSlotOfThePathIsNotARepeat) {
       << "a stroke drawn after its own pending fill took a repeat record of the stroke slot";
 }
 
+TEST_F(GeodeDocumentResidencyTest, OnlyTheSolidRepeatsOfAPatternPaintedSlotKeepRecords) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  // One path's fill slot drawn six times a frame: first with a pattern, then solid and pattern
+  // paint alternating. The three solid draws are repeats and keep a record each; the later
+  // pattern draws take their own resident path and keep none. (The pattern's content rectangle is
+  // drawn once per pattern-painted element, so it keeps repeat records of its own; only `#r` is
+  // counted here.)
+  SVGDocument document = ParseShapes(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <pattern id="pt" width="8" height="8" patternUnits="userSpaceOnUse">
+        <rect width="4" height="4" fill="#c20"/>
+      </pattern>
+      <defs><rect id="r" width="16" height="16"/></defs>
+      <use href="#r" x="8" y="8" fill="url(#pt)"/>
+      <use href="#r" x="24" y="8" fill="#0a0"/>
+      <use href="#r" x="40" y="8" fill="url(#pt)"/>
+      <use href="#r" x="8" y="32" fill="#0a0"/>
+      <use href="#r" x="24" y="32" fill="#a0a"/>
+      <use href="#r" x="40" y="32" fill="url(#pt)"/>
+    </svg>)svg");
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  renderer.draw(document);
+  std::optional<SVGElement> source = document.querySelector("#r");
+  ASSERT_TRUE(source.has_value());
+  auto* residence = source->entityHandle().try_get<geode::GeodeResidentPathComponent>();
+  ASSERT_THAT(residence, NotNull());
+  size_t records = 0;
+  residence->devices.forEach([&](geode::GeodeResidentPathSlots& slots) {
+    for (const geode::GeodeResidentSlot& slot : slots.fillSlots) {
+      records += slot.repeatRecords ? slot.repeatRecords->occurrences.size() : 0;
+    }
+  });
+  EXPECT_THAT(records, Eq(3u));
+}
+
 TEST_F(GeodeDocumentResidencyTest, EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats) {
   if (!RendererGeode::sceneBatchingEnabledForTesting()) {
     GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";

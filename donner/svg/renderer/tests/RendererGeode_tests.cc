@@ -10254,6 +10254,55 @@ TEST_F(RendererGeodeTest, OffscreenPassReplacingAStrokeVariantLeavesTheOuterFram
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// A path's fill slot serves both its solid and its pattern fills. Here `<use>` instances of one
+// path alternate pattern and solid paint, so in each frame a solid repeat follows a draw that bound
+// a pattern tile to the slot, and a pattern draw follows a solid one. A solid repeat draws through
+// a scene batch, which binds no pattern tile, and a pattern-painted draw never takes a repeat
+// record. Every edge sits on a pixel boundary, so the instances must match the same paint on
+// separate rectangles exactly, on the first and the steady frame.
+TEST_F(RendererGeodeTest, UseRepeatsOfAPatternPaintedSlotMatchPlainGeometry) {
+  const std::string pattern = R"svg(
+    <pattern id="pt" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="4" height="4" fill="#cc2200"/><rect x="4" y="4" width="4" height="4"
+      fill="#2255aa"/>
+    </pattern>)svg";
+  const std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg" + pattern +
+      R"svg(<defs><rect id="r" width="16" height="16"/></defs>
+    <use href="#r" x="8" y="8" fill="url(#pt)"/>
+    <use href="#r" x="24" y="8" fill="#00aa00"/>
+    <use href="#r" x="40" y="8" fill="url(#pt)"/>
+    <use href="#r" x="8" y="32" fill="#00aa00"/>
+    <use href="#r" x="24" y="32" fill="#aa00aa"/>
+    <use href="#r" x="40" y="32" fill="url(#pt)"/>
+  </svg>)svg";
+  const std::string plain =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg" + pattern +
+      R"svg(
+    <rect x="8" y="8" width="16" height="16" fill="url(#pt)"/>
+    <rect x="24" y="8" width="16" height="16" fill="#00aa00"/>
+    <rect x="40" y="8" width="16" height="16" fill="url(#pt)"/>
+    <rect x="8" y="32" width="16" height="16" fill="#00aa00"/>
+    <rect x="24" y="32" width="16" height="16" fill="#aa00aa"/>
+    <rect x="40" y="32" width="16" height="16" fill="url(#pt)"/>
+  </svg>)svg";
+
+  SVGDocument plainDocument = ParseDocumentOrFail(plain);
+  RendererGeode reference = createRenderer();
+  reference.draw(plainDocument);
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode renderer = createRenderer();
+  for (const char* frame : {"first", "steady"}) {
+    SCOPED_TRACE(frame);
+    renderer.draw(document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         std::string("pattern_slot_repeats_") + frame,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 // Repeated draws of a `<use>` source take the same repeat records as marker placements: adjacent
 // and non-adjacent repeats, with differing inherited paint, interleaved with an overlapping
 // element. Every edge sits on a pixel boundary, so the instances must match plain rectangles

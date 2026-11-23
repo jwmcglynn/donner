@@ -242,8 +242,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `geode_pattern_nonrect`, `geode_pattern_offset`, `geode_pattern_solid`. The tile itself is
     rendered again every frame, which costs one render pass and its content draws but no gated
     counter; skipping that pass is Future Work. A pattern painted by several elements renders its
-    tile once per element, and its content entities are then drawn more than once in the frame;
-    the draws after the first take repeat records (8.2), so an unchanged frame still writes nothing.
+    tile once per element, and its content entities are then drawn more than once in the frame, so
+    the draws after the first take the arena path, the repeat-draw limit 8.2 also meets.
   - [x] 8.6: Filter-pass steady state. A pass's parameters land in the slot they had the frame
     before, and an upload of bytes the slot already holds is skipped
     (`ReusedFilterSlotsUploadEditedParameters` checks that an edit still reaches the GPU). Texture
