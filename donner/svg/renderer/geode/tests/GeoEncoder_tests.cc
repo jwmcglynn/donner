@@ -593,6 +593,25 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListReuseIsLinearAndOrdered) {
   EXPECT_THAT(slab.freeListStepsForTesting(), testing::Le(kFrames * 2u * kCount));
 }
 
+TEST_F(GeoEncoderTest, RecordSlabSlotFreedTwiceIsHandedOutOnce) {
+  geode::GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement());
+  geode::GeodeRecordSlab::Slot freed;
+  geode::GeodeRecordSlab::Slot kept;
+  ASSERT_TRUE(slab.allocateSlot(*device_, freed));
+  ASSERT_TRUE(slab.allocateSlot(*device_, kept));
+  slab.freeSlot(freed);
+  slab.freeSlot(freed);
+  slab.beginFrame(1);
+
+  geode::GeodeRecordSlab::Slot first;
+  geode::GeodeRecordSlab::Slot second;
+  ASSERT_TRUE(slab.allocateSlot(*device_, first));
+  ASSERT_TRUE(slab.allocateSlot(*device_, second));
+  EXPECT_THAT(std::vector<uint32_t>({first.index, second.index}),
+              testing::ElementsAre(freed.index, testing::Gt(kept.index)))
+      << "the twice-freed slot must be reused once, and the next slot must be a fresh one";
+}
+
 TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
   geode::GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement());
 

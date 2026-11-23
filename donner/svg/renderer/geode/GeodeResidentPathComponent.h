@@ -162,6 +162,8 @@ public:
     const auto merged = static_cast<std::ptrdiff_t>(freeIndices_.size());
     freeIndices_.insert(freeIndices_.end(), pendingFrees_.begin(), pendingFrees_.end());
     std::inplace_merge(freeIndices_.begin(), freeIndices_.begin() + merged, freeIndices_.end());
+    // A slot freed twice must still be handed out once, or two live slots would share a record.
+    freeIndices_.erase(std::unique(freeIndices_.begin(), freeIndices_.end()), freeIndices_.end());
     freeListSteps_ += freeIndices_.size();
     pendingFrees_.clear();
   }
