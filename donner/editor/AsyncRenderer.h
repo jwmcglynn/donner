@@ -319,13 +319,16 @@ inline HandoffTimings ComputeHandoffTimings(std::chrono::steady_clock::time_poin
 /**
  * Outcome of the most recent interaction-layer promotion request in one worker iteration.
  *
- * The retained total and the total budget are sampled at the start of each request, before the
- * compositor decides it. The compositor compares them only for a new promotion of an entity that
- * holds no interaction hint yet, after its other checks pass. An entity that already holds a hint
- * is refreshed as `PromotedLayer` without that comparison, and `MemoryLimit` also covers the
- * per-tile interaction raster limit and a cached refusal of a previously failed interaction root.
- * So `MemoryLimit` with the retained total below the budget has a cause other than the total
- * budget, and `PromotedLayer` with the retained total above it is a refreshed hint.
+ * The retained total and the total admission threshold are sampled at the start of each request,
+ * before the compositor decides it. The compositor compares them only for a new promotion of an
+ * entity that holds no interaction hint yet, after target validation, the cached refusal, context
+ * classification, the hint refresh and the layer limit, and it adds one frame target of the most
+ * recent frame's canvas size to the retained total before comparing. An entity that already holds a
+ * hint is refreshed as `PromotedLayer` without that comparison. `MemoryLimit` also covers retained
+ * CPU bitmaps reaching the heap bitmap threshold, the per-tile interaction raster limit, and a
+ * cached refusal of a previously failed interaction root. So `MemoryLimit` with the retained total
+ * more than one canvas-sized surface below the threshold has another of those causes, and
+ * `PromotedLayer` with the retained total above the threshold is a refreshed hint.
  *
  * When one iteration makes several requests (a multi-selection, or a retry after the first
  * render), the last request wins: an earlier refusal can be followed by an admitted request.
@@ -339,7 +342,7 @@ struct InteractionPromotionOutcome {
   std::optional<svg::compositor::CompositorController::PromoteResult::Code> result;
   /// Retained compositor total (bitmaps and textures) at the start of the most recent request.
   std::size_t retainedBitmapBytes = 0;
-  /// Total compositor memory budget at the start of the most recent request.
+  /// The compositor's total admission threshold at the start of the most recent request.
   std::size_t memoryBudgetBytes = 0;
 };
 

@@ -1,5 +1,6 @@
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load("//donner/gpu/shader:constexpr_budgets.bzl", "GAUSSIAN_BLUR_ALL_PROJECTIONS_CONSTEXPR_COPTS")
 
 donner_cc_library(
     name = "projection",
@@ -100,6 +101,8 @@ donner_cc_test(
         "tests/TextEmitter_tests.cc",
         "tests/Uniformity_tests.cc",
     ],
+    # Compiler_tests.cc compiles the Gaussian blur program to every projection.
+    copts = GAUSSIAN_BLUR_ALL_PROJECTIONS_CONSTEXPR_COPTS,
     deps = [
         ":compiler",
         ":graphics_test_artifact",

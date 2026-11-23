@@ -518,6 +518,12 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "texture_hand_out_queue",
+    hdrs = ["TextureHandOutQueue.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+donner_cc_library(
     name = "renderer_geode",
     srcs = ["RendererGeode.cc"],
     hdrs = ["RendererGeode.h"],
@@ -533,6 +539,7 @@ donner_cc_library(
     }),
     visibility = ["//visibility:public"],
     deps = _RENDERER_GEODE_COMMON_DEPS + [
+        ":texture_hand_out_queue",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_gpu_wait",
     ],

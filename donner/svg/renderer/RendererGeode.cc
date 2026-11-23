@@ -48,6 +48,7 @@
 #include "donner/svg/renderer/HeadlessDevicePool.h"
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/TextureHandOutQueue.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeAnchoredSampling.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
@@ -870,14 +871,6 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   return out;
 }
 
-/// True when \p texture is the texture \p ref names. Slot and generation together identify a
-/// texture, so a recycled slot never matches the texture it replaced, and a null \p ref matches
-/// nothing.
-bool SameTexture(const gpu::Texture& texture, gpu::TextureRef ref) {
-  return ref.isValid() && texture.slotIndex() == ref.slotIndex() &&
-         texture.generation() == ref.generation();
-}
-
 struct RendererGeodeTextureKey {
   uint32_t width = 0;
   uint32_t height = 0;
@@ -900,7 +893,8 @@ struct RendererGeodeTextureKey {
 };
 
 struct RendererGeodeTextureBucket {
-  std::vector<gpu::Texture> free;
+  /// Free textures, handed out in the order the most recent frame took them.
+  TextureHandOutQueue<gpu::Texture> free;
   uint64_t lastUsedFrame = 0;
 };
 
@@ -915,6 +909,11 @@ struct RendererGeodeTextureBucket {
  * allocates from rather than taking one per call, because a texture must be destroyed through
  * that device on eviction and in this pool's destructor, where no caller is present to supply
  * one.
+ *
+ * A bucket hands its textures out in the order the most recent frame took them, whatever order
+ * they came back in, so a frame that repeats the previous frame's acquisitions gets back the same
+ * texture for each one. Caches keyed on texture identity, such as the filter engine's views and
+ * bind groups, therefore stay valid across unchanged frames.
  */
 class RendererGeodeTexturePool {
 public:
@@ -926,9 +925,7 @@ public:
   ~RendererGeodeTexturePool() {
     for (auto& [unusedKey, bucket] : buckets_) {
       (void)unusedKey;
-      for (gpu::Texture& texture : bucket.free) {
-        destroyPooledTexture(std::move(texture));
-      }
+      bucket.free.drain([&](gpu::Texture&& texture) { destroyPooledTexture(std::move(texture)); });
     }
   }
 
@@ -946,6 +943,10 @@ public:
     budgetBytes_ = std::clamp(workingSet, kTexturePoolBudgetBytes, kMaximumTexturePoolBudgetBytes);
     evictStalePoolBuckets();
     (void)evictPoolEntriesToFit(0);
+    // A texture kept out longer than a bucket stays alive comes back with no hand-out order.
+    std::erase_if(handedOut_, [&](const auto& entry) {
+      return currentFrameIndex_ - entry.second.frame > kBucketEvictAfterFrames;
+    });
   }
 
   /**
@@ -996,26 +997,17 @@ public:
   /// Takes a pooled texture matching \p desc, or creates one on a miss. The runtime counts the
   /// creation itself, so a hit ticks no counter and a miss ticks exactly one.
   /// @param desc Descriptor the texture must match exactly.
-  /// @param preferred Texture to hand back when it is still free in the bucket, so a caller that
-  ///   keeps state naming a texture, such as a cached bind group, gets the same one again. Any
-  ///   free texture of the bucket serves when it is not.
-  gpu::Texture acquire(const gpu::TextureDescriptor& desc, gpu::TextureRef preferred = {}) {
+  gpu::Texture acquire(const gpu::TextureDescriptor& desc) {
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     {
       std::lock_guard lock(mutex_);
       RendererGeodeTextureBucket& bucket = buckets_[key];
       bucket.lastUsedFrame = currentFrameIndex_;
       if (!bucket.free.empty()) {
-        const auto match =
-            std::find_if(bucket.free.begin(), bucket.free.end(),
-                         [&](const gpu::Texture& free) { return SameTexture(free, preferred); });
-        if (match != bucket.free.end()) {
-          std::iter_swap(match, std::prev(bucket.free.end()));
-        }
-        gpu::Texture texture = std::move(bucket.free.back());
-        bucket.free.pop_back();
+        gpu::Texture texture = bucket.free.takeNext();
         pooledTextureBytes_ -= textureByteSize(key);
         --pooledTextureCount_;
+        recordHandOut(texture);
         return texture;
       }
     }
@@ -1024,7 +1016,10 @@ public:
     if (created.hasError()) {
       return gpu::Texture{};
     }
-    return std::move(created).result();
+    gpu::Texture texture = std::move(created).result();
+    std::lock_guard lock(mutex_);
+    recordHandOut(texture);
+    return texture;
   }
 
   /// Returns \p texture to its bucket, or destroys it when a ceiling rejects it.
@@ -1036,6 +1031,12 @@ public:
     }
 
     std::lock_guard lock(mutex_);
+    TextureHandOutStamp stamp;
+    if (const auto handOut = handedOut_.find(IdentityOf(texture)); handOut != handedOut_.end()) {
+      stamp = handOut->second;
+      handedOut_.erase(handOut);
+    }
+
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto existingBucket = buckets_.find(key);
     const uint64_t textureBytes = textureByteSize(key);
@@ -1055,7 +1056,7 @@ public:
 
     RendererGeodeTextureBucket& bucket = buckets_[key];
     bucket.lastUsedFrame = currentFrameIndex_;
-    bucket.free.push_back(std::move(texture));
+    bucket.free.push(std::move(texture), stamp);
     pooledTextureBytes_ += textureBytes;
     ++pooledTextureCount_;
   }
@@ -1127,12 +1128,10 @@ private:
   }
 
   void destroyPoolBucket(const RendererGeodeTextureKey& key, RendererGeodeTextureBucket& bucket) {
-    const uint64_t bucketBytes = textureByteSize(key) * static_cast<uint64_t>(bucket.free.size());
-    for (gpu::Texture& texture : bucket.free) {
-      destroyPooledTexture(std::move(texture));
-    }
-    pooledTextureBytes_ -= bucketBytes;
-    pooledTextureCount_ -= bucket.free.size();
+    const std::size_t bucketCount = bucket.free.size();
+    bucket.free.drain([&](gpu::Texture&& texture) { destroyPooledTexture(std::move(texture)); });
+    pooledTextureBytes_ -= textureByteSize(key) * static_cast<uint64_t>(bucketCount);
+    pooledTextureCount_ -= bucketCount;
   }
 
   bool evictPoolEntriesToFit(uint64_t incomingBytes) {
@@ -1154,8 +1153,7 @@ private:
         return false;
       }
 
-      destroyPooledTexture(std::move(victim->second.free.back()));
-      victim->second.free.pop_back();
+      destroyPooledTexture(victim->second.free.takeLast());
       pooledTextureBytes_ -= textureByteSize(victim->first);
       --pooledTextureCount_;
       if (victim->second.free.empty()) {
@@ -1176,9 +1174,22 @@ private:
     }
   }
 
+  /// Records that \p texture was handed out now, so its return can be ordered by it.
+  void recordHandOut(const gpu::Texture& texture) {
+    handedOut_[IdentityOf(texture)] = TextureHandOutStamp{currentFrameIndex_, ++handOutCount_};
+  }
+
+  static uint64_t IdentityOf(const gpu::Texture& texture) {
+    return (uint64_t{texture.slotIndex()} << 32) | texture.generation();
+  }
+
   std::shared_ptr<geode::GeodeDevice> device_;
   mutable std::mutex mutex_;
   std::map<RendererGeodeTextureKey, RendererGeodeTextureBucket> buckets_;
+  /// When each texture now out of the pool was handed out, keyed by its runtime identity.
+  std::unordered_map<uint64_t, TextureHandOutStamp> handedOut_;
+  /// Hand-outs so far, the source of \ref TextureHandOutStamp::order.
+  uint64_t handOutCount_ = 0;
   uint64_t pooledTextureBytes_ = 0;
   std::size_t pooledTextureCount_ = 0;
   uint64_t currentFrameIndex_ = 0;
@@ -1878,11 +1889,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // and a filter execution inside the frame adds the chunks it closes here.
   std::vector<gpu::CommandBuffer> frameCommandBuffers;
 
-  // Runtime handles the filter executions of this frame recorded against. They belong to
-  // executions that have already finished, and the frame's submission re-validates every resource
-  // its command buffers name, so they are dropped only once that submission has happened.
-  std::vector<geode::RetainedFilterResources> frameRetainedFilterResources;
-
   // Whether a frame is open for recording. Distinct from `frameGpuEncoder`, which is null while
   // a filter executes between the frame's own encoders.
   bool frameRecordingOpen = false;
@@ -2052,11 +2058,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  /// Keep what a filter execution's command buffers reference alive until the frame submits.
-  void retainUntilFrameSubmits(geode::RetainedFilterResources resources) override {
-    frameRetainedFilterResources.push_back(std::move(resources));
-  }
-
   /// Submit every command buffer the frame has accumulated as one submission, in recording order.
   [[nodiscard]] bool submitFrameCommandBuffers() {
     if (frameArenaWriteFailed) {
@@ -2162,7 +2163,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
     frameCommandBuffers.clear();
-    frameRetainedFilterResources.clear();
     frameRecordingOpen = false;
     frameImportedTextureViews.clear();
     frameSnapshotImports.clear();
@@ -2367,16 +2367,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                 "A copyable pattern stack frame would let vector growth copy its tile handle.");
   std::vector<PatternStackFrame> patternStack;
 
-  /// Pattern tiles this renderer acquired in one frame, per descriptor in acquisition order.
-  using PatternTileOrder = std::map<RendererGeodeTextureKey, std::vector<gpu::TextureRef>>;
-  /// Tiles of the previous frame. The Nth tile of a descriptor in a frame asks the pool for the
-  /// previous frame's Nth tile of that descriptor, so an unchanged frame draws every pattern into
-  /// the texture it used last frame and resident fills keep their cached bind groups. Only which
-  /// texture is reused depends on this; every tile is rendered again each frame.
-  PatternTileOrder previousFramePatternTiles;
-  /// Tiles of the current frame; see \ref previousFramePatternTiles.
-  PatternTileOrder currentFramePatternTiles;
-
   /// A view of a pattern tile texture, kept while frames keep drawing into that texture.
   struct PatternTileView {
     gpu::TextureView view;       //!< View of the tile texture.
@@ -2392,23 +2382,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// This renderer's own frame count. Unlike \ref currentFrameIndex, which every renderer of the
   /// device advances, it measures how many frames of this renderer a view went unused.
   uint64_t patternTileFrame = 0;
-
-  /// The pool texture for the next pattern tile with \p desc, preferring the one the same tile
-  /// used last frame; see \ref previousFramePatternTiles.
-  gpu::Texture acquirePatternTileTexture(const gpu::TextureDescriptor& desc) {
-    const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
-    std::vector<gpu::TextureRef>& current = currentFramePatternTiles[key];
-    gpu::TextureRef preferred;
-    if (const auto previous = previousFramePatternTiles.find(key);
-        previous != previousFramePatternTiles.end() && current.size() < previous->second.size()) {
-      preferred = previous->second[current.size()];
-    }
-    gpu::Texture texture = acquireTexture(desc, preferred);
-    if (texture.isValid()) {
-      current.push_back(gpu::TextureRef(texture));
-    }
-    return texture;
-  }
 
   /// A view of pattern tile \p texture that outlives this frame, created on first use.
   /// @return The view, or null when the runtime refuses one.
@@ -2427,11 +2400,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return gpu::TextureViewRef(entry.view);
   }
 
-  /// Start a frame's pattern tile bookkeeping: the finished frame's tile order becomes the
-  /// preference for this one, and views the finished frame did not draw into are dropped.
+  /// Start a frame's pattern tile bookkeeping: views the finished frame did not draw into are
+  /// dropped.
   void beginFramePatternTiles() {
-    previousFramePatternTiles = std::move(currentFramePatternTiles);
-    currentFramePatternTiles.clear();
     ++patternTileFrame;
     std::erase_if(patternTileViews, [&](const auto& entry) {
       return entry.second.lastUsedFrame + 1 < patternTileFrame;
@@ -2672,36 +2643,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Acquire a pooled texture matching `desc`, or create a fresh one
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns an invalid texture on device failure.
-  /// @param preferred Texture to take when it is free, as \ref RendererGeodeTexturePool::acquire
-  ///   describes.
-  gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc, gpu::TextureRef preferred = {}) {
+  gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
     if (!texturePool) {
       return gpu::Texture{};
     }
     // A parked texture keeps its surface charge, which passes to the reuser.
-    if (gpu::Texture parked = takeFrameReusableTexture(desc, preferred); parked.isValid()) {
+    if (gpu::Texture parked = takeFrameReusableTexture(desc); parked.isValid()) {
       return parked;
     }
     if (!reserveTextureSurface(desc.size, desc.format)) {
       return gpu::Texture{};
     }
-    return texturePool->acquire(desc, preferred);
+    return texturePool->acquire(desc);
   }
 
-  /// Takes a texture this renderer parked in its open frame with exactly \p desc, if any,
-  /// \p preferred when it is among them.
-  gpu::Texture takeFrameReusableTexture(const gpu::TextureDescriptor& desc,
-                                        gpu::TextureRef preferred = {}) {
+  /// Takes a texture this renderer parked in its open frame with exactly \p desc, if any.
+  gpu::Texture takeFrameReusableTexture(const gpu::TextureDescriptor& desc) {
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
-    const auto matches = [&](const PendingRelease& r) {
-      return RendererGeodeTextureKey::From(r.desc) == key;
-    };
-    auto reusable = std::find_if(
+    const auto reusable = std::find_if(
         frameReusableTextures.begin(), frameReusableTextures.end(),
-        [&](const PendingRelease& r) { return matches(r) && SameTexture(r.texture, preferred); });
-    if (reusable == frameReusableTextures.end()) {
-      reusable = std::find_if(frameReusableTextures.begin(), frameReusableTextures.end(), matches);
-    }
+        [&](const PendingRelease& r) { return RendererGeodeTextureKey::From(r.desc) == key; });
     if (reusable == frameReusableTextures.end()) {
       return gpu::Texture{};
     }
@@ -7219,8 +7180,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       tiles->clear();
     }
     patternTileViews.clear();
-    previousFramePatternTiles.clear();
-    currentFramePatternTiles.clear();
   }
 
   /// Give up this renderer's render targets at teardown.
@@ -7710,7 +7669,6 @@ void RendererGeode::endFrame() {
     impl_->frameCommandBuffers.clear();
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
-    impl_->frameRetainedFilterResources.clear();
     impl_->frameImportedTextureViews.clear();
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();
@@ -8357,15 +8315,17 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   const int tilePixelHeight = rasterMetrics->pixelHeight;
 
   // Pattern tile target sampled by the Slug fill shader when used as paint. It comes from the
-  // transient pool, so a document repainting the same pattern every frame allocates once, and
-  // the same tile takes the same texture again, so a resident fill keeps its bind group.
+  // transient pool, so a document repainting the same pattern every frame allocates once. The
+  // pool hands a bucket's textures out in the order the previous frame took them, so on an
+  // unchanged frame each tile draws into the texture it used before and a resident fill keeps the
+  // bind group that names that texture's view.
   const gpu::TextureDescriptor tileDesc{
       "RendererGeodePatternTile",
       gpu::Extent2d{static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight)},
       impl_->gpuTextureFormat(),
       gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled |
           gpu::TextureUsage::CopySrc};
-  gpu::Texture tileTexture = impl_->acquirePatternTileTexture(tileDesc);
+  gpu::Texture tileTexture = impl_->acquireTexture(tileDesc);
   if (!tileTexture.isValid()) {
     return false;
   }
