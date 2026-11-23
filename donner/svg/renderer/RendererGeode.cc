@@ -4997,6 +4997,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       auto& variant = cache.fillVariants[*hit];
       variant.lastUse = ++cache.fillUseClock;
       variant.lastUseFrame = currentFrameIndex;
+      variant.lastUseDeviceId = device->deviceId();
       return {&*variant.encode, true, *hit};
     }
 
@@ -5004,11 +5005,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!encoded.has_value()) {
       return {&rejectedGeometry, false};
     }
-    const std::optional<std::size_t> replaceable = fillVariantToReplace(cache, currentFrameIndex);
+    const std::optional<std::size_t> replaceable = fillVariantToReplace(cache);
     if (!replaceable) {
-      // Every variant already served a draw this frame. Replacing one would make this frame's
-      // buckets evict each other on every draw, re-encoding and re-uploading each time, so this
-      // draw uses a scratch encode and the cached variants and their residence stay put.
+      // Every variant may still be read by an open frame. Replacing one would make this frame's
+      // buckets evict each other on every draw, or pull an encode from under an outer frame's
+      // pending batch, so this draw uses a scratch encode and the cached variants and their
+      // residence stay put.
       fillScratchEncode = std::move(*encoded);
       return {&*fillScratchEncode, false};
     }
@@ -5036,24 +5038,35 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       variant.encode = std::move(*encoded);
       variant.lastUse = ++cache.fillUseClock;
       variant.lastUseFrame = currentFrameIndex;
+      variant.lastUseDeviceId = device->deviceId();
       return {&*variant.encode, true, index};
     }
     fillScratchEncode = std::move(*encoded);
     return {&*fillScratchEncode, false};
   }
 
+  /// True when a cache variant last used in frame generation \p stamp of device \p stampDeviceId
+  /// may still be read by a frame that has not ended: the current frame, or an outer frame still
+  /// open on this device while an offscreen pass draws, which can hold a pending batch pointing at
+  /// the variant. A stamp from another device is not in use: a frame holds its document's write
+  /// access from beginning to end, so no frame of another device is open on this document.
+  [[nodiscard]] bool cacheVariantInUse(std::uint64_t stamp, std::uint64_t stampDeviceId) const {
+    return stampDeviceId == device->deviceId() &&
+           (stamp == currentFrameIndex || device->frameStampClaimed(stamp));
+  }
+
   /// Index of the fill variant a new tolerance bucket replaces: an empty one when there is one,
-  /// otherwise the least recently used one that served no draw in frame \p frame. Nullopt when
-  /// every variant served a draw in \p frame.
-  static std::optional<std::size_t> fillVariantToReplace(
-      const geode::GeodePathCacheComponent& cache, std::uint64_t frame) {
+  /// otherwise the least recently used one no open frame may still read (`cacheVariantInUse`).
+  /// Nullopt when every variant may still be read.
+  std::optional<std::size_t> fillVariantToReplace(
+      const geode::GeodePathCacheComponent& cache) const {
     std::optional<std::size_t> index;
     for (std::size_t i = 0; i < cache.fillVariants.size(); ++i) {
       const auto& variant = cache.fillVariants[i];
       if (!variant.encode.has_value()) {
         return i;
       }
-      if (variant.lastUseFrame != frame &&
+      if (!cacheVariantInUse(variant.lastUseFrame, variant.lastUseDeviceId) &&
           (!index || variant.lastUse < cache.fillVariants[*index].lastUse)) {
         index = i;
       }
@@ -6285,17 +6298,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Index of the stroke variant a new stroke key replaces: an empty one when there is one,
-  /// otherwise the least recently used one that served no draw in frame \p frame. Nullopt when
-  /// every variant served a draw in \p frame.
-  static std::optional<std::size_t> strokeVariantToReplace(
-      const geode::GeodePathCacheComponent& cache, std::uint64_t frame) {
+  /// otherwise the least recently used one no open frame may still read (`cacheVariantInUse`).
+  /// Nullopt when every variant may still be read.
+  std::optional<std::size_t> strokeVariantToReplace(
+      const geode::GeodePathCacheComponent& cache) const {
     std::optional<std::size_t> index;
     for (std::size_t i = 0; i < cache.strokeVariants.size(); ++i) {
       const auto& variant = cache.strokeVariants[i];
       if (!variant) {
         return i;
       }
-      if (variant->lastUseFrame != frame &&
+      if (!cacheVariantInUse(variant->lastUseFrame, variant->lastUseDeviceId) &&
           (!index || variant->lastUse < cache.strokeVariants[*index]->lastUse)) {
         index = i;
       }
@@ -6308,12 +6321,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// @param source Entity owning \p cache.
   /// @param cache Stroke cache of \p source.
   /// @param candidate Outline to store; moved from only when stored.
-  /// @return Index of the stored variant, or nullopt when every variant served a draw this frame
-  ///   or the budget refused the outline. The cache is unchanged then.
+  /// @return Index of the stored variant, or nullopt when every variant may still be read by an
+  ///   open frame or the budget refused the outline. The cache is unchanged then.
   std::optional<std::size_t> storeStrokeVariant(
       EntityHandle source, geode::GeodePathCacheComponent& cache,
       std::unique_ptr<geode::GeodePathCacheComponent::StrokeVariant>& candidate) {
-    const std::optional<std::size_t> replaceable = strokeVariantToReplace(cache, currentFrameIndex);
+    const std::optional<std::size_t> replaceable = strokeVariantToReplace(cache);
     const std::optional<std::size_t> retainedBytes = candidate->retainedBytes();
     if (!replaceable.has_value() || !retainedBytes.has_value()) {
       return std::nullopt;
@@ -6339,7 +6352,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// device-derived flattening tolerance, and the host transform of a `non-scaling-stroke`
   /// centerline. Returns a `StrokeDerived` pointing into the cached variant, or into
   /// `strokeScratchPath` for a draw with no entity, past the document budget, or past the
-  /// variants when every one already served this frame. The caller must check
+  /// variants when every one may still be read by an open frame. The caller must check
   /// `strokedPath == nullptr` for the "zero-stroke" case.
   StrokeDerived getStrokeDerived(EntityHandle source, const Path& geometry,
                                  const StrokeStyle& strokeStyle,
@@ -6353,6 +6366,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       geode::GeodePathCacheComponent::StrokeVariant& variant = *cache.strokeVariants[index];
       variant.lastUse = ++cache.strokeUseClock;
       variant.lastUseFrame = currentFrameIndex;
+      variant.lastUseDeviceId = device->deviceId();
       result.strokedPath = &variant.strokedPath;
       result.encoded = &variant.strokedEncode;
       result.persistent = true;
@@ -6390,7 +6404,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       if (const std::optional<std::size_t> stored = storeStrokeVariant(source, cache, candidate)) {
         return fromVariant(cache, *stored);
       }
-      // Every variant already served a draw this frame, or the document budget refused the
+      // Every variant may still be read by an open frame, or the document budget refused the
       // outline: draw from a per-frame outline and leave the cached variants and their residence
       // in place.
       strokeScratchPath = std::move(candidate->strokedPath);

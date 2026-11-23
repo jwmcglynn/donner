@@ -97,10 +97,14 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     encode. A stroke variant is keyed by the stroke style (width, cap, join, miter limit, dash
     array, dash offset, and `pathLength`), the device-derived flattening tolerance, which must
     match exactly, and the host transform of a `non-scaling-stroke` centerline. A new key replaces
-    the least recently used variant unless every variant served a draw in the current frame; then
-    the draw uses a per-frame outline. Each variant's bytes are charged to the document's
-    cache-byte budget, and each has its own resident slots, released with the variant, the
-    entity, or the device.
+    the least recently used variant that no open frame on the device may still read (the current
+    frame, or an outer frame an offscreen pass runs inside); when every variant may still be read,
+    the draw uses a per-frame outline. Fill variants are replaced under the same rule. Each
+    variant's bytes are charged to the document's cache-byte budget, a replacement taking over
+    the evicted variant's charge, and each has its own resident slots, released with the variant,
+    the entity, or the device
+    (`ReplacedStrokeOutlinesHandOverTheirChargeAndResidence`,
+    `StrokeOutlinesGoWithTheirPathDeviceAndDocument`).
   - [x] The driver passes the source entity to the backend in `PathShape::sourceEntity`
     (`RendererInterface.h`); backends that keep no per-entity state ignore it.
   - [x] `ShapeSystem`'s `emplaceComputedPathIfChanged` keeps the existing `ComputedPathComponent`
@@ -179,16 +183,18 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     does not compare GPU output with a TinySkia image.
   - [x] Snapshot unpremultiplication runs as a GPU compute pass (`SnapshotUnpremultiply`) where
     the target format allows it (`GpuAndCpuPathsAreByteIdentical`).
-- [ ] Milestone 8: Steady-state residency for the remaining draw classes. Each item clears the
-  named `kKnownViolations` entries in `geode_counter_corpus_tests`; every entry listed here misses
-  the steady state in the shipping configuration, with ordered batching on.
+- [ ] Milestone 8: Steady-state residency for the remaining draw classes. Each item removes one
+  cause of the named `kKnownViolations` entries in `geode_counter_corpus_tests`; an entry is
+  deleted once every item it names has landed. Every entry listed here misses the steady state in
+  the shipping configuration, with ordered batching on.
   - [x] 8.1: Stroke outlines cached per stroke key (see Milestone 2), so `<use>` instances that
     stroke one source path with different styles keep one outline each and re-encode nothing on an
     unchanged frame (`UseInstancesWithDistinctStrokeStyles_NoDirtyPath_ZeroEncodes`,
     `StrokeStylesPastTheCache_ReEncodeOnlyTheOverflow`; staleness under an edit to each key
     component and to the path: `RendererGeodeStrokeKeyTest` in `RendererGeode_tests.cc`). It
-    removes the path encodes of `poker_chips`, `stroking_complex`, and `nested_svg_aspectratio`;
-    their remaining uploads and bind groups are 8.9.
+    removes the path encodes of `poker_chips`, `stroking_complex`, and `nested_svg_aspectratio`.
+    The remaining uploads and bind groups of the first two are 8.9, and those of
+    `nested_svg_aspectratio` are 8.7.
   - [ ] 8.2: Marker instance residency. Every drawn marker re-uploads its geometry through the
     per-frame arena and builds its own bind group. Clears `marker`, `marker_segments`,
     `marker_spec_example`. A design that batches markers through instance records and needs new
@@ -216,10 +222,11 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     `filter_stroke_paint`.
   - [ ] 8.7: Clip, mask, and nested-viewport geometry. Residency and batching skip draws under a
     clip polygon, a clip mask, or an open mask pass, so clip-path and mask geometry re-encodes and
-    re-uploads every frame, and nested viewports re-encode their subtree. Clears `donner_splash`,
-    `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3, on 8.6 for `donner_splash`'s
-    filters, and on 8.1 for `nested_svg_aspectratio`'s `<use>` instances. That scene also carries
-    text inside nested viewports; whether its text needs 8.8 is not traced.
+    re-uploads every frame. `nested_svg_aspectratio` re-encodes no path on an unchanged frame;
+    its nested viewports re-upload geometry and build bind groups every frame. Clears
+    `donner_splash`, `geode_splash`, `nested_svg_aspectratio`. Depends on 8.3 and on 8.6 for
+    `donner_splash`'s filters. `nested_svg_aspectratio` also carries text inside nested
+    viewports; whether its text needs 8.8 is not traced.
   - [ ] 8.8: Painted-text geometry. Glyph outlines are cached per glyph (`GeodeGlyphCache`) and
     solid-filled glyphs draw from resident outlines, but pattern- and gradient-painted glyphs and
     text decorations are placed and encoded as transient geometry every frame. Clears
@@ -231,7 +238,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     frame, so when several `<use>` instances draw one source path's fill or stroke variant at
     different transforms or paints, every draw after the first goes through the per-frame arena,
     re-uploading its geometry and building a bind group. Clears `poker_chips` and
-    `stroking_complex`.
+    `stroking_complex`. Markers also draw one content entity at many transforms per frame;
+    whether 8.2's marker entries share this cause is not traced.
 
 ## Background
 

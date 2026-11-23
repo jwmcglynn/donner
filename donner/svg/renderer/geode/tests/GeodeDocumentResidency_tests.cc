@@ -10,6 +10,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -18,10 +20,12 @@
 #include <mutex>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
@@ -529,6 +533,77 @@ TEST_F(GeodeDocumentResidencyTest, StrokeOutlinesGoWithTheirPathDeviceAndDocumen
   }
   EXPECT_THAT(first_->liveResidentBytesForTesting(), Eq(firstBaseline))
       << "the document's stroke residence must be released with the document";
+}
+
+/// A document whose path is stroked through `<use>` instances with the given stroke widths, one
+/// instance per width, so the path keeps one stroke outline per width.
+/// @param widths Stroke widths of the instances.
+std::string StrokeWidthsSvg(std::span<const int> widths) {
+  std::string svg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">)"
+      R"(<defs><path id="p" d="M20 40 C60 0 120 80 180 30" fill="none"/></defs>)";
+  for (const int width : widths) {
+    svg += R"(<use href="#p" stroke="#c00" stroke-width=")" + std::to_string(width) + R"("/>)";
+  }
+  return svg + "</svg>";
+}
+
+/// A stroke key drawn once per frame, cycling through more keys than the path keeps outlines
+/// for, replaces a cached outline every frame. Each replacement hands the evicted outline's
+/// charge over, so the document is charged exactly what a fresh document holding the same eight
+/// outlines is charged; the evicted outline's residence goes with it, so the device's resident
+/// bytes stop growing once the cycle repeats; and every frame draws what a fresh document draws.
+TEST_F(GeodeDocumentResidencyTest, ReplacedStrokeOutlinesHandOverTheirChargeAndResidence) {
+  constexpr int kKeys = 12;
+  constexpr std::size_t kCached = 8;
+  const std::array<int, 1> firstWidth = {1};
+  SVGDocument document = ParseShapes(StrokeWidthsSvg(firstWidth));
+  std::optional<SVGElement> use = document.querySelector("use");
+  ASSERT_TRUE(use.has_value());
+  RendererGeode renderer(first_);
+
+  int64_t firstCyclePeak = 0;
+  std::vector<int> recent;
+  for (int frame = 0; frame < 2 * kKeys; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    const int width = 1 + frame % kKeys;
+    use->setAttribute("stroke-width", std::to_string(width));
+    renderer.draw(document);
+    const RendererBitmap actual = renderer.takeSnapshot();
+    recent.push_back(width);
+    if (recent.size() > kCached) {
+      recent.erase(recent.begin());
+    }
+
+    const std::array<int, 1> onlyWidth = {width};
+    SVGDocument fresh = ParseShapes(StrokeWidthsSvg(onlyWidth));
+    RendererGeode reference(second_);
+    reference.draw(fresh);
+    editor::tests::CompareBitmapToBitmap(actual, reference.takeSnapshot(),
+                                         "replaced_stroke_outline_frame_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+
+    SVGDocument holdingTheSameOutlines = ParseShapes(StrokeWidthsSvg(recent));
+    RendererGeode counter(second_);
+    counter.draw(holdingTheSameOutlines);
+    EXPECT_THAT(DocumentBudgetOf(document)->cacheBytes(),
+                Eq(DocumentBudgetOf(holdingTheSameOutlines)->cacheBytes()))
+        << "the document must be charged for exactly the eight outlines it holds";
+
+    const int64_t resident = first_->liveResidentBytesForTesting();
+    if (frame < kKeys) {
+      firstCyclePeak = std::max(firstCyclePeak, resident);
+    } else {
+      EXPECT_THAT(resident, testing::Le(firstCyclePeak))
+          << "replaced outlines must release their residence";
+    }
+  }
+
+  std::optional<SVGElement> path = document.querySelector("#p");
+  ASSERT_TRUE(path.has_value());
+  path->setAttribute("d", "");
+  renderer.draw(document);
+  EXPECT_THAT(DocumentBudgetOf(document)->cacheBytes(), Eq(0u));
 }
 
 TEST_F(GeodeDocumentResidencyTest, ADocumentBudgetRefusalRecoversWhenTheDeviceHoldingItGoes) {

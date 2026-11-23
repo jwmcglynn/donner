@@ -1293,16 +1293,16 @@ struct GeodeResidentGradientSlot {
   }
 };
 
-/// Sibling of `GeodePathCacheComponent`: holds the GPU residence for an
-/// entity's fill and stroke encodes. Installed lazily by `RendererGeode`
-/// at the solid-fill draw sites; removed by the same entt listener that
-/// clears `GeodePathCacheComponent` when geometry changes.
 /// GPU residence for one cached stroke outline (`GeodePathCacheComponent::StrokeVariant`).
 struct GeodeResidentStrokeSlots {
   GeodeResidentSlot solid;             ///< Solid stroke's resident geometry and record.
   GeodeResidentGradientSlot gradient;  ///< Gradient-painted stroke's resident outline and paint.
 };
 
+/// Sibling of `GeodePathCacheComponent`: holds the GPU residence for an
+/// entity's fill and stroke encodes. Installed lazily by `RendererGeode`
+/// at the solid-fill draw sites; removed by the same entt listener that
+/// clears `GeodePathCacheComponent` when geometry changes.
 struct GeodeResidentPathSlots {
   /// Solid fill's resident geometry and record, one per cached fill encode variant.
   std::array<GeodeResidentSlot, kGeodeFillVariantCount> fillSlots;

@@ -51,9 +51,12 @@ struct GeodePathCacheComponent {
     GeodeGeometryCacheReservation reservation;
     /// Value of `fillUseClock` when this variant last served a draw; picks the variant to replace.
     std::uint64_t lastUse = 0;
-    /// Frame index of the last draw this variant served. A variant used in the current frame is
-    /// never replaced, so more buckets in one frame than variants cannot evict each other.
+    /// Frame generation of the last draw this variant served, on the device `lastUseDeviceId`.
+    /// While a frame of that device at or before this generation is open, a recorded or pending
+    /// draw may still read the variant, so it is not replaced.
     std::uint64_t lastUseFrame = 0;
+    /// `GeodeDevice::deviceId()` of the device whose generation `lastUseFrame` is.
+    std::uint64_t lastUseDeviceId = 0;
 
     /// True when this variant holds the encode a draw at \p drawTolerance would build.
     ///
@@ -68,7 +71,8 @@ struct GeodePathCacheComponent {
 
   /// Number of tolerance buckets cached at once. Two covers an element drawn at its rest scale
   /// and an animated scale in the same frame. A further bucket replaces the least recently used
-  /// variant, unless every variant served a draw this frame; then it draws from a scratch encode.
+  /// variant, unless every variant may still be read by an open frame; then it draws from a
+  /// scratch encode.
   static constexpr std::size_t kFillVariantCount = kGeodeFillVariantCount;
 
   /// Fill encodes, one per recently drawn tolerance bucket. Populated on first encode for a
@@ -123,9 +127,12 @@ struct GeodePathCacheComponent {
     GeodeGeometryCacheReservation reservation;
     /// Value of `strokeUseClock` when this variant last served a draw; picks the one to replace.
     std::uint64_t lastUse = 0;
-    /// Frame index of the last draw this variant served. A variant used in the current frame is
-    /// never replaced, so more stroke keys in one frame than variants cannot evict each other.
+    /// Frame generation of the last draw this variant served, on the device `lastUseDeviceId`.
+    /// While a frame of that device at or before this generation is open, a pending batch may
+    /// still point at this variant, so it is neither replaced nor freed.
     std::uint64_t lastUseFrame = 0;
+    /// `GeodeDevice::deviceId()` of the device whose generation `lastUseFrame` is.
+    std::uint64_t lastUseDeviceId = 0;
 
     /// True when this variant holds the outline a draw with the given key would build.
     ///
@@ -169,9 +176,10 @@ struct GeodePathCacheComponent {
 
   /// Number of stroke keys cached at once. Eight covers an element whose `<use>` instances apply
   /// several stroke styles to it, together with a second tolerance bucket while a zoom animates.
-  /// A further key replaces the least recently used variant, unless every variant served a draw
-  /// this frame; then it draws from a per-frame outline, so the keys of one frame cannot evict
-  /// each other.
+  /// A further key replaces the least recently used variant, unless every variant may still be
+  /// read by an open frame (the current one, or an outer frame an offscreen pass runs inside);
+  /// then it draws from a per-frame outline, so the keys of one frame cannot evict each other and
+  /// a pending batch never loses the outline it points at.
   static constexpr std::size_t kStrokeVariantCount = kGeodeStrokeVariantCount;
 
   /// Stroke outlines, one per recently drawn stroke key. Each is allocated on first use, so an

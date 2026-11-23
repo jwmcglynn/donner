@@ -4540,6 +4540,62 @@ INSTANTIATE_TEST_SUITE_P(
       return std::string(info.param.name);
     });
 
+/// An offscreen pass on the same device inside an open frame, as a filter's image pass is, must
+/// not replace a stroke outline that the outer frame's pending batch still draws from. The outer
+/// frame leaves one stroke of the path pending; the pass then fills the path's stroke cache with
+/// seven more keys, so a ninth key would have to replace the only variant it did not draw.
+TEST_F(RendererGeodeTest, NestedPassKeepsTheStrokeOutlineAnOuterFrameLeftPending) {
+  const auto strokeOfWidth = [](double width) {
+    StrokeParams stroke;
+    stroke.strokeWidth = width;
+    return stroke;
+  };
+  const Path curve = PathBuilder().moveTo({8, 40}).curveTo({20, 8}, {44, 8}, {56, 40}).build();
+  const css::RGBA red(200, 0, 0, 255);
+
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  reference.setPaint(solidStroke(red));
+  reference.drawPath(PathShape{.path = &curve}, strokeOfWidth(3.0));
+  reference.endFrame();
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <path id="p" d="M8,40 C20,8 44,8 56,40" fill="none"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#p");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const EntityHandle source = target->unsafeEntityHandle();
+
+  RendererGeode outer = createRenderer();
+  beginFrame(outer);
+  outer.setPaint(solidStroke(red));
+  outer.drawPath(PathShape{.path = &curve, .sourceEntity = source}, strokeOfWidth(3.0));
+
+  std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+  ASSERT_THAT(inner, testing::NotNull());
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  inner->beginFrame(viewport);
+  inner->setPaint(solidStroke(css::RGBA(0, 0, 200, 255)));
+  for (double width = 4.0; width <= 11.0; width += 1.0) {
+    inner->drawPath(PathShape{.path = &curve, .sourceEntity = source}, strokeOfWidth(width));
+  }
+  inner->endFrame();
+
+  outer.endFrame();
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expected,
+                                       "nested_pass_keeps_pending_stroke_outline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// Fill and stroke together: interior should be the fill color, the stroke
 /// ring around the edge should be the stroke color.
 TEST_F(RendererGeodeTest, FillAndStrokeRect) {
