@@ -471,17 +471,20 @@ bool GeodeTextureEncoder::RetainedQuadBinding::publishUniforms(gpu::Device& devi
 bool GeodeTextureEncoder::RetainedQuadBinding::viewsTexture(
     const gpu::ResourceIdentity& texture) const {
   return (sourceView_.isValid() && inputs_.source == texture) ||
+         (maskView_.isValid() && inputs_.mask == texture) ||
          (backdropView_.isValid() && inputs_.backdrop == texture);
 }
 
-bool GeodeTextureEncoder::RetainedQuadBinding::bindsClipMask() const {
-  return bindGroup_.isValid() && inputs_.clipMask != gpu::ResourceIdentity{};
+bool GeodeTextureEncoder::RetainedQuadBinding::bindsClipMaskView(
+    const gpu::ResourceIdentity& view) const {
+  return bindGroup_.isValid() && view != gpu::ResourceIdentity{} && inputs_.clipMask == view;
 }
 
 void GeodeTextureEncoder::RetainedQuadBinding::releaseTextureViews() {
   // The bind group names the views, so it goes first.
   bindGroup_ = gpu::BindGroup();
   sourceView_ = gpu::TextureView();
+  maskView_ = gpu::TextureView();
   backdropView_ = gpu::TextureView();
   bindGroupBindsBuffer_ = false;
   inputs_ = Inputs{};
@@ -510,6 +513,15 @@ bool GeodeTextureEncoder::RetainedQuadBinding::rebuildBindGroup(gpu::Device& dev
   QuadViews views;
   views.source = sourceView_;
   views.mask = views.source;
+  if (params.maskTexture != nullptr) {
+    gpu::Result<gpu::TextureView> maskView = device.createTextureView(
+        *params.maskTexture, gpu::TextureViewDescriptor{"GeodeRetainedQuadMaskView"});
+    if (maskView.hasError()) {
+      return fail();
+    }
+    maskView_ = std::move(maskView).result();
+    views.mask = maskView_;
+  }
   views.backdrop = views.source;
   if (params.dstSnapshotTexture != nullptr) {
     gpu::Result<gpu::TextureView> backdropView = device.createTextureView(
@@ -540,7 +552,7 @@ bool GeodeTextureEncoder::drawRetainedQuad(const GeodeGpuContext& context,
                                            const gpu::Texture& texture, const float mvp[16],
                                            uint32_t targetWidth, uint32_t targetHeight,
                                            const QuadParams& params, RetainedQuadBinding& binding) {
-  if (!texture.isValid() || params.maskTexture != nullptr) {
+  if (!texture.isValid()) {
     return false;
   }
   gpu::Device& device = *context.gpuDevice;
@@ -558,6 +570,7 @@ bool GeodeTextureEncoder::drawRetainedQuad(const GeodeGpuContext& context,
   const RetainedQuadBinding::Inputs inputs{
       .layout = IdentityOf(pipeline.bindGroupLayout()),
       .source = IdentityOf(texture),
+      .mask = IdentityOf(params.maskTexture),
       .backdrop = IdentityOf(params.dstSnapshotTexture),
       .clipMask = IdentityOf(params.clipMaskView),
       .deviceId = texture.deviceId(),

@@ -4,10 +4,10 @@
 including painted text, re-encode, create and re-upload nothing, including the second and later
 draws of one entity in a frame such as marker placements and draws under a path clip mask, clip
 shapes fill their masks from cached, resident geometry, filter passes upload and bind nothing new,
-opacity, blend-mode and filter-result composites and decoded images without a clip mask write and
-create nothing, and ordered batching draws runs of resident draws as instanced draws. Steady-state
-residency for composites and images under a clip mask, composites through a `<mask>`, and draws
-under a clip polygon (among them turned marker placements) is still open (Milestone 8).
+opacity, blend-mode, filter-result and `<mask>` composites and decoded images, also under a path
+clip mask, write and create nothing, and ordered batching draws runs of resident draws as
+instanced draws. Steady-state residency for draws under a clip polygon (among them turned marker
+placements) is still open (Milestone 8).
 `geode_counter_corpus_tests` records the corpus scenes measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
@@ -56,8 +56,7 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the remaining Milestone 8 items: composites under a clip mask or through a `<mask>` (the
-  rest of 8.7) and residency under a clip polygon (8.9).
+- Start the remaining Milestone 8 item: residency under a clip polygon (8.9).
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -264,13 +263,18 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     does not bound the entries, because a frame split by a memory-limited filter budget returns
     the surfaces it already composited (`LayerCompositeRetainedStateIsCappedAcrossFrameSplits`).
     An entry holds a 224-byte uniform buffer on the GPU, a 224-byte CPU mirror of it, and the
-    handles of that buffer, at most two texture views and one bind group; its host record is at
-    most 512 bytes (a `static_assert` on `RetainedCompositeSequence::Entry`). The two composite
-    sequences therefore retain at most 512 entries: 112 KiB of uniform buffers on the GPU, 256 KiB
-    of host records, and the runtime objects behind 512 buffers, 1024 views and 512 bind groups.
-    These bytes are not charged to a byte budget. Entries the frame did not reach are dropped once
-    it is submitted, a
-    texture pool trim to nothing releases every entry, and all are released with the renderer
+    handles of that buffer, at most three texture views (source, `<mask>` and blend backdrop) and
+    one bind group; its host record is at most 512 bytes (a `static_assert` on
+    `RetainedCompositeSequence::Entry`). The two composite sequences therefore retain at most 512
+    entries: 112 KiB of uniform buffers on the GPU, 256 KiB of host records, and the runtime
+    objects behind 512 buffers, at most 1024 views (a layer or filter composite views at most two
+    textures) and 512 bind groups. These bytes are not charged to a byte budget. Entries the frame
+    did not reach are dropped once it is submitted; each keeps its uniform buffer, with no view or
+    bind group, for the next entry a frame claims, so a renderer whose frames alternate between
+    documents or compositor layers does not create those buffers again
+    (`RetainedCompositesKeepTheirBuffersAcrossFramesWithoutThem`), and entries and kept buffers
+    together stay within the cap. A texture pool trim to nothing releases every entry and kept
+    buffer, and all are released with the renderer
     (`LayerCompositeEntriesFollowTheLastFrame`). An entry's textures go back to the device's
     shared pool at each frame end while its views stay, so entries release their views and bind
     group, keeping the uniform buffer, before any texture they view is destroyed. The pool reports
@@ -279,28 +283,34 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     (`RetainedCompositesReleaseViewsBeforeThePoolDestroysTheirTextures`). A frame that ends without
     submitting, because it never reached `endFrame` or its recording failed, releases every entry's
     views, including bind groups naming its clip-mask views
-    (`RetainedCompositesReleaseViewsWhenAFrameIsAbandoned`). Covered only structurally: a release
-    the pool rejects goes through the same reporting destroy; a texture a failed frame hands to
-    fenced destruction, and one destroyed with no pool, are reported the same way; the pool
-    destroys textures in its own destructor only after every renderer has unregistered; teardown
-    releases the entries before destroying any texture; and a bind group naming a submitted frame's
-    clip-mask view is released when that frame ends. The runtime refuses any use of a view whose
-    texture is gone in any case; this ordering keeps a retained view from outliving the request to
-    destroy its texture. The blend backdrop, the clip-mask view and the sampler are part of the bind
-    group's key, each changed alone in
-    `RetainedQuadBindingRebuildsWhenAnyBoundInputChanges`; the source texture is covered by the
-    tests above. The bind group layout and the device are keyed too, defensively and untested: a
-    device has one image pipeline layout per target format. Blend-mode and filter-region edits and a
+    (`RetainedCompositesReleaseViewsWhenAFrameIsAbandoned`). An entry under a path clip mask names
+    the clip mask's view, which the renderer keeps across frames (see 8.7), and the renderer
+    releases every entry naming a clip-mask view before it drops that view: when the view's texture
+    is destroyed (`ClippedImageBlitsKeepTheirClipMaskViewUntilItGoes`, where another renderer's
+    pool trim destroys only the clip mask's texture) and when a frame starts that the view went
+    unused for. Covered only structurally: a release the pool rejects goes through the same
+    reporting destroy; a texture a failed frame hands to fenced destruction, and one destroyed with
+    no pool, are reported the same way; the pool destroys textures in its own destructor only after
+    every renderer has unregistered; teardown releases the entries before destroying any texture;
+    and the release at a frame start, which only an entry left undrawn after its claim reaches (a
+    pass that failed to open, a refused uniform publish, or a singular texel mapping). Such an
+    entry's bind group is never reused, since the identity of a dropped view never matches a live
+    view. The runtime refuses any use of a view whose texture is gone in any case; this ordering
+    keeps a retained view from outliving the request to destroy its texture. The `<mask>` texture,
+    the blend backdrop, the clip-mask view and the sampler are part of the bind group's key, each
+    changed alone in `RetainedQuadBindingRebuildsWhenAnyBoundInputChanges`, and a binding reports
+    each texture and clip-mask view it binds to the release paths above
+    (`RetainedQuadBindingReportsWhatItBinds`); the source texture is covered by the tests above.
+    The bind group layout and the device are keyed too, defensively and untested: a device has one
+    image pipeline layout per target format. Blend-mode and filter-region edits and a
     canvas rescale match a fresh renderer (`CompositeEditsMatchAFreshRenderer`).
     `LayerComposites_UnchangedFrameWritesAndCreatesNothing` and
     `FilterResultComposites_UnchangedFrameWritesAndCreatesNothing` gate the counters.
     `Edzample_Anim3`, `donner_icon`, the five filter scenes, and with 8.2 `marker_segments` and
     `marker_spec_example` meet the steady state: in
     `donner_icon` every counter came from its twenty `opacity: .5` spark outlines, each its own
-    isolated layer, while its gradient-painted paths are resident and batched. A composite under a
-    path clip mask binds a clip-mask view created for that frame, so it rebuilds its bind group
-    every frame, and composites through a `<mask>` keep the per-frame path; neither is part of this
-    item.
+    isolated layer, while its gradient-painted paths are resident and batched. Composites under a
+    path clip mask and composites through a `<mask>` hold the steady state with 8.7.
   - [x] 8.4: Image residency. An image drawn from its element's `LoadedImageComponent` keeps its
     premultiplied RGBA8 texture on each device that draws it (`GeodeResidentImageComponent`,
     `geode/GeodeResidentImageComponent.h`), and the blit of a kept texture draws through a retained
@@ -341,14 +351,15 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     the one whose frame releases the texture
     (`ImageBlitsReleaseViewsBeforeTheirTexturesAreDestroyed`). A frame that ends without submitting
     releases every image entry's views (`ImageBlitsReleaseViewsWhenAFrameIsAbandoned`), and an image
-    under a path clip mask rebuilds its bind group every frame and releases it at the frame's end
-    (`ClippedImageBlitsReleaseTheFramesClipMaskView`). A device that goes takes its renderers and
-    their entries with it; its textures stop counting against the document, and a document destroyed
-    outside a frame hands its textures to the retirement
+    under a path clip mask keeps the bind group naming the clip mask's view until that view goes
+    (`ClippedImageBlitsKeepTheirClipMaskViewUntilItGoes`). A device that goes takes its renderers
+    and their entries with it; its textures stop counting against the document, and a document
+    destroyed outside a frame hands its textures to the retirement
     (`ImageTexturesGoWithTheirElementDeviceAndDocument`). The image blit sequence keeps at most 256
     entries of the 8.3 entry shape (56 KiB of uniform buffers, 128 KiB of host records), uncharged
-    like the composite entries, so a renderer's three sequences retain at most 768 entries (168 KiB
-    of uniform buffers, 384 KiB of host records); blits past it allocate for their frame, and its
+    like the composite entries; with the `<mask>` composite sequence of 8.7, a renderer's four
+    sequences retain at most 1024 entries (224 KiB of uniform buffers, 512 KiB of host records);
+    blits past it allocate for their frame, and its
     entries follow the last frame and a pool trim
     (`ImageBlitEntriesStayCappedAndFollowTheLastFrame`). Placement, size, sampling and transform
     edits match a fresh renderer (`ImageBlitEditsMatchAFreshRenderer`). Each draw of a kept texture
@@ -399,8 +410,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     frames, and every pass misses under either key (the two-filter case of
     `UnchangedFilterPassesUploadAndBindNothing`). A filter region that changes size takes new
     textures and rebuilds its bindings once.
-  - [ ] 8.7: Clip, mask, and nested-viewport geometry. Clip geometry and draws under a path clip
-    meet the steady state; composites under a clip mask or through a `<mask>` do not yet. Draws
+  - [x] 8.7: Clip, mask, and nested-viewport geometry. Clip geometry, draws under a path clip,
+    composites under a path clip and composites through a `<mask>` meet the steady state. Draws
     inside a `<mask>`'s content or mask capture were already resident: the clips are suspended while
     a mask is captured. `nested_svg_aspectratio`'s per-frame uploads were same-frame repeats of
     resident slots, not nested-viewport geometry, and cleared with 8.1 and 8.2.
@@ -439,6 +450,27 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
       clip polygon is 8.9, which this item does not cover. A same-frame repeat of a slot under a
       clip mask takes the arena too, since repeat records are not written under any clip state; the
       arena draw binds the same mask and carries the same clip flag.
+    - Composites. A `<mask>` composites its content through its mask with a retained quad binding
+      (8.3) claimed when the mask is popped, in a fourth sequence beside the layer, filter-result
+      and image sequences; the binding views the content and the mask texture and keys its bind
+      group on both, and its uniform carries the mask mode, color interpolation and region bounds,
+      so it is rewritten only when one of them changes. A layer, filter-result, image or mask
+      composite under a path clip mask keeps the bind group naming the clip mask's retained view
+      from frame to frame. An unchanged frame writes and creates nothing for either
+      (`MaskComposites_UnchangedFrameWritesAndCreatesNothing`,
+      `MaskCompositesKeepTheirBindingsAcrossUnchangedFrames`, also when another renderer draws on
+      the device between frames, and again after a canvas resize). Edits of the mask's content, the
+      masked content, the mask's color interpolation, type and region, and a mask removed and
+      restored match a fresh renderer (`MaskCompositeEditsMatchAFreshRenderer`). Mask composite
+      entries follow the 8.3 lifetime rules and release their views before the pool destroys either
+      texture, after a trim, a stale bucket and a budget eviction caused by another renderer, and
+      after an abandoned frame (`MaskAndClippedCompositesReleaseViewsWithTheirTextures`). Each
+      entry has the 8.3 entry's bytes, counted with the other sequences under 8.4, and views two
+      textures, its content and its mask, so the sequence keeps the runtime objects behind at most
+      256 buffers, 512 views and 256 bind groups. The composites belong to the renderer, not the
+      document, so a replayed concurrent-DOM frame keeps them too
+      (`SnapshotReplayKeepsMaskCompositeBindings`) and the change adds nothing to a render
+      snapshot.
     - Mask views. The renderer keeps the view of each clip-mask texture across frames
       (`RetainedTextureViews`, the mechanism pattern tile views use), and the pool hands a clip mask
       the texture it had the frame before, so an unchanged frame binds the same views. A view is
@@ -482,12 +514,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
       every frame; no corpus scene has one. Nested clip chains (#2499) are unchanged: the cache is
       indexed by shape, so each shape costs a constant per frame, and the superlinear cost #2499
       measures is in the driver's clip collection.
-    - Remaining. `donner_splash` meets the steady state. `geode_splash` keeps 3 buffer writes and 3
-      bind groups, the blit uniforms and bindings of the composites of its three masks. Composites
-      through a `<mask>` and composites under a clip mask are the next part of this item. The
-      retained composite sequences release every binding that names a clip-mask view at each frame
-      end; the clip-mask view a composite binds is now the same every frame, so they can keep those
-      bindings, keyed by the identity of the views they bind.
+    - Corpus. `donner_splash` and `geode_splash` meet the steady state, and their entries are
+      deleted from `kKnownViolations`.
   - [x] 8.8: Painted-text geometry. Solid, unwarped glyph fills draw the glyph cache's resident
     encodings. Every other shape a text element paints (a placed glyph outline filled with a
     gradient or a pattern, or with a solid along a text path; a joined glyph stroke outline; a

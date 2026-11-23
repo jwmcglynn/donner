@@ -413,6 +413,18 @@ TEST_F(GeoEncoderTest, RetainedQuadBindingRebuildsWhenAnyBoundInputChanges) {
         encoder.blitFullTarget(opaqueLayer, 1.0, binding);
       });
 
+  // The `<mask>` texture changes while the content texture stays.
+  expectRebuild(
+      "mask",
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.blitFullTargetMasked(opaqueLayer, leftMask, svg::MaskType::Alpha, std::nullopt,
+                                     svg::ColorInterpolation::SRGB, binding);
+      },
+      [&](GeoEncoder& encoder, auto* binding) {
+        encoder.blitFullTargetMasked(opaqueLayer, topMask, svg::MaskType::Alpha, std::nullopt,
+                                     svg::ColorInterpolation::SRGB, binding);
+      });
+
   // The sampler changes: a nearest-sampled upscale, then a bilinear one of the same texture.
   const gpu::Texture checker = makeTexture({4, 4}, [](uint32_t x, uint32_t y) {
     return (x + y) % 2 == 0 ? std::array<uint8_t, 4>{255, 255, 255, 255}
@@ -430,6 +442,62 @@ TEST_F(GeoEncoderTest, RetainedQuadBindingRebuildsWhenAnyBoundInputChanges) {
         encoder.drawTexture(checker, upscaled, wholeTexture, 1.0, /*pixelated=*/false,
                             /*sourceIsPremultiplied=*/true, binding);
       });
+}
+
+/// A retained quad binding reports every texture its views view and the clip-mask view its bind
+/// group names, which is how its owner finds the bindings to release before a texture or a view
+/// goes. Releasing the binding's views leaves it reporting none of them.
+TEST_F(GeoEncoderTest, RetainedQuadBindingReportsWhatItBinds) {
+  // Creates a sampled texture the size of the target into \p out, failing the test if it cannot.
+  const auto makeTarget = [&](const char* label, gpu::Texture& out) {
+    gpu::Result<gpu::Texture> created = device_->runtimeDevice().createTexture(
+        gpu::TextureDescriptor{label, kTargetSize, gpu::TextureFormat::RGBA8Unorm,
+                               gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+    ASSERT_THAT(created, gpu::HasResult()) << label;
+    out = std::move(created).result();
+  };
+  const auto identityOf = [](const auto& handle) {
+    return gpu::ResourceIdentity{handle.slotIndex(), handle.generation()};
+  };
+  gpu::Texture content;
+  gpu::Texture mask;
+  gpu::Texture clip;
+  gpu::Texture unrelated;
+  ASSERT_NO_FATAL_FAILURE(makeTarget("BindingContent", content));
+  ASSERT_NO_FATAL_FAILURE(makeTarget("BindingMask", mask));
+  ASSERT_NO_FATAL_FAILURE(makeTarget("BindingClip", clip));
+  ASSERT_NO_FATAL_FAILURE(makeTarget("BindingUnrelated", unrelated));
+  gpu::Result<gpu::TextureView> clipView =
+      device_->runtimeDevice().createTextureView(clip, gpu::TextureViewDescriptor{"BindingClip"});
+  gpu::Result<gpu::TextureView> otherView = device_->runtimeDevice().createTextureView(
+      unrelated, gpu::TextureViewDescriptor{"BindingUnrelated"});
+  ASSERT_THAT(clipView, gpu::HasResult());
+  ASSERT_THAT(otherView, gpu::HasResult());
+
+  GeodeTextureEncoder::RetainedQuadBinding binding;
+  {
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                       kTargetSize);
+    encoder.setClipMask(clip, clipView.result());
+    encoder.blitFullTargetMasked(content, mask, svg::MaskType::Luminance, std::nullopt,
+                                 svg::ColorInterpolation::SRGB, &binding);
+    encoder.finish();
+  }
+  ASSERT_THAT(binding.holdsTextureViews(), testing::IsTrue())
+      << "premise: the draw used the binding";
+  EXPECT_THAT(binding.viewsTexture(identityOf(content)), testing::IsTrue());
+  EXPECT_THAT(binding.viewsTexture(identityOf(mask)), testing::IsTrue())
+      << "a binding views its mask texture, so it must report it before that texture goes";
+  EXPECT_THAT(binding.viewsTexture(identityOf(unrelated)), testing::IsFalse());
+  EXPECT_THAT(binding.bindsClipMaskView(identityOf(clipView.result())), testing::IsTrue())
+      << "a binding names the clip-mask view it was drawn under";
+  EXPECT_THAT(binding.bindsClipMaskView(identityOf(otherView.result())), testing::IsFalse());
+  EXPECT_THAT(binding.bindsClipMaskView(gpu::ResourceIdentity{}), testing::IsFalse());
+
+  binding.releaseTextureViews();
+  EXPECT_THAT(binding.holdsTextureViews(), testing::IsFalse());
+  EXPECT_THAT(binding.viewsTexture(identityOf(mask)), testing::IsFalse());
+  EXPECT_THAT(binding.bindsClipMaskView(identityOf(clipView.result())), testing::IsFalse());
 }
 
 /// A mask pass over a mask whose extent is not the target's is refused before anything is recorded:

@@ -46,7 +46,11 @@ struct HeldFrame {
 /// construction and destruction are absent too: they ride along with the next round trip, and the
 /// 19 still held after a frame's last round trip go in one more batch when the worker parks.
 constexpr HeldFrame kHeldFrames[] = {
-    {12.0, {.resourceCreation = 45, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    // The first held frame creates one pooled uniform arena buffer, taken by the layer tile draws
+    // (`RendererGeode::drawTextureSnapshot`), that earlier frames no longer warm: mask composites
+    // keep their own uniform buffers instead of drawing through the arena. Later held frames create
+    // none beyond the recorded counts.
+    {12.0, {.resourceCreation = 46, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
     {24.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
     {36.0, {.resourceCreation = 35, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
 };

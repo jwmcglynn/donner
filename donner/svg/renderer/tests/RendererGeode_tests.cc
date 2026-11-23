@@ -7438,10 +7438,12 @@ TEST_F(RendererGeodeTest, ImageBlitsReleaseViewsWhenAFrameIsAbandoned) {
       "image_blits_after_abandoned_frames", editor::tests::PixelmatchIdentityParams());
 }
 
-/// An image under a path clip binds the frame's clip mask view, which the next frame replaces, so
-/// its blit entry lets go of its views and bind group when the frame ends and every frame still
-/// matches a fresh rendering.
-TEST_F(RendererGeodeTest, ClippedImageBlitsReleaseTheFramesClipMaskView) {
+/// An image under a path clip keeps the bind group naming the clip mask's retained view across
+/// unchanged frames, so those frames write and create nothing for it. The image's own texture is
+/// kept outside the texture pool, so a pool trim by another renderer on the device destroys only
+/// the clip mask's texture: the entry stays, but must release the bind group naming that texture's
+/// view, and the next frame rebuilds it and matches a fresh rendering.
+TEST_F(RendererGeodeTest, ClippedImageBlitsKeepTheirClipMaskViewUntilItGoes) {
   const std::string source =
       std::string(
           R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">)svg"
@@ -7450,19 +7452,39 @@ TEST_F(RendererGeodeTest, ClippedImageBlitsReleaseTheFramesClipMaskView) {
       std::string(kImagePngDataUrls[2]) + R"svg("/></svg>)svg";
   std::optional<SVGDocument> document;
   ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
-  RendererGeode renderer = createRenderer();
-  for (int frame = 1; frame <= 2; ++frame) {
-    SCOPED_TRACE(testing::Message() << "frame " << frame);
+  // A device of its own, so the pool holds only what these renderers put there. A renderer's own
+  // trim also releases its retained entries, so the trim comes from another renderer.
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  RendererGeode other(device);
+  const auto drawAndCompare = [&](const std::string& label) {
     renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse()) << label;
     EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(1))
         << "Premise: the clipped image draws through a retained entry";
-    EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(0))
-        << "the entry must not keep the ended frame's clip mask view";
+    EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(1))
+        << label << ": the entry keeps the bind group naming the clip mask's view";
     editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
-                                         RenderFreshGeode(sharedDevice(), source),
-                                         "clipped_image_blit_frame_" + std::to_string(frame),
+                                         RenderFreshGeode(sharedDevice(), source), label,
                                          editor::tests::PixelmatchIdentityParams());
+  };
+  for (int frame = 1; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    drawAndCompare("clipped_image_blit_frame_" + std::to_string(frame));
+    if (frame > 1) {
+      EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
+      EXPECT_EQ(renderer.lastFrameTimings().counters.bufferWrites, 0u);
+    }
   }
+
+  other.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(), ImageBlitEntries(1))
+      << "Premise: another renderer's trim leaves this renderer's entry in place";
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), ImageBlitEntries(0))
+      << "the trim destroyed the clip mask's texture, so the entry must let go of the bind group "
+         "naming its view";
+  drawAndCompare("clipped_image_blit_after_clip_texture_destroyed");
 }
 
 /// A render snapshot carries a copy of each image's pixels and no handle into the document, so
@@ -12404,7 +12426,7 @@ TEST_F(RendererGeodeTest, TileAndClipMaskViewsGoWithTheirTextures) {
 /// Edits that change what a retained composite draws with, each compared with a fresh renderer:
 /// a blend mode, a filter region that moves the same filter result between the full-target blit
 /// and the offset quad, a canvas resize that rescales the document through its viewBox, and a
-/// composite under a path clip mask, whose clip view is new every frame.
+/// composite under a path clip mask, whose binding names the clip mask's retained view.
 TEST_F(RendererGeodeTest, CompositeEditsMatchAFreshRenderer) {
   std::optional<SVGDocument> document;
   ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
@@ -12512,6 +12534,325 @@ TEST_F(RendererGeodeTest, LayerCompositeRetainedStateFollowsTheSurfaceBudget) {
   renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/4u, /*maximumBytes=*/1u << 20);
   renderer.draw(*document);
   EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::SizeIs(3u));
+}
+
+/// Matches retained composite counts of \p masks `<mask>` composite entries.
+testing::Matcher<RendererGeode::RetainedCompositeCounts> RetainedMaskCount(size_t masks) {
+  return testing::Field("masks", &RendererGeode::RetainedCompositeCounts::masks, masks);
+}
+
+/// Four `<mask>` composites over a background: a luminance mask, an alpha mask with user-space
+/// bounds, and a mask whose content is masked by a second mask. Every mask covers the whole canvas,
+/// so all of their textures share one size.
+constexpr std::string_view kMaskCompositeSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <mask id="luminance">
+    <rect width="64" height="64" fill="white"/>
+    <circle id="hole" cx="16" cy="16" r="9" fill="#202020"/>
+  </mask>
+  <mask id="alpha" mask-type="alpha" maskUnits="userSpaceOnUse" x="34" y="2" width="28"
+        height="28">
+    <rect width="64" height="64" fill="black" fill-opacity="0.6"/>
+  </mask>
+  <mask id="inner"><rect x="2" y="34" width="14" height="28" fill="white"/></mask>
+  <mask id="outer"><rect x="2" y="34" width="28" height="28" fill="white" mask="url(#inner)"/></mask>
+  <rect width="64" height="64" fill="#204080"/>
+  <rect id="luminance-target" x="2" y="2" width="28" height="28" fill="orange"
+        mask="url(#luminance)"/>
+  <rect id="alpha-target" x="34" y="2" width="28" height="28" fill="lime" mask="url(#alpha)"/>
+  <rect x="2" y="34" width="28" height="28" fill="red" mask="url(#outer)"/>
+</svg>)svg";
+
+/// `<mask>` composites drawn by kMaskCompositeSvg, the nested mask's included.
+constexpr size_t kMaskCompositeCount = 4;
+
+/// Each mask composites from the same textures on every unchanged frame, also when another renderer
+/// on the device draws its own masks between frames, so it writes no uniform and creates no bind
+/// group; once the canvas size changes the composites take textures of the new size and are steady
+/// again on the next frame. The pixels stay those of a fresh renderer throughout.
+TEST_F(RendererGeodeTest, MaskCompositesKeepTheirBindingsAcrossUnchangedFrames) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(kMaskCompositeSvg, document));
+  const RendererBitmap expected = RenderFresh(sharedDevice(), *document);
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  const auto firstFrame = renderer.maskCompositeTexturesForTesting();
+  ASSERT_THAT(firstFrame, testing::SizeIs(kMaskCompositeCount));
+  ASSERT_THAT(firstFrame, AllComposited());
+
+  RendererGeode other = createRenderer();
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    if (frame == 3) {
+      // The other renderer takes and returns textures of the same size before this frame.
+      other.draw(*document);
+      ASSERT_THAT(other.maskCompositeTexturesForTesting(), testing::SizeIs(kMaskCompositeCount));
+    }
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.maskCompositeTexturesForTesting(), testing::ElementsAreArray(firstFrame));
+    const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+    EXPECT_EQ(counters.bindgroupCreates, 0u);
+    EXPECT_EQ(counters.bufferWrites, 0u);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         "mask_composites_unchanged_frame_" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+
+  document->setCanvasSize(48, 48);
+  const RendererBitmap expectedResized = RenderFresh(sharedDevice(), *document);
+  renderer.draw(*document);
+  const auto resizedFrame = renderer.maskCompositeTexturesForTesting();
+  ASSERT_THAT(resizedFrame, testing::SizeIs(kMaskCompositeCount));
+  ASSERT_THAT(resizedFrame, AllComposited());
+  EXPECT_THAT(resizedFrame, testing::Pointwise(testing::Ne(), firstFrame))
+      << "every mask must take textures of the new size";
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expectedResized,
+                                       "mask_composites_resized_frame",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.maskCompositeTexturesForTesting(), testing::ElementsAreArray(resizedFrame));
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.bufferWrites, 0u);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expectedResized,
+                                       "mask_composites_after_resize",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Edits that change what a retained mask composite draws, each compared with a fresh renderer
+/// after a warm renderer has drawn the document twice: the mask's content, the masked content, the
+/// mask's color interpolation, a mask removed and restored, which shifts the composites after it to
+/// other entries, the mask's type, and its region. Each edit must change the picture, or a stale
+/// binding would pass unnoticed.
+TEST_F(RendererGeodeTest, MaskCompositeEditsMatchAFreshRenderer) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(kMaskCompositeSvg, document));
+  std::optional<SVGElement> hole = document->querySelector("#hole");
+  std::optional<SVGElement> alphaTarget = document->querySelector("#alpha-target");
+  std::optional<SVGElement> luminance = document->querySelector("#luminance");
+  std::optional<SVGElement> luminanceTarget = document->querySelector("#luminance-target");
+  ASSERT_THAT(hole, testing::Optional(testing::_)) << "the fixture names this element";
+  ASSERT_THAT(alphaTarget, testing::Optional(testing::_)) << "the fixture names this element";
+  ASSERT_THAT(luminance, testing::Optional(testing::_)) << "the fixture names this element";
+  ASSERT_THAT(luminanceTarget, testing::Optional(testing::_)) << "the fixture names this element";
+  struct Edit {
+    const char* name;
+    std::function<void()> apply;
+  };
+  const std::vector<Edit> edits = {
+      {"mask_content", [&] { hole->setAttribute("fill", "#a0a0a0"); }},
+      {"masked_content", [&] { alphaTarget->setAttribute("fill", "magenta"); }},
+      {"color_interpolation", [&] { luminance->setAttribute("color-interpolation", "linearRGB"); }},
+      {"mask_removed", [&] { luminanceTarget->removeAttribute("mask"); }},
+      {"mask_restored", [&] { luminanceTarget->setAttribute("mask", "url(#luminance)"); }},
+      {"mask_type", [&] { luminance->setAttribute("mask-type", "alpha"); }},
+      // The luminance mask's region is the default, relative to the masked element's bounds, so
+      // resizing the element moves the region the composite is bounded by.
+      {"mask_region", [&] { luminanceTarget->setAttribute("width", "20"); }},
+  };
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*document);
+  for (const Edit& edit : edits) {
+    SCOPED_TRACE(edit.name);
+    renderer.draw(*document);
+    const RendererBitmap beforeEdit = renderer.takeSnapshot();
+    edit.apply();
+    const RendererBitmap expected = RenderFresh(sharedDevice(), *document);
+    // Premise, measured with an unbounded pixel budget: the edit changes the rendering.
+    editor::tests::BitmapGoldenCompareParams signalParams =
+        editor::tests::PixelmatchIdentityParams();
+    signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+    int editedPixels = -1;
+    editor::tests::CompareBitmapToBitmap(beforeEdit, expected,
+                                         std::string("mask_edit_premise_") + edit.name,
+                                         signalParams, &editedPixels);
+    ASSERT_THAT(editedPixels, testing::Gt(0))
+        << "Premise: the edit must change the rendering, or a stale binding would pass unnoticed";
+
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         std::string("mask_edit_") + edit.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// The views and bind groups a renderer keeps for its mask composites, and for composites under a
+/// path clip, go with the textures and clip-mask views they name. Another renderer on the same
+/// device makes the shared pool destroy those textures, by trimming it, by beginning frames until
+/// their bucket goes stale, and by returning textures past the pool's budget, and a frame that ends
+/// without submitting releases them too. Each time no entry holds a view, and the next frame
+/// rebuilds them from live textures and paints what a fresh renderer paints. Ends with both
+/// renderers torn down, which the sanitizer lanes check for use after free.
+TEST_F(RendererGeodeTest, MaskAndClippedCompositesReleaseViewsWithTheirTextures) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <mask id="m"><rect width="64" height="64" fill="#a0a0a0"/></mask>
+        <clipPath id="c"><circle cx="48" cy="48" r="14"/></clipPath>
+        <rect width="32" height="32" fill="orange" mask="url(#m)"/>
+        <g opacity="0.5" clip-path="url(#c)"><rect x="32" y="32" width="32" height="32" fill="red"/></g>
+      </svg>)svg",
+      document));
+  std::optional<SVGDocument> plain;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+        <rect width="16" height="16" fill="red"/>
+      </svg>)svg",
+      plain));
+  // Six nested full-canvas layers of 16 MiB each return 96 MiB at once, past the 64 MiB budget a
+  // pool of small frames keeps, so the pool evicts its least recently used buckets.
+  std::optional<SVGDocument> large;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="2048">
+        <g opacity="0.9"><rect width="2048" height="2048" fill="red"/>
+         <g opacity="0.9"><rect width="2048" height="2048" fill="lime"/>
+          <g opacity="0.9"><rect width="2048" height="2048" fill="blue"/>
+           <g opacity="0.9"><rect width="2048" height="2048" fill="yellow"/>
+            <g opacity="0.9"><rect width="2048" height="2048" fill="white"/>
+             <g opacity="0.9"><rect width="2048" height="2048" fill="black"/></g>
+            </g>
+           </g>
+          </g>
+         </g>
+        </g>
+      </svg>)svg",
+      large));
+
+  // A device of its own, so the pool holds only what these renderers put there.
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  RendererGeode other(device);
+  const auto holdsNoViews = testing::AllOf(RetainedLayerCount(0), RetainedMaskCount(0));
+  const auto drawAndExpectRebuilt = [&](const char* label) {
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse()) << label;
+    EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(),
+                testing::AllOf(RetainedLayerCount(1), RetainedMaskCount(1)))
+        << label << ": the frame's composites hold views of what they drew";
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderFresh(device, *document),
+                                         label, editor::tests::PixelmatchIdentityParams());
+  };
+
+  drawAndExpectRebuilt("mask_and_clipped_first_frame");
+  // The fresh rendering above drew on this device too, so the next frame may take its pooled
+  // textures in another order; the frame after it is unchanged.
+  renderer.draw(*document);
+  renderer.draw(*document);
+  ASSERT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u)
+      << "premise: an unchanged frame reuses both composites' bind groups";
+
+  other.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), holdsNoViews)
+      << "a trim by another renderer destroyed the textures these entries viewed";
+  EXPECT_THAT(renderer.retainedCompositeCountsForTesting(),
+              testing::AllOf(RetainedLayerCount(1), RetainedMaskCount(1)))
+      << "entries keep their uniform buffers";
+  drawAndExpectRebuilt("mask_and_clipped_after_other_renderer_trim");
+
+  // The pool evicts a bucket no frame has used for 120 frames, counting every renderer's frames.
+  constexpr int kFramesPastStale = 125;
+  for (int frame = 0; frame < kFramesPastStale; ++frame) {
+    other.draw(*plain);
+  }
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), holdsNoViews)
+      << "stale-bucket eviction destroyed the textures these entries viewed";
+  drawAndExpectRebuilt("mask_and_clipped_after_stale_eviction");
+
+  other.draw(*large);
+  ASSERT_THAT(other.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), holdsNoViews)
+      << "budget eviction destroyed the textures these entries viewed";
+  drawAndExpectRebuilt("mask_and_clipped_after_budget_eviction");
+
+  // A frame that never reaches endFrame submits nothing, and the next frame releases every view.
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {20, 20}), StrokeParams{});
+  beginFrame(renderer);
+  EXPECT_THAT(renderer.retainedCompositeViewHoldersForTesting(), holdsNoViews)
+      << "a frame that never reached endFrame must release every entry's views";
+  renderer.endFrame();
+  drawAndExpectRebuilt("mask_and_clipped_after_abandoned_frame");
+}
+
+/// A renderer whose frames alternate between documents, as a compositor's layers do, drops the
+/// composite entries of each frame that draws none, but keeps their uniform buffers for the next
+/// frame that does. Here a mask composite and a layer composited under a path clip that moves every
+/// time alternate with a document of neither: after the first round, the composite frames create no
+/// buffer or texture, and each matches a fresh renderer.
+TEST_F(RendererGeodeTest, RetainedCompositesKeepTheirBuffersAcrossFramesWithoutThem) {
+  std::optional<SVGDocument> composites;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <mask id="m"><rect width="64" height="64" fill="#a0a0a0"/></mask>
+        <clipPath id="c"><circle id="moving" cx="40" cy="44" r="14"/></clipPath>
+        <rect width="32" height="32" fill="orange" mask="url(#m)"/>
+        <g clip-path="url(#c)">
+          <g opacity="0.5"><rect x="16" y="24" width="48" height="40" fill="red"/></g>
+        </g>
+      </svg>)svg",
+      composites));
+  std::optional<SVGDocument> plain;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <rect width="16" height="16" fill="blue"/>
+      </svg>)svg",
+      plain));
+  std::optional<SVGElement> moving = composites->querySelector("#moving");
+  ASSERT_THAT(moving, testing::Optional(testing::_)) << "the fixture names this element";
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(*composites);
+  ASSERT_THAT(renderer.retainedCompositeCountsForTesting(),
+              testing::AllOf(RetainedLayerCount(1), RetainedMaskCount(1)))
+      << "Premise: the document draws one mask composite and one layer composite";
+  ASSERT_THAT(renderer.layerCompositeTexturesForTesting(), testing::SizeIs(1u));
+  renderer.draw(*plain);
+  ASSERT_THAT(renderer.retainedCompositeCountsForTesting(),
+              testing::AllOf(RetainedLayerCount(0), RetainedMaskCount(0)))
+      << "Premise: a frame that draws no composite drops their entries";
+
+  for (int round = 1; round <= 3; ++round) {
+    SCOPED_TRACE(testing::Message() << "round " << round);
+    moving->setAttribute("cx", std::to_string(36 + 4 * round));
+    renderer.draw(*composites);
+    const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+    EXPECT_EQ(counters.bufferCreates, 0u)
+        << "the composites reuse the uniform buffers of the entries the plain frame dropped";
+    EXPECT_EQ(counters.textureCreates, 0u);
+    editor::tests::CompareBitmapToBitmap(
+        renderer.takeSnapshot(), RenderFresh(sharedDevice(), *composites),
+        "composites_after_a_frame_without_them_" + std::to_string(round),
+        editor::tests::PixelmatchIdentityParams());
+    renderer.draw(*plain);
+  }
+}
+
+/// A concurrent-DOM document is drawn by recording a snapshot and replaying it. Mask composites are
+/// kept by the renderer, not the document, so a replayed unchanged frame composites each mask from
+/// the textures of the frame before, and the replay paints what a direct draw paints.
+TEST_F(RendererGeodeTest, SnapshotReplayKeepsMaskCompositeBindings) {
+  std::optional<SVGDocument> direct;
+  std::optional<SVGDocument> replayed;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(kMaskCompositeSvg, direct));
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(kMaskCompositeSvg, replayed));
+  replayed->setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  RendererGeode replayRenderer = createRenderer();
+  RendererDriver driver(replayRenderer);
+  driver.draw(*replayed);
+  const auto firstReplay = replayRenderer.maskCompositeTexturesForTesting();
+  ASSERT_THAT(firstReplay, testing::SizeIs(kMaskCompositeCount));
+  driver.draw(*replayed);
+  EXPECT_THAT(replayRenderer.maskCompositeTexturesForTesting(),
+              testing::ElementsAreArray(firstReplay));
+  editor::tests::CompareBitmapToBitmap(
+      replayRenderer.takeSnapshot(), RenderFresh(sharedDevice(), *direct),
+      "mask_composite_snapshot_replay", editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

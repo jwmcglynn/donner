@@ -185,12 +185,13 @@ public:
    * Uniform buffer and bind group that one textured quad keeps across frames, so drawing it again
    * with unchanged inputs writes no buffer and creates no bind group.
    *
-   * The bind group is reused only with the exact textures it was built from. Each one is matched
-   * by its runtime identity, a slot plus a generation that no later texture ever takes, so a
-   * reused bind group cannot sample a texture that was destroyed, nor one whose slot now holds a
-   * different texture. A texture returned to a pool and handed out again keeps its identity, so a
-   * caller must only pass a binding when the quad's current owner rendered the texture's contents
-   * for this draw. The uniform buffer is rewritten only when the quad's uniform bytes change.
+   * The bind group is reused only with the exact textures and clip-mask view it was built from.
+   * Each texture is matched by its runtime identity, a slot plus a generation that no later
+   * texture ever takes, so a reused bind group cannot sample a texture that was destroyed, nor one
+   * whose slot now holds a different texture. A texture returned to a pool and handed out again
+   * keeps its identity, so a caller must only pass a binding when the quad's current owner rendered
+   * the texture's contents for this draw. The uniform buffer is rewritten only when the quad's
+   * uniform bytes change.
    *
    * A binding serves at most one draw per frame: its uniform write reaches the queue ahead of the
    * frame's command buffers, so a second draw recorded in the same frame would make the first read
@@ -212,16 +213,19 @@ public:
 
     /// Whether this binding holds a texture view or a bind group naming one.
     [[nodiscard]] bool holdsTextureViews() const {
-      return sourceView_.isValid() || backdropView_.isValid() || bindGroup_.isValid();
+      return sourceView_.isValid() || maskView_.isValid() || backdropView_.isValid() ||
+             bindGroup_.isValid();
     }
 
-    /// Whether this binding holds a view of the texture \p texture, as its source or backdrop.
+    /// Whether this binding holds a view of the texture \p texture, as its source, mask or
+    /// backdrop.
     /// @param texture Runtime identity of the texture.
     [[nodiscard]] bool viewsTexture(const gpu::ResourceIdentity& texture) const;
 
-    /// Whether this binding's bind group names a clip mask view. The binding does not own that
-    /// view, so the bind group must not outlive the frame that supplied it.
-    [[nodiscard]] bool bindsClipMask() const;
+    /// Whether this binding's bind group names the clip-mask view \p view. The binding does not
+    /// own that view, so its owner must release this binding's views before it drops the view.
+    /// @param view Runtime identity of the clip-mask view.
+    [[nodiscard]] bool bindsClipMaskView(const gpu::ResourceIdentity& view) const;
 
     /**
      * Release the texture views and the bind group, keeping the uniform buffer and the bytes it
@@ -238,6 +242,7 @@ public:
     struct Inputs {
       gpu::ResourceIdentity layout;
       gpu::ResourceIdentity source;
+      gpu::ResourceIdentity mask;
       gpu::ResourceIdentity backdrop;
       gpu::ResourceIdentity clipMask;
       uint64_t deviceId = 0;
@@ -258,12 +263,13 @@ public:
     bool publishUniforms(gpu::Device& device, std::span<const uint8_t> bytes);
 
     /**
-     * Build the bind group for \p inputs, with views of \p texture and of the quad's backdrop.
+     * Build the bind group for \p inputs, with views of \p texture and of the quad's mask and
+     * backdrop.
      *
      * @param device Device to create the views and bind group on.
      * @param pipeline Image pipeline whose layout the bind group follows.
      * @param texture Source texture sampled by the quad.
-     * @param params Quad parameters naming the backdrop and clip mask.
+     * @param params Quad parameters naming the mask, backdrop and clip mask.
      * @param inputs Identities of what the bind group binds.
      * @return False, leaving no bind group, when the device refused a view or the bind group.
      */
@@ -278,6 +284,7 @@ public:
     /// Whether \ref bindGroup_ binds the current \ref uniformBuffer_.
     bool bindGroupBindsBuffer_ = false;
     gpu::TextureView sourceView_;
+    gpu::TextureView maskView_;
     gpu::TextureView backdropView_;
     gpu::BindGroup bindGroup_;
     /// Inputs \ref bindGroup_ was built from.
@@ -337,10 +344,9 @@ public:
    * Record a textured-quad draw through \p binding, reusing its uniform buffer and bind group
    * when they still match this draw (see \ref RetainedQuadBinding).
    *
-   * Takes the same draw inputs as \ref drawTexturedQuad. Quads with a mask texture keep using
-   * \ref drawTexturedQuad. Returns false without recording anything when the binding cannot serve
-   * the draw (a mask texture, or a buffer, view or bind group the device refused); the caller then
-   * draws through \ref drawTexturedQuad.
+   * Takes the same draw inputs as \ref drawTexturedQuad. Returns false without recording anything
+   * when the binding cannot serve the draw (a buffer, view or bind group the device refused); the
+   * caller then draws through \ref drawTexturedQuad.
    *
    * @param context GPU context used to allocate draw resources.
    * @param pipeline Image pipeline compatible with the active target.
