@@ -5298,7 +5298,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                         std::vector<uint8_t>*& outCache) {
     outSlot = nullptr;
     outCache = nullptr;
-    std::shared_ptr<geode::GeodeRecordSlab> slab = recordSlab(registry);
+    // The repeat's record is published through `slot.recordSlab`, so the records come from that
+    // same slab: wiring the slot first makes the two one object by construction.
+    if (!ensureRecordSlot(slot, registry)) {
+      return;
+    }
+    const std::shared_ptr<geode::GeodeRecordSlab>& slab = slot.recordSlab;
     if (!slot.repeatRecords) {
       slot.repeatRecords = std::make_unique<geode::GeodeOccurrenceRecords>();
     }
@@ -6381,6 +6386,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// @param clipVersion Encoder clip-state version the singleton was queued
   ///   under, which the new batch carries.
   bool convertPendingSingletonToScene(uint64_t clipVersion) {
+    if (pendingBatch->residentSlot == nullptr || pendingBatch->encoded == nullptr ||
+        pendingBatch->sourceRegistry == nullptr) {
+      return false;
+    }
     PendingBatch::SceneInstance first{pendingBatch->residentSlot,
                                       pendingBatch->encoded,
                                       pendingBatch->path,
@@ -6393,9 +6402,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // (another device rendered the document in between): ensure it against
     // the current slab before resolving.
     const geode::GeodeRecordSlab::Slot* firstRecordSlotPtr = nullptr;
-    if (first.slot == nullptr || first.encoded == nullptr ||
-        pendingBatch->sourceRegistry == nullptr ||
-        !ensureRecordSlot(*first.slot, *pendingBatch->sourceRegistry) ||
+    if (!ensureRecordSlot(*first.slot, *pendingBatch->sourceRegistry) ||
         !resolveSceneRecordSlot(*first.slot, firstRecordSlotPtr) ||
         !encoder->ensureResidentSceneRecord(*first.slot, *first.encoded,
                                             geode::GeoEncoder::ScenePaint{first.color}, first.rule,
