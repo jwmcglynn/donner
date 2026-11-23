@@ -44,17 +44,28 @@
 /// nothing, so each scene also asserts that its snapshot contains visible
 /// pixels. Scenes that legitimately render nothing are listed, with a reason,
 /// in `kDeliberatelyInert`.
+///
+/// The corpus pass clamps every scene to 512 px per edge, so it cannot see a
+/// cost that appears only on a larger canvas: the texture pool's retention
+/// limits depend on texture size. A second pass renders every scene again at
+/// twice its natural size, up to a 2048 px edge (`aboveNaturalCanvasSize`),
+/// starting from an empty texture pool, against its own ledger,
+/// `kKnownViolationsAboveNaturalSize`.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -183,15 +194,32 @@ struct KnownViolation {
 // listed as `std::to_array<KnownViolation>({...})`, whose size is deduced from its entries.
 constexpr std::array<KnownViolation, 0> kKnownViolations = {};
 
-const KnownViolation* findKnownViolation(std::string_view scene) {
-  for (const KnownViolation& entry : kKnownViolations) {
-    if (entry.scene != scene) {
-      continue;
+/// The ledger of the above-natural-size pass, measured at `aboveNaturalCanvasSize` from an empty
+/// texture pool.
+constexpr std::array<KnownViolation, 0> kKnownViolationsAboveNaturalSize = {};
+
+const KnownViolation* findKnownViolation(std::span<const KnownViolation> ledger,
+                                         std::string_view scene) {
+  for (const KnownViolation& entry : ledger) {
+    if (entry.scene == scene) {
+      return &entry;
     }
-    return &entry;
   }
   return nullptr;
 }
+
+/// One way of sizing every corpus scene, with the ledger of the scenes it lets miss the steady
+/// state.
+struct CorpusPass {
+  std::string_view name;
+  std::span<const KnownViolation> ledger;
+};
+
+constexpr CorpusPass kCorpusSizePass = {"corpus size", kKnownViolations};
+constexpr CorpusPass kAboveNaturalSizePass = {"above natural size",
+                                              kKnownViolationsAboveNaturalSize};
+constexpr std::array<const CorpusPass*, 2> kCorpusPasses = {&kCorpusSizePass,
+                                                            &kAboveNaturalSizePass};
 
 // ---------------------------------------------------------------------------
 // Deliberately inert scenes.
@@ -202,12 +230,15 @@ const KnownViolation* findKnownViolation(std::string_view scene) {
 /// entirely would sail through every upper bound in this file.
 struct InertScene {
   std::string_view scene;
+  /// The pass that renders it blank, or null when every pass does.
+  const CorpusPass* onlyIn;
   std::string_view reason;
 };
 
 constexpr std::array<InertScene, 2> kDeliberatelyInert = {{
     {
         /*scene=*/"external_context_paint",
+        /*onlyIn=*/nullptr,
         /*reason=*/
         "helper document for use-external-context-paint.svg: rendered standalone there is no "
         "use context, so context-fill and context-stroke resolve to no paint and nothing is "
@@ -215,15 +246,16 @@ constexpr std::array<InertScene, 2> kDeliberatelyInert = {{
     },
     {
         /*scene=*/"size_too_large",
+        /*onlyIn=*/&kCorpusSizePass,
         /*reason=*/
         "declares a 100000 px width, which the shared canvas clamp scales down until every "
         "stroke is sub-pixel, so this scene is measured blank by construction",
     },
 }};
 
-bool isDeliberatelyInert(std::string_view scene) {
+bool isDeliberatelyInert(std::string_view scene, const CorpusPass& pass) {
   for (const InertScene& entry : kDeliberatelyInert) {
-    if (entry.scene == scene) {
+    if (entry.scene == scene && (entry.onlyIn == nullptr || entry.onlyIn == &pass)) {
       return true;
     }
   }
@@ -275,6 +307,30 @@ struct CorpusScene {
 /// cropped). The counters recorded here therefore describe each scene AT THIS
 /// CLAMP, not at its natural size.
 constexpr int kMaxCanvasEdge = 512;
+
+/// Longest canvas edge, in device pixels, of the above-natural-size pass: the canvas of a 1024
+/// CSS px view on a high-density display. It is a quarter of the WebGPU guaranteed texture
+/// dimension, so the pass stays adapter-independent, and it bounds a frame target to 16 MiB. A
+/// scene whose natural long edge is above half of it is measured at this edge, which for an
+/// oversized scene such as `size_too_large` is above its corpus size but below its natural size.
+constexpr int kMaxAboveNaturalCanvasEdge = 2048;
+
+/// The corpus pass's canvas: each edge of the natural size, clamped to `kMaxCanvasEdge`.
+Vector2i corpusCanvasSize(const Vector2i& natural) {
+  return {std::clamp(natural.x, 1, kMaxCanvasEdge), std::clamp(natural.y, 1, kMaxCanvasEdge)};
+}
+
+/// The above-natural-size pass's canvas: the natural size scaled to twice its long edge, at most
+/// `kMaxAboveNaturalCanvasEdge`, keeping its aspect ratio.
+Vector2i aboveNaturalCanvasSize(const Vector2i& natural) {
+  const int naturalLongEdge = std::max({natural.x, natural.y, 1});
+  const int longEdge = std::min(naturalLongEdge * 2, kMaxAboveNaturalCanvasEdge);
+  const auto scaled = [&](int edge) {
+    return std::max(
+        1, static_cast<int>(std::lround(static_cast<double>(edge) * longEdge / naturalLongEdge)));
+  };
+  return {scaled(natural.x), scaled(natural.y)};
+}
 
 /// gtest test-case names must be alphanumeric, so fold everything else to '_'.
 std::string sanitizeName(std::string_view stem) {
@@ -366,8 +422,10 @@ std::string readFile(const std::string& path) {
 /// data, and the generic font families point at the checked-in font set. All
 /// three matter for the counters: without them the external-resource scenes
 /// draw a fraction of their content and the text scenes fall back to whatever
-/// the host has installed.
-std::optional<SVGDocument> loadScene(const CorpusScene& scene) {
+/// the host has installed. The canvas is \p canvasSize applied to the scene's
+/// natural size.
+std::optional<SVGDocument> loadScene(const CorpusScene& scene,
+                                     Vector2i (*canvasSize)(const Vector2i&) = corpusCanvasSize) {
   const std::string source = readFile(scene.path);
   if (source.empty()) {
     ADD_FAILURE() << "Corpus scene not readable: " << scene.path;
@@ -396,9 +454,8 @@ std::optional<SVGDocument> loadScene(const CorpusScene& scene) {
     RegisterFontsFromDirectoryForTesting(document, fontsDir);
   }
 
-  const Vector2i natural = document.canvasSize();
-  document.setCanvasSize(std::clamp(natural.x, 1, kMaxCanvasEdge),
-                         std::clamp(natural.y, 1, kMaxCanvasEdge));
+  const Vector2i canvas = canvasSize(document.canvasSize());
+  document.setCanvasSize(canvas.x, canvas.y);
   return document;
 }
 
@@ -424,16 +481,27 @@ FrameSample sampleFrame(const RendererGeode& renderer) {
                      counters.drawCalls};
 }
 
+/// The device-shared texture pool a measurement starts from.
+enum class PoolStart {
+  /// Whatever the scenes before it left.
+  AsLeft,
+  /// Emptied, at its starting budget, so the measurement depends on no earlier scene.
+  Empty,
+};
+
 /// Render @p document twice on one renderer and return both frames.
 ///
 /// One renderer across both frames keeps the document's cache and residence
 /// components live on frame two, which is the steady state an interactive host
 /// sits in between edits.
 SceneMeasurement measureFrames(const std::shared_ptr<geode::GeodeDevice>& device,
-                               SVGDocument& document) {
+                               SVGDocument& document, PoolStart poolStart = PoolStart::AsLeft) {
   SceneMeasurement measurement;
 
   RendererGeode renderer(device);
+  if (poolStart == PoolStart::Empty) {
+    renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  }
   renderer.draw(document);
   // Sampled before the snapshot, like frame two, so the two frames are
   // measured the same way.
@@ -448,12 +516,13 @@ SceneMeasurement measureFrames(const std::shared_ptr<geode::GeodeDevice>& device
   return measurement;
 }
 
-void printMeasurement(const std::string& name, const SceneMeasurement& measurement) {
+void printMeasurement(const char* label, const std::string& name,
+                      const SceneMeasurement& measurement) {
   std::fprintf(stderr,
-               "[counter-corpus] %-48s pathEncodes=%6" PRIu64 " textureCreates=%4" PRIu64
+               "[%s] %-48s pathEncodes=%6" PRIu64 " textureCreates=%4" PRIu64
                " bufferWrites=%6" PRIu64 " bindgroupCreates=%6" PRIu64 " drawCalls=%6" PRIu64
                " frame1DrawCalls=%6" PRIu64 " visiblePixels=%8zu\n",
-               name.c_str(), measurement.second.gated.pathEncodes,
+               label, name.c_str(), measurement.second.gated.pathEncodes,
                measurement.second.gated.textureCreates, measurement.second.gated.bufferWrites,
                measurement.second.gated.bindgroupCreates, measurement.second.drawCalls,
                measurement.first.drawCalls, measurement.visiblePixels);
@@ -473,36 +542,25 @@ std::shared_ptr<geode::GeodeDevice> sharedDevice() {
   return device;
 }
 
-using GeodeCounterCorpusTest = ::testing::TestWithParam<std::string>;
-
-TEST_P(GeodeCounterCorpusTest, SecondFrameIsSteadyState) {
-  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
-
-  const std::string& name = GetParam();
-  const CorpusScene* scene = findScene(name);
-  ASSERT_NE(scene, nullptr) << "Corpus scene disappeared between enumeration and run: " << name;
-
-  std::optional<SVGDocument> document = loadScene(*scene);
-  ASSERT_TRUE(document.has_value());
-
-  const SceneMeasurement measurement = measureFrames(device, *document);
-  printMeasurement(name, measurement);
+/// Hold one measured scene to the steady state, or to its entry in \p pass's ledger.
+void expectSteadyState(const std::string& name, const CorpusPass& pass,
+                       const SceneMeasurement& measurement) {
   const FrameSample& sample = measurement.second;
 
-  if (isDeliberatelyInert(name)) {
+  if (isDeliberatelyInert(name, pass)) {
     EXPECT_EQ(measurement.visiblePixels, 0u)
-        << name << " is listed in kDeliberatelyInert but now renders visible pixels. Delete the "
-        << "entry and measure it like any other scene.";
+        << name << " is listed in kDeliberatelyInert for the " << pass.name
+        << " pass but now renders visible pixels there. Fix the entry and measure the scene like "
+        << "any other.";
   } else {
     EXPECT_GT(measurement.visiblePixels, 0u)
-        << name << " rendered no visible pixels, so the counter ceilings below prove nothing "
-        << "about it: an upper bound is trivially satisfied by drawing nothing. Either the scene "
-        << "regressed to rendering blank output, or it legitimately renders nothing and belongs "
-        << "in kDeliberatelyInert with a reason.";
+        << name << " rendered no visible pixels at " << pass.name
+        << ", so the counter ceilings below prove nothing about it: an upper bound is trivially "
+        << "satisfied by drawing nothing. Either the scene regressed to rendering blank output, "
+        << "or it legitimately renders nothing and belongs in kDeliberatelyInert with a reason.";
   }
 
-  const KnownViolation* known = findKnownViolation(name);
+  const KnownViolation* known = findKnownViolation(pass.ledger, name);
   const Observed ceilings = known != nullptr ? known->ceiling : Observed{};
   for (const CounterField& field : kCounterFields) {
     const uint64_t value = sample.gated.*field.member;
@@ -511,20 +569,21 @@ TEST_P(GeodeCounterCorpusTest, SecondFrameIsSteadyState) {
 
     if (!expectedToViolate) {
       EXPECT_LE(value, target)
-          << name << " broke the steady-state invariant on " << field.name << " ("
-          << field.rationale << "). If this is a known, accepted regression, add an entry to "
-          << "kKnownViolations with the measured value and a reason; do not widen the shared "
+          << name << " broke the steady-state invariant at " << pass.name << " on " << field.name
+          << " (" << field.rationale << "). If this is a known, accepted regression, add an entry "
+          << "to that pass's ledger with the measured value and a reason; do not widen the shared "
           << "target.";
       continue;
     }
 
     const uint64_t ceiling = ceilings.*field.member;
     EXPECT_GT(value, target)
-        << name << " now holds the steady-state invariant on " << field.name
-        << ", but kKnownViolations still lists it as violating. Delete that counter from the "
-        << "entry (and the whole entry once it lists nothing) so the fix cannot silently "
-        << "regress. Recorded reason: " << known->reason;
-    EXPECT_LE(value, ceiling) << name << " regressed further on " << field.name
+        << name << " now holds the steady-state invariant at " << pass.name << " on " << field.name
+        << ", but that pass's ledger still lists it as violating. Delete that "
+        << "counter from the entry (and the whole entry once it lists nothing) so the fix cannot "
+        << "silently regress. Recorded reason: " << known->reason;
+    EXPECT_LE(value, ceiling) << name << " regressed further at " << pass.name << " on "
+                              << field.name
                               << " than its recorded known-violation ceiling. Recorded reason: "
                               << known->reason << "; tracking: " << known->tracking;
 
@@ -533,15 +592,64 @@ TEST_P(GeodeCounterCorpusTest, SecondFrameIsSteadyState) {
     // looser bound. Say so rather than letting the slack accumulate silently.
     if (value > target && value * 2u <= ceiling) {
       std::fprintf(stderr,
-                   "[counter-corpus] NOTICE %s improved on %s (%" PRIu64
-                   " vs recorded ceiling %" PRIu64
-                   "); re-measure and tighten its kKnownViolations entry.\n",
-                   name.c_str(), field.name, value, ceiling);
+                   "[counter-corpus] NOTICE %s improved at %.*s on %s (%" PRIu64
+                   " vs recorded ceiling %" PRIu64 "); re-measure and tighten its ledger entry.\n",
+                   name.c_str(), static_cast<int>(pass.name.size()), pass.name.data(), field.name,
+                   value, ceiling);
     }
   }
 }
 
+using GeodeCounterCorpusTest = ::testing::TestWithParam<std::string>;
+
+TEST_P(GeodeCounterCorpusTest, SecondFrameIsSteadyState) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const std::string& name = GetParam();
+  const CorpusScene* scene = findScene(name);
+  ASSERT_NE(scene, nullptr) << "Corpus scene disappeared between enumeration and run: " << name;
+
+  std::optional<SVGDocument> document = loadScene(*scene);
+  ASSERT_THAT(document, testing::Optional(testing::_));
+
+  const SceneMeasurement measurement = measureFrames(device, *document);
+  printMeasurement("counter-corpus", name, measurement);
+  expectSteadyState(name, kCorpusSizePass, measurement);
+}
+
 INSTANTIATE_TEST_SUITE_P(Corpus, GeodeCounterCorpusTest, ::testing::ValuesIn(corpusNames()),
+                         [](const ::testing::TestParamInfo<std::string>& info) {
+                           return info.param;
+                         });
+
+using GeodeCounterCorpusAboveNaturalSizeTest = ::testing::TestWithParam<std::string>;
+
+/// The same gate at twice each scene's natural size. The pass starts each scene from an empty
+/// texture pool, because what the pool keeps depends on texture size and on the working set of
+/// the frames before, so a size-dependent miss shows the same way under any test filter or order.
+TEST_P(GeodeCounterCorpusAboveNaturalSizeTest, SecondFrameIsSteadyState) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const std::string& name = GetParam();
+  const CorpusScene* scene = findScene(name);
+  ASSERT_NE(scene, nullptr) << "Corpus scene disappeared between enumeration and run: " << name;
+
+  std::optional<SVGDocument> document = loadScene(*scene, aboveNaturalCanvasSize);
+  ASSERT_THAT(document, testing::Optional(testing::_));
+
+  const SceneMeasurement measurement = measureFrames(device, *document, PoolStart::Empty);
+  const Vector2i canvas = document->canvasSize();
+  printMeasurement(
+      ("counter-corpus-above-natural " + std::to_string(canvas.x) + "x" + std::to_string(canvas.y))
+          .c_str(),
+      name, measurement);
+  expectSteadyState(name, kAboveNaturalSizePass, measurement);
+}
+
+INSTANTIATE_TEST_SUITE_P(Corpus, GeodeCounterCorpusAboveNaturalSizeTest,
+                         ::testing::ValuesIn(corpusNames()),
                          [](const ::testing::TestParamInfo<std::string>& info) {
                            return info.param;
                          });
@@ -583,11 +691,11 @@ TEST(GeodeCounterCorpusGate, SceneNamesAreUnique) {
       << "'. Rename one of the source files; gtest cannot register both.";
 }
 
-/// A stale or self-contradicting entry would sit in the table forever without
-/// gating anything.
-TEST(GeodeCounterCorpusGate, KnownViolationsAreWellFormed) {
+/// Every entry of \p ledger names a corpus scene, gates at least one counter, explains itself, and
+/// has a ceiling that agrees with its mask.
+void expectLedgerWellFormed(std::span<const KnownViolation> ledger) {
   const auto& scenes = corpus();
-  for (const KnownViolation& entry : kKnownViolations) {
+  for (const KnownViolation& entry : ledger) {
     const bool present = std::any_of(scenes.begin(), scenes.end(), [&](const CorpusScene& scene) {
       return scene.name == entry.scene;
     });
@@ -619,6 +727,15 @@ TEST(GeodeCounterCorpusGate, KnownViolationsAreWellFormed) {
   }
 }
 
+/// A stale or self-contradicting entry would sit in the table forever without
+/// gating anything.
+TEST(GeodeCounterCorpusGate, KnownViolationsAreWellFormed) {
+  for (const CorpusPass* pass : kCorpusPasses) {
+    SCOPED_TRACE(::testing::Message() << "ledger of the " << pass->name << " pass");
+    expectLedgerWellFormed(pass->ledger);
+  }
+}
+
 TEST(GeodeCounterCorpusGate, DeliberatelyInertScenesAreWellFormed) {
   const auto& scenes = corpus();
   for (const InertScene& entry : kDeliberatelyInert) {
@@ -629,9 +746,14 @@ TEST(GeodeCounterCorpusGate, DeliberatelyInertScenesAreWellFormed) {
                          << "', which is not in the corpus. Delete the stale entry.";
     EXPECT_FALSE(entry.reason.empty())
         << "kDeliberatelyInert entry '" << entry.scene << "' needs a reason.";
-    EXPECT_EQ(findKnownViolation(entry.scene), nullptr)
-        << "'" << entry.scene << "' is listed as both inert and a known violator, which cannot "
-        << "both be true. Remove one entry.";
+    for (const CorpusPass* pass : kCorpusPasses) {
+      if (!isDeliberatelyInert(entry.scene, *pass)) {
+        continue;
+      }
+      EXPECT_EQ(findKnownViolation(pass->ledger, entry.scene), nullptr)
+          << "'" << entry.scene << "' is listed as both inert and a known violator of the "
+          << pass->name << " pass, which cannot both be true. Remove one entry.";
+    }
   }
 }
 

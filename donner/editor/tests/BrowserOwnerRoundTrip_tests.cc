@@ -46,13 +46,14 @@ struct HeldFrame {
 /// construction and destruction are absent too: they ride along with the next round trip, and the
 /// 19 still held after a frame's last round trip go in one more batch when the worker parks.
 constexpr HeldFrame kHeldFrames[] = {
-    // The first held frame creates one pooled uniform arena buffer, taken by the layer tile draws
-    // (`RendererGeode::drawTextureSnapshot`), that earlier frames no longer warm: mask composites
-    // keep their own uniform buffers instead of drawing through the arena. Later held frames create
-    // none beyond the recorded counts.
-    {12.0, {.resourceCreation = 46, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
-    {24.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
-    {36.0, {.resourceCreation = 35, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    // The first held frame creates five resources the later ones take from the pool: a uniform
+    // arena buffer for the layer tile draws (`RendererGeode::drawTextureSnapshot`), a batch
+    // uniform for the tile's target size, and a clip mask, a mask capture and a mask content
+    // texture of the tile's size, which no earlier frame used. Each held frame also creates two
+    // render targets and the texture views its passes and composites name.
+    {12.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    {24.0, {.resourceCreation = 31, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    {36.0, {.resourceCreation = 30, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {

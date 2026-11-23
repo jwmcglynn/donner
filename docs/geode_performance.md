@@ -21,7 +21,8 @@ whose document, viewport and renderer did not change since the previous frame re
 creates no texture, writes no GPU buffer and creates at most six bind groups, within the caps and
 budgets this page states: a draw past a cap or refused by a budget pays per frame (see
 [the per-frame list](#GeodePerformanceArena)). The counter corpus enforces this for every scene of
-the render corpus at its 512-pixel clamp.
+the render corpus at its 512-pixel clamp, and again with its long edge at twice its natural long
+edge, at most 2048 pixels.
 
 Three rules apply to every piece of state kept for this:
 
@@ -92,6 +93,16 @@ state. The target selects the Geode backend itself, so it needs no `--config`.
   scene not in the corpus, an empty mask, a missing reason or tracking note, and a ceiling that
   contradicts its mask. A listed scene that improves to half its ceiling or less prints a `NOTICE`
   line asking for the entry to be re-measured.
+- **Above natural size.** What the texture pool keeps depends on texture size, so a scene can meet
+  the steady state at the clamp and miss it on a larger canvas. A second pass,
+  `Corpus/GeodeCounterCorpusAboveNaturalSizeTest.SecondFrameIsSteadyState/<stem>`, renders every
+  scene with its long edge at twice its natural long edge, at most `kMaxAboveNaturalCanvasEdge`
+  (2048) pixels, aspect kept (`aboveNaturalCanvasSize`), so a scene wider than 1024 pixels is
+  measured at 2048, which for an oversized scene is below its natural size. Each scene starts from
+  an empty texture pool at its starting budget, so its counters depend on no earlier scene. The
+  pass has its own ledger, `kKnownViolationsAboveNaturalSize`, with the same rules, also empty, and
+  `kDeliberatelyInert` names the pass a blank scene is blank in. Run with `--test_output=all`, the
+  pass prints one `[counter-corpus-above-natural WxH]` line per scene.
 - **Order independence.** All scenes share one device, so `SceneCountersAreOrderIndependent`
   renders a pattern scene, runs unrelated scenes on the same device, renders it again and requires
   identical counters.
@@ -115,7 +126,8 @@ then asserts the counters of an unchanged frame. Examples are
 `ClippedDraws_UnchangedFrameEncodesWritesAndCreatesNothing`,
 `ClipPolygonSoloDraws_UnchangedFrameWritesAndCreatesNothing`,
 `LayerComposites_UnchangedFrameWritesAndCreatesNothing`,
-`MaskComposites_UnchangedFrameWritesAndCreatesNothing`,
+`GeodePerfSiblingSurfacesTest.UnchangedFrameCreatesNothing` (24 sibling layers, masks or clip
+paths at 640 to 2048 pixels), `MaskComposites_UnchangedFrameWritesAndCreatesNothing`,
 `DecodedImages_UnchangedFrameWritesAndCreatesNothing`,
 `PatternFills_UnchangedFrameWritesAndCreatesNothing` and
 `UnchangedFilterPassesUploadAndBindNothing`; painted text is covered by
@@ -480,6 +492,25 @@ image, a composite past the cap) allocates its uniform and bind group for that f
   joins its bucket while the bucket holds fewer than `kMaxPoolEntriesPerKey` (16) free textures,
   whatever their size, and past that while the bucket stays within a quarter of the current
   budget; evicting to fit the budget can leave a bucket with fewer.
+- **Surfaces reused within a frame.** A texture whose last reader is already recorded in the
+  renderer's open frame can serve a later acquisition of the same descriptor in that frame
+  (`releaseTextureWithinFrame`): every command that writes it next is recorded after that reader.
+  An isolated layer's surface and a `<mask>`'s two surfaces are released this way once their
+  composite is recorded, a clip's masks once the clip pops, and a filter's intermediates once its
+  execution is recorded, so a frame of sibling layers, masks, clips or filters takes turns with a
+  few surfaces instead of holding one per use. They stay out of the shared pool, which another
+  renderer could take from and submit first, until the frame submits, and stay charged to the
+  frame's surface budget while they wait. A texture with `CopyDst` usage, such as a blend layer's
+  backdrop snapshot, waits for the frame's submission instead, because a queue upload into the
+  next holder of that descriptor would run ahead of the recorded reader.
+- **Surface budget.** `RendererSurfaceBudget` admits at most 256 surfaces and 256 MiB of them at
+  once in a frame. Because siblings take turns, it bounds the surfaces live at the same time, not
+  the layers, masks and clips a frame draws. A reservation it refuses latches for the rest of the
+  frame: every later isolated layer draws its content without its opacity or blend, every later
+  `<mask>` draws the mask's own shapes and then its content, unmasked, into the target below it,
+  and every later path clip draws nothing. At 2048x2048 the
+  byte limit holds 16 canvas-sized surfaces, so only surfaces held at once, such as layers nested
+  that deep, reach it.
 
 ## Which Draws Keep Residency {#GeodePerformanceDrawPaths}
 
@@ -658,6 +689,16 @@ group every frame:
   the encode and upload are skipped.
 - **The texture pool keys by exact size**, so a viewport that changes size every frame (a resize,
   a zoom) creates a texture for every size it has not kept.
+- **Surfaces a frame holds at once still count against the pool's per-size limit.** A frame that
+  holds more canvas-sized surfaces of one descriptor at the same time than the pool keeps (16, or
+  a quarter of its budget) creates the surplus every frame: isolated layers nested more deeply
+  than that, and blend layers' backdrop snapshots, which wait for the frame's submission. At
+  1024x512, 24 sibling `mix-blend-mode` groups create 8 textures and 8 bind groups per unchanged
+  frame, and 24 nested opacity groups 8 textures and 24 bind groups.
+- **The pool's budget follows the bytes returned in recent frames**, so it grows a frame late:
+  the frame after one whose returns first exceed it recreates what it evicted. At 1024x1024,
+  `filter_displacement_map` and `filter_spot_light` create one texture and two bind groups on
+  their second frame and nothing after.
 - **Clip caches go with any edit that recomputes the document's computed components**, so the
   first frame after such an edit encodes and uploads every clip shape again. Nested clip chains
   cost more than linear time in the driver's clip collection

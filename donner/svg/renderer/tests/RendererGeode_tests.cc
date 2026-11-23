@@ -10733,6 +10733,133 @@ TEST_F(RendererGeodeTest, WithinFrameTextureReuseMatchesSingleUseTextures) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// A 256x128 canvas of overlapping sibling circles, circle `i` wrapped in the group element
+/// \p openGroup returns for it, with `<mask>`s `m` (the whole canvas) and `m2` (its left half) and
+/// `<clipPath>`s `c` and `c2` (a smaller circle on the left) to name.
+std::string SiblingGroupsSource(int count, const std::function<std::string(int)>& openGroup) {
+  std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="128">
+      <mask id="m"><rect width="256" height="128" fill="#999999"/></mask>
+      <mask id="m2"><rect width="128" height="128" fill="#999999"/></mask>
+      <clipPath id="c"><circle cx="128" cy="64" r="60"/></clipPath>
+      <clipPath id="c2"><circle cx="64" cy="64" r="40"/></clipPath>
+      <rect width="256" height="128" fill="#204080"/>)svg";
+  for (int i = 0; i < count; ++i) {
+    source += openGroup(i) + "<circle cx=\"" + std::to_string(12 + (i % 12) * 20) + "\" cy=\"" +
+              std::to_string(36 + (i / 12) * 56) + "\" r=\"16\" fill=\"" +
+              (i % 2 == 0 ? "red" : "lime") + "\"/></g>";
+  }
+  return source + "</svg>";
+}
+
+/// Draws \p source once with surfaces shared within the frame and once with one surface per use,
+/// and returns how many more surface bytes the second held at its peak.
+std::uint64_t SurfaceBytesSavedBySharing(RendererGeode& reusing, RendererGeode& singleUse,
+                                         const std::string& source) {
+  SVGDocument document = ParseDocumentOrFail(source);
+  reusing.draw(document);
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  const RendererResourceStats reusingStats = reusing.resourceStats();
+  const RendererResourceStats singleUseStats = singleUse.resourceStats();
+  EXPECT_THAT(reusingStats.surfaceBudgetSupported, testing::IsTrue());
+  EXPECT_THAT(singleUseStats.surfacePeakBytes, testing::Ge(reusingStats.surfacePeakBytes));
+  return singleUseStats.surfacePeakBytes - reusingStats.surfacePeakBytes;
+}
+
+constexpr std::uint64_t kSiblingSurfaceBytes = std::uint64_t{256} * 128 * 4;
+
+// Sibling layers take turns with one canvas-sized layer surface: a layer's surface is free for the
+// next once its composite is recorded. A blend layer's snapshot of what lies beneath it waits for
+// the frame's submission, so each blend layer still adds one.
+TEST_F(RendererGeodeTest, SiblingLayersShareOneLayerSurface) {
+  constexpr int kNormalLayers = 20;
+  constexpr int kBlendLayers = 4;
+  RendererGeode reusing = createRenderer();
+  RendererGeode singleUse = createRenderer();
+  EXPECT_THAT(
+      SurfaceBytesSavedBySharing(
+          reusing, singleUse,
+          SiblingGroupsSource(kNormalLayers + kBlendLayers,
+                              [](int i) {
+                                return std::string(i < kNormalLayers
+                                                       ? R"(<g opacity="0.7">)"
+                                                       : R"(<g style="mix-blend-mode: multiply">)");
+                              })),
+      testing::Eq((kNormalLayers + kBlendLayers - 1) * kSiblingSurfaceBytes));
+}
+
+// Sibling masked groups take turns with one mask and one content surface.
+TEST_F(RendererGeodeTest, SiblingMasksShareTwoSurfaces) {
+  constexpr int kMasks = 12;
+  RendererGeode reusing = createRenderer();
+  RendererGeode singleUse = createRenderer();
+  EXPECT_THAT(
+      SurfaceBytesSavedBySharing(
+          reusing, singleUse,
+          SiblingGroupsSource(kMasks, [](int) { return std::string("<g mask=\"url(#m)\">"); })),
+      testing::Eq((2 * kMasks - 2) * kSiblingSurfaceBytes));
+}
+
+// Sibling path clips take turns with one clip-mask surface.
+TEST_F(RendererGeodeTest, SiblingClipPathsShareOneClipMask) {
+  constexpr int kClips = 12;
+  RendererGeode reusing = createRenderer();
+  RendererGeode singleUse = createRenderer();
+  EXPECT_THAT(SurfaceBytesSavedBySharing(
+                  reusing, singleUse,
+                  SiblingGroupsSource(
+                      kClips, [](int) { return std::string("<g clip-path=\"url(#c)\">"); })),
+              testing::Eq((kClips - 1) * kSiblingSurfaceBytes));
+}
+
+// Layers, masks and clips that take turns with surfaces render what they render with a surface
+// each, also when they nest, when a filter takes turns with them, and on a frame whose surfaces
+// come back from the pool holding the previous frame's pixels. Consecutive masks and clips differ,
+// so a surface that kept its previous user's pixels would show.
+TEST_F(RendererGeodeTest, SharedSurfacesMatchOneSurfacePerUse) {
+  std::string source = SiblingGroupsSource(15, [](int i) {
+    const bool second = (i / 5) % 2 == 1;
+    switch (i % 5) {
+      case 0: return std::string(R"(<g style="mix-blend-mode: multiply">)");
+      case 1: return std::string(second ? "<g mask=\"url(#m2)\">" : "<g mask=\"url(#m)\">");
+      case 2:
+        return std::string(second ? "<g clip-path=\"url(#c2)\">" : "<g clip-path=\"url(#c)\">");
+      default: return std::string(R"(<g opacity="0.7">)");
+    }
+  });
+  source.erase(source.size() - std::string_view("</svg>").size());
+  source += R"svg(
+      <filter id="f"><feOffset dx="3" dy="2"/></filter>
+      <g mask="url(#m)">
+        <g opacity="0.5"><rect x="20" y="70" width="60" height="40" fill="orange"/></g>
+        <g clip-path="url(#c)"><rect x="40" y="80" width="60" height="40" fill="white"/></g>
+      </g>
+      <g filter="url(#f)">
+        <g opacity="0.6"><rect x="110" y="70" width="50" height="40" fill="purple"/></g>
+      </g>
+      <g opacity="0.8">
+        <g opacity="0.5"><rect x="170" y="70" width="60" height="40" fill="lime"/></g>
+        <g clip-path="url(#c)" opacity="0.5">
+          <rect x="190" y="80" width="40" height="40" fill="red"/>
+        </g>
+      </g>
+      <g opacity="0.9"><rect x="200" y="10" width="50" height="50" fill="yellow"/></g>
+    </svg>)svg";
+  SVGDocument document = ParseDocumentOrFail(source);
+  RendererGeode reusing = createRenderer();
+  reusing.draw(document);
+  reusing.draw(document);
+  RendererGeode singleUse = createRenderer();
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  ASSERT_THAT(reusing.resourceStats().surfacePeakBytes,
+              testing::Lt(singleUse.resourceStats().surfacePeakBytes))
+      << "the scene's surfaces are not shared, so this compares nothing new";
+  editor::tests::CompareBitmapToBitmap(reusing.takeSnapshot(), singleUse.takeSnapshot(),
+                                       "shared_surfaces",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // A full-canvas blur on a canvas larger than 2048x2048 renders, and reusing its textures within
 // the frame matches single-use textures. On this backend the blur executes in tiles below the
 // shared pool's budget, so this guards the large-raster path rather than reproducing a texture
@@ -12754,10 +12881,42 @@ TEST_F(RendererGeodeTest, LayerCompositeRewritesItsUniformWhenOpacityChanges) {
   EXPECT_EQ(renderer.lastFrameTimings().counters.bindgroupCreates, 0u);
 }
 
-/// A composite keeps state only for a layer texture the frame's surface budget admitted, so a frame
-/// of more layers than the budget allows keeps at most one entry per admitted surface, and those
-/// stay steady.
+/// A composite keeps state only for a layer texture the frame's surface budget admitted. Nested
+/// layers each hold their surface until they pop, so a nest deeper than the budget allows keeps at
+/// most one entry per admitted surface, and those stay steady.
 TEST_F(RendererGeodeTest, LayerCompositeRetainedStateFollowsTheSurfaceBudget) {
+  constexpr size_t kDepth = 12;
+  std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="15">)svg";
+  for (size_t i = 0; i < kDepth; ++i) {
+    source += "<g opacity=\"0.9\"><rect x=\"" + std::to_string(i) +
+              R"svg(" width="1" height="1" fill="black"/>)svg";
+  }
+  for (size_t i = 0; i < kDepth; ++i) {
+    source += "</g>";
+  }
+  source += "</svg>";
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+
+  RendererGeode renderer = createRenderer();
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/8u, /*maximumBytes=*/1u << 20);
+  renderer.draw(*document);
+  renderer.draw(*document);
+  // The frame's own target takes one surface.
+  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::SizeIs(7u));
+  const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+  EXPECT_EQ(counters.bufferWrites, 0u);
+  EXPECT_EQ(counters.bindgroupCreates, 0u);
+
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/4u, /*maximumBytes=*/1u << 20);
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::SizeIs(3u));
+}
+
+/// Sibling layers take turns with one surface, so the surface budget admits every one of them,
+/// however many there are. The composites past the retained-composite cap draw with per-frame
+/// state.
+TEST_F(RendererGeodeTest, SiblingLayersPastTheSurfaceBudgetAreAllAdmitted) {
   constexpr size_t kLayers = 300;
   std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="15">)svg";
   for (size_t i = 0; i < kLayers; ++i) {
@@ -12767,20 +12926,65 @@ TEST_F(RendererGeodeTest, LayerCompositeRetainedStateFollowsTheSurfaceBudget) {
   source += "</svg>";
   std::optional<SVGDocument> document;
   ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+  const size_t cap = RendererGeode::maxRetainedCompositesForTesting();
+  ASSERT_GT(kLayers, cap);
 
   RendererGeode renderer = createRenderer();
-  renderer.draw(*document);
-  renderer.draw(*document);
-  // The frame's own target takes one surface.
-  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(),
-              testing::SizeIs(RendererSurfaceBudget::kMaximumSurfaces - 1));
-  const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
-  EXPECT_EQ(counters.bufferWrites, 0u);
-  EXPECT_EQ(counters.bindgroupCreates, 0u);
-
   renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/4u, /*maximumBytes=*/1u << 20);
   renderer.draw(*document);
-  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::SizeIs(3u));
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.layerCompositeTexturesForTesting(), testing::SizeIs(cap));
+  const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+  EXPECT_THAT(counters.bufferWrites, testing::Eq(kLayers - cap))
+      << "each composite past the cap writes its own uniform";
+  EXPECT_THAT(counters.bindgroupCreates, testing::Eq(kLayers - cap))
+      << "each composite past the cap builds its own bind group";
+
+  // Every layer composites at its opacity: the squares do not overlap, so one group at the same
+  // opacity around all of them renders the same pixels.
+  std::string grouped = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="15">
+      <g opacity="0.5">)svg";
+  for (size_t i = 0; i < kLayers; ++i) {
+    grouped += "<rect x=\"" + std::to_string(i % 20) + "\" y=\"" + std::to_string(i / 20) +
+               R"svg(" width="1" height="1" fill="black"/>)svg";
+  }
+  grouped += "</g></svg>";
+  std::optional<SVGDocument> groupedDocument;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(grouped, groupedDocument));
+  editor::tests::CompareBitmapToBitmap(
+      renderer.takeSnapshot(), RenderFresh(sharedDevice(), *groupedDocument),
+      "sibling_layers_past_the_surface_budget", editor::tests::PixelmatchIdentityParams());
+}
+
+/// The surface budget also bounds bytes, and a refused reservation latches for the rest of the
+/// frame. Sibling layers, masks and clips whose surfaces would together pass the byte limit, while
+/// their count stays far under the surface limit, take turns with a few surfaces, so they render
+/// what they render under a budget that cannot bind.
+TEST_F(RendererGeodeTest, SiblingSurfacesPastTheSurfaceByteBudgetRenderAsUnbudgeted) {
+  constexpr std::uint64_t kBudgetBytes = 8 * kSiblingSurfaceBytes;
+  SVGDocument document = ParseDocumentOrFail(SiblingGroupsSource(24, [](int i) {
+    switch (i % 3) {
+      case 0: return std::string(R"(<g opacity="0.7">)");
+      case 1: return std::string("<g mask=\"url(#m)\">");
+      default: return std::string("<g clip-path=\"url(#c)\">");
+    }
+  }));
+
+  RendererGeode unbudgeted = createRenderer();
+  unbudgeted.setWithinFrameTextureReuseForTesting(false);
+  unbudgeted.setSurfaceBudgetForTesting(/*maximumSurfaces=*/1024u, /*maximumBytes=*/1u << 30);
+  unbudgeted.draw(document);
+  ASSERT_THAT(unbudgeted.resourceStats().surfacePeakBytes, testing::Gt(kBudgetBytes))
+      << "one surface per use must pass the byte limit for this case to reach it";
+
+  RendererGeode budgeted = createRenderer();
+  budgeted.setSurfaceBudgetForTesting(RendererSurfaceBudget::kMaximumSurfaces, kBudgetBytes);
+  budgeted.draw(document);
+  EXPECT_THAT(budgeted.resourceStats().surfaceBudgetRejected, testing::IsFalse())
+      << "peak " << budgeted.resourceStats().surfacePeakBytes << " of " << kBudgetBytes;
+  editor::tests::CompareBitmapToBitmap(budgeted.takeSnapshot(), unbudgeted.takeSnapshot(),
+                                       "sibling_surfaces_past_the_byte_budget",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// Matches retained composite counts of \p masks `<mask>` composite entries.
