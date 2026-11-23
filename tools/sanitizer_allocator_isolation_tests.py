@@ -134,6 +134,7 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
             "//donner/benchmarks:svg_parse_allocation_tests",
             "//donner/gpu:gpu_allocation_tests",
             "//donner/gpu/metal/tests:metal_buffer_bounds_tests",
+            "//donner/svg/renderer/benchmarks:geode_filter_allocation_tests",
         )
         for sanitizer in ("ASan", "UBSan"):
             commands = self._commands(sanitizer)

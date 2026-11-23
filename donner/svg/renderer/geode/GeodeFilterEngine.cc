@@ -1269,19 +1269,12 @@ FilterTexture resolveStandardInput(svg::components::FilterStandardInput input,
   return prepared != nullptr ? *prepared : textures.sourceGraphic;
 }
 
-/// Resolve an input reference to a texture.
-FilterTexture resolveInput(const svg::components::FilterInput& input,
-                           const std::unordered_map<std::string, FilterTexture>& namedBuffers,
-                           FilterTexture currentBuffer, const StandardInputTextures& standard) {
-  using namespace svg::components;
-  if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
-    auto it = namedBuffers.find(named->name.str());
-    if (it != namedBuffers.end()) {
-      return it->second;
-    }
-  } else if (std::holds_alternative<FilterInput::Previous>(input.value)) {
-    return currentBuffer;
-  } else if (const auto* stdIn = std::get_if<FilterStandardInput>(&input.value)) {
+/// Resolve an input that names no earlier primitive's result to a texture: a standard input, or
+/// the previous result for the implicit input and for a name no earlier primitive produces.
+FilterTexture resolveUnnamedInput(const svg::components::FilterInput& input,
+                                  FilterTexture currentBuffer,
+                                  const StandardInputTextures& standard) {
+  if (const auto* stdIn = std::get_if<svg::components::FilterStandardInput>(&input.value)) {
     return resolveStandardInput(*stdIn, standard);
   }
   return currentBuffer;
@@ -1604,7 +1597,8 @@ struct FilterGraphExecution {
                          std::optional<FilterTexture>& tileBackdrop);
   bool loadTile(const FilterTilePlan& plan, gpu::Origin2d origin, TileCopy source,
                 OptionalTileCopy backdropCopy);
-  FilterTexture inputFor(const svg::components::FilterNode& node, size_t index) const;
+  /// Texture for input slot \p slot of the node at \p nodeIndex.
+  FilterTexture inputFor(size_t nodeIndex, size_t slot) const;
   /// Clears \p input outside \p region. A \p transformed clip keeps pixels whose centers map
   /// inside \p region; otherwise it keeps every device pixel \p region touches, the extent of a
   /// primitive subregion.
@@ -1615,8 +1609,11 @@ struct FilterGraphExecution {
   FilterTexture clipOutputToFilterRegion(FilterTexture output);
   void record(const svg::components::FilterNode& node, const Box2d& subregion, FilterTexture output,
               size_t nodeIndex);
-  void findLastNamedUses();
+  void indexNamedResults();
   void retainLiveValues(size_t nodeIndex);
+
+  /// Marks a node index that no primitive refers to.
+  static constexpr uint32_t kNoNode = std::numeric_limits<uint32_t>::max();
 
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
@@ -1633,8 +1630,16 @@ struct FilterGraphExecution {
   std::optional<FilterTexture> sourceAlpha;
   std::optional<FilterTexture> backdrop;       //!< BackgroundImage, clipped to the filter region.
   std::optional<FilterTexture> backdropAlpha;  //!< BackgroundAlpha derived from \ref backdrop.
-  std::unordered_map<std::string, FilterTexture> namedBuffers;
-  std::unordered_map<std::string, size_t> lastNamedUse;
+  /// For every input of every node, in graph order, the index of the latest earlier node whose
+  /// result the input names, or \ref kNoNode when it names none. Filled by \ref indexNamedResults
+  /// once the graph is admitted, so a lookup during execution compares no names.
+  SmallVector<uint32_t, svg::components::kMaximumFilterGraphNodes * 2> inputProducers;
+  /// Offset of each node's first entry in \ref inputProducers, plus one entry past the last node.
+  SmallVector<uint32_t, svg::components::kMaximumFilterGraphNodes + 1> firstInput;
+  /// Index of the last node that reads each node's result, or \ref kNoNode when none does.
+  SmallVector<uint32_t, svg::components::kMaximumFilterGraphNodes> lastReader;
+  /// Output of each node, by node index, while a later node still reads it.
+  SmallVector<FilterTexture, svg::components::kMaximumFilterGraphNodes> namedOutputs;
   bool axisAligned;
   uint64_t executedTiles = 0;
   uint64_t admittedWorkUnits = 0;
@@ -1642,13 +1647,14 @@ struct FilterGraphExecution {
 
 /// The primitive visitor owns node-local conversion and clip decisions.
 struct FilterNodeExecution {
-  FilterNodeExecution(FilterGraphExecution& execution, const svg::components::FilterNode& node)
+  FilterNodeExecution(FilterGraphExecution& execution, size_t nodeIndex)
       : execution(execution),
-        node(node),
+        nodeIndex(nodeIndex),
+        node(execution.graph.nodes[nodeIndex]),
         engine(execution.engine),
         arena(execution.arena),
         coordinates(execution.coordinates),
-        input(execution.inputFor(node, 0)),
+        input(execution.inputFor(nodeIndex, 0)),
         regionSample(coordinates.sampleNodeSubregion(node)),
         subregion(regionSample.bounds),
         linearRgb(
@@ -1679,6 +1685,7 @@ struct FilterNodeExecution {
   FilterTexture apply(const fp::Tile& primitive);
 
   FilterGraphExecution& execution;
+  size_t nodeIndex;  ///< Position of \ref node in the graph.
   const svg::components::FilterNode& node;
   GeodeFilterEngine& engine;
   FilterResourceArena& arena;
@@ -2053,12 +2060,17 @@ FilterExecutionResult GeodeFilterEngine::execute(
   return result;
 }
 
-FilterTexture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
-                                             size_t index) const {
+FilterTexture FilterGraphExecution::inputFor(size_t nodeIndex, size_t slot) const {
+  const svg::components::FilterNode& node = graph.nodes[nodeIndex];
+  if (slot < node.inputs.size()) {
+    const uint32_t producer = inputProducers[firstInput[nodeIndex] + slot];
+    if (producer != kNoNode) {
+      return namedOutputs[producer];
+    }
+  }
   const StandardInputTextures standard{sourceGraphic, OptionalTexture(sourceAlpha),
                                        OptionalTexture(backdrop), OptionalTexture(backdropAlpha)};
-  return resolveInput(svg::FilterInputOrDefault(node, index), namedBuffers, currentBuffer,
-                      standard);
+  return resolveUnnamedInput(svg::FilterInputOrDefault(node, slot), currentBuffer, standard);
 }
 
 FilterTexture FilterGraphExecution::clip(FilterTexture input, const Box2d& region, bool transformed,
@@ -2090,23 +2102,46 @@ FilterTexture FilterGraphExecution::clipOutputToFilterRegion(FilterTexture outpu
       svg::FirstPixelCenterAtOrBeyond(pixelAABB.bottomRight.y) - tileOrigin.y, /*resolve=*/true);
 }
 
-void FilterGraphExecution::findLastNamedUses() {
-  for (size_t index = 0; index < graph.nodes.size(); ++index) {
-    for (const svg::components::FilterInput& input : graph.nodes[index].inputs) {
+void FilterGraphExecution::indexNamedResults() {
+  // A named input reads the latest earlier node with that result name. Admission bounds the graph
+  // to kMaximumFilterGraphNodes nodes, so the backward search costs at most that many name
+  // comparisons per input, once per execution. Only a graph with more inputs than the inline
+  // capacity of inputProducers moves that table to the heap.
+  const size_t nodeCount = graph.nodes.size();
+  inputProducers.clear();
+  firstInput.clear();
+  lastReader.clear();
+  lastReader.resize(nodeCount);
+  for (uint32_t& reader : lastReader) {
+    reader = kNoNode;
+  }
+  for (size_t reader = 0; reader < nodeCount; ++reader) {
+    firstInput.push_back(static_cast<uint32_t>(inputProducers.size()));
+    for (const svg::components::FilterInput& input : graph.nodes[reader].inputs) {
+      uint32_t producer = kNoNode;
       if (const auto* named = std::get_if<svg::components::FilterInput::Named>(&input.value)) {
-        lastNamedUse[named->name.str()] = index;
+        for (size_t candidate = reader; candidate-- > 0;) {
+          if (graph.nodes[candidate].result == named->name) {
+            producer = static_cast<uint32_t>(candidate);
+            lastReader[candidate] = static_cast<uint32_t>(reader);
+            break;
+          }
+        }
       }
+      inputProducers.push_back(producer);
     }
   }
+  firstInput.push_back(static_cast<uint32_t>(inputProducers.size()));
+  namedOutputs.clear();
+  namedOutputs.resize(nodeCount);
 }
 
 void FilterGraphExecution::retainLiveValues(size_t nodeIndex) {
-  const auto expired = [&](const auto& entry) {
-    const auto last = lastNamedUse.find(entry.first);
-    return last == lastNamedUse.end() || last->second <= nodeIndex;
-  };
-  std::erase_if(namedBuffers, expired);
-  std::erase_if(coordinates.namedSubregions, expired);
+  for (size_t producer = 0; producer < namedOutputs.size(); ++producer) {
+    if (lastReader[producer] == kNoNode || lastReader[producer] <= nodeIndex) {
+      namedOutputs[producer] = {};
+    }
+  }
   SmallVector<FilterTexture, 8> live{sourceGraphic, currentBuffer};
   if (sourceAlpha) {
     live.push_back(*sourceAlpha);
@@ -2116,19 +2151,20 @@ void FilterGraphExecution::retainLiveValues(size_t nodeIndex) {
       live.push_back(**value);
     }
   }
-  for (const auto& [name, texture] : namedBuffers) {
-    live.push_back(texture);
+  for (const FilterTexture& texture : namedOutputs) {
+    if (texture) {
+      live.push_back(texture);
+    }
   }
   arena.retainValues(std::span<const FilterTexture>(live.data(), live.size()));
 }
 
 void FilterGraphExecution::record(const svg::components::FilterNode& node, const Box2d& subregion,
                                   FilterTexture output, size_t nodeIndex) {
-  if (node.result.has_value()) {
-    coordinates.namedSubregions[node.result->str()] = subregion;
-    namedBuffers[node.result->str()] = output;
+  coordinates.recordSubregion(node, subregion);
+  if (lastReader[nodeIndex] != kNoNode) {
+    namedOutputs[nodeIndex] = output;
   }
-  coordinates.previousOutputSubregion = subregion;
   currentBuffer = output;
   retainLiveValues(nodeIndex);
 }
@@ -2160,6 +2196,7 @@ FilterTexture FilterGraphExecution::run() {
     return admittedPlan ? FilterTexture{} : sourceGraphic;
   }
   admittedWorkUnits = budget.workUnits() - workBefore;
+  indexNamedResults();
   const FilterTexture result = plan.tiles > 1 ? runTiled(plan) : runNodes();
   budget.release(*reservation);
   return result;
@@ -2196,9 +2233,10 @@ FilterTexture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
       sourceGraphic = currentBuffer = tileInput;
       sourceAlpha.reset();
       backdropSource = tileBackdrop;
-      namedBuffers.clear();
-      coordinates.namedSubregions.clear();
-      coordinates.previousOutputSubregion = coordinates.filterRegion;
+      for (FilterTexture& texture : namedOutputs) {
+        texture = {};
+      }
+      coordinates.resetSubregionHistory(coordinates.filterRegion);
       tileOrigin = Vector2d(originX, originY);
       const FilterTexture result = runNodes();
       if (!result || !arena.copyTexture(result, output,
@@ -2280,10 +2318,9 @@ FilterTexture FilterGraphExecution::runNodes() {
   if (!prepareBackdrop()) {
     return {};
   }
-  findLastNamedUses();
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     const FilterNode& node = graph.nodes[index];
-    FilterNodeExecution primitive(*this, node);
+    FilterNodeExecution primitive(*this, index);
     primitive.finalResolve = index + 1 == graph.nodes.size() &&
                              std::holds_alternative<fp::DropShadow>(node.primitive) &&
                              axisAligned && primitive.subregion == coordinates.filterRegion;
@@ -2326,7 +2363,7 @@ FilterTexture FilterNodeExecution::toNodeSpace(FilterTexture texture) {
 }
 
 bool FilterNodeExecution::convertBinaryInputs(FilterTexture& second) {
-  second = execution.inputFor(node, 1);
+  second = execution.inputFor(nodeIndex, 1);
   input = toNodeSpace(input);
   if (!input) {
     return false;
@@ -2404,7 +2441,7 @@ FilterTexture FilterNodeExecution::apply(const fp::Merge&) {
   // the child count before execution.
   SmallVector<FilterTexture, 8> inputs;
   for (size_t index = 0; index < node.inputs.size(); ++index) {
-    inputs.push_back(execution.inputFor(node, index));
+    inputs.push_back(execution.inputFor(nodeIndex, index));
   }
   return engine.applyMerge(arena, std::span<const FilterTexture>(inputs.data(), inputs.size()),
                            execution.currentBuffer.width(), execution.currentBuffer.height(),
