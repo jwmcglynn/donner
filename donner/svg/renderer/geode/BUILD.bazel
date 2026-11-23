@@ -1303,6 +1303,31 @@ donner_cc_test(
     ],
 )
 
+# Heap allocations of a filter execution's result-name bookkeeping, over a recording device. The
+# binary replaces the global allocator (AllocationTracker.h). It is manual so a sanitizer lane that
+# runs this package whole never builds it; the wrapper that runs it lives in
+# //donner/svg/renderer/benchmarks, where //tools/ci:sanitizer_allocator_exclusions excludes it.
+donner_cc_test(
+    name = "geode_filter_allocation_tests_impl",
+    srcs = [
+        "tests/GeodeFilterAllocation_tests.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = ["//donner/svg/renderer/benchmarks:__pkg__"],
+    deps = [
+        ":geode_device",
+        ":geode_runtime_device_source",
+        "//donner/base",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+        "//donner/svg/components/filter:components",
+        "@com_google_gtest//:gtest_main",
+    ] + wgsl_alternate_projections_for_tests(),  # The recording device consumes WGSL.
+)
+
 donner_multi_transitioned_test(
     name = "geode_filter_engine_tests",
     linux_hardware_gpu = True,

@@ -140,6 +140,17 @@ donner_multi_transitioned_test(
     text_full = "false",
 )
 
+# Heap allocations of a Geode filter execution's result-name bookkeeping. The binary replaces the
+# global allocator (AllocationTracker.h), so its implementation lives in the Geode package as a
+# manual target, which keeps it out of the sanitizer lane that runs that package whole, and this
+# wrapper is excluded from the other sanitizer lanes through
+# //tools/ci:sanitizer_allocator_exclusions.
+donner_multi_transitioned_test(
+    name = "geode_filter_allocation_tests",
+    dep = "//donner/svg/renderer/geode:geode_filter_allocation_tests_impl",
+    renderer_backend = "geode",
+)
+
 configured_dependency_audit_test(
     name = "renderer_bench_no_text_resource_audit",
     forbidden = [

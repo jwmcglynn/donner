@@ -1589,16 +1589,197 @@ std::optional<SVGDocument> ParseFilterDocument(const std::string& source) {
 
 /// \p source rendered once on a device of its own, whose filter engine starts with nothing cached.
 /// @param source SVG document source.
-RendererBitmap RenderOnFreshDevice(const std::string& source) {
+/// @param maximumTileExtent When nonzero, the largest tile the filter engine executes, which must
+///   split the filter into several tiles; zero keeps the engine's own extent.
+RendererBitmap RenderOnFreshDevice(const std::string& source, uint32_t maximumTileExtent = 0) {
   const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   EXPECT_THAT(device, testing::NotNull());
   std::optional<SVGDocument> document = ParseFilterDocument(source);
   if (!device || !document) {
     return {};
   }
+  if (maximumTileExtent != 0) {
+    device->filterEngine().setMaximumTileExtentForTesting(maximumTileExtent);
+  }
   RendererGeode renderer(device);
   renderer.draw(*document);
+  if (maximumTileExtent != 0) {
+    EXPECT_THAT(device->filterEngine().lastExecutionMemory().tileExecutions, testing::Gt(1u))
+        << "Premise: the filter must execute in tiles";
+  }
   return renderer.takeSnapshot();
+}
+
+/// Primitives that flood sixteen opaque squares of distinct colors that do not overlap, each with
+/// the result `square<i>`.
+std::string SixteenFloodedSquares() {
+  std::string primitives;
+  for (int i = 0; i < 16; ++i) {
+    primitives += "<feFlood x=\"" + std::to_string(4 + 22 * (i % 4)) + "\" y=\"" +
+                  std::to_string(4 + 18 * (i / 4)) +
+                  "\" width=\"14\" height=\"12\" flood-color=\"rgb(" + std::to_string(30 + 14 * i) +
+                  "," + std::to_string(220 - 12 * i) + "," + std::to_string(60 + (i % 3) * 70) +
+                  ")\" result=\"square" + std::to_string(i) + "\"/>";
+  }
+  return primitives;
+}
+
+/// An feMerge whose children read the results named by \p children, in order.
+std::string MergeOf(const std::vector<std::string>& children) {
+  std::string merge = "<feMerge>";
+  for (const std::string& child : children) {
+    merge += "<feMergeNode in=\"" + child + "\"/>";
+  }
+  return merge + "</feMerge>";
+}
+
+/// Four feMerge primitives that each read one square sixteen times, then one that reads all
+/// sixteen squares: 80 inputs, more than the execution keeps inline. With \p repeated false, the
+/// first four read their square once, which draws the same picture from 20 inputs, and
+/// \p misreadChild replaces the final merge's last child with that result.
+std::string ManyInputMerges(bool repeated, const std::string& misreadChild = "") {
+  std::string primitives = SixteenFloodedSquares();
+  for (int merge = 0; merge < 4; ++merge) {
+    primitives +=
+        MergeOf(std::vector<std::string>(repeated ? 16 : 1, "square" + std::to_string(merge)));
+  }
+  std::vector<std::string> squares;
+  for (int i = 0; i < 16; ++i) {
+    squares.push_back("square" + std::to_string(i));
+  }
+  if (!misreadChild.empty()) {
+    squares.back() = misreadChild;
+  }
+  return primitives + MergeOf(squares);
+}
+
+// A named input reads the latest earlier primitive with that result name, and a name no earlier
+// primitive has reads the previous result, the source graphic for the first primitive. A keyword
+// input reads the standard input even when a primitive's result has the keyword's name. The engine
+// resolves each name to the position of the primitive that produces it once per execution and
+// keeps results by that position, so each graph here must render exactly like the same graph with
+// every result named once, whole and split into tiles, which start their results afresh. The
+// input-derived default subregion follows the same resolution, and a graph with more inputs than
+// the execution keeps inline resolves the same way. Each case also differs from what a wrong
+// resolution would draw, or it could not tell the two apart.
+TEST_F(RendererGeodeTest, NamedInputsReadTheLatestEarlierPrimitiveWithThatName) {
+  struct Case {
+    std::string_view name;
+    std::string_view sharedNames;  //!< Graph whose result names repeat or are missing.
+    std::string_view uniqueNames;  //!< The same graph with every result named once.
+    std::string_view misread;      //!< What a wrong resolution of the names would draw.
+  };
+  const std::string manyInputs = ManyInputMerges(/*repeated=*/true);
+  const std::string fewInputs = ManyInputMerges(/*repeated=*/false);
+  const std::string manyInputsMisread = ManyInputMerges(/*repeated=*/false, "square0");
+  const std::array<Case, 8> cases = {{
+      {"redefined_name",
+       R"(<feOffset in="SourceGraphic" dx="6" dy="2" result="a"/>
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1.5" result="a"/>
+          <feColorMatrix in="SourceGraphic" type="saturate" values="0.2" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="a"/></feMerge>)",
+       R"(<feOffset in="SourceGraphic" dx="6" dy="2" result="a0"/>
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1.5" result="a1"/>
+          <feColorMatrix in="SourceGraphic" type="saturate" values="0.2" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="a1"/></feMerge>)",
+       R"(<feOffset in="SourceGraphic" dx="6" dy="2" result="a0"/>
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1.5" result="a1"/>
+          <feColorMatrix in="SourceGraphic" type="saturate" values="0.2" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="a0"/></feMerge>)"},
+      {"redefined_name_sets_the_default_subregion",
+       R"(<feFlood x="8" y="8" width="24" height="20" flood-color="#c03030" result="r"/>
+          <feFlood x="40" y="30" width="40" height="36" flood-color="#3060c0" result="r"/>
+          <feOffset in="r" dx="3" dy="2"/>)",
+       R"(<feFlood x="8" y="8" width="24" height="20" flood-color="#c03030" result="r0"/>
+          <feFlood x="40" y="30" width="40" height="36" flood-color="#3060c0" result="r1"/>
+          <feOffset in="r1" dx="3" dy="2"/>)",
+       R"(<feFlood x="8" y="8" width="24" height="20" flood-color="#c03030" result="r0"/>
+          <feFlood x="40" y="30" width="40" height="36" flood-color="#3060c0" result="r1"/>
+          <feOffset in="r1" x="8" y="8" width="24" height="20" dx="3" dy="2"/>)"},
+      {"input_named_like_its_own_result",
+       R"(<feOffset dx="5" dy="3" result="s"/>
+          <feGaussianBlur in="s" stdDeviation="1.5" result="s"/>
+          <feComposite in="s" in2="SourceGraphic" operator="xor"/>)",
+       R"(<feOffset dx="5" dy="3" result="s0"/>
+          <feGaussianBlur in="s0" stdDeviation="1.5" result="s1"/>
+          <feComposite in="s1" in2="SourceGraphic" operator="xor"/>)",
+       R"(<feOffset dx="5" dy="3" result="s0"/>
+          <feGaussianBlur in="s0" stdDeviation="1.5" result="s1"/>
+          <feComposite in="s0" in2="SourceGraphic" operator="xor"/>)"},
+      {"name_defined_only_later",
+       R"(<feOffset dx="4" dy="-3" result="x"/>
+          <feGaussianBlur in="later" stdDeviation="1.5"/>
+          <feComposite in2="x" operator="over" result="later"/>)",
+       R"(<feOffset dx="4" dy="-3" result="x"/>
+          <feGaussianBlur stdDeviation="1.5"/>
+          <feComposite in2="x" operator="over" result="later"/>)",
+       R"(<feOffset dx="4" dy="-3" result="x"/>
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1.5"/>
+          <feComposite in2="x" operator="over" result="later"/>)"},
+      {"name_no_primitive_defines_read_first",
+       R"(<feGaussianBlur in="nowhere" stdDeviation="1.5"/>
+          <feOffset dx="3" dy="2"/>)",
+       R"(<feGaussianBlur stdDeviation="1.5"/>
+          <feOffset dx="3" dy="2"/>)",
+       R"(<feGaussianBlur in="SourceAlpha" stdDeviation="1.5"/>
+          <feOffset dx="3" dy="2"/>)"},
+      {"result_named_like_a_keyword",
+       R"(<feFlood flood-color="#c03030" result="SourceAlpha"/>
+          <feComposite in="SourceAlpha" in2="SourceGraphic" operator="xor"/>)",
+       R"(<feFlood flood-color="#c03030" result="flooded"/>
+          <feComposite in="SourceAlpha" in2="SourceGraphic" operator="xor"/>)",
+       R"(<feFlood flood-color="#c03030" result="flooded"/>
+          <feComposite in="flooded" in2="SourceGraphic" operator="xor"/>)"},
+      {"more_inputs_than_the_inline_tables", manyInputs, fewInputs, manyInputsMisread},
+      {"result_read_after_later_primitives",
+       R"(<feOffset in="SourceGraphic" dx="-5" dy="4" result="kept"/>
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1"/>
+          <feColorMatrix type="hueRotate" values="120"/>
+          <feMorphology operator="dilate" radius="1"/>
+          <feOffset dx="3" dy="1" result="chain"/>
+          <feComposite in="kept" in2="chain" operator="arithmetic" k2="0.5" k3="0.7"/>)",
+       R"(<feGaussianBlur in="SourceGraphic" stdDeviation="1"/>
+          <feColorMatrix type="hueRotate" values="120"/>
+          <feMorphology operator="dilate" radius="1"/>
+          <feOffset dx="3" dy="1" result="chain"/>
+          <feOffset in="SourceGraphic" dx="-5" dy="4" result="kept"/>
+          <feComposite in="kept" in2="chain" operator="arithmetic" k2="0.5" k3="0.7"/>)",
+       R"(<feGaussianBlur in="SourceGraphic" stdDeviation="1"/>
+          <feColorMatrix type="hueRotate" values="120"/>
+          <feMorphology operator="dilate" radius="1"/>
+          <feOffset dx="3" dy="1" result="chain"/>
+          <feComposite in="chain" in2="chain" operator="arithmetic" k2="0.5" k3="0.7"/>)"},
+  }};
+  constexpr uint32_t kTileExtent = 32;
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const std::string label(testCase.name);
+    const RendererBitmap expected = RenderOnFreshDevice(FilteredShapesSvg(testCase.uniqueNames));
+    editor::tests::BitmapGoldenCompareParams signalParams =
+        editor::tests::PixelmatchIdentityParams();
+    signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+    RendererBitmap transparent = expected;
+    std::fill(transparent.pixels.begin(), transparent.pixels.end(), uint8_t{0});
+    int drawnPixels = -1;
+    editor::tests::CompareBitmapToBitmap(expected, transparent, "named_inputs_drawn_" + label,
+                                         signalParams, &drawnPixels);
+    ASSERT_THAT(drawnPixels, testing::Gt(0))
+        << "Premise: the graph with every result named once must draw";
+    int misreadPixels = -1;
+    editor::tests::CompareBitmapToBitmap(RenderOnFreshDevice(FilteredShapesSvg(testCase.misread)),
+                                         expected, "named_inputs_premise_" + label, signalParams,
+                                         &misreadPixels);
+    ASSERT_THAT(misreadPixels, testing::Gt(0))
+        << "Premise: a wrong resolution of the names must change the rendering";
+
+    editor::tests::CompareBitmapToBitmap(
+        RenderOnFreshDevice(FilteredShapesSvg(testCase.sharedNames)), expected,
+        "named_inputs_" + label, editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(
+        RenderOnFreshDevice(FilteredShapesSvg(testCase.sharedNames), kTileExtent),
+        RenderOnFreshDevice(FilteredShapesSvg(testCase.uniqueNames), kTileExtent),
+        "named_inputs_tiled_" + label, editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 /// A document whose markers sit inside \p depth nested viewports turned by one rotation, one

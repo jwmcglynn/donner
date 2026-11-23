@@ -7,13 +7,13 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <string>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/RcString.h"
+#include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -1097,8 +1097,13 @@ struct FilterRegionContext {
   /// @param input Input reference.
   Box2d resolveInputSubregion(const FilterInput& input) const {
     if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
-      auto it = namedSubregions.find(named->name.str());
-      return it != namedSubregions.end() ? it->second : previousOutputSubregion;
+      // The latest recorded primitive with the name wins, as it does for the result itself.
+      for (std::size_t index = namedSubregions_.size(); index-- > 0;) {
+        if (namedSubregions_[index].result == named->name) {
+          return namedSubregions_[index].bounds;
+        }
+      }
+      return previousOutputSubregion;
     }
     if (const auto* standard = std::get_if<components::FilterStandardInput>(&input.value)) {
       if (*standard == components::FilterStandardInput::FillPaint) {
@@ -1166,6 +1171,13 @@ struct FilterRegionContext {
         node, bounds ? intersect(*bounds, historyFilterRegion) : computeDefaultSubregion(node));
   }
 
+  /// Forget every recorded primitive region, as before a graph's first primitive.
+  /// @param previous Region the first primitive's implicit input covers.
+  void resetSubregionHistory(const Box2d& previous) {
+    namedSubregions_.clear();
+    previousOutputSubregion = previous;
+  }
+
   /// Use admitted CPU paint-input coverage for standard-input default regions.
   /// @param fill FillPaint alpha bounds. @param stroke StrokePaint alpha bounds.
   void setPaintInputRegions(std::optional<Box2d> fill, std::optional<Box2d> stroke) {
@@ -1204,16 +1216,25 @@ struct FilterRegionContext {
   std::optional<Box2d> fillPaintRegion;    ///< FillPaint coverage bounds, when admitted.
   std::optional<Box2d> strokePaintRegion;  ///< StrokePaint coverage bounds, when admitted.
   Box2d previousOutputSubregion;           ///< Subregion of the most recently recorded primitive.
-  std::unordered_map<std::string, Box2d>
-      namedSubregions;  ///< Subregions of recorded primitives, by result name.
 
 private:
+  /// Region of one recorded primitive that has a result name.
+  struct NamedSubregion {
+    RcString result;  ///< The primitive's result name; copying it shares the characters.
+    Box2d bounds;     ///< The region recorded for it.
+  };
+
   void storeSubregion(const FilterNode& node, const Box2d& bounds) {
     previousOutputSubregion = bounds;
     if (node.result) {
-      namedSubregions[node.result->str()] = bounds;
+      namedSubregions_.push_back(NamedSubregion{*node.result, bounds});
     }
   }
+
+  /// Named primitives in recording order, one entry per record. A graph records each primitive
+  /// once per execution and admission bounds it to kMaximumFilterGraphNodes primitives, so the
+  /// entries fit the inline storage and a lookup compares at most that many names.
+  SmallVector<NamedSubregion, components::kMaximumFilterGraphNodes> namedSubregions_;
 
   Box2d computeDefaultSubregion(const FilterNode& node) const {
     using namespace components;

@@ -5,9 +5,8 @@ re-encode, create and re-upload nothing, including the second and later draws of
 frame such as marker placements, filter passes upload and bind nothing new, and ordered batching
 draws runs of resident draws as instanced draws. Steady-state residency for images, layer
 composites, clip and mask geometry, draws under a clip polygon (among them turned marker
-placements), and painted text is still open (Milestone 8), as are index-keyed filter results
-(Milestone 5). `geode_counter_corpus_tests` records the corpus scenes measured to miss
-the steady state.
+placements), and painted text is still open (Milestone 8). `geode_counter_corpus_tests` records
+the corpus scenes measured to miss the steady state.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -55,8 +54,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the independent Milestone 8 item, layer-composite uniforms (8.3), together with the
-  Milestone 5 named-result keys. 8.3 also clears the five filter scenes 8.6 left listed.
+- Start the independent Milestone 8 item, layer-composite uniforms (8.3), which also clears the
+  five filter scenes 8.6 left listed.
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -159,11 +158,29 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     bucket to evict from scans every bucket (#2619).
   - [x] `{SimpleShapes,Moderate,Lion,GhostscriptTiger,GaussianBlur}_NoDirtyPath_ZeroTextures`
     assert `textureCreates == 0` on an unchanged second frame.
-- [ ] Milestone 5: Filter engine caching.
-  - [ ] Key filter results by node index instead of string. A filter execution in
-    `GeodeFilterEngine.cc` keeps named results in `std::unordered_map<std::string, FilterTexture>`
-    and copies the result name with `.str()` on every lookup and store. No counter covers this; it
-    needs an allocation or encode-time probe as its repro.
+- [x] Milestone 5: Filter engine caching.
+  - [x] Filter results are keyed by node index. Once admission has bounded a graph to
+    `kMaximumFilterGraphNodes` (32) primitives, a filter execution resolves each named input to
+    the latest earlier primitive with that result name, or to the previous result when no earlier
+    primitive has it, and records the last primitive that reads each result; this costs at most 31
+    name comparisons per input, once per execution, not per tile. Results are then stored and
+    looked up by the producing primitive's index and released after their last reader. The
+    subregion history that input-derived default subregions read (`FilterRegionContext`, shared
+    with the CPU filter path) lists the named primitives in recording order and is searched from
+    the latest. Neither copies a name's characters nor uses a map, so naming results adds no heap
+    allocation to an execution (`NamedResultsAllocateNoMoreThanImplicitChaining` in
+    `//donner/svg/renderer/benchmarks:geode_filter_allocation_tests`, an allocation probe over a
+    recording device in its own binary, which the sanitizer lanes exclude because it replaces the
+    global allocator). A repeated name, read both as a result and as the default subregion it sets,
+    an input named like its primitive's own result, a name defined only by a later primitive, a
+    name no primitive defines read by the first primitive (the source graphic), a result named like
+    a standard input keyword (the keyword wins), a result read after several later primitives, and
+    a graph of 80 inputs, which moves the input table to the heap, each render like the same graph
+    with every result named once, whole and split into tiles
+    (`NamedInputsReadTheLatestEarlierPrimitiveWithThatName`). The tables hold 32 primitives and 64
+    inputs in the execution's own storage; an admitted graph with more inputs, possible only
+    through `feMerge` children, moves the input table to the heap for that one execution; nothing
+    outlives the execution, so this retains no memory across frames.
   - [x] Filter intermediate textures come from the Milestone 4 pool and return to it after frame
     submission; an unchanged repeat blur creates no texture.
   - [x] Gaussian blur and morphology alternate two scratch textures instead of allocating one per
