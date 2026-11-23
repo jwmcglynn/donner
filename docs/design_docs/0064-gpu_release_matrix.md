@@ -3,7 +3,7 @@
 **Status:** Design\
 **Author:** Claude Opus 5\
 **Created:** 2026-08-24\
-**Updated:** 2026-10-06
+**Updated:** 2026-11-23
 
 ## Summary
 
@@ -258,17 +258,11 @@ bazel test --config=editor-wasm --test_output=all \
   //donner/editor/wasm:wasm_geode_package_size_tests
 ```
 
-The size ceilings are about 2% over the measured package, rounded up.
-
-| Metric                     | Measured   | Ceiling    |
-| -------------------------- | ---------- | ---------- |
-| `editor.wasm` raw          | 9,741,597  | 9,937,000  |
-| `editor.wasm` gzip         | 3,208,966  | 3,274,000  |
-| `editor.js` raw            | 188,005    | 191,800    |
-| `editor.js` gzip           | 51,894     | 53,000     |
-| Package raw                | 11,809,457 | 12,046,000 |
-| Largest Wasm function body | 33,236     | 46,000     |
-| Passive data segments      | 3          | 64         |
+The ceilings are the arguments of that test in `donner/editor/wasm/BUILD.bazel`, which is their
+one source: they cap the raw and gzip sizes of `editor.wasm` and `editor.js`, the package's total
+raw size, the largest Wasm function body and the number of passive data segments. The test prints
+each measured value beside its ceiling with `--test_output=all`. A ceiling is lowered as the
+package shrinks, and raising one is a maintainer decision.
 
 The function-body and data-segment limits are structural limits and are not scaled with the
 package.
