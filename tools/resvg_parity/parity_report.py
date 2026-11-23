@@ -1320,6 +1320,9 @@ UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
 # third_party/resvg-test-suite/BUILD.bazel.
 UPSTREAM_RELEASE_MANIFEST = Path("third_party/resvg-test-suite/resvg-v0.50.0.sha256")
 UPSTREAM_RELEASE_NOTES = Path("third_party/resvg-test-suite/BUILD.bazel")
+# The manifest's tests that the snapshot does not have, one `tests/...svg` path per line; the
+# head-to-head report leaves them unscored because results.csv has no verdict for them.
+UPSTREAM_RELEASE_ADDITIONS = Path("third_party/resvg-test-suite/resvg-v0.50.0-additions.txt")
 _MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (tests/[^\s].*)")
 
 
@@ -2702,11 +2705,15 @@ def build_head_to_head(
 
     `release_additions` are cases vendored from a later upstream release than the snapshot
     whose results.csv the engine column comes from; they have no recorded result, so both
-    sides leave them unscored and the report lists them. Any other case without a result fails.
+    sides leave them unscored and the report lists them. One with a result fails, as does any
+    other case without a result.
     """
 
     all_cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
-    unscored = sorted((set(all_cases) & release_additions) - set(engine_results))
+    if scored_additions := sorted(release_additions & set(engine_results)):
+        raise ParityReportError(
+            f"release additions have a results.csv row: {scored_additions[:5]}")
+    unscored = sorted(set(all_cases) & release_additions)
     cases = {path: case for path, case in all_cases.items() if path not in unscored}
     missing = sorted(set(cases) - set(engine_results))
     extra = sorted(set(engine_results) - set(cases))
@@ -2785,26 +2792,31 @@ def generate_head_to_head(repo_root: Path) -> dict[str, object]:
 
 
 def release_addition_cases(repo_root: Path) -> frozenset[str]:
-    """Return the cases whose SVG and PNG are both recorded in the upstream release manifest.
+    """Return the cases listed in the upstream release additions list.
 
-    The manifest records files byte-identical to a later upstream release, so such a case is the
-    release's own test and reference; one absent from results.csv was added after the snapshot.
-    A tree without the manifest has no such cases.
+    The list names the release's tests that the snapshot does not have. Each entry must have both
+    its SVG and its PNG recorded in the release manifest. A tree without the list has none.
     """
 
-    path = repo_root / UPSTREAM_RELEASE_MANIFEST
+    path = repo_root / UPSTREAM_RELEASE_ADDITIONS
     if not path.exists():
         return frozenset()
     try:
-        manifest = path.read_text(encoding="utf-8")
+        entries = path.read_text(encoding="utf-8").splitlines()
+        manifest = (repo_root / UPSTREAM_RELEASE_MANIFEST).read_text(encoding="utf-8")
     except OSError as error:
-        raise ParityReportError(f"cannot read {UPSTREAM_RELEASE_MANIFEST}: {error}") from error
+        raise ParityReportError(f"cannot read the release additions: {error}") from error
     listed = {match.group(2) for match in map(_MANIFEST_LINE.fullmatch, manifest.splitlines())
               if match}
-    return frozenset(
-        path.removeprefix("tests/") for path in listed
-        if path.endswith(".svg") and path[:-4] + ".png" in listed
-    )
+    if len(set(entries)) != len(entries):
+        raise ParityReportError(f"{UPSTREAM_RELEASE_ADDITIONS} lists a case more than once")
+    for entry in entries:
+        if not (entry.startswith("tests/") and entry.endswith(".svg") and entry in listed
+                and entry[:-4] + ".png" in listed):
+            raise ParityReportError(
+                f"{UPSTREAM_RELEASE_ADDITIONS}: {entry!r} is not a tests/...svg case whose SVG and "
+                f"PNG are both in {UPSTREAM_RELEASE_MANIFEST.name}")
+    return frozenset(entry.removeprefix("tests/") for entry in entries)
 
 
 def _default_repo_root() -> Path:

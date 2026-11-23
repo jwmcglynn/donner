@@ -1801,14 +1801,12 @@ class ParityReportTests(unittest.TestCase):
             "painting/fill/both.svg", "painting/fill/budget.svg", "painting/fill/golden.svg",
             "painting/fill/gated.svg", "painting/fill/skip.svg", "painting/fill/ub.svg",
             "painting/fill/neither.svg")}
-        additions = frozenset({"painting/fill/unknown.svg", "painting/stroke/off.svg",
-                               "painting/fill/both.svg"})
+        additions = frozenset({"painting/fill/unknown.svg", "painting/stroke/off.svg"})
 
         head_to_head = parity_report.build_head_to_head(report, results,
                                                         release_additions=additions)
 
-        # A recorded result keeps a release-recorded case scored; the other two are left out of
-        # both scores and listed.
+        # The two listed additions are left out of both scores and listed.
         self.assertEqual(head_to_head["unscored_release_additions"], [
             {"path": "painting/fill/unknown.svg", "state": "compare"},
             {"path": "painting/stroke/off.svg", "state": "disabled"},
@@ -1827,15 +1825,66 @@ class ParityReportTests(unittest.TestCase):
     def test_release_additions_need_both_files_in_the_manifest(self) -> None:
         manifest = self.fixture.root / parity_report.UPSTREAM_RELEASE_MANIFEST
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        digest = "0" * 64
-        manifest.write_text("".join(f"{digest}  tests/{path}\n" for path in (
-            "a/b/both.png", "a/b/both.svg", "a/b/png-only.png", "a/b/svg-only.svg")),
-            encoding="utf-8")
+        manifest.write_text("".join(f"{'0' * 64}  tests/{path}\n" for path in (
+            "a/b/both.png", "a/b/both.svg", "a/b/svg-only.svg")), encoding="utf-8")
+        additions = self.fixture.root / parity_report.UPSTREAM_RELEASE_ADDITIONS
 
+        self.assertEqual(parity_report.release_addition_cases(self.fixture.root), frozenset())
+        additions.write_text("tests/a/b/both.svg\n", encoding="utf-8")
         self.assertEqual(parity_report.release_addition_cases(self.fixture.root),
                          frozenset({"a/b/both.svg"}))
-        manifest.unlink()
-        self.assertEqual(parity_report.release_addition_cases(self.fixture.root), frozenset())
+        for entries in ("tests/a/b/svg-only.svg\n", "tests/a/b/missing.svg\n",
+                        "a/b/both.svg\n", "tests/a/b/both.svg\ntests/a/b/both.svg\n"):
+            with self.subTest(entries=entries):
+                additions.write_text(entries, encoding="utf-8")
+                with self.assertRaises(parity_report.ParityReportError):
+                    parity_report.release_addition_cases(self.fixture.root)
+
+    def _release_fixture(self, results: str) -> io.StringIO:
+        for name in ("a.svg", "b.svg"):
+            self.fixture.add_case("painting/fill/" + name)
+        source_path = self.fixture.root / parity_report.REGISTRATION_SOURCE
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(_registration("PaintingFill", '"painting/fill", {}'),
+                               encoding="utf-8")
+        (self.fixture.root / parity_report.RESULTS_CSV).write_text(results, encoding="utf-8")
+        manifest = self.fixture.root / parity_report.UPSTREAM_RELEASE_MANIFEST
+        manifest.write_text("".join(f"{'0' * 64}  tests/painting/fill/{name}\n" for name in (
+            "a.png", "a.svg", "b.png", "b.svg")), encoding="utf-8")
+        return io.StringIO()
+
+    def test_head_to_head_fails_when_a_snapshot_case_loses_its_result(self) -> None:
+        # Both cases are byte-identical to the release, but only a listed addition may lack a row:
+        # a deleted or renamed row for a snapshot case must still fail.
+        stdout = self._release_fixture("title,resvg\npainting/fill/a.svg,1\n")
+
+        result = parity_report.main(
+            ["--repo-root", str(self.fixture.root), "--head-to-head"], stdout=stdout
+        )
+
+        self.assertNotEqual(result, 0)
+
+    def test_head_to_head_leaves_only_listed_additions_unscored(self) -> None:
+        stdout = self._release_fixture("title,resvg\npainting/fill/a.svg,1\n")
+        (self.fixture.root / parity_report.UPSTREAM_RELEASE_ADDITIONS).write_text(
+            "tests/painting/fill/b.svg\n", encoding="utf-8")
+
+        result = parity_report.main(
+            ["--repo-root", str(self.fixture.root), "--head-to-head"], stdout=stdout
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["unscored_release_additions"],
+                         [{"path": "painting/fill/b.svg", "state": "compare"}])
+
+    def test_head_to_head_rejects_a_release_addition_with_a_result(self) -> None:
+        report = self._head_to_head_fixture()
+
+        with self.assertRaisesRegex(parity_report.ParityReportError,
+                                    r"release additions have a results.csv row"):
+            parity_report.build_head_to_head(
+                report, {"painting/fill/both.svg": 1},
+                release_additions=frozenset({"painting/fill/both.svg"}))
 
     def test_engine_results_reject_malformed_rows(self) -> None:
         malformed = {
@@ -2103,7 +2152,8 @@ class RealTreeParityReportTests(unittest.TestCase):
         unscored = {row["path"] for row in head_to_head["unscored_release_additions"]}
         self.assertEqual(summary["total_cases"], report["summary"]["total_cases"])
         self.assertEqual(summary["unscored_release_additions"], len(unscored))
-        self.assertLessEqual(unscored, parity_report.release_addition_cases(repo_root))
+        self.assertEqual(unscored, parity_report.release_addition_cases(repo_root))
+        self.assertEqual(len(unscored), 49)
         self.assertEqual(summary["donner_pixel_pass"],
                          report["summary"]["compare_cases"]
                          - sum(row["state"] == "compare"
