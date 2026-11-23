@@ -80,7 +80,7 @@ Estimates are engineering days, including tests and review fixes.
   - [ ] Chase-Lev deque with the memory orders of Le et al. and old-array reclamation,
         per-worker deques, a bounded injection queue for closures and an intrusive resumption list
         for coroutines, random-victim stealing, help-while-waiting joins with scope watermarks,
-        per-scope shared queues for flat spawns,
+        per-scope shared queues and epoch words, drain before sleep, `trySpawn`,
         event-count sleep and wake, cross-thread slot return, `TaskScope` and `Join`, zero-worker
         inline mode.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
@@ -236,6 +236,7 @@ struct TaskSchedulerOptions {
   std::size_t workerCount = 0;               // 0: run everything inline on the caller.
   std::optional<std::uint64_t> seed;         // Seeded deterministic mode (tests).
   std::size_t maxQueuedTasks = 64 * 1024;    // Bound on queued tasks across all queues.
+  std::size_t helpMarginBytes = 128 * 1024;  // Stack kept free when stealing while waiting.
 };
 
 class TaskScheduler {
@@ -251,6 +252,7 @@ public:
   explicit TaskScope(TaskScheduler& scheduler);
   ~TaskScope();
   template <typename F> void spawn(F&& work);   // From the creator or any task of this scope.
+  template <typename F> bool trySpawn(F&& work); // False at the queue bound; caller keeps work.
   void wait();                               // Runs queued work while waiting.
   JoinAwaitable join();                      // co_await: resume when every spawn finished.
   void requestStop();                        // Cooperative cancellation.
@@ -288,17 +290,19 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
 
 ### Internals
 
-- **Deques.** Each worker owns a Chase-Lev deque with signed 64-bit indices: the owner pushes and
-  pops at the bottom, thieves take from the top, and the last element is claimed by a
-  compare-and-swap on the top index. The memory orders are the C11 ones of Le et al.'s Figure 1
-  (relaxed and release-acquire accesses, sequentially consistent fences in `take` and `steal`,
-  sequentially consistent compare-and-swap), whose ARM counterpart they prove correct, not a port of
-  the original pseudo-code. The array grows by doubling up to the per-worker share of
-  `maxQueuedTasks`; past it, `spawn` runs the task inline, which keeps the program correct and
-  memory bounded. A thief can still be reading the old array after the owner grows it, so the old
-  array is kept, not freed: old arrays stay on the deque's list until the scheduler
-  destructor, as Chase and Lev's GC-free variant keeps buffers in a pool. Because arrays double,
-  the kept ones together are smaller than the live one.
+- **Deques.** Each worker owns a Chase-Lev deque with signed 64-bit logical indices that only grow
+  and never wrap or reset (the array slot is the index modulo the capacity), so watermarks stay
+  comparable for the life of the scheduler: the owner pushes and pops at the bottom, thieves take
+  from the top, and the last element is claimed by a compare-and-swap on the top index. The memory
+  orders are the C11 ones of Le et al.'s Figure 1 (relaxed and release-acquire accesses,
+  sequentially consistent fences in `take` and `steal`, sequentially consistent compare-and-swap),
+  whose ARM counterpart they prove correct, not a port of the original pseudo-code. The array grows
+  by doubling up to the per-worker share of `maxQueuedTasks`; past it, `spawn` runs the task inline
+  and `trySpawn` returns false, which keeps the program correct and memory bounded. A thief can
+  still be reading the old array after the owner grows it, so the old array is kept, not freed: old
+  arrays stay on the deque's list until the scheduler destructor, as Chase and Lev's GC-free variant
+  keeps buffers in a pool. Because arrays double, the kept ones together are smaller than the live
+  one.
 - **Injection queue.** A closure spawned from a thread that is not a worker (the first spawn of a
   scope) goes to one bounded multi-producer queue that idle workers drain before stealing; when the
   queue is full the closure runs inline on the spawning thread. A coroutine resumption scheduled
@@ -322,31 +326,50 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   build wraps (`-Wl,--wrap=emscripten_futex_wait`) for the GPU-owning application pthread. The
   wrapper passes every other thread straight to the real futex wait, so scheduler workers sleep
   through `Atomics.wait`, which is permitted on workers; Milestone S5 tests that branch.
-- **Waiting.** A `TaskScope` constructed on a worker records that worker's deque bottom index as
-  its watermark. Scopes on one worker nest last in, first out, because a scope joins in its
-  destructor before its creator returns, so every task the scope's creator spawns from its own
-  stack is pushed onto its own deque above the watermark. A scope's tasks may also spawn into it
-  (flat spawns) from other workers; those do not go to the spawning worker's deque but to the
-  scope's own bounded shared queue (on overflow the spawn runs inline), which idle workers steal
-  from after a fenced wake. Only a scope's creator waits on it. While it waits, it applies these
-  rules in order:
+- **Where spawned tasks go.** A `TaskScope` constructed on a worker records that worker's deque
+  bottom index as its watermark. Scopes on one worker nest last in, first out, because a scope
+  joins in its destructor before its creator returns. A spawn from the scope's creator goes onto
+  the creator's own deque, above the watermark. A spawn made by one of the scope's tasks while it
+  runs on any worker (a flat spawn) goes onto that worker's own deque like any other push, so a
+  tree traversal gets ordinary deque-to-deque work stealing. Each queued task records its scope.
+  Every scope also has a shared queue: an intrusive list through the task slots, so it needs no
+  allocation and cannot overflow. It receives spawns from a creator that is not a worker and tasks
+  moved there by the drain step below. Idle workers take work from their own deque, then from
+  scopes' shared queues and the injection queue, then by stealing.
+- **Scope state word.** Each scope has one atomic epoch word. It is incremented, after the change
+  it announces, whenever the scope's counter reaches zero and whenever a task is put into the
+  scope's shared queue, and the incrementing thread then notifies waiters on it. A creator that
+  is about to sleep reads the epoch, re-checks rules 1 and 2 below, and only then calls
+  `epoch.wait(read value)`. If the change happened before the read, the re-check sees it; if after,
+  the value differs and the wait returns at once. A notify that did not change a waited-on word
+  would let `std::atomic::wait` block again, so nothing wakes a creator except a change to this
+  word. The injected-delay tests cover a delay between the re-check and the wait, and between the
+  change and the increment, each observed red with the increment moved before the change.
+- **Waiting.** Only a scope's creator waits on it. While it waits it applies, in order:
 
   1. If its deque holds an entry above the scope's watermark, or the scope's shared queue is not
      empty, take one and run it, whatever the stack margin.
   2. If the scope's counter is zero, return.
-  3. Otherwise every unfinished task of the scope is running on another worker. The waiter steals
-     unrelated work while its stack has more than the margin left (checked against the stack
-     pointer), and past the margin sleeps on the scope until its counter reaches zero or its
-     shared queue receives a task, then starts again at rule 1.
+  3. Otherwise steal unrelated work while the stack has more than the margin left (checked
+     against the stack pointer). Past the margin, or when there is nothing to steal, drain and
+     sleep: move every entry still on its own deque, all of which are below its watermark, into
+     the shared queue of the scope each entry belongs to (incrementing that scope's epoch), then
+     sleep on this scope's epoch with the protocol above, and start again at rule 1 when it
+     changes.
 
-  **Liveness.** The invariant is that every queued task of a scope is runnable by that scope's
-  creator through rule 1: it is either on the creator's deque above the scope's watermark or in
-  the scope's shared queue. A scope is waited on only by its creator and waits only for tasks it
-  spawned and their descendants, so the waits-for relation is acyclic and finite. Take a waiting
-  scope none of whose running tasks waits: its running tasks finish, and its queued tasks are run
-  by its creator, which cannot sleep while rule 1 applies, so it completes; by induction every wait
-  completes, even when every worker is past its margin. Tasks below a waiting worker's watermark
-  belong to outer scopes on the same stack, whose only waiter is that same worker's outer frame. The
+  A worker never runs a deque entry below its innermost live watermark; those entries leave only
+  by being stolen from the top or moved by the drain step. An idle worker also drains before it
+  sleeps on the global event count (its deque is then empty, so the step is free).
+
+  **Liveness.** The invariant is that every queued task is either on the deque of a worker that is
+  not asleep, or in its scope's shared queue, because no worker sleeps with a non-empty deque. A
+  worker that is not asleep eventually runs, is robbed of, or drains each entry of its deque. A
+  task in a scope's shared queue is run by that scope's creator through rule 1, and the move
+  changed the epoch that creator sleeps on, so a sleeping creator wakes. A scope is waited on only
+  by its creator and waits only for tasks it spawned and their descendants, so the waits-for
+  relation is acyclic and finite. Take a waiting scope none of whose running tasks waits: its
+  running tasks finish and its queued tasks are run or moved to where its creator runs them, so it
+  completes; by induction every wait completes, even when every worker is past its margin. The
   cases raised in review, each a liveness test in Milestone S1:
 
   - One worker recursing: each level constructs a scope, spawns its child above the watermark and
@@ -354,41 +377,45 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     as in a serial run. The reported schedule (deep nested scopes, the next child still on the
     worker's own deque, an external caller waiting on the outer scope) runs the child instead of
     sleeping.
-  - Every worker past its margin: no worker sleeps with a task its own wait could run, and every
-    other queued task is runnable by a waiting creator.
+  - Every worker past its margin: each drains before sleeping, so all queued tasks sit in shared
+    queues whose creators are awake or are woken by the move.
+  - Two workers past the margin, each holding the other's scope's flat task below its own
+    watermark (the schedule that a deque without the drain step deadlocks on): both drain, each
+    task lands in its own scope's shared queue, and each creator runs its task by rule 1.
   - A stolen task that waits: it constructs its own scope on the thief, so its children sit above
     the thief's watermark.
   - `Join`: an internal scope is constructed before `b` is pushed, so `b` is above its watermark;
     after `a` returns, rule 1 takes `b` back unless it was stolen.
-  - Spawns that overflowed a queue bound ran inline at spawn time and count as finished.
-  - Flat spawns: in the scope's shared queue, so the creator runs them by rule 1. Sending them to
-    the spawning worker's deque instead admits a deadlock (two workers past the margin, each
-    holding the other's scope's task below its own watermark), which is why they do not go there.
+  - A spawn that meets the queue bound: `spawn` runs it inline at spawn time and it counts as
+    finished; `trySpawn` returns false and the caller keeps the work (0072 Part D walks such a
+    subtree on its own heap stack, so no task frames nest).
   - Non-worker scopes: below.
 
-  **Skipping the wake on a push.** A creator pushing a scope's task onto its own deque may skip the
-  event count, because it runs that task by rule 1 before its wait can sleep, so a missed wake costs
-  parallelism only. Pushes into a scope's shared queue, the injection queue and coroutine
-  resumptions always take the fenced wake protocol. A push into a scope's shared queue also wakes
-  that scope's creator if it is sleeping on the scope, with the same fence and re-check on both
-  sides, so a creator never sleeps while rule 1 could run a task; without this, a flat spawn that
-  arrives while the creator sleeps would depend on another worker being free to take it.
-- **Worker stacks.** Workers are created with an explicit stack size (512 KiB by default, an option)
-  instead of the platform default, which differs between platforms and toolchains. The margin
-  limits only stealing. Rule 1 runs regardless of it, so a stolen task's own nested waits recurse
-  on the thief's stack as deep as that client's scope nesting; a client must bound its nesting
-  times its task frame within the worker stack. The style traversal of 0072 Part D does this by
-  construction: one flat scope, tasks that never wait, and an explicit heap stack for the inline
-  part of a subtree, so a style task uses one task frame whatever the tree depth. The margin
-  starts at 128 KiB, a per-client parameter that must exceed that client's deepest task (0072
-  Milestone D3 measures it for style at the parser's nesting limit).
+  **Skipping the wake on a push.** A worker pushing onto its own deque may skip the global event
+  count, because it runs, loses to a thief, or drains that entry before it can sleep, so a missed
+  wake costs parallelism only. Moves into a shared queue, pushes into the injection queue and
+  coroutine resumptions always take the fenced wake protocol, and moves also increment the scope's
+  epoch.
+- **Worker stacks and the margin.** Workers are created with an explicit stack size (512 KiB by
+  default, an option) instead of the platform default, which differs between platforms and
+  toolchains. The margin limits only stealing, and a stolen task can come from any client, so the
+  margin is one scheduler-wide value: the largest stack bound declared by any client of that
+  scheduler (`TaskSchedulerOptions::helpMarginBytes`, which clients raise when they register),
+  plus slack. A client's declaration is its guarantee about one stolen task: run on a worker,
+  that task, including any waits it makes and the rule 1 work those waits run, never uses more
+  native stack than the declared bound. Rule 1 itself runs regardless of the margin, so a client
+  whose tasks wait must bound its own scope nesting to meet that guarantee. The style traversal of
+  0072 Part D declares one task frame: one flat scope, tasks that never wait, an explicit heap
+  stack for the inline part of a subtree, and `trySpawn` with the heap stack as the fallback, so a
+  style task's stack use does not depend on tree depth (0072 Milestone D3 measures the bound at
+  the parser's nesting limit). The default margin is 128 KiB.
 - **Non-worker waits.** A scope created on a thread that is not a worker (the render worker
-  holding document access, for example) keeps its own queue: its spawns go there, and idle workers
-  steal from it as they do from the injection queue, after a fenced wake. This is the same shared
-  queue every scope has for flat spawns. When that thread waits, it runs tasks from its scope's
-  queue (rule 1), never from the injection queue or another worker's deque, and sleeps on the
-  counter only when that queue is empty, so every unfinished task is then running on a worker. Such
-  a thread never runs another client's task while it holds a guard.
+  holding document access, for example) has no deque: its spawns go to its shared queue, with a
+  fenced wake for idle workers. Flat spawns by its tasks running on workers go to those workers'
+  deques as above. When that thread waits, it runs tasks from its scope's shared queue (rule 1),
+  never from the injection queue or another worker's deque, and sleeps on the scope's epoch when
+  that queue is empty and the counter is not zero. Drained tasks of its scope arrive in its shared
+  queue and wake it. Such a thread never runs another client's task while it holds a guard.
 - **Task storage.** A spawned closure is stored in a fixed-size slot (64 bytes inline, larger
   closures in a per-worker free list of blocks) so small tasks never call `malloc`. A slot is freed
   by whichever thread ran the task: a thief returns it to the owning worker's lock-free return
@@ -489,7 +516,9 @@ clients that size work from documents.
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
 - **Injected-delay race tests.** Test hooks delay a worker at chosen points (between the sleep
-  decision and the sleep, between steal and run, before a scope's final decrement). Each race test
+  decision and the sleep, between steal and run, before a scope's final decrement, between a
+  creator's re-check and its epoch wait, between a shared-queue move and its epoch increment, and
+  between a drain and the sleep). Each race test
   was observed red with the matching protocol step deliberately broken before it counts as
   coverage.
 - **Fuzzer** (`//donner/base/tasks:task_scheduler_fuzzer`): decodes a random fork-join program
