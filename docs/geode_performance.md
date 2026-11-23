@@ -102,7 +102,13 @@ state. The target selects the Geode backend itself, so it needs no `--config`.
   an empty texture pool at its starting budget, so its counters depend on no earlier scene. The
   pass has its own ledger, `kKnownViolationsAboveNaturalSize`, with the same rules, also empty, and
   `kDeliberatelyInert` names the pass a blank scene is blank in. Run with `--test_output=all`, the
-  pass prints one `[counter-corpus-above-natural WxH]` line per scene.
+  pass prints one `[counter-corpus-above-natural WxH]` line per scene. Neither pass may run a
+  filter on a [reduced raster](#GeodePerformanceDevice).
+- **Large canvas.** Twice a small scene's natural size is still a small canvas, so a third pass,
+  `Corpus/GeodeCounterCorpusLargeCanvasTest.RendersVisiblePixels/<stem>`, draws one frame of every
+  scene with its long edge at `kMaxAboveNaturalCanvasEdge` (2048) pixels (`largeCanvasSize`) and
+  requires visible pixels, unless `kDeliberatelyInert` names the scene for this pass. It gates no
+  counters; it catches content a budget drops only on a large canvas.
 - **Order independence.** All scenes share one device, so `SceneCountersAreOrderIndependent`
   renders a pattern scene, runs unrelated scenes on the same device, renders it again and requires
   identical counters.
@@ -511,6 +517,45 @@ image, a composite past the cap) allocates its uniform and bind group for that f
   and every later path clip draws nothing. At 2048x2048 the
   byte limit holds 16 canvas-sized surfaces, so only surfaces held at once, such as layers nested
   that deep, reach it.
+- **Filters past the frame's limits run on a reduced raster.** A filter graph normally runs on a
+  capture of the visible part of its filter region at device resolution. When it does not fit
+  there (its intermediate memory estimate is past `kMaximumFilterIntermediateBytes`, 256 MiB, its
+  work is past the per-graph or per-frame work limit, or its surfaces are past what the frame's
+  surface budget can still hold), the element is captured on a raster reduced by 2, 4, 8 or 16
+  along each axis, the smallest of those factors at which the same graph fits the same limits, and
+  the graph runs in that raster's pixels. Every resolution-dependent parameter (blur deviation,
+  offsets, morphology radius, displacement scale, light positions and surface scale, noise
+  frequency) then takes the value it has on a canvas reduced by the same factor. The raster's
+  pixels are the reduced canvas's pixels that cover the capture, and each device pixel shows the
+  raster pixel that covers its center, so the element looks as it does on the reduced canvas,
+  enlarged (`FilterPastTheSurfaceBudgetRunsOnAReducedRaster`,
+  `InsetFilterRegionRunsOnTheReducedCanvasGrid`,
+  `FilterPastThePerGraphWorkLimitRunsOnAReducedRaster`, `FilterOnA2048CanvasRunsOnAReducedRaster`,
+  `FilterOnA3840x2160CanvasRunsOnAReducedRaster`; `FiltersPastTheFrameWorkLimitRunOnReducedRasters`
+  covers the frame's work limit). No
+  limit is raised: the reduced plan is admitted against the same budgets, so its memory is bounded
+  by them, and the factor depends only on the graph, the canvas and what the frame already holds.
+  The capture's input margin is sized at full resolution, so near the viewport's edge it can
+  reach about one reduced pixel further than the reduced canvas's own margin would. Three kinds of
+  graph are not reduced, because the reduced canvas would draw them differently: a graph whose
+  transform takes the transformed blur path (a skewed blur, or a rotated blur that is not
+  circular), one that reads `BackgroundImage` or `BackgroundAlpha`, and one with an `feImage` of a
+  document fragment, which the driver rasterizes at full resolution
+  (`FiltersAReducedRasterCannotReproduceAreNotReduced`); past the limits they are left out as
+  before. A memory refusal that submitting the frame's work so far would lift is retried at full
+  resolution first, unless the plan does not fit the surface budget even with nothing else held
+  (`FilterLargerThanTheSurfaceBudgetReducesWithoutAChunk`). A graph that does not fit even at 16 is
+  left out, and `filterBudgetRejected` reports it (`FilterPastTheCoarsestReducedRasterIsLeftOut`). A
+  reduced filter's unchanged frame costs what the same filter's does at full resolution
+  (`ReducedFilterReachesTheSteadyState`). The frame's work limit counts every filter in draw order,
+  so once one filter runs reduced, a later filter that used to fit in the remaining work may run
+  reduced too; the outcome depends only on the document. `resourceStats()` sets
+  `filterReducedRasterSupported` and reports how many filters ran reduced (`filterReducedRasters`)
+  and the largest factor (`filterRasterReduction`). A
+  turbulence and displacement graph, whose estimate is 116 bytes per pixel, runs reduced by 2 on a
+  2048x2048 canvas and by 4 on a 3840x2160 one. This is how such a graph renders on a large canvas:
+  at lower resolution, even where splitting it into tiles would let it run at full resolution
+  ([#2675](https://github.com/jwmcglynn/donner/issues/2675)).
 
 ## Which Draws Keep Residency {#GeodePerformanceDrawPaths}
 
@@ -706,6 +751,16 @@ group every frame:
 - **Renderers that alternate frames on one device sweep each other's filter bindings**, because the
   filter engine sweeps at every renderer's frame start, so neither reaches the filter steady state;
   no test measures this.
+- **Filters past the frame's limits render at lower resolution.** A graph that does not fit at
+  full resolution runs on a reduced raster (above), so on a large canvas it looks coarser than the
+  same element on a small one. Running graphs that can be tiled exactly at full resolution instead
+  is tracked in [#2675](https://github.com/jwmcglynn/donner/issues/2675).
+- **Some filters still drop out on a large canvas.** A graph that reads `BackgroundImage` or
+  `BackgroundAlpha` is not reduced, because its backdrop copy keeps the device grid, so past its
+  limits it is still left out. An `feImage` that references an element is rasterized by the
+  renderer driver within a per-frame source-image budget of 4 MiB, so on a canvas above about 1000
+  pixels the element is hidden on every backend
+  ([#2662](https://github.com/jwmcglynn/donner/issues/2662)).
 - **Texture pool eviction scans every bucket**
   ([#2619](https://github.com/jwmcglynn/donner/issues/2619)).
 - **Uncharged host records**: the composite sequences above, a kept image's host record per image

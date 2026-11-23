@@ -1392,6 +1392,24 @@ public:
                                  .failure == RejectionReason::None;
   }
 
+  /// The reason \ref reserve would refuse the same arguments, or `RejectionReason::None` when it
+  /// would admit them, without reserving anything or latching a rejection. A frame already closed
+  /// reports the reason that closed it.
+  [[nodiscard]] RejectionReason refusalReason(const FilterGraph& graph, std::uint64_t pixelCount,
+                                              FilterMemoryModel memoryModel,
+                                              std::uint64_t captureBytes,
+                                              std::uint64_t retainedGpuBufferBytes = 0,
+                                              std::uint64_t memoryPixels = UINT64_MAX,
+                                              std::uint64_t executions = 1,
+                                              std::size_t gpuSurfaces = 0) const {
+    if (rejected_) {
+      return rejectionReason_;
+    }
+    return evaluate(graph, pixelCount, memoryModel, captureBytes, retainedGpuBufferBytes,
+                    memoryPixels, executions, gpuSurfaces)
+        .failure;
+  }
+
   /// Release a successful CPU capture reservation after its filter layer is popped.
   void release(Reservation& reservation) {
     if (!reservation.active) {

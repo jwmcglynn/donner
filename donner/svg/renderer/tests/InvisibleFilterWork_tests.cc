@@ -20,6 +20,8 @@ namespace donner::svg {
 namespace {
 
 using test::PixelAt;
+using ::testing::AllOf;
+using ::testing::Field;
 using ::testing::Gt;
 using ::testing::Lt;
 
@@ -155,14 +157,26 @@ TEST(InvisibleFilterWorkTest, HiddenFilteredContentRunsNoFilters) {
   }
 }
 
-/// A visible graph that no longer fits the frame's remaining work is refused alone and counted;
-/// the smaller graph drawn after it still runs.
-TEST(InvisibleFilterWorkTest, RefusedGraphLeavesLaterGraphsRunning) {
+/// A visible graph that no longer fits the frame's remaining work leaves the smaller graph drawn
+/// after it running. A renderer that runs such a graph on a reduced-resolution raster refuses
+/// nothing; any other renderer refuses that graph alone and counts it.
+TEST(InvisibleFilterWorkTest, GraphPastTheFrameWorkLeavesLaterGraphsRunning) {
   const Frame actual = Draw(WithKernel(Document(HeavyShapes(12))));
   ExpectVisibleFilterDrawn(actual);
-  if (actual.stats.filterBudgetSupported) {
-    EXPECT_THAT(actual.stats.filterGraphsRefused, Gt(0u));
-    EXPECT_TRUE(actual.stats.filterBudgetRejected);
+  if (!actual.stats.filterBudgetSupported) {
+    return;
+  }
+  if (actual.stats.filterReducedRasterSupported) {
+    EXPECT_THAT(
+        actual.stats,
+        AllOf(Field("filterReducedRasters", &RendererResourceStats::filterReducedRasters, Gt(0u)),
+              Field("filterGraphsRefused", &RendererResourceStats::filterGraphsRefused, 0u),
+              Field("filterBudgetRejected", &RendererResourceStats::filterBudgetRejected, false)));
+  } else {
+    EXPECT_THAT(
+        actual.stats,
+        AllOf(Field("filterGraphsRefused", &RendererResourceStats::filterGraphsRefused, Gt(0u)),
+              Field("filterBudgetRejected", &RendererResourceStats::filterBudgetRejected, true)));
   }
 }
 
