@@ -35,6 +35,8 @@ struct LayerRasterGeometry {
   bool interactionBoundsRejected = false;
   /// No conservative full-object bound is available for the selected content.
   bool interactionBoundsUnavailable = false;
+  /// The content is bounded and lies wholly outside the canvas, so it has no pixels to retain.
+  bool offCanvas = false;
 };
 
 inline constexpr std::uint64_t kMaximumInteractionTilePixels = 4ULL * 1024 * 1024;
@@ -102,6 +104,15 @@ double ImmediateStaticSpanBudgetChargeMs(double measuredRasterizeMs);
 bool IsStaticSpanImmediateSafe(const CompositorController::StaticSpanPlan& spanPlan);
 bool IsBoundedMultiDrawStaticSpan(const CompositorController::StaticSpanPlan& spanPlan);
 bool HasPublicTileBitmap(const RendererBitmap& bitmap);
+/// The transparent 1x1 bitmap a slot holds when it has nothing to draw on the current raster, so
+/// that `RendererBitmap::empty()` keeps meaning "not rasterized yet".
+RendererBitmap TransparentPlaceholderBitmap();
+/// True when @p bounds are finite and, grown by @p paddingPx on every side and snapped outward to
+/// whole pixels, still miss a canvas of @p canvasSize: the content has no pixels on the canvas.
+bool PaddedBoundsMissCanvas(const Box2d& bounds, double paddingPx, const Vector2d& canvasSize);
+/// The layer's CPU bitmap when it holds publishable pixels, without reading a texture back; null
+/// for a texture payload, a placeholder, or no payload.
+const RendererBitmap* PublicLayerBitmap(const CompositorLayer& layer);
 bool BitmapPixelsEqual(const RendererBitmap& a, const RendererBitmap& b);
 std::string SpanRangeLabel(const Registry& registry, Entity firstEntity, Entity lastEntity);
 

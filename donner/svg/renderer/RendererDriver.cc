@@ -345,43 +345,32 @@ Vector2i CheckedRenderingSize(const RenderViewport& viewport) {
   return Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
 }
 
-/// Compute the draw call's device (surface) space AABB, inclusive of stroke width, for the given
-/// entity, or `std::nullopt` if the entity has no drawable content that this pass can cheaply
-/// bound (i.e., it's a group, or it's text/<image> whose bounds live in a different component than
-/// `ComputedPathComponent`).
+double ResolvedStrokeWidth(Registry& registry,
+                           const components::RenderingInstanceComponent& instance,
+                           const PropertyRegistry& properties);
+
+/// Surface-space bounds of @p localBox grown by the furthest the stroke of @p style can reach from
+/// the centerline, including the worst-case miter tip and square-cap corner, or the box itself
+/// when the element is not stroked. @p strokeWidth is the stroke width in user units, resolved
+/// from its authored length as the draw resolves it (\ref ResolvedStrokeWidth): the authored
+/// number alone would read `5em` as 5 and `0.5in` as 0.5.
 ///
-/// The stroke inflate is the furthest a stroke can reach from the centerline, including the
-/// worst-case miter tip and square-cap corner, and it is applied in the space the stroke is
-/// actually expanded in: host space at the authored width for a
-/// \ref NonScalingStrokeMode::HostSpace stroke, local space at the CTM-adjusted width otherwise.
-/// Applying an area-average local inflate to a host-space stroke (or the authored host inflate to
-/// a local one) under-counts along one axis of an anisotropic CTM and wrongly culls a visible
-/// stroke. Returns `std::nullopt` when the reach is not finite, which reads as "cannot bound" and
-/// leaves the draw uncalled rather than substituting a bound that may under-count.
-std::optional<Box2d> DeviceDrawableBoundsWithStroke(const EntityHandle& dataHandle,
-                                                    const components::ComputedStyleComponent& style,
-                                                    NonScalingStrokeMode strokeMode,
-                                                    const Transform2d& worldFromEntity,
-                                                    const Transform2d& surfaceFromCanvas) {
-  const auto* path = dataHandle.try_get<components::ComputedPathComponent>();
-  if (!path) {
-    // Text and <image> draws are not culled by this path: text measurement would require asking
-    // the text engine, and `<image>` bounds live on `ComputedSizedElementComponent`. Both are far
-    // rarer than paths in complex documents, where culling pays off.
-    return std::nullopt;
-  }
-
-  Box2d box = path->localBounds();
-  if (box.isEmpty()) {
-    return std::nullopt;
-  }
-
+/// The stroke inflate is applied in the space the stroke is actually expanded in: host space at
+/// the authored width for a \ref NonScalingStrokeMode::HostSpace stroke, local space at the
+/// CTM-adjusted width otherwise. Applying an area-average local inflate to a host-space stroke (or
+/// the authored host inflate to a local one) under-counts along one axis of an anisotropic CTM and
+/// wrongly culls a visible stroke. Returns `std::nullopt` when the reach is not finite, which
+/// reads as "cannot bound" rather than substituting a bound that may under-count.
+std::optional<Box2d> StrokedDeviceBox(Box2d localBox,
+                                      const components::ComputedStyleComponent& style,
+                                      double strokeWidth, NonScalingStrokeMode strokeMode,
+                                      const Transform2d& worldFromEntity,
+                                      const Transform2d& surfaceFromCanvas) {
   if (style.properties.has_value()) {
     const auto& props = style.properties.value();
     // Value (not reference): `get()` returns a temporary optional, so binding a
     // reference to its `.value()` would dangle. PaintServer is a small variant.
     const PaintServer strokeServer = props.stroke.get().value();
-    const double strokeWidth = props.strokeWidth.get().value().value;
     if (!strokeServer.is<PaintServer::None>() && strokeWidth > 0.0) {
       const double inflate = StrokeCullHalfExtent(
           EffectiveStrokeWidth(strokeWidth, strokeMode, worldFromEntity),
@@ -393,16 +382,43 @@ std::optional<Box2d> DeviceDrawableBoundsWithStroke(const EntityHandle& dataHand
 
       const Vector2d inflateVector(inflate, inflate);
       if (strokeMode == NonScalingStrokeMode::HostSpace) {
-        const Box2d hostBox = worldFromEntity.transformBox(box);
+        const Box2d hostBox = worldFromEntity.transformBox(localBox);
         return surfaceFromCanvas.transformBox(
             Box2d(hostBox.topLeft - inflateVector, hostBox.bottomRight + inflateVector));
       }
 
-      box = Box2d(box.topLeft - inflateVector, box.bottomRight + inflateVector);
+      localBox = Box2d(localBox.topLeft - inflateVector, localBox.bottomRight + inflateVector);
     }
   }
 
-  return (worldFromEntity * surfaceFromCanvas).transformBox(box);
+  return (worldFromEntity * surfaceFromCanvas).transformBox(localBox);
+}
+
+/// Compute the draw call's device (surface) space AABB, inclusive of stroke reach (see
+/// \ref StrokedDeviceBox), for the given entity, or `std::nullopt` if the entity has no drawable
+/// content that this pass can cheaply bound (i.e., it's a group, or it's text/<image> whose bounds
+/// live in a different component than `ComputedPathComponent`).
+std::optional<Box2d> DeviceDrawableBoundsWithStroke(
+    Registry& registry, const components::RenderingInstanceComponent& instance,
+    const EntityHandle& dataHandle, const components::ComputedStyleComponent& style,
+    NonScalingStrokeMode strokeMode, const Transform2d& worldFromEntity,
+    const Transform2d& surfaceFromCanvas) {
+  const auto* path = dataHandle.try_get<components::ComputedPathComponent>();
+  if (!path) {
+    // Text and <image> draws are not culled by this path: text measurement would require asking
+    // the text engine, and `<image>` bounds live on `ComputedSizedElementComponent`. Both are far
+    // rarer than paths in complex documents, where culling pays off.
+    return std::nullopt;
+  }
+
+  const Box2d box = path->localBounds();
+  if (box.isEmpty()) {
+    return std::nullopt;
+  }
+  const double strokeWidth = style.properties.has_value()
+                                 ? ResolvedStrokeWidth(registry, instance, *style.properties)
+                                 : 0.0;
+  return StrokedDeviceBox(box, style, strokeWidth, strokeMode, worldFromEntity, surfaceFromCanvas);
 }
 
 #ifdef DONNER_TEXT_ENABLED
@@ -649,6 +665,21 @@ private:
   FontMetrics fontMetrics_;
   double scale_;
 };
+
+/// The stroke width of the shape drawn for \p instance, in user units: its authored length
+/// resolved as `toStrokeParams` resolves it, before any `non-scaling-stroke` adjustment. Font,
+/// viewport and physical units all resolve; a plain user-unit or `px` width skips the viewport
+/// lookup, which resolves it to the same number.
+double ResolvedStrokeWidth(Registry& registry,
+                           const components::RenderingInstanceComponent& instance,
+                           const PropertyRegistry& properties) {
+  const Lengthd width = properties.strokeWidth.get().value();
+  if (width.unit == Lengthd::Unit::None || width.unit == Lengthd::Unit::Px) {
+    return width.value;
+  }
+  const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  return StrokeLengthResolver(properties, viewBox)(width);
+}
 
 /// Builds the decoration that \p declaringProperties declare, painted with the style of
 /// \p provider. Its stroke width resolves as the text root's does (\ref StrokeLengthResolver),
@@ -2655,7 +2686,8 @@ bool IsPlainVisibleLeaf(const components::RenderingInstanceComponent& instance) 
 /// Device bounds for viewport culling a shape, or nullopt when the shape must not be culled. A
 /// shape with markers is never culled: its own bounds do not include the markers, which can reach
 /// onto the canvas from a path that lies off it.
-std::optional<Box2d> CullableDeviceBounds(const components::RenderingInstanceComponent& instance,
+std::optional<Box2d> CullableDeviceBounds(Registry& registry,
+                                          const components::RenderingInstanceComponent& instance,
                                           const EntityHandle& dataHandle,
                                           const components::ComputedStyleComponent& style,
                                           NonScalingStrokeMode strokeMode,
@@ -2664,8 +2696,8 @@ std::optional<Box2d> CullableDeviceBounds(const components::RenderingInstanceCom
   if (HasMarkers(instance)) {
     return std::nullopt;
   }
-  return DeviceDrawableBoundsWithStroke(dataHandle, style, strokeMode, worldFromEntity,
-                                        surfaceFromCanvas);
+  return DeviceDrawableBoundsWithStroke(registry, instance, dataHandle, style, strokeMode,
+                                        worldFromEntity, surfaceFromCanvas);
 }
 
 bool HasNeutralLeafCompositing(const components::ComputedStyleComponent& style) {
@@ -3113,8 +3145,8 @@ bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
     return false;
   }
   const auto bounds = DeviceDrawableBoundsWithStroke(
-      components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
-      ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+      registry, instance, components::ShapeSystem::geometryHandle(instance.styleHandle(registry)),
+      style, ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
       surfaceFromCanvasTransform_);
   return bounds.has_value() && ShouldCullDeviceBox(*bounds, cullingSurfaceSize());
 }
@@ -3393,33 +3425,26 @@ RangeBoundContribution BoundFilteredEntity(Registry& registry, Entity entity,
 RangeBoundContribution BoundPathEntity(Registry& registry, Entity entity,
                                        const components::RenderingInstanceComponent& instance,
                                        const components::ComputedStyleComponent& style,
-                                       const Transform2d& finalTransform,
+                                       const Transform2d& surfaceFromCanvas,
                                        const components::ComputedPathComponent& path) {
   // Marker geometry can extend beyond the path and is not bounded here.
   if (instance.markerStart || instance.markerMid || instance.markerEnd) {
     TraceBoundReason(entity, "marker");
     return {.unknown = true};
   }
-  Box2d local = path.spline.bounds();
-  const PaintParams paint = toPaintParams(registry, instance, style);
-  if (!std::holds_alternative<PaintServer::None>(paint.stroke) &&
-      paint.strokeParams.strokeWidth > 0.0) {
-    double padding = paint.strokeParams.strokeWidth / 2.0;
-    if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
-      padding *= paint.strokeParams.miterLimit;
-    } else if (paint.strokeParams.lineJoin == StrokeLinejoin::MiterClip) {
-      padding = StrokeCullHalfExtent(paint.strokeParams.strokeWidth, paint.strokeParams.lineCap,
-                                     paint.strokeParams.lineJoin, paint.strokeParams.miterLimit);
-    }
-    if (!std::isfinite(padding)) {
-      return {.unknown = true};
-    }
-    local = Box2d(local.topLeft - Vector2d(padding, padding),
-                  local.bottomRight + Vector2d(padding, padding));
+  // The same stroke reach the viewport cull uses: square caps, miter-like joins and host-space
+  // widths all reach past half the stroke width.
+  const std::optional<Box2d> canvas = StrokedDeviceBox(
+      path.spline.bounds(), style,
+      style.properties.has_value() ? ResolvedStrokeWidth(registry, instance, *style.properties)
+                                   : 0.0,
+      ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+      surfaceFromCanvas);
+  if (!canvas.has_value()) {
+    return {.unknown = true};
   }
-  const Box2d canvas = finalTransform.transformBox(local);
-  TraceBoundBox(entity, "path/shape", canvas);
-  return {.bounds = canvas};
+  TraceBoundBox(entity, "path/shape", *canvas);
+  return {.bounds = *canvas};
 }
 
 void TraceUnknownDrawable(Registry& registry, Entity entity,
@@ -3450,7 +3475,7 @@ RangeBoundContribution BoundVisibleEntity(Registry& registry, Entity entity,
   const EntityHandle data = instance.dataHandle(registry);
   if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
                              .try_get<components::ComputedPathComponent>()) {
-    return BoundPathEntity(registry, entity, instance, style, finalTransform, *path);
+    return BoundPathEntity(registry, entity, instance, style, surfaceFromCanvas, *path);
   }
   if (data.try_get<components::ComputedTextComponent>()) {
     TraceBoundReason(entity, "text");
@@ -4052,9 +4077,10 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(subtreeMarkers_);
       if (!insideFilterLayer) {
         if (const auto deviceBounds = CullableDeviceBounds(
-                instance, components::ShapeSystem::geometryHandle(instance.styleHandle(registry)),
-                style, ShapeNonScalingStrokeMode(instance, style),
-                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+                registry, instance,
+                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, cullingSurfaceSize());
         }
@@ -4278,9 +4304,10 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       const bool insideFilterLayer = hasFilterLayer || hasOpenFilterLayer(localDeferred);
       if (!insideFilterLayer) {
         if (const auto deviceBounds = CullableDeviceBounds(
-                instance, components::ShapeSystem::geometryHandle(instance.styleHandle(registry)),
-                style, ShapeNonScalingStrokeMode(instance, style),
-                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+                registry, instance,
+                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, cullingSurfaceSize());
         }

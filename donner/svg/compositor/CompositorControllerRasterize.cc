@@ -386,6 +386,67 @@ bool IsWholePixelOffset(const Vector2d& offsetPx) {
          std::abs(offsetPx.y - std::round(offsetPx.y)) < 1e-9;
 }
 
+/// Where a static span's tile lands on the canvas.
+struct SpanTileBounds {
+  /// The span's canvas bounds clipped to the canvas, snapped to whole pixels with an antialiasing
+  /// halo; unset when the span cannot be bounded or has nothing on the canvas.
+  std::optional<Box2d> snapped;
+  /// Crop the tile to \ref snapped instead of allocating the whole canvas.
+  bool useTight = false;
+  /// The span is bounded and lies wholly outside the canvas.
+  bool offCanvas = false;
+};
+
+SpanTileBounds ComputeSpanTileBounds(RendererInterface& renderer, Registry& registry, Entity first,
+                                     Entity last, const RenderViewport& viewport,
+                                     const Transform2d& surfaceFromCanvas) {
+  RendererDriver boundsDriver(renderer);
+  std::optional<Box2d> bounds =
+      boundsDriver.computeEntityRangeBounds(registry, first, last, viewport, surfaceFromCanvas);
+  if (!bounds.has_value()) {
+    // Clipped bounds are also absent for a span wholly outside the canvas; only the unclipped
+    // bounds tell that apart from a span that cannot be bounded.
+    bounds = boundsDriver.computeEntityRangeBounds(
+        registry, first, last, viewport, surfaceFromCanvas,
+        RendererDriver::EntityRangeBoundsOptions{.clipToCanvas = false});
+  }
+  const double canvasArea = viewport.size.x * viewport.size.y;
+  SpanTileBounds result;
+  if (!bounds.has_value() || canvasArea <= 0.0) {
+    return result;
+  }
+  // Bounds are mathematical, not pixel aligned: a 1 px halo keeps antialiased edges in the crop.
+  constexpr double kEdgePaddingPx = 1.0;
+  result.offCanvas = PaddedBoundsMissCanvas(*bounds, kEdgePaddingPx, viewport.size);
+  const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
+  const Box2d padded(bounds->topLeft - padding, bounds->bottomRight + padding);
+  const Vector2d snapTL(std::floor(std::max(0.0, padded.topLeft.x)),
+                        std::floor(std::max(0.0, padded.topLeft.y)));
+  const Vector2d snapBR(std::ceil(std::min(viewport.size.x, padded.bottomRight.x)),
+                        std::ceil(std::min(viewport.size.y, padded.bottomRight.y)));
+  if (snapBR.x <= snapTL.x || snapBR.y <= snapTL.y) {
+    return result;
+  }
+  result.snapped = Box2d(snapTL, snapBR);
+  // Cropping costs a little at compose time; a span covering most of the canvas is not worth it.
+  constexpr double kTightBoundsCoverageThreshold = 0.75;
+  result.useTight = result.snapped->width() * result.snapped->height() <
+                    canvasArea * kTightBoundsCoverageThreshold;
+  return result;
+}
+
+// The entity's current absolute transform on the surface, which a layer payload is stamped with so
+// a later pure translation can reuse it. An entity without a rendering instance was promoted before
+// the tree was prepared and counts as drawn at the origin.
+Transform2d SurfaceFromLayerEntity(Registry& registry, Entity entity,
+                                   const Transform2d& surfaceFromCanvas) {
+  if (!registry.all_of<components::RenderingInstanceComponent>(entity)) {
+    return Transform2d();
+  }
+  return registry.get<components::RenderingInstanceComponent>(entity).worldFromEntityTransform *
+         surfaceFromCanvas;
+}
+
 }  // namespace
 
 bool DrawsCopyOf(Registry& registry, Entity target) {
@@ -599,6 +660,19 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     layer.markDirty();
     return;
   }
+  if (geometry.offCanvas) {
+    // A placeholder stands in for the tile of a layer with nothing on this canvas, which would
+    // otherwise rasterize into a transparent canvas-sized texture.
+    layer.setBitmap(TransparentPlaceholderBitmap(),
+                    SurfaceFromLayerEntity(registry, layer.entity(), surfaceFromCanvas),
+                    CompositorLayer::PayloadRaster{.canvasSize = canvasSize,
+                                                   .surfaceFromCanvas = surfaceFromCanvas});
+    layer.setGeneration(nextTileGeneration_++);
+    layer.setCanvasOffset(Vector2d::Zero());
+    layer.setLastRasterizeMs(0.0);
+    layer.setImmediatePlan(ImmediateLayerPlan{});
+    return;
+  }
   ImmediateLayerPlan immediatePlan;
   immediatePlan.visible = geometry.boundsCanvas.has_value();
   if (geometry.boundsCanvas.has_value()) {
@@ -644,20 +718,10 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     }
   }
 
-  // Stamp the bitmap with the entity's current absolute transform so the
-  // fast path in `renderFrame` can later tell whether a DOM transform
-  // mutation is a pure translation (reuse bitmap via `canvasFromBitmap_`
-  // delta) or a shape-changing transform (force re-rasterize). A missing
-  // `RenderingInstanceComponent` means the entity was promoted before
-  // the tree was prepared - treat it as transform identity, which makes
-  // the subsequent fast-path delta equal to the new transform, which is
-  // correct for the "bitmap was drawn at origin" case.
-  Transform2d surfaceFromEntity;
-  if (registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
-    surfaceFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
-                            .worldFromEntityTransform *
-                        surfaceFromCanvas;
-  }
+  // Stamp the payload so the fast path in `renderFrame` can tell a pure translation, which reuses
+  // it, from a shape-changing transform, which re-rasterizes.
+  const Transform2d surfaceFromEntity =
+      SurfaceFromLayerEntity(registry, layer.entity(), surfaceFromCanvas);
   const CompositorLayer::PayloadRaster payloadRaster{.canvasSize = canvasSize,
                                                      .surfaceFromCanvas = surfaceFromCanvas,
                                                      .styleWorkIncomplete = styleWork_->rejected()};
@@ -997,6 +1061,13 @@ LayerPaintRange FindLayerPaintRange(Registry& registry, const std::vector<Entity
 
 }  // namespace
 
+void CompositorController::holdEmptySegment(size_t slotIndex) {
+  staticSegments_[slotIndex] = TransparentPlaceholderBitmap();
+  staticSegmentStyleWorkIncomplete_[slotIndex] = false;
+  staticSegmentTextures_[slotIndex].reset();
+  staticSegmentOffsets_[slotIndex] = Vector2d::Zero();
+}
+
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport,
                                                         const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::rasterizeDirtyStaticSegmentsImpl");
@@ -1112,68 +1183,22 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     }
 
     if (segmentIsEmpty) {
-      // No entities in this segment's paint-order range. Use a 1×1
-      // transparent placeholder so `.empty()` still means "not yet
-      // rasterized"; public tile snapshots prune the placeholder.
       ZoneScopedN("Compositor::segment::emptyBitmap");
-      RendererBitmap placeholder;
-      placeholder.dimensions = Vector2i(1, 1);
-      placeholder.rowBytes = 4u;
-      placeholder.pixels.assign(4u, 0u);
-      placeholder.alphaType = AlphaType::Premultiplied;
-      staticSegments_[i] = std::move(placeholder);
-      staticSegmentStyleWorkIncomplete_[i] = false;
-      staticSegmentTextures_[i].reset();
-      staticSegmentOffsets_[i] = Vector2d::Zero();
+      holdEmptySegment(i);
     } else {
-      // Try the tight-bound path before allocating pixels. When the entity
-      // range has precise canvas bounds, the offscreen is cropped and draws
-      // are shifted by the crop origin.
-      //
-      // `computeEntityRangeBounds` returns `nullopt` for entity
-      // ranges it can't precisely bound (text, markers, masks,
-      // patterns, sub-documents - see its own contract in
-      // `RendererDriver.h`). Callers treat `nullopt` as "fall back
-      // to full-canvas"; never as "empty segment".
-      std::optional<Box2d> tightBoundsCanvas;
+      // Try the tight-bound path before allocating pixels: a cropped offscreen draws shifted by the
+      // crop origin. `ComputeSpanTileBounds` falls back to the full canvas for a span it cannot
+      // bound; turning tight bounds off is the bisection knob for tight-bound regressions.
+      SpanTileBounds tileBounds;
       if (config_.tightBoundedSegments) {
         ZoneScopedN("Compositor::segment::computeBounds");
-        RendererDriver boundsDriver(renderer());
-        tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(
-            registry, paintOrder[startIdx], paintOrder[endIdx], viewport, surfaceFromCanvas);
+        tileBounds = ComputeSpanTileBounds(renderer(), registry, paintOrder[startIdx],
+                                           paintOrder[endIdx], viewport, surfaceFromCanvas);
       }
-      // The bounds-compute overhead per segment is ~O(entities) with
-      // no pixel work - negligible vs any render. But tight-bound
-      // also adds the crop-into-smaller-bitmap overhead at compose
-      // time; if the tight rect covers most of the canvas anyway,
-      // the allocation savings don't justify it. Fall back to
-      // full-canvas above the coverage threshold.
-      constexpr double kTightBoundsCoverageThreshold = 0.75;
-      const double canvasArea = viewport.size.x * viewport.size.y;
-      bool useTight = false;
-      bool visibleInViewport = false;
-      Box2d tightBoundsSnapped;
-      if (tightBoundsCanvas.has_value() && canvasArea > 0.0) {
-        // Snap to integer pixels + 1px padding so AA edges aren't
-        // clipped by the crop box - `computeEntityRangeBounds`
-        // returns mathematical bounds, not pixel-aligned bounds.
-        constexpr double kEdgePaddingPx = 1.0;
-        const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
-        Box2d padded(tightBoundsCanvas->topLeft - padding,
-                     tightBoundsCanvas->bottomRight + padding);
-        const Vector2d snapTL(std::floor(std::max(0.0, padded.topLeft.x)),
-                              std::floor(std::max(0.0, padded.topLeft.y)));
-        const Vector2d snapBR(std::ceil(std::min(viewport.size.x, padded.bottomRight.x)),
-                              std::ceil(std::min(viewport.size.y, padded.bottomRight.y)));
-        if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
-          tightBoundsSnapped = Box2d(snapTL, snapBR);
-          visibleInViewport = true;
-          const double tightArea = tightBoundsSnapped.width() * tightBoundsSnapped.height();
-          if (tightArea < canvasArea * kTightBoundsCoverageThreshold) {
-            useTight = true;
-          }
-        }
-      }
+      const bool visibleInViewport = tileBounds.snapped.has_value();
+      const bool offCanvas = tileBounds.offCanvas;
+      const bool useTight = tileBounds.useTight;
+      const Box2d tightBoundsSnapped = tileBounds.snapped.value_or(Box2d());
 
       const StaticSpanCostEstimate cost =
           EstimateStaticSpanCost(registry, paintOrder, startIdx, endIdx);
@@ -1195,39 +1220,43 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       }
 
       const Vector2i canvasSize = BitmapDimensionsForViewport(viewport);
-      if (adoptBudgetImmediateSpan(i, previousSpanPlan, spanPlan, canvasSize)) {
+      if (!offCanvas && adoptBudgetImmediateSpan(i, previousSpanPlan, spanPlan, canvasSize)) {
         continue;
       }
-      if (surfaceBudgetExhaustedThisFrame_) {
-        // The latched budget rejects every further allocation this frame; the remaining dirty
-        // slots complete in the next frame.
-        return;
-      }
-      std::unique_ptr<RendererInterface> offscreen;
-      {
-        ZoneScopedN("Compositor::segment::createOffscreen");
-        offscreen = acquireOffscreen();
-      }
-      UTILS_RELEASE_ASSERT(offscreen != nullptr);
-      // A tight slot draws into a crop of the canvas shifted by the crop origin.
-      RenderViewport slotViewport = viewport;
-      Transform2d slotSurfaceFromCanvas = surfaceFromCanvas;
-      Vector2d slotOffset = Vector2d::Zero();
-      if (useTight) {
-        slotViewport.size = tightBoundsSnapped.size();
-        slotSurfaceFromCanvas =
-            surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft);
-        slotOffset = tightBoundsSnapped.topLeft;
-      }
-      {
-        ZoneScopedN("Compositor::segment::drawEntityRange");
-        if (!rasterizeSegmentSlot(i, std::move(offscreen), paintOrder[startIdx], paintOrder[endIdx],
-                                  slotViewport, slotSurfaceFromCanvas, previousSpanPlan, spanPlan,
-                                  canvasSize)) {
+      if (offCanvas) {
+        holdEmptySegment(i);
+      } else {
+        if (surfaceBudgetExhaustedThisFrame_) {
+          // The latched budget rejects every further allocation this frame; the remaining dirty
+          // slots complete in the next frame.
           return;
         }
+        std::unique_ptr<RendererInterface> offscreen;
+        {
+          ZoneScopedN("Compositor::segment::createOffscreen");
+          offscreen = acquireOffscreen();
+        }
+        UTILS_RELEASE_ASSERT(offscreen != nullptr);
+        // A tight slot draws into a crop of the canvas shifted by the crop origin.
+        RenderViewport slotViewport = viewport;
+        Transform2d slotSurfaceFromCanvas = surfaceFromCanvas;
+        Vector2d slotOffset = Vector2d::Zero();
+        if (useTight) {
+          slotViewport.size = tightBoundsSnapped.size();
+          slotSurfaceFromCanvas =
+              surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft);
+          slotOffset = tightBoundsSnapped.topLeft;
+        }
+        {
+          ZoneScopedN("Compositor::segment::drawEntityRange");
+          if (!rasterizeSegmentSlot(i, std::move(offscreen), paintOrder[startIdx],
+                                    paintOrder[endIdx], slotViewport, slotSurfaceFromCanvas,
+                                    previousSpanPlan, spanPlan, canvasSize)) {
+            return;
+          }
+        }
+        staticSegmentOffsets_[i] = slotOffset;
       }
-      staticSegmentOffsets_[i] = slotOffset;
     }
     const auto segmentRasterizeEnd = std::chrono::steady_clock::now();
     const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1525,7 +1554,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
     }
     // Layer tile.
     const auto& layer = layers_[i];
-    const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
+    const RendererBitmap* layerBitmap = PublicLayerBitmap(layer);
     const std::shared_ptr<const RendererTextureSnapshot> layerTexture = layer.textureSnapshot();
     const bool isDragTarget =
         layer.entity() == splitStaticLayersEntity_ || isActiveDragTarget(layer.entity());
@@ -1594,8 +1623,8 @@ bool CompositorController::hasCompletePaintOrderTilePayloads() const {
         staticSpanPlans_[index].lastEntity == entt::null) {
       continue;
     }
-    const bool hasBitmap =
-        index < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[index]);
+    // A placeholder bitmap marks a span with nothing on this raster.
+    const bool hasBitmap = index < staticSegments_.size() && !staticSegments_[index].empty();
     const bool hasTexture =
         index < staticSegmentTextures_.size() && staticSegmentTextures_[index] != nullptr;
     if (!hasBitmap && !hasTexture) {
@@ -1620,7 +1649,7 @@ bool CompositorController::hasCompleteTileSetForPresentation() const {
   }
   for (size_t index = 0; index < segmentCount; ++index) {
     const bool hasPayload =
-        HasPublicTileBitmap(staticSegments_[index]) || staticSegmentTextures_[index] != nullptr;
+        !staticSegments_[index].empty() || staticSegmentTextures_[index] != nullptr;
     if (!hasPayload &&
         (staticSegmentDirty_[index] || staticSpanPlans_[index].firstEntity != entt::null)) {
       return false;

@@ -1570,6 +1570,8 @@ private:
                                    const std::vector<Entity>& transformDirtyEntities) const;
   bool hasDirtyMarkedInteraction(Registry& registry,
                                  const std::vector<Entity>& dirtyEntities) const;
+  /// Hold the placeholder of a static segment slot with nothing to draw on the current raster.
+  void holdEmptySegment(size_t slotIndex);
   /// Withdraw interaction promotions admitted against a raster that @p viewport and
   /// @p surfaceFromCanvas outgrow in canvas size or content scale.
   void withdrawOutgrownAdmissions(Registry& registry, const RenderViewport& viewport,
