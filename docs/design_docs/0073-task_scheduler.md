@@ -76,15 +76,17 @@ not shaped by one user.
 
 Estimates are engineering days, including tests and review fixes.
 
-- [ ] Milestone S1: Core scheduler (6 days)
+- [ ] Milestone S1: Core scheduler (7 days)
   - [ ] Chase-Lev deque with the memory orders of Le et al. and old-array reclamation,
         per-worker deques, a bounded injection queue for closures and an intrusive resumption list
-        for coroutines, random-victim stealing, help-while-waiting joins with the watermark rule,
+        for coroutines, random-victim stealing, help-while-waiting joins with scope watermarks,
+        per-scope shared queues for flat spawns,
         event-count sleep and wake, cross-thread slot return, `TaskScope` and `Join`, zero-worker
         inline mode.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
-    all-workers-at-the-help-limit liveness test, and the lost-wakeup injected-delay test (red with
-    the protocol broken) are green.
+    liveness tests listed under [Waiting](#internals), and the lost-wakeup injected-delay test (red
+    with the protocol broken) are green. Each liveness test was observed red with the watermark
+    taken at `wait()` instead of at scope construction, through a test hook.
 - [ ] Milestone S2: Parallel loops and determinism (3 days). After S1.
   - [ ] `ParallelFor` with grain and adaptive splitting; seeded deterministic mode; test hooks.
   - Done when: the inline-below-grain counter test, the seeded-mode replay test and the scaling
@@ -109,7 +111,7 @@ Estimates are engineering days, including tests and review fixes.
   - Done when: `//donner/benchmarks:task_scheduler_bench` reports spawn, join, wake latency and
     scaling, and the overhead goals are met.
 
-Total committed estimate: 20.5 engineering days. Part D of
+Total committed estimate: 21.5 engineering days. Part D of
 [0072-css_cascade_performance](0072-css_cascade_performance.md) needs S1 to S3, and S4 for its
 race coverage.
 
@@ -248,7 +250,7 @@ class TaskScope {                            // Structured fork-join; the destru
 public:
   explicit TaskScope(TaskScheduler& scheduler);
   ~TaskScope();
-  template <typename F> void spawn(F&& work);   // Runs work() on some worker or inline.
+  template <typename F> void spawn(F&& work);   // From the creator or any task of this scope.
   void wait();                               // Runs queued work while waiting.
   JoinAwaitable join();                      // co_await: resume when every spawn finished.
   void requestStop();                        // Cooperative cancellation.
@@ -303,7 +305,8 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   from a thread that is not a worker cannot run inline, since that would break the meaning of
   `schedule()`, and cannot be dropped; it goes instead to an intrusive list whose link lives in the
   awaiter inside the suspended coroutine frame. That list needs no allocation and cannot overflow:
-  its length is at most the number of suspended frames, which the frame accounting below bounds.
+  its link is part of the suspended frame, so each suspended coroutine adds exactly one entry and
+  the list grows only as frames do.
 - **Stealing.** An idle worker drains the injection queue, then tries random victims a bounded
   number of times, then prepares to sleep.
 - **Sleeping without lost wakeups.** An event count, following Rayon's protocol: a worker that
@@ -319,31 +322,70 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   build wraps (`-Wl,--wrap=emscripten_futex_wait`) for the GPU-owning application pthread. The
   wrapper passes every other thread straight to the real futex wait, so scheduler workers sleep
   through `Atomics.wait`, which is permitted on workers; Milestone S5 tests that branch.
-- **Waiting.** When a worker starts `TaskScope::wait()`, it records its deque's bottom index as a
-  watermark. Everything above the watermark was pushed after the wait began, so it is the awaited
-  work or its descendants. The waiter always pops and runs tasks above its watermark; that
-  recursion follows the program's own fork-join nesting, as a serial run would. When nothing is
-  above the watermark and the scope is not done, every remaining awaited task has been stolen and
-  is running on another worker. The waiter then steals unrelated work to stay busy, but only while
-  its stack has more than a margin left (checked against the stack pointer, not a fixed count);
-  past the margin it sleeps on the scope's counter. The liveness argument: a waiting task only waits
-  for its own descendants, so the waits-for relation is acyclic and finite. An awaited descendant is
-  either finished, running without waiting, running and waiting on its own descendants, or in its
-  runner's deque above that runner's innermost watermark, which the runner always pops even past
-  its margin. Older tasks below a sleeping waiter's watermark stay stealable, and the only task
-  waiting on them is the same worker's outer frame, which resumes when the inner wait completes.
-  So the deepest waiting task always makes progress, and by induction every wait completes, even
-  when every worker is past its margin.
+- **Waiting.** A `TaskScope` constructed on a worker records that worker's deque bottom index as
+  its watermark. Scopes on one worker nest last in, first out, because a scope joins in its
+  destructor before its creator returns, so every task the scope's creator spawns from its own
+  stack is pushed onto its own deque above the watermark. A scope's tasks may also spawn into it
+  (flat spawns) from other workers; those do not go to the spawning worker's deque but to the
+  scope's own bounded shared queue (on overflow the spawn runs inline), which idle workers steal
+  from after a fenced wake. Only a scope's creator waits on it. While it waits, it applies these
+  rules in order:
+
+  1. If its deque holds an entry above the scope's watermark, or the scope's shared queue is not
+     empty, take one and run it, whatever the stack margin.
+  2. If the scope's counter is zero, return.
+  3. Otherwise every unfinished task of the scope is running on another worker. The waiter steals
+     unrelated work while its stack has more than the margin left (checked against the stack
+     pointer), and past the margin sleeps on the scope's counter until the last task decrements
+     it.
+
+  **Liveness.** The invariant is that every queued task of a scope is runnable by that scope's
+  creator through rule 1: it is either on the creator's deque above the scope's watermark or in
+  the scope's shared queue. A scope is waited on only by its creator and waits only for tasks it
+  spawned and their descendants, so the waits-for relation is acyclic and finite. Take a waiting
+  scope none of whose running tasks waits: its running tasks finish, and its queued tasks are run
+  by its creator, which cannot sleep while rule 1 applies, so it completes; by induction every wait
+  completes, even when every worker is past its margin. Tasks below a waiting worker's watermark
+  belong to outer scopes on the same stack, whose only waiter is that same worker's outer frame. The
+  cases raised in review, each a liveness test in Milestone S1:
+
+  - One worker recursing: each level constructs a scope, spawns its child above the watermark and
+    waits; rule 1 runs the child on the same stack. Recursion depth is the program's own nesting,
+    as in a serial run. The reported schedule (deep nested scopes, the next child still on the
+    worker's own deque, an external caller waiting on the outer scope) runs the child instead of
+    sleeping.
+  - Every worker past its margin: no worker sleeps with a task its own wait could run, and every
+    other queued task is runnable by a waiting creator.
+  - A stolen task that waits: it constructs its own scope on the thief, so its children sit above
+    the thief's watermark.
+  - `Join`: an internal scope is constructed before `b` is pushed, so `b` is above its watermark;
+    after `a` returns, rule 1 takes `b` back unless it was stolen.
+  - Spawns that overflowed a queue bound ran inline at spawn time and count as finished.
+  - Flat spawns: in the scope's shared queue, so the creator runs them by rule 1. Sending them to
+    the spawning worker's deque instead admits a deadlock (two workers past the margin, each
+    holding the other's scope's task below its own watermark), which is why they do not go there.
+  - Non-worker scopes: below.
+
+  **Skipping the wake on a push.** A creator pushing a scope's task onto its own deque may skip the
+  event count, because it runs that task by rule 1 before its wait can sleep, so a missed wake costs
+  parallelism only. Pushes into a scope's shared queue, the injection queue and coroutine
+  resumptions always take the fenced wake protocol.
 - **Worker stacks.** Workers are created with an explicit stack size (512 KiB by default, an option)
-  instead of the platform default, which differs between platforms and toolchains. The help
-  margin starts at 128 KiB and is a per-client parameter: it must exceed the deepest stack a single
-  task of that client uses, which each client measures (0072 Milestone D3 measures it for the style
-  cascade).
+  instead of the platform default, which differs between platforms and toolchains. The margin
+  limits only stealing. Rule 1 runs regardless of it, so a stolen task's own nested waits recurse
+  on the thief's stack as deep as that client's scope nesting; a client must bound its nesting
+  times its task frame within the worker stack. The style traversal of 0072 Part D does this by
+  construction: one flat scope, tasks that never wait, and an explicit heap stack for the inline
+  part of a subtree, so a style task uses one task frame whatever the tree depth. The margin
+  starts at 128 KiB, a per-client parameter that must exceed that client's deepest task (0072
+  Milestone D3 measures it for style at the parser's nesting limit).
 - **Non-worker waits.** A scope created on a thread that is not a worker (the render worker
   holding document access, for example) keeps its own queue: its spawns go there, and idle workers
-  steal from it as they do from the injection queue. When that thread waits, it helps only from
-  its scope's queue, never from the injection queue or another worker's deque, and then sleeps on
-  the counter. Such a thread therefore never runs another client's task while it holds a guard.
+  steal from it as they do from the injection queue, after a fenced wake. This is the same shared
+  queue every scope has for flat spawns. When that thread waits, it runs tasks from its scope's
+  queue (rule 1), never from the injection queue or another worker's deque, and sleeps on the
+  counter only when that queue is empty, so every unfinished task is then running on a worker. Such
+  a thread never runs another client's task while it holds a guard.
 - **Task storage.** A spawned closure is stored in a fixed-size slot (64 bytes inline, larger
   closures in a per-worker free list of blocks) so small tasks never call `malloc`. A slot is freed
   by whichever thread ran the task: a thief returns it to the owning worker's lock-free return
@@ -398,11 +440,18 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   and the frame pool's retained bytes. Milestone S5 measures the editor's peak heap with the
   scheduler running and keeps the build's headroom contract; if it does not fit, the worker count
   or the memory size changes together with a new measurement, never by enabling growth.
-- **Asyncify.** The editor build enables `-sASYNCIFY` for Geode's synchronous WebGPU bridge.
-  Scheduler tasks must never reach a function that can suspend through Asyncify (the GPU bridge);
-  a debug assertion in those entry points rejects calls from scheduler workers. The scheduler's own
-  code does not call suspending imports, so it is not instrumented and adds no Asyncify size beyond
-  its own code.
+- **Asyncify.** The editor build enables `-sASYNCIFY` for Geode's synchronous WebGPU bridge with no
+  `ASYNCIFY_ONLY`, `ASYNCIFY_REMOVE`, `ASYNCIFY_ADD` or `ASYNCIFY_IGNORE_INDIRECT` setting
+  (`donner/editor/wasm/BUILD.bazel`). Asyncify's analysis cannot tell where an indirect call goes,
+  so by default it treats one as a possible unwind and instruments it and its callers
+  ([Emscripten Asyncify](https://emscripten.org/docs/porting/asyncify.html)). The scheduler calls
+  task closures and coroutine resumptions indirectly, so its run loop, `wait()` and their callers
+  will be instrumented and grow. Scheduler tasks must never reach a function that can suspend
+  through Asyncify (the GPU bridge); a debug assertion in those entry points rejects calls from
+  scheduler workers. Milestone S5 measures the instrumented size; if it is too large, the
+  scheduler's dispatch functions go on an `ASYNCIFY_REMOVE` list, which removes instrumentation from
+  them and their callers. The documentation calls such lists error-prone, and the assertion is what
+  makes this one safe.
 - **Costs.** The scheduler adds code to both editor and renderer modules; Milestone S5 measures it
   against the size tests and the goals above. Each extra worker costs a Web Worker and its stack.
 
