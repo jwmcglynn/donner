@@ -428,7 +428,7 @@ public:
   /// @param precomputedEncoded Optional cache-hit payload. When
   ///   non-null, the encoder skips `GeodePathEncoder::encode` and the
   ///   `pathEncodes` counter bump. Used by `RendererGeode` to plumb a
-  ///   cached `GeodePathCacheComponent::strokeSlot` result.
+  ///   cached `GeodePathCacheComponent::strokeVariants` result.
   /// @param path Path geometry to fill into the open mask pass.
   /// @param rule Fill rule for resolving interior coverage.
   void fillPathIntoMask(const Path& path, FillRule rule,
