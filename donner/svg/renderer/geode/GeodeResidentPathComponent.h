@@ -557,57 +557,17 @@ struct GeodeOccurrenceRecords {
   /// @param budget Document budget that will own the new reservation.
   /// @return False if capacity growth or byte admission fails.
   bool reserveOccurrence(std::shared_ptr<GeodeDocumentGeometryBudget> budget) {
-    if (occurrenceReservationPending || !budget || (cpuBudget && cpuBudget.get() != budget.get()) ||
-        occurrences.size() == std::numeric_limits<size_t>::max()) {
+    if (!canReserveOccurrence(budget) ||
+        kOccurrencePayloadBytes > std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
       return false;
     }
     const size_t nextSize = occurrences.size() + 1u;
-    if (kOccurrencePayloadBytes > std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
-      return false;
-    }
     const uint64_t payloadBytes = cpuOccurrenceBytes + kOccurrencePayloadBytes;
-    const uint64_t oldBytes = cpuRetainedBytes;
-
-    if (nextSize > occurrences.capacity()) {
-      size_t targetCapacity = occurrences.capacity() == 0u ? 1u : occurrences.capacity();
-      while (targetCapacity < nextSize) {
-        if (targetCapacity > std::numeric_limits<size_t>::max() / 2u) {
-          return false;
-        }
-        targetCapacity *= 2u;
-      }
-      if (targetCapacity > occurrences.max_size()) {
-        return false;
-      }
-      const uint64_t projectedOwnerBytes =
-          static_cast<uint64_t>(targetCapacity) * sizeof(OccurrenceOwner);
-      if (payloadBytes > std::numeric_limits<uint64_t>::max() - projectedOwnerBytes ||
-          !cpuReservation.replace(budget, projectedOwnerBytes + payloadBytes)) {
-        return false;
-      }
-
-      std::vector<OccurrenceOwner> replacement;
-      replacement.reserve(targetCapacity);
-      const uint64_t actualOwnerBytes =
-          static_cast<uint64_t>(replacement.capacity()) * sizeof(OccurrenceOwner);
-      if (payloadBytes > std::numeric_limits<uint64_t>::max() - actualOwnerBytes ||
-          !cpuReservation.replace(budget, actualOwnerBytes + payloadBytes)) {
-        (void)cpuReservation.replace(budget, oldBytes);
-        return false;
-      }
-      for (OccurrenceOwner& occurrence : occurrences) {
-        replacement.push_back(std::move(occurrence));
-      }
-      occurrences.swap(replacement);
-      cpuRetainedBytes = actualOwnerBytes + payloadBytes;
-    } else {
-      const uint64_t ownerBytes =
-          static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
-      if (payloadBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
-          !cpuReservation.replace(budget, ownerBytes + payloadBytes)) {
-        return false;
-      }
-      cpuRetainedBytes = ownerBytes + payloadBytes;
+    const bool charged = nextSize > occurrences.capacity()
+                             ? growOwnersAndCharge(budget, nextSize, payloadBytes)
+                             : chargeAtCurrentCapacity(budget, payloadBytes);
+    if (!charged) {
+      return false;
     }
     cpuBudget = std::move(budget);
     occurrenceReservationPending = true;
@@ -685,6 +645,68 @@ struct GeodeOccurrenceRecords {
   }
 
 private:
+  /// Whether one more occurrence may be reserved against \p budget: no reservation is pending,
+  /// the records charge no other budget, and the list can still grow.
+  bool canReserveOccurrence(const std::shared_ptr<GeodeDocumentGeometryBudget>& budget) const {
+    return !occurrenceReservationPending && budget &&
+           (!cpuBudget || cpuBudget.get() == budget.get()) &&
+           occurrences.size() != std::numeric_limits<size_t>::max();
+  }
+
+  /// Grow the owner vector to hold \p nextSize occurrences and charge its new capacity plus
+  /// \p payloadBytes, restoring the previous charge when the grown vector cannot be charged.
+  /// @return False, with the vector unchanged, if the growth or the charge is refused.
+  bool growOwnersAndCharge(const std::shared_ptr<GeodeDocumentGeometryBudget>& budget,
+                           size_t nextSize, uint64_t payloadBytes) {
+    const uint64_t oldBytes = cpuRetainedBytes;
+    size_t targetCapacity = occurrences.capacity() == 0u ? 1u : occurrences.capacity();
+    while (targetCapacity < nextSize) {
+      if (targetCapacity > std::numeric_limits<size_t>::max() / 2u) {
+        return false;
+      }
+      targetCapacity *= 2u;
+    }
+    if (targetCapacity > occurrences.max_size()) {
+      return false;
+    }
+    const uint64_t projectedOwnerBytes =
+        static_cast<uint64_t>(targetCapacity) * sizeof(OccurrenceOwner);
+    if (payloadBytes > std::numeric_limits<uint64_t>::max() - projectedOwnerBytes ||
+        !cpuReservation.replace(budget, projectedOwnerBytes + payloadBytes)) {
+      return false;
+    }
+
+    std::vector<OccurrenceOwner> replacement;
+    replacement.reserve(targetCapacity);
+    const uint64_t actualOwnerBytes =
+        static_cast<uint64_t>(replacement.capacity()) * sizeof(OccurrenceOwner);
+    if (payloadBytes > std::numeric_limits<uint64_t>::max() - actualOwnerBytes ||
+        !cpuReservation.replace(budget, actualOwnerBytes + payloadBytes)) {
+      (void)cpuReservation.replace(budget, oldBytes);
+      return false;
+    }
+    for (OccurrenceOwner& occurrence : occurrences) {
+      replacement.push_back(std::move(occurrence));
+    }
+    occurrences.swap(replacement);
+    cpuRetainedBytes = actualOwnerBytes + payloadBytes;
+    return true;
+  }
+
+  /// Charge the owner vector's current capacity plus \p payloadBytes.
+  /// @return False if the charge is refused.
+  bool chargeAtCurrentCapacity(const std::shared_ptr<GeodeDocumentGeometryBudget>& budget,
+                               uint64_t payloadBytes) {
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    if (payloadBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+        !cpuReservation.replace(budget, ownerBytes + payloadBytes)) {
+      return false;
+    }
+    cpuRetainedBytes = ownerBytes + payloadBytes;
+    return true;
+  }
+
   uint64_t cpuOccurrenceBytes = 0;
   bool occurrenceReservationPending = false;
 };

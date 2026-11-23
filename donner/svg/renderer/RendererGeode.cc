@@ -5346,6 +5346,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
             pendingBatch->residentSlot == &slot);
   }
 
+  /// Offer a draw to the repeat path when it is a same-frame repeat of a resident slot - a marker
+  /// drawn at several vertices, a `<use>` source drawn again. The slot's uniform and primary record
+  /// serve only its first draw of the frame, so without this a repeat falls back to the per-frame
+  /// arena: alone, or through the instanced append, whose instances are arena data too. Gradient
+  /// paint lives in the slot's single paint block, so a gradient repeat keeps the existing paths.
+  /// The target-state guards are the ordered batch's own.
+  /// @return True when the draw was taken.
+  bool tryAppendRepeatDraw(Registry* sourceRegistry, const geode::EncodedPath* encoded,
+                           geode::GeodeResidentSlot* residentSlot, const Path& path,
+                           const geode::GeoEncoder::ScenePaint& paint, FillRule rule) {
+    if (!kEnableSceneBatching || paint.isGradient() || residentSlot == nullptr ||
+        encoded == nullptr || sourceRegistry == nullptr || encoder->hasActiveClipState() ||
+        encoder->hasOpenMaskPass() || !isRepeatDraw(*residentSlot)) {
+      return false;
+    }
+    return tryAppendRepeatInstance(*sourceRegistry, *encoded, *residentSlot, path, paint.color,
+                                   rule);
+  }
+
   /// Draw a repeat of \p slot through a record of its own over the slot's
   /// resident geometry, joining the pending ordered batch when its record
   /// extends it and opening a new one otherwise. Returns false, having drawn
@@ -5364,58 +5383,73 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (recordSlot == nullptr) {
       return false;
     }
-    // A pending singleton, typically this slot's own first draw, becomes the
-    // first instance of the batch this repeat joins, so a run of repeats still
-    // draws as one batch. One that cannot convert is flushed now, taking its
-    // solo resident path before this repeat claims the slot.
     const uint64_t clipVersion = encoder->clipStateVersion();
-    if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity) {
-      if (pendingBatch->deviceFromLocalTransforms.size() != 1 ||
-          pendingBatch->sameEntityClipVersion != clipVersion ||
-          !convertPendingSingletonToScene(clipVersion)) {
-        flushPendingBatch();
-      }
-    }
-    const bool pendingScene =
-        pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene;
+    settlePendingSingletonForRepeat(clipVersion);
     geode::GeoEncoder::SceneRecordState recordState;
     if (!encoder->ensureResidentSceneRecord(slot, encoded, geode::GeoEncoder::ScenePaint{color},
                                             rule, deviceFromLocalTransform, recordSlot, recordCache,
                                             &recordState)) {
       return false;
     }
+    appendOrOpenSceneBatch(
+        PendingBatch::SceneInstance{&slot, &encoded, &path, color, rule, deviceFromLocalTransform,
+                                    encoded.boundingDrawVertexCount(), recordSlot, recordCache,
+                                    recordState},
+        *recordSlot, clipVersion);
+    slot.lastSceneFrame = currentFrameIndex;
+    return true;
+  }
 
-    const uint64_t chunkId = slot.bufferId;
-    const uint32_t vertexCount = encoded.boundingDrawVertexCount();
-    const PendingBatch::SceneInstance instance{
-        &slot,       &encoded,   &path,       color,      rule, deviceFromLocalTransform,
-        vertexCount, recordSlot, recordCache, recordState};
-    if (pendingScene && pendingBatch->sceneChunkBufferId == chunkId &&
-        pendingBatch->sceneRecordBufferId == recordSlot->bufferId &&
+  /// Before a repeat joins a batch: a pending singleton, typically the repeated slot's own first
+  /// draw, becomes the first instance of a scene batch, so a run of repeats still draws as one
+  /// batch. One that cannot convert is flushed now, taking its solo resident path before the repeat
+  /// claims the slot.
+  /// @param clipVersion Encoder clip-state version of the repeat.
+  void settlePendingSingletonForRepeat(uint64_t clipVersion) {
+    if (!pendingBatch.has_value() || pendingBatch->mode != PendingBatch::Mode::SameEntity) {
+      return;
+    }
+    if (pendingBatch->deviceFromLocalTransforms.size() != 1 ||
+        pendingBatch->sameEntityClipVersion != clipVersion ||
+        !convertPendingSingletonToScene(clipVersion)) {
+      flushPendingBatch();
+    }
+  }
+
+  /// Append \p instance to the pending scene batch when its record extends that batch under the
+  /// same clip state; otherwise flush what is pending and open a new scene batch holding it.
+  /// @param instance Instance whose record and geometry are already ensured.
+  /// @param recordSlot Record slot \p instance draws from.
+  /// @param clipVersion Encoder clip-state version of \p instance.
+  void appendOrOpenSceneBatch(const PendingBatch::SceneInstance& instance,
+                              const geode::GeodeRecordSlab::Slot& recordSlot,
+                              uint64_t clipVersion) {
+    const uint64_t chunkId = instance.slot->bufferId;
+    if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene &&
+        pendingBatch->sceneChunkBufferId == chunkId &&
+        pendingBatch->sceneRecordBufferId == recordSlot.bufferId &&
         pendingBatch->sceneClipVersion == clipVersion &&
         pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
-            recordSlot->index) {
+            recordSlot.index) {
       pendingBatch->sceneInstances.push_back(instance);
-      pendingBatch->sceneVertexCount = std::max(pendingBatch->sceneVertexCount, vertexCount);
-      slot.lastSceneFrame = currentFrameIndex;
-      return true;
+      pendingBatch->sceneVertexCount =
+          std::max(pendingBatch->sceneVertexCount, instance.vertexCount);
+      return;
     }
-
     flushPendingBatch();
     pendingBatch = PendingBatch{};
     pendingBatch->mode = PendingBatch::Mode::Scene;
-    pendingBatch->sceneChunkBuffer = slot.buffer;
-    pendingBatch->sceneChunkBytes = slot.slab != nullptr ? slot.slab->chunkBytesForId(chunkId) : 0;
-    pendingBatch->sceneRecordBuffer = recordSlot->buffer;
+    pendingBatch->sceneChunkBuffer = instance.slot->buffer;
+    pendingBatch->sceneChunkBytes =
+        instance.slot->slab != nullptr ? instance.slot->slab->chunkBytesForId(chunkId) : 0;
+    pendingBatch->sceneRecordBuffer = recordSlot.buffer;
     pendingBatch->sceneChunkBufferId = chunkId;
-    pendingBatch->sceneRecordBufferId = recordSlot->bufferId;
-    pendingBatch->sceneFirstInstance = recordSlot->index;
-    pendingBatch->sceneFirstRecordOffset = recordSlot->offset;
+    pendingBatch->sceneRecordBufferId = recordSlot.bufferId;
+    pendingBatch->sceneFirstInstance = recordSlot.index;
+    pendingBatch->sceneFirstRecordOffset = recordSlot.offset;
     pendingBatch->sceneClipVersion = clipVersion;
-    pendingBatch->sceneVertexCount = vertexCount;
+    pendingBatch->sceneVertexCount = instance.vertexCount;
     pendingBatch->sceneInstances.push_back(instance);
-    slot.lastSceneFrame = currentFrameIndex;
-    return true;
   }
 
   /// Resident CPU encode + GPU geometry for one glyph identity, creating it on
@@ -6112,19 +6146,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const css::RGBA& color = paint.color;
     const bool gradientPaint = paint.isGradient();
 
-    // A same-frame repeat of a resident slot - a marker drawn at several
-    // vertices, a `<use>` source drawn again - gets a record of its own over the
-    // slot's resident geometry, so it re-uploads nothing on an unchanged frame.
-    // The slot's uniform and primary record serve only its first draw of the
-    // frame, so without this a repeat falls back to the per-frame arena: alone,
-    // or through the instanced append below, whose instances are arena data
-    // too. Gradient paint lives in the slot's single paint block, so a gradient
-    // repeat keeps the existing paths. The target-state guards are the ordered
-    // batch's own.
-    if (kEnableSceneBatching && !gradientPaint && residentSlot != nullptr && encoded != nullptr &&
-        sourceRegistry != nullptr && !encoder->hasActiveClipState() &&
-        !encoder->hasOpenMaskPass() && isRepeatDraw(*residentSlot) &&
-        tryAppendRepeatInstance(*sourceRegistry, *encoded, *residentSlot, path, color, rule)) {
+    // A same-frame repeat of a resident slot takes a record of its own over the slot's geometry.
+    if (tryAppendRepeatDraw(sourceRegistry, encoded, residentSlot, path, paint, rule)) {
       return true;
     }
 
