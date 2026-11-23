@@ -417,67 +417,78 @@ constexpr std::array<KnownViolation, 26> kKnownViolations = {{
     {
         /*scene=*/"marker_segments",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 23, 23},
+        /*ceiling=*/{0, 0, 143, 43},
         /*reason=*/
         "the marker content carries opacity, so every marker instance draws inside its own "
         "opacity group, whose composite rewrites its blit uniform and builds a bind group "
-        "every frame",
+        "every frame; without ordered batching every instance after the first also draws "
+        "through the per-frame arena",
         /*tracking=*/
         "clears when the isolated-layer composite keeps its uniform and bind group across "
         "unchanged frames",
+        /*sceneBatchingViolated=*/kViolatedSameAsBase,
+        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
+        /*sceneBatchingCeiling=*/{0, 0, 23, 23},
     },
     {
         /*scene=*/"marker_spec_example",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 11, 11},
+        /*ceiling=*/{0, 0, 65, 20},
         /*reason=*/
         "two of the three markers' content carries opacity, so each of their instances draws "
         "inside its own opacity group, whose composite rewrites its blit uniform and builds a "
-        "bind group every frame",
+        "bind group every frame; without ordered batching every instance after the first also "
+        "draws through the per-frame arena",
         /*tracking=*/
         "clears when the isolated-layer composite keeps its uniform and bind group across "
         "unchanged frames",
+        /*sceneBatchingViolated=*/kViolatedSameAsBase,
+        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
+        /*sceneBatchingCeiling=*/{0, 0, 11, 11},
     },
     {
         /*scene=*/"nested_svg_aspectratio",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{4, 0, 2357, 0},
+        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{4, 0, 21, 261},
         /*reason=*/
-        "nested viewports carrying text and use instances re-encode and re-upload the whole "
-        "subtree every frame",
+        "four paths inside the nested viewports re-encode every frame, so their geometry and "
+        "the records of their repeated draws are re-uploaded; without ordered batching the "
+        "repeated use draws also go through the per-frame arena with a bind group per draw",
         /*tracking=*/
-        "clears when nested-viewport subtrees, placed text, and use instances all keep their "
-        "cached geometry",
-        /*sceneBatchingViolated=*/kViolatedSameAsBase,
-        /*sceneBatchingDiffers=*/kBufferWrites,
-        /*sceneBatchingCeiling=*/{4, 0, 746, 0},
+        "clears when nested-viewport subtrees and placed text keep their cached geometry",
+        /*sceneBatchingViolated=*/kPathEncodes | kBufferWrites,
+        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
+        /*sceneBatchingCeiling=*/{4, 0, 18, 0},
     },
     {
         /*scene=*/"poker_chips",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{12, 0, 96, 0},
+        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{12, 0, 30, 20},
         /*reason=*/
         "use instances share one source path with differing stroke styles, so the per-entity "
-        "stroke cache thrashes and re-encodes every instance; with ordered batching that same "
-        "thrash costs one more buffer write and saves one bind group",
+        "stroke cache thrashes and re-encodes every instance; without ordered batching the "
+        "repeated draws also build a bind group each",
         /*tracking=*/
         "clears when the stroke cache keys on the resolved stroke style rather than one slot "
         "per source entity",
-        /*sceneBatchingViolated=*/kViolatedSameAsBase,
-        /*sceneBatchingDiffers=*/kBufferWrites,
-        /*sceneBatchingCeiling=*/{12, 0, 97, 0},
+        /*sceneBatchingViolated=*/kPathEncodes | kBufferWrites,
+        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
+        /*sceneBatchingCeiling=*/{12, 0, 14, 0},
     },
     {
         /*scene=*/"stroking_complex",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{8, 0, 16, 1},
+        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
+        /*ceiling=*/{8, 0, 16, 8},
         /*reason=*/
         "eight use instances share one source path with differing stroke styles (width, "
         "dash, opacity), so the per-entity stroke cache thrashes and re-encodes each "
-        "instance",
+        "instance; without ordered batching the repeated draws also build a bind group each",
         /*tracking=*/
         "clears when the stroke cache keys on the resolved stroke style rather than one slot "
         "per source entity",
+        /*sceneBatchingViolated=*/kPathEncodes | kBufferWrites,
+        /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
+        /*sceneBatchingCeiling=*/{8, 0, 9, 1},
     },
     {
         /*scene=*/"svg2_e_use_003",
