@@ -516,8 +516,16 @@ async function continuousDrag(
     expect(stream.releaseFrame, "release must reach a current paired frame at the requested camera")
       .toBeTruthy();
     // Once idle, the presented frame must still be that release at the current camera: a later
-    // frame must not have reverted the pointer or the camera.
-    const settled = after.presentation;
+    // frame must not have reverted the pointer or the camera. Frames submitted by then may still
+    // be in flight, and the last one to complete can be a frame that kept showing the previous
+    // presentation while a new one was prepared, which does not claim the current input. Every
+    // such frame must be superseded by one that does, so the check reads the presented frame
+    // once all of them have completed.
+    await expect.poll(async () => (await snapshot(page)).presentation?.completedSerial ?? 0, {
+      timeout: 15000,
+      message: "every frame submitted by idle must complete",
+    }).toBeGreaterThanOrEqual(after.presentation.submittedSerial);
+    const settled = (await snapshot(page)).presentation!;
     expect(
       settled.inputRepresented && !settled.mouseDown && settled.pointerX === stream.end.x
         && settled.pointerY === stream.end.y
