@@ -292,8 +292,8 @@ Entity with <path d="...">
   only when its bytes change, so an edit that moves or repaints a placement rewrites exactly the
   records it changed. A slot keeps at most 4096 such records, each a 256-byte GPU record plus a few
   hundred bytes of CPU bookkeeping charged to the document's geometry budget, so under 3 MiB per
-  slot; repeats past that write a record that lives for one frame. Gradient-painted repeats keep the arena path, because a gradient's
-  parameters live in the slot's single paint block.
+  slot; repeats past that write a record that lives for one frame. Gradient-painted repeats keep
+  the arena path, because a gradient's parameters live in the slot's single paint block.
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
   order.
