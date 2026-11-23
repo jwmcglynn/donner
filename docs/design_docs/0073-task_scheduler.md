@@ -759,3 +759,13 @@ scheduler.
   (raising `PTHREAD_POOL_SIZE` from 2 to 4) and revisit with Part D's measurements.
 - **0061.** Recommendation: update 0061 to build its row bands on this scheduler when its pool
   milestone starts, rather than editing it in this change.
+- **Memory ordering of the join handle.** A coroutine registering `co_await scope.join()` publishes
+  its handle and sets a flag in the scope's counter with one compare-and-swap, and the finisher
+  whose decrement reaches zero reads the handle and enqueues the resumption. As written, the
+  finisher's decrement uses release ordering only, which does not acquire the handle that the
+  registration published, so the read can race with the write when the two run on different
+  workers. Recommendation: the registration's compare-and-swap publishes with release ordering
+  after the handle is written, the completion path's decrement is acquire-release, and Milestone
+  S3's ThreadSanitizer tests cover registration racing completion. To be settled when S3 is
+  implemented, together with a review of every other ordering in the protocol against the same
+  rule: any thread that reads state written by another thread acquires it.
