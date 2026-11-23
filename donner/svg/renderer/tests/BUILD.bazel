@@ -2191,6 +2191,22 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "translucent_text_across_backends_tests",
+    srcs = ["TranslucentTextAcrossBackends_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":image_comparison_test_fixture",
+        ":renderer_test_backend",
+        "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "circle_clip_path_tests",
     srcs = ["CircleClipPath_tests.cc"],
     opens_gpu_device = True,
