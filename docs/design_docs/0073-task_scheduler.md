@@ -461,16 +461,24 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     the sleep steps. A notify without a change would let `std::atomic::wait` block again, so every
     wake is a change of the parker; a creator woken by an event for an outer scope re-checks its
     current scope and sleeps again, which is a spurious wake and nothing more.
-  - Parker storage for threads that are not workers is lookup-keyed per scheduler: each thread
-    keeps a small thread-local map from a scheduler's unique generation number (not its address,
-    which could be reused) to its parker slot. When such a thread exits, a thread-local destructor
-    returns the slot to the scheduler's free list. A scope that a coroutine created on that
-    thread can still be live after the thread exits, if the coroutine was resumed elsewhere, and a
-    finisher that read the parker before the slot was reused can still change it. Either way the
-    slot's next owner gets one spurious wake: parker storage is stable until the scheduler is
-    destroyed, and every wake is followed by a re-check, so that is harmless. Storage is therefore
-    bounded by the largest number of non-worker threads that hold the scheduler's scopes at the same
-    time, and is freed when the scheduler is destroyed, after it has joined every worker.
+  - Parker storage for threads that are not workers lives in a `ParkerPool`, a separate object
+    the scheduler creates and shares by `std::shared_ptr`: it holds the slots (stable addresses,
+    allocated in fixed blocks) and a mutex-protected free list. Each such thread keeps a small
+    thread-local map from a scheduler's unique generation number (not its address, which could be
+    reused) to an entry holding a `std::shared_ptr` to that scheduler's pool and its slot index.
+    The scheduler holds one more reference and, when it is destroyed, marks the pool closed after
+    joining every worker. When a thread exits, its thread-local destructor returns each slot to
+    the pool its entry references and drops the reference, so the pool outlives every thread that
+    holds one of its slots, and a scheduler destroyed first (one local to `main()`, destroyed
+    before the main thread's thread-local cleanup, for example) leaves nothing dangling. A lookup
+    that meets an entry whose pool is closed drops it, so entries for destroyed schedulers do not
+    accumulate. A scope that a coroutine created on that thread can still be live after the thread
+    exits, if the coroutine was resumed elsewhere, and a finisher that read the parker before the
+    slot was reused can still change it. Either way the slot's next owner gets one spurious wake:
+    slot storage is stable while any reference to the pool lives, and every wake is followed by a
+    re-check, so that is harmless. Storage is therefore bounded by the largest number of
+    non-worker threads that hold the scheduler's scopes at the same time, and is freed when the
+    scheduler and every thread that took a slot from it have released the pool.
 
   The injected-delay tests cover a delay between a creator's re-check and its parker wait, between
   a push to the global queue and the publisher's read of `awake`, between a sleeper's decrement
@@ -508,6 +516,12 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     on something else (the reported schedule): the last awake worker runs the task, the finisher
     enqueues the resumption, and the coroutine and every waiter blocked on it complete.
   - `co_await scope.join()` on a scope whose count is already zero does not suspend.
+  - A scheduler destroyed before a non-worker thread that used it exits: the thread waits on a
+    scope, the scheduler is destroyed, then the thread exits; and a small test binary whose
+    `main()` creates a scheduler, waits on a scope from the main thread and destroys the
+    scheduler before returning, so the main thread's thread-local cleanup runs after it.
+    Both run under AddressSanitizer with no use-after-free, and must be observed red with the
+    thread-local entry holding a raw pointer to the scheduler's free list.
   - A stolen task that waits; `Join` stolen and not stolen; a spawn at the queue bound
     (`spawn` inline, `trySpawn` returning false); a non-worker scope with zero idle workers.
 - **Blocking inside tasks.** A worker that blocks inside a task on anything other than the
