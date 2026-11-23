@@ -4650,8 +4650,16 @@ TEST_P(RendererGeodeStrokeKeyTest, EditRendersLikeAFreshDocument) {
   reference.draw(fresh);
   const RendererBitmap expected = reference.takeSnapshot();
   ASSERT_THAT(expected.empty(), testing::IsFalse());
-  // Premise: the edit changes the rendering, so serving the old outline cannot match.
-  ASSERT_THAT(beforeEdit.pixels == expected.pixels, testing::IsFalse())
+  // Premise: the edit changes the rendering, so serving the old outline cannot match. The
+  // comparison only measures the difference here, so any count is allowed.
+  editor::tests::BitmapGoldenCompareParams premiseParams =
+      editor::tests::PixelmatchIdentityParams();
+  premiseParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int editChangedPixels = -1;
+  editor::tests::CompareBitmapToBitmap(beforeEdit, expected,
+                                       "stroke_key_premise_" + std::string(edit.name),
+                                       premiseParams, &editChangedPixels);
+  ASSERT_THAT(editChangedPixels, testing::Gt(0))
       << "the edit to " << edit.attribute << " must change the rendering";
 
   editor::tests::CompareBitmapToBitmap(afterEdit, expected, "stroke_key_" + std::string(edit.name),
