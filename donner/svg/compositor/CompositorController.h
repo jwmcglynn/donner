@@ -210,7 +210,7 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 /// are not charged again, so the retained total approximates what the next
 /// rebuild must fit. When a rebuild does not fit, the remaining tiles are
 /// rasterized in the following frame, and a tile refused twice at the same
-/// canvas size is drawn directly from then on. WebGPU reports no memory
+/// canvas size is drawn directly until the canvas size changes. WebGPU reports no memory
 /// budget, the browser runtime does not observe an out-of-memory texture
 /// allocation, and once a device is lost the runtime refuses further work, so
 /// the browser does not add an interaction layer to a tile set whose rebuild
@@ -223,11 +223,11 @@ inline constexpr size_t kBrowserCompositorMemoryBytes = RendererSurfaceBudget::k
 /// `CompositorController::promoteEntity` refuses to promote an entity that
 /// holds no interaction hint yet once the retained total, plus one surface the
 /// size of the most recent frame's canvas, has reached this value. That
-/// surface stands for the frame target, which every frame charges beside the
-/// tiles it rasterizes. The canvas of the frame that follows the request can
-/// differ from the most recent one. It is not a cap on retained pixels: an entity that already
-/// holds a hint is refreshed without the comparison, mandatory filter, mask and isolated layers and
-/// static segments are not gated by it, and nothing is evicted to meet it.
+/// surface stands for the frame target, which every frame that composes the
+/// main renderer charges beside the tiles it rasterizes. The canvas of the frame that follows the
+/// request can differ from the most recent one. It is not a cap on retained pixels: an entity that
+/// already holds a hint is refreshed without the comparison, mandatory filter, mask and isolated
+/// layers and static segments are not gated by it, and nothing is evicted to meet it.
 /// `CompositorConfig::retainedMemoryBudgetBytes` replaces it for one controller.
 [[nodiscard]] size_t EffectiveCompositorMemoryBudget();
 
