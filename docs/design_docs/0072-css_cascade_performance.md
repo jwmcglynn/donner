@@ -1267,13 +1267,24 @@ on the first 4,096 keys. An adversary who forces distinct keys makes every inser
 costs one sweep step and leaves today's per-element cost.
 
 **Memory budget and ownership.** Retained bytes are charged per distinct record instead of per
-entity, and the charge lives exactly as long as the record. When a record is created (by the cache
-or for an uncacheable element), its heap bytes are reserved against the computed-style budget, and
-the record's deleter releases them when its last reference goes, whether the cache evicted it long
-before or never held it. Eviction only drops the cache's reference. The reservation is held by the
-record through a shared reference to the document's `DocumentResourceFamilyBudget` account, so a
-record that outlives the `StyleResourceBudget` object (through `ExternalUseStyleRetention`, for
-example) still releases correctly, and releases from worker threads in Part D are atomic. A hostile
+entity, and the charge lives exactly as long as the record. Today the 64 MiB per-document limit is
+kept inside `StyleResourceBudget` itself (`complexPropertyBytes_` against `limits_`, with the
+per-entity `reservations_` map), and `DocumentResourceFamilyBudget` is an optional outer envelope
+whose pointer is null unless a document family is configured. The per-document retained-byte
+counter therefore moves out of `StyleResourceBudget` into a `RetainedStyleBytes` account: a small
+object with an atomic byte count and the 64 MiB limit, always created with the document's style
+context and shared by `std::shared_ptr`, which also forwards each charge and release to the family
+envelope when one exists. When a record is created (by the cache or for an uncacheable element),
+its heap bytes are reserved against that account, and the record keeps a reference to the account
+and its byte count; the record's deleter releases exactly those bytes when its last reference
+goes, whether the cache evicted it long before or never held it. Eviction only drops the cache's
+reference. Records are the only holders of these charges, so the per-entity `reservations_` map
+leaves the computed-style path; `StyleResourceBudget::reset()` still leaves retained bytes alone,
+and in this design `releaseAll()` does not release computed-style bytes itself: clearing the
+`ComputedStyleComponent`s it accompanies drops the references, and each record's deleter releases
+once, so nothing is released twice. Because the account is shared, a record that outlives the
+`StyleResourceBudget` object (through `ExternalUseStyleRetention`, for example) still releases
+correctly, and releases from worker threads in Part D are atomic. A hostile
 document therefore hits the same 64 MiB retained-property limit as today: distinct keys create
 distinct records, each charged until no element points at it. A test
 (`style_index_differential_tests`, hostile case) builds a document whose elements each carry a
@@ -1518,8 +1529,16 @@ Reading `StylesheetParser::Parse`, `StylesheetParseState`, `HandleAtRule` and
 
 The window parse is seeded with the old parse's state at the window start (`importsAllowed`, and the
 running counts), and a window that starts at offset 0 goes through the same `@charset` handling as
-a full parse. The window is accepted only when, in addition to the token-level condition, the
-parser state at the window end is the same in the old and the new parse: `importsAllowed` is
+a full parse. `RuleParser::kMaximumRules` counts raw rules, including invalid ones that
+`StylesheetParser` later drops, and that raw count at each retained rule's start is not stored
+today; the parse records it per retained rule (alongside `ruleSourceRange`), together with the
+running declaration and component-value totals, so a window can be seeded exactly. The equality
+covers the resulting `css::Stylesheet`. Parse warnings are not part of it: the style projection
+parses with a disabled warning sink today (`StylesheetComponent::parseStylesheet` without a sink),
+so there are no stored warnings for the unchanged prefix and suffix to keep or shift; if a warning
+sink is added later, warnings of unchanged rules are kept with shifted ranges and only the
+window's are re-emitted. The window is accepted only when, in addition to the token-level condition,
+the parser state at the window end is the same in the old and the new parse: `importsAllowed` is
 equal, the window contains no `@import`, `@namespace`, `@font-face` or `@layer` rule before or
 after the edit, the spliced totals stay within every limit, and the old parse was not stopped by a
 limit (`rejected`). Otherwise the whole sheet is reparsed. For example, in
@@ -1681,10 +1700,13 @@ per-element cost and is calibrated in Milestone D3.
 - **Parents before children.** Inheritance needs the parent's computed record. The pass is a
   top-down traversal from each root inside one flat `TaskScope`: a task cascades its root, then
   walks each child subtree smaller than the grain (initially 64 elements) with an explicit,
-  heap-allocated stack, and spawns each larger child subtree into the same scope. Tasks never wait,
-  so a task's native stack use is one task frame whatever the tree depth, and only the pass owner
-  waits, once. A child never starts before its parent's record is published, which the spawn order
-  guarantees.
+  heap-allocated stack, and spawns each larger child subtree into the same scope with
+  `trySpawn`. A spawn from a running task goes onto that worker's own deque, so subtrees spread
+  by ordinary work stealing between workers, as the scheduler intends for small work. If
+  `trySpawn` meets the queue bound it returns false and the task pushes that subtree onto its own
+  heap stack instead of running it as a nested call. Tasks never wait, so a task's native stack use
+  is one task frame whatever the tree depth, and only the pass owner waits, once. A child never
+  starts before its parent's record is published, which the spawn order guarantees.
   The on-demand parent computation in `computePropertiesInto` stays for the serial path and is an
   assertion failure in the parallel path. Offscreen shadow trees are separate roots, started after
   the main tree; entities that no root reaches are cascaded by a serial sweep afterwards, as the
