@@ -48,7 +48,7 @@ import {
   presentedDragFailures,
   presentedDragSummary,
 } from "./presented-frame-samples.mjs";
-import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
+import { kSplashDocumentSize, showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 import {
   armCanvasGpuDelayFromEnv,
   canvasGpuDelayFromEnv,
@@ -214,6 +214,16 @@ interface WorkerResultCounters {
   compositorRenderCount: number;
   workerMs: number;
   renderFrameMs: number;
+  /** The result's most recent interaction-layer promotion request, as published, or null. */
+  interactionPromotion: InteractionPromotion | null;
+}
+
+/** One worker result's interaction-layer promotion request and its admission inputs. */
+interface InteractionPromotion {
+  requested: boolean;
+  result: string | null;
+  retainedBitmapBytes: number;
+  memoryBudgetBytes: number;
 }
 
 async function attachJson(info: import("@playwright/test").TestInfo, name: string, data: unknown) {
@@ -375,12 +385,12 @@ async function aimAtSplashD(page: Page) {
   return point;
 }
 
-async function zoomSplashForDrag(page: Page) {
+async function zoomSplashForDrag(page: Page, targetZoom = 1.93) {
   for (let step = 0; step < 12; ++step) {
     const viewport = (await snapshot(page)).viewport!;
-    if (Math.abs(viewport.zoom - 1.93) < 0.001) break;
+    if (Math.abs(viewport.zoom - targetZoom) < 0.001) break;
     const point = await aimAtSplashD(page);
-    const deltaY = -100 * Math.max(-0.25, Math.min(0.25, Math.log(1.93 / viewport.zoom)));
+    const deltaY = -100 * Math.max(-0.25, Math.min(0.25, Math.log(targetZoom / viewport.zoom)));
     await page.evaluate(({ x, y, deltaY }) => {
       document.querySelector("canvas#canvas")!.dispatchEvent(
         new WheelEvent("wheel", {
@@ -399,7 +409,7 @@ async function zoomSplashForDrag(page: Page) {
       message: "the normal pinch input must update the viewport",
     }).not.toBe(viewport.zoom);
   }
-  expect((await snapshot(page)).viewport!.zoom).toBeCloseTo(1.93, 2);
+  expect((await snapshot(page)).viewport!.zoom).toBeCloseTo(targetZoom, 2);
   await waitForIdle(page);
   return aimAtSplashD(page);
 }
@@ -466,13 +476,8 @@ async function completionCheck(
   });
 }
 
-async function continuousDrag(
-  page: Page,
-  start: { x: number; y: number },
-  direction: number,
-  phase: string,
-) {
-  const before = await snapshot(page);
+/** Stream one drag from \p start and wait until its release reaches an idle editor. */
+async function streamDragToIdle(page: Page, start: { x: number; y: number }, direction: number) {
   const stream = await page.evaluate(streamDragInputs, {
     start,
     direction,
@@ -488,6 +493,17 @@ async function continuousDrag(
     pendingClick: false,
   }));
   await waitForIdle(page);
+  return stream;
+}
+
+async function continuousDrag(
+  page: Page,
+  start: { x: number; y: number },
+  direction: number,
+  phase: string,
+) {
+  const before = await snapshot(page);
+  const stream = await streamDragToIdle(page, start, direction);
   const after = await snapshot(page);
   const baselineOnly = process.env.DONNER_BROWSER_BASELINE === "1";
   if (!baselineOnly) {
@@ -1780,6 +1796,7 @@ async function startWorkerResultCounters(page: Page) {
           compositorRenderCount: count("compositorRenderCount"),
           workerMs: stats.workerMs,
           renderFrameMs: count("renderFrameMs"),
+          interactionPromotion: (stats.interactionPromotion ?? null) as InteractionPromotion | null,
         });
       },
     });
@@ -1998,4 +2015,120 @@ test.describe("Geode detailed interactions", () => {
       },
     );
   }
+});
+
+// A shape first selected after zooming in must still get its own layer (#2575). Retained textures
+// grow with the square of the device scale, so `chromium` and `firefox` (3840x2160) are where a
+// budget that counts them refuses it; `chromium-dpr1` and `firefox-dpr1` are the control.
+test.describe("fresh selection after zoom", () => {
+  test.use({ viewport: { width: 1920, height: 1080 } });
+
+  test("a letter selected after zooming in to 3x drags as its own layer", async ({ page }, info) => {
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(error.message));
+    page.on("console", (message) => {
+      if (/Aborted|RuntimeError|UTILS_RELEASE_ASSERT|device lost/i.test(message.text())) {
+        failures.push(message.text());
+      }
+    });
+    let stopHeartbeat: (() => void) | undefined;
+    const report: Record<string, unknown> = { project: info.project.name, ...packageHashes() };
+    try {
+      await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+      await expect.poll(
+        () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+        { timeout: 30000, message: "WebGPU must present the production editor" },
+      ).toBe(true);
+      stopHeartbeat = await startApplicationHeartbeat(page);
+      const raster = await rasterIdentity(page);
+      report.raster = raster;
+      expect(raster).toEqual(expect.objectContaining({
+        backingWidth: Math.round(1920 * raster.dpr),
+        backingHeight: Math.round(1080 * raster.dpr),
+        cssWidth: 1920,
+        cssHeight: 1080,
+      }));
+
+      // The welcome carousel is centered: at this width the splash tile sits 310 CSS px left of
+      // the canvas center.
+      const canvas = page.locator("canvas#canvas");
+      const bounds = (await canvas.boundingBox())!;
+      await dispatchCanvasPointer(
+        page,
+        { x: bounds.x + bounds.width / 2 - 310, y: bounds.y + 282 },
+        true,
+      );
+      await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+      await waitForSplashDisplayed(page);
+      await zoomSplashForDrag(page, 3);
+
+      // The splash N's left stem, a letter nothing has selected yet.
+      const viewport = (await snapshot(page)).viewport!;
+      expect(showsSplashDocument(viewport), "the viewport must describe the splash").toBe(true);
+      const point = {
+        x: Math.round(
+          viewport.documentX + viewport.documentWidth * 413 / kSplashDocumentSize.width,
+        ),
+        y: Math.round(
+          viewport.documentY + viewport.documentHeight * 360 / kSplashDocumentSize.height,
+        ),
+      };
+      expect(point.x).toBeGreaterThan(viewport.paneX);
+      expect(point.x).toBeLessThan(viewport.paneX + viewport.paneWidth);
+      expect(point.y).toBeGreaterThan(viewport.paneY);
+      expect(point.y).toBeLessThan(viewport.paneY + viewport.paneHeight);
+      await startWorkerResultCounters(page);
+      await dispatchCanvasPointer(page, point, true);
+      await expect.poll(async () => (await snapshot(page)).interaction?.selectedCount, {
+        timeout: 10000,
+        message: "the click must select the splash N",
+      }).toBe(1);
+      await waitForIdle(page);
+      // Separate the selection click from the drag press so it cannot become a double click.
+      await page.waitForTimeout(400);
+      const selection = await stopWorkerResultCounters(page);
+
+      await startWorkerResultCounters(page);
+      const stream = await streamDragToIdle(page, point, -1);
+      const drag = await stopWorkerResultCounters(page);
+
+      const promotions = [...selection, ...drag]
+        .map((result) => result.interactionPromotion)
+        .filter((promotion): promotion is InteractionPromotion => Boolean(promotion?.requested));
+      const summary = {
+        zoom: viewport.zoom,
+        dragInputs: stream.dispatchPoints.length,
+        promotions,
+        dragResults: drag.length,
+        activeDragResults: drag.filter((result) => result.activeDragResult).length,
+        fastPathFrames: drag.reduce((sum, result) => sum + (result.fastPathFrames ?? 0), 0),
+        slowPathFramesWithDirty: drag.reduce(
+          (sum, result) => sum + (result.slowPathFramesWithDirty ?? 0),
+          0,
+        ),
+      };
+      report.summary = summary;
+      console.log(`fresh-selection-after-zoom ${info.project.name} ${JSON.stringify(summary)}`);
+
+      expect(stream.frames.some((frame) => frame.dragging), "the stream must enter drag mode")
+        .toBe(true);
+      expect(promotions.length, "selecting and dragging the N must request its promotion")
+        .toBeGreaterThan(0);
+      const refused = promotions.filter((promotion) => promotion.result !== "PromotedLayer");
+      expect(
+        { refusedRequests: refused.length, firstRefusal: refused[0] ?? null },
+        "every promotion request for the freshly selected N must be admitted",
+      ).toEqual({ refusedRequests: 0, firstRefusal: null });
+      expect(summary.fastPathFrames, "the drag must move the N's layer on the fast path")
+        .toBeGreaterThan(0);
+      // An admitted drag renders a drag-start and a release result; a refused one renders up to one
+      // per pointer move. Eight leaves room for a recapture without accepting that fallback.
+      expect(summary.activeDragResults, "the drag must not re-render once per pointer move")
+        .toBeLessThanOrEqual(8);
+      expect(failures).toEqual([]);
+    } finally {
+      stopHeartbeat?.();
+      await attachJson(info, "fresh-selection-after-zoom.json", report);
+    }
+  });
 });

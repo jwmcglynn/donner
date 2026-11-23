@@ -1085,6 +1085,112 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
       << "The cached gradient-stroke bind group must be reused on an unchanged frame.";
 }
 
+/// Three patterns with tiles of one size: two fill rects and the third strokes a rect. The three
+/// tiles share one pool bucket, so each keeps its texture only because the pool hands a bucket's
+/// textures out in the order the previous frame took them. Each pattern has one consumer: a pattern
+/// drawn twice in a frame draws its content twice, and the second draw of a content entity in a
+/// frame takes the per-frame arena path like any entity drawn twice in a frame.
+constexpr std::string_view kPatternFillsSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+  <defs>
+    <pattern id="a" patternUnits="userSpaceOnUse" width="10" height="10">
+      <rect width="5" height="5" fill="#2050c0"/>
+    </pattern>
+    <pattern id="b" patternUnits="userSpaceOnUse" width="10" height="10">
+      <rect x="5" y="5" width="5" height="5" fill="#c05020"/>
+    </pattern>
+    <pattern id="c" patternUnits="userSpaceOnUse" width="10" height="10">
+      <rect width="10" height="5" fill="#20a050"/>
+    </pattern>
+  </defs>
+  <rect x="10" y="10" width="40" height="60" fill="url(#a)"/>
+  <rect x="60" y="10" width="40" height="60" fill="url(#b)"/>
+  <rect x="5" y="5" width="110" height="70" fill="none" stroke="url(#c)" stroke-width="4"/>
+</svg>
+)SVG";
+
+/// Pattern fills and strokes draw from resident slots: on an unchanged frame they upload no
+/// geometry or uniform, and each keeps its cached bind group because each tile is drawn into the
+/// texture it used the frame before (the pool's hand-out order).
+TEST_F(GeodePerfTest, PatternFills_UnchangedFrameWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kPatternFillsSvg, sink);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  ASSERT_GT(test::CountNonTransparentPixels(renderer.takeSnapshot()), 0u)
+      << "Premise: the pattern fills must paint, or zero counters below prove nothing";
+
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "unchanged frame " << frame);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("PatternFills (unchanged frame)", c);
+    EXPECT_GE(c.drawCalls, 3u) << "Premise: every tile and every pattern paint draws";
+    EXPECT_EQ(c.pathEncodes, 0u);
+    EXPECT_EQ(c.textureCreates, 0u);
+    EXPECT_EQ(c.bufferWrites, 0u)
+        << "A resident pattern fill rewrites neither its geometry nor its uniform";
+    EXPECT_EQ(c.bindgroupCreates, 0u)
+        << "A resident pattern fill keeps the bind group naming its tile";
+  }
+}
+
+/// One path stroked through two `<use>` elements with different stroke widths and different
+/// patterns. Both draws go through the source path's entity, so the entity caches two stroke
+/// outlines, and each pattern stroke draws from the resident slot of its own outline.
+constexpr std::string_view kPatternStrokeVariantsSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="120" height="80">
+  <defs>
+    <pattern id="a" patternUnits="userSpaceOnUse" width="10" height="10">
+      <rect width="5" height="5" fill="#2050c0"/>
+    </pattern>
+    <pattern id="b" patternUnits="userSpaceOnUse" width="10" height="10">
+      <rect x="5" y="5" width="5" height="5" fill="#c05020"/>
+    </pattern>
+    <path id="p" d="M10 10 L50 10 L50 60 Z" fill="none"/>
+  </defs>
+  <use xlink:href="#p" stroke="url(#a)" stroke-width="4"/>
+  <use xlink:href="#p" x="60" stroke="url(#b)" stroke-width="8"/>
+</svg>
+)SVG";
+
+/// Pattern strokes of one path with two stroke styles stay resident together: each stroke outline
+/// has resident slots of its own, so neither draw is turned away as the slot's second draw of the
+/// frame.
+TEST_F(GeodePerfTest, PatternStrokeVariants_UnchangedFrameWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kPatternStrokeVariantsSvg, sink);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  ASSERT_GT(test::CountNonTransparentPixels(renderer.takeSnapshot()), 0u)
+      << "Premise: the pattern strokes must paint, or zero counters below prove nothing";
+
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "unchanged frame " << frame);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("PatternStrokeVariants (unchanged frame)", c);
+    EXPECT_GE(c.drawCalls, 4u) << "Premise: both tiles and both pattern strokes draw";
+    EXPECT_EQ(c.pathEncodes, 0u);
+    EXPECT_EQ(c.textureCreates, 0u);
+    EXPECT_EQ(c.bufferWrites, 0u)
+        << "Each pattern stroke draws from the resident slot of its own stroke outline";
+    EXPECT_EQ(c.bindgroupCreates, 0u)
+        << "Each stroke outline's slot keeps the bind group naming its tile";
+  }
+}
+
 /// Six rects filled with one 40-stop gradient, more stops than a draw carries inline, so each
 /// draws through the gradient pipeline with the gradient's stop ramp.
 std::string SharedManyStopGradientSvg() {

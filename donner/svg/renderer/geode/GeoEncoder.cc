@@ -838,12 +838,15 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// rewrites the uniform region right after.
   void uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded);
 
-  /// Build + cache the eleven-entry fill bind group for `slot` (all
-  /// bindings reference `slot.buffer` sub-ranges + device dummies).
-  void buildResidentBindGroup(GeodeResidentSlot& slot);
+  /// Build + cache the eleven-entry fill bind group for `slot`. Every binding references
+  /// `slot.buffer` sub-ranges or device dummies, except the pattern texture, which is
+  /// \p patternView when it is non-null.
+  /// @param slot Slot whose cached bind group is replaced.
+  /// @param patternView Pattern tile view to bind, or null for the dummy pattern texture.
+  void buildResidentBindGroup(GeodeResidentSlot& slot, gpu::TextureViewRef patternView);
 
-  /// Resident solid-fill draw: ensure geometry residence, rewrite the
-  /// uniform only if it changed, reuse the cached bind group, and record
+  /// Resident solid or pattern fill draw: ensure geometry residence, rewrite
+  /// the uniform only if it changed, reuse the cached bind group, and record
   /// the draw. Steady-state (unchanged) frame: zero writes, zero bind
   /// group creates.
   bool submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
@@ -2016,6 +2019,16 @@ void GeoEncoder::setLoadPreserve() {
   impl_->loadPreserve = true;
 }
 
+namespace {
+
+/// True when \p a and \p b name the same texture view, or are both null. Slot and generation
+/// together identify a view, so a recycled slot never compares equal to the view it replaced.
+bool SameView(gpu::TextureViewRef a, gpu::TextureViewRef b) {
+  return a.slotIndex() == b.slotIndex() && a.generation() == b.generation();
+}
+
+}  // namespace
+
 /// Parameters for the shared `submitFillDraw` helper. Solid-color and
 /// pattern-tile fills share the same encode → upload → draw pipeline; only
 /// the uniform contents and bound texture differ.
@@ -2310,7 +2323,8 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   slot.owningDeviceId = device->deviceId();
 }
 
-void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
+void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot,
+                                              gpu::TextureViewRef patternView) {
   const gpu::BufferRef buf = slot.buffer;
   const auto region = [&buf](uint32_t binding, const GeodeResidentSlot::Region& r) {
     return gpu::BindGroupEntry{binding, gpu::BufferBinding{buf, r.offset, r.size}};
@@ -2334,7 +2348,11 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   // draw reads its paint from the slot's uniform, so the record binding only has to supply the
   // vertex stage's identity transform; binding the shared identity record keeps this slot out of
   // the record slab entirely. The paint block binds on the same tight-range terms, so the
-  // uniform's `paintBase` is zero.
+  // uniform's `paintBase` is zero. The sampler is the device's linear repeat sampler, the same
+  // descriptor the arena pattern fill creates per draw.
+  const gpu::TextureViewRef boundPatternView =
+      patternView.isValid() ? patternView
+                            : gpu::TextureViewRef(*gpuContext->dummyPatternTextureView);
   gpu::Result<gpu::BindGroup> created =
       gpuContext->gpuDevice->createBindGroup(gpu::BindGroupDescriptor{
           "GeodeResidentBindGroup",
@@ -2342,7 +2360,7 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
           {region(FillBinding("uniforms"), slot.uniform), region(FillBinding("bands"), slot.bands),
            region(FillBinding("curveData"), slot.curves),
            gpu::BindGroupEntry{FillBinding("patternTexture"),
-                               gpu::TextureViewBinding{*gpuContext->dummyPatternTextureView}},
+                               gpu::TextureViewBinding{boundPatternView}},
            gpu::BindGroupEntry{FillBinding("patternSampler"),
                                gpu::SamplerBinding{*gpuContext->dummyPatternSampler}},
            gpu::BindGroupEntry{FillBinding("clipMaskTexture"),
@@ -2362,6 +2380,7 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   // not reached the backend yet, so let the frame-boundary destroy pass reclaim it.
   device->deferDestroy(std::move(slot.bindGroup));
   slot.bindGroup = std::move(created).result();
+  slot.boundPatternView = patternView;
 }
 
 bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
@@ -2378,8 +2397,14 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
 
   // ensureResidentSceneRecordImpl already wrote the uniform + record.
 
-  if (!slot.bindGroup.isValid()) {
-    buildResidentBindGroup(slot);
+  // A pattern fill binds its tile; a solid fill binds the dummy pattern texture.
+  const gpu::TextureViewRef patternView =
+      args.paintMode == 1u ? args.patternView : gpu::TextureViewRef();
+  if (!slot.bindGroup.isValid() || !SameView(slot.boundPatternView, patternView)) {
+    buildResidentBindGroup(slot, patternView);
+  }
+  if (!slot.bindGroup.isValid() || !SameView(slot.boundPatternView, patternView)) {
+    return false;
   }
 
   recordGeometryDebugDraw(encoded);
@@ -2630,6 +2655,30 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
+  submitResidentOrArenaFill(slot, encoded, args, frameId);
+}
+
+void GeoEncoder::fillPathPatternResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                         FillRule rule, const PatternPaint& paint,
+                                         uint64_t frameId) {
+  if (paint.tile == nullptr || !paint.tileView.isValid() || paint.tileSize.x <= 0.0 ||
+      paint.tileSize.y <= 0.0) {
+    return;
+  }
+  if (!impl_->admitGeometry(encoded, 1u) || encoded.empty()) {
+    return;
+  }
+
+  // The tile view and the device's linear repeat sampler outlive the frame, so the resident bind
+  // group can keep naming them. The sampler has the descriptor the arena fill creates per draw.
+  submitResidentOrArenaFill(slot, encoded,
+                            PatternFillArgs(nullptr, encoded, rule, paint, paint.tileView,
+                                            *impl_->gpuContext->dummyPatternSampler),
+                            frameId);
+}
+
+void GeoEncoder::submitResidentOrArenaFill(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                           const FillDrawArgs& args, uint64_t frameId) {
   // Residence is only safe (bind group stable, uniform clip flags zero)
   // when no clip mask / clip polygon / mask pass is active. Otherwise fall
   // back to the per-frame arena path so clipped / masked draws stay exact.
@@ -2638,11 +2687,12 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
     return;
   }
   // A slot's single uniform buffer can only carry one draw's uniform per
-  // frame. If a frame that drew this slot resident is still open - an earlier
-  // draw in THIS frame, when this repeat could not take a repeat record of its
-  // own (a clip polygon or mask, gradient paint, a refused record), or an outer
-  // renderer's frame on this device that recorded a draw against the slot
-  // while an offscreen pass renders the same document - route this draw
+  // frame, and its cached bind group only one pattern tile. If a frame that
+  // drew this slot resident is still open - an earlier draw in THIS frame,
+  // when this repeat could not take a repeat record of its own (a clip
+  // polygon or mask, gradient or pattern paint, a refused record), or an
+  // outer renderer's frame on this device that recorded a draw against the
+  // slot while an offscreen pass renders the same document - route this draw
   // through the arena path so it gets its
   // own uniform + bind group instead of clobbering the parameters that
   // recorded draw reads at submit. Frame stamps are device-scoped
@@ -2928,23 +2978,32 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   }
   const gpu::Sampler& sampler = impl_->transientResources.retain(std::move(samplerResult).result());
 
-  FillDrawArgs args = {};
-  args.path = &path;
-  args.rule = rule;
-  args.precomputedEncoded = encoded;
-  args.paintMode = 1u;
   gpu::Result<gpu::TextureView> tileView = impl_->gpuContext->gpuDevice->createTextureView(
       *paint.tile, gpu::TextureViewDescriptor{"GeoEncoderPatternTileView"});
   if (tileView.hasError()) {
     return;
   }
-  args.patternView = impl_->transientResources.retain(std::move(tileView).result());
+  const FillDrawArgs args =
+      PatternFillArgs(&path, *encoded, rule, paint,
+                      impl_->transientResources.retain(std::move(tileView).result()), sampler);
+  submitFillDraw(args, {}, /*requireAdmission=*/false);
+}
+
+GeoEncoder::FillDrawArgs GeoEncoder::PatternFillArgs(const Path* path, const EncodedPath& encoded,
+                                                     FillRule rule, const PatternPaint& paint,
+                                                     gpu::TextureViewRef tileView,
+                                                     gpu::SamplerRef sampler) {
+  FillDrawArgs args = {};
+  args.path = path;
+  args.rule = rule;
+  args.precomputedEncoded = &encoded;
+  args.paintMode = 1u;
+  args.patternView = tileView;
   args.patternSampler = sampler;
   args.patternFromPath = paint.patternFromPath;
   args.tileSize = paint.tileSize;
   args.patternOpacity = static_cast<float>(paint.opacity);
-
-  submitFillDraw(args, {}, /*requireAdmission=*/false);
+  return args;
 }
 
 void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms,

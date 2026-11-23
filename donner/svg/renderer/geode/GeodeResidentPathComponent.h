@@ -1123,10 +1123,14 @@ struct GeodeResidentSlot {
 
   /// Cached fill bind group. All twelve bindings reference stable
   /// objects (this slot's `buffer` sub-ranges + device-owned dummy
-  /// texture/sampler/identity-instance handles), so it survives frames
-  /// and encoders. Rebuilt only when the geometry buffer is
-  /// re-allocated.
+  /// texture/sampler/identity-instance handles, or a pattern fill's tile view, which the
+  /// renderer keeps across frames), so it survives frames and encoders. Rebuilt when the
+  /// geometry buffer is re-allocated or the bound pattern tile view changes.
   gpu::BindGroup bindGroup;
+
+  /// Pattern tile view \ref bindGroup binds, or null when it binds the dummy pattern texture.
+  /// A pattern fill whose tile view differs rebuilds the bind group before drawing.
+  gpu::TextureViewRef boundPatternView;
 
   /// A byte sub-range of `buffer`. `size == 0` is never bound directly -
   /// empty SSBO regions reserve a zero-filled dummy slot wide enough for one
@@ -1312,6 +1316,8 @@ struct GeodeResidentSlot {
       repeatRecords = std::move(other.repeatRecords);
       nextRepeatOccurrence = other.nextRepeatOccurrence;
       bindGroup = std::move(other.bindGroup);
+      boundPatternView = other.boundPatternView;
+      other.boundPatternView = gpu::TextureViewRef();
       bands = other.bands;
       curves = other.curves;
       hRefs = other.hRefs;
@@ -1379,6 +1385,7 @@ struct GeodeResidentSlot {
       slab->retireBindGroup(std::move(bindGroup));
     }
     bindGroup = gpu::BindGroup();
+    boundPatternView = gpu::TextureViewRef();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;
