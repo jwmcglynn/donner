@@ -886,7 +886,8 @@ void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
 }
 
 TurbulenceParams makeTurbulenceParams(
-    uint32_t width, uint32_t height, const svg::components::filter_primitive::Turbulence& primitive,
+    gpu::Extent2d stitchExtent, Vector2d deviceOrigin,
+    const svg::components::filter_primitive::Turbulence& primitive,
     const Transform2d& deviceFromFilter, double baseFrequencyX, double baseFrequencyY,
     double seed) {
   TurbulenceParams params{};
@@ -898,8 +899,10 @@ TurbulenceParams makeTurbulenceParams(
   params.stitchTiles = primitive.stitchTiles ? 1u : 0u;
   params.typeFlag =
       primitive.type == svg::components::filter_primitive::Turbulence::Type::Turbulence ? 1u : 0u;
-  params.tileWidth = static_cast<float>(width);
-  params.tileHeight = static_cast<float>(height);
+  params.tileWidth = static_cast<float>(stitchExtent.width);
+  params.tileHeight = static_cast<float>(stitchExtent.height);
+  params.deviceOriginX = static_cast<int32_t>(deviceOrigin.x);
+  params.deviceOriginY = static_cast<int32_t>(deviceOrigin.y);
 
   const double determinant = deviceFromFilter.determinant();
   if (NearZero(determinant, 1e-12)) {
@@ -1621,6 +1624,8 @@ struct FilterGraphExecution {
   /// Unclipped BackgroundImage input for the current tile, when the caller supplied one.
   std::optional<FilterTexture> backdropSource;
   Vector2d tileOrigin = Vector2d::Zero();
+  /// Size of the whole raster the graph runs over, which a tile is part of.
+  gpu::Extent2d rasterExtent;
   svg::components::FilterExecutionBudget* executionBudget;
   std::optional<FilterTilePlan> admittedPlan;
   FilterResourceArena arena;
@@ -1815,6 +1820,36 @@ struct FilterSamplingHalo {
     return true;
   }
 
+  /// A displaced pixel reads its input around its position plus `(channel - 0.5) * scale`, and the
+  /// program clamps each map channel to [0, 1], so the displacement is at most half the scale. The
+  /// program's scale is this same value rounded to `f32`, which cannot pass the next whole pixel.
+  /// It reads bilinearly at the rounded-down position and the pixel after it, which carries weight
+  /// only when the position is not whole, so no weighted read passes the position rounded up: half
+  /// the scale, rounded up.
+  bool add(const fp::DisplacementMap& value) {
+    const double pixels = std::abs(svg::BoundedSignedFilterPixels(
+        value.scale * (objectBounds ? std::sqrt(bounds.x * bounds.y) : 1.0) *
+        std::sqrt(scale.x * scale.y)));
+    const double reach = std::ceil(pixels * 0.5);
+    halo += Vector2d(reach, reach);
+    return true;
+  }
+
+  /// Noise depends only on the pixel's own position, which a tile carries.
+  bool add(const fp::Turbulence&) { return true; }
+
+  /// The surface normal reads the 3 x 3 neighborhood of each pixel.
+  bool add(const fp::DiffuseLighting&) {
+    halo += Vector2d(1.0, 1.0);
+    return true;
+  }
+
+  /// The surface normal reads the 3 x 3 neighborhood of each pixel.
+  bool add(const fp::SpecularLighting&) {
+    halo += Vector2d(1.0, 1.0);
+    return true;
+  }
+
   bool add(const fp::ConvolveMatrix& value) {
     if (value.edgeMode == fp::ConvolveMatrix::EdgeMode::Wrap || value.orderX <= 0 ||
         value.orderY <= 0 || value.orderX > svg::components::kMaximumFilterConvolveOrder ||
@@ -1882,20 +1917,25 @@ bool FilterPlanFits(const svg::components::FilterGraph& graph, const FilterTileP
   return bytes <= kMaximumFilterFrameBytes;
 }
 
-FilterTilePlan ChooseFilterTiles(const svg::components::FilterGraph& graph, FilterTilePlan full,
-                                 Vector2d halo, uint32_t preferredExtent, bool adaptive,
-                                 uint64_t retainedBufferBytes) {
-  const auto preferred = FitFilterTiles(full, halo, {preferredExtent, preferredExtent});
-  uint64_t bytes = 0;
-  if (preferred.tileWidth <= preferredExtent && preferred.tileHeight <= preferredExtent &&
-      FilterPlanFits(graph, preferred, retainedBufferBytes, bytes)) {
-    return preferred;
-  }
-  if (!adaptive) {
-    return full;
-  }
+/// Whether \p graph generates noise or reads a displaced or lit neighborhood, which tiles only when
+/// its untiled execution does not fit, so such a graph keeps its untiled pixels wherever they fit.
+bool TilesOnlyPastUntiledLimits(const svg::components::FilterGraph& graph) {
+  return std::any_of(graph.nodes.begin(), graph.nodes.end(), [](const auto& node) {
+    return std::holds_alternative<fp::Turbulence>(node.primitive) ||
+           std::holds_alternative<fp::DisplacementMap>(node.primitive) ||
+           std::holds_alternative<fp::DiffuseLighting>(node.primitive) ||
+           std::holds_alternative<fp::SpecularLighting>(node.primitive);
+  });
+}
+
+/// The plan with the fewest bytes among strips and squares of tiles larger than \p preferredExtent,
+/// growing by 128 pixels, or \p full when none fits.
+FilterTilePlan ChooseLargerFilterTiles(const svg::components::FilterGraph& graph,
+                                       const FilterTilePlan& full, Vector2d halo,
+                                       uint32_t preferredExtent, uint64_t retainedBufferBytes) {
   FilterTilePlan best = full;
   uint64_t bestBytes = UINT64_MAX;
+  uint64_t bytes = 0;
   for (uint32_t extent = preferredExtent; extent < std::max(full.width, full.height);
        extent += 128) {
     const std::array<gpu::Extent2d, 3> extents{
@@ -1910,6 +1950,23 @@ FilterTilePlan ChooseFilterTiles(const svg::components::FilterGraph& graph, Filt
     }
   }
   return best;
+}
+
+FilterTilePlan ChooseFilterTiles(const svg::components::FilterGraph& graph, FilterTilePlan full,
+                                 Vector2d halo, uint32_t preferredExtent, bool adaptive,
+                                 uint64_t retainedBufferBytes, bool preferTiles) {
+  uint64_t bytes = 0;
+  if (adaptive && !preferTiles && TilesOnlyPastUntiledLimits(graph) &&
+      FilterPlanFits(graph, full, retainedBufferBytes, bytes)) {
+    return full;
+  }
+  const auto preferred = FitFilterTiles(full, halo, {preferredExtent, preferredExtent});
+  if (preferred.tileWidth <= preferredExtent && preferred.tileHeight <= preferredExtent &&
+      FilterPlanFits(graph, preferred, retainedBufferBytes, bytes)) {
+    return preferred;
+  }
+  return adaptive ? ChooseLargerFilterTiles(graph, full, halo, preferredExtent, retainedBufferBytes)
+                  : full;
 }
 
 bool ValidFilterPlanAxis(uint32_t size, uint32_t tile, uint32_t core) {
@@ -1953,14 +2010,15 @@ bool AdmittedFilterPlanFitsSource(const svg::components::FilterGraph& graph,
 
 FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGraph& graph,
                                                 uint32_t width, uint32_t height,
-                                                const Transform2d& deviceFromFilter) const {
+                                                const Transform2d& deviceFromFilter,
+                                                bool preferTiles) const {
   const FilterTilePlan plan{width, height, width, height, width, height, 1};
   if (!CanTileFilter(graph, width, height, deviceFromFilter)) {
     return plan;
   }
   const auto halo = ComputeFilterSamplingHalo(graph, deviceFromFilter);
   return halo ? ChooseFilterTiles(graph, plan, *halo, preferredTileExtent_, adaptiveTiles_,
-                                  retainedBufferBytes())
+                                  retainedBufferBytes(), preferTiles)
               : plan;
 }
 
@@ -2196,6 +2254,7 @@ FilterTexture FilterGraphExecution::run() {
     return admittedPlan ? FilterTexture{} : sourceGraphic;
   }
   admittedWorkUnits = budget.workUnits() - workBefore;
+  rasterExtent = {plan.width, plan.height};
   indexNamedResults();
   const FilterTexture result = plan.tiles > 1 ? runTiled(plan) : runNodes();
   budget.release(*reservation);
@@ -2492,7 +2551,8 @@ FilterTexture FilterNodeExecution::apply(const fp::ConvolveMatrix& primitive) {
 
 FilterTexture FilterNodeExecution::apply(const fp::Turbulence& primitive) {
   return engine.applyTurbulence(arena, input.width(), input.height(), primitive,
-                                coordinates.deviceFromFilter);
+                                coordinates.deviceFromFilter, execution.tileOrigin,
+                                execution.rasterExtent);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::DisplacementMap& primitive) {
@@ -2504,20 +2564,23 @@ FilterTexture FilterNodeExecution::apply(const fp::DisplacementMap& primitive) {
   FilterTexture second;
   return convertBinaryInputs(second)
              ? engine.applyDisplacementMap(arena, input, second, primitive,
-                                           svg::BoundedSignedFilterPixels(scale))
+                                           svg::BoundedSignedFilterPixels(scale),
+                                           execution.tileOrigin)
              : FilterTexture();
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::DiffuseLighting& primitive) {
   const Box2d bounds = coordinates.resolveInputSubregion(svg::FilterInputOrDefault(node, 0));
   return engine.applyDiffuseLighting(arena, input, primitive, execution.graph,
-                                     coordinates.deviceFromFilter, bounds, linearRgb);
+                                     coordinates.deviceFromFilter, bounds, linearRgb,
+                                     execution.tileOrigin);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::SpecularLighting& primitive) {
   const Box2d bounds = coordinates.resolveInputSubregion(svg::FilterInputOrDefault(node, 0));
   return engine.applySpecularLighting(arena, input, primitive, execution.graph,
-                                      coordinates.deviceFromFilter, bounds, linearRgb);
+                                      coordinates.deviceFromFilter, bounds, linearRgb,
+                                      execution.tileOrigin);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
@@ -3192,7 +3255,7 @@ FilterTexture GeodeFilterEngine::applyConvolveMatrix(
 FilterTexture GeodeFilterEngine::applyTurbulence(
     FilterResourceArena& arena, uint32_t width, uint32_t height,
     const svg::components::filter_primitive::Turbulence& primitive,
-    const Transform2d& deviceFromFilter) {
+    const Transform2d& deviceFromFilter, Vector2d deviceOrigin, gpu::Extent2d stitchExtent) {
   const double baseFrequencyX = boundedTurbulenceFrequency(primitive.baseFrequencyX);
   const double baseFrequencyY = boundedTurbulenceFrequency(primitive.baseFrequencyY);
   const double seed = boundedTurbulenceSeed(primitive.seed);
@@ -3213,8 +3276,9 @@ FilterTexture GeodeFilterEngine::applyTurbulence(
     return {};
   }
 
-  const TurbulenceParams params = makeTurbulenceParams(width, height, primitive, deviceFromFilter,
-                                                       baseFrequencyX, baseFrequencyY, seed);
+  const TurbulenceParams params =
+      makeTurbulenceParams(stitchExtent, deviceOrigin, primitive, deviceFromFilter, baseFrequencyX,
+                           baseFrequencyY, seed);
 
   // Generate permutation + gradient tables from the seed.
   TurbulenceTables tables{};
@@ -3255,7 +3319,8 @@ FilterTexture GeodeFilterEngine::applyTurbulence(
 
 FilterTexture GeodeFilterEngine::applyDisplacementMap(
     FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
-    const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale) {
+    const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale,
+    Vector2d deviceOrigin) {
   if (!in1 || !in2) {
     return {};
   }
@@ -3284,6 +3349,8 @@ FilterTexture GeodeFilterEngine::applyDisplacementMap(
   params.xChannel = toIndex(primitive.xChannelSelector);
   params.yChannel = toIndex(primitive.yChannelSelector);
   params.padding = 0;
+  params.deviceOriginX = static_cast<int32_t>(deviceOrigin.x);
+  params.deviceOriginY = static_cast<int32_t>(deviceOrigin.y);
 
   if (!dispatchRuntimeTwoInput(arena, displacementMapProgram_, in1, in2, output, extent,
                                UniformBytes(params), "FilterDisplacementMapPass")) {
@@ -3391,7 +3458,7 @@ FilterTexture GeodeFilterEngine::applyDiffuseLighting(
     FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::DiffuseLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-    const Box2d& sampleSubregion, bool linearRGB) {
+    const Box2d& sampleSubregion, bool linearRGB, Vector2d deviceOrigin) {
   if (!input) {
     return {};
   }
@@ -3444,7 +3511,11 @@ FilterTexture GeodeFilterEngine::applyDiffuseLighting(
                   &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
                   &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
 
-  const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
+  // The light and pixel positions stay in the raster's pixels; the sample bounds index this
+  // texture.
+  params.deviceOriginX = static_cast<int32_t>(deviceOrigin.x);
+  params.deviceOriginY = static_cast<int32_t>(deviceOrigin.y);
+  const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion) - deviceOrigin;
   params.sampleMinX = boundedFloorInt32(samplePixels.topLeft.x, 0, static_cast<int32_t>(width) - 1);
   params.sampleMinY =
       boundedFloorInt32(samplePixels.topLeft.y, 0, static_cast<int32_t>(height) - 1);
@@ -3464,7 +3535,7 @@ FilterTexture GeodeFilterEngine::applySpecularLighting(
     FilterResourceArena& arena, FilterTexture input,
     const svg::components::filter_primitive::SpecularLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-    const Box2d& sampleSubregion, bool linearRGB) {
+    const Box2d& sampleSubregion, bool linearRGB, Vector2d deviceOrigin) {
   if (!input) {
     return {};
   }
@@ -3516,7 +3587,11 @@ FilterTexture GeodeFilterEngine::applySpecularLighting(
                   &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
                   &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
 
-  const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
+  // The light and pixel positions stay in the raster's pixels; the sample bounds index this
+  // texture.
+  params.deviceOriginX = static_cast<int32_t>(deviceOrigin.x);
+  params.deviceOriginY = static_cast<int32_t>(deviceOrigin.y);
+  const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion) - deviceOrigin;
   params.sampleMinX = boundedFloorInt32(samplePixels.topLeft.x, 0, static_cast<int32_t>(width) - 1);
   params.sampleMinY =
       boundedFloorInt32(samplePixels.topLeft.y, 0, static_cast<int32_t>(height) - 1);

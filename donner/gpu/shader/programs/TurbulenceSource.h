@@ -17,6 +17,8 @@ inline constexpr wgsl::SourceText kTurbulenceSource{R"wgsl(struct TurbulencePara
   filterFromDeviceB: f32,
   filterFromDeviceC: f32,
   filterFromDeviceD: f32,
+  deviceOriginX: i32,
+  deviceOriginY: i32,
 }
 
 struct TurbulenceTables {
@@ -91,8 +93,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
   let coord = vec2<i32>(gid.xy);
-  let px = f32(coord.x);
-  let py = f32(coord.y);
+  let px = f32((coord.x + params.deviceOriginX));
+  let py = f32((coord.y + params.deviceOriginY));
   let ux = ((params.filterFromDeviceA * px) + (params.filterFromDeviceB * py));
   let uy = ((params.filterFromDeviceC * px) + (params.filterFromDeviceD * py));
   var pixel: vec4<f32> = vec4<f32>(0f);

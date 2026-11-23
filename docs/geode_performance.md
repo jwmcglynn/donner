@@ -517,33 +517,59 @@ image, a composite past the cap) allocates its uniform and bind group for that f
   and every later path clip draws nothing. At 2048x2048 the
   byte limit holds 16 canvas-sized surfaces, so only surfaces held at once, such as layers nested
   that deep, reach it.
-- **Filters past the frame's limits run on a reduced raster.** A filter graph normally runs on a
-  capture of the visible part of its filter region at device resolution. When it does not fit
-  there (its intermediate memory estimate is past `kMaximumFilterIntermediateBytes`, 256 MiB, its
-  work is past the per-graph or per-frame work limit, or its surfaces are past what the frame's
-  surface budget can still hold), the element is captured on a raster reduced by 2, 4, 8 or 16
-  along each axis, the smallest of those factors at which the same graph fits the same limits, and
-  the graph runs in that raster's pixels. Every resolution-dependent parameter (blur deviation,
-  offsets, morphology radius, displacement scale, light positions and surface scale, noise
-  frequency) then takes the value it has on a canvas reduced by the same factor. The raster's
-  pixels are the reduced canvas's pixels that cover the capture, and each device pixel shows the
-  raster pixel that covers its center, so the element looks as it does on the reduced canvas,
-  enlarged (`FilterPastTheSurfaceBudgetRunsOnAReducedRaster`,
+- **Filters past the frame's limits run in tiles at full resolution.** A filter graph normally
+  runs on a capture of the visible part of its filter region at device resolution. When it does
+  not fit there (its intermediate memory estimate is past `kMaximumFilterIntermediateBytes`, 256
+  MiB, or its surfaces are past what the frame's surface budget can still hold), it is split into
+  tiles at full resolution first, if its transform is axis-aligned, its raster is at most 4096
+  pixels per edge and every primitive's sampling halo is known: every primitive except `feImage`,
+  `feTile` and a blur or convolution with wrapping edges. Each tile reads its halo, and the noise,
+  displacement and lighting programs receive the tile's origin in the raster (`deviceOriginX`,
+  `deviceOriginY` in `TurbulenceParams`, `DisplacementMapParams` and `LightingParams`). They
+  compute every position as the tile-local pixel plus that origin, an integer sum, and a
+  displacement subtracts the origin again for its fetch, so a tile does the untiled raster's
+  arithmetic and the tiles reproduce the untiled raster exactly (`TiledFilterExactnessTest`, at
+  tile origins that are not powers of two and under a non-uniform scale). Positions stay below the
+  4096-pixel raster edge, far inside the integers `f32` holds exactly (2^24). With an origin of
+  zero, the untiled path, every sum adds zero to an integer, so its arithmetic is what it was.
+  Halos: a displacement map reads at most half its scale away in device pixels, rounded up,
+  because the program clamps the map's channels to [0, 1] and its bilinear read's second pixel
+  carries weight only past a fractional position; lighting reads the 3 x 3 neighborhood of its
+  surface normal, one pixel; noise reads nothing. Graphs with noise, displacement or lighting split only when they do not fit
+  untiled, so wherever they fit their pixels are the untiled ones
+  (`FilterThatFitsUntiledStaysUntiled`). On 2048x2048 and 3840x2160 canvases, displacement and
+  lighting graphs past the untiled limits run in tiles and match the canvas rendered as four
+  quadrants (`LargeCanvasTilingTest`); noise matches the untiled raster where it fits
+  (`NoiseOnA2048CanvasMatchesTheUntiledRaster`), because a quadrant would anchor it elsewhere
+  ([#2673](https://github.com/jwmcglynn/donner/issues/2673)).
+  `resourceStats().filterTiledGraphs` counts the filters that ran in more than one tile.
+- **Filters that cannot tile run on a reduced raster.** A graph past the frame's limits that cannot
+  run in tiles (a rotated or skewed filter, `feTile`, `feImage`, wrapping edges, a halo wider than
+  half a tile), whose tiles still do not fit, or that is past the per-graph or per-frame work limit,
+  which tiling does not lower, is captured on a raster reduced by 2, 4, 8 or 16 along each axis,
+  the smallest of those factors at which the same graph fits the same limits, and the graph runs in
+  that raster's pixels. Every resolution-dependent parameter (blur deviation, offsets, morphology
+  radius, displacement scale, light positions and surface scale, noise frequency) then takes the
+  value it has on a canvas reduced by the same factor. The raster's pixels are the reduced canvas's
+  pixels that cover the capture, and each device pixel shows the raster pixel that covers its
+  center, so the element looks as it does on the reduced canvas, enlarged
+  (`FilterPastTheSurfaceBudgetRunsOnAReducedRaster`,
   `InsetFilterRegionRunsOnTheReducedCanvasGrid`,
   `FilterPastThePerGraphWorkLimitRunsOnAReducedRaster`, `FilterOnA2048CanvasRunsOnAReducedRaster`,
   `FilterOnA3840x2160CanvasRunsOnAReducedRaster`; `FiltersPastTheFrameWorkLimitRunOnReducedRasters`
-  covers the frame's work limit). No
-  limit is raised: the reduced plan is admitted against the same budgets, so its memory is bounded
-  by them, and the factor depends only on the graph, the canvas and what the frame already holds.
-  The capture's input margin is sized at full resolution, so near the viewport's edge it can
-  reach about one reduced pixel further than the reduced canvas's own margin would. Three kinds of
-  graph are not reduced, because the reduced canvas would draw them differently: a graph whose
-  transform takes the transformed blur path (a skewed blur, or a rotated blur that is not
-  circular), one that reads `BackgroundImage` or `BackgroundAlpha`, and one with an `feImage` of a
-  document fragment, which the driver rasterizes at full resolution
-  (`FiltersAReducedRasterCannotReproduceAreNotReduced`); past the limits they are left out as
-  before. A memory refusal that submitting the frame's work so far would lift is retried at full
-  resolution first, unless the plan does not fit the surface budget even with nothing else held
+  covers the frame's work limit). No limit is raised: tiled and reduced plans are admitted against
+  the same budgets, so their memory is bounded by them, and the choice depends only on the graph,
+  the canvas and what the frame already holds. The capture's input margin is sized at full
+  resolution, so near the viewport's edge it can reach about one reduced pixel further than the
+  reduced canvas's own margin would. Three kinds of graph are not reduced, because the reduced
+  canvas would draw them differently: a graph whose transform takes the transformed blur path (a
+  skewed blur, or a rotated blur that is not circular), one that reads `BackgroundImage` or
+  `BackgroundAlpha`, and one with an `feImage` of a document fragment, which the driver rasterizes
+  at full resolution (`FiltersAReducedRasterCannotReproduceAreNotReduced`); past the limits a
+  backdrop graph runs in tiles when it can, as it did before for graphs without noise,
+  displacement or lighting, and otherwise these are left out as before. A
+  memory refusal that submitting the frame's work so far would lift is retried at full resolution
+  first, unless the plan does not fit the surface budget even with nothing else held
   (`FilterLargerThanTheSurfaceBudgetReducesWithoutAChunk`). A graph that does not fit even at 16 is
   left out, and `filterBudgetRejected` reports it (`FilterPastTheCoarsestReducedRasterIsLeftOut`). A
   reduced filter's unchanged frame costs what the same filter's does at full resolution
@@ -551,11 +577,7 @@ image, a composite past the cap) allocates its uniform and bind group for that f
   so once one filter runs reduced, a later filter that used to fit in the remaining work may run
   reduced too; the outcome depends only on the document. `resourceStats()` sets
   `filterReducedRasterSupported` and reports how many filters ran reduced (`filterReducedRasters`)
-  and the largest factor (`filterRasterReduction`). A
-  turbulence and displacement graph, whose estimate is 116 bytes per pixel, runs reduced by 2 on a
-  2048x2048 canvas and by 4 on a 3840x2160 one. This is how such a graph renders on a large canvas:
-  at lower resolution, even where splitting it into tiles would let it run at full resolution
-  ([#2675](https://github.com/jwmcglynn/donner/issues/2675)).
+  and the largest factor (`filterRasterReduction`).
 
 ## Which Draws Keep Residency {#GeodePerformanceDrawPaths}
 
@@ -751,16 +773,22 @@ group every frame:
 - **Renderers that alternate frames on one device sweep each other's filter bindings**, because the
   filter engine sweeps at every renderer's frame start, so neither reaches the filter steady state;
   no test measures this.
-- **Filters past the frame's limits render at lower resolution.** A graph that does not fit at
-  full resolution runs on a reduced raster (above), so on a large canvas it looks coarser than the
-  same element on a small one. Running graphs that can be tiled exactly at full resolution instead
-  is tracked in [#2675](https://github.com/jwmcglynn/donner/issues/2675).
+- **Filters that cannot tile render at lower resolution past the frame's limits.** A rotated or
+  skewed filter, one with `feTile`, `feImage` or wrapping edges, or one past a work limit runs on a
+  reduced raster (above), so on a large canvas it looks coarser than the same element on a small
+  one.
 - **Some filters still drop out on a large canvas.** A graph that reads `BackgroundImage` or
   `BackgroundAlpha` is not reduced, because its backdrop copy keeps the device grid, so past its
-  limits it is still left out. An `feImage` that references an element is rasterized by the
-  renderer driver within a per-frame source-image budget of 4 MiB, so on a canvas above about 1000
-  pixels the element is hidden on every backend
+  limits it is left out unless it can run in tiles, which a backdrop graph with noise,
+  displacement or lighting now can. An `feImage` that references an element is
+  rasterized by the renderer driver within a per-frame source-image budget of 4 MiB, so on a
+  canvas above about 1000 pixels the element is hidden on every backend
   ([#2662](https://github.com/jwmcglynn/donner/issues/2662)).
+- **Noise is anchored at the filter raster's origin.** `feTurbulence` evaluates the noise at each
+  pixel through the linear part of the filter transform only, so the pattern follows the raster's
+  corner rather than the filter's user space, and moves under a pan or a view box offset
+  ([#2673](https://github.com/jwmcglynn/donner/issues/2673)). Tiles keep that anchoring: a tile's
+  origin is its offset in the raster, so its noise is the untiled raster's.
 - **Texture pool eviction scans every bucket**
   ([#2619](https://github.com/jwmcglynn/donner/issues/2619)).
 - **Uncharged host records**: the composite sequences above, a kept image's host record per image

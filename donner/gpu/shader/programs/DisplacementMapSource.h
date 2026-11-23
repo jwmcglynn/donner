@@ -9,6 +9,10 @@ inline constexpr wgsl::SourceText kDisplacementMapSource{R"wgsl(struct Displacem
   xChannel: u32,
   yChannel: u32,
   padding: u32,
+  deviceOriginX: i32,
+  deviceOriginY: i32,
+  padding1: u32,
+  padding2: u32,
 }
 
 @group(0) @binding(0) var sourceTexture: texture_2d<f32>;
@@ -18,7 +22,7 @@ inline constexpr wgsl::SourceText kDisplacementMapSource{R"wgsl(struct Displacem
 
 fn channel(color: vec4<f32>, selector: u32) -> f32 {
   if ((selector == 3u)) {
-    return color.w;
+    return clamp(color.w, 0f, 1f);
   }
   if ((color.w <= 0f)) {
     return 0f;
@@ -33,7 +37,7 @@ fn channel(color: vec4<f32>, selector: u32) -> f32 {
   if ((selector == 2u)) {
     value = color.z;
   }
-  return min(1f, (value * (1f / color.w)));
+  return clamp((value * (1f / color.w)), 0f, 1f);
 }
 
 fn sampleSource(coord: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
@@ -51,9 +55,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
   let map = textureLoad(mapTexture, coord, 0i);
-  let position = (vec2<f32>(coord) + ((vec2<f32>(channel(map, params.xChannel), channel(map, params.yChannel)) - vec2<f32>(0.5f)) * params.scale));
-  let base = vec2<i32>(floor(position));
-  let fraction = (position - vec2<f32>(base));
+  let origin = vec2<i32>(params.deviceOriginX, params.deviceOriginY);
+  let position = (vec2<f32>((coord + origin)) + ((vec2<f32>(channel(map, params.xChannel), channel(map, params.yChannel)) - vec2<f32>(0.5f)) * params.scale));
+  let rasterBase = vec2<i32>(floor(position));
+  let fraction = (position - vec2<f32>(rasterBase));
+  let base = (rasterBase - origin);
   let top = (sampleSource((base + vec2<i32>(0i, 0i)), size) + (fraction.x * (sampleSource((base + vec2<i32>(1i, 0i)), size) - sampleSource((base + vec2<i32>(0i, 0i)), size))));
   let bottom = (sampleSource((base + vec2<i32>(0i, 1i)), size) + (fraction.x * (sampleSource((base + vec2<i32>(1i, 1i)), size) - sampleSource((base + vec2<i32>(0i, 1i)), size))));
   textureStore(outputTexture, coord, clamp((top + (fraction.y * (bottom - top))), vec4<f32>(0f), vec4<f32>(1f)));

@@ -386,11 +386,16 @@ public:
   /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
   uint64_t retainedBufferBytes() const;
 
-  /// Plans bounded working textures without changing sample coordinates or resolution.
+  /// Plans bounded working textures without changing sample coordinates or resolution. A graph
+  /// whose sampling halo is known splits into tiles once the raster passes the preferred tile
+  /// extent, except that a graph with a turbulence, displacement map or lighting primitive splits
+  /// only when its untiled execution does not fit, unless \p preferTiles.
   /// @param graph Graph to execute. @param width Source width. @param height Source height.
   /// @param deviceFromFilter Original filter-to-device transform.
+  /// @param preferTiles Whether to split a graph that would fit untiled.
   FilterTilePlan executionPlan(const svg::components::FilterGraph& graph, uint32_t width,
-                               uint32_t height, const Transform2d& deviceFromFilter) const;
+                               uint32_t height, const Transform2d& deviceFromFilter,
+                               bool preferTiles = false) const;
 
   /// Lower the working extent for deterministic tile-boundary tests.
   /// @param extent Maximum dimension, between 16 and 512 pixels.
@@ -545,10 +550,14 @@ private:
   /// @param height Output texture height.
   /// @param primitive The feTurbulence parameters.
   /// @param deviceFromFilter Transform from filter/user space into device space.
+  /// @param deviceOrigin Device position of the output texture's pixel (0, 0): a tile's origin
+  ///   in its raster, or zero.
+  /// @param stitchExtent Raster size whose edges `stitchTiles` wraps the noise at.
   /// @return The noise texture.
   FilterTexture applyTurbulence(FilterResourceArena& arena, uint32_t width, uint32_t height,
                                 const svg::components::filter_primitive::Turbulence& primitive,
-                                const Transform2d& deviceFromFilter);
+                                const Transform2d& deviceFromFilter, Vector2d deviceOrigin,
+                                gpu::Extent2d stitchExtent);
 
   /// Per-pixel channel-driven displacement (feDisplacementMap).
   /// @param in1 Source image texture.
@@ -558,7 +567,8 @@ private:
   /// @return The displaced texture.
   FilterTexture applyDisplacementMap(
       FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
-      const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale);
+      const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale,
+      Vector2d deviceOrigin = Vector2d::Zero());
 
   /// Lambertian diffuse lighting (feDiffuseLighting).
   /// @param input The input texture (alpha = height map).
@@ -572,7 +582,7 @@ private:
       FilterResourceArena& arena, FilterTexture input,
       const svg::components::filter_primitive::DiffuseLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-      const Box2d& sampleSubregion, bool linearRGB);
+      const Box2d& sampleSubregion, bool linearRGB, Vector2d deviceOrigin = Vector2d::Zero());
 
   /// Phong specular lighting (feSpecularLighting).
   /// @param input The input texture (alpha = height map).
@@ -586,7 +596,7 @@ private:
       FilterResourceArena& arena, FilterTexture input,
       const svg::components::filter_primitive::SpecularLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-      const Box2d& sampleSubregion, bool linearRGB);
+      const Box2d& sampleSubregion, bool linearRGB, Vector2d deviceOrigin = Vector2d::Zero());
 
   /// Drop-shadow composite (feDropShadow): blur alpha, offset, flood, source-over.
   /// @param input The input texture.

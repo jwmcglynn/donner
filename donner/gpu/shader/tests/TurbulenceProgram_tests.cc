@@ -7,13 +7,17 @@
 
 #include "donner/gpu/shader/programs/TurbulenceSource.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
+#include "donner/gpu/shader/tests/ShaderTestUtils.h"
 namespace donner::gpu::shader {
 namespace {
 TEST(TurbulenceProgramTests, StorageLayoutsMatchHostParameterAndTableBytes) {
   const auto& shader = tests::TurbulenceAllProjections();
   ASSERT_NE(shader.resource("params"), nullptr);
   ASSERT_NE(shader.resource("tables"), nullptr);
-  EXPECT_EQ(shader.resource("params")->minSizeBytes, 48u);
+  EXPECT_EQ(shader.resource("params")->minSizeBytes, 56u);
+  // A tile's origin in its raster follows the device-to-filter coefficients.
+  EXPECT_THAT(shader, HasShaderMember("params", "deviceOriginX", 48, 4, ShaderScalarType::I32));
+  EXPECT_THAT(shader, HasShaderMember("params", "deviceOriginY", 52, 4, ShaderScalarType::I32));
   EXPECT_EQ(shader.resource("tables")->minSizeBytes, 18504u);
   EXPECT_TRUE(shader.matchesMember("tables", "lattice", 0, 2056, ShaderScalarType::I32, 1, 514, 4));
   EXPECT_TRUE(

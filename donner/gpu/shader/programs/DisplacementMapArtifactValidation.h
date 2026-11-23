@@ -37,6 +37,18 @@ consteval bool ValidateDisplacementMapArtifact() {
   static_assert(shader.matchesMember("params", "padding", offsetof(DisplacementMapParams, padding),
                                      sizeof(DisplacementMapParams::padding),
                                      ShaderScalarType::U32));
+  static_assert(shader.matchesMember(
+      "params", "deviceOriginX", offsetof(DisplacementMapParams, deviceOriginX),
+      sizeof(DisplacementMapParams::deviceOriginX), ShaderScalarType::I32));
+  static_assert(shader.matchesMember(
+      "params", "deviceOriginY", offsetof(DisplacementMapParams, deviceOriginY),
+      sizeof(DisplacementMapParams::deviceOriginY), ShaderScalarType::I32));
+  static_assert(
+      shader.matchesMember("params", "padding1", offsetof(DisplacementMapParams, padding1),
+                           sizeof(DisplacementMapParams::padding1), ShaderScalarType::U32));
+  static_assert(
+      shader.matchesMember("params", "padding2", offsetof(DisplacementMapParams, padding2),
+                           sizeof(DisplacementMapParams::padding2), ShaderScalarType::U32));
   return true;
 }
 }  // namespace donner::gpu::shader::programs

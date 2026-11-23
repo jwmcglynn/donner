@@ -53,6 +53,12 @@ consteval bool ValidateTurbulenceArtifact() {
   static_assert(shader.matchesMember(
       "params", "filterFromDeviceD", offsetof(TurbulenceParams, filterFromDeviceD),
       sizeof(TurbulenceParams::filterFromDeviceD), ShaderScalarType::F32));
+  static_assert(
+      shader.matchesMember("params", "deviceOriginX", offsetof(TurbulenceParams, deviceOriginX),
+                           sizeof(TurbulenceParams::deviceOriginX), ShaderScalarType::I32));
+  static_assert(
+      shader.matchesMember("params", "deviceOriginY", offsetof(TurbulenceParams, deviceOriginY),
+                           sizeof(TurbulenceParams::deviceOriginY), ShaderScalarType::I32));
   static_assert(shader.matchesMember("tables", "lattice", offsetof(TurbulenceTables, lattice),
                                      sizeof(TurbulenceTables::lattice), ShaderScalarType::I32, 1,
                                      kTurbulenceTableSize, 4));
