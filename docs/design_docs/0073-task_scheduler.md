@@ -337,17 +337,32 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   by being stolen from the top or by the drain step before a sleep. An idle worker runs its own
   deque, then the global queue, then steals.
 - **Sleeping.** Every worker sleeps on its own parker (below), whether it is idle or a waiting
-  creator. The scheduler keeps an `awake` count of workers not asleep and a per-worker state word
-  (awake or asleep). To sleep, a worker:
+  creator. The scheduler keeps an `awake` count of workers not asleep and a per-worker state word:
+  awake, asleep shallow (asleep while within its margin, for example in its top-level idle loop) or
+  asleep deep (asleep past its margin). Every transition from either asleep state to awake is one
+  compare-and-swap on that word, and exactly the thread whose swap succeeds increments `awake`; a
+  thread whose swap fails does not increment, because the thread that won already counted the
+  worker. Every waker changes and notifies the worker's parker whether or not its swap succeeded,
+  which at worst causes a spurious wake. This rule covers every wake: a sleeper waking itself in
+  step 4, a publisher, a finisher waking an asleep creator, the hand-off below, and shutdown. To
+  sleep, a worker:
 
   1. drains its own deque into the global queue, removing entries with the owner's Chase-Lev
      `take` (including its compare-and-swap on the last element), never by reading the array;
   2. reads its parker value;
-  3. marks itself asleep and decrements `awake`, then issues a sequentially consistent fence;
+  3. stores asleep shallow or asleep deep in its state word and decrements `awake`, then issues a
+     sequentially consistent fence;
   4. re-checks: a waiting creator re-checks rules 1 and 2; every worker checks the global queue.
-     If its scope completed, or if the global queue is non-empty and either it was the last awake
-     worker (the decrement returned 1) or it is not past its margin, it marks itself awake,
-     increments `awake` and goes back to work;
+     If its scope completed, or if the global queue is non-empty and it is not past its margin, it
+     wakes itself (the swap on its own state word, incrementing `awake` only if the swap
+     succeeds) and goes back to work. If the global queue is non-empty, it is past its margin and
+     it was the last awake worker (the decrement returned 1), it first hands the work off: it
+     looks for a worker asleep shallow and wakes it with the swap rule. If the swap succeeds, the
+     woken worker is counted awake and will take the work from its shallow stack; if it fails, the
+     worker was already woken and counted by another thread. Either way an awake worker exists
+     that will re-check the global queue before it next sleeps, and this worker continues to step
+     5. Only when no worker is asleep shallow does it wake itself and run the work past its
+     margin;
   5. otherwise waits on its parker for a change from the value read in step 2.
 
   A thread that publishes to the global queue pushes, issues a sequentially consistent fence, and
@@ -358,8 +373,14 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   at least one of them sees the other: either the sleeper sees the queued task in step 4, or the
   publisher sees `awake` at zero and wakes someone. A woken worker that is past its margin may go
   back to sleep only under the same steps, so the last awake worker never leaves queued work.
-  The waker, not the woken worker, increments `awake`, so the count is never low while a woken
-  worker is still starting.
+  The thread whose swap succeeds increments `awake` before it changes the woken worker's parker,
+  so the count is never low while a woken worker is still starting, and never counts one wake
+  twice. The hand-off keeps the invariant: the deep worker's own decrement happened before it
+  wakes the shallow worker, and the shallow worker is counted awake by the successful swap before
+  the deep worker waits, so from then on an awake worker exists for the queued work; in the short
+  window between the two, a concurrent publisher reads `awake` as zero and wakes another worker,
+  which only adds parallelism. If the shallow worker was waking itself at the same moment, exactly
+  one of the two swaps succeeds and only that one counts it.
   On native platforms a parker wait is `std::atomic::wait`; in the editor Wasm build that reaches
   `emscripten_futex_wait`, which the build wraps (`-Wl,--wrap=emscripten_futex_wait`) for the
   GPU-owning application pthread. The wrapper passes every other thread straight to the real
@@ -411,12 +432,13 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   - Parker storage for threads that are not workers is lookup-keyed per scheduler: each thread
     keeps a small thread-local map from a scheduler's unique generation number (not its address,
     which could be reused) to its parker slot. When such a thread exits, a thread-local destructor
-    returns the slot to the scheduler's free list. No scope of that thread can be live then, since
-    scopes live in the thread's frames. A finisher that read the parker before the slot was reused
-    can still change it, which gives the slot's next owner one spurious wake; every wake is
-    followed by a re-check, so that is harmless. Storage is therefore bounded by the largest number
-    of non-worker threads that hold the scheduler's scopes at the same time, and is freed when the
-    scheduler is destroyed, after it has joined every worker.
+    returns the slot to the scheduler's free list. A scope that a coroutine created on that
+    thread can still be live after the thread exits, if the coroutine was resumed elsewhere, and a
+    finisher that read the parker before the slot was reused can still change it. Either way the
+    slot's next owner gets one spurious wake: parker storage is stable until the scheduler is
+    destroyed, and every wake is followed by a re-check, so that is harmless. Storage is therefore
+    bounded by the largest number of non-worker threads that hold the scheduler's scopes at the same
+    time, and is freed when the scheduler is destroyed, after it has joined every worker.
 
   The injected-delay tests cover a delay between a creator's re-check and its parker wait, between
   a push to the global queue and the publisher's read of `awake`, between a sleeper's decrement
@@ -430,6 +452,12 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     above the watermark: rule 1 runs the child; recursion depth is the program's own nesting.
   - Every worker past its margin with work queued: exactly one worker, the last awake, runs it,
     asserted by a counter of tasks run past the margin.
+  - The last awake worker past its margin with work queued and another worker asleep shallow: the
+    shallow worker runs the work and the counter of tasks run past the margin stays at zero.
+  - A sleeper's self-wake racing a publisher's wake of the same worker: `awake` ends equal to the
+    number of workers not asleep. The injected-delay test delays the sleeper between its step 4
+    decision and its swap, and must be observed red with an unconditional increment (`awake`
+    stays one too high, and a later schedule with every worker asleep leaves a task unrun).
   - Two workers past the margin, each holding the other's scope's flat task below its own
     watermark: both drain into the global queue and the last awake worker runs both tasks.
   - A coroutine-joined scope whose task is drained into the global queue while every worker is
@@ -462,6 +490,18 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   (one flat scope, an explicit heap stack for the inline part of a subtree, `trySpawn` with the
   heap stack as the fallback), so each help by a style task adds one frame (0072 Milestone D3
   measures it at the parser's nesting limit).
+
+  The hand-off in the sleep steps keeps most past-margin work off deep stacks, but not all of it.
+  When every other worker is asleep past its margin, the last awake worker runs queued work on
+  its own deep stack, and if that work is a task that waits, it can run another queued task on top
+  of it, and so on: depth is then bounded by how many waiting tasks are queued at the same time,
+  not by any one program's nesting. If several clients whose tasks wait share one scheduler and
+  every worker is past its margin, that depth can exceed a worker stack. The stack-floor check then
+  stops the process with a named release assertion. That is a clean, diagnosable crash, not a
+  recovery. Style alone cannot reach it, because style tasks never wait. A client whose tasks wait
+  must declare so, and the scheduler's owner checks, before letting such clients share a
+  scheduler, that the worker stack size exceeds the sum of the declared stack bounds those clients'
+  waiting tasks can stack on one worker, or gives them separate schedulers.
 - **Non-worker waits.** A thread that is not a worker (the render worker holding document access,
   for example) is not counted in `awake` and never runs tasks while workers exist: its spawns go
   to the global queue with the publish protocol, and when it waits it re-checks its scope's counter
@@ -483,7 +523,8 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   orders, not steals: the deque's compare-and-swap race and real interleavings never happen in
   this mode, and are covered by the stress tests at real worker counts and by ThreadSanitizer.
 - **Shutdown.** The destructor asserts no scope is live (`UTILS_RELEASE_ASSERT`), sets the stop
-  flag, wakes every worker and joins them. A coroutine suspended on `schedule()` after destruction
+  flag, wakes every worker with the same swap rule (so `awake` stays exact until the end) and
+  joins them. A coroutine suspended on `schedule()` after destruction
   began is a programming error caught by the same assertion.
 - **Nested parallelism.** Scopes nest freely; nested work goes to the current worker's deque, so a
   nested parallel loop inside a task adds parallelism without adding threads.
@@ -552,9 +593,11 @@ clients that size work from documents.
 
 - **Bounded queues.** Total queued tasks are capped (`maxQueuedTasks`); past the cap work runs
   inline, so a client that spawns per document element cannot exhaust memory through the queues.
-- **No unbounded recursion.** Stealing while waiting stops at a stack margin, helping within a
-  wait follows the program's own nesting, coroutine chains use symmetric transfer, and
-  `ParallelFor` splits iteratively.
+- **Bounded recursion, or a named stop.** Helping past the margin is handed to a shallow worker
+  when one exists; otherwise the last awake worker stacks queued work, which for waiting tasks is
+  bounded by how many are queued at once, as described under worker stacks, and the stack-floor
+  check turns exhaustion into a named release assertion instead of an overflow. Coroutine chains
+  use symmetric transfer, and `ParallelFor` splits iteratively.
 - **Memory pressure.** Task slots come from per-worker free lists that are reused; frame-pool
   growth is charged to the scheduler's own counters and bounded; an allocation failure aborts, as
   everywhere in Donner.
