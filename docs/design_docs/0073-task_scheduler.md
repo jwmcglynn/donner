@@ -470,15 +470,21 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     joining every worker. When a thread exits, its thread-local destructor returns each slot to
     the pool its entry references and drops the reference, so the pool outlives every thread that
     holds one of its slots, and a scheduler destroyed first (one local to `main()`, destroyed
-    before the main thread's thread-local cleanup, for example) leaves nothing dangling. A lookup
-    that meets an entry whose pool is closed drops it, so entries for destroyed schedulers do not
-    accumulate. A scope that a coroutine created on that thread can still be live after the thread
-    exits, if the coroutine was resumed elsewhere, and a finisher that read the parker before the
-    slot was reused can still change it. Either way the slot's next owner gets one spurious wake:
-    slot storage is stable while any reference to the pool lives, and every wake is followed by a
-    re-check, so that is harmless. Storage is therefore bounded by the largest number of
-    non-worker threads that hold the scheduler's scopes at the same time, and is freed when the
-    scheduler and every thread that took a slot from it have released the pool.
+    before the main thread's thread-local cleanup, for example) leaves nothing dangling. A
+    long-lived thread that uses many schedulers in turn would never look up a destroyed
+    scheduler's generation again, so dropping closed entries only on lookup would keep every old
+    pool until thread exit. Instead, whenever a thread registers with a scheduler (its first
+    lookup for a new generation misses), it first sweeps its map and drops every entry whose pool
+    is closed. A closed pool has no live scope, so none of its slots is in use, and dropping the
+    entry releases the thread's reference. A thread therefore holds pools only for schedulers that
+    were open at its last registration, plus the one it registers with. A scope that a coroutine
+    created on that thread can still be live after the thread exits, if the coroutine was resumed
+    elsewhere, and a finisher that read the parker before the slot was reused can still change it.
+    Either way the slot's next owner gets one spurious wake: slot storage is stable while any
+    reference to the pool lives, and every wake is followed by a re-check, so that is harmless.
+    Storage is therefore bounded by the largest number of non-worker threads that hold the
+    scheduler's scopes at the same time, and is freed when the scheduler and every thread that took
+    a slot from it have released the pool.
 
   The injected-delay tests cover a delay between a creator's re-check and its parker wait, between
   a push to the global queue and the publisher's read of `awake`, between a sleeper's decrement
@@ -516,6 +522,10 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     on something else (the reported schedule): the last awake worker runs the task, the finisher
     enqueues the resumption, and the coroutine and every waiter blocked on it complete.
   - `co_await scope.join()` on a scope whose count is already zero does not suspend.
+  - One non-worker thread creating, using and destroying 1,000 schedulers in turn: after each
+    registration the number of live `ParkerPool` objects (a test-only counter) is at most 2, and
+    after the last scheduler is destroyed and the thread registers with a fresh one it is 1. Must
+    be observed red with the sweep removed (the count grows with the iteration count).
   - A scheduler destroyed before a non-worker thread that used it exits: the thread waits on a
     scope, the scheduler is destroyed, then the thread exits; and a small test binary whose
     `main()` creates a scheduler, waits on a scope from the main thread and destroys the
