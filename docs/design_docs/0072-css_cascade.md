@@ -1165,9 +1165,9 @@ be decremented, which would leave the filter's content depending on history rath
 when an insertion would saturate a counter, the filter is cleared and disabled (every probe
 answers "may contain") until synchronization pops back above the ancestor whose insertion
 saturated it, and then rebuilt from the chain. Saturation needs 255 live insertions into one
-counter, so it happens only on very deep chains of repeated keys. With that rule, whether the filter is
-enabled and what it contains are functions of E's ancestor chain alone, so the filter is correct
-in every traversal mode and makes the same decisions in the serial and parallel passes:
+counter, so it happens only on very deep chains of repeated keys. With that rule, whether the
+filter is enabled and what it contains are functions of E's ancestor chain alone, so the filter is
+correct in every traversal mode and makes the same decisions in the serial and parallel passes:
 
 - Full pass in storage order: consecutive elements usually share most of their chain, so the
   cost is the difference between two chains. A later change may visit in tree order to make it
