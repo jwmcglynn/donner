@@ -179,19 +179,9 @@ struct KnownViolation {
   std::string_view tracking;
 };
 
-// The size is deduced so that deleting an entry touches only that entry.
-constexpr auto kKnownViolations = std::to_array<KnownViolation>({
-    {
-        /*scene=*/"marker",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 6, 14},
-        /*reason=*/
-        "the markers use orient=\"auto\", and a marker's viewport clip turns with the marker, so "
-        "each turned placement draws under a clip polygon; no resident path draws under a clip "
-        "polygon, so those placements take the per-frame arena and build a bind group per draw",
-        /*tracking=*/"clears when draws under a clip polygon are resident",
-    },
-});
+// Every corpus scene meets the steady state, so the list is empty. A scene that falls off it is
+// listed as `std::to_array<KnownViolation>({...})`, whose size is deduced from its entries.
+constexpr std::array<KnownViolation, 0> kKnownViolations = {};
 
 const KnownViolation* findKnownViolation(std::string_view scene) {
   for (const KnownViolation& entry : kKnownViolations) {

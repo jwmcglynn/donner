@@ -2,13 +2,12 @@
 
 **Status:** Design. On an unchanged frame, resident solid, gradient and pattern fills and strokes,
 including painted text, re-encode, create and re-upload nothing, including the second and later
-draws of one entity in a frame such as marker placements and draws under a path clip mask, clip
-shapes fill their masks from cached, resident geometry, filter passes upload and bind nothing new,
-opacity, blend-mode, filter-result and `<mask>` composites and decoded images, also under a path
-clip mask, write and create nothing, and ordered batching draws runs of resident draws as
-instanced draws. Steady-state residency for draws under a clip polygon (among them turned marker
-placements) is still open (Milestone 8).
-`geode_counter_corpus_tests` records the corpus scenes measured to miss the steady state.
+draws of one entity in a frame such as marker placements, turned ones among them, and draws under
+a path clip mask or a clip polygon, clip shapes fill their masks from cached, resident geometry,
+filter passes upload and bind nothing new, opacity, blend-mode, filter-result and `<mask>`
+composites and decoded images, also under a path clip mask, write and create nothing, and ordered
+batching draws runs of resident draws as instanced draws. `geode_counter_corpus_tests` gates
+the steady state on every corpus scene, and none is listed as missing it.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 
@@ -56,10 +55,9 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 
 ## Next Steps
 
-- Start the remaining Milestone 8 item: residency under a clip polygon (8.9).
-- Each item deletes the `kKnownViolations` entries it clears from
-  `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
-  `GeodePerf_tests.cc` case that fails before the change.
+- Every milestone is complete, and `kKnownViolations` in
+  `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` is empty. Next is the design-doc
+  finalization step: the developer documentation this design earned and the summary stub.
 
 ## Implementation Plan
 
@@ -194,10 +192,11 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     paints, join one instanced draw in painter order. Each instance carries a 256-byte record
     (`SlugFillInstance` in `donner/gpu/shader/programs/SlugFill.h`, mirrored by the shader's
     `InstanceRecord` in `SlugFillSource.h`) with its transform, paint, fill rule, and any
-    rectangular clip, which the fragment stage applies. Draws under a clip polygon, a clip mask,
-    or an open mask pass do not join a batch. The pending batch flushes at every state change it
-    cannot carry, including clip, layer, filter, and mask push and pop, pattern tiles, images,
-    text that cannot join it, and end of frame.
+    rectangular clip, which the fragment stage applies. Draws under a clip mask or an open mask pass
+    do not join a batch, and draws under a clip polygon join one only as same-frame repeats of a
+    resident slot, whose batch binds a uniform carrying the polygon (8.9). The pending batch flushes
+    at every state change it cannot carry, including clip, layer, filter, and mask push and pop,
+    pattern tiles, images, text that cannot join it, and end of frame.
     `kEnableSceneBatching` in `RendererGeode.cc` gates the feature and is on.
   - [x] Repeated `<use>` instances of one source draw as one instanced draw
     (`UseHeavy_BaselineCeilings` asserts `drawCalls == 1`). Lion's 132 paths draw as one batch
@@ -212,7 +211,7 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     does not compare GPU output with a TinySkia image.
   - [x] Snapshot unpremultiplication runs as a GPU compute pass (`SnapshotUnpremultiply`) where
     the target format allows it (`GpuAndCpuPathsAreByteIdentical`).
-- [ ] Milestone 8: Steady-state residency for the remaining draw classes. Each item removes one
+- [x] Milestone 8: Steady-state residency for the remaining draw classes. Each item removes one
   cause of the named `kKnownViolations` entries in `geode_counter_corpus_tests`; an entry is
   deleted once every item it names has landed. Every entry listed here misses the steady state in
   the shipping configuration, with ordered batching on.
@@ -233,16 +232,15 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     resident geometry and joins ordered batches. The record's existing transform, paint, and clip
     rectangle carry the placement, so the `SlugFillInstance` layout is unchanged.
     `MarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame for placements whose
-    marker viewport clip is an axis-aligned rectangle. A turned placement (`orient="auto"`) is not
-    resident: a marker's viewport clip turns with the marker, so it reaches the renderer as a clip
-    polygon, under which no draw is resident (8.9). `marker` stays listed for that reason, and
-    `RotatedClippedMarkerPlacementsMatchSinglePlacementMarkers` covers those placements' pixels.
-    `marker_segments` and `marker_spec_example` put `opacity` on the marker content, so each
-    placement also composites an isolated layer; they clear with 8.3. Repeats of other entities
-    hold the steady state the same way, each stroke variant of a path keeping its own records:
-    `image_external_svg_par` and `image_external_svg_viewbox`, which draw one external SVG's paths
-    twice per frame, clear here, and with 8.1 so do `poker_chips`, `stroking_complex`, and
-    `nested_svg_aspectratio` (`UseStrokeStylesRepeated_SecondFrameIsSteadyState`).
+    marker viewport clip is an axis-aligned rectangle. A turned placement (`orient="auto"`) turns
+    its viewport clip with it, which then reaches the renderer as a clip polygon; such placements
+    are resident through 8.9. `marker_segments` and `marker_spec_example` put `opacity` on the
+    marker content, so each placement also composites an isolated layer; they clear with 8.3.
+    Repeats of other entities hold the steady state the same way, each stroke variant of a path
+    keeping its own records: `image_external_svg_par` and `image_external_svg_viewbox`, which draw
+    one external SVG's paths twice per frame, clear here, and with 8.1 so do `poker_chips`,
+    `stroking_complex`, and `nested_svg_aspectratio`
+    (`UseStrokeStylesRepeated_SecondFrameIsSteadyState`).
   - [x] 8.3: Isolated-layer and filter-result composites. Each opacity or blend-mode composite,
     and each composite of a filter result, keeps a uniform buffer and a bind group across frames
     (`GeodeTextureEncoder::RetainedQuadBinding`), indexed by draw order within the frame, with
@@ -445,11 +443,10 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     - Clipped draws. A solid, gradient or pattern fill or stroke under a path clip mask stays
       resident. Its uniform carries the clip flag exactly as the arena draw's does, and its cached
       bind group binds the mask's view (`GeodeResidentSlot::boundClipMaskView`), rebuilt when the
-      draw is clipped by another view (`ResidentClippedDrawsMatchTheArenaDraws`). A clip polygon or
-      an open mask pass still takes the arena, also together with a clip mask: residence under a
-      clip polygon is 8.9, which this item does not cover. A same-frame repeat of a slot under a
-      clip mask takes the arena too, since repeat records are not written under any clip state; the
-      arena draw binds the same mask and carries the same clip flag.
+      draw is clipped by another view (`ResidentClippedDrawsMatchTheArenaDraws`). A draw under a
+      clip polygon as well stays resident (8.9). An open mask pass still takes the arena. A
+      same-frame repeat of a slot under a clip mask takes the arena too, since a repeat's batch
+      binds no clip mask; the arena draw binds the same mask and carries the same clip flag.
     - Composites. A `<mask>` composites its content through its mask with a retained quad binding
       (8.3) claimed when the mask is popped, in a fourth sequence beside the layer, filter-result
       and image sequences; the binding views the content and the mask texture and keys its bind
@@ -571,12 +568,61 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
     (`strokeOutlineFlattens`, which no gate checks). Clears `geode_text_decoration_underline`,
     `geode_text_pattern_fill`, `geode_text_span_gradient_over_pattern`,
     `geode_text_span_gradient_over_pattern_stroke`.
-  - [ ] 8.9: Residency under a clip polygon. A clip polygon reaches the shader only through the
-    draw-level uniform, and no resident path writes one: a slot's solo resident draw
-    (`GeoEncoder::submitResidentOrArenaFill`) and a repeat's record (`tryAppendRepeatDraw`) both
-    fall back to the per-frame arena while a clip polygon is active. A turned marker placement
-    draws under one, because its viewport clip turns with it. Clears `marker`. Tracked in #2644
-    (Geode draws under a clip polygon are never resident).
+  - [x] 8.9: Residency under a clip polygon. A rectangle clip under a transform that does not keep
+    it axis-aligned, such as a turned marker's viewport or a rotated nested `<svg>`, reaches the
+    shader as a clip polygon: four planes that only the draw-level uniform carries, while an
+    instance record carries an axis-aligned clip rectangle. Neither the uniform, the record nor
+    the bind group layout changes.
+    - Solo draws. A solid, pattern or gradient fill or stroke drawn once in a frame under a polygon
+      stays resident: its slot's uniform holds the planes exactly as the arena draw's uniform does,
+      and is written only when its bytes change, as for any resident draw
+      (`ClipPolygonSoloDraws_UnchangedFrameWritesAndCreatesNothing`), and paints what the arena
+      paints where the polygon cuts it (`ClipPolygonResidentDrawsMatchTheArenaDraws`, which covers
+      the repeats below too). Only an open mask pass still sends such a draw to the arena.
+    - Repeats. A same-frame repeat of a resident slot under a polygon, such as each turned placement
+      of a marker's content after the first, takes its persistent record as in 8.2 and also a
+      batch-level uniform of its own, kept on its occurrence (`GeodeClipUniform`, published by
+      `GeoEncoder::publishOccurrenceClipUniform`): the shared batch uniform's bytes with the
+      polygon's planes, written only when they change. The ordered batch the repeat opens binds
+      that uniform in place of the shared one. A batch never spans a clip change, so its instances
+      share one polygon; a pending first draw under a polygon is flushed as a solo draw rather than
+      joined. `TurnedMarkerInstances_SecondFrameIsSteadyState` asserts the unchanged frame, and
+      `RotatedClippedMarkerPlacementsMatchSinglePlacementMarkers` that it draws what single
+      placements draw. A gradient repeat, a repeat under a clip mask, and a repeat that cannot keep
+      a persistent occurrence (past the record cap, or in an offscreen pass inside an open frame
+      that wrote the records) still draw through the arena.
+    - Invalidation. Every draw rebuilds its uniform bytes from the encoder's clip state and
+      compares them with the copy kept on its slot or occurrence, so an edit that moves, turns,
+      skews, resizes, straightens or zooms the polygon, or a new surface transform, rewrites exactly
+      the uniforms it changes (`ClipPolygonDrawsFollowEveryEditOfThePolygon`,
+      `ClipPolygonUniformsFollowTheSurfaceTransform`; the turned fixture of
+      `MarkerPlacementsFollowEveryEditThatMovesOrRepaintsThem`, whose `marker_width`,
+      `marker_height` and `marker_view_box` edits change the clip rectangle and whose
+      `marker_orient_switches` edit turns placements, straightens them and turns them again).
+      An occurrence drawn without a polygon binds the shared batch uniform and keeps its clip
+      uniform for the next time it draws under one.
+    - Lifetime. A clip uniform is a range of the repeated slot's geometry slab on the drawing
+      device. It goes with the occurrence's records: with the slot's residence component, with
+      the device's slots, or with the document
+      (`TurnedMarkerClipUniformsAreChargedAndGoWithTheDocument`,
+      `TurnedMarkerClipUniformsGoWithTheContentAndTheDevice`), through the slab's free at its next
+      frame boundary, so a batch recorded in an open frame still reads it.
+    - Accounting. Each clip uniform takes 512 bytes of the geometry slab, whose chunks are charged
+      to the document's resident budget, and a 448-byte CPU copy plus its bookkeeping, charged with
+      the occurrence's other CPU bytes to the document's cache budget; at most one per repeat
+      occurrence, 4096 per slot. A repeat whose clip uniform the budget refuses draws through the
+      arena and renders the same (`TurnedMarkerRepeatsFallBackWhenTheDocumentRefusesClipUniforms`).
+    - Snapshot replay. A replayed snapshot's paths carry no source entity, so its draws keep no
+      slots, records or clip uniforms on the document
+      (`ConcurrentDomReplayKeepsNoClipUniformOnTheDocument`,
+      `ClipPolygonSnapshotsHoldNoLiveReference`). Direct draws of the live document, the
+      interruptible draw and the compositor's layer rasterization keep them.
+    - Limit. Each placement under its own polygon is a batch of its own, whose bind group is found
+      in the device's scene-batch bind-group cache (256 entries, first in first out), so a frame
+      with more distinct batches than that rebuilds bind groups every frame, as it does for any
+      batches.
+    - Clears `marker`, whose 14 turned repeat placements were all of its 14 bind groups and, through
+      the per-frame arenas, its 6 buffer writes on an unchanged frame.
 
 ## Background
 
@@ -662,9 +708,10 @@ Entity with <path d="...">
   covered: a warm renderer keeps a marker's old context paint after the context element's paint
   changes (#2617), and setting a pattern's `width` with `setAttribute` does not reach the tile
   (#2616).
-- **Residency gates.** Residence is taken only when no clip polygon or mask pass is active. A
-  draw under a path clip mask is resident and binds the mask's view, which the renderer keeps
-  across frames. Draws that fail a gate use the per-frame arena path.
+- **Residency gates.** Residence is taken only when no mask pass is active. A draw under a path
+  clip mask is resident and binds the mask's view, which the renderer keeps across frames; a draw
+  under a clip polygon is resident and its uniform carries the polygon. Draws that fail a gate use
+  the per-frame arena path.
 - **Repeats within a frame.** A slot's uniform and primary record serve its first draw of a frame.
   Its second and later draws in the frame (each marker placement, a repeated `<use>` source) take
   persistent records from `GeodeResidentSlot::repeatRecords`: the `i`-th repeat writes record `i`,
@@ -677,23 +724,24 @@ Entity with <path d="...">
   Repeats past that, or refused by the budget, write a record that lives for one frame, and repeats
   that cannot have even that draw through the arena
   (`MarkerRepeatsPastTheRecordLimitDrawTheSamePicture`,
-  `MarkerRepeatsFallBackWhenTheDocumentRefusesTheirRecords`). An offscreen pass inside an open
-  frame that already wrote a slot's records takes one-frame records instead
+  `MarkerRepeatsFallBackWhenTheDocumentRefusesTheirRecords`). A repeat under a clip polygon also
+  keeps a batch-level uniform carrying the polygon on its occurrence (8.9). An offscreen pass inside
+  an open frame that already wrote a slot's records takes one-frame records instead
   (`OffscreenPassLeavesTheOuterFramesRepeatRecordsAlone`). Gradient-painted repeats keep the arena
-  path, because a gradient's parameters live in the slot's single paint block; pattern-painted
-  draws take their own resident path and keep no repeat records. Only the solid fill and solid
-  stroke slots hold repeat records: per path and device, two fill slots and eight stroke slots, a
-  bound fixed by the slot arrays rather than by a test, so a path retains under about 30 MiB of
-  repeat records, all charged to the document's geometry budget. The records are kept at each
-  slot's high-water mark and reused: a slot reset for new geometry, including a replaced stroke or
-  fill variant, keeps its records (structural: `reset()` leaves them in place), and they are
-  released only when the path's residence component is removed
+  path, because a gradient's parameters live in the slot's single paint block; pattern-painted draws
+  take their own resident path and keep no repeat records. Only the solid fill and solid stroke
+  slots hold repeat records: per path and device, two fill slots and eight stroke slots, a bound
+  fixed by the slot arrays rather than by a test, so a path retains under about 30 MiB of repeat
+  records, all charged to the document's geometry budget. The records are kept at each slot's
+  high-water mark and reused: a slot reset for new geometry, including a replaced stroke or fill
+  variant, keeps its records (structural: `reset()` leaves them in place), and they are released
+  only when the path's residence component is removed
   (`MarkerRepeatRecordsAreReplacedWhenTheContentChanges`), when the device is dropped
   (`MarkerRepeatRecordsGoWithTheDeviceThatKeptThem`), or with the document
-  (`MarkerRepeatRecordsAreKeptAcrossFramesAndGoWithTheDocument`). Repeat detection keys on the
-  slot itself, so a draw of another slot of the same path, such as a stroke after its own pending
-  fill, is a first draw (`ADrawOfAnotherSlotOfThePathIsNotARepeat`), and each stroke variant counts
-  its own repeats (`EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats`).
+  (`MarkerRepeatRecordsAreKeptAcrossFramesAndGoWithTheDocument`). Repeat detection keys on the slot
+  itself, so a draw of another slot of the same path, such as a stroke after its own pending fill,
+  is a first draw (`ADrawOfAnotherSlotOfThePathIsNotARepeat`), and each stroke variant counts its
+  own repeats (`EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats`).
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
   order.
@@ -708,8 +756,9 @@ Entity with <path d="...">
 - **Invalidation.** Path geometry invalidates through `on_update<ComputedPathComponent>`, which
   fires only when `ShapeSystem` changes the geometry; no separate dirty flag is involved.
 - **Uniform storage.** Resident slots hold their own uniforms, including each clip shape's mask
-  uniform, and each isolated-layer or filter-result composite and each blit of a kept image texture
-  keeps a uniform buffer and bind group of its own across frames. Per-frame draws bump-allocate
+  uniform, each repeat drawn under a clip polygon keeps a batch-level uniform in its slot's slab,
+  and each isolated-layer or filter-result composite and each blit of a kept image texture keeps a
+  uniform buffer and bind group of its own across frames. Per-frame draws bump-allocate
   from per-encoder arenas, other image blits from the encoder's uniform scratch, and filter passes
   from the filter engine's scratch blocks, which skip uploading a slot that already holds the same
   bytes. Nothing uses a uniform ring or dynamic offsets.
@@ -747,9 +796,9 @@ Steady-state invariants on an unchanged second frame, asserted per corpus scene:
 - `bufferWrites == 0`: resident geometry and unchanged uniforms are not re-uploaded.
 - `bindgroupCreates <= 6`: bind groups are cached per slot and per batch, not built per draw.
 
-`kKnownViolations` lists the corpus scenes measured to miss one or more of these, all of them
-covered by Milestone 8. An entry names the counters it breaks and their measured values. The list
-gates only the built configuration, which always compiles in ordered batching.
+`kKnownViolations` lists the corpus scenes measured to miss one or more of these, and is empty:
+every corpus scene holds them. An entry names the counters it breaks and their measured values. The
+list gates only the built configuration, which always compiles in ordered batching.
 
 ## Testing and Validation
 

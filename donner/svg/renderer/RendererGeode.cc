@@ -5286,6 +5286,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// Encoder clip-state version at the batch's first append. A batch
     /// never spans a clip change (one draw carries one clip state).
     uint64_t sceneClipVersion = 0;
+    /// The uniform a batch of repeats drawn under a clip polygon binds, which
+    /// carries the polygon; no value for every other batch, which binds the
+    /// shared batch uniform.
+    std::optional<geode::GeoEncoder::ClipUniformBinding> sceneClipUniform;
     /// GPU-residence slot for the encode this batch started on - the source
     /// entity's fill slot for a fill, its stroke slot for a stroked outline.
     /// Used only by the size-1 flush path; a size >= 2 flush routes through
@@ -6270,10 +6274,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// The cap in force; tests may lower it.
   std::size_t repeatRecordLimit = kMaxRepeatOccurrencesPerSlot;
 
+  /// The next persistent repeat occurrence of \p slot in this frame, appended to \p records when
+  /// the frame has used every one it holds and the cap allows another; null when none can be had.
+  geode::GeodeOccurrenceRecords::Occurrence* nextPersistentOccurrence(
+      geode::GeodeResidentSlot& slot, geode::GeodeOccurrenceRecords& records, Registry& registry) {
+    auto& occurrences = records.occurrences;
+    if (slot.nextRepeatOccurrence == occurrences.size() && occurrences.size() < repeatRecordLimit) {
+      appendOccurrence(records, registry);
+    }
+    if (slot.nextRepeatOccurrence >= occurrences.size()) {
+      return nullptr;
+    }
+    return occurrences[slot.nextRepeatOccurrence++].get();
+  }
+
   /// Record storage for a second or later draw of \p slot in this frame: the
   /// slot's next persistent repeat record, or a per-frame temporary when the
   /// persistent set is full, refused, or still read by another open frame.
-  /// Leaves \p outSlot null when no record can be had at all.
+  /// Leaves \p outSlot null when no record can be had at all, and when
+  /// \p outOccurrence is given and only a temporary could be had.
   ///
   /// Repeats of a slot arrive in the same order on every unchanged frame, so
   /// the `i`-th repeat keeps writing record `i` and its compare-before-write
@@ -6281,11 +6300,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// vertices, a stroke-width change under `markerUnits="strokeWidth"`, the
   /// marker's attributes, a context paint - changes its record bytes and so
   /// rewrites exactly the records that changed.
+  /// @param outOccurrence When non-null, receives the persistent occurrence the
+  ///   record belongs to; such a caller takes no temporary record.
   void nextRepeatRecord(geode::GeodeResidentSlot& slot, Registry& registry,
                         const geode::GeodeRecordSlab::Slot*& outSlot,
-                        std::vector<uint8_t>*& outCache) {
+                        std::vector<uint8_t>*& outCache,
+                        geode::GeodeOccurrenceRecords::Occurrence** outOccurrence = nullptr) {
     outSlot = nullptr;
     outCache = nullptr;
+    if (outOccurrence != nullptr) {
+      *outOccurrence = nullptr;
+    }
     // The repeat's record is published through `slot.recordSlab`, so the records come from that
     // same slab: wiring the slot first makes the two one object by construction.
     if (!ensureRecordSlot(slot, registry)) {
@@ -6313,18 +6338,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         slot.nextRepeatOccurrence = 0;
       }
     }
-    if (persistent) {
-      auto& occurrences = records.occurrences;
-      if (slot.nextRepeatOccurrence == occurrences.size() &&
-          occurrences.size() < repeatRecordLimit) {
-        appendOccurrence(records, registry);
+    if (geode::GeodeOccurrenceRecords::Occurrence* occurrence =
+            persistent ? nextPersistentOccurrence(slot, records, registry) : nullptr) {
+      outSlot = &occurrence->slot;
+      outCache = &occurrence->lastRecord;
+      if (outOccurrence != nullptr) {
+        *outOccurrence = occurrence;
       }
-      if (slot.nextRepeatOccurrence < occurrences.size()) {
-        outSlot = &occurrences[slot.nextRepeatOccurrence]->slot;
-        outCache = &occurrences[slot.nextRepeatOccurrence]->lastRecord;
-        ++slot.nextRepeatOccurrence;
-        return;
-      }
+      return;
+    }
+    if (outOccurrence != nullptr) {
+      return;
     }
     outSlot = allocateTempRecordSlot(slab, &outCache);
   }
@@ -6344,13 +6368,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// serve only its first draw of the frame, so without this a repeat falls back to the per-frame
   /// arena: alone, or through the instanced append, whose instances are arena data too. Gradient
   /// paint lives in the slot's single paint block, so a gradient repeat keeps the existing paths.
-  /// The target-state guards are the ordered batch's own.
+  /// The target-state guards are the ordered batch's own, except that a repeat also draws under a
+  /// clip polygon, through a uniform its occurrence keeps (see `tryAppendRepeatInstance`).
   /// @return True when the draw was taken.
   bool tryAppendRepeatDraw(Registry* sourceRegistry, const geode::EncodedPath* encoded,
                            geode::GeodeResidentSlot* residentSlot, const Path& path,
                            const geode::GeoEncoder::ScenePaint& paint, FillRule rule) {
     if (!kEnableSceneBatching || paint.isGradient() || residentSlot == nullptr ||
-        encoded == nullptr || sourceRegistry == nullptr || encoder->hasActiveClipState() ||
+        encoded == nullptr || sourceRegistry == nullptr || encoder->hasActiveClipMask() ||
         encoder->hasOpenMaskPass() || !isRepeatDraw(*residentSlot)) {
       return false;
     }
@@ -6367,14 +6392,31 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// every later one owns a distinct record, so no record a recorded draw reads
   /// is rewritten later in the frame and painter order is the order of the
   /// records in each batch, as for any other ordered batch.
+  ///
+  /// A clip polygon reaches the shader only through the batch-level uniform,
+  /// not the record, so a repeat under one also takes a uniform of its own,
+  /// kept on its persistent occurrence and rewritten only when its polygon
+  /// changes. A repeat that cannot have both, such as one past the record cap,
+  /// is not taken here.
   bool tryAppendRepeatInstance(Registry& registry, const geode::EncodedPath& encoded,
                                geode::GeodeResidentSlot& slot, const Path& path,
                                const css::RGBA& color, FillRule rule) {
+    const bool underClipPolygon = encoder->hasClipPolygon();
     const geode::GeodeRecordSlab::Slot* recordSlot = nullptr;
     std::vector<uint8_t>* recordCache = nullptr;
-    nextRepeatRecord(slot, registry, recordSlot, recordCache);
+    geode::GeodeOccurrenceRecords::Occurrence* occurrence = nullptr;
+    nextRepeatRecord(slot, registry, recordSlot, recordCache,
+                     underClipPolygon ? &occurrence : nullptr);
     if (recordSlot == nullptr) {
       return false;
+    }
+    std::optional<geode::GeoEncoder::ClipUniformBinding> clipUniform;
+    if (underClipPolygon) {
+      clipUniform =
+          encoder->publishOccurrenceClipUniform(*slot.repeatRecords, *occurrence, slot.slab);
+      if (!clipUniform.has_value()) {
+        return false;
+      }
     }
     const uint64_t clipVersion = encoder->clipStateVersion();
     settlePendingSingletonForRepeat(clipVersion);
@@ -6388,7 +6430,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         PendingBatch::SceneInstance{&slot, &encoded, &path, color, rule, deviceFromLocalTransform,
                                     encoded.boundingDrawVertexCount(), recordSlot, recordCache,
                                     recordState},
-        *recordSlot, clipVersion);
+        *recordSlot, clipVersion, clipUniform);
     slot.lastSceneFrame = currentFrameIndex;
     return true;
   }
@@ -6396,14 +6438,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Before a repeat joins a batch: a pending singleton, typically the repeated slot's own first
   /// draw, becomes the first instance of a scene batch, so a run of repeats still draws as one
   /// batch. One that cannot convert is flushed now, taking its solo resident path before the repeat
-  /// claims the slot.
+  /// claims the slot. Under a clip polygon a singleton is always flushed: it has no occurrence to
+  /// keep the polygon's uniform on, and its solo resident draw carries the polygon itself.
   /// @param clipVersion Encoder clip-state version of the repeat.
   void settlePendingSingletonForRepeat(uint64_t clipVersion) {
     if (!pendingBatch.has_value() || pendingBatch->mode != PendingBatch::Mode::SameEntity) {
       return;
     }
     if (pendingBatch->deviceFromLocalTransforms.size() != 1 ||
-        pendingBatch->sameEntityClipVersion != clipVersion ||
+        pendingBatch->sameEntityClipVersion != clipVersion || encoder->hasClipPolygon() ||
         !convertPendingSingletonToScene(clipVersion)) {
       flushPendingBatch();
     }
@@ -6414,14 +6457,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// @param instance Instance whose record and geometry are already ensured.
   /// @param recordSlot Record slot \p instance draws from.
   /// @param clipVersion Encoder clip-state version of \p instance.
-  void appendOrOpenSceneBatch(const PendingBatch::SceneInstance& instance,
-                              const geode::GeodeRecordSlab::Slot& recordSlot,
-                              uint64_t clipVersion) {
+  /// @param clipUniform Uniform \p instance published for the clip polygon it is drawn under, or
+  ///   no value when none is active. Instances under one clip state publish identical bytes, so
+  ///   a batch binds the uniform of the instance that opened it.
+  void appendOrOpenSceneBatch(
+      const PendingBatch::SceneInstance& instance, const geode::GeodeRecordSlab::Slot& recordSlot,
+      uint64_t clipVersion,
+      const std::optional<geode::GeoEncoder::ClipUniformBinding>& clipUniform) {
     const uint64_t chunkId = instance.slot->bufferId;
     if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene &&
         pendingBatch->sceneChunkBufferId == chunkId &&
         pendingBatch->sceneRecordBufferId == recordSlot.bufferId &&
         pendingBatch->sceneClipVersion == clipVersion &&
+        pendingBatch->sceneClipUniform.has_value() == clipUniform.has_value() &&
         pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
             recordSlot.index) {
       pendingBatch->sceneInstances.push_back(instance);
@@ -6441,6 +6489,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     pendingBatch->sceneFirstInstance = recordSlot.index;
     pendingBatch->sceneFirstRecordOffset = recordSlot.offset;
     pendingBatch->sceneClipVersion = clipVersion;
+    pendingBatch->sceneClipUniform = clipUniform;
     pendingBatch->sceneVertexCount = instance.vertexCount;
     pendingBatch->sceneInstances.push_back(instance);
   }
@@ -7276,6 +7325,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       binding.recordSlab = batch.sceneInstances.front().slot != nullptr
                                ? batch.sceneInstances.front().slot->recordSlab.get()
                                : nullptr;
+      binding.clipUniform = batch.sceneClipUniform;
 
       // The batched entry points read colour and fill rule from each instance's
       // record, so these two only populate the draw-level uniform the batched
