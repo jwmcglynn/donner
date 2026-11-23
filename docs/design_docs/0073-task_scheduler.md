@@ -80,7 +80,7 @@ Estimates are engineering days, including tests and review fixes.
   - [ ] Chase-Lev deque with the memory orders of Le et al. and old-array reclamation,
         per-worker deques, a bounded injection queue for closures and an intrusive resumption list
         for coroutines, random-victim stealing, help-while-waiting joins with scope watermarks,
-        per-scope shared queues and epoch words, drain before sleep, `trySpawn`,
+        per-scope shared queues, per-thread parker words, drain before sleep, `trySpawn`,
         event-count sleep and wake, cross-thread slot return, `TaskScope` and `Join`, zero-worker
         inline mode.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
@@ -336,15 +336,38 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   allocation and cannot overflow. It receives spawns from a creator that is not a worker and tasks
   moved there by the drain step below. Idle workers take work from their own deque, then from
   scopes' shared queues and the injection queue, then by stealing.
-- **Scope state word.** Each scope has one atomic epoch word. It is incremented, after the change
-  it announces, whenever the scope's counter reaches zero and whenever a task is put into the
-  scope's shared queue, and the incrementing thread then notifies waiters on it. A creator that
-  is about to sleep reads the epoch, re-checks rules 1 and 2 below, and only then calls
-  `epoch.wait(read value)`. If the change happened before the read, the re-check sees it; if after,
-  the value differs and the wait returns at once. A notify that did not change a waited-on word
-  would let `std::atomic::wait` block again, so nothing wakes a creator except a change to this
-  word. The injected-delay tests cover a delay between the re-check and the wait, and between the
-  change and the increment, each observed red with the increment moved before the change.
+- **Parker words and scope lifetime.** A scope lives in its creator's frame and is destroyed as
+  soon as its creator sees it complete, so no thread may touch the scope after the change that
+  lets the creator return. Sleeping therefore does not happen on a word inside the scope. Every
+  thread that can create a scope (each worker, and each other thread when it first creates one)
+  owns a parker: an atomic epoch word that lives as long as the thread or the scheduler, whichever
+  is shorter. A scope records its creator's parker when it is constructed. The rules:
+
+  - A finishing task reads the creator's parker pointer from the scope, then decrements the
+    scope's counter with release ordering. That decrement is its last access to the scope: if it
+    reached zero the creator may return and destroy the scope at once. Only then does the finisher
+    increment the parker and notify it, touching only the parker.
+  - A task is put into a scope's shared queue (by a non-worker creator's spawn or by the drain
+    step) only while that task is unfinished, so the counter cannot reach zero and the scope cannot
+    complete while the move runs. The mover reads the parker, publishes the task, leaves the
+    scope, and then increments and notifies the parker.
+  - A `co_await scope.join()` registers its coroutine handle in the scope and sets a flag in the
+    counter word with one compare-and-swap; the finisher whose decrement reaches zero sees the flag
+    in the value it replaced and resumes the handle. The scope cannot be destroyed in between,
+    because the scope's creator is that suspended coroutine.
+  - A creator about to sleep reads its parker value, re-checks rules 1 and 2 below (the counter
+    with acquire ordering), and only then calls `parker.wait(read value)`. If an event happened
+    before the read, the re-check sees it; if after, the value differs and the wait returns at
+    once. A notify without a change would let `std::atomic::wait` block again, so every wake is a
+    change of the parker. Because a parker is per thread, a creator waiting on an inner scope can
+    also be woken by an event for one of its outer scopes; it re-checks its current scope's rules
+    and sleeps again, which costs a spurious wake and nothing more.
+
+  The injected-delay tests cover a delay between a creator's re-check and its parker wait, between
+  a move and the parker increment, and between the final decrement and the parker increment with
+  the creator returning and destroying the scope at once; that last test runs under
+  AddressSanitizer and ThreadSanitizer and must be observed red with the epoch word placed inside
+  the scope before it counts.
 - **Waiting.** Only a scope's creator waits on it. While it waits it applies, in order:
 
   1. If its deque holds an entry above the scope's watermark, or the scope's shared queue is not
@@ -353,9 +376,11 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   3. Otherwise steal unrelated work while the stack has more than the margin left (checked
      against the stack pointer). Past the margin, or when there is nothing to steal, drain and
      sleep: move every entry still on its own deque, all of which are below its watermark, into
-     the shared queue of the scope each entry belongs to (incrementing that scope's epoch), then
-     sleep on this scope's epoch with the protocol above, and start again at rule 1 when it
-     changes.
+     the shared queue of the scope each entry belongs to (waking that scope's creator through its
+     parker), then sleep on its own parker with the protocol above, and start again at rule 1 when
+     it changes. Draining removes entries with the owner's Chase-Lev `take`, including its
+     compare-and-swap on the last element, never by reading the array directly, so a thief racing
+     for the same entry gets it or loses it exactly once.
 
   A worker never runs a deque entry below its innermost live watermark; those entries leave only
   by being stolen from the top or moved by the drain step. An idle worker also drains before it
@@ -364,8 +389,10 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   **Liveness.** The invariant is that every queued task is either on the deque of a worker that is
   not asleep, or in its scope's shared queue, because no worker sleeps with a non-empty deque. A
   worker that is not asleep eventually runs, is robbed of, or drains each entry of its deque. A
-  task in a scope's shared queue is run by that scope's creator through rule 1, and the move
-  changed the epoch that creator sleeps on, so a sleeping creator wakes. A scope is waited on only
+  task in a scope's shared queue is run by that scope's creator through rule 1: if the creator is
+  waiting on that scope, the move changed its parker and it wakes; if it is waiting on an inner
+  scope of its own stack, it reaches that scope's rule 1 again once the inner waits complete,
+  which the induction below establishes for the deeper scopes first. A scope is waited on only
   by its creator and waits only for tasks it spawned and their descendants, so the waits-for
   relation is acyclic and finite. Take a waiting scope none of whose running tasks waits: its
   running tasks finish and its queued tasks are run or moved to where its creator runs them, so it
@@ -394,8 +421,18 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   **Skipping the wake on a push.** A worker pushing onto its own deque may skip the global event
   count, because it runs, loses to a thief, or drains that entry before it can sleep, so a missed
   wake costs parallelism only. Moves into a shared queue, pushes into the injection queue and
-  coroutine resumptions always take the fenced wake protocol, and moves also increment the scope's
-  epoch.
+  coroutine resumptions always take the fenced wake protocol, and moves also change the scope
+  creator's parker.
+
+  **Blocking inside tasks.** A worker that blocks inside a task on anything other than the
+  scheduler (a condition variable, an `std::atomic::wait` in client code, a lock held by a thread
+  that waits on scheduler work) sleeps with its deque possibly full, and nothing drains it, so the
+  liveness argument does not cover that case. The rule is therefore that tasks may block only
+  through the scheduler: `TaskScope::wait()`, the join and schedule awaitables, and `Join`. A short
+  critical section under a mutex is allowed when no holder of that mutex ever waits on scheduler
+  work while holding it. The rule is documented in the API, and debug builds check it where Donner
+  itself blocks: the per-thread in-task flag that the document access coordinator already checks
+  is also checked by Donner's own waiting helpers, which assert when called from a task.
 - **Worker stacks and the margin.** Workers are created with an explicit stack size (512 KiB by
   default, an option) instead of the platform default, which differs between platforms and
   toolchains. The margin limits only stealing, and a stolen task can come from any client, so the
@@ -413,8 +450,8 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   holding document access, for example) has no deque: its spawns go to its shared queue, with a
   fenced wake for idle workers. Flat spawns by its tasks running on workers go to those workers'
   deques as above. When that thread waits, it runs tasks from its scope's shared queue (rule 1),
-  never from the injection queue or another worker's deque, and sleeps on the scope's epoch when
-  that queue is empty and the counter is not zero. Drained tasks of its scope arrive in its shared
+  never from the injection queue or another worker's deque, and sleeps on its parker when that
+  queue is empty and the counter is not zero. Drained tasks of its scope arrive in its shared
   queue and wake it. Such a thread never runs another client's task while it holds a guard.
 - **Task storage.** A spawned closure is stored in a fixed-size slot (64 bytes inline, larger
   closures in a per-worker free list of blocks) so small tasks never call `malloc`. A slot is freed
@@ -517,7 +554,8 @@ clients that size work from documents.
   assertions, each at 0, 1 and 4 workers and in seeded mode.
 - **Injected-delay race tests.** Test hooks delay a worker at chosen points (between the sleep
   decision and the sleep, between steal and run, before a scope's final decrement, between a
-  creator's re-check and its epoch wait, between a shared-queue move and its epoch increment, and
+  creator's re-check and its parker wait, between a shared-queue move and its parker increment,
+  between the final decrement and the parker increment with the scope destroyed at once, and
   between a drain and the sleep). Each race test
   was observed red with the matching protocol step deliberately broken before it counts as
   coverage.
