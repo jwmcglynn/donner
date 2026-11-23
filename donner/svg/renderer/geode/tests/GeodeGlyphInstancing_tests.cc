@@ -22,7 +22,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <format>
 #include <limits>
@@ -695,6 +697,37 @@ TEST_F(GeodeGlyphInstancingTest, StrokedRunPastTheEncoderLimitStillDraws) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// A joined stroke the encoder refuses whole is drawn glyph by glyph from kept shapes. On an
+/// unchanged frame it repeats only the refused encode attempt: the glyph strokes drawn in its
+/// place stay resident, as every later shape of the element does.
+TEST_F(GeodeGlyphInstancingTest, RefusedJoinedStrokeKeepsTheGlyphStrokesDrawnInItsPlace) {
+  SVGDocument one = parse(TouchingStrokeRun(1));
+  RendererGeode measure(sharedDevice());
+  (void)render(measure, one);
+  const std::size_t itemsPerGlyph = measure.resourceStats().geometryItems;
+  ASSERT_THAT(itemsPerGlyph, testing::Gt(0u));
+
+  SVGDocument run = parse(TouchingStrokeRun(4));
+  RendererGeode renderer(sharedDevice());
+  // Each glyph's stroke fits the encoder's item limit; the four joined do not.
+  renderer.setPathEncoderItemLimitForTesting(itemsPerGlyph + itemsPerGlyph / 2);
+  (void)render(renderer, run);
+  ASSERT_THAT(renderer.resourceStats().geometryBudgetRejected, testing::IsFalse());
+  EXPECT_THAT(renderer.textShapeResidencyForTesting(run).shapes, testing::Eq(4u))
+      << "the four glyph strokes drawn in the refused group's place are kept";
+
+  const Frame steady = render(renderer, run);
+  EXPECT_THAT(steady.counters.pathEncodes, testing::Eq(1u))
+      << "only the refused joined encode is attempted again";
+  EXPECT_THAT(steady.counters.bufferWrites, testing::Eq(0u));
+  EXPECT_THAT(steady.counters.bindgroupCreates, testing::Eq(0u));
+  SVGDocument glyphByGlyph = parse(SeparatelyStrokedGroups(run, 4, 1));
+  RendererGeode reference(sharedDevice());
+  editor::tests::CompareBitmapToBitmap(steady.bitmap, render(reference, glyphByGlyph).bitmap,
+                                       "refused_joined_stroke_steady",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// Touching strokes are joined into shapes of at most the group point limit, so a long, heavily
 /// stroked line is drawn as several shapes rather than one.
 TEST_F(GeodeGlyphInstancingTest, TouchingStrokesJoinUpToTheGroupPointLimit) {
@@ -1181,6 +1214,87 @@ TEST_F(GeodeGlyphInstancingTest, GradientTextAfterAGeometryRefusalConvertsNothin
   EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected) << "Premise: the second rect";
   EXPECT_EQ(renderer.resourceStats().gradientStops, 0u);
   EXPECT_EQ(frame.counters.gradientStopConversions, 0u);
+}
+
+/// Text painted by every kind of paint the glyph cache's solid fills do not cover: pattern and
+/// gradient glyph fills, pattern, gradient and solid glyph strokes, decoration lines filled with a
+/// solid, a pattern and a gradient and stroked with a gradient, and a solid fill along a text path.
+/// Each pattern paints one element: a pattern several elements paint renders its tile once per
+/// element, and the repeated draws of its content are a separate cost.
+constexpr std::string_view kPaintedTextSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 200" font-family="Noto Sans">
+  <defs>
+    <pattern id="p1" patternUnits="userSpaceOnUse" width="6" height="6">
+      <rect width="3" height="3" fill="#2050c0"/>
+    </pattern>
+    <pattern id="p2" patternUnits="userSpaceOnUse" width="6" height="6">
+      <rect x="3" y="3" width="3" height="3" fill="#c05020"/>
+    </pattern>
+    <pattern id="p3" patternUnits="userSpaceOnUse" width="6" height="6">
+      <rect width="6" height="3" fill="#20a080"/>
+    </pattern>
+    <linearGradient id="g">
+      <stop offset="0" stop-color="#c02050"/>
+      <stop offset="1" stop-color="#20a050"/>
+    </linearGradient>
+    <path id="arc" d="M 10 190 Q 100 150 190 190"/>
+  </defs>
+  <text x="8" y="32" font-size="30" fill="url(#p1)">Pat<tspan fill="url(#g)">Gr</tspan></text>
+  <text x="8" y="70" font-size="30" fill="none" stroke="url(#p2)" stroke-width="2"
+    >St<tspan stroke="url(#g)">Gr</tspan><tspan stroke="#208040">So</tspan></text>
+  <text x="8" y="108" font-size="30" fill="url(#p3)"
+        text-decoration="underline line-through">Dec</text>
+  <text x="120" y="108" font-size="30" fill="#303030" text-decoration="overline">Ov</text>
+  <text x="8" y="146" font-size="30" fill="url(#g)" stroke="url(#g)" stroke-width="1"
+        text-decoration="underline">Gd</text>
+  <text font-size="18" fill="#404040"><textPath xlink:href="#arc">Along the arc</textPath></text>
+</svg>)svg";
+
+/// Painted text keeps the encodes and residence of the shapes it paints outside the glyph cache, so
+/// an unchanged frame encodes, uploads, creates and binds nothing for them, and draws what a fresh
+/// renderer draws.
+TEST_F(GeodeGlyphInstancingTest, PaintedTextUnchangedFrameEncodesWritesAndCreatesNothing) {
+  SVGDocument document = parse(kPaintedTextSvg);
+  RendererGeode renderer(sharedDevice());
+  const Frame first = render(renderer, document);
+  ASSERT_THAT(CountNonTransparentPixels(first.bitmap), testing::Gt(0u))
+      << "Premise: the text must paint";
+  ASSERT_THAT(first.counters.pathEncodes, testing::Gt(20u))
+      << "Premise: the painted glyphs, strokes and decoration lines all encode on the first frame";
+  const RendererGeode::TextShapeResidency kept = renderer.textShapeResidencyForTesting(document);
+  std::fprintf(
+      stderr, "[painted-text] shapes=%zu chargedBytes=%" PRIu64 " shapeOverheadBytes=%" PRIu64 "\n",
+      kept.shapes, kept.chargedBytes, geode::GeodeTextShapeCache::kShapeOverheadBytes);
+  EXPECT_THAT(kept.shapes, testing::Ge(20u)) << "the painted shapes are kept";
+  EXPECT_THAT(kept.chargedBytes,
+              testing::Ge(kept.shapes * geode::GeodeTextShapeCache::kShapeOverheadBytes))
+      << "every kept shape charges at least its fixed size to the document";
+
+  for (int frameNumber = 2; frameNumber <= 3; ++frameNumber) {
+    SCOPED_TRACE(testing::Message() << "unchanged frame " << frameNumber);
+    const Frame frame = render(renderer, document);
+    const geode::GeodeCounters& c = frame.counters;
+    std::fprintf(stderr,
+                 "[painted-text] frame %d pathEncodes=%" PRIu64 " textureCreates=%" PRIu64
+                 " bufferWrites=%" PRIu64 " bindgroupCreates=%" PRIu64 " drawCalls=%" PRIu64
+                 " strokeOutlineFlattens=%" PRIu64 "\n",
+                 frameNumber, c.pathEncodes, c.textureCreates, c.bufferWrites, c.bindgroupCreates,
+                 c.drawCalls, c.strokeOutlineFlattens);
+    EXPECT_THAT(c.drawCalls, testing::Ge(20u)) << "Premise: every painted shape still draws";
+    EXPECT_EQ(c.pathEncodes, 0u) << "A painted text shape re-encoded on an unchanged frame";
+    EXPECT_EQ(c.textureCreates, 0u);
+    EXPECT_EQ(c.bufferWrites, 0u)
+        << "A painted text shape re-uploaded its geometry or rewrote its uniform";
+    EXPECT_EQ(c.bindgroupCreates, 0u) << "A painted text shape built a bind group";
+    if (frameNumber == 3) {
+      SVGDocument fresh = parse(kPaintedTextSvg);
+      RendererGeode reference(sharedDevice());
+      editor::tests::CompareBitmapToBitmap(frame.bitmap, render(reference, fresh).bitmap,
+                                           "painted_text_steady",
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 }  // namespace

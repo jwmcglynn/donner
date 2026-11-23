@@ -1549,7 +1549,8 @@ private:
 /// Every per-entity component that keeps state per device in a `geode::GeodePerDevice`. A new one
 /// must be listed here, or a gone device's slots on it would keep that device's slabs alive.
 using DocumentPerDeviceComponents = PerDeviceComponents<geode::GeodeResidentPathComponent,
-                                                        geode::GeodeTextInstanceResidencyComponent>;
+                                                        geode::GeodeTextInstanceResidencyComponent,
+                                                        geode::GeodeTextShapeResidencyComponent>;
 
 /**
  * Drops, from every entity of \p registry, the residence slots of devices that are gone.
@@ -5233,6 +5234,31 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
+  /// Most painted shapes one text element keeps per device; see `geode::GeodeTextShapeCache`.
+  std::size_t textShapeLimit = geode::GeodeTextShapeCache::kDefaultMaximumShapes;
+
+  /// The retained shapes one text draw paints from, in paint order. A null `cache` sends every
+  /// shape of the draw through a per-frame encode: the text has no source entity, or a frame that
+  /// has not submitted drew the element already (an earlier draw in this frame, or an outer frame
+  /// around an offscreen pass), whose recorded draws its shapes must keep serving.
+  struct TextShapeCursor {
+    /// Whether the draw keeps its shapes; false sends every shape through a per-frame encode.
+    bool keeps = false;
+    /// The element's shapes on this device; null until the element keeps its first shape here.
+    geode::GeodeTextShapeCache* cache = nullptr;
+    Registry* registry = nullptr;  //!< Registry of the element.
+    Entity element = entt::null;   //!< The element's entity.
+    std::size_t next = 0;          //!< Ordinal of the next shape.
+  };
+
+  /// What one painted text shape draws from: its encode, and its resident slots when the shape is
+  /// retained. A null encode means the encoder refused a splittable shape whole.
+  struct TextShape {
+    const geode::EncodedPath* encoded = nullptr;               //!< Encode to draw.
+    geode::GeodeResidentSlot* slot = nullptr;                  //!< Solid and pattern residence.
+    geode::GeodeResidentGradientSlot* gradientSlot = nullptr;  //!< Gradient residence.
+  };
+
 #ifdef DONNER_TEXT_ENABLED
   /// The glyph fill of a text run, which paints a decoration that has no recorded origin.
   struct TextRunFillPaint {
@@ -5343,24 +5369,32 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * @param path Decoration line outline.
    * @param textBoundsPath The text element's bounds as a path.
    * @param decorationPaint Resolved paint of the declaring origin.
+   * @param shapes The text draw's retained shapes, which the line and its stroke draw from.
    */
   void paintTextDecorationPath(const Path& path, const Path& textBoundsPath,
-                               const TextDecorationPaint& decorationPaint) {
+                               const TextDecorationPaint& decorationPaint,
+                               TextShapeCursor& shapes) {
     if (path.empty()) {
       return;
     }
     const auto fillDecoration = [&]() {
-      const geode::EncodedPath* encoded = encodeTransientGeometry(path, FillRule::NonZero);
       if (decorationPaint.gradientFill != nullptr) {
+        const TextShape shape = textShape(shapes, path);
         drawPaintedPathAgainst(textBoundsPath, path, *decorationPaint.gradientFill,
-                               decorationPaint.fillOpacity, FillRule::NonZero, encoded);
+                               decorationPaint.fillOpacity, FillRule::NonZero, shape.encoded,
+                               shape.slot, shape.gradientSlot);
       } else if (decorationPaint.patternFill) {
+        const TextShape shape = textShape(shapes, path);
+        releaseGradientRamp(shape.gradientSlot);
         syncTransform();
-        encoder->fillPathPattern(path, FillRule::NonZero,
-                                 buildPatternPaint(*patternFillPaint, decorationPaint.fillOpacity),
-                                 encoded);
+        emitPatternFill(path, FillRule::NonZero,
+                        buildPatternPaint(*patternFillPaint, decorationPaint.fillOpacity),
+                        shape.encoded, shape.slot);
       } else if (decorationPaint.solidFill.a != 0) {
-        encoder->fillPath(path, decorationPaint.solidFill, FillRule::NonZero, encoded);
+        const TextShape shape = textShape(shapes, path);
+        releaseGradientRamp(shape.gradientSlot);
+        emitSolidFill(path, decorationPaint.solidFill, FillRule::NonZero, shape.encoded,
+                      shape.slot);
       }
     };
     const auto strokeDecoration = [&]() {
@@ -5374,12 +5408,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         return;
       }
       countStrokeOutline(stroked);
-      const geode::EncodedPath* encoded = encodeTransientGeometry(stroked, FillRule::NonZero);
+      const TextShape shape = textShape(shapes, stroked);
       if (decorationPaint.gradientStroke != nullptr) {
         drawPaintedPathAgainst(textBoundsPath, stroked, *decorationPaint.gradientStroke,
-                               decorationPaint.strokeOpacity, FillRule::NonZero, encoded);
+                               decorationPaint.strokeOpacity, FillRule::NonZero, shape.encoded,
+                               shape.slot, shape.gradientSlot);
       } else {
-        encoder->fillPath(stroked, *decorationPaint.solidStroke, FillRule::NonZero, encoded);
+        releaseGradientRamp(shape.gradientSlot);
+        emitSolidFill(stroked, *decorationPaint.solidStroke, FillRule::NonZero, shape.encoded,
+                      shape.slot);
       }
     };
     // The decoration's own fill/stroke order is the declaring element's `paint-order`.
@@ -5520,14 +5557,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * encoded on its own rejects the frame, as any path does.
    *
    * @param outlines Stroke outlines of the chunk's glyphs, in run order.
-   * @param draw Paints a shape: called with the joined outline and its encoding.
+   * @param shapes The text draw's retained shapes, which each drawn shape takes the next of.
+   * @param draw Paints a shape: called with the joined outline and its \ref TextShape.
    */
   template <typename DrawFn>
-  void drawTextStrokeOutlines(std::span<const Path> outlines, const DrawFn& draw) {
+  void drawTextStrokeOutlines(std::span<const Path> outlines, TextShapeCursor& shapes,
+                              const DrawFn& draw) {
     for (const std::vector<std::size_t>& group : textStrokeGroups(outlines)) {
       if (group.size() == 1) {
         const Path& outline = outlines[group.front()];
-        draw(outline, encodeTransientGeometry(outline, FillRule::NonZero));
+        draw(outline, textShape(shapes, outline));
         continue;
       }
       PathBuilder builder;
@@ -5535,13 +5574,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         builder.addPath(outlines[index]);
       }
       const Path joined = builder.build();
-      if (const geode::EncodedPath* encoded =
-              encodeTransientGeometryOrSplit(joined, FillRule::NonZero)) {
-        draw(joined, encoded);
+      if (const TextShape shape = textShape(shapes, joined, /*splittable=*/true);
+          shape.encoded != nullptr) {
+        draw(joined, shape);
         continue;
       }
       for (const std::size_t index : group) {
-        draw(outlines[index], encodeTransientGeometry(outlines[index], FillRule::NonZero));
+        draw(outlines[index], textShape(shapes, outlines[index]));
       }
     }
   }
@@ -6012,6 +6051,143 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     pendingBatch->sceneClipVersion = clipVersion;
     pendingBatch->sceneVertexCount = instance.vertexCount;
     pendingBatch->sceneInstances.push_back(instance);
+  }
+
+  /**
+   * The gradient residence a glyph shape of a run paints \p gradient from: none when the run's
+   * resolved gradient has more stops than a draw carries inline. Such a gradient reads a stop ramp,
+   * and the run's per-frame draws share one ramp lookup through the resolution's ramp cache, where
+   * each resident draw would look its slot's ramp up again. A draw that resolves its own gradient,
+   * as a decoration line does, looks its ramp up once whether it draws resident or per frame.
+   *
+   * @param shape The shape about to be painted.
+   * @param gradient The run's resolved gradient, or null when the draw resolves its own.
+   */
+  static geode::GeodeResidentGradientSlot* TextShapeGradientSlot(
+      const TextShape& shape, const ResolvedGradientPaint* gradient) {
+    if (gradient != nullptr) {
+      std::size_t stops = 0;
+      if (const geode::LinearGradientParams* linear = gradient->linearParams()) {
+        stops = linear->stops.size();
+      } else if (const geode::RadialGradientParams* radial = gradient->radialParams()) {
+        stops = radial->stops.size();
+      }
+      if (stops > geode::GeoEncoder::kMaxSceneGradientStops) {
+        return nullptr;
+      }
+    }
+    return shape.gradientSlot;
+  }
+
+  /// Opens the retained shapes of the text element rooted at \p textRoot for one draw.
+  /// @param registry Registry of the element.
+  /// @param textRoot The element's entity, or null when the text has none.
+  TextShapeCursor beginTextShapes(Registry& registry, Entity textRoot) {
+    TextShapeCursor cursor;
+    if (textRoot == entt::null) {
+      return cursor;
+    }
+    EntityHandle handle(registry, textRoot);
+    if (!handle) {
+      return cursor;
+    }
+    // Text that paints only solid glyph fills never tries to keep a shape, so the component is
+    // created only at the element's first attempt to keep one (\ref textShapeCacheFor), and the
+    // frame that creates it claims it then.
+    if (auto* component = handle.try_get<geode::GeodeTextShapeResidencyComponent>()) {
+      if (geode::GeodeTextShapeCache* cache = component->devices.find(device->deviceId())) {
+        if (cache->lastFrame >= device->oldestOpenFrameGeneration()) {
+          return cursor;
+        }
+        cache->lastFrame = currentFrameIndex;
+        cursor.cache = cache;
+      }
+    }
+    cursor.keeps = true;
+    cursor.registry = &registry;
+    cursor.element = textRoot;
+    return cursor;
+  }
+
+  /// The element's shapes on this device for \p cursor's draw, created at the first attempt to keep
+  /// a shape (an attempt the cap or budget then refuses leaves it empty and uncharged) and marked
+  /// as drawn by this frame.
+  geode::GeodeTextShapeCache& textShapeCacheFor(TextShapeCursor& cursor) {
+    if (cursor.cache == nullptr) {
+      cursor.cache = &EntityHandle(*cursor.registry, cursor.element)
+                          .get_or_emplace<geode::GeodeTextShapeResidencyComponent>()
+                          .devices.forDevice(deviceKey());
+      cursor.cache->lastFrame = currentFrameIndex;
+    }
+    return *cursor.cache;
+  }
+
+  /// Drops the shapes past the last one \p cursor's draw reached.
+  void endTextShapes(const TextShapeCursor& cursor) {
+    if (cursor.cache != nullptr) {
+      cursor.cache->trim(cursor.next);
+    }
+  }
+
+  /**
+   * The encode and residence of the next painted shape of a text draw, \p path in the element's
+   * space: the retained shape when it holds exactly this path at the current tolerance, else a new
+   * encode, retained when the element's shape cap and the document's cache budget allow and drawn
+   * for this frame only otherwise.
+   *
+   * @param cursor The draw's shapes; see \ref beginTextShapes.
+   * @param path Shape to paint.
+   * @param splittable Whether the caller can draw \p path in parts: then an encode the encoder's
+   *   limits refuse returns a null encode, leaving the frame admitted, instead of rejecting it.
+   */
+  TextShape textShape(TextShapeCursor& cursor, const Path& path, bool splittable = false) {
+    if (!cursor.keeps) {
+      return {splittable ? encodeTransientGeometryOrSplit(path, FillRule::NonZero)
+                         : encodeTransientGeometry(path, FillRule::NonZero)};
+    }
+    const std::size_t index = cursor.next++;
+    const double tolerance = geode::FillCubicToleranceFor(deviceFromLocalTransform);
+    geode::GeodeTextShapeCache::Shape* shape =
+        cursor.cache != nullptr ? cursor.cache->find(index, path, FillRule::NonZero, tolerance)
+                                : nullptr;
+    if (shape == nullptr) {
+      if (geometryBudget->rejected()) {
+        return {&rejectedGeometry};
+      }
+      geode::EncodedPath encoded = encodeAtDeviceTolerance(path, FillRule::NonZero);
+      if (encoded.rejected()) {
+        if (splittable) {
+          // The caller draws the parts instead, from the ordinals this one would have taken, so a
+          // whole the encoder refuses costs its encode attempt each frame and nothing more.
+          cursor.next = index;
+          return {nullptr};
+        }
+        geometryBudget->reject();
+        return {&rejectedGeometry};
+      }
+      geode::GeodeTextShapeCache& cache = textShapeCacheFor(cursor);
+      shape = cache.store(index, path, FillRule::NonZero, tolerance, encoded,
+                          documentGeometryBudget(*cursor.registry), textShapeLimit);
+      if (shape == nullptr) {
+        // Past the cap or refused by the budget: this draw encodes for the frame, its ordinal is
+        // left empty, and the later shapes of the element are still kept.
+        cache.release(index);
+        transientTextEncodes.push_back(std::move(encoded));
+        return {&transientTextEncodes.back()};
+      }
+    }
+    // Wire the slots to this device's slab for the document, as the per-entity residence getters
+    // do; a slot resident in another slab re-uploads into this one.
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*cursor.registry);
+    if (shape->slot.slab.get() != slab.get()) {
+      shape->slot.reset();
+    }
+    shape->slot.slab = slab;
+    if (shape->gradientSlot.slab.get() != slab.get()) {
+      shape->gradientSlot.reset();
+    }
+    shape->gradientSlot.slab = std::move(slab);
+    return {&shape->encoded, &shape->slot, &shape->gradientSlot};
   }
 
   /// Resident CPU encode + GPU geometry for one glyph identity, creating it on
@@ -8352,6 +8528,11 @@ void RendererGeode::setTextStrokeGroupPointLimitForTesting(std::size_t maximumPo
   impl_->textStrokeGroupPointLimit = std::min(Impl::kMaximumTextStrokeGroupPoints, maximumPoints);
 }
 
+void RendererGeode::setTextShapeLimitForTesting(std::size_t maximumShapes) {
+  impl_->textShapeLimit =
+      std::min(geode::GeodeTextShapeCache::kDefaultMaximumShapes, maximumShapes);
+}
+
 void RendererGeode::setGradientStopBudgetForTesting(std::size_t maximumStops) {
   impl_->drawBudget->setGradientStopLimitForTesting(maximumStops);
 }
@@ -8436,6 +8617,23 @@ size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
   const DocumentDeviceResidency* residency =
       (*residencyPtr)->devices.find(impl_->device->deviceId());
   return residency != nullptr && residency->glyphs ? residency->glyphs->size() : 0;
+}
+
+RendererGeode::TextShapeResidency RendererGeode::textShapeResidencyForTesting(
+    SVGDocument& document) {
+  TextShapeResidency result;
+  if (!impl_->device) {
+    return result;
+  }
+  for (auto&& [entity, component] :
+       document.registry().view<geode::GeodeTextShapeResidencyComponent>().each()) {
+    if (const geode::GeodeTextShapeCache* cache =
+            component.devices.find(impl_->device->deviceId())) {
+      result.shapes += cache->keptShapes();
+      result.chargedBytes += cache->retainedBytes();
+    }
+  }
+  return result;
 }
 
 void RendererGeode::beginFrameResourceScope() {
@@ -9817,6 +10015,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // ordinal advances across runs, so the element's persistent slots stay in
   // one consecutive range and a batch can cover the whole element.
   Impl::TextRecordCursor textRecords = impl_->beginTextRecords(registry, params.textRootEntity);
+  // The element's painted shapes outside the glyph cache's solid fills, kept across frames.
+  Impl::TextShapeCursor textShapes = impl_->beginTextShapes(registry, params.textRootEntity);
 
   // Each draw spends at most the per-draw geometry allowance, and only what the frame has left.
   std::size_t decorationWorkRemaining = std::min(
@@ -10089,44 +10289,49 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       }
       for (const Path& placed : runGlyphPaths) {
         if (fillIsGradient) {
-          const geode::EncodedPath* encoded =
-              impl_->encodeTransientGeometry(placed, FillRule::NonZero);
+          const Impl::TextShape shape = impl_->textShape(textShapes, placed);
           // Gradient fill on text: resolve the gradient against the text bbox
           // (the gradient *geometry*), fill the glyph outline (the *draw* path).
-          impl_->drawPaintedPathAgainst(textBoundsPath, placed, fillServer, fillOpacity,
-                                        FillRule::NonZero, encoded, nullptr, nullptr,
-                                        runFillGradient);
+          impl_->drawPaintedPathAgainst(
+              textBoundsPath, placed, fillServer, fillOpacity, FillRule::NonZero, shape.encoded,
+              shape.slot, Impl::TextShapeGradientSlot(shape, runFillGradient), runFillGradient);
         } else if (usePatternFill) {
-          const geode::EncodedPath* encoded =
-              impl_->encodeTransientGeometry(placed, FillRule::NonZero);
+          const Impl::TextShape shape = impl_->textShape(textShapes, placed);
+          impl_->releaseGradientRamp(shape.gradientSlot);
           // Fill the glyph outline with the staged pattern tile, same as a
           // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
           // already in the element's local space and `deviceFromLocalTransform`
           // is set above, so `buildPatternPaint` composes the right sample space.
           impl_->syncTransform();
-          impl_->encoder->fillPathPattern(
-              placed, FillRule::NonZero, impl_->buildPatternPaint(*fillTile, fillOpacity), encoded);
+          impl_->emitPatternFill(placed, FillRule::NonZero,
+                                 impl_->buildPatternPaint(*fillTile, fillOpacity), shape.encoded,
+                                 shape.slot);
         } else if (hasFill) {
-          const geode::EncodedPath* encoded =
-              impl_->encodeTransientGeometry(placed, FillRule::NonZero);
-          impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero, encoded);
+          const Impl::TextShape shape = impl_->textShape(textShapes, placed);
+          impl_->releaseGradientRamp(shape.gradientSlot);
+          impl_->emitSolidFill(placed, spanFill, FillRule::NonZero, shape.encoded, shape.slot);
         }
       }
     };
-    // Paints one stroke shape: a joined stroke outline and its encoding.
-    const auto drawStrokeShape = [&](const Path& stroked, const geode::EncodedPath* encoded) {
+    // Paints one stroke shape: a joined stroke outline, its encoding and its residence.
+    const auto drawStrokeShape = [&](const Path& stroked, const Impl::TextShape& shape) {
       const FillRule strokeRule = FillRule::NonZero;
       if (strokeIsGradient) {
         // Gradient stroke: resolve against the text bbox (the *original*
         // geometry, per SVG), fill the stroked outline.
-        impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
-                                      strokeRule, encoded, nullptr, nullptr, runStrokeGradient);
-      } else if (usePatternStroke) {
+        impl_->drawPaintedPathAgainst(
+            textBoundsPath, stroked, *strokeServer, strokeOpacity, strokeRule, shape.encoded,
+            shape.slot, Impl::TextShapeGradientSlot(shape, runStrokeGradient), runStrokeGradient);
+        return;
+      }
+      impl_->releaseGradientRamp(shape.gradientSlot);
+      if (usePatternStroke) {
         impl_->syncTransform();
-        impl_->encoder->fillPathPattern(
-            stroked, strokeRule, impl_->buildPatternPaint(*strokeTile, strokeOpacity), encoded);
+        impl_->emitPatternFill(stroked, strokeRule,
+                               impl_->buildPatternPaint(*strokeTile, strokeOpacity), shape.encoded,
+                               shape.slot);
       } else {
-        impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
+        impl_->emitSolidFill(stroked, *strokeColor, strokeRule, shape.encoded, shape.slot);
       }
     };
     const auto drawRunStroke = [&]() {
@@ -10144,7 +10349,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       for (const auto& [begin, end] : runChunks.ranges(paths.size())) {
         const std::vector<Path> outlines =
             impl_->strokeGlyphOutlines(paths.subspan(begin, end - begin), *strokeStyle);
-        impl_->drawTextStrokeOutlines(outlines, drawStrokeShape);
+        impl_->drawTextStrokeOutlines(outlines, textShapes, drawStrokeShape);
         impl_->releaseTextStrokeOutlines(outlines);
       }
     };
@@ -10175,7 +10380,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
             EmitTextDecorationPaths(
                 run, decoration, emittedLines, origins.size(), spanFontSizePx, textEngine,
                 impl_->deviceFromLocalTransform, decorationWorkRemaining, [&](const Path& path) {
-                  impl_->paintTextDecorationPath(path, textBoundsPath, decorationPaint);
+                  impl_->paintTextDecorationPath(path, textBoundsPath, decorationPaint, textShapes);
                 });
             impl_->textMaterializationBudget->consumeDecorationWork(workBefore -
                                                                     decorationWorkRemaining);
@@ -10208,6 +10413,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
     drawDecorations(TextDecoration::LineThrough);
   }
+  impl_->endTextShapes(textShapes);
 
 #else
   (void)registry;
