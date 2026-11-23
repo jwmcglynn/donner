@@ -137,12 +137,16 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ### Part D: Parallel Style Traversal
 
-- **Speedup where it pays.** With four scheduler workers, first-frame style time on the
-  bootstrap-icons sprite (5,137 elements) and the synthetic `<use>` document (4,425 elements) is
-  at most half of the same build's serial style time.
-- **No cost where it does not.** Passes below the serial threshold (initially 1,000 elements to
-  cascade, calibrated in Milestone D3) run the serial path; style time on the splash and tiger
-  documents does not regress by more than 2 percent with a scheduler present.
+- **Speedup where it pays.** Target, not yet measured: with four scheduler workers and the
+  shared computed-style storage of Milestone A8, first-frame style time on the bootstrap-icons
+  sprite (5,137 elements) and the synthetic `<use>` document (4,425 elements) is at most half of
+  the same build's serial style time. Without A8 the serial placeholder step caps the speedup near
+  2.3x (see [What Must Hold](#what-must-hold-for-parallel-cascading)), which is why Part D depends
+  on A8.
+- **No cost where it does not.** Passes below the serial threshold (an initial target of 1,000
+  elements to cascade, calibrated in Milestone D3) run the serial path. Target, not yet measured:
+  style time on the splash and tiger documents does not regress by more than 2 percent with a
+  scheduler present, in quiet-machine perf runs.
 - **Bit-identical.** Computed styles, matched-rule lists, warnings and budget outcomes are the
   same at 0, 1, 2, 4 and 8 workers and under the scheduler's seeded-schedule mode, enforced by the
   differential tests.
@@ -331,10 +335,14 @@ Part C estimate: 13.5 engineering days.
 
 ### Part D Milestones
 
-- [ ] Milestone D1: Parallel style pass (3 days). After A7, A9 and scheduler milestones S1 to S3.
-  - [ ] Decompose the full and selective passes into subtree tasks on the scheduler, with per-worker
-        budget shares, warning buffers, ancestor filters and caches, a serial commit of warnings,
-        and the serial fallback on budget pressure.
+- [ ] Milestone D1: Parallel style pass (4 days). After A7, A8, A9 and scheduler milestones S1 to
+      S3.
+  - [ ] Pre-region step: create every pool and context object, pre-emplace computed-style slots
+        for dirty entities and their missing ancestors, find the roots of dirty subtrees.
+  - [ ] Decompose the full and selective passes into subtree tasks on the scheduler, with a
+        `const Registry&` view for workers, per-worker budget shares, warning buffers, ancestor
+        filters and caches, a serial commit of warnings, the serial fallback on budget pressure,
+        and a debug guard that pool sizes are unchanged across the region.
   - Done when: the differential tests are green at every worker count and the serial threshold
     keeps the splash and tiger documents on the serial path.
 - [ ] Milestone D2: Race and determinism coverage (2 days). After D1.
@@ -344,19 +352,20 @@ Part C estimate: 13.5 engineering days.
   - Done when: the lane is green, and the injected-delay test was observed red with the broken
     order and green with the real one.
 - [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
-  - Done when: the threshold and subtree grain are set from a measured curve recorded here, and
-    the Part D speedup goal is met.
+  - Done when: the threshold and subtree grain are set from a measured curve recorded here, the
+    deepest stack use of a cascade task is measured and set as this client's help margin in the
+    scheduler, and the Part D speedup goal is met.
 
-Part D estimate: 6 engineering days.
+Part D estimate: 7 engineering days.
 
 ### Order and Total
 
 A1 first; A2, A3, A6, A8, B4, C1 and C3 can then proceed in parallel; A4 follows A3; A7 follows
 A3 and A6; A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B;
-C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D1 follows A7, A9 and the
+C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D1 follows A7, A8, A9 and the
 scheduler milestones S1 to S3 of [0073-task_scheduler](0073-task_scheduler.md); D2 and D3 follow
-D1. Total committed estimate for this document: 60 engineering days (A 26, B 16, C 12, D 6); the
-scheduler is estimated in 0073.
+D1. Total committed estimate for this document: 65 engineering days (A 27.5, B 17, C 13.5, D 7);
+the scheduler is estimated in 0073.
 
 ## Background
 
@@ -1517,20 +1526,45 @@ per-element cost and is calibrated in Milestone D3.
 
 ### What Must Hold for Parallel Cascading
 
-- **No structural registry change inside the parallel region.** EnTT storage is not safe for
-  concurrent structural changes. `computeAllStyles` already emplaces a placeholder
-  `ComputedStyleComponent` for every tree entity before computing, shadow-tree instantiation runs
-  between the two `computeAllStyles` calls, outside any parallel region, and the style context's
-  budgets and caches are created before workers start. Inside the region a worker reads
-  components and writes only the computed-style pointer of the entity it owns. By reading the
-  code, a full pass makes no registry structural change per element once the placeholders exist:
-  `computeStyle` and `inheritProperties` use `get_or_emplace`, which only emplaces when the
-  placeholder is missing, and the remaining shared writes (the budget's reservation map, the
-  warning sink) are moved to per-worker state below. This is the conservative route: parallel
-  compute into pre-existing slots and per-worker buffers, then a serial commit. Whether Donner's
-  storage can be made safe for structural changes during a parallel phase is being evaluated
-  separately; Part D adopts whichever route that evaluation supports, and the conservative route
-  needs no storage change.
+- **No structural registry change inside the parallel region.** EnTT's registry is not thread
+  safe for structural changes: entity creation, emplace or remove on a pool, and first use of a
+  component type all grow shared vectors and maps. Its documentation says "the entire registry is
+  not thread safe as it is", that a set of components can be iterated by several threads while
+  none are assigned or removed, and that "the creation of pools and resources within the registry
+  is not necessarily thread safe"
+  ([EnTT entity documentation](https://github.com/skypjack/entt/blob/v3.16.0/docs/md/entity.md)).
+  Making the storage itself concurrent would require forking EnTT's sparse set, storage and
+  registry (pool lookup, `contains` and `index` are not virtual, and the pools map, free list and
+  signals cannot be customized), adding a lock or atomic to every lookup (measured at roughly 4 to
+  8 times the cost of an uncontended `get` of 8.7 ns), and accepting nondeterministic packed
+  iteration order, which Donner's output depends on (for example, styled paint trees are
+  instantiated in `view<ComputedStyleComponent>` order and recycled entity ids are reused last in,
+  first out). That route is rejected. The style pass instead performs all structural work before
+  the parallel region and keeps the existing serial phases serial.
+- **What the pre-region step does.** A census of the full pass on the splash, the sprite, the
+  2,000-element synthetic and the `<use>` documents found exactly one structural operation per
+  element, the placeholder `get_or_emplace` of `ComputedStyleComponent` over
+  `view<TreeComponent>` that `computeAllStyles` already performs, and none inside the cascade loop,
+  with no entity or pool creation. Shadow-tree instantiation is heavily structural (about four
+  component additions per created entity) and stays serial between the two `computeAllStyles`
+  calls. Before workers start, the pass therefore: emplaces the placeholders (full pass) or, for
+  the selective pass, emplaces slots for every dirty entity and any ancestor that lacks one (the
+  serial selective pass emplaces in its loop, and `computeStyle` and `inheritProperties` emplace a
+  missing parent on demand); creates every pool and context object the cascade touches
+  (`StyleResourceBudget`, the animation contextual-work context) and fixes EnTT's type ids
+  (`ENTT_USE_ATOMIC`, or by touching every component type the pass reads up front); and, for the
+  selective pass, finds the roots of the dirty subtrees, the dirty entities whose parent is clean.
+  Workers then receive a `const Registry&`: on a const registry `try_get` and `all_of` cannot
+  create a pool, while non-const `get` and `view` can. Inside the region a worker writes only the
+  computed-style slot of an entity it owns and its own per-worker state. A debug guard records
+  every pool's size and the entity count before the region and asserts they are unchanged after
+  it.
+- **The serial placeholder sets the speedup ceiling.** While `ComputedStyleComponent` holds the
+  4,840-byte `PropertyRegistry` inline, the placeholder step costs about 1.7 microseconds per
+  element, about a quarter of style time on the sprite, which caps four workers near 2.3x. With
+  Milestone A8's pointer-sized slot to a shared record it costs about 0.03 microseconds per
+  element. These figures come from a toy experiment on a loaded machine and are indicative only;
+  D3 measures the real ones.
 - **Parents before children.** Inheritance needs the parent's computed record. The pass is a
   top-down traversal from each root: a task cascades its root, then runs each child subtree inline
   when it is smaller than the grain (initially 64 elements) or spawns it as a task otherwise. A
@@ -1544,9 +1578,13 @@ per-element cost and is calibrated in Milestone D3.
   any share runs out, the parallel pass is abandoned, its computed styles are cleared, and the pass
   reruns serially, so a budget-limited document gets exactly the serial result and only documents
   near their limits pay twice.
-- **Warnings.** Each task records diagnostics into its own buffer, tagged with the entity; after
-  the join they are sent to the caller's `ParseWarningSink` in the order the serial pass would
-  produce them.
+- **Warnings.** Each task records an entity's diagnostics in two per-entity buffers: those from
+  before its parent is computed in the serial `computePropertiesInto` (rule application) and those
+  from after (animation, colors, inheritance, fonts). After the join the commit replays the serial
+  pass's order exactly: it walks entities in the same storage order the serial loop uses, and for
+  an entity not yet emitted sends its first buffer, then recursively emits its parent if the parent
+  is not yet emitted, then sends its second buffer. That is the order the serial on-demand parent
+  recursion produces.
 - **Ancestor filter and cache.** Each worker owns a `StyleAncestorFilter`; its chain
   synchronization already makes it independent of visit order. Each worker owns a matched
   properties cache; records are immutable and shared through atomic reference counts, so a hit
@@ -1556,16 +1594,22 @@ per-element cost and is calibrated in Milestone D3.
   external-use registries, passes below the threshold, and builds or runtimes without workers run
   the serial path.
 - **Document access.** Style runs inside the caller's document access (the renderer's or the
-  editor worker's). Workers act on its behalf and never acquire document guards; the caller joins
-  before its access ends, so in `ThreadingMode::ConcurrentDom` other threads stay excluded for the
-  whole pass, exactly as with the serial pass.
+  editor worker's). Workers act on its behalf: they read through the `const Registry&` and entity
+  handles the caller obtained before the fork, never call public DOM API (which acquires
+  `DocumentReadAccess` or `DocumentWriteAccess`), and never acquire a document guard. The caller
+  joins before its access ends, so in `ThreadingMode::ConcurrentDom` other threads stay excluded
+  for the whole pass, exactly as with the serial pass. The debug assertion that a task does not
+  take a guard fires only on guard acquisition; it does not detect a task reading the registry
+  through some other path, so the rule is enforced by the const view and review.
 
 ### Correctness
 
 The parallel pass must produce the same computed styles as the serial pass. The differential
 cascade test and fuzzer of Part A gain a worker-count dimension (0, 1, 2, 4, 8) and the
-scheduler's seeded-schedule mode, which replays one steal order from a seed so a failure
-reproduces. `style_parallel_tests` runs in the ThreadSanitizer lane that
+scheduler's seeded mode, which runs tasks on one thread in an order chosen from a seed so an
+ordering-dependent failure reproduces. The seeded mode exercises task orders, not real steals or
+the deque's compare-and-swap; those are covered by the real worker counts, the scheduler's own
+stress tests and ThreadSanitizer. `style_parallel_tests` runs in the ThreadSanitizer lane that
 [0073-task_scheduler](0073-task_scheduler.md) adds. A race test counts as proven only when it was
 observed red: the injected-delay test delays one worker between computing a child and publishing
 it, together with a deliberately broken publish order, and must fail; with the real order it
@@ -1774,6 +1818,11 @@ Stylesheets and documents are untrusted input.
   `co_await` support, designed as its own document,
   [0073-task_scheduler](0073-task_scheduler.md), because it is a general facility with its own
   goals, risks and tests and other clients.
+- **Storage route for parallel style.** No structural registry change inside the parallel region,
+  with structural work done before it and results written into pre-existing slots and per-worker
+  buffers. An evaluation of making EnTT's storage safe for parallel structural changes found it
+  possible only by forking EnTT, 4 to 8 times slower per lookup, and order-nondeterministic, so
+  that route is rejected (see [What Must Hold](#what-must-hold-for-parallel-cascading)).
 - **Document scale.** Documents above the XML parser's default 8,192-node cap are not a target of
   these goals. The techniques scale with elements and rules, so larger documents benefit, but no
   goal is stated or measured for them.
@@ -1797,10 +1846,6 @@ Stylesheets and documents are untrusted input.
   Recommendation: keep them out of Part B and take them up with `@property` in a later design,
   since both change how the cascade stores candidates.
 
-- **Storage safety for structural changes.** Part D is designed on the conservative route (no
-  structural change in the parallel phase, serial commit). A separate evaluation of whether the
-  storage can be made safe for structural changes in parallel decides whether Part D changes
-  route; no decision is needed before Milestone D1 starts.
 - **Parallel threshold.** The initial 1,000-element threshold keeps most single illustrations
   serial. Recommendation: keep it until Milestone D3 measures the curve, and do not lower it to
   make small documents parallel unless the measured wake cost allows.
@@ -1812,4 +1857,7 @@ Stylesheets and documents are untrusted input.
 - [ ] Stop a descendant recompute where the recomputed style equals the previous one, so an edit
       that changes no inherited value does not walk the subtree.
 - [ ] Mine `:is()` and `:where()` arguments for index keys.
+- [ ] Per-worker structural command buffers applied at a sync point in an order derived from the
+      tree, as a general facility for parallelizing phases that create entities (shadow-tree
+      instantiation, shapes); not needed for style.
 - [ ] `@property` registration, as a separate design.
