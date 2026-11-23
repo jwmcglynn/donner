@@ -571,7 +571,7 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListReuseIsLinearAndOrdered) {
   constexpr size_t kCount = 3000;
   std::vector<geode::GeodeRecordSlab::Slot> slots(kCount);
   for (geode::GeodeRecordSlab::Slot& slot : slots) {
-    ASSERT_TRUE(slab.allocateSlot(*device_, slot));
+    ASSERT_THAT(slab.allocateSlot(*device_, slot), testing::IsTrue()) << "allocation of slot";
   }
   constexpr uint64_t kFrames = 4;
   for (uint64_t frame = 1; frame <= kFrames; ++frame) {
@@ -582,7 +582,7 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListReuseIsLinearAndOrdered) {
     slab.beginFrame(frame);
     std::vector<uint32_t> indices;
     for (geode::GeodeRecordSlab::Slot& slot : slots) {
-      ASSERT_TRUE(slab.allocateSlot(*device_, slot));
+      ASSERT_THAT(slab.allocateSlot(*device_, slot), testing::IsTrue()) << "allocation of slot";
       indices.push_back(slot.index);
     }
     std::vector<uint32_t> ascending(kCount);
@@ -597,16 +597,16 @@ TEST_F(GeoEncoderTest, RecordSlabSlotFreedTwiceIsHandedOutOnce) {
   geode::GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement());
   geode::GeodeRecordSlab::Slot freed;
   geode::GeodeRecordSlab::Slot kept;
-  ASSERT_TRUE(slab.allocateSlot(*device_, freed));
-  ASSERT_TRUE(slab.allocateSlot(*device_, kept));
+  ASSERT_THAT(slab.allocateSlot(*device_, freed), testing::IsTrue()) << "allocation of freed";
+  ASSERT_THAT(slab.allocateSlot(*device_, kept), testing::IsTrue()) << "allocation of kept";
   slab.freeSlot(freed);
   slab.freeSlot(freed);
   slab.beginFrame(1);
 
   geode::GeodeRecordSlab::Slot first;
   geode::GeodeRecordSlab::Slot second;
-  ASSERT_TRUE(slab.allocateSlot(*device_, first));
-  ASSERT_TRUE(slab.allocateSlot(*device_, second));
+  ASSERT_THAT(slab.allocateSlot(*device_, first), testing::IsTrue()) << "allocation of first";
+  ASSERT_THAT(slab.allocateSlot(*device_, second), testing::IsTrue()) << "allocation of second";
   EXPECT_THAT(std::vector<uint32_t>({first.index, second.index}),
               testing::ElementsAre(freed.index, testing::Gt(kept.index)))
       << "the twice-freed slot must be reused once, and the next slot must be a fresh one";

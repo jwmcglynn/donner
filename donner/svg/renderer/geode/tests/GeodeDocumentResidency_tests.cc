@@ -817,7 +817,7 @@ TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsAreReplacedWhenTheContentC
       .on_destroy<geode::GeodeResidentPathComponent>()
       .connect<&DestroyedRepeatRecords::onDestroy>(destroyed);
   std::optional<SVGElement> content = document.querySelector("#content");
-  ASSERT_TRUE(content.has_value());
+  ASSERT_THAT(content, testing::Optional(testing::_));
   content->setAttribute("d", "M0 0 L10 3 L0 10 Z");
   renderer.draw(document);
   renderer.draw(document);
@@ -873,7 +873,7 @@ TEST_F(GeodeDocumentResidencyTest, OnlyTheSolidRepeatsOfAPatternPaintedSlotKeepR
   renderer.draw(document);
   renderer.draw(document);
   std::optional<SVGElement> source = document.querySelector("#r");
-  ASSERT_TRUE(source.has_value());
+  ASSERT_THAT(source, testing::Optional(testing::_));
   auto* residence = source->entityHandle().try_get<geode::GeodeResidentPathComponent>();
   ASSERT_THAT(residence, NotNull());
   size_t records = 0;

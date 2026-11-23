@@ -2267,11 +2267,12 @@ constexpr std::string_view kMarkerInstancesSvg = R"SVG(
 
 TEST_F(GeodePerfTest, MarkerInstances_SecondFrameIsSteadyState) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const SteadyStateFrame frame = renderSteadyState(kMarkerInstancesSvg, device);
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
-  ASSERT_FALSE(frame.bitmap.empty()) << "renderer produced no snapshot";
+  ASSERT_THAT(frame.bitmap.pixels, testing::Not(testing::IsEmpty()))
+      << "renderer produced no snapshot";
   ASSERT_GT(frame.counters.drawCalls, 0u) << "the scene must reach the fill path";
 
   // Every placement after the first reuses its content's resident geometry and
@@ -2350,10 +2351,11 @@ constexpr std::string_view kRepeatedStrokeStylesSvg = R"SVG(
 
 TEST_F(GeodePerfTest, UseStrokeStylesRepeated_SecondFrameIsSteadyState) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const SteadyStateFrame frame = renderSteadyState(kRepeatedStrokeStylesSvg, device);
-  ASSERT_FALSE(frame.bitmap.empty()) << "renderer produced no snapshot";
+  ASSERT_THAT(frame.bitmap.pixels, testing::Not(testing::IsEmpty()))
+      << "renderer produced no snapshot";
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), frame.counters);
 
   EXPECT_EQ(frame.counters.pathEncodes, 0u);
