@@ -460,9 +460,9 @@ bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
 }
 
 /// Whether a frame without a complete tile set may present one full-canvas frame instead. A flat
-/// overview may, and so may the composed frame when the only slots without tiles are ones the
-/// surface budget refused on their own and the compose drew directly: that frame is the whole
-/// document, and the tiles cannot be.
+/// overview may, and so may the compositor's main frame when it holds the whole document: a flat
+/// draw of it from this frame, or a compose whose only slots without tiles are ones the surface
+/// budget refused on their own and the compose drew directly.
 bool FullCanvasPresentationAllowed(const svg::compositor::CompositorController* compositor,
                                    bool hasCompositedPreview, bool overviewInfillOnly,
                                    bool geometryDebugOverlay) {

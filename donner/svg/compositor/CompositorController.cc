@@ -1654,6 +1654,7 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   surfaceBudgetExhaustedThisFrame_ = false;
   tileAllocatedThisFrame_ = false;
   mainFrameComposedThisFrame_ = false;
+  flatFrameDrawnThisFrame_ = false;
   warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
   const bool completed = !token.isCancelled();
   cancelToken_.reset();
@@ -1738,6 +1739,7 @@ void CompositorController::renderWithoutPromotedLayers(const RenderViewport& vie
     }
   }
   mainRendererHasCachedFrame_ = true;
+  noteFlatFrameDrawn();
   // The guarded draw runs preparation for the first frame. Defensively clear
   // the rebuild flag so the eager-warmed compositor caches survive the next
   // `renderFrame`.
@@ -1808,6 +1810,7 @@ void CompositorController::renderAfterLastLayerRemoved(const RenderViewport& vie
     mainRendererHasCachedFrame_ = false;
     return;
   }
+  noteFlatFrameDrawn();
   staticSegments_.clear();
   staticSegmentStyleWorkIncomplete_.clear();
   staticSegmentTextures_.clear();
@@ -1854,6 +1857,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   surfaceBudgetExhaustedThisFrame_ = false;
   tileAllocatedThisFrame_ = false;
   mainFrameComposedThisFrame_ = false;
+  flatFrameDrawnThisFrame_ = false;
   composedStyleWorkIncomplete_ = false;
   // Interaction promotes arrive between frames; more than one active-drag entity means a
   // multi-selection drag.
@@ -2385,6 +2389,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   if (!offscreenSupported_) {
     RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.draw(document(), viewport, surfaceFromCanvas);
+    noteFlatFrameDrawn();
     rootDirty_ = false;
     return;
   }

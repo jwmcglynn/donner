@@ -1188,11 +1188,13 @@ public:
   /// failure leaves only part of a new layer/segment topology rasterized.
   [[nodiscard]] bool hasCompleteTileSetForPresentation() const;
 
-  /// True when this frame's composed main frame shows the whole document although the tile set
-  /// is incomplete: every non-empty slot without a payload is one the budget refused twice on its
-  /// own and that the compose drew directly, and the compose allocated its frame target. The
-  /// editor then presents the composed frame as one full-canvas texture in place of the tiles.
-  /// False whenever the tile set is complete, or a slot is missing for any other reason.
+  /// True when this frame's main frame shows the whole document although the tile set is
+  /// incomplete. That holds after a flat draw of the document this frame (a first frame, or one
+  /// with no layers, whose tiles the surface budget refused after the flat frame took its target),
+  /// and after a compose in which every non-empty slot without a payload is one the budget refused
+  /// twice on its own and the compose drew directly, with its frame target allocated. The editor
+  /// then presents the main frame as one full-canvas texture in place of the tiles. False whenever
+  /// the tile set is complete, or a slot is missing for any other reason.
   [[nodiscard]] bool composedFrameStandsInForTiles() const;
 
   /// True when every nonempty layer and static span has a current tile payload.
@@ -1395,6 +1397,9 @@ private:
   /// True when a tile-only drag frame may skip the main compose: nothing reads the main frame,
   /// and no slot is drawn directly into it in place of a tile.
   [[nodiscard]] bool canSkipMainCompose(const RenderViewport& viewport) const;
+  /// Records that the main renderer drew the whole document flat this frame, unless the frame's
+  /// surface budget refused its target.
+  void noteFlatFrameDrawn();
   /// Carries a span that was switched to immediate presentation at `canvasSize` into this
   /// frame's plan without allocating; returns false when the span rasterizes normally.
   bool adoptBudgetImmediateSpan(size_t slotIndex, const StaticSpanPlan& previousPlan,
@@ -1837,6 +1842,9 @@ private:
   bool tileAllocatedThisFrame_ = false;
   /// Whether this frame's compose ran and allocated its frame target.
   bool mainFrameComposedThisFrame_ = false;
+  /// Whether the main frame holds a flat draw of the whole document from this frame that no
+  /// compose has replaced since.
+  bool flatFrameDrawnThisFrame_ = false;
   /// Consecutive frames in which the main renderer declined each static segment's texture
   /// payload; a slot stops re-rasterizing after two strikes. Sized lazily in `composeLayers`.
   std::vector<uint8_t> staticSegmentComposeDeclines_;

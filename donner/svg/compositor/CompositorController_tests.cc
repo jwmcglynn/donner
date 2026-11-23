@@ -2870,6 +2870,8 @@ TEST_F(CompositorControllerTest, NullOffscreenFallsBackToFlatWithoutCrash) {
   const auto rowsAfterSecond = compositor.snapshotLayerInspectorRows();
   ASSERT_EQ(rowsAfterSecond.size(), 1u);
   EXPECT_FALSE(rowsAfterSecond.front().hasValidBitmap);
+  EXPECT_TRUE(compositor.composedFrameStandsInForTiles())
+      << "the flat frame of a renderer without offscreens is the whole document";
 }
 
 namespace {

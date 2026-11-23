@@ -3329,6 +3329,29 @@ void SetSurfaceBudgetIn64PxCanvases(svg::Renderer& renderer, double canvasSurfac
        .surfaces = svg::RendererSurfaceBudget::kMaximumSurfaces});
 }
 
+// With no layers the worker's frame is a flat draw of the document followed by the root tile's
+// warm-up. A budget that holds the flat frame's target but not the root tile beside it refuses the
+// tile in every frame. The flat frame is the whole document, so it is presented as one
+// full-canvas frame rather than nothing.
+TEST(AsyncRendererTest, FlatFrameIsPresentedWhenTheRootTileDoesNotFitBesideIt) {
+  svg::SVGDocument document = svg::instantiateSubtree(kFullCanvasTargetSvg);
+  document.setCanvasSize(64, 64);
+  svg::Renderer renderer;
+  SetSurfaceBudgetIn64PxCanvases(renderer, 1.5);
+  AsyncRenderer asyncRenderer;
+  for (std::uint64_t version = 1; version <= 3; ++version) {
+    SCOPED_TRACE(version);
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    asyncRenderer.requestRender(request);
+    const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+    ASSERT_THAT(result, ::testing::Optional(::testing::_));
+    EXPECT_FALSE(result->workerTiming.nothingToPresent) << DescribePresentation(*result);
+    EXPECT_TRUE(ContainsFullCanvasTile(*result)) << DescribePresentation(*result);
+  }
+}
+
 // A budget below one surface switches every slot to direct presentation; once it holds the frame
 // target again, the composed frame of direct draws is presented as one full-canvas frame.
 TEST(AsyncRendererTest, ComposedFrameOfDirectlyDrawnSlotsIsPresented) {

@@ -1704,11 +1704,21 @@ bool CompositorController::spansHavePayloadOrDrawDirectly(const Vector2i& canvas
   return true;
 }
 
+void CompositorController::noteFlatFrameDrawn() {
+  flatFrameDrawnThisFrame_ = !renderer().resourceStats().surfaceBudgetRejected;
+}
+
 bool CompositorController::composedFrameStandsInForTiles() const {
+  if (hasCompleteTileSetForPresentation()) {
+    return false;
+  }
+  if (flatFrameDrawnThisFrame_) {
+    return true;
+  }
   const bool frameComplete = mainFrameComposedThisFrame_ &&
                              lastRenderFrameStats_.textureAllocationFailureCount == 0 &&
                              lastRenderFrameStats_.composePayloadRefusalCount == 0;
-  if (!frameComplete || !hasLastViewport_ || hasCompleteTileSetForPresentation()) {
+  if (!frameComplete || !hasLastViewport_) {
     return false;
   }
   const Vector2i canvasSize = BitmapDimensionsForViewport(lastViewport_);
@@ -1822,6 +1832,8 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
 
   const auto composeStart = std::chrono::steady_clock::now();
   ++lastRenderFrameStats_.mainComposeCount;
+  // The compose replaces any flat frame drawn earlier this frame.
+  flatFrameDrawnThisFrame_ = false;
   renderer().beginFrame(viewport);
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {

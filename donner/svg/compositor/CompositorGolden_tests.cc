@@ -1873,6 +1873,42 @@ TEST_F(CompositorGoldenTest, AdmissionCountsThePresentedFrameWhileASlotIsDrawnDi
       CompositorController::PromoteResult::MemoryLimit);
 }
 
+// With no layers, every frame draws the document flat and then warms the canvas-sized root tile.
+// When the budget holds the flat frame's target but not that tile beside it, the tile is refused
+// in every frame and the tile set never completes. The flat frame is the whole document, so it
+// stands in for the tiles and matches a flat render.
+TEST_F(CompositorGoldenTest, FlatFrameStandsInWhenTheRootTileDoesNotFitBesideIt) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+        <rect width="200" height="100" fill="white"/>
+        <rect x="20" y="20" width="50" height="50" fill="red"/>
+      </svg>)svg";
+  SVGDocument document = parseDocument(kSource);
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  config.complexityBucketing = false;
+  config.dynamicImmediateStaticSpans = false;
+  SetSurfaceBudgetInCanvases(renderer_, 1.5);
+  CompositorController compositor(document, renderer_, config);
+  const RendererBitmap reference = FlatRender(kSource);
+  for (int frame = 0; frame < 3; ++frame) {
+    SCOPED_TRACE(frame);
+    compositor.renderFrame(viewport_);
+    ASSERT_FALSE(compositor.hasCompleteTileSetForPresentation())
+        << "the root tile must not fit beside the flat frame for this case to mean anything";
+    EXPECT_TRUE(compositor.composedFrameStandsInForTiles());
+    editor::tests::CompareBitmapToBitmap(renderer_.takeSnapshot(), reference,
+                                         "flat_frame_stands_in",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+
+  // A budget below one surface refuses the flat frame's own target: no frame holds the document.
+  SetSurfaceBudgetInCanvases(renderer_, 0.5);
+  compositor.renderFrame(viewport_);
+  EXPECT_FALSE(compositor.composedFrameStandsInForTiles())
+      << "a flat frame whose target the budget refused must not stand in for the tiles";
+}
+
 TEST_F(CompositorGoldenTest, OpacityLessThanOneAutoPromotionMatchesFullRender) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
