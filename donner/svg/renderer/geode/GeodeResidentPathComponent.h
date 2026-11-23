@@ -162,7 +162,9 @@ public:
     const auto merged = static_cast<std::ptrdiff_t>(freeIndices_.size());
     freeIndices_.insert(freeIndices_.end(), pendingFrees_.begin(), pendingFrees_.end());
     std::inplace_merge(freeIndices_.begin(), freeIndices_.begin() + merged, freeIndices_.end());
-    // A slot freed twice must still be handed out once, or two live slots would share a record.
+    // A slot freed more than once before this merge, or freed again while still on the free list,
+    // is listed once, so it is handed out once. This cannot catch a stale free of a slot that has
+    // already been handed out again: that slot would be listed free while it is live.
     freeIndices_.erase(std::unique(freeIndices_.begin(), freeIndices_.end()), freeIndices_.end());
     freeListSteps_ += freeIndices_.size();
     pendingFrees_.clear();

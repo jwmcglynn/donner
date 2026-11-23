@@ -390,7 +390,20 @@ Entity with <path d="...">
   `MarkerRepeatsFallBackWhenTheDocumentRefusesTheirRecords`). An offscreen pass inside an open
   frame that already wrote a slot's records takes one-frame records instead
   (`OffscreenPassLeavesTheOuterFramesRepeatRecordsAlone`). Gradient-painted repeats keep the arena
-  path, because a gradient's parameters live in the slot's single paint block.
+  path, because a gradient's parameters live in the slot's single paint block; pattern-painted
+  draws take their own resident path and keep no repeat records. Only the solid fill and solid
+  stroke slots hold repeat records: per path and device, two fill slots and eight stroke slots, a
+  bound fixed by the slot arrays rather than by a test, so a path retains under about 30 MiB of
+  repeat records, all charged to the document's geometry budget. The records are kept at each
+  slot's high-water mark and reused: a slot reset for new geometry, including a replaced stroke or
+  fill variant, keeps its records (structural: `reset()` leaves them in place), and they are
+  released only when the path's residence component is removed
+  (`MarkerRepeatRecordsAreReplacedWhenTheContentChanges`), when the device is dropped
+  (`MarkerRepeatRecordsGoWithTheDeviceThatKeptThem`), or with the document
+  (`MarkerRepeatRecordsAreKeptAcrossFramesAndGoWithTheDocument`). Repeat detection keys on the
+  slot itself, so a draw of another slot of the same path, such as a stroke after its own pending
+  fill, is a first draw (`ADrawOfAnotherSlotOfThePathIsNotARepeat`), and each stroke variant counts
+  its own repeats (`EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats`).
 - **Ordered batching.** An eligible resident draw publishes its instance record into the
   `GeodeRecordSlab` and joins the pending batch; the batch flushes as one instanced draw in painter
   order.

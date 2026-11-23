@@ -828,6 +828,25 @@ TEST_F(GeodeDocumentResidencyTest, MarkerRepeatRecordsAreReplacedWhenTheContentC
   EXPECT_THAT(RepeatRecordsOf(document), Eq(kMarkerRepeats)) << "and a fresh set replaces them";
 }
 
+TEST_F(GeodeDocumentResidencyTest, ADrawOfAnotherSlotOfThePathIsNotARepeat) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
+  }
+  // Each element is filled and stroked once, so its stroke draws while its own fill is still the
+  // pending singleton. The stroke uses another slot of the same path, so it is that slot's first
+  // draw, and nothing in the frame is a repeat.
+  SVGDocument document = ParseShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+      <path d="M20 40 C60 0 120 80 180 30 Z" fill="#06c" stroke="#000" stroke-width="2"/>
+      <rect x="20" y="100" width="80" height="60" fill="#c00" stroke="#0a0" stroke-width="6"/>
+    </svg>)");
+  RendererGeode renderer(first_);
+  renderer.draw(document);
+  renderer.draw(document);
+  EXPECT_THAT(RepeatRecordsOf(document), Eq(0u))
+      << "a stroke drawn after its own pending fill took a repeat record of the stroke slot";
+}
+
 TEST_F(GeodeDocumentResidencyTest, EachStrokeVariantKeepsTheRecordsOfItsOwnRepeats) {
   if (!RendererGeode::sceneBatchingEnabledForTesting()) {
     GTEST_SKIP() << "Without scene batching a repeat draws solo and keeps no records.";
