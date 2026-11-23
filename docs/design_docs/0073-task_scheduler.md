@@ -363,11 +363,35 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
      that will re-check the global queue before it next sleeps, and this worker continues to step
      5. Only when no worker is asleep shallow does it wake itself and run the work past its
      margin;
-  5. otherwise waits on its parker for a change from the value read in step 2.
+  5. otherwise waits on its parker for a change from the value read in step 2. Whenever that wait
+     returns, for any reason (a change, a change that happened before the wait began, or a
+     spurious return), the worker first wakes itself with the swap on its own state word,
+     incrementing `awake` only if the swap succeeds, and only then does anything else: a waiting
+     creator re-checks its scope and rules 1 and 2, an idle worker looks for work, and either one
+     that finds nothing sleeps again from step 1.
+
+  Steps 3 to 5 touch only the global queue's emptiness, state words and parkers; the worker runs,
+  pops and steals nothing while its state is asleep. So a worker executing anything other than
+  those steps is counted awake. Without the self-wake on leaving step 5 that fails: a waker whose
+  swap failed because the worker had not yet reached step 3 still changes the parker, the worker
+  then stores asleep and decrements, its wait returns at once, and it would run on counted asleep
+  and decrement again at its next sleep.
+
+  `awake` is a signed count. The transitions that change either side of it are exactly these:
+  a worker storing an asleep value in its own state word in step 3, followed by its one decrement;
+  and a successful swap from asleep to awake on some worker's word (the worker itself in step 4
+  or on leaving step 5, a publisher, a finisher, the hand-off, or shutdown), followed by one
+  increment by the thread that won the swap. A failed swap changes neither side. Workers start
+  awake with `awake` equal to the worker count. So the protocol's count invariant is: `awake`
+  equals the number of workers whose state word is awake, except for transitions in flight, each
+  of which is one store or swap followed by its single matching decrement or increment. Debug
+  builds assert after every decrement that the result is not negative.
 
   A thread that publishes to the global queue pushes, issues a sequentially consistent fence, and
-  reads `awake`. If it is zero, it picks an asleep worker, switches that worker's state to awake
-  with a compare-and-swap, increments `awake`, and changes and notifies that worker's parker. It
+  reads `awake`. If no worker is awake, tested as `awake <= 0` so that a count driven below zero
+  by a defect still reads as no worker awake and leads to a wake rather than to silence, it picks
+  an asleep worker, switches that worker's state to awake with a compare-and-swap, increments
+  `awake` if its swap succeeded, and changes and notifies that worker's parker. It
   may also wake one worker when some are asleep and none is searching, for parallelism. Because the
   sleeper's step 3 and the publisher's push are each followed by a fence before the other's read,
   at least one of them sees the other: either the sleeper sees the queued task in step 4, or the
@@ -416,8 +440,8 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   - A finishing task reads the creator's parker pointer from its task record, then decrements the
     scope's counter with release ordering. That decrement is its last access to the scope. If it
     reached zero, the finisher changes and notifies the parker (and, if the creator is an asleep
-    worker, switches its state to awake and increments `awake` first), touching only the parker
-    and the scheduler's own state.
+    worker, first swaps its state to awake, incrementing `awake` only if that swap succeeds),
+    touching only the parker and the scheduler's own state.
   - `co_await scope.join()` registers its coroutine handle in the scope and sets a flag in the
     counter word with a compare-and-swap loop. If the loop observes a count of zero,
     `await_suspend` returns false and the coroutine continues without suspending. Otherwise the
@@ -458,6 +482,12 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     number of workers not asleep. The injected-delay test delays the sleeper between its step 4
     decision and its swap, and must be observed red with an unconditional increment (`awake`
     stays one too high, and a later schedule with every worker asleep leaves a task unrun).
+  - A finisher's swap failing just before the creator's step 3: a worker waits on an inner scope
+    inside an outer one, and the injected delay holds it between steps 2 and 3 while the outer
+    scope's last task finishes, so the finisher sees it awake, its swap fails and it changes the
+    parker. At quiescence `awake` must equal the number of workers whose state is awake, and a
+    following schedule with every worker past its margin must complete. Must be observed red with
+    the self-wake swap after the parker wait removed (`awake` ends one low).
   - Two workers past the margin, each holding the other's scope's flat task below its own
     watermark: both drain into the global queue and the last awake worker runs both tasks.
   - A coroutine-joined scope whose task is drained into the global queue while every worker is
@@ -481,7 +511,8 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   margin (`TaskSchedulerOptions::helpMarginBytes`, 128 KiB by default) is a heuristic that decides
   which worker helps; it is not part of correctness. Because the last awake worker runs queued
   work even past its margin, native stack depth is bounded by policy instead. Each client declares
-  its tasks' native stack bound and whether its tasks wait; a task that waits can, through rule 1
+  its tasks' native stack bound and whether its tasks wait (with the declaration below for a client
+  whose tasks wait); a task that waits can, through rule 1
   and helping, nest further tasks on the same stack, bounded by the program's own fork-join
   structure, as in other work-stealing runtimes. A hard limit turns exhaustion into a named
   failure: before running any task, a worker compares the stack pointer with its stack floor plus
@@ -498,10 +529,17 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   not by any one program's nesting. If several clients whose tasks wait share one scheduler and
   every worker is past its margin, that depth can exceed a worker stack. The stack-floor check then
   stops the process with a named release assertion. That is a clean, diagnosable crash, not a
-  recovery. Style alone cannot reach it, because style tasks never wait. A client whose tasks wait
-  must declare so, and the scheduler's owner checks, before letting such clients share a
-  scheduler, that the worker stack size exceeds the sum of the declared stack bounds those clients'
-  waiting tasks can stack on one worker, or gives them separate schedulers.
+  recovery. Style alone cannot reach it, because style tasks never wait.
+
+  The rule for clients whose tasks wait: each such client either declares the maximum number of
+  its waiting tasks that can be queued or running at once together with their stack bound, or
+  gets a scheduler of its own. Sharing a scheduler without one of the two is not allowed. For
+  clients that declare, the scheduler's owner checks, before letting them share, that the worker
+  stack size less the reserve exceeds the sum over those clients of maximum count times stack
+  bound, plus the largest stack bound of any client whose tasks do not wait; that is a sum of
+  products and computable. A declaration that is wrong is not caught by the check, and the
+  stack-floor assertion is then still what stops the process: a named, clean crash, not a
+  recovery.
 - **Non-worker waits.** A thread that is not a worker (the render worker holding document access,
   for example) is not counted in `awake` and never runs tasks while workers exist: its spawns go
   to the global queue with the publish protocol, and when it waits it re-checks its scope's counter
