@@ -54,8 +54,8 @@ this is a wiring, caching, and batching design, not a new rendering algorithm.
 ## Next Steps
 
 - Start the independent Milestone 8 items: keyed stroke cache (8.1) and layer-composite
-  uniforms (8.3), together with the Milestone 5 named-result keys. 8.3 also clears the five filter scenes
-  8.6 left listed.
+  uniforms (8.3), together with the Milestone 5 named-result keys. 8.3 also clears the five filter
+  scenes 8.6 left listed.
 - Each item deletes the `kKnownViolations` entries it clears from
   `donner/svg/renderer/geode/tests/GeodeCounterCorpus_tests.cc` and adds a focused
   `GeodePerf_tests.cc` case that fails before the change.
@@ -325,15 +325,16 @@ Entity with <path d="...">
   rebuilt when the tile's view changes. The renderer renders every tile again each frame, into a
   pool texture; because the pool hands a bucket's textures out in the order the previous frame took
   them, an unchanged frame draws each tile into the texture it used before. The renderer keeps a
-  view of each tile texture for one frame after its last use (`PatternTileViewsStayBoundedBetweenFrames`). A view owns no memory of
-  its own; the tile textures go back to the pool at every frame end and are charged to the pool's
-  byte budget. Because every tile is rendered again, a warm renderer's next frame matches a fresh
-  render after an edit of a shape inside the pattern, the pattern's size or transform, a gradient
-  or nested pattern its content paints with, the device scale, or an edit that makes tiles of one
-  size trade textures (`PatternEditsReachTheNextFrameOfAWarmRenderer`). Two gaps outside the
-  pattern path are not covered: a warm renderer keeps a marker's old context paint after the
-  context element's paint changes (#2617), and setting a pattern's `width` with `setAttribute`
-  does not reach the tile (#2616).
+  view of each tile texture for one frame after its last use
+  (`PatternTileViewsStayBoundedBetweenFrames`). A view owns no memory of its own; the tile textures
+  go back to the pool at every frame end and are charged to the pool's byte budget. Because every
+  tile is rendered again, a warm renderer's next frame matches a fresh render after an edit of a
+  shape inside the pattern, the pattern's size or transform, a gradient or nested pattern its
+  content paints with, the device scale, or an edit that makes tiles of one size trade textures
+  (`PatternEditsReachTheNextFrameOfAWarmRenderer`). Two gaps outside the pattern path are not
+  covered: a warm renderer keeps a marker's old context paint after the context element's paint
+  changes (#2617), and setting a pattern's `width` with `setAttribute` does not reach the tile
+  (#2616).
 - **Residency gates.** Residence is taken only when no clip polygon, clip mask, or mask pass is
   active, and once per slot per frame. Draws that fail a gate use the per-frame arena path.
 - **Ordered batching.** An eligible resident draw publishes its instance record into the

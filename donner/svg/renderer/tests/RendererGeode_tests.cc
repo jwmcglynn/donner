@@ -3130,22 +3130,6 @@ struct PatternEdit {
   const char* value;      //!< New attribute value, or the new pattern width.
 };
 
-/// Number of pixels that differ between \p a and \p b, a premise check that an edit changes what
-/// is drawn, or every pixel of the larger bitmap when their dimensions differ.
-std::size_t DifferingPixelCount(const RendererBitmap& a, const RendererBitmap& b) {
-  if (a.dimensions != b.dimensions || a.rowBytes != b.rowBytes) {
-    return std::max(a.pixels.size(), b.pixels.size()) / 4u;
-  }
-  std::size_t differing = 0;
-  for (std::size_t offset = 0; offset + 4u <= a.pixels.size(); offset += 4u) {
-    if (!std::equal(a.pixels.begin() + offset, a.pixels.begin() + offset + 4u,
-                    b.pixels.begin() + offset)) {
-      ++differing;
-    }
-  }
-  return differing;
-}
-
 /// Applies \p edit to \p document.
 void ApplyPatternEdit(SVGDocument& document, const PatternEdit& edit) {
   switch (edit.kind) {
@@ -3208,9 +3192,12 @@ TEST_F(RendererGeodeTest, PatternEditsReachTheNextFrameOfAWarmRenderer) {
     RendererGeode fresh = createRenderer();
     fresh.draw(reference);
     const RendererBitmap expected = fresh.takeSnapshot();
-    ASSERT_THAT(DifferingPixelCount(beforeEdit, expected), testing::Gt(0u))
-        << "Premise: the edit must change the rendering, or a stale tile would pass unnoticed. "
-        << "Before: " << beforeEdit.dimensions << ", after: " << expected.dimensions;
+    // Premise: the edit changes the rendering, or a stale tile would pass unnoticed. An edit that
+    // changes the canvas size changes it by construction.
+    if (beforeEdit.dimensions == expected.dimensions) {
+      ASSERT_NE(beforeEdit.pixels, expected.pixels)
+          << "Premise: the edit must change the rendering, or a stale tile would pass unnoticed";
+    }
 
     editor::tests::CompareBitmapToBitmap(afterEdit, expected,
                                          std::string("pattern_edit_") + edit.name,
