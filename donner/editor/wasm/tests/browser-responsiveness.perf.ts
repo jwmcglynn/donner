@@ -48,7 +48,7 @@ import {
   presentedDragFailures,
   presentedDragSummary,
 } from "./presented-frame-samples.mjs";
-import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
+import { kSplashDocumentSize, showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 import {
   armCanvasGpuDelayFromEnv,
   canvasGpuDelayFromEnv,
@@ -2017,13 +2017,9 @@ test.describe("Geode detailed interactions", () => {
   }
 });
 
-// A shape selected for the first time after zooming in must still get its own compositor layer, so
-// its drag moves that layer instead of re-rendering the document for every pointer move. The
-// retained compositor textures grow with the square of the device pixel ratio and of the zoom, so a
-// 1920x1080 window at device scale 2 (a 3840x2160 backing store, as on a 4K display) is where a
-// budget that counts them refuses the promotion. The checks read worker counters, not wall-clock
-// time, so they hold on a loaded or software GPU. The device-scale-1 projects run the same case on
-// a 1920x1080 backing store as the control.
+// A shape first selected after zooming in must still get its own layer (#2575). Retained textures
+// grow with the square of the device scale, so `chromium` and `firefox` (3840x2160) are where a
+// budget that counts them refuses it; `chromium-dpr1` and `firefox-dpr1` are the control.
 test.describe("fresh selection after zoom", () => {
   test.use({ viewport: { width: 1920, height: 1080 } });
 
@@ -2068,10 +2064,19 @@ test.describe("fresh selection after zoom", () => {
 
       // The splash N's left stem, a letter nothing has selected yet.
       const viewport = (await snapshot(page)).viewport!;
+      expect(showsSplashDocument(viewport), "the viewport must describe the splash").toBe(true);
       const point = {
-        x: Math.round(viewport.documentX + viewport.documentWidth * 413 / 892),
-        y: Math.round(viewport.documentY + viewport.documentHeight * 360 / 512),
+        x: Math.round(
+          viewport.documentX + viewport.documentWidth * 413 / kSplashDocumentSize.width,
+        ),
+        y: Math.round(
+          viewport.documentY + viewport.documentHeight * 360 / kSplashDocumentSize.height,
+        ),
       };
+      expect(point.x).toBeGreaterThan(viewport.paneX);
+      expect(point.x).toBeLessThan(viewport.paneX + viewport.paneWidth);
+      expect(point.y).toBeGreaterThan(viewport.paneY);
+      expect(point.y).toBeLessThan(viewport.paneY + viewport.paneHeight);
       await startWorkerResultCounters(page);
       await dispatchCanvasPointer(page, point, true);
       await expect.poll(async () => (await snapshot(page)).interaction?.selectedCount, {
@@ -2116,8 +2121,8 @@ test.describe("fresh selection after zoom", () => {
       ).toEqual({ refusedRequests: 0, firstRefusal: null });
       expect(summary.fastPathFrames, "the drag must move the N's layer on the fast path")
         .toBeGreaterThan(0);
-      // An admitted drag renders a drag-start and a release result; a refused one renders one per
-      // pointer move (60 here). Eight leaves room for a recapture without accepting that fallback.
+      // An admitted drag renders a drag-start and a release result; a refused one renders up to one
+      // per pointer move. Eight leaves room for a recapture without accepting that fallback.
       expect(summary.activeDragResults, "the drag must not re-render once per pointer move")
         .toBeLessThanOrEqual(8);
       expect(failures).toEqual([]);
