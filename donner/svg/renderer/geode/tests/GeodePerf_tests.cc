@@ -1085,9 +1085,9 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
 
 /// Three patterns with tiles of one size: two fill rects and the third strokes a rect. The three
 /// tiles share one pool bucket, so each keeps its texture only because the pool hands a bucket's
-/// textures out in the order the previous frame took them. Each pattern has one consumer: a pattern drawn twice in a frame draws its content
-/// twice, and the second draw of a content entity in a frame takes the per-frame arena path like
-/// any entity drawn twice in a frame.
+/// textures out in the order the previous frame took them. Each pattern has one consumer: a pattern
+/// drawn twice in a frame draws its content twice, and the second draw of a content entity in a
+/// frame takes the per-frame arena path like any entity drawn twice in a frame.
 constexpr std::string_view kPatternFillsSvg = R"SVG(
 <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
   <defs>
