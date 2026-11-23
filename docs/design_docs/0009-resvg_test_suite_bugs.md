@@ -160,9 +160,10 @@ default sideways Latin.
 
 `filters/filter/subregion-and-primitiveUnits=objectBoundingBox-3` renders without a comparison
 (`Params::UndefinedBehavior`, listed in `SPEC_UB_ALLOWLIST`). Its objectBoundingBox subregion runs
-from 112.5 to 187.5 device pixels on the 300x300 canvas. On every lane Donner covers columns and
-rows 112 to 187, both half-covered edge pixels, and the reference 112 to 186; that last column and
-row is the whole difference (147 pixels on the software renderer, 153 on Geode). Filter Effects 1
+from 112.5 to 187.5 device pixels on the 300x300 canvas. Measured on Linux, Donner covers columns
+and rows 112 to 187, both half-covered edge pixels, and the reference 112 to 186; that last column
+and row is the whole difference (147 pixels on the software renderer, 153 on Geode with software
+Vulkan). Filter Effects 1
 sections 8, 9.1 and 9.4 make the subregion a hard clip in the operating coordinate space but give
 no rule for an edge that falls inside a device pixel.
 
