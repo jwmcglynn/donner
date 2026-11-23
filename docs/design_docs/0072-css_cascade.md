@@ -1705,7 +1705,10 @@ per-element cost and is calibrated in Milestone D3.
   by ordinary work stealing between workers, as the scheduler intends for small work. If
   `trySpawn` meets the queue bound it returns false and the task pushes that subtree onto its own
   heap stack instead of running it as a nested call. Tasks never wait, so a task's native stack use
-  is one task frame whatever the tree depth, and only the pass owner waits, once. A child never
+  is one task frame whatever the tree depth, and only the pass owner waits, once. The pass owner
+  is usually the render worker, which is not a scheduler worker: its root spawns go to the
+  scheduler's global queue and it sleeps on its parker until the pass's counter reaches zero,
+  running no tasks itself. A child never
   starts before its parent's record is published, which the spawn order guarantees.
   The on-demand parent computation in `computePropertiesInto` stays for the serial path and is an
   assertion failure in the parallel path. Offscreen shadow trees are separate roots, started after
@@ -1714,19 +1717,29 @@ per-element cost and is calibrated in Milestone D3.
 - **Budgets.** The serial pass defines every budget outcome; a parallel pass is kept only when no
   budget could have refused in either path. The `StyleResourceBudget` work counters (rule-element
   matches, declaration applications and their component and byte work, selector traversal) are
-  charged against per-worker shares of the remaining allowance. Retained computed-style bytes go
-  through the shared `RetainedStyleBytes` account of Part A, whose reserve is a compare-exchange
-  loop that never overshoots the limit. With per-worker caches a parallel pass can create a
-  different number of distinct records than the serial pass, so the retained total differs by
-  schedule and cannot decide a refusal by itself. Each worker therefore also sums, for every
-  element it styles, the bytes of the record that element ends up holding, which is what a
-  per-entity charge would be; every distinct-record total, serial or parallel, is at most that
-  sum. The parallel pass is abandoned, its computed styles discarded (releasing their records), and
-  the pass rerun serially, whenever any work share runs out, any reserve on the account is
-  refused, or the per-entity sum reaches the retained-byte limit. Below that point neither path
-  can refuse anything, so their outcomes match; at or above it the serial rerun decides which
-  element is refused, so a budget-limited document gets exactly the serial result and only
-  documents near their limits pay twice.
+  charged against per-worker shares of the remaining allowance. Matching and traversal work is the
+  same per element in both paths, but declaration-application work depends on cache hits, and a
+  per-worker cache can hit where the serial cache, with its clock eviction, misses. So in a
+  parallel pass declaration work is charged as if every element missed the cache: each element is
+  charged the declaration applications, component work and byte work its matched rules and local
+  declarations would cost on a miss, which is at least what the serial pass charges for it.
+  Retained computed-style bytes go through the shared `RetainedStyleBytes` account of Part A,
+  whose reserve is a compare-exchange loop that never overshoots the limit. With per-worker caches
+  a parallel pass can create a different number of distinct records than the serial pass, so the
+  retained total differs by schedule and cannot decide a refusal by itself. Each worker therefore
+  also sums, for every element it styles, the bytes of the record that element ends up holding,
+  which is what a per-entity charge would be; every distinct-record total, serial or parallel, is
+  at most that sum. Both comparisons are against the allowance remaining when the pass starts,
+  since records held by entities outside a selective pass already occupy the account. The
+  parallel pass is abandoned whenever any work share runs out, any reserve on the account is
+  refused, or the per-entity sum reaches the remaining retained-byte allowance. Abandoning drops
+  every computed style the pass wrote, the per-worker caches and the per-worker warning buffers
+  (so their record references and charges go), restores the work counters to their values at the
+  start of the pass, and reruns the pass serially. Below the abandon point neither path can refuse
+  anything, because every quantity the parallel pass checks bounds the serial pass's from above,
+  so their outcomes match; at or above it the serial rerun decides which element is refused, so a
+  budget-limited document gets exactly the serial result and only documents near their limits pay
+  twice.
 - **Warnings.** Each task records an entity's diagnostics in two per-entity buffers: those from
   before its parent is computed in the serial `computePropertiesInto` (rule application) and those
   from after (animation, colors, inheritance, fonts). After the join the commit replays the serial
