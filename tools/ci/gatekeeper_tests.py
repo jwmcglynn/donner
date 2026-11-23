@@ -1,5 +1,7 @@
 """Runs the gatekeeper decisions as a workflow step would: real git history, a fake gh."""
 
+import ast
+import importlib.util
 import json
 import os
 import shlex
@@ -179,6 +181,7 @@ class GatekeeperTest(unittest.TestCase):
                    "target.write_text('forged trust action')\n")
         _commit(self.repo, ["tools/ci/gatekeeper.py"], payload)
         head = _commit(self.repo, [".github/actions/pr-trust/action.yml"], "forged action")
+        self._test_merge(self.root, head)
         context = self._pull_request(self.root, head)
         output = self.work / "admission-output"
         env = dict(os.environ, **context, **_GIT_ENV, GITHUB_WORKSPACE=str(trusted),
@@ -250,13 +253,73 @@ class GatekeeperTest(unittest.TestCase):
 
     # docs-only
 
-    def test_docs_only_pull_request(self):
-        head = _commit(self.repo, ["docs/guide.md", "CHANGELOG.md", "NOTES.md", ".gitignore",
-                                   ".editorconfig", ".gitattributes", "docs/img/a.svg"], "docs")
-        result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
+    def _test_merge(self, base_tip, *heads):
+        """Checks out GitHub's test merge of `heads` into `base_tip`, as CI checks it out."""
+        # Forced: a fixture may stage an entry its worktree does not match.
+        _git(self.repo, "checkout", "-q", "-f", "--detach", base_tip)
+        _git(self.repo, "merge", "-q", "--no-ff", "-m", "test merge", *heads)
+        return _git(self.repo, "rev-parse", "HEAD")
+
+    def _docs_only(self, base, head, base_tip=None):
+        """Runs docs-only on the test merge of `head` into `base_tip` (default: payload base)."""
+        merge = self._test_merge(base_tip or base, head)
+        result, output, _ = self._run("docs-only", **self._pull_request(base, head))
         self.assertEqual(result.returncode, 0, result.stderr)
+        return result, output, merge
+
+    def test_docs_only_pull_request(self):
+        # Every kind of file docs/ holds, and the top-level documentation files.
+        head = _commit(self.repo, ["docs/guide.md", "docs/design_docs/0001-plan.md",
+                                   "docs/pages.dox", "docs/img/a.svg", "docs/img/b.png",
+                                   "docs/data.json", "docs/table.tsv", "docs/notes.txt",
+                                   "docs/page.html", "docs/archive.zip", "CHANGELOG",
+                                   "CHANGELOG.md", "RELEASE_NOTES.md", "NOTES.md", ".gitignore",
+                                   ".editorconfig"], "docs")
+        result, output, merge = self._docs_only(self.root, head)
         self.assertEqual(output, "docs_only=true\n")
-        self.assertIn(f"Using merge-base {self.root} as diff basis.", result.stdout)
+        self.assertIn(f"Comparing test merge {merge} with its first parent {self.root}.",
+                      result.stdout)
+
+    def test_build_graph_files_and_test_inputs_are_not_documentation(self):
+        # docs/ is part of the root package: a BUILD file there splits it off. A CHANGELOG
+        # prefix names a top-level file, not a directory, and .gitattributes is a test input.
+        for path in ("docs/BUILD.bazel", "docs/BUILD", "docs/rules.bzl", "docs/CMakeLists.txt",
+                     "docs/deps.cmake", "docs/MODULE.bazel", "docs/WORKSPACE.bazel",
+                     "CHANGELOGx/BUILD.bazel", "CHANGELOG/foo.cc", ".gitattributes",
+                     # A case-insensitive checkout (macOS) finds these as build-graph files.
+                     "docs/build.bazel", "docs/Build", "docs/Workspace.bazel",
+                     "docs/Module.bazel.lock", "docs/CMakeLists.TXT", "docs/rules.BZL",
+                     "docs/deps.CMake"):
+            with self.subTest(path=path):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                head = _commit(self.repo, ["docs/guide.md", path], "change " + path)
+                result, output, _ = self._docs_only(self.root, head)
+                self.assertEqual(output, "docs_only=false\n")
+                self.assertIn(f"Non-doc change: {path}", result.stdout)
+
+    def test_every_build_graph_input_lint_knows_is_not_documentation(self):
+        # The admission checkout cannot import tools/ci/lint_changes.py, so gatekeeper.py keeps
+        # its own list; this fails when graph_input accepts a file the gatekeeper calls docs.
+        source = Path(runfiles.Create().Rlocation("donner/tools/ci/lint_changes.py")).read_text(
+            encoding="utf-8")
+        function = next(node for node in ast.parse(source).body
+                        if isinstance(node, ast.FunctionDef) and node.name == "graph_input")
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "lint_changes.py", "exec"),
+             namespace)
+        graph_input = namespace["graph_input"]
+        gatekeeper = self._gatekeeper_module()
+        names = sorted({node.value for node in ast.walk(function)
+                        if isinstance(node, ast.Constant) and isinstance(node.value, str)})
+        self.assertIn("BUILD.bazel", names)
+        checked = 0
+        for name in names:
+            for path in (name, "docs/" + name, "docs/rules" + name):
+                if graph_input(path):
+                    checked += 1
+                    with self.subTest(path=path):
+                        self.assertFalse(gatekeeper.is_docs_only_path(path))
+        self.assertGreater(checked, len(names))
 
     def test_any_build_input_clears_docs_only(self):
         for path in ("donner/BUILD.bazel", "nested/README.md", ".bazelignore", ".gitmodules",
@@ -264,8 +327,7 @@ class GatekeeperTest(unittest.TestCase):
             with self.subTest(path=path):
                 _git(self.repo, "checkout", "-q", "--detach", self.root)
                 head = _commit(self.repo, ["docs/guide.md", path], "change " + path)
-                result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
-                self.assertEqual(result.returncode, 0, result.stderr)
+                result, output, _ = self._docs_only(self.root, head)
                 self.assertEqual(output, "docs_only=false\n")
                 self.assertIn(f"Non-doc change: {path}", result.stdout)
 
@@ -283,8 +345,7 @@ class GatekeeperTest(unittest.TestCase):
             with self.subTest(path=path):
                 _git(self.repo, "checkout", "-q", "--detach", self.root)
                 head = _commit(self.repo, ["docs/guide.md", path], "change " + path)
-                result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
-                self.assertEqual(result.returncode, 0, result.stderr)
+                _, output, _ = self._docs_only(self.root, head)
                 self.assertEqual(output, "docs_only=false\n")
 
     def test_deleted_build_inputs_clear_docs_only(self):
@@ -306,32 +367,231 @@ class GatekeeperTest(unittest.TestCase):
                 else:
                     _git(self.repo, "rm", "-q", path)
                 head = _commit(self.repo, ["docs/guide.md"], "remove %s, edit docs" % path)
-                result, output, _ = self._run("docs-only", **self._pull_request(base, head))
-                self.assertEqual(result.returncode, 0, result.stderr)
+                _, output, _ = self._docs_only(base, head)
                 self.assertEqual(output, "docs_only=%s\n" % expected)
+
+    def _gatekeeper_module(self):
+        spec = importlib.util.spec_from_file_location("gatekeeper", self.script)
+        gatekeeper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gatekeeper)
+        return gatekeeper
+
+    def _stage_entry(self, mode, path, target):
+        """Stages `path` as a symlink to `target` (120000) or a gitlink to commit `target`."""
+        if mode == "120000":
+            link = self.work / "link-target"
+            link.write_text(target, encoding="utf-8")
+            target = _git(self.repo, "hash-object", "-w", str(link))
+        _git(self.repo, "update-index", "--add", "--cacheinfo", f"{mode},{target},{path}")
+
+    def test_a_type_change_of_a_build_input_clears_docs_only(self):
+        # A source file becomes a symlink (or a symlink a file) beside a documentation edit.
+        for link_first in (False, True):
+            with self.subTest(link_first=link_first):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                if link_first:
+                    self._stage_entry("120000", "donner/code.cc", "../README.md")
+                    _git(self.repo, "commit", "-q", "-m", "add a symlink")
+                    base = _git(self.repo, "rev-parse", "HEAD")
+                    # The worktree still has no file there, so this writes a regular file.
+                    head = _commit(self.repo, ["donner/code.cc", "docs/guide.md"], "as a file")
+                else:
+                    base = _commit(self.repo, ["donner/code.cc"], "add a file")
+                    self._stage_entry("120000", "donner/code.cc", "../README.md")
+                    head = _commit(self.repo, ["docs/guide.md"], "as a symlink")
+                result, output, _ = self._docs_only(base, head)
+                self.assertEqual(output, "docs_only=false\n")
+                self.assertIn("Non-file change: donner/code.cc", result.stdout)
+
+    def test_a_mode_only_change_of_a_build_input_clears_docs_only(self):
+        base = _commit(self.repo, ["tools/run.sh"], "add a script")
+        _git(self.repo, "update-index", "--chmod=+x", "tools/run.sh")
+        head = _commit(self.repo, ["docs/guide.md"], "make the script executable")
+        self.assertEqual(_git(self.repo, "diff", "--raw", base, head, "--", "tools/run.sh")[:15],
+                         ":100644 100755 ")
+        result, output, _ = self._docs_only(base, head)
+        self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("Non-doc change: tools/run.sh", result.stdout)
+
+    def test_a_symlink_or_gitlink_under_docs_clears_docs_only(self):
+        # Bazel's `//...` walks docs/, which .bazelignore does not exclude: a symlink there can
+        # add packages or a cycle. A gitlink is a dependency checkout, not a document.
+        cases = (("a document becomes a symlink", "100644", "120000"),
+                 ("a symlink becomes a document", "120000", "100644"),
+                 ("a symlink is added", None, "120000"),
+                 ("a gitlink is added", None, "160000"))
+        for name, before, after in cases:
+            with self.subTest(case=name):
+                _git(self.repo, "checkout", "-q", "--detach", self.root)
+                if before == "100644":
+                    _commit(self.repo, ["docs/linked.md"], "add a document")
+                elif before == "120000":
+                    self._stage_entry("120000", "docs/linked.md", "../donner")
+                    _git(self.repo, "commit", "-q", "-m", "add a symlink")
+                base = _git(self.repo, "rev-parse", "HEAD")
+                if after == "100644":
+                    _commit(self.repo, ["docs/linked.md"], "as a document")
+                else:
+                    self._stage_entry(after, "docs/linked.md",
+                                      "../donner" if after == "120000" else self.root)
+                head = _commit(self.repo, ["docs/guide.md"], "edit docs")
+                result, output, _ = self._docs_only(base, head)
+                self.assertEqual(output, "docs_only=false\n")
+                self.assertIn("Non-file change: docs/linked.md", result.stdout)
+
+    def test_an_unexpected_diff_entry_is_not_docs_only(self):
+        # Copies, renames, unmerged, unknown and broken pairs cannot appear in this diff; if one
+        # ever does, CI runs. A documentation entry beside each shows only the entry decides.
+        gatekeeper = self._gatekeeper_module()
+        blob = "1" * 40
+        document = f":100644 100644 {blob} {blob} M\tdocs/guide.md\n"
+        self.assertTrue(gatekeeper._all_docs_entries(document))
+        for entry in (f":100644 100644 {blob} {blob} C075\tdocs/a.md\tdocs/b.md",
+                      f":100644 100644 {blob} {blob} R100\tdocs/a.md\tdocs/b.md",
+                      f":000000 000000 {'0' * 40} {'0' * 40} U\tdocs/a.md",
+                      f":100644 100644 {blob} {blob} X\tdocs/a.md",
+                      f":100644 100644 {blob} {blob} B\tdocs/a.md",
+                      f":100644 100644 {blob} {blob} M",
+                      "docs/a.md"):
+            with self.subTest(entry=entry):
+                self.assertFalse(gatekeeper._all_docs_entries(document + entry + "\n"))
 
     def test_base_drift_after_the_fork_is_not_attributed_to_the_pull_request(self):
         head = _commit(self.repo, ["docs/guide.md"], "docs")
         _git(self.repo, "checkout", "-q", "--detach", self.root)
         base_tip = _commit(self.repo, ["donner/code.cc"], "base drift")
-        result, output, _ = self._run("docs-only", **self._pull_request(base_tip, head))
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for payload_base in (self.root, base_tip):
+            with self.subTest(payload_base=payload_base):
+                _, output, _ = self._docs_only(payload_base, head, base_tip=base_tip)
+                self.assertEqual(output, "docs_only=true\n")
+
+    def test_a_payload_base_older_than_the_fork_keeps_a_docs_only_pull_request(self):
+        # The payload's base commit lags the base branch: this head forked from a newer commit
+        # with a code change. Only the test merge's first parent shows the pull request's own
+        # change, which is documentation.
+        _git(self.repo, "checkout", "-q", "--detach", self.root)
+        fork = _commit(self.repo, ["donner/code.cc"], "base branch change")
+        head = _commit(self.repo, ["docs/guide.md"], "docs")
+        for payload_base in (self.root, fork):
+            with self.subTest(payload_base=payload_base):
+                _, output, _ = self._docs_only(payload_base, head, base_tip=fork)
+                self.assertEqual(output, "docs_only=true\n")
+
+    def test_a_docs_only_pull_request_that_merged_the_advanced_base_stays_docs_only(self):
+        # The head forked before the base branch changed code, then merged that change; the base
+        # branch moved on with another code change. The payload still records the fork point.
+        head = _commit(self.repo, ["docs/guide.md"], "docs")
+        _git(self.repo, "checkout", "-q", "--detach", self.root)
+        advanced = _commit(self.repo, ["donner/code.cc"], "base branch change")
+        _git(self.repo, "checkout", "-q", "--detach", head)
+        _git(self.repo, "merge", "-q", "--no-ff", "-m", "merge the base branch", advanced)
+        head = _commit(self.repo, ["docs/other.md"], "more docs")
+        _git(self.repo, "checkout", "-q", "--detach", advanced)
+        base_tip = _commit(self.repo, ["donner/later.cc"], "later base branch change")
+        _, output, _ = self._docs_only(self.root, head, base_tip=base_tip)
         self.assertEqual(output, "docs_only=true\n")
 
-    def test_missing_merge_base_falls_back_to_the_base_tip(self):
-        _git(self.repo, "checkout", "-q", "--orphan", "unrelated")
-        _git(self.repo, "rm", "-q", "-rf", ".")
-        unrelated = _commit(self.repo, ["docs/other.md"], "unrelated")
-        result, output, _ = self._run("docs-only", **self._pull_request(unrelated, self.root))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"using base tip {unrelated} as diff basis", result.stdout)
-        # The fallback diff contains README.md, a top-level Markdown file.
-        self.assertEqual(output, "docs_only=true\n")
+    def test_restoring_a_path_to_an_older_base_commit_clears_docs_only(self):
+        # The base branch changed donner/code.cc after the payload's base commit; the head, based
+        # on that change, sets the file back to its content at the payload base and edits docs.
+        # Against the payload base the file looks unchanged, but the tested tree changes it.
+        before = _commit(self.repo, ["donner/code.cc"], "before")
+        advanced = _commit(self.repo, ["donner/code.cc"], "after")
+        (self.repo / "donner/code.cc").write_text("before\n", encoding="utf-8")
+        _git(self.repo, "add", "--", "donner/code.cc")
+        head = _commit(self.repo, ["docs/guide.md"], "restore donner/code.cc, edit docs")
+        self.assertEqual(_git(self.repo, "rev-parse", f"{head}:donner/code.cc"),
+                         _git(self.repo, "rev-parse", f"{before}:donner/code.cc"))
+        result, output, _ = self._docs_only(before, head, base_tip=advanced)
+        self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("Non-doc change: donner/code.cc", result.stdout)
 
-    def test_empty_change_set_is_not_docs_only(self):
-        result, output, _ = self._run("docs-only", **self._pull_request(self.root, self.root))
+    def test_an_empty_pull_request_with_an_older_payload_base_is_not_docs_only(self):
+        # The head is a base-branch commit that adds documentation; the base branch has moved on.
+        # The test merge changes nothing, though the older payload base sees the documentation.
+        fork = _commit(self.repo, ["docs/guide.md"], "base branch docs")
+        base_tip = _commit(self.repo, ["donner/code.cc"], "base branch code")
+        # `git merge` would report the head as already merged; GitHub still builds a test merge.
+        merge = _git(self.repo, "commit-tree", f"{base_tip}^{{tree}}", "-p", base_tip, "-p", fork,
+                     "-m", "test merge")
+        _git(self.repo, "checkout", "-q", "--detach", merge)
+        result, output, _ = self._run("docs-only", **self._pull_request(self.root, fork))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, "docs_only=false\n")
+
+    def test_empty_change_set_is_not_docs_only(self):
+        _git(self.repo, "commit", "-q", "--allow-empty", "-m", "empty")
+        head = _git(self.repo, "rev-parse", "HEAD")
+        result, output, _ = self._docs_only(self.root, head)
+        self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("The test merge changes no path; not docs-only.", result.stdout)
+
+    def test_a_checkout_that_is_not_a_test_merge_of_the_payload_head_is_not_docs_only(self):
+        # Every head here changes only documentation, so only the binding keeps CI running.
+        head = _commit(self.repo, ["docs/guide.md"], "docs")
+        _git(self.repo, "checkout", "-q", "--detach", self.root)
+        base_tip = _commit(self.repo, ["docs/base.md"], "base branch docs")
+        _git(self.repo, "checkout", "-q", "--detach", self.root)
+        other = _commit(self.repo, ["docs/other.md"], "another head")
+        _git(self.repo, "checkout", "-q", "--detach", head)
+        _git(self.repo, "merge", "-q", "--no-ff", "-m", "parents swapped", base_tip)
+        swapped = _git(self.repo, "rev-parse", "HEAD")
+        checkouts = {
+            "the head itself": (head, head),
+            "parents swapped": (swapped, head),
+            "a merge of another head": (self._test_merge(base_tip, other), head),
+            "three parents": (self._test_merge(base_tip, head, other), head),
+            "an unknown payload head": (self._test_merge(base_tip, head), "0" * 40),
+            "no payload head": (self._test_merge(base_tip, head), None),
+        }
+        for name, (checkout, payload_head) in checkouts.items():
+            with self.subTest(checkout=name):
+                _git(self.repo, "checkout", "-q", "--detach", checkout)
+                context = self._pull_request(self.root, payload_head)
+                if payload_head is None:
+                    Path(context["GITHUB_EVENT_PATH"]).write_text(
+                        json.dumps({"pull_request": {"base": {"sha": self.root}}}),
+                        encoding="utf-8")
+                result, output, _ = self._run("docs-only", **context)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "docs_only=false\n")
+                self.assertIn("::warning::Cannot bind the checkout to a test merge of the pull "
+                              "request head", result.stdout)
+
+    def test_a_checkout_without_the_merge_parents_is_not_docs_only(self):
+        # actions/checkout's default depth does not fetch the test merge's parents.
+        head = _commit(self.repo, ["docs/guide.md"], "docs")
+        _git(self.repo, "branch", "test-merge", self._test_merge(self.root, head))
+        for depth, expected in ((1, "false"), (2, "true")):
+            with self.subTest(depth=depth):
+                checkout = self.work / f"depth-{depth}"
+                subprocess.run(["git", "clone", "-q", "--depth", str(depth), "--branch",
+                                "test-merge", "file://" + str(self.repo), str(checkout)],
+                               check=True, env=dict(os.environ, **_GIT_ENV),
+                               timeout=test_timing.STALL_GUARD_SECONDS)
+                result, output, _ = self._run("docs-only", cwd=checkout,
+                                              **self._pull_request(self.root, head))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, f"docs_only={expected}\n")
+
+    def test_a_git_failure_is_not_docs_only(self):
+        head = _commit(self.repo, ["docs/guide.md"], "docs")
+        merge = self._test_merge(self.root, head)
+        not_a_repository = self.work / "not-a-repository"
+        not_a_repository.mkdir()
+        result, output, _ = self._run("docs-only", cwd=not_a_repository,
+                                      **self._pull_request(self.root, head))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("::warning::Cannot bind the checkout", result.stdout)
+        # The first parent is listed but its tree is missing, so only the diff fails.
+        tree = _git(self.repo, "rev-parse", f"{self.root}^{{tree}}")
+        self.assertNotEqual(tree, _git(self.repo, "rev-parse", f"{merge}^{{tree}}"))
+        (self.repo / ".git/objects" / tree[:2] / tree[2:]).unlink()
+        result, output, _ = self._run("docs-only", **self._pull_request(self.root, head))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "docs_only=false\n")
+        self.assertIn("::warning::git diff failed", result.stdout)
 
     def test_non_pull_request_events_are_never_docs_only(self):
         for event in ("push", "schedule", "workflow_dispatch"):
@@ -339,11 +599,6 @@ class GatekeeperTest(unittest.TestCase):
                 result, output, _ = self._run("docs-only", GITHUB_EVENT_NAME=event)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output, "docs_only=false\n")
-
-    def test_unknown_head_fails_the_step(self):
-        result, output, _ = self._run("docs-only", **self._pull_request(self.root, "0" * 40))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(output, "")
 
     # main-advanced
 

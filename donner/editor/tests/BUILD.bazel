@@ -1220,8 +1220,6 @@ donner_cc_test(
 donner_cc_test(
     name = "text_editor_core_tests",
     srcs = ["TextEditorCore_tests.cc"],
-    # A hung case (such as a glyph walk that stops advancing) fails within the Bazel timeout.
-    args = ["--donner_test_timeout_seconds=20"],
     deps = [
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
@@ -1233,8 +1231,6 @@ donner_cc_test(
 donner_cc_test(
     name = "text_editor_tests",
     srcs = ["TextEditor_tests.cc"],
-    # A hung case (such as a glyph walk that stops advancing) fails within the Bazel timeout.
-    args = ["--donner_test_timeout_seconds=20"],
     deps = [
         "//donner/base:gtest_timeout_main",
         "//donner/editor:text_editor",

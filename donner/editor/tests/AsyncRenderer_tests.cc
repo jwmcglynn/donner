@@ -71,6 +71,7 @@ using ::testing::Contains;
 using ::testing::DoubleNear;
 using ::testing::Field;
 using ::testing::Gt;
+using ::testing::ResultOf;
 using tests::PollForResult;
 using tests::PollUntil;
 using tests::WaitForIdle;
@@ -1540,6 +1541,115 @@ TEST(AsyncRendererTest, NestedMultiSelectionNeverPublishesOverlappingLayers) {
   ASSERT_EQ(reversedPixels.dimensions, referencePixels.dimensions);
   EXPECT_EQ(reversedPixels.pixels, referencePixels.pixels)
       << "Reversing nested selection order must not change pixels";
+}
+
+/// Published name of a promotion outcome's result, so a mismatch prints a readable reason.
+std::string PromotionResultName(const InteractionPromotionOutcome& outcome) {
+  return InteractionPromotionResultName(outcome);
+}
+
+/// Renders \p svgSource once per entry of \p selectPerRender, selecting \p selector for an active
+/// drag in the renders whose entry is true, and returns every result.
+std::vector<RenderResult> RenderSelectionSequence(std::string_view svgSource, const char* selector,
+                                                  std::span<const bool> selectPerRender,
+                                                  Entity* selectedEntity) {
+  svg::SVGDocument document = svg::instantiateSubtree(std::string(svgSource));
+  document.setCanvasSize(64, 64);
+  auto selected = document.querySelector(selector);
+  if (!selected.has_value()) {
+    ADD_FAILURE() << "missing " << selector;
+    return {};
+  }
+  *selectedEntity = selected->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  std::vector<RenderResult> results;
+  for (std::size_t index = 0; index < selectPerRender.size(); ++index) {
+    RenderRequest request(renderer, document);
+    request.version = index + 1;
+    request.documentGeneration = 1;
+    if (selectPerRender[index]) {
+      request.selectedEntity = *selectedEntity;
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = *selectedEntity,
+          .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      };
+    }
+    asyncRenderer.requestRender(request);
+    std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+    if (!result.has_value()) {
+      ADD_FAILURE() << "render " << index + 1 << " produced no result";
+      return {};
+    }
+    results.push_back(std::move(*result));
+  }
+  return results;
+}
+
+TEST(AsyncRendererTest, PublishesAdmittedInteractionPromotionWithItsBudgetInputs) {
+  // The first render has no selection, so its retained tiles exist when the second render
+  // requests the promotion and the sampled retained total is nonzero.
+  constexpr std::array<bool, 2> kSelectPerRender = {false, true};
+  Entity entity = entt::null;
+  const std::vector<RenderResult> results = RenderSelectionSequence(
+      R"svg(
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+          <rect x="0" y="0" width="64" height="64" fill="white"/>
+          <rect id="target" x="12" y="12" width="24" height="24" fill="red"/>
+        </svg>
+      )svg",
+      "#target", kSelectPerRender, &entity);
+  ASSERT_EQ(results.size(), 2u);
+  EXPECT_THAT(results[0].interactionPromotion,
+              AllOf(Field("requested", &InteractionPromotionOutcome::requested, false),
+                    ResultOf("result name", PromotionResultName, "None")));
+
+  const RenderResult& result = results[1];
+  ASSERT_TRUE(result.compositedPreview.has_value());
+  EXPECT_EQ(result.compositedPreview->entity, entity);
+  const std::size_t budget = svg::compositor::EffectiveCompositorMemoryBudget();
+  EXPECT_THAT(
+      result.interactionPromotion,
+      AllOf(Field("requested", &InteractionPromotionOutcome::requested, true),
+            Field("entity", &InteractionPromotionOutcome::entity, entity),
+            ResultOf("result name", PromotionResultName, "PromotedLayer"),
+            Field("retainedBitmapBytes", &InteractionPromotionOutcome::retainedBitmapBytes,
+                  AllOf(Gt(0u), ::testing::Lt(budget))),
+            Field("memoryBudgetBytes", &InteractionPromotionOutcome::memoryBudgetBytes, budget)));
+}
+
+TEST(AsyncRendererTest, PublishesRefusedInteractionPromotionReason) {
+  // The selected rectangle's complete interaction tile is far larger than the largest tile the
+  // compositor admits. The first request is admitted before the compositor has a viewport, and its
+  // first frame drops the oversized tile. Every later request, the retry in that render and the
+  // request in the next, is refused with MemoryLimit by the cached refusal of that interaction
+  // root, not by the total budget: the retained total stays far below it.
+  constexpr std::array<bool, 2> kSelectPerRender = {true, true};
+  Entity entity = entt::null;
+  const std::vector<RenderResult> results = RenderSelectionSequence(
+      R"svg(
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+          <rect x="0" y="0" width="64" height="64" fill="white"/>
+          <rect id="target" x="-6000" y="-6000" width="12064" height="12064" fill="red"/>
+        </svg>
+      )svg",
+      "#target", kSelectPerRender, &entity);
+  ASSERT_EQ(results.size(), 2u);
+  const RenderResult& result = results[1];
+  ASSERT_TRUE(result.compositedPreview.has_value());
+  EXPECT_THAT(result.compositedPreview->entity, ::testing::Eq(Entity{entt::null}))
+      << "A refused promotion must leave the drag without a drag-target layer";
+
+  const std::size_t budget = svg::compositor::EffectiveCompositorMemoryBudget();
+  EXPECT_THAT(
+      result.interactionPromotion,
+      AllOf(Field("requested", &InteractionPromotionOutcome::requested, true),
+            Field("entity", &InteractionPromotionOutcome::entity, entity),
+            ResultOf("result name", PromotionResultName, "MemoryLimit"),
+            Field("retainedBitmapBytes", &InteractionPromotionOutcome::retainedBitmapBytes,
+                  ::testing::Lt(budget)),
+            Field("memoryBudgetBytes", &InteractionPromotionOutcome::memoryBudgetBytes, budget)));
 }
 
 TEST(AsyncRendererTest, PendingParentDemotionDoesNotClaimMovableChildCoverage) {

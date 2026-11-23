@@ -191,8 +191,8 @@ private:
 [[nodiscard]] std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(
     const SVGDocument& oldDoc, const SVGDocument& newDoc);
 
-/// Maximum total memory budget for compositor layer bitmaps, in bytes, on
-/// hosts with a large address space.
+/// Admission threshold on retained compositor pixels, CPU bitmaps and GPU
+/// textures together, in bytes, on hosts with a large address space.
 ///
 /// Sized for high-DPI editor sessions with mandatory filter, mask, and
 /// isolated-layer promotions plus one active drag target. Scale-band caching
@@ -200,22 +200,56 @@ private:
 /// canvas resolution.
 inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 
-/// Effective compositor bitmap budget for the current process.
+/// Admission threshold on retained compositor pixels in the browser build, in
+/// bytes: the renderer's per-frame surface budget.
+///
+/// A frame that rebuilds every tile (the first frame, and any change of canvas
+/// size or surface transform, such as a zoom step) charges each tile it
+/// rasterizes and its own frame target against
+/// `RendererSurfaceBudget::kMaximumBytes`. Tiles retained from earlier frames
+/// are not charged again, so the retained total approximates what the next
+/// rebuild must fit. When a rebuild does not fit, the remaining tiles are
+/// rasterized in the following frame, and a tile refused twice at the same
+/// canvas size is drawn directly until the canvas size changes. WebGPU reports no memory
+/// budget, the browser runtime does not observe an out-of-memory texture
+/// allocation, and once a device is lost the runtime refuses further work, so
+/// the browser does not add an interaction layer to a tile set whose rebuild
+/// already cannot fit that budget.
+inline constexpr size_t kBrowserCompositorMemoryBytes = RendererSurfaceBudget::kMaximumBytes;
+
+/// Threshold on all retained compositor pixels, CPU bitmaps and GPU textures
+/// together, for admitting a new interaction promotion.
+///
+/// `CompositorController::promoteEntity` refuses to promote an entity that
+/// holds no interaction hint yet once the retained total, plus one surface the
+/// size of the most recent frame's canvas, has reached this value. That
+/// surface stands for the frame target, which every frame that composes the
+/// main renderer charges beside the tiles it rasterizes. The canvas of the frame that follows the
+/// request can differ from the most recent one. It is not a cap on retained pixels: an entity that
+/// already holds a hint is refreshed without the comparison, mandatory filter, mask and isolated
+/// layers and static segments are not gated by it, and nothing is evicted to meet it.
+/// `CompositorConfig::retainedMemoryBudgetBytes` replaces it for one controller.
+[[nodiscard]] size_t EffectiveCompositorMemoryBudget();
+
+/// Threshold on the retained compositor pixels that are held in CPU bitmaps,
+/// for admitting a new interaction promotion. It gates the same requests as
+/// \ref EffectiveCompositorMemoryBudget.
 ///
 /// On wasm the linear memory is small and FIXED (growth is fatal on every
 /// browser engine, so the build links with equal initial and maximum
-/// memory), and a budget larger
-/// than the whole address space means admission can never refuse: full-canvas
-/// payloads accrue across zoom size-commit epochs until the module aborts
-/// (measured 2026-08-11: ~one 24.8MB surface per 250ms at DPR 2). Bound the
-/// budget to a third of the actual heap there. Native keeps the constant.
+/// memory), and a threshold larger than the whole address space means
+/// admission can never refuse: full-canvas CPU payloads accrue across zoom
+/// size-commit epochs until the module aborts. CPU bitmaps are therefore
+/// bounded to a third of the actual heap there. GPU textures do not live in
+/// that heap, so they count only against \ref EffectiveCompositorMemoryBudget.
+/// Native keeps the constant.
 ///
 /// NOTE the measured caveat: refusing promotion is not free - an unpromoted
 /// heavy subtree re-rasterizes full-document per frame, which can cost MORE
 /// transient memory than the retained tile (a blind 96MB budget made storms
 /// OOM sooner). This bound therefore stays generous (heap/3, not heap/10);
 /// right-sizing below that requires measuring the demotion fallback path.
-[[nodiscard]] size_t EffectiveCompositorMemoryBudget();
+[[nodiscard]] size_t EffectiveCompositorHeapBitmapBudget();
 
 /**
  * Runtime feature gates for `CompositorController`.
@@ -290,6 +324,14 @@ struct CompositorConfig {
   /// disable this so a span is rasterized once and then reused as a cached tile.
   bool immediateStaticSpans = true;
 
+  /// Admission threshold on all retained compositor pixels, in bytes. Unset uses
+  /// `EffectiveCompositorMemoryBudget()`.
+  std::optional<size_t> retainedMemoryBudgetBytes;
+
+  /// Admission threshold on retained pixels held in CPU bitmaps, in bytes. Unset uses
+  /// `EffectiveCompositorHeapBitmapBudget()`.
+  std::optional<size_t> heapBitmapBudgetBytes;
+
   /// When true, a static segment that the deterministic cost heuristic would
   /// cache may additionally be promoted to an immediate (re-rasterized every
   /// frame) span when its *measured* rasterize time fits the per-frame
@@ -359,7 +401,12 @@ public:
       InvalidEntity,
       /// The compositor cannot add another layer without exceeding the layer limit.
       LayerLimit,
-      /// The compositor cannot add another layer without exceeding the memory budget.
+      /// The promotion was refused for memory: retained pixels plus one canvas-sized frame target
+      /// reached the total threshold;
+      /// retained CPU bitmaps reached the heap bitmap threshold; the entity's complete interaction
+      /// tile exceeds the largest tile the compositor admits; or the request repeats, at the same
+      /// raster size and surface transform, one that was refused because its complete tile was
+      /// oversized or dropped after a texture allocation failure while it held an exclusive layer.
       MemoryLimit,
       /// A descendant is already promoted, so this entity was not promoted.
       DescendantPromoted,
@@ -374,6 +421,24 @@ public:
     static constexpr Code MemoryLimit = Code::MemoryLimit;  ///< Memory limit was reached.
     static constexpr Code DescendantPromoted =
         Code::DescendantPromoted;  ///< A descendant already owns a promoted layer.
+
+    /// Prints the name of \p value.
+    friend std::ostream& operator<<(std::ostream& stream, Code value) {
+      switch (value) {
+        case Code::PromotedLayer: return stream << "PromotedLayer";
+        case Code::OwningTilesRequired: return stream << "OwningTilesRequired";
+        case Code::InvalidEntity: return stream << "InvalidEntity";
+        case Code::LayerLimit: return stream << "LayerLimit";
+        case Code::MemoryLimit: return stream << "MemoryLimit";
+        case Code::DescendantPromoted: return stream << "DescendantPromoted";
+      }
+      return stream << "Code(" << static_cast<int>(value) << ")";
+    }
+
+    /// Prints the name of the result's code.
+    friend std::ostream& operator<<(std::ostream& stream, const PromoteResult& result) {
+      return stream << result.code;
+    }
 
     /// Result code for this promotion request.
     Code code = Code::PromotedLayer;
@@ -548,9 +613,19 @@ public:
   [[nodiscard]] size_t layerCount() const;
 
   /**
-   * Returns the total memory used by all layer bitmaps, in bytes.
+   * Returns the memory held by retained compositor pixels, in bytes: the CPU bitmaps and GPU
+   * textures of cached static segments and of layers. Pieces held for a masked-child drag count as
+   * layer textures.
    */
   [[nodiscard]] size_t totalBitmapMemory() const;
+
+  /// Admission threshold on \ref totalBitmapMemory for a new interaction promotion: the
+  /// configured override, or `EffectiveCompositorMemoryBudget()`.
+  [[nodiscard]] size_t retainedMemoryBudgetBytes() const;
+
+  /// Admission threshold on the CPU-bitmap share of \ref totalBitmapMemory for a new interaction
+  /// promotion: the configured override, or `EffectiveCompositorHeapBitmapBudget()`.
+  [[nodiscard]] size_t heapBitmapBudgetBytes() const;
 
   /// Split of \ref totalBitmapMemory by what holds the pixels. The four kinds
   /// are evicted by different rules, so a single total cannot say which rule is
@@ -967,7 +1042,12 @@ public:
     InvalidEntity,
     /// Too many entities already promoted (`kMaxCompositorLayers`).
     LayerLimit,
-    /// Total bitmap memory already at `kMaxCompositorMemoryBytes`.
+    /// Refused for memory: retained pixels plus one canvas-sized frame target reached the total
+    /// threshold; retained CPU bitmaps reached the heap bitmap threshold; the entity's complete
+    /// interaction tile exceeds the largest tile the compositor admits; or the request repeats, at
+    /// the same raster size and surface transform, one that was refused because its complete tile
+    /// was oversized or dropped after a texture allocation failure while it held an exclusive
+    /// layer.
     MemoryLimit,
     /// A descendant already has its own promoted layer (typically a
     /// mandatorily-detected filter / mask / isolated-layer). Allowing
@@ -1222,6 +1302,11 @@ private:
   void remapMaskedChildDrag(const std::unordered_map<Entity, Entity>& remap);
   /// Texture bytes held by the masked-child drag pieces.
   size_t maskedChildDragPieceBytes() const;
+
+  /// True when retained pixels have reached either admission threshold: all retained pixels plus
+  /// one frame target of the most recent canvas size against the total threshold, or the
+  /// CPU-bitmap share against the heap bitmap threshold.
+  bool retainedMemoryAtBudget() const;
   /// The only layer containing @p entity, or null when there is none, several, or @p entity is a
   /// layer itself.
   CompositorLayer* soleLayerContaining(Entity entity);

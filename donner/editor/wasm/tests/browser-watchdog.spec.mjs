@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -569,7 +569,8 @@ test("termination is issued once even when the stop and exit paths both run", as
   }
 });
 
-async function superviseWithDeniedGroupProbe(options, code = "EPERM") {
+// Runs `body` with every signal-zero probe of a process group failing with errno `code`.
+async function withFailingGroupProbe(code, body) {
   const original = process.kill;
   process.kill = function(pid, signal) {
     if (pid < 0 && signal === 0) {
@@ -580,14 +581,17 @@ async function superviseWithDeniedGroupProbe(options, code = "EPERM") {
     return original.call(this, pid, signal);
   };
   try {
-    return await superviseCase(process.execPath, ["-e", "process.exit(0)"], {
-      outputDir: directory(),
-      intervalMs: 20,
-      ...options,
-    });
+    return await body();
   } finally {
     process.kill = original;
   }
+}
+function superviseWithDeniedGroupProbe(options, code = "EPERM", args = ["-e", "process.exit(0)"]) {
+  return withFailingGroupProbe(code, () => superviseCase(process.execPath, args, {
+    outputDir: directory(),
+    intervalMs: 20,
+    ...options,
+  }));
 }
 test("a denied signal-zero probe verifies absence through process enumeration", async () => {
   const result = await superviseWithDeniedGroupProbe();
@@ -636,6 +640,106 @@ test("an unexpected signal-zero probe failure fails closed and finishes cleanup"
   assert.equal(result.exit.code, 0, "the driver's own exit is still reported");
   assertFinalReport(result, listeners);
 });
+const kUnverifiedProbeFailure = "group probe failed: EINVAL signal-zero probe";
+const kUnverifiedProbeReason = `test process cleanup verification unavailable: ${
+  kUnverifiedProbeFailure}`;
+test("an unexpected signal-zero probe failure keeps a failing driver's exit", async () => {
+  const listeners = ["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal));
+  const result = await superviseWithDeniedGroupProbe({}, "EINVAL", ["-e", "process.exit(3)"]);
+  assert.equal(result.exit.code, 3, "the driver's own failure is still reported");
+  assert.equal(result.reason, kUnverifiedProbeReason);
+  assert.equal(result.reportingError, kUnverifiedProbeFailure);
+  assert.deepEqual(result.cleanup, { groupGone: false, survivors: [] });
+  assertFinalReport(result, listeners);
+});
+// Supervises a driver whose anchor emits an error before the driver starts, so the awaited driver
+// result rejects, with every signal-zero group probe failing with EINVAL. Resolves to the rejection,
+// the anchor's pid and the report path.
+async function superviseWithAnchorError() {
+  const childProcess = createRequire(import.meta.url)("node:child_process");
+  const originalSpawn = childProcess.spawn;
+  let anchor;
+  childProcess.spawn = function(command, args, ...rest) {
+    const child = originalSpawn.call(this, command, args, ...rest);
+    if (args?.[0]?.endsWith("browser-watchdog-anchor.mjs")) {
+      anchor = child;
+      // The driver never starts: this anchor fails before launching it. The error is emitted on
+      // the next tick, after `supervise` has subscribed to the anchor's events.
+      child.send = () => true;
+      process.nextTick(() => child.emit("error", new Error("simulated anchor failure")));
+    }
+    return child;
+  };
+  // The watchdog imports `spawn` as an ES module binding; publish the replacement to it.
+  syncBuiltinESMExports();
+  const outputDir = directory();
+  try {
+    const error = await withFailingGroupProbe("EINVAL", () => superviseCase(
+      process.execPath,
+      ["-e", "process.exit(0)"],
+      { outputDir, intervalMs: 20 },
+    )).then(() => null, (rejection) => rejection);
+    const reportFile = path.join(outputDir, "browser-watchdog.json");
+    return { error, anchorPid: anchor?.pid, reportFile };
+  } finally {
+    childProcess.spawn = originalSpawn;
+    syncBuiltinESMExports();
+  }
+}
+test("an unexpected signal-zero probe failure cannot replace a rejected driver result", async () => {
+  const listeners = ["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal));
+  const { error, anchorPid, reportFile } = await superviseWithAnchorError();
+  assert.ok(anchorPid > 0, "the anchor spawn was intercepted");
+  assert.equal(error?.message, "simulated anchor failure", "the driver's own failure is the result");
+  const report = JSON.parse(fs.readFileSync(reportFile, "utf8"));
+  assert.equal(report.reason, kUnverifiedProbeReason);
+  assert.equal(report.reportingError, kUnverifiedProbeFailure);
+  assert.deepEqual(report.cleanup, { groupGone: false, survivors: [] });
+  assert.deepEqual(["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal)), listeners);
+  assert.throws(() => process.kill(-anchorPid, 0), { code: "ESRCH" }, "the group was still ended");
+});
+// The watchdog command's own exit status, for a driver that exits `driverCode` while every
+// signal-zero group probe fails with EINVAL: an unverified cleanup must never exit green.
+for (const [name, driverCode] of [["passing", 0], ["failing", 3]]) {
+  test(`the watchdog command fails a ${name} driver whose cleanup is unverified`, () => {
+    const root = directory();
+    const outputDir = path.join(root, "outputs");
+    const driver = path.join(root, "driver.sh");
+    fs.writeFileSync(driver, `#!/bin/sh\nexit ${driverCode}\n`, { mode: 0o755 });
+    const failingProbe = path.join(root, "failing-probe.cjs");
+    fs.writeFileSync(failingProbe, `
+      const original = process.kill;
+      process.kill = function(pid, signal) {
+        if (pid < 0 && signal === 0) {
+          throw Object.assign(new Error("EINVAL signal-zero probe"), { code: "EINVAL" });
+        }
+        return original.call(this, pid, signal);
+      };
+    `);
+    const watchdog = fileURLToPath(new URL("./browser-watchdog.mjs", import.meta.url));
+    // SIGKILL on timeout: the supervisor's own SIGTERM handler would otherwise absorb it.
+    const child = spawnSync(process.execPath, ["--require", failingProbe, watchdog], {
+      encoding: "utf8",
+      timeout: kStallGuardMs,
+      killSignal: "SIGKILL",
+      env: {
+        ...process.env,
+        DONNER_WATCHDOG_DRIVER: driver,
+        DONNER_WATCHDOG_SPEC: driver,
+        DONNER_WATCHDOG_CONFIG: driver,
+        DONNER_WATCHDOG_HEARTBEAT: undefined,
+        TEST_UNDECLARED_OUTPUTS_DIR: outputDir,
+      },
+    });
+    assert.equal(child.error, undefined, "the supervisor exits without being killed");
+    assert.equal(child.status, 1, child.stderr);
+    const reportFile = path.join(outputDir, "browser-watchdog.json");
+    assert.ok(fs.existsSync(reportFile), `the final receipt is written\n${child.stderr}`);
+    const report = JSON.parse(fs.readFileSync(reportFile, "utf8"));
+    assert.equal(report.reason, kUnverifiedProbeReason);
+    assert.deepEqual(report.cleanup, { groupGone: false, survivors: [] });
+  });
+}
 // Supervises `args` with every group kill denied, ending the group after the test if it is left.
 async function superviseWithDeniedGroupKill(t, args, options) {
   const original = process.kill;

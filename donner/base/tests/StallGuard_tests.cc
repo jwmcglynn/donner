@@ -9,18 +9,25 @@
 #include <optional>
 #include <thread>
 
+#include "donner/base/tests/GtestTimeoutBudget.h"
+
 namespace donner::tests {
 namespace {
 
 using std::chrono::steady_clock;
 using testing::Eq;
+using testing::Gt;
 using testing::Optional;
 
 // The guard is a hang bound of tens of seconds, never a latency budget. It must expire strictly
-// before the 60 s per-case watchdog in gtest_timeout_main and the 60 s Bazel timeout of a `small`
-// test, so a hang fails with the guard's message rather than a bare timeout.
+// before the per-case watchdog in gtest_timeout_main and the watchdog deadline of a `small` test,
+// so a hang fails with the guard's message rather than the watchdog's.
 static_assert(kHangGuard >= std::chrono::seconds(10));
-static_assert(kHangGuard < std::chrono::seconds(60));
+static_assert(kHangGuard < kDefaultPerCaseBudget);
+
+TEST(StallGuardTest, HangGuardExpiresBeforeTheSmallTestWatchdogDeadline) {
+  EXPECT_THAT(WatchdogDeadline("60"), Optional(Gt(kHangGuard)));
+}
 
 TEST(StallGuardTest, HangGuardWindowIsKHangGuardFromConstruction) {
   const auto before = steady_clock::now();

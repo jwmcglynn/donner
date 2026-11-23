@@ -17,7 +17,7 @@ import json
 from math import ceil
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -28,10 +28,10 @@ class CoverageCounts:
     found: int = 0
 
     @property
-    def percent(self) -> float:
-        """Return hit/found as a percentage, or 100 for an empty denominator."""
+    def percent(self) -> float | None:
+        """Return hit/found as a percentage, or None when nothing was counted."""
         if self.found == 0:
-            return 100.0
+            return None
         return self.hit / self.found * 100.0
 
     def hits_needed_for(self, target_percent: float) -> int:
@@ -56,16 +56,17 @@ class CodecovLineCounts:
         return self.hits + self.misses + self.partials
 
     @property
-    def percent(self) -> float:
-        """Return Codecov-style line coverage percentage."""
+    def percent(self) -> float | None:
+        """Return Codecov-style line coverage percentage, or None without coverable lines."""
         if self.total == 0:
-            return 100.0
+            return None
         return self.hits / self.total * 100.0
 
     @property
-    def display_percent(self) -> int:
+    def display_percent(self) -> int | None:
         """Return the whole-number percentage shown by Codecov's project UI."""
-        return int(self.percent + 0.5)
+        percent = self.percent
+        return None if percent is None else int(percent + 0.5)
 
     def hits_needed_for(self, target_percent: float) -> int:
         """Return additional fully covered lines needed to reach target_percent."""
@@ -194,30 +195,144 @@ def collect_lcov_metrics(
     )
 
 
+class CoverageInputError(ValueError):
+    """An input that cannot be measured; the message is the user-facing diagnostic."""
+
+
+_Reject = Callable[[str], CoverageInputError]
+
+_QUOTE_LIMIT = 120
+
+_REPORT_ENDPOINT_HINT = (
+    "expected a Codecov coverage report response with a 'files' list, as returned by "
+    "https://api.codecov.io/api/v2/github/<owner>/repos/<repo>/report/?sha=<sha>"
+)
+
+
 def load_codecov_reference_lines(path: Path) -> dict[str, set[int]]:
-    """Load the file/line universe from a Codecov commit API JSON response."""
-    data = json.loads(path.read_text(encoding="utf-8"))
-    report = data.get("report", data)
-    files = report.get("files", [])
+    """Load the file/line universe from a Codecov coverage report JSON response.
+
+    Accepts the `/report/?sha=<sha>` response, whose top level carries `files`, and the
+    `/commits/<sha>/` response, which nests the same report under `report`. Each file
+    entry has a `name` and `line_coverage` pairs of `[line_number, coverage]`.
+
+    Raises:
+        CoverageInputError: The file is missing, is not a Codecov report, has a
+            malformed entry, or describes no coverable lines. Treating any of these
+            as an empty universe would discard every local record.
+    """
+
+    def reject(problem: str) -> CoverageInputError:
+        return CoverageInputError(f"Codecov reference {path} {problem}")
+
     reference_lines: dict[str, set[int]] = {}
-    for file_entry in files:
-        source_file = file_entry.get("name")
-        line_coverage = file_entry.get("line_coverage", [])
-        if not isinstance(source_file, str):
-            continue
-
-        lines: set[int] = set()
-        for line_entry in line_coverage:
-            if not isinstance(line_entry, list) or not line_entry:
-                continue
-            try:
-                lines.add(int(line_entry[0]))
-            except (TypeError, ValueError):
-                continue
-
+    for file_index, file_entry in enumerate(_reference_files(_read_reference_json(path), reject)):
+        location = f"files[{file_index}]"
+        source_file, lines = _reference_file_lines(file_entry, location, reject)
+        if source_file in reference_lines:
+            raise reject(f"lists {_quote(source_file)} twice (again at {location})")
         reference_lines[source_file] = lines
 
+    if not any(reference_lines.values()):
+        raise reject(f"has no coverable lines in its {len(reference_lines)} files")
     return reference_lines
+
+
+def _read_reference_json(path: Path) -> Any:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise CoverageInputError(f"Codecov reference JSON not found: {path}") from None
+    except (OSError, UnicodeDecodeError) as error:
+        raise CoverageInputError(f"Cannot read Codecov reference JSON {path}: {error}") from None
+
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError) as error:
+        # ValueError covers JSONDecodeError and integers past the int-to-str digit limit;
+        # RecursionError covers nesting deeper than the decoder allows.
+        raise CoverageInputError(
+            f"Codecov reference {path} is not valid JSON ({error}); {_REPORT_ENDPOINT_HINT}"
+        ) from None
+
+
+def _reference_files(data: Any, reject: _Reject) -> list[Any]:
+    """Return the non-empty `files` list of a report or commit response."""
+    if not isinstance(data, dict):
+        raise reject(f"is not a JSON object; {_REPORT_ENDPOINT_HINT}")
+    if isinstance(data.get("detail"), str):
+        raise reject(f"is a Codecov error response: {_quote(data['detail'])}")
+
+    report = data["report"] if "report" in data else data
+    files = report.get("files") if isinstance(report, dict) else None
+    if not isinstance(files, list):
+        raise reject(f"has no 'files' list; {_REPORT_ENDPOINT_HINT}")
+    if not files:
+        raise reject("lists no files; Codecov may not have processed a report for this commit")
+    return files
+
+
+def _reference_file_lines(file_entry: Any, location: str, reject: _Reject) -> tuple[str, set[int]]:
+    """Return the name and line numbers of one `files` entry."""
+    source_file = file_entry.get("name") if isinstance(file_entry, dict) else None
+    if not isinstance(source_file, str) or not source_file:
+        raise reject(f"has a malformed entry at {location}: expected an object with a 'name'")
+
+    line_coverage = file_entry.get("line_coverage")
+    if not isinstance(line_coverage, list):
+        raise reject(f"has no 'line_coverage' list for {_quote(source_file)} at {location}")
+    return source_file, {
+        _reference_line_number(line_entry, f"{location}.line_coverage[{line_index}]", reject)
+        for line_index, line_entry in enumerate(line_coverage)
+    }
+
+
+def _reference_line_number(line_entry: Any, location: str, reject: _Reject) -> int:
+    """Return the line number from a `[line_number, coverage]` pair."""
+    if isinstance(line_entry, list) and len(line_entry) >= 2:
+        line_no = line_entry[0]
+        if isinstance(line_no, int) and not isinstance(line_no, bool) and line_no > 0:
+            return line_no
+    raise reject(
+        f"has a malformed entry at {location}: expected [line_number, coverage] with a "
+        f"positive integer line number, got {_quote(line_entry)}"
+    )
+
+
+def _quote(value: Any) -> str:
+    """Return untrusted JSON as a bounded, escaped literal safe to print in a diagnostic.
+
+    JSON escaping keeps control characters such as ESC and newline out of terminal and CI
+    log output, where they could forge escape sequences or workflow commands.
+    """
+    try:
+        text = json.dumps(value)
+    except (TypeError, ValueError, RecursionError):
+        return f"<{type(value).__name__}>"
+    return text if len(text) <= _QUOTE_LIMIT else text[: _QUOTE_LIMIT - 3] + "..."
+
+
+def require_line_universe(metrics: LcovMetrics, report: Path) -> None:
+    """Reject a report with no local line records instead of reporting a percentage.
+
+    With a reference, the universe comes from the reference, so an empty LCOV report would
+    otherwise measure as every reference line missed.
+    """
+    if count_line_records(report) == 0 or metrics.codecov_lines.total == 0:
+        raise CoverageInputError(
+            f"Coverage report {report} has no executable line (DA) records; "
+            "there is no line universe to measure"
+        )
+
+
+def count_line_records(path: Path) -> int:
+    """Return the parsed `DA` records in an LCOV report, before any reference filtering."""
+    with path.open(encoding="utf-8", errors="replace") as lcov_file:
+        return sum(
+            1
+            for raw_line in lcov_file
+            if raw_line.startswith("DA:") and _parse_da(raw_line.rstrip("\n"))[0] is not None
+        )
 
 
 def _collect_line_counts(line_hits: dict[int, int]) -> CoverageCounts:
@@ -444,8 +559,8 @@ def main() -> int:
         "--codecov-reference-json",
         type=Path,
         help=(
-            "Codecov commit API JSON whose processed file/line universe should be used "
-            "instead of every DA record in the LCOV report"
+            "Codecov coverage report API JSON (/report/?sha=<sha>) whose processed "
+            "file/line universe should be used instead of every DA record in the LCOV report"
         ),
     )
     args = parser.parse_args()
@@ -456,9 +571,13 @@ def main() -> int:
             if args.codecov_reference_json is not None
             else None
         )
-        metrics = collect_lcov_metrics(args.report, reference_lines=reference_lines)
-    except FileNotFoundError:
-        print(f"ERROR: Coverage report not found: {args.report}", file=sys.stderr)
+        try:
+            metrics = collect_lcov_metrics(args.report, reference_lines=reference_lines)
+        except FileNotFoundError:
+            raise CoverageInputError(f"Coverage report not found: {args.report}") from None
+        require_line_universe(metrics, args.report)
+    except CoverageInputError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
     if args.json:

@@ -1172,6 +1172,7 @@ py_test(
         "lcov_metrics.py",
         "lcov_metrics_tests.py",
     ],
+    deps = [":test_timing"],
 )
 
 py_test(

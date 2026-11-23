@@ -6,6 +6,13 @@ import path from "node:path";
 import { test } from "node:test";
 import { PNG } from "pngjs";
 
+import {
+  assertCallerProtocolFilesUnchanged,
+  kCompletedReport,
+  writeCallerProtocolFiles,
+  writeIncompleteComparators,
+} from "./incomplete-comparators.mjs";
+
 const require = createRequire(import.meta.url);
 assert.ok(process.env.DONNER_GPU_TRANSFER_COMPARISON, "Bazel must provide the comparison module");
 assert.ok(process.env.DONNER_BROWSER_GOLDEN_COMPARE, "Bazel must provide the native comparator");
@@ -18,26 +25,16 @@ const scratch = fs.mkdtempSync(path.join(process.env.TEST_TMPDIR, "gpu-transfer-
 const evidence = fs.mkdtempSync(
   path.join(process.env.TEST_UNDECLARED_OUTPUTS_DIR, "gpu-transfer-comparison-"),
 );
-const sentinel = "caller test protocol sentinel\n";
 
 function setup(name, hostile) {
   const outputDirectory = path.join(evidence, name);
   fs.mkdirSync(outputDirectory);
-  const protocolFiles = {
-    XML_OUTPUT_FILE: path.join(outputDirectory, "caller-test.xml"),
-    TEST_PREMATURE_EXIT_FILE: path.join(outputDirectory, "caller-premature-exit"),
-    TEST_SHARD_STATUS_FILE: path.join(outputDirectory, "caller-shard-status"),
-    TEST_WARNINGS_OUTPUT_FILE: path.join(outputDirectory, "caller-warnings"),
-    GTEST_SHARD_STATUS_FILE: path.join(outputDirectory, "caller-gtest-shard-status"),
-  };
-  const callerReport = path.join(outputDirectory, "caller-gtest-report.json");
-  const callerFiles = [...Object.values(protocolFiles), callerReport];
-  for (const file of callerFiles) fs.writeFileSync(file, sentinel);
+  const caller = writeCallerProtocolFiles(outputDirectory);
   const environment = { ...process.env };
   for (const key of Object.keys(environment)) {
     if (key.startsWith("GTEST_") || key.startsWith("TESTBRIDGE_")) delete environment[key];
   }
-  Object.assign(environment, protocolFiles, {
+  Object.assign(environment, caller.settings, {
     TEST_UNDECLARED_OUTPUTS_DIR: outputDirectory,
     UPDATE_GOLDEN_IMAGES_DIR: scratch,
     DONNER_BROWSER_COMPARE_MODE: "invalid-inherited-mode",
@@ -49,11 +46,11 @@ function setup(name, hostile) {
       GTEST_TOTAL_SHARDS: "4",
       GTEST_SHARD_INDEX: "3",
       GTEST_LIST_TESTS: "1",
-      GTEST_OUTPUT: `json:${callerReport}`,
+      GTEST_OUTPUT: `json:${caller.report}`,
       TESTBRIDGE_TEST_ONLY: "NoSuchSuite.NoSuchCase",
     });
   }
-  return { outputDirectory, environment, callerFiles };
+  return { outputDirectory, environment, callerFiles: caller.files };
 }
 
 function authoredSamples(outputDirectory) {
@@ -150,13 +147,7 @@ for (const hostile of [false, true]) {
       ...Array(3).fill(false),
     ], "only the twelve pixel pairs may be marked checked");
     if (hostile) completedReports(samples, context.outputDirectory);
-    for (const file of context.callerFiles) {
-      assert.equal(
-        fs.readFileSync(file, "utf8"),
-        sentinel,
-        `native comparisons must preserve ${path.basename(file)}`,
-      );
-    }
+    assertCallerProtocolFilesUnchanged(context.callerFiles);
     if (!hostile) completedReports(samples, context.outputDirectory);
     for (let sequence = 12; sequence < 15; ++sequence) {
       assert.equal(
@@ -205,6 +196,32 @@ test("a real native pixel mismatch throws before marking the sample checked", ()
     "COMPLETED",
   ]);
   assert.equal(record.failures.length, 1);
-  for (const file of context.callerFiles) assert.equal(fs.readFileSync(file, "utf8"), sentinel);
+  assertCallerProtocolFilesUnchanged(context.callerFiles);
   assert.deepEqual(fs.readdirSync(scratch), []);
 });
+
+const kIncompleteComparators = writeIncompleteComparators(
+  fs.mkdtempSync(path.join(process.env.TEST_TMPDIR, "incomplete-comparator-")),
+);
+
+for (const { behavior, comparator, expectedError } of kIncompleteComparators) {
+  test(`a comparator that ${behavior} fails the sample instead of checking it`, () => {
+    const context = setup(`incomplete-${path.basename(comparator, ".sh")}`, true);
+    const [sample] = authoredSamples(context.outputDirectory);
+    // A completed report from an earlier run must not stand in for this one.
+    fs.writeFileSync(
+      path.join(context.outputDirectory, `${sample.sequence}-compare.json`),
+      JSON.stringify(kCompletedReport),
+    );
+    assert.throws(
+      () =>
+        compareGpuTransferSamples([sample], context.outputDirectory, {
+          ...context.environment,
+          DONNER_BROWSER_GOLDEN_COMPARE: comparator,
+        }),
+      expectedError,
+    );
+    assert.equal(sample.pixelChecked, false, "an incomplete comparison must not check the sample");
+    assertCallerProtocolFilesUnchanged(context.callerFiles);
+  });
+}

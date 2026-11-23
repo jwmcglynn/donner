@@ -16,7 +16,8 @@ Options:
   --branch-target PERCENT   Print branch-hit shortfall to this target (default: 85).
   --output-dir DIR          Directory for filtered LCOV/HTML output (default: coverage-report).
   --codecov-reference-json PATH
-                            Use a Codecov commit API JSON file as the processed file/line universe.
+                            Use a Codecov coverage report API JSON file (/report/?sha=SHA)
+                            as the processed file/line universe.
   --help                    Show this help message.
 EOF
   exit 0
