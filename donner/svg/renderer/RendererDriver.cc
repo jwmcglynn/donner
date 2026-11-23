@@ -1312,6 +1312,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
     }
 
     copyBudget = std::move(candidateBudget);
+    clip.sourceEntity = instance.styleHandle(registry);
     clip.clipPaths.reserve(shapeCount);
     for (const auto& path : clipPaths->clipPaths) {
       ClipPathShape shape;

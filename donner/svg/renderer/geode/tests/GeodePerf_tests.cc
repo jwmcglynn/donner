@@ -29,6 +29,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
@@ -1431,11 +1432,12 @@ geode::GeodeCounters secondFrameCounters(const std::shared_ptr<geode::GeodeDevic
 TEST_F(GeodePerfTest, ManyStopGradient_ArenaDrawBeforeResidentDrawsLeavesThemCached) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
-  const std::string defs =
-      ManyStopGradientDefs("g", 40) +
-      R"svg(<clipPath id="c"><path d="M-10,-10 L300,-10 L-10,300 Z"/></clipPath>)svg";
+  const std::string defs = ManyStopGradientDefs("g", 40);
+  // A rotated nested viewport clips its content by a polygon, which sends the draw through the
+  // arena.
   const std::string clipped =
-      R"svg(<rect width="20" height="80" fill="url(#g)" clip-path="url(#c)"/>)svg";
+      R"svg(<g transform="rotate(1)"><svg width="300" height="300" overflow="hidden">)svg"
+      R"svg(<rect width="20" height="80" fill="url(#g)"/></svg></g>)svg";
   const std::string head =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)svg" + defs +
       "</defs>" + clipped;
@@ -2572,6 +2574,70 @@ TEST_F(GeodePerfTest, StrokeStylesPastTheCache_ReEncodeOnlyTheOverflow) {
   editor::tests::CompareBitmapToBitmap(steady, reference.takeSnapshot(),
                                        "stroke_styles_past_the_cache",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+/// Path clips over every resident draw class: a solid fill, a gradient fill with a gradient
+/// stroke, and a pattern fill under one clip with a curved path, and a solid fill under a clip
+/// whose own clip-path nests a second clip, so its mask fill is intersected with another mask.
+constexpr std::string_view kClippedDrawsSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100">
+  <defs>
+    <clipPath id="round">
+      <path d="M10 50 C10 10 70 10 70 50 C70 90 10 90 10 50 Z"/>
+    </clipPath>
+    <clipPath id="inner">
+      <rect x="95" y="15" width="40" height="70"/>
+    </clipPath>
+    <clipPath id="nested" clip-path="url(#inner)">
+      <circle cx="115" cy="50" r="35"/>
+    </clipPath>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2050c0"/>
+      <stop offset="1" stop-color="#c05020"/>
+    </linearGradient>
+    <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="4" height="4" fill="#208040"/>
+    </pattern>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect x="0" y="0" width="80" height="40" fill="#e0c020"/>
+    <polygon points="5,45 75,45 40,95" fill="url(#g)" stroke="url(#g)" stroke-width="3"/>
+    <rect x="0" y="60" width="80" height="40" fill="url(#p)"/>
+  </g>
+  <rect x="80" y="0" width="80" height="100" fill="#8030a0" clip-path="url(#nested)"/>
+</svg>
+)SVG";
+
+/// Draws under path clips are resident and the clip masks are filled from cached, resident clip
+/// geometry: on an unchanged frame no clip path is encoded, nothing is uploaded, and no bind
+/// group is created, for the clipped draws or for the mask fills, including the fill of a clip
+/// intersected with a nested clip's mask.
+TEST_F(GeodePerfTest, ClippedDraws_UnchangedFrameEncodesWritesAndCreatesNothing) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kClippedDrawsSvg, sink);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  ASSERT_GT(test::CountNonTransparentPixels(renderer.takeSnapshot()), 0u)
+      << "Premise: the clipped draws must paint, or zero counters below prove nothing";
+
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE(testing::Message() << "unchanged frame " << frame);
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("ClippedDraws (unchanged frame)", c);
+    EXPECT_GE(c.drawCalls, 8u) << "Premise: every clip shape and every clipped draw is drawn";
+    EXPECT_EQ(c.pathEncodes, 0u) << "Clip shapes draw from their cached encodes";
+    EXPECT_EQ(c.textureCreates, 0u);
+    EXPECT_EQ(c.bufferWrites, 0u)
+        << "Clip shapes and clipped draws rewrite neither their geometry nor their uniforms";
+    EXPECT_EQ(c.bindgroupCreates, 0u)
+        << "Clip shapes and clipped draws keep the bind groups naming the retained mask views";
+  }
 }
 
 }  // namespace

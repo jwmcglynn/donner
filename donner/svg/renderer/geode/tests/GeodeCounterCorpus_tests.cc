@@ -182,22 +182,14 @@ struct KnownViolation {
 // The size is deduced so that deleting an entry touches only that entry.
 constexpr auto kKnownViolations = std::to_array<KnownViolation>({
     {
-        /*scene=*/"donner_splash",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{2, 0, 6, 4},
-        /*reason=*/"clip paths re-encode and re-upload their geometry every frame",
-        /*tracking=*/"clears when clip-mask geometry stays resident",
-    },
-    {
         /*scene=*/"geode_splash",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{8, 0, 1329, 156},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 3, 3},
         /*reason=*/
-        "shared contours and layered clip/mask passes re-encode paths and use per-frame "
-        "geometry/uniform uploads and bind groups",
-        /*tracking=*/
-        "clears when clip/mask geometry and layered fill/composite bindings remain resident "
-        "across unchanged frames",
+        "the composites of its three masks rewrite their blit uniforms and rebuild their bind "
+        "groups every frame; its clip shapes, clipped draws, repeated contours and filter "
+        "composite are resident",
+        /*tracking=*/"clears when composites through a mask keep their uniform and bind group",
     },
     {
         /*scene=*/"marker",

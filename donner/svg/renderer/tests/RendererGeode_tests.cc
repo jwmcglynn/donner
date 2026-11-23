@@ -42,6 +42,7 @@
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGMarkerElement.h"
@@ -3453,35 +3454,44 @@ TEST_F(RendererGeodeTest, PatternEditsReachTheNextFrameOfAWarmRenderer) {
   }
 }
 
-/// A resident pattern fill paints exactly what the per-frame arena pattern fill paints. In the
-/// second document a clip path sends the triangle's fill through the arena: the clip cuts a notch
-/// from the corner of the triangle's bounds, several pixels away from any pixel the triangle
-/// covers, so the clip itself changes no pixel. The pattern is rotated, so a wrong mapping from
-/// path to tile cannot match.
+/// A resident pattern fill paints exactly what the per-frame arena pattern fill paints. Both
+/// documents rotate the triangle; in the second it sits in a nested viewport, whose clip rectangle
+/// the rotation turns into a clip polygon, which sends the fill through the arena. The viewport
+/// reaches far past the triangle on every side, so the clip itself changes no pixel. The pattern
+/// is rotated too, so a wrong mapping from path to tile cannot match.
 TEST_F(RendererGeodeTest, ResidentPatternFillMatchesTheArenaPatternFill) {
-  ASSERT_TRUE(sharedDevice() != nullptr);
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
   constexpr std::string_view kDefs = R"svg(
     <pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"
              patternTransform="rotate(20)">
       <rect width="5" height="5" fill="#2050c0"/>
       <rect x="5" y="5" width="5" height="5" fill="#c05020"/>
-    </pattern>
-    <clipPath id="notch"><path d="M -10 -10 L 75 -10 L 88 6 L 120 6 L 120 80 L -10 80 Z"/>
-    </clipPath>)svg";
-  const auto triangle = [](std::string_view fill, std::string_view clip) {
+    </pattern>)svg";
+  const auto triangle = [](std::string_view fill) {
     return R"svg(<path d="M 8 4 L 88 12 L 60 60 Z" fill-opacity="0.6" fill=")svg" +
-           std::string(fill) + "\"" + std::string(clip) + "/>";
+           std::string(fill) + "\"/>";
   };
-  constexpr std::string_view kClip = R"svg( clip-path="url(#notch)")svg";
+  // The nested viewport's user space is the outer one: its origin sits at (-100, -100), and its
+  // content is moved back by (100, 100).
+  const auto inViewport = [](const std::string& content) {
+    return R"svg(<svg x="-100" y="-100" width="300" height="300" overflow="hidden">)svg"
+           R"svg(<g transform="translate(100 100)">)svg" +
+           content + "</g></svg>";
+  };
+  const auto rotated = [](const std::string& content) {
+    return R"svg(<g transform="rotate(30 48 32)">)svg" + content + "</g>";
+  };
   const std::string head =
       std::string(
           R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64"><defs>)svg") +
       std::string(kDefs) + "</defs>";
-  SVGDocument resident = ParsePatternDocument(head + triangle("url(#p)", "") + "</svg>");
-  SVGDocument arena = ParsePatternDocument(head + triangle("url(#p)", kClip) + "</svg>");
-  // A clipped solid fill always draws from the arena, which builds a bind group for each draw on
-  // every frame, so its steady frame creates the clip's bind groups plus one for the fill.
-  SVGDocument clippedSolid = ParsePatternDocument(head + triangle("#808080", kClip) + "</svg>");
+  SVGDocument resident = ParsePatternDocument(head + rotated(triangle("url(#p)")) + "</svg>");
+  SVGDocument arena =
+      ParsePatternDocument(head + rotated(inViewport(triangle("url(#p)"))) + "</svg>");
+  // A solid fill under a clip polygon always draws from the arena, which builds a bind group for
+  // each draw on every frame.
+  SVGDocument clippedSolid =
+      ParsePatternDocument(head + rotated(inViewport(triangle("#808080"))) + "</svg>");
 
   const auto steadyFrame = [&](SVGDocument& document) {
     RendererGeode renderer = createRenderer();
@@ -3542,6 +3552,607 @@ TEST_F(RendererGeodeTest, PatternTileViewsStayBoundedBetweenFrames) {
   ASSERT_NO_FATAL_FAILURE(drawFrame(0, 0));
   EXPECT_THAT(renderer.patternTileViewCountForTesting(), testing::Eq(0u))
       << "Two frames without a pattern leave no tile view behind";
+}
+
+/// Three clipped columns: a gradient-filled group under a clip with a curved path, an
+/// objectBoundingBox clip over a rect, a clip whose own clip-path nests a second clip, and a clip
+/// with a hole whose clip-rule decides whether the hole is clipped out.
+constexpr std::string_view kClipEditSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="64" viewBox="0 0 144 64">
+  <defs>
+    <clipPath id="c">
+      <path id="c-shape" d="M 6 32 C 6 6 42 6 42 32 C 42 58 6 58 6 32 Z"/>
+    </clipPath>
+    <clipPath id="obb" clipPathUnits="objectBoundingBox">
+      <path id="obb-shape" d="M 0.1 0.1 L 0.9 0.2 L 0.5 0.9 Z"/>
+    </clipPath>
+    <clipPath id="inner">
+      <rect id="inner-shape" x="52" y="34" width="20" height="28"/>
+    </clipPath>
+    <clipPath id="nested" clip-path="url(#inner)">
+      <circle cx="68" cy="48" r="14"/>
+    </clipPath>
+    <clipPath id="rule">
+      <path id="rule-shape" d="M 100 4 H 140 V 60 H 100 Z M 108 12 H 132 V 52 H 108 Z"/>
+    </clipPath>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2050c0"/>
+      <stop offset="1" stop-color="#c05020"/>
+    </linearGradient>
+  </defs>
+  <g id="clipped" clip-path="url(#c)">
+    <rect width="48" height="64" fill="url(#g)"/>
+  </g>
+  <rect id="obb-target" x="50" y="2" width="44" height="28" fill="#c05020"
+        clip-path="url(#obb)"/>
+  <rect id="nested-target" x="48" y="32" width="48" height="32" fill="#2050c0"
+        clip-path="url(#nested)"/>
+  <rect id="rule-target" x="96" width="48" height="64" fill="#208040" clip-path="url(#rule)"/>
+</svg>)svg";
+
+/// An edit applied to a document drawn with \ref kClipEditSvg.
+struct ClipEdit {
+  /// How the edit reaches the document.
+  enum class Kind {
+    Attribute,       //!< `setAttribute` on \ref selector.
+    UserSpaceUnits,  //!< `SVGClipPathElement::setClipPathUnits(UserSpaceOnUse)` on \ref selector.
+    Zoom,            //!< The canvas doubles in size, so the viewBox maps to twice the pixels.
+    ZoomFar,         //!< The canvas grows eightfold, far enough to need finer clip curves.
+  };
+  const char* name;       //!< Names the case and its diff images.
+  Kind kind;              //!< How the edit is applied.
+  const char* selector;   //!< Element the edit changes.
+  const char* attribute;  //!< Attribute set by an attribute edit.
+  const char* value;      //!< New attribute value.
+};
+
+/// Applies \p edit to \p document.
+void ApplyClipEdit(SVGDocument& document, const ClipEdit& edit) {
+  if (edit.kind == ClipEdit::Kind::Zoom || edit.kind == ClipEdit::Kind::ZoomFar) {
+    const int scale = edit.kind == ClipEdit::Kind::Zoom ? 2 : 8;
+    document.setCanvasSize(144 * scale, 64 * scale);
+    return;
+  }
+  std::optional<SVGElement> element = document.querySelector(edit.selector);
+  ASSERT_THAT(element, testing::Optional(testing::_)) << edit.selector;
+  if (edit.kind == ClipEdit::Kind::UserSpaceUnits) {
+    element->cast<SVGClipPathElement>().setClipPathUnits(ClipPathUnits::UserSpaceOnUse);
+    return;
+  }
+  element->setAttribute(edit.attribute, edit.value);
+}
+
+/// A renderer that drew a document's clips on earlier frames draws an edit of anything a clip mask
+/// depends on exactly as a renderer that never saw the document: the clip shape's geometry and
+/// transform, its clip-rule on the shape and on the clipped element, clipPathUnits, the clipped
+/// element's bounds under an objectBoundingBox clip and its transform, the nested clip, the clip
+/// reference itself, and the device scale. The warm renderer keeps clip encodes, resident mask
+/// fills, and clipped draws bound to retained mask views, so each edit must reach all of them.
+TEST_F(RendererGeodeTest, ClipEditsReachTheNextFrameOfAWarmRenderer) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  using Kind = ClipEdit::Kind;
+  constexpr ClipEdit kEdits[] = {
+      {"clip_geometry", Kind::Attribute, "#c-shape", "d",
+       "M 4 20 C 20 0 44 10 40 40 C 30 62 4 56 4 20 Z"},
+      {"clip_shape_transform", Kind::Attribute, "#c-shape", "transform", "translate(3 2)"},
+      {"clip_rule_on_shape", Kind::Attribute, "#rule-shape", "clip-rule", "evenodd"},
+      {"clip_rule_on_clipped", Kind::Attribute, "#rule-target", "clip-rule", "evenodd"},
+      // `setAttribute` of `clipPathUnits` does not reach the rendering of a parsed document, so
+      // the units change through the element's own setter.
+      {"clip_path_units", Kind::UserSpaceUnits, "#obb", nullptr, nullptr},
+      {"clipped_bounds", Kind::Attribute, "#obb-target", "width", "30"},
+      {"clipped_transform", Kind::Attribute, "#clipped", "transform", "translate(3 1)"},
+      {"nested_clip", Kind::Attribute, "#inner-shape", "width", "10"},
+      {"clip_reference", Kind::Attribute, "#obb-target", "clip-path", "url(#c)"},
+      {"zoom", Kind::Zoom, nullptr, nullptr, nullptr},
+      {"zoom_far", Kind::ZoomFar, nullptr, nullptr, nullptr},
+  };
+  for (const ClipEdit& edit : kEdits) {
+    SCOPED_TRACE(edit.name);
+    SVGDocument document = ParsePatternDocument(kClipEditSvg);
+    SVGDocument reference = ParsePatternDocument(kClipEditSvg);
+
+    RendererGeode warm = createRenderer();
+    warm.draw(document);
+    warm.draw(document);
+    const RendererBitmap beforeEdit = warm.takeSnapshot();
+    ASSERT_THAT(test::CountNonTransparentPixels(beforeEdit), testing::Gt(0u))
+        << "Premise: the clipped shapes must paint";
+
+    ASSERT_NO_FATAL_FAILURE(ApplyClipEdit(document, edit));
+    ASSERT_NO_FATAL_FAILURE(ApplyClipEdit(reference, edit));
+    warm.draw(document);
+    const RendererBitmap afterEdit = warm.takeSnapshot();
+
+    RendererGeode fresh = createRenderer();
+    fresh.draw(reference);
+    const RendererBitmap expected = fresh.takeSnapshot();
+    // Premise: the edit changes the rendering, or a stale clip would pass unnoticed. A zoom
+    // changes the canvas size by construction. The comparison only measures the difference, so
+    // its pixel budget is unbounded.
+    if (beforeEdit.dimensions == expected.dimensions) {
+      editor::tests::BitmapGoldenCompareParams signalParams =
+          editor::tests::PixelmatchIdentityParams();
+      signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+      int editedPixels = -1;
+      editor::tests::CompareBitmapToBitmap(beforeEdit, expected,
+                                           std::string("clip_edit_premise_") + edit.name,
+                                           signalParams, &editedPixels);
+      ASSERT_THAT(editedPixels, testing::Gt(0))
+          << "Premise: the edit must change the rendering, or a stale clip would pass unnoticed";
+    }
+
+    editor::tests::CompareBitmapToBitmap(afterEdit, expected, std::string("clip_edit_") + edit.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// The documents of \ref ResidentClippedDrawsMatchTheArenaDraws: a solid fill, a gradient fill
+/// with a gradient stroke, and a pattern fill under a clip with a curved path, all rotated. With
+/// \p polygonClip the group sits in a nested viewport, whose clip rectangle the rotation turns
+/// into a clip polygon, which sends every clipped draw through the per-frame arena. The viewport
+/// reaches far past the content on every side, so it changes no pixel itself.
+std::string ClippedDrawsDocument(bool polygonClip) {
+  const std::string content = R"svg(
+    <g clip-path="url(#round)">
+      <rect x="0" y="0" width="96" height="24" fill="#e0c020"/>
+      <polygon points="8,26 88,26 48,46" fill="url(#g)" stroke="url(#g)" stroke-width="3"/>
+      <rect x="0" y="44" width="96" height="20" fill="url(#p)"/>
+    </g>)svg";
+  const std::string body =
+      polygonClip ? R"svg(<svg x="-100" y="-100" width="300" height="300" overflow="hidden">)svg"
+                    R"svg(<g transform="translate(100 100)">)svg" +
+                        content + "</g></svg>"
+                  : content;
+  return R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64">
+    <defs>
+      <clipPath id="round">
+        <path d="M 8 32 C 8 4 88 4 88 32 C 88 60 8 60 8 32 Z"/>
+      </clipPath>
+      <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#2050c0"/>
+        <stop offset="1" stop-color="#c05020"/>
+      </linearGradient>
+      <pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"
+               patternTransform="rotate(20)">
+        <rect width="5" height="5" fill="#208040"/>
+      </pattern>
+    </defs>
+    <g transform="rotate(12 48 32)">)svg" +
+         body + "</g></svg>";
+}
+
+/// Draws under a path clip mask paint exactly what the per-frame arena paints for the same draws:
+/// a resident solid, gradient, gradient stroke and pattern fill bind the clip mask's retained view
+/// and carry the same clip flag in their uniforms as arena draws do.
+TEST_F(RendererGeodeTest, ResidentClippedDrawsMatchTheArenaDraws) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  SVGDocument resident = ParsePatternDocument(ClippedDrawsDocument(/*polygonClip=*/false));
+  SVGDocument arena = ParsePatternDocument(ClippedDrawsDocument(/*polygonClip=*/true));
+
+  const auto steadyFrame = [&](SVGDocument& document) {
+    RendererGeode renderer = createRenderer();
+    renderer.draw(document);
+    renderer.draw(document);
+    const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+    return std::make_tuple(counters.bindgroupCreates, renderer.takeSnapshot());
+  };
+  const auto [residentBindGroups, residentBitmap] = steadyFrame(resident);
+  const auto [arenaBindGroups, arenaBitmap] = steadyFrame(arena);
+  ASSERT_THAT(residentBindGroups, testing::Eq(0u))
+      << "Premise: the clipped draws and the clip's mask fill are resident";
+  ASSERT_THAT(arenaBindGroups, testing::Ge(4u))
+      << "Premise: under the clip polygon every clipped draw builds a bind group of its own";
+  ASSERT_THAT(test::CountNonTransparentPixels(residentBitmap), testing::Gt(0u));
+
+  editor::tests::CompareBitmapToBitmap(residentBitmap, arenaBitmap, "resident_vs_arena_clipped",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Clip geometry is charged to the document's geometry budget. A document whose budget refuses
+/// to keep clip encodes or resident clip geometry still renders exactly what an unbounded renderer
+/// renders: past the cache budget each frame encodes its clip shapes again, and past the resident
+/// budget each frame fills them from the per-frame arena.
+TEST_F(RendererGeodeTest, ClipGeometryPastTheDocumentBudgetStillRenders) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  RendererGeode unbounded = createRenderer();
+  SVGDocument unboundedDocument = ParsePatternDocument(kClipEditSvg);
+  unbounded.draw(unboundedDocument);
+  unbounded.draw(unboundedDocument);
+  const RendererBitmap expected = unbounded.takeSnapshot();
+  const geode::GeodeCounters unboundedCounters = unbounded.lastFrameTimings().counters;
+  ASSERT_THAT(unboundedCounters.pathEncodes, testing::Eq(0u))
+      << "Premise: within the budget the clip shapes keep their encodes";
+  ASSERT_THAT(unboundedCounters.bufferWrites, testing::Eq(0u))
+      << "Premise: within the budget the clip shapes and clipped draws are resident";
+
+  // The clip shapes of kClipEditSvg: the curved clip, the objectBoundingBox triangle, the nested
+  // clip's rectangle and circle and its group's union, and the clip with a hole.
+  constexpr uint64_t kClipShapes = 6u;
+  // The content of kClipEditSvg without its clips, whose encodes and bind groups count the content
+  // alone.
+  constexpr std::string_view kUnclippedSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="64" viewBox="0 0 144 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2050c0"/>
+      <stop offset="1" stop-color="#c05020"/>
+    </linearGradient>
+  </defs>
+  <g id="clipped">
+    <rect width="48" height="64" fill="url(#g)"/>
+  </g>
+  <rect id="obb-target" x="50" y="2" width="44" height="28" fill="#c05020"/>
+  <rect id="nested-target" x="48" y="32" width="48" height="32" fill="#2050c0"/>
+  <rect id="rule-target" x="96" width="48" height="64" fill="#208040"/>
+</svg>)svg";
+
+  struct Bound {
+    const char* name;
+    std::uint64_t cacheBytes;
+    std::uint64_t residentBytes;
+  };
+  constexpr Bound kBounds[] = {{"no_cache_bytes", 0u, 64u << 20},
+                               {"no_resident_bytes", 64u << 20, 0u}};
+  for (const Bound& bound : kBounds) {
+    SCOPED_TRACE(bound.name);
+    const auto steadyCounters = [&](SVGDocument& document) {
+      RendererGeode renderer = createRenderer();
+      renderer.setGeometryBudgetForTesting(/*maximumDraws=*/4096u, /*maximumItems=*/1u << 20,
+                                           /*maximumFrameBytes=*/64u << 20,
+                                           /*maximumCacheBytes=*/bound.cacheBytes,
+                                           /*maximumResidentBytes=*/bound.residentBytes);
+      renderer.draw(document);
+      renderer.draw(document);
+      return std::make_tuple(renderer.lastFrameTimings().counters, renderer.takeSnapshot());
+    };
+    SVGDocument unclipped = ParsePatternDocument(kUnclippedSvg);
+    SVGDocument document = ParsePatternDocument(kClipEditSvg);
+    const auto [contentCounters, contentBitmap] = steadyCounters(unclipped);
+    const auto [counters, bitmap] = steadyCounters(document);
+    if (bound.cacheBytes == 0u) {
+      EXPECT_THAT(counters.pathEncodes, testing::Eq(contentCounters.pathEncodes + kClipShapes))
+          << "Every clip shape is encoded again each frame once the cache budget refuses it";
+    } else {
+      // Arena uploads are flushed once per arena, so the arena fills show in their bind groups.
+      EXPECT_THAT(counters.bindgroupCreates,
+                  testing::Ge(contentCounters.bindgroupCreates + kClipShapes))
+          << "Clip shapes fill from the per-frame arena, each with a bind group of its own, once "
+             "the resident budget refuses them";
+    }
+    editor::tests::CompareBitmapToBitmap(bitmap, expected,
+                                         std::string("clip_past_budget_") + bound.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A concurrent-DOM document is drawn by recording a snapshot and replaying it, and a snapshot
+/// outlives its document, so the replay keeps no clip state on the live document: it caches no
+/// clip geometry there and paints what a direct draw of the same document paints.
+TEST_F(RendererGeodeTest, SnapshotReplayKeepsNoClipStateOnTheDocument) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  SVGDocument direct = ParsePatternDocument(kClipEditSvg);
+  SVGDocument replayed = ParsePatternDocument(kClipEditSvg);
+  replayed.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  RendererGeode directRenderer = createRenderer();
+  directRenderer.draw(direct);
+  directRenderer.draw(direct);
+  ASSERT_THAT(directRenderer.clipGeometryCacheCountForTesting(direct), testing::Gt(0u))
+      << "Premise: a direct draw caches clip geometry on the document";
+
+  // The driver's concurrent-DOM draw records a snapshot under document access and replays it
+  // without holding access.
+  RendererGeode replayRenderer = createRenderer();
+  RendererDriver driver(replayRenderer);
+  driver.draw(replayed);
+  driver.draw(replayed);
+  std::size_t cachedClips = 0;
+  {
+    DocumentWriteAccess access = replayed.writeAccess();
+    cachedClips = replayRenderer.clipGeometryCacheCountForTesting(replayed);
+  }
+  EXPECT_THAT(cachedClips, testing::Eq(0u))
+      << "A snapshot replay must not write clip state into the live document";
+  editor::tests::CompareBitmapToBitmap(replayRenderer.takeSnapshot(), directRenderer.takeSnapshot(),
+                                       "clip_snapshot_replay",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Cached clip geometry goes with the computed clip paths it was built from: once the clipped
+/// elements stop referencing their clips and the document is drawn again, no entity keeps cached
+/// clip geometry or its charge to the document's budgets.
+TEST_F(RendererGeodeTest, ClipGeometryCacheGoesWithItsClip) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  SVGDocument document = ParsePatternDocument(kClipEditSvg);
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  ASSERT_THAT(renderer.clipGeometryCacheCountForTesting(document), testing::Gt(0u))
+      << "Premise: the clipped elements cache their clip geometry";
+
+  for (const char* selector : {"#clipped", "#obb-target", "#nested-target", "#rule-target"}) {
+    std::optional<SVGElement> element = document.querySelector(selector);
+    ASSERT_THAT(element, testing::Optional(testing::_)) << selector;
+    element->removeAttribute("clip-path");
+  }
+  renderer.draw(document);
+  EXPECT_THAT(renderer.clipGeometryCacheCountForTesting(document), testing::Eq(0u))
+      << "Clip geometry must not outlive the computed clip paths it was built from";
+}
+
+/// A renderer keeps a view of each clip-mask texture only while its frames keep using that
+/// texture, so the views it holds are those of its last two frames. The mask textures themselves
+/// go back to the device's pool at every frame end, whose byte budget bounds them.
+TEST_F(RendererGeodeTest, ClipMaskViewsStayBoundedBetweenFrames) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  RendererGeode renderer = createRenderer();
+  const auto drawFrame = [&](int clipCount) {
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+    for (int index = 0; index < clipCount; ++index) {
+      ResolvedClip clip;
+      clip.clipPaths.push_back(
+          {.path = PathBuilder().addRect(Box2d::FromXYWH(index, index, 16.0, 16.0)).build()});
+      renderer.pushClip(clip);
+      renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+      renderer.popClip();
+    }
+    renderer.endFrame();
+  };
+
+  constexpr int kClipsPerFrame = 12;
+  for (int frame = 0; frame < 4; ++frame) {
+    drawFrame(kClipsPerFrame);
+    EXPECT_THAT(renderer.clipMaskViewCountForTesting(),
+                testing::AllOf(testing::Gt(0u), testing::Le(2u * kClipsPerFrame)))
+        << "Views are kept for the current and the previous frame's mask textures only";
+  }
+  drawFrame(0);
+  drawFrame(0);
+  EXPECT_THAT(renderer.clipMaskViewCountForTesting(), testing::Eq(0u))
+      << "Two frames without a clip leave no clip-mask view behind";
+}
+
+/// A clip shape's cached encode serves only the tolerance it was made at. A renderer that drew a
+/// curved clip shape at one scale encodes it again when it draws it at a much larger one, as a
+/// renderer that only ever drew the larger scale does, and renders the same pixels. Document edits
+/// rebuild the computed clip paths and so drop the cache; this changes only the transform, which
+/// keeps it.
+TEST_F(RendererGeodeTest, ClipShapeCacheFollowsTheDeviceScale) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  // The cache lives on the document, so the fresh renderer draws a document of its own.
+  const auto parseDocument = [] {
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    auto parsed = parser::SVGParser::ParseSVG(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <clipPath id="c"><circle cx="0.5" cy="0.5" r="0.4"/></clipPath>
+          <rect id="t" width="1" height="1" clip-path="url(#c)"/>
+        </svg>)svg",
+        warnings);
+    EXPECT_THAT(parsed, NoParseError());
+    return std::move(parsed).result();
+  };
+  const auto clipOn = [](SVGDocument& document) {
+    ResolvedClip clip;
+    clip.clipPaths.push_back({.path = PathBuilder()
+                                          .moveTo({0.1, 0.5})
+                                          .curveTo({0.1, 0.0}, {0.9, 0.0}, {0.9, 0.5})
+                                          .curveTo({0.9, 1.0}, {0.1, 1.0}, {0.1, 0.5})
+                                          .closePath()
+                                          .build()});
+    std::optional<SVGElement> target = document.querySelector("#t");
+    EXPECT_THAT(target, testing::Optional(testing::_));
+    if (target.has_value()) {
+      clip.sourceEntity = target->unsafeEntityHandle();
+    }
+    return clip;
+  };
+  const auto drawAtScale = [&](RendererGeode& renderer, const ResolvedClip& clip, double scale) {
+    beginFrame(renderer);
+    renderer.setTransform(Transform2d::Scale(scale));
+    renderer.pushClip(clip);
+    renderer.setPaint(solidFill(css::RGBA(30, 90, 200, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), StrokeParams{});
+    renderer.popClip();
+    renderer.endFrame();
+    return renderer.lastFrameTimings().counters.pathEncodes;
+  };
+
+  SVGDocument warmDocument = parseDocument();
+  const ResolvedClip warmClip = clipOn(warmDocument);
+  RendererGeode warm = createRenderer();
+  drawAtScale(warm, warmClip, 1.0);
+  const uint64_t sameScaleEncodes = drawAtScale(warm, warmClip, 1.0);
+  const uint64_t newScaleEncodes = drawAtScale(warm, warmClip, 64.0);
+
+  SVGDocument freshDocument = parseDocument();
+  const ResolvedClip freshClip = clipOn(freshDocument);
+  RendererGeode fresh = createRenderer();
+  const uint64_t freshEncodes = drawAtScale(fresh, freshClip, 64.0);
+  // The rectangle has no source entity, so every frame encodes it; only the clip shape caches.
+  EXPECT_THAT(newScaleEncodes, testing::Eq(freshEncodes))
+      << "At a new scale the clip shape is encoded again, as a fresh renderer encodes it";
+  EXPECT_THAT(sameScaleEncodes, testing::Eq(freshEncodes - 1u))
+      << "At an unchanged scale the clip shape draws from its cached encode";
+  const RendererBitmap expected = fresh.takeSnapshot();
+  ASSERT_THAT(test::CountNonTransparentPixels(expected), testing::Gt(0u));
+  editor::tests::CompareBitmapToBitmap(warm.takeSnapshot(), expected, "clip_cache_device_scale",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A clip shape whose path changes to another of the same command and point counts and the same
+/// encoded size is encoded again and its resident geometry uploaded again: the new encode takes
+/// the old one's storage, so only the encode's identity tells the slot that its geometry is stale.
+TEST_F(RendererGeodeTest, ClipShapeCacheFollowsAPathOfTheSameSize) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  const auto parseDocument = [] {
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    auto parsed = parser::SVGParser::ParseSVG(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <clipPath id="c"><rect width="8" height="8"/></clipPath>
+          <rect id="t" width="64" height="64" clip-path="url(#c)"/>
+        </svg>)svg",
+        warnings);
+    EXPECT_THAT(parsed, NoParseError());
+    return std::move(parsed).result();
+  };
+  // The second triangle is the first moved by whole pixels, so their encodes have the same size.
+  const Path first =
+      PathBuilder().moveTo({8, 8}).lineTo({40, 12}).lineTo({20, 40}).closePath().build();
+  const Path second =
+      PathBuilder().moveTo({24, 20}).lineTo({56, 24}).lineTo({36, 52}).closePath().build();
+  const auto drawClippedBy = [&](RendererGeode& renderer, SVGDocument& document, const Path& path) {
+    ResolvedClip clip;
+    clip.clipPaths.push_back({.path = path});
+    std::optional<SVGElement> target = document.querySelector("#t");
+    EXPECT_THAT(target, testing::Optional(testing::_));
+    if (target.has_value()) {
+      clip.sourceEntity = target->unsafeEntityHandle();
+    }
+    beginFrame(renderer);
+    renderer.pushClip(clip);
+    renderer.setPaint(solidFill(css::RGBA(30, 90, 200, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+    renderer.popClip();
+    renderer.endFrame();
+  };
+
+  SVGDocument warmDocument = parseDocument();
+  RendererGeode warm = createRenderer();
+  drawClippedBy(warm, warmDocument, first);
+  drawClippedBy(warm, warmDocument, first);
+  drawClippedBy(warm, warmDocument, second);
+  SVGDocument freshDocument = parseDocument();
+  RendererGeode fresh = createRenderer();
+  drawClippedBy(fresh, freshDocument, second);
+  const RendererBitmap expected = fresh.takeSnapshot();
+  ASSERT_THAT(test::CountNonTransparentPixels(expected), testing::Gt(0u));
+  editor::tests::CompareBitmapToBitmap(warm.takeSnapshot(), expected, "clip_cache_same_size_path",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A cached clip shape intersected with a nested clip binds the nested clip's mask, and a frame
+/// whose nested mask is another texture rebinds it. Here the target grows between frames, so
+/// every clip mask is a texture of the new size, and the nested rectangle moves, so the old
+/// nested mask no longer holds the coverage the outer shape must be intersected with; the outer
+/// shape keeps its cached encode throughout.
+TEST_F(RendererGeodeTest, ClipShapeRebindsItsNestedMask) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  const auto parseDocument = [] {
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    auto parsed = parser::SVGParser::ParseSVG(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <clipPath id="c"><rect width="8" height="8"/></clipPath>
+          <rect id="t" width="64" height="64" clip-path="url(#c)"/>
+        </svg>)svg",
+        warnings);
+    EXPECT_THAT(parsed, NoParseError());
+    return std::move(parsed).result();
+  };
+  // The circle is clipped by the nested rectangle \p nested.
+  const auto clipOn = [](SVGDocument& document, const Box2d& nested) {
+    ResolvedClip clip;
+    clip.clipPaths.push_back({.path = PathBuilder().addRect(nested).build(), .layer = 1});
+    clip.clipPaths.push_back(
+        {.path = PathBuilder().addEllipse(Box2d::FromXYWH(8, 8, 48, 48)).build(), .layer = 0});
+    std::optional<SVGElement> target = document.querySelector("#t");
+    EXPECT_THAT(target, testing::Optional(testing::_));
+    if (target.has_value()) {
+      clip.sourceEntity = target->unsafeEntityHandle();
+    }
+    return clip;
+  };
+  const auto drawAtSize = [&](RendererGeode& renderer, const ResolvedClip& clip, double size) {
+    RenderViewport viewport;
+    viewport.size = Vector2d(size, size);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    renderer.pushClip(clip);
+    renderer.setPaint(solidFill(css::RGBA(30, 90, 200, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, size, size), StrokeParams{});
+    renderer.popClip();
+    renderer.endFrame();
+  };
+  const Box2d leftPart = Box2d::FromXYWH(4, 4, 24, 56);
+  const Box2d rightPart = Box2d::FromXYWH(36, 4, 24, 56);
+
+  SVGDocument warmDocument = parseDocument();
+  RendererGeode warm = createRenderer();
+  drawAtSize(warm, clipOn(warmDocument, leftPart), 64.0);
+  drawAtSize(warm, clipOn(warmDocument, leftPart), 64.0);
+  drawAtSize(warm, clipOn(warmDocument, rightPart), 96.0);
+  SVGDocument freshDocument = parseDocument();
+  RendererGeode fresh = createRenderer();
+  drawAtSize(fresh, clipOn(freshDocument, rightPart), 96.0);
+  const RendererBitmap expected = fresh.takeSnapshot();
+  ASSERT_THAT(test::CountNonTransparentPixels(expected), testing::Gt(0u));
+  editor::tests::CompareBitmapToBitmap(warm.takeSnapshot(), expected, "clip_nested_mask_rebind",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// An offscreen pass that builds a clip while an outer frame on the same device has recorded a
+/// mask fill of that clip, and not submitted it, leaves the outer fill as it was recorded. The
+/// clip has a curved shape, which the nested pass, drawing at another scale, encodes again into
+/// the shape's slot, and a polygon, whose encode serves every scale, so the nested pass draws
+/// the slot the outer frame already drew.
+TEST_F(RendererGeodeTest, NestedPassKeepsTheClipMaskAnOuterFrameLeftPending) {
+  ASSERT_THAT(sharedDevice(), testing::NotNull());
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <clipPath id="c"><circle cx="20" cy="20" r="14"/></clipPath>
+        <rect id="t" width="64" height="64" fill="red" clip-path="url(#c)"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+
+  ResolvedClip clip;
+  clip.clipPaths.push_back(
+      {.path =
+           PathBuilder().moveTo({8, 40}).curveTo({20, 8}, {44, 8}, {56, 40}).closePath().build()});
+  clip.clipPaths.push_back(
+      {.path =
+           PathBuilder().moveTo({30, 34}).lineTo({60, 40}).lineTo({40, 60}).closePath().build()});
+  ResolvedClip cachedClip = clip;
+  cachedClip.sourceEntity = target->unsafeEntityHandle();
+  const css::RGBA red(200, 0, 0, 255);
+  const auto drawClipped = [&](RendererInterface& renderer, const ResolvedClip& withClip) {
+    renderer.pushClip(withClip);
+    renderer.setPaint(solidFill(red));
+    renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+    renderer.popClip();
+  };
+
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  drawClipped(reference, clip);
+  reference.endFrame();
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(test::CountNonTransparentPixels(expected), testing::Gt(0u));
+
+  RendererGeode outer = createRenderer();
+  beginFrame(outer);
+  drawClipped(outer, cachedClip);
+
+  std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+  ASSERT_THAT(inner, testing::NotNull());
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  inner->beginFrame(viewport);
+  for (const double scale : {0.5, 4.0}) {
+    inner->setTransform(Transform2d::Scale(scale));
+    drawClipped(*inner, cachedClip);
+  }
+  inner->endFrame();
+
+  outer.endFrame();
+  editor::tests::CompareBitmapToBitmap(outer.takeSnapshot(), expected,
+                                       "nested_pass_keeps_pending_clip_mask",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererGeodeTest, TransientTexturePoolStaysWithinGlobalMemoryBudgetAcrossSizeChurn) {
@@ -11695,6 +12306,99 @@ TEST_F(RendererGeodeTest, RetainedCompositesReleaseViewsWhenAFrameIsAbandoned) {
   editor::tests::CompareBitmapToBitmap(recovered, RenderFresh(device, *document),
                                        "retained_composites_after_abandoned_frames",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+/// The views a renderer keeps of pattern tile and clip-mask textures go with those textures.
+/// Another renderer on the same device makes the shared pool destroy them, by trimming it, by
+/// beginning frames until their bucket goes stale, and by returning textures past the pool's
+/// budget, and a frame that ends without submitting drops them too. Each time the renderer keeps no
+/// view, and its next frame rebuilds them from live textures and paints what a fresh renderer
+/// paints. Ends with both renderers torn down, which the sanitizer lanes check for use after free.
+TEST_F(RendererGeodeTest, TileAndClipMaskViewsGoWithTheirTextures) {
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+          <rect width="4" height="4" fill="#208040"/>
+        </pattern>
+        <clipPath id="c"><circle cx="32" cy="32" r="24"/></clipPath>
+        <rect width="64" height="64" fill="url(#p)" clip-path="url(#c)"/>
+      </svg>)svg",
+      document));
+  std::optional<SVGDocument> plain;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+        <rect width="16" height="16" fill="red"/>
+      </svg>)svg",
+      plain));
+  // Six nested full-canvas layers of 16 MiB each return 96 MiB at once, past the 64 MiB budget a
+  // pool of small frames keeps, so the pool evicts its least recently used buckets.
+  std::optional<SVGDocument> large;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="2048">
+        <g opacity="0.9"><rect width="2048" height="2048" fill="red"/>
+         <g opacity="0.9"><rect width="2048" height="2048" fill="lime"/>
+          <g opacity="0.9"><rect width="2048" height="2048" fill="blue"/>
+           <g opacity="0.9"><rect width="2048" height="2048" fill="yellow"/>
+            <g opacity="0.9"><rect width="2048" height="2048" fill="white"/>
+             <g opacity="0.9"><rect width="2048" height="2048" fill="black"/></g>
+            </g>
+           </g>
+          </g>
+         </g>
+        </g>
+      </svg>)svg",
+      large));
+
+  // A device of its own, so the pool holds only what these renderers put there.
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  RendererGeode other(device);
+  const auto keptViews = [&] {
+    return std::make_pair(renderer.patternTileViewCountForTesting(),
+                          renderer.clipMaskViewCountForTesting());
+  };
+  const auto drawAndExpectRebuilt = [&](const char* label) {
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse()) << label;
+    EXPECT_THAT(keptViews(), testing::Pair(testing::Gt(0u), testing::Gt(0u)))
+        << label << ": the frame keeps views of the textures it drew";
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), RenderFresh(device, *document),
+                                         label, editor::tests::PixelmatchIdentityParams());
+  };
+
+  drawAndExpectRebuilt("tile_and_clip_views_first_frame");
+
+  other.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  EXPECT_THAT(keptViews(), testing::Pair(testing::Eq(0u), testing::Eq(0u)))
+      << "a trim by another renderer destroyed the textures these views viewed";
+  drawAndExpectRebuilt("tile_and_clip_views_after_other_renderer_trim");
+
+  // The pool evicts a bucket no frame has used for 120 frames, counting every renderer's frames.
+  constexpr int kFramesPastStale = 125;
+  for (int frame = 0; frame < kFramesPastStale; ++frame) {
+    other.draw(*plain);
+  }
+  EXPECT_THAT(keptViews(), testing::Pair(testing::Eq(0u), testing::Eq(0u)))
+      << "stale-bucket eviction destroyed the textures these views viewed";
+  drawAndExpectRebuilt("tile_and_clip_views_after_stale_eviction");
+
+  other.draw(*large);
+  ASSERT_THAT(other.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(keptViews(), testing::Pair(testing::Eq(0u), testing::Eq(0u)))
+      << "budget eviction destroyed the textures these views viewed";
+  drawAndExpectRebuilt("tile_and_clip_views_after_budget_eviction");
+
+  // A frame that never reaches endFrame submits nothing, and the next frame drops every view.
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {20, 20}), StrokeParams{});
+  beginFrame(renderer);
+  EXPECT_THAT(keptViews(), testing::Pair(testing::Eq(0u), testing::Eq(0u)))
+      << "a frame that never reached endFrame must drop every kept view";
+  renderer.endFrame();
+  drawAndExpectRebuilt("tile_and_clip_views_after_abandoned_frame");
 }
 
 /// Edits that change what a retained composite draws with, each compared with a fresh renderer:

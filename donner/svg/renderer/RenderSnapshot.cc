@@ -388,6 +388,9 @@ public:
 #endif
 
   ResolvedClip mapClip(ResolvedClip clip) {
+    // Same rule as `drawPath`: a replayed clip must not carry a handle into the live document
+    // registry, so backends replaying a snapshot keep no per-clip state on its source entity.
+    clip.sourceEntity = EntityHandle();
     if (clip.mask.has_value()) {
       clip.mask = mapMask(*clip.mask);
     }
@@ -499,9 +502,9 @@ std::size_t CountReferenceToRegistry(const components::ResolvedMask& mask,
 }
 
 std::size_t CountReferenceToRegistry(const ResolvedClip& clip, const Registry& registry) {
-  std::size_t count = 0;
-  // Clip paths hold no entity handle at all (see `ClipPathShape`), so only the mask chain
-  // can reference the registry.
+  // The clip's source entity and its mask chain are the only handles a clip carries; clip path
+  // shapes hold none (see `ClipPathShape`).
+  std::size_t count = CountReferenceToRegistry(clip.sourceEntity, registry);
   if (clip.mask.has_value()) {
     count += CountReferenceToRegistry(*clip.mask, registry);
   }

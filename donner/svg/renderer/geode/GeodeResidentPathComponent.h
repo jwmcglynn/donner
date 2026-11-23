@@ -1136,16 +1136,22 @@ struct GeodeResidentSlot {
   /// Number of bytes occupied by this slot's allocation.
   uint64_t allocationSize = 0;
 
-  /// Cached fill bind group. All twelve bindings reference stable
-  /// objects (this slot's `buffer` sub-ranges + device-owned dummy
-  /// texture/sampler/identity-instance handles, or a pattern fill's tile view, which the
-  /// renderer keeps across frames), so it survives frames and encoders. Rebuilt when the
-  /// geometry buffer is re-allocated or the bound pattern tile view changes.
+  /// Cached bind group. All bindings reference stable objects (this slot's `buffer` sub-ranges,
+  /// device-owned dummy texture/sampler/identity-instance handles, and the views of a pattern
+  /// fill's tile and of an active path-clip mask, which the renderer keeps across frames), so it
+  /// survives frames and encoders. Rebuilt when the geometry buffer is re-allocated or a bound
+  /// view changes. A fill or stroke slot holds a fill-pipeline group; a clip shape's slot holds a
+  /// clip-mask-pipeline group.
   gpu::BindGroup bindGroup;
 
   /// Pattern tile view \ref bindGroup binds, or null when it binds the dummy pattern texture.
   /// A pattern fill whose tile view differs rebuilds the bind group before drawing.
   gpu::TextureViewRef boundPatternView;
+
+  /// Clip-mask view \ref bindGroup binds: the path-clip mask the draw was clipped by (for a clip
+  /// shape's slot, the nested mask it is intersected with), or the device's identity-coverage
+  /// dummy. A draw under a different mask rebuilds the bind group before drawing.
+  gpu::TextureViewRef boundClipMaskView;
 
   /// A byte sub-range of `buffer`. `size == 0` is never bound directly -
   /// empty SSBO regions reserve a zero-filled dummy slot wide enough for one
@@ -1333,6 +1339,8 @@ struct GeodeResidentSlot {
       bindGroup = std::move(other.bindGroup);
       boundPatternView = other.boundPatternView;
       other.boundPatternView = gpu::TextureViewRef();
+      boundClipMaskView = other.boundClipMaskView;
+      other.boundClipMaskView = gpu::TextureViewRef();
       bands = other.bands;
       curves = other.curves;
       hRefs = other.hRefs;
@@ -1401,6 +1409,7 @@ struct GeodeResidentSlot {
     }
     bindGroup = gpu::BindGroup();
     boundPatternView = gpu::TextureViewRef();
+    boundClipMaskView = gpu::TextureViewRef();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;
@@ -1441,11 +1450,9 @@ private:
 /// buffer holds the same eight analytic dual-ray SSBO regions, but the
 /// uniform region holds the 704-byte gradient uniform block (stops inline,
 /// `donner/gpu/shader/programs/SlugGradientSource.h`) and the cached bind group uses the
-/// reflected gradient pipeline layout with the device-owned placeholder clip-mask
-/// and stop-ramp textures. Residence is only taken
-/// when no clip mask, clip polygon, or mask pass is active (the gradient
-/// shader's clip flags must stay zero for the cached bind group to remain
-/// stable), exactly like the solid-fill residence gate.
+/// reflected gradient pipeline layout with the active clip mask's view (or the device-owned
+/// placeholder) and the placeholder stop-ramp texture. Residence is not taken while a clip
+/// polygon or a mask pass is active, exactly like the solid-fill residence gate.
 struct GeodeResidentGradientSlot {
   /// Combined Storage|Uniform|CopyDst buffer, borrowed from the owning
   /// `GeodeResidentSlab` chunk; region offsets are ABSOLUTE buffer
@@ -1467,10 +1474,15 @@ struct GeodeResidentGradientSlot {
   uint64_t allocationSize = 0;
 
   /// Cached gradient bind group. All bindings reference stable objects (this
-  /// slot's buffer sub-ranges + device-owned placeholder clip-mask and
-  /// stop-ramp textures), so it survives frames and encoders. A gradient with
+  /// slot's buffer sub-ranges, \ref boundClipMaskView, and the device-owned
+  /// placeholder stop-ramp texture), so it survives frames and encoders. A gradient with
   /// more stops than the uniform carries inline binds `rampBindGroup` instead.
   gpu::BindGroup bindGroup;
+
+  /// Clip-mask view both cached groups bind: the active path-clip mask's view, which the renderer
+  /// keeps across frames, or the device's identity-coverage dummy. A draw under a different mask
+  /// drops both groups and builds them again.
+  gpu::TextureViewRef boundClipMaskView;
 
   /// Stop ramp of the last draw whose gradient had more stops than the
   /// uniform carries inline, and the cached group that binds it with this
@@ -1568,6 +1580,8 @@ struct GeodeResidentGradientSlot {
       other.allocationOffset = 0;
       other.allocationSize = 0;
       bindGroup = std::move(other.bindGroup);
+      boundClipMaskView = other.boundClipMaskView;
+      other.boundClipMaskView = gpu::TextureViewRef();
       ramp = std::move(other.ramp);
       rampBindGroup = std::move(other.rampBindGroup);
       bands = other.bands;
@@ -1615,6 +1629,7 @@ struct GeodeResidentGradientSlot {
       slab->retireBindGroup(std::move(bindGroup));
     }
     bindGroup = gpu::BindGroup();
+    boundClipMaskView = gpu::TextureViewRef();
     replaceRamp(nullptr, gpu::BindGroup());
     resident = false;
     encodedKey = nullptr;
