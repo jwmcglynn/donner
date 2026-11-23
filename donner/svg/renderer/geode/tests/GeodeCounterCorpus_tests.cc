@@ -50,7 +50,10 @@
 /// limits depend on texture size. A second pass renders every scene again at
 /// twice its natural size, up to a 2048 px edge (`aboveNaturalCanvasSize`),
 /// starting from an empty texture pool, against its own ledger,
-/// `kKnownViolationsAboveNaturalSize`.
+/// `kKnownViolationsAboveNaturalSize`. Twice a small scene's natural size is still a small canvas,
+/// so a third pass renders one frame of every scene at a 2048 px long edge and requires visible
+/// pixels there too: a budget that drops content only on a large canvas fails it. Neither the
+/// corpus pass nor the above-natural-size pass may run a filter on a reduced-resolution raster.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -218,16 +221,19 @@ struct CorpusPass {
 constexpr CorpusPass kCorpusSizePass = {"corpus size", kKnownViolations};
 constexpr CorpusPass kAboveNaturalSizePass = {"above natural size",
                                               kKnownViolationsAboveNaturalSize};
-constexpr std::array<const CorpusPass*, 2> kCorpusPasses = {&kCorpusSizePass,
-                                                            &kAboveNaturalSizePass};
+/// Gates visible pixels only, so it has no counter ledger.
+constexpr CorpusPass kLargeCanvasPass = {"large canvas", {}};
+constexpr std::array<const CorpusPass*, 3> kCorpusPasses = {
+    &kCorpusSizePass, &kAboveNaturalSizePass, &kLargeCanvasPass};
 
 // ---------------------------------------------------------------------------
 // Deliberately inert scenes.
 // ---------------------------------------------------------------------------
 
 /// A corpus scene that renders no visible pixels, with the reason it is
-/// expected to stay that way. Without this list a scene that stopped rendering
-/// entirely would sail through every upper bound in this file.
+/// expected to stay that way, or the issue that tracks it. Without this list a
+/// scene that stopped rendering entirely would sail through every upper bound
+/// in this file.
 struct InertScene {
   std::string_view scene;
   /// The pass that renders it blank, or null when every pass does.
@@ -235,7 +241,7 @@ struct InertScene {
   std::string_view reason;
 };
 
-constexpr std::array<InertScene, 2> kDeliberatelyInert = {{
+constexpr std::array<InertScene, 3> kDeliberatelyInert = {{
     {
         /*scene=*/"external_context_paint",
         /*onlyIn=*/nullptr,
@@ -250,6 +256,14 @@ constexpr std::array<InertScene, 2> kDeliberatelyInert = {{
         /*reason=*/
         "declares a 100000 px width, which the shared canvas clamp scales down until every "
         "stroke is sub-pixel, so this scene is measured blank by construction",
+    },
+    {
+        /*scene=*/"feimage_fragment_idempotency",
+        /*onlyIn=*/&kLargeCanvasPass,
+        /*reason=*/
+        "its feImage fragment raster exceeds the renderer driver's per-frame filter source-image "
+        "budget on a canvas this large, so the filter is not prepared and the element is hidden, "
+        "on every backend (#2662)",
     },
 }};
 
@@ -328,6 +342,17 @@ Vector2i aboveNaturalCanvasSize(const Vector2i& natural) {
   const auto scaled = [&](int edge) {
     return std::max(
         1, static_cast<int>(std::lround(static_cast<double>(edge) * longEdge / naturalLongEdge)));
+  };
+  return {scaled(natural.x), scaled(natural.y)};
+}
+
+/// The large-canvas pass's canvas: the natural size scaled to a `kMaxAboveNaturalCanvasEdge` long
+/// edge, keeping its aspect ratio.
+Vector2i largeCanvasSize(const Vector2i& natural) {
+  const int naturalLongEdge = std::max({natural.x, natural.y, 1});
+  const auto scaled = [&](int edge) {
+    return std::max(1, static_cast<int>(std::lround(static_cast<double>(edge) *
+                                                    kMaxAboveNaturalCanvasEdge / naturalLongEdge)));
   };
   return {scaled(natural.x), scaled(natural.y)};
 }
@@ -471,6 +496,8 @@ struct SceneMeasurement {
   /// a full image. Pixels are the one signal that means "this scene renders
   /// something" no matter which path composited it.
   size_t visiblePixels = 0;
+  /// Filters of frame one that ran on a reduced-resolution raster.
+  std::uint64_t filterReducedRasters = 0;
 };
 
 FrameSample sampleFrame(const RendererGeode& renderer) {
@@ -506,6 +533,7 @@ SceneMeasurement measureFrames(const std::shared_ptr<geode::GeodeDevice>& device
   // Sampled before the snapshot, like frame two, so the two frames are
   // measured the same way.
   measurement.first = sampleFrame(renderer);
+  measurement.filterReducedRasters = renderer.resourceStats().filterReducedRasters;
   // Settle frame one through a readback so deferred GPU work completes before
   // the frame that gets measured, and use the pixels for the liveness check.
   measurement.visiblePixels = test::CountNonTransparentPixels(renderer.takeSnapshot());
@@ -559,6 +587,9 @@ void expectSteadyState(const std::string& name, const CorpusPass& pass,
         << "satisfied by drawing nothing. Either the scene regressed to rendering blank output, "
         << "or it legitimately renders nothing and belongs in kDeliberatelyInert with a reason.";
   }
+  EXPECT_EQ(measurement.filterReducedRasters, 0u)
+      << name << " ran a filter on a reduced-resolution raster at " << pass.name
+      << ", so its picture is not the full-resolution rendering this pass measures.";
 
   const KnownViolation* known = findKnownViolation(pass.ledger, name);
   const Observed ceilings = known != nullptr ? known->ceiling : Observed{};
@@ -649,6 +680,44 @@ TEST_P(GeodeCounterCorpusAboveNaturalSizeTest, SecondFrameIsSteadyState) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Corpus, GeodeCounterCorpusAboveNaturalSizeTest,
+                         ::testing::ValuesIn(corpusNames()),
+                         [](const ::testing::TestParamInfo<std::string>& info) {
+                           return info.param;
+                         });
+
+using GeodeCounterCorpusLargeCanvasTest = ::testing::TestWithParam<std::string>;
+
+/// Every scene that is not listed as inert for this pass renders visible pixels on a 2048 px
+/// canvas.
+TEST_P(GeodeCounterCorpusLargeCanvasTest, RendersVisiblePixels) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  const std::string& name = GetParam();
+  const CorpusScene* scene = findScene(name);
+  ASSERT_NE(scene, nullptr) << "Corpus scene disappeared between enumeration and run: " << name;
+
+  std::optional<SVGDocument> document = loadScene(*scene, largeCanvasSize);
+  ASSERT_THAT(document, testing::Optional(testing::_));
+
+  RendererGeode renderer(device);
+  renderer.draw(*document);
+  const size_t visiblePixels = test::CountNonTransparentPixels(renderer.takeSnapshot());
+  const Vector2i canvas = document->canvasSize();
+  std::fprintf(stderr, "[counter-corpus-large-canvas %dx%d] %-48s visiblePixels=%8zu\n", canvas.x,
+               canvas.y, name.c_str(), visiblePixels);
+  if (isDeliberatelyInert(name, kLargeCanvasPass)) {
+    EXPECT_EQ(visiblePixels, 0u) << name << " is listed in kDeliberatelyInert for the "
+                                 << kLargeCanvasPass.name
+                                 << " pass but now renders visible pixels there. Delete the entry.";
+  } else {
+    EXPECT_GT(visiblePixels, 0u)
+        << name << " rendered no visible pixels at " << kLargeCanvasPass.name
+        << ": content that shows on a small canvas disappeared on a large one.";
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Corpus, GeodeCounterCorpusLargeCanvasTest,
                          ::testing::ValuesIn(corpusNames()),
                          [](const ::testing::TestParamInfo<std::string>& info) {
                            return info.param;

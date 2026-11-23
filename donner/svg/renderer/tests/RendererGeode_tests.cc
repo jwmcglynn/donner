@@ -406,10 +406,10 @@ TEST_F(RendererGeodeTest, TransformedLocalFilterAdmissionCoversItsTileWork) {
 }
 
 // A frame whose filters outgrow the retained GPU memory submits a chunk and retries the filter in
-// it. A frame recovered that way drew every filter, so it reports no refusal. These blurs outgrow
-// the memory every few filters, and the frame stops short of its work limit. Natively the surface
-// budget asks for each chunk before the filter budget refuses anything; the filter execution budget
-// tests cover a chunk that follows a memory refusal.
+// it. A frame recovered that way drew every filter at full resolution, so it reports no refusal.
+// These blurs outgrow the memory every few filters, and the frame stops short of its work limit.
+// Natively the surface budget asks for each chunk before the filter budget refuses anything; the
+// filter execution budget tests cover a chunk that follows a memory refusal.
 TEST_F(RendererGeodeTest, FilterFrameRecoveredThroughAMemoryChunkReportsNoRefusal) {
   using namespace components;
   constexpr uint32_t kWidth = 1024;
@@ -438,6 +438,8 @@ TEST_F(RendererGeodeTest, FilterFrameRecoveredThroughAMemoryChunkReportsNoRefusa
   EXPECT_EQ(stats.filterExecutions, kFilters) << "every filter ran";
   EXPECT_EQ(stats.filterGraphsRefused, 0u);
   EXPECT_FALSE(stats.filterBudgetRejected);
+  EXPECT_EQ(stats.filterReducedRasters, 0u)
+      << "a chunk lifts a memory refusal at full resolution, so no filter runs reduced";
 }
 
 // Tiles on the raster edge keep the transparent outside of the raster, so the box passes there
@@ -13304,6 +13306,460 @@ TEST_F(RendererGeodeTest, SnapshotReplayKeepsMaskCompositeBindings) {
   editor::tests::CompareBitmapToBitmap(
       replayRenderer.takeSnapshot(), RenderFresh(sharedDevice(), *direct),
       "mask_composite_snapshot_replay", editor::tests::PixelmatchIdentityParams());
+}
+
+/// A circle filtered by \p primitives whose filter region is the whole `0 0 W H` view box, so the
+/// filter's capture covers the canvas with no margin, and a canvas reduced by a power of two holds
+/// exactly the pixels of a raster reduced by the same factor. With \p backdrop, a gray rectangle
+/// lies under the circle.
+std::string WholeCanvasFilterSource(std::string_view primitives, int viewBoxWidth = 64,
+                                    int viewBoxHeight = 64, bool backdrop = false,
+                                    bool filtered = true) {
+  const std::string width = std::to_string(viewBoxWidth);
+  const std::string height = std::to_string(viewBoxHeight);
+  std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 " + width + " " +
+                       height + "\"><filter id=\"f\" filterUnits=\"userSpaceOnUse\" x=\"0\" " +
+                       "y=\"0\" width=\"" + width + "\" height=\"" + height + "\">" +
+                       std::string(primitives) + "</filter>";
+  if (backdrop) {
+    source += "<rect x=\"4\" y=\"40\" width=\"56\" height=\"20\" fill=\"#888\"/>";
+  }
+  if (filtered) {
+    source +=
+        "<circle cx=\"32\" cy=\"32\" r=\"18\" fill=\"#3a7\" stroke=\"#124\" "
+        "stroke-width=\"3\" filter=\"url(#f)\"/>";
+  }
+  return source + "</svg>";
+}
+
+/// \p source parsed and rendered on a fresh renderer of the shared device at \p canvas, with the
+/// frame's surface bytes limited to \p surfaceBytes when given. \p stats receives the frame's
+/// resource statistics.
+RendererBitmap RenderFilterCanvas(const std::shared_ptr<geode::GeodeDevice>& device,
+                                  const std::string& source, Vector2i canvas,
+                                  std::optional<std::uint64_t> surfaceBytes,
+                                  RendererResourceStats& stats) {
+  std::optional<SVGDocument> document;
+  ParseDocumentWithoutWarnings(source, document);
+  if (!document.has_value()) {
+    return {};
+  }
+  document->setCanvasSize(canvas.x, canvas.y);
+  RendererGeode renderer(device);
+  if (surfaceBytes.has_value()) {
+    renderer.setSurfaceBudgetForTesting(RendererSurfaceBudget::kMaximumSurfaces, *surfaceBytes);
+  }
+  renderer.draw(*document);
+  stats = renderer.resourceStats();
+  return renderer.takeSnapshot();
+}
+
+/// \p bitmap with every pixel repeated over a \p factor x \p factor block: what a raster reduced
+/// by \p factor shows when each device pixel takes the raster pixel covering its center.
+RendererBitmap ReplicatePixels(const RendererBitmap& bitmap, int factor) {
+  RendererBitmap result;
+  result.dimensions = bitmap.dimensions * factor;
+  result.rowBytes = static_cast<std::size_t>(result.dimensions.x) * 4;
+  result.alphaType = bitmap.alphaType;
+  result.pixels.resize(result.rowBytes * static_cast<std::size_t>(result.dimensions.y));
+  for (int y = 0; y < result.dimensions.y; ++y) {
+    for (int x = 0; x < result.dimensions.x; ++x) {
+      const std::size_t from = static_cast<std::size_t>(y / factor) * bitmap.rowBytes +
+                               static_cast<std::size_t>(x / factor) * 4;
+      const std::size_t to =
+          static_cast<std::size_t>(y) * result.rowBytes + static_cast<std::size_t>(x) * 4;
+      std::copy_n(bitmap.pixels.begin() + static_cast<std::ptrdiff_t>(from), 4,
+                  result.pixels.begin() + static_cast<std::ptrdiff_t>(to));
+    }
+  }
+  return result;
+}
+
+/// Matches resource statistics whose filters ran on \p rasters reduced rasters, the coarsest
+/// reduced by \p reduction.
+testing::Matcher<const RendererResourceStats&> ReducedFilterRasters(std::uint64_t rasters,
+                                                                    std::uint32_t reduction) {
+  return testing::AllOf(
+      testing::Field("filterReducedRasters", &RendererResourceStats::filterReducedRasters, rasters),
+      testing::Field("filterRasterReduction", &RendererResourceStats::filterRasterReduction,
+                     reduction),
+      testing::Field("filterBudgetRejected", &RendererResourceStats::filterBudgetRejected, false));
+}
+
+struct ReducedFilterCase {
+  std::string_view name;
+  std::string_view primitives;
+};
+
+/// Primitives whose result depends on the device resolution: noise frequency and displacement
+/// scale, light positions and surface scale, blur deviation and offset, and morphology radius.
+constexpr std::array<ReducedFilterCase, 5> kResolutionDependentFilters = {{
+    {"turbulence_displacement",
+     R"(<feTurbulence type="turbulence" baseFrequency="0.1" numOctaves="2" result="t"/>
+        <feDisplacementMap in="SourceGraphic" in2="t" scale="6" xChannelSelector="R"
+                           yChannelSelector="G"/>)"},
+    {"spot_lighting",
+     R"(<feSpecularLighting surfaceScale="3" specularConstant="1.2" specularExponent="8"
+                            lighting-color="white" result="s">
+          <feSpotLight x="10" y="10" z="30" pointsAtX="32" pointsAtY="32"
+                       limitingConeAngle="30"/>
+        </feSpecularLighting>
+        <feComposite in="SourceGraphic" in2="s" operator="arithmetic" k1="0" k2="1" k3="1"
+                     k4="0"/>)"},
+    {"distant_diffuse_lighting",
+     R"(<feDiffuseLighting surfaceScale="4" diffuseConstant="1">
+          <feDistantLight azimuth="45" elevation="40"/>
+        </feDiffuseLighting>)"},
+    {"blur_offset", R"(<feGaussianBlur stdDeviation="2.5"/><feOffset dx="3" dy="2"/>)"},
+    {"morphology", R"(<feMorphology operator="dilate" radius="2"/>)"},
+}};
+
+/// A filter the frame's surface budget cannot hold at full resolution runs on a raster reduced by
+/// the smallest power of two that fits, in that raster's pixels: the element shows exactly the
+/// canvas reduced by that factor, each pixel covering a block of device pixels. The same filter
+/// with room runs at full resolution.
+TEST_F(RendererGeodeTest, FilterPastTheSurfaceBudgetRunsOnAReducedRaster) {
+  constexpr int kCanvas = 256;
+  // Holds the target and a filter at half resolution, but not at full resolution.
+  constexpr std::uint64_t kSurfaceBytes = 2560 * 1024;
+  for (const ReducedFilterCase& filter : kResolutionDependentFilters) {
+    SCOPED_TRACE(filter.name);
+    const std::string source = WholeCanvasFilterSource(filter.primitives);
+    RendererResourceStats stats;
+    const RendererBitmap reference =
+        RenderFilterCanvas(sharedDevice(), source, {kCanvas / 2, kCanvas / 2}, std::nullopt, stats);
+    ASSERT_THAT(test::CountNonTransparentPixels(reference), testing::Gt(0u))
+        << "Premise: the filtered circle is visible";
+    (void)RenderFilterCanvas(sharedDevice(), source, {kCanvas, kCanvas}, std::nullopt, stats);
+    EXPECT_THAT(stats, ReducedFilterRasters(0, 1))
+        << "With room the filter runs at full resolution";
+
+    const RendererBitmap reduced =
+        RenderFilterCanvas(sharedDevice(), source, {kCanvas, kCanvas}, kSurfaceBytes, stats);
+    EXPECT_THAT(stats, ReducedFilterRasters(1, 2));
+    editor::tests::CompareBitmapToBitmap(reduced, ReplicatePixels(reference, 2),
+                                         "reduced_filter_raster_" + std::string(filter.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// The reduced-raster statistics describe one frame: a later frame whose filters all fit reports
+/// none.
+TEST_F(RendererGeodeTest, ReducedRasterStatisticsDescribeOneFrame) {
+  std::optional<SVGDocument> reduced;
+  ParseDocumentWithoutWarnings(WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives),
+                               reduced);
+  std::optional<SVGDocument> unfiltered;
+  ParseDocumentWithoutWarnings(
+      WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives, 64, 64,
+                              /*backdrop=*/true, /*filtered=*/false),
+      unfiltered);
+  ASSERT_THAT(reduced, testing::Optional(testing::_));
+  ASSERT_THAT(unfiltered, testing::Optional(testing::_));
+  reduced->setCanvasSize(256, 256);
+  unfiltered->setCanvasSize(256, 256);
+  RendererGeode renderer = createRenderer();
+  renderer.setSurfaceBudgetForTesting(RendererSurfaceBudget::kMaximumSurfaces, 2560 * 1024);
+  renderer.draw(*reduced);
+  ASSERT_THAT(renderer.resourceStats(), ReducedFilterRasters(1, 2));
+  renderer.draw(*unfiltered);
+  EXPECT_THAT(renderer.resourceStats(), ReducedFilterRasters(0, 1));
+}
+
+/// Popping a filter that ran on a reduced raster restores the transform in effect before it was
+/// pushed, so a caller that draws next without setting a transform draws in device pixels.
+TEST_F(RendererGeodeTest, DrawAfterAReducedFilterUsesTheTransformBeforeIt) {
+  constexpr double kSize = 256.0;
+  const auto render = [&](bool setTransformAfterPop, RendererResourceStats& stats) {
+    RendererGeode renderer = createRenderer();
+    // Holds the target and a full-region flood at half resolution, but not at full resolution.
+    renderer.setSurfaceBudgetForTesting(RendererSurfaceBudget::kMaximumSurfaces,
+                                        256 * 256 * 4 + 2 * 1024 * 1024);
+    RenderViewport viewport;
+    viewport.size = Vector2d(kSize, kSize);
+    renderer.beginFrame(viewport);
+    renderer.setTransform(Transform2d());
+    components::FilterGraph graph;
+    components::FilterNode flood;
+    flood.primitive =
+        components::filter_primitive::Flood{.floodColor = css::Color(css::RGBA(0, 0, 255, 255))};
+    graph.nodes.push_back(flood);
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kSize, kSize}));
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d({0, 0}, {kSize, kSize}), StrokeParams{});
+    renderer.popFilterLayer();
+    stats = renderer.resourceStats();
+    if (setTransformAfterPop) {
+      renderer.setTransform(Transform2d());
+    }
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawRect(Box2d({128, 128}, {192, 192}), StrokeParams{});
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+  RendererResourceStats inherited;
+  RendererResourceStats explicitTransform;
+  const RendererBitmap drawnAfterPop = render(/*setTransformAfterPop=*/false, inherited);
+  const RendererBitmap reference = render(/*setTransformAfterPop=*/true, explicitTransform);
+  ASSERT_THAT(inherited, ReducedFilterRasters(1, 2));
+  ASSERT_THAT(explicitTransform, ReducedFilterRasters(1, 2));
+  editor::tests::CompareBitmapToBitmap(drawnAfterPop, reference, "draw_after_reduced_filter",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// The work estimate charges feMorphology its largest radius, so on a 1024 x 1024 canvas its work
+/// is past what one graph may do; it runs on a raster reduced by four, the smallest power of two
+/// that brings the work under the limit, and shows the 256 x 256 rendering.
+TEST_F(RendererGeodeTest, FilterPastThePerGraphWorkLimitRunsOnAReducedRaster) {
+  const std::string source = WholeCanvasFilterSource(kResolutionDependentFilters[4].primitives);
+  RendererResourceStats stats;
+  const RendererBitmap reference =
+      RenderFilterCanvas(sharedDevice(), source, {256, 256}, std::nullopt, stats);
+  ASSERT_THAT(stats, ReducedFilterRasters(0, 1));
+  ASSERT_THAT(test::CountNonTransparentPixels(reference), testing::Gt(0u));
+  const RendererBitmap large =
+      RenderFilterCanvas(sharedDevice(), source, {1024, 1024}, std::nullopt, stats);
+  EXPECT_THAT(stats, ReducedFilterRasters(1, 4));
+  editor::tests::CompareBitmapToBitmap(large, ReplicatePixels(reference, 4),
+                                       "morphology_past_work_limit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// The frame's work limit covers every filter it runs. Each feMorphology over a 256 x 256 canvas
+/// is charged its largest radius, so the frame's work runs out after seven of them; the later ones
+/// run on a raster reduced by two instead of being dropped.
+TEST_F(RendererGeodeTest, FiltersPastTheFrameWorkLimitRunOnReducedRasters) {
+  constexpr int kFilters = 10;
+  std::string source =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\"><filter id=\"f\" "
+      "filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"64\" height=\"64\">"
+      "<feMorphology operator=\"dilate\" radius=\"1\"/></filter>";
+  for (int i = 0; i < kFilters; ++i) {
+    source +=
+        "<circle cx=\"" + std::to_string(4 + 6 * i) + "\" cy=\"32\" r=\"2\" filter=\"url(#f)\"/>";
+  }
+  source += "</svg>";
+  RendererResourceStats stats;
+  (void)RenderFilterCanvas(sharedDevice(), source, {256, 256}, std::nullopt, stats);
+  EXPECT_THAT(
+      stats,
+      testing::AllOf(testing::Field("filterExecutions", &RendererResourceStats::filterExecutions,
+                                    static_cast<std::uint64_t>(kFilters)),
+                     testing::Field("filterReducedRasters",
+                                    &RendererResourceStats::filterReducedRasters, testing::Gt(0u)),
+                     testing::Field("filterRasterReduction",
+                                    &RendererResourceStats::filterRasterReduction, 2u),
+                     testing::Field("filterBudgetRejected",
+                                    &RendererResourceStats::filterBudgetRejected, false)));
+}
+
+/// A filter that does not fit even a raster reduced by 16 is left out, as a refused filter was
+/// before: the content under it still draws, and the frame reports the refusal.
+TEST_F(RendererGeodeTest, FilterPastTheCoarsestReducedRasterIsLeftOut) {
+  // Large enough that the filter's intermediates, not its fixed parameter blocks, decide the fit.
+  constexpr int kCanvas = 2048;
+  // Holds the target and the filter on a raster reduced by 32 (64 x 64), not by 16 (128 x 128).
+  constexpr std::uint64_t kSurfaceBytes = std::uint64_t{kCanvas} * kCanvas * 4 + 1280 * 1024;
+  const std::string_view primitives = kResolutionDependentFilters[0].primitives;
+  RendererResourceStats stats;
+  const RendererBitmap leftOut = RenderFilterCanvas(
+      sharedDevice(), WholeCanvasFilterSource(primitives, 64, 64, /*backdrop=*/true),
+      {kCanvas, kCanvas}, kSurfaceBytes, stats);
+  EXPECT_THAT(stats,
+              testing::AllOf(testing::Field("filterReducedRasters",
+                                            &RendererResourceStats::filterReducedRasters, 0u),
+                             testing::Field("filterBudgetRejected",
+                                            &RendererResourceStats::filterBudgetRejected, true)));
+  RendererResourceStats referenceStats;
+  const RendererBitmap withoutElement = RenderFilterCanvas(
+      sharedDevice(),
+      WholeCanvasFilterSource(primitives, 64, 64, /*backdrop=*/true, /*filtered=*/false),
+      {kCanvas, kCanvas}, std::nullopt, referenceStats);
+  ASSERT_THAT(test::CountNonTransparentPixels(withoutElement), testing::Gt(0u))
+      << "Premise: the backdrop is visible";
+  editor::tests::CompareBitmapToBitmap(leftOut, withoutElement, "filter_past_coarsest_raster",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A turbulence and displacement filter over a 2048 x 2048 canvas needs more intermediate memory
+/// than one graph may hold, so it runs on a raster reduced by two: the canvas shows the 1024 x 1024
+/// rendering, each pixel covering a 2 x 2 block, rather than nothing.
+TEST_F(RendererGeodeTest, FilterOnA2048CanvasRunsOnAReducedRaster) {
+  const std::string source = WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives);
+  RendererResourceStats stats;
+  const RendererBitmap reference =
+      RenderFilterCanvas(sharedDevice(), source, {1024, 1024}, std::nullopt, stats);
+  ASSERT_THAT(stats, ReducedFilterRasters(0, 1));
+  ASSERT_THAT(test::CountNonTransparentPixels(reference), testing::Gt(0u));
+  const RendererBitmap large =
+      RenderFilterCanvas(sharedDevice(), source, {2048, 2048}, std::nullopt, stats);
+  EXPECT_THAT(stats, ReducedFilterRasters(1, 2));
+  editor::tests::CompareBitmapToBitmap(large, ReplicatePixels(reference, 2),
+                                       "filter_on_2048_canvas",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// On a 3840 x 2160 canvas the same filter also exceeds the frame's surface budget at half
+/// resolution, so it runs on a raster reduced by four.
+TEST_F(RendererGeodeTest, FilterOnA3840x2160CanvasRunsOnAReducedRaster) {
+  const std::string source =
+      WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives, 128, 72);
+  RendererResourceStats stats;
+  const RendererBitmap reference =
+      RenderFilterCanvas(sharedDevice(), source, {960, 540}, std::nullopt, stats);
+  ASSERT_THAT(stats, ReducedFilterRasters(0, 1));
+  ASSERT_THAT(test::CountNonTransparentPixels(reference), testing::Gt(0u));
+  const RendererBitmap large =
+      RenderFilterCanvas(sharedDevice(), source, {3840, 2160}, std::nullopt, stats);
+  EXPECT_THAT(stats, ReducedFilterRasters(1, 4));
+  editor::tests::CompareBitmapToBitmap(large, ReplicatePixels(reference, 4),
+                                       "filter_on_3840x2160_canvas",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Filters a reduced raster cannot reproduce: a skewed blur and a rotated one-axis blur, which the
+/// reduced canvas draws on the transformed blur path; a backdrop read; and a pre-rasterized feImage
+/// fragment. Past the injected budget each runs at full resolution if it fits there, and is left
+/// out otherwise, but never on a reduced raster.
+TEST_F(RendererGeodeTest, FiltersAReducedRasterCannotReproduceAreNotReduced) {
+  constexpr std::uint64_t kSurfaceBytes = 2560 * 1024;
+  struct Case {
+    std::string_view name;
+    std::string body;
+  };
+  const std::string defs =
+      "<filter id=\"f\" filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"64\" height=\"64\">";
+  const std::array<Case, 4> cases = {{
+      {"skewed_blur",
+       defs + "<feGaussianBlur stdDeviation=\"2\"/></filter><g transform=\"skewX(30)\">"},
+      {"rotated_one_axis_blur",
+       defs + "<feGaussianBlur stdDeviation=\"3 0\"/></filter><g transform=\"rotate(30 32 32)\">"},
+      {"backdrop_blend", defs + "<feBlend in=\"SourceGraphic\" in2=\"BackgroundImage\" "
+                                "mode=\"multiply\"/></filter><g>"},
+      {"fragment_image",
+       "<defs><rect id=\"frag\" x=\"8\" y=\"8\" width=\"30\" height=\"20\" fill=\"#a35\"/></defs>" +
+           defs + "<feImage href=\"#frag\"/></filter><g>"},
+  }};
+  for (const Case& test : cases) {
+    SCOPED_TRACE(test.name);
+    const auto source = [&](bool withElement) {
+      return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\">"
+             "<rect x=\"4\" y=\"40\" width=\"56\" height=\"20\" fill=\"#888\"/>" +
+             test.body +
+             (withElement ? "<circle cx=\"32\" cy=\"32\" r=\"18\" fill=\"#3a7\" "
+                            "filter=\"url(#f)\"/>"
+                          : "") +
+             "</g></svg>";
+    };
+    RendererResourceStats stats;
+    const RendererBitmap budgeted =
+        RenderFilterCanvas(sharedDevice(), source(true), {256, 256}, kSurfaceBytes, stats);
+    EXPECT_THAT(stats, testing::Field("filterReducedRasters",
+                                      &RendererResourceStats::filterReducedRasters, 0u));
+    RendererResourceStats referenceStats;
+    const RendererBitmap reference =
+        stats.filterBudgetRejected ? RenderFilterCanvas(sharedDevice(), source(false), {256, 256},
+                                                        std::nullopt, referenceStats)
+                                   : RenderFilterCanvas(sharedDevice(), source(true), {256, 256},
+                                                        std::nullopt, referenceStats);
+    editor::tests::CompareBitmapToBitmap(budgeted, reference,
+                                         "not_reduced_" + std::string(test.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A filter region inset from the canvas at offsets that are not multiples of the reduction runs
+/// on a raster whose pixels are the reduced canvas's, so it matches the half-size rendering
+/// doubled.
+TEST_F(RendererGeodeTest, InsetFilterRegionRunsOnTheReducedCanvasGrid) {
+  constexpr std::uint64_t kSurfaceBytes = 2560 * 1024;
+  for (const std::size_t index : {std::size_t{0}, std::size_t{3}}) {
+    const ReducedFilterCase& filter = kResolutionDependentFilters[index];
+    SCOPED_TRACE(filter.name);
+    std::string source = WholeCanvasFilterSource(filter.primitives);
+    const std::string region = "x=\"0\" y=\"0\" width=\"64\" height=\"64\"";
+    source.replace(source.find(region), region.size(),
+                   "x=\"3.3\" y=\"5.7\" width=\"47\" height=\"41\"");
+    RendererResourceStats stats;
+    const RendererBitmap reference =
+        RenderFilterCanvas(sharedDevice(), source, {128, 128}, std::nullopt, stats);
+    ASSERT_THAT(test::CountNonTransparentPixels(reference), testing::Gt(0u));
+    const RendererBitmap reduced =
+        RenderFilterCanvas(sharedDevice(), source, {256, 256}, kSurfaceBytes, stats);
+    EXPECT_THAT(stats, ReducedFilterRasters(1, 2));
+    editor::tests::CompareBitmapToBitmap(reduced, ReplicatePixels(reference, 2),
+                                         "inset_reduced_" + std::string(filter.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// The unchanged second frame of a filter on a reduced raster costs what the same filter's second
+/// frame costs at full resolution: nothing is encoded, created or rebuilt again.
+TEST_F(RendererGeodeTest, ReducedFilterReachesTheSteadyState) {
+  const auto secondFrame = [&](std::optional<std::uint64_t> surfaceBytes,
+                               RendererResourceStats& stats) {
+    std::optional<SVGDocument> document;
+    ParseDocumentWithoutWarnings(WholeCanvasFilterSource(kResolutionDependentFilters[3].primitives),
+                                 document);
+    document->setCanvasSize(256, 256);
+    RendererGeode renderer = createRenderer();
+    if (surfaceBytes.has_value()) {
+      renderer.setSurfaceBudgetForTesting(RendererSurfaceBudget::kMaximumSurfaces, *surfaceBytes);
+    }
+    renderer.draw(*document);
+    (void)renderer.takeSnapshot();
+    renderer.draw(*document);
+    stats = renderer.resourceStats();
+    return renderer.lastFrameTimings().counters;
+  };
+  RendererResourceStats fullStats;
+  RendererResourceStats reducedStats;
+  const geode::GeodeCounters full = secondFrame(std::nullopt, fullStats);
+  const geode::GeodeCounters reduced = secondFrame(2560 * 1024, reducedStats);
+  ASSERT_THAT(fullStats, ReducedFilterRasters(0, 1));
+  ASSERT_THAT(reducedStats, ReducedFilterRasters(1, 2));
+  EXPECT_THAT(
+      reduced,
+      testing::AllOf(
+          testing::Field("pathEncodes", &geode::GeodeCounters::pathEncodes, full.pathEncodes),
+          testing::Field("textureCreates", &geode::GeodeCounters::textureCreates,
+                         full.textureCreates),
+          testing::Field("bufferWrites", &geode::GeodeCounters::bufferWrites, full.bufferWrites),
+          testing::Field("bindgroupCreates", &geode::GeodeCounters::bindgroupCreates,
+                         full.bindgroupCreates)));
+}
+
+/// A filter too large for the whole surface budget runs on a reduced raster without first
+/// splitting the frame, because no submitted chunk could make room for it.
+TEST_F(RendererGeodeTest, FilterLargerThanTheSurfaceBudgetReducesWithoutAChunk) {
+  constexpr int kCanvas = 256;
+  RendererGeode renderer = createRenderer();
+  renderer.setSurfaceBudgetForTesting(RendererSurfaceBudget::kMaximumSurfaces, 2560 * 1024);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kCanvas, kCanvas);
+  renderer.beginFrame(viewport);
+  renderer.setTransform(Transform2d());
+  // A small first filter leaves retained filter memory, so a chunk would be available.
+  components::FilterGraph flood;
+  components::FilterNode floodNode;
+  floodNode.primitive =
+      components::filter_primitive::Flood{.floodColor = css::Color(css::RGBA(0, 0, 255, 255))};
+  flood.nodes.push_back(floodNode);
+  renderer.pushFilterLayer(flood, Box2d({0, 0}, {16, 16}));
+  renderer.popFilterLayer();
+  components::FilterGraph blur;
+  components::FilterNode blurNode;
+  blurNode.primitive =
+      components::filter_primitive::GaussianBlur{.stdDeviationX = 3, .stdDeviationY = 3};
+  blur.nodes.push_back(blurNode);
+  renderer.pushFilterLayer(blur, Box2d({0, 0}, {kCanvas, kCanvas}));
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({32, 32}, {224, 224}), StrokeParams{});
+  renderer.popFilterLayer();
+  const RendererResourceStats stats = renderer.resourceStats();
+  renderer.endFrame();
+  EXPECT_THAT(stats, ReducedFilterRasters(1, 2));
+  EXPECT_THAT(renderer.filterBudgetChunksForTesting(), testing::Eq(0u));
 }
 
 }  // namespace

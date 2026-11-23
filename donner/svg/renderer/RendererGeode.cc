@@ -1307,6 +1307,11 @@ struct GeodeFilterAdmission {
   components::FilterExecutionBudget::Reservation reservation;
   geode::FilterTilePlan fullPlan;
   std::optional<geode::FilterTilePlan> localPlan;
+  /// Raster pixels from device pixels when the graph runs on a reduced-resolution raster, which
+  /// the buffer fields then describe; absent at full resolution.
+  std::optional<Transform2d> reducedRasterFromDevice;
+  /// Device pixels per raster pixel along each axis: 1 at full resolution.
+  std::uint32_t rasterReduction = 1;
 };
 
 struct GeodeFilterBuffer {
@@ -1441,7 +1446,8 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
                                 const std::optional<Box2d>& filterRegion,
                                 const Transform2d& deviceFromFilter,
                                 const GeodeFilterBuffer& buffer,
-                                const geode::GeodeFilterEngine& engine) {
+                                const geode::GeodeFilterEngine& engine,
+                                bool allowLocalPlan = true) {
   GeodeFilterPlan result{
       buffer, engine.executionPlan(filterGraph, buffer.width, buffer.height, deviceFromFilter)};
   uint64_t plannedWork = 0;
@@ -1449,8 +1455,10 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
   result.fullExecutionFits = components::FilterGraphExecutionCost(
       filterGraph, result.plan.workPixels(), components::FilterMemoryModel::GpuAllNodes,
       plannedWork, plannedBytes, result.plan.pixels(), result.plan.tiles);
-  result.localPlan = ComputeGeodeLocalFilterPlan(filterGraph, filterRegion, deviceFromFilter,
-                                                 result.fullExecutionFits, engine);
+  result.localPlan = allowLocalPlan
+                         ? ComputeGeodeLocalFilterPlan(filterGraph, filterRegion, deviceFromFilter,
+                                                       result.fullExecutionFits, engine)
+                         : std::nullopt;
   if (result.fullExecutionFits || !result.localPlan) {
     result.bounds.include(result.plan);
   }
@@ -1505,13 +1513,128 @@ bool GeodeFilterPlanFits(const components::FilterGraph& filterGraph, const Geode
                            plan.bounds.executions, plan.surfaces);
 }
 
-std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGraph& filterGraph,
-                                                     const std::optional<Box2d>& filterRegion,
-                                                     const Transform2d& deviceFromFilter,
-                                                     int viewportWidth, int viewportHeight,
-                                                     components::FilterExecutionBudget& budget,
-                                                     const RendererSurfaceBudget& surfaceBudget,
-                                                     const geode::GeodeFilterEngine& engine) {
+/// Coarsest reduced filter raster: one raster pixel per 16 x 16 device pixels.
+constexpr std::uint32_t kMaximumFilterRasterReduction = 16;
+
+/// Why \p plan cannot be admitted at full resolution, or `RejectionReason::None` when it can.
+components::FilterExecutionBudget::RejectionReason GeodeFilterPlanRefusal(
+    const components::FilterGraph& filterGraph, const GeodeFilterPlan& plan,
+    const components::FilterExecutionBudget& budget, const RendererSurfaceBudget& surfaceBudget,
+    const geode::GeodeFilterEngine& engine) {
+  if (!GeodeFilterSurfacesFit(plan, budget, surfaceBudget)) {
+    return components::FilterExecutionBudget::RejectionReason::MemoryLimit;
+  }
+  return budget.refusalReason(filterGraph, plan.bounds.workPixels,
+                              components::FilterMemoryModel::GpuAllNodes, plan.captureBytes,
+                              engine.retainedBufferBytes(), plan.bounds.memoryPixels,
+                              plan.bounds.executions, plan.surfaces);
+}
+
+/// Whether \p filterGraph can run on a reduced raster and still be the picture a canvas reduced by
+/// the same factor shows. A backdrop copy and a pre-rasterized feImage fragment keep the device
+/// grid, and a graph whose transform needs the transformed blur path takes that path on the
+/// reduced canvas, which a device-axis blur on the reduced capture cannot reproduce.
+bool CanRunOnReducedRaster(const components::FilterGraph& filterGraph,
+                           const std::optional<Box2d>& filterRegion,
+                           const Transform2d& deviceFromFilter) {
+  if (components::StandardInputUsage(filterGraph).readsBackdrop() ||
+      UsesTransformedBlurPath(filterGraph, filterRegion, deviceFromFilter,
+                              /*fullExecutionFits=*/true)) {
+    return false;
+  }
+  return std::none_of(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
+    const auto* image = std::get_if<components::filter_primitive::Image>(&node.primitive);
+    return image != nullptr && image->isFragmentReference;
+  });
+}
+
+/// Rounds \p value down to a multiple of \p step, for any sign. @param step Positive step.
+int FloorToMultiple(int value, int step) {
+  const int quotient = value / step;
+  return (quotient * step > value ? quotient - 1 : quotient) * step;
+}
+
+/// Admits \p filterGraph on a raster of \p buffer reduced by the smallest power of two, up to
+/// \ref kMaximumFilterRasterReduction, that fits every frame limit. The raster's pixels are the
+/// pixels of the canvas reduced by that factor, covering the capture, and the graph runs in them,
+/// so each resolution-dependent parameter is evaluated as for that reduced canvas. Nothing is
+/// reserved when no reduction fits.
+std::optional<GeodeFilterAdmission> AdmitReducedGeodeFilter(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, const GeodeFilterBuffer& buffer,
+    components::FilterExecutionBudget& budget, const RendererSurfaceBudget& surfaceBudget,
+    const geode::GeodeFilterEngine& engine) {
+  if (!CanRunOnReducedRaster(filterGraph, filterRegion, deviceFromFilter)) {
+    return std::nullopt;
+  }
+  for (std::uint32_t reduction = 2; reduction <= kMaximumFilterRasterReduction; reduction *= 2) {
+    const int step = static_cast<int>(reduction);
+    // The capture spans device [-offset, size - offset); the raster spans the reduced canvas
+    // pixels that cover it, so its pixel grid is the reduced canvas's.
+    const int left = FloorToMultiple(-buffer.offsetX, step);
+    const int top = FloorToMultiple(-buffer.offsetY, step);
+    const int right = -FloorToMultiple(buffer.offsetX - buffer.width, step);
+    const int bottom = -FloorToMultiple(buffer.offsetY - buffer.height, step);
+    const double scale = 1.0 / reduction;
+    const Transform2d rasterFromDevice =
+        Transform2d::Translate(-left, -top) * Transform2d::Scale(scale, scale);
+    const GeodeFilterBuffer reduced{buffer.region, (right - left) / step, (bottom - top) / step, 0,
+                                    0};
+    const GeodeFilterPlan plan =
+        PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter * rasterFromDevice, reduced,
+                        engine, /*allowLocalPlan=*/false);
+    if (!plan.costKnown ||
+        GeodeFilterPlanRefusal(filterGraph, plan, budget, surfaceBudget, engine) !=
+            components::FilterExecutionBudget::RejectionReason::None) {
+      continue;
+    }
+    auto reservation = budget.reserve(filterGraph, plan.bounds.workPixels,
+                                      components::FilterMemoryModel::GpuAllNodes, plan.captureBytes,
+                                      engine.retainedBufferBytes(), plan.bounds.memoryPixels,
+                                      plan.bounds.executions, plan.surfaces);
+    if (!reservation.has_value()) {
+      return std::nullopt;
+    }
+    return GeodeFilterAdmission{
+        reduced.region, reduced.width, reduced.height,   0,        0, false, false, *reservation,
+        plan.plan,      std::nullopt,  rasterFromDevice, reduction};
+  }
+  return std::nullopt;
+}
+
+/// Whether \p plan's capture and intermediates fit the frame's surface limit with nothing else
+/// held, the most a submitted chunk can free.
+bool FitsAnEmptyFrame(const GeodeFilterPlan& plan, const RendererSurfaceBudget& surfaceBudget) {
+  const std::uint64_t limit = surfaceBudget.limits().bytes;
+  return plan.captureBytes <= limit && plan.graphBytes <= limit - plan.captureBytes;
+}
+
+/// Whether a graph refused at full resolution for \p refusal may run on a reduced raster: a memory,
+/// work or estimate refusal may, except a memory refusal that a submitted chunk can lift while
+/// \p mayRequestChunk.
+bool ReducedRasterMayAdmit(components::FilterExecutionBudget::RejectionReason refusal,
+                           bool mayRequestChunk) {
+  using RejectionReason = components::FilterExecutionBudget::RejectionReason;
+  switch (refusal) {
+    case RejectionReason::MemoryLimit: return !mayRequestChunk;
+    case RejectionReason::WorkLimit:
+    case RejectionReason::InvalidGraph: return true;
+    case RejectionReason::None:
+    case RejectionReason::ExecutionLimit:
+    case RejectionReason::External: return false;
+  }
+  return false;
+}
+
+/// Admits \p filterGraph at full resolution when it fits the frame's limits. A graph that does not
+/// fit runs on a reduced-resolution raster instead (\ref AdmitReducedGeodeFilter), except while
+/// \p mayRequestChunk and the refusal is one a submitted chunk can lift: the caller then submits
+/// the chunk and asks again with \p mayRequestChunk false.
+std::optional<GeodeFilterAdmission> AdmitGeodeFilter(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight,
+    components::FilterExecutionBudget& budget, const RendererSurfaceBudget& surfaceBudget,
+    const geode::GeodeFilterEngine& engine, bool mayRequestChunk) {
   // Prefer a raster over the part of the filter region the viewport can show, with the graph's
   // input margin, but never let the margin turn an admissible filter into a frame-wide rejection:
   // fall back to the viewport layout when that raster would not fit.
@@ -1533,6 +1656,14 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
       !GeodeFilterPlanFits(filterGraph, plan, budget, surfaceBudget, engine)) {
     const GeodeFilterBuffer viewport{buffer->region, viewportWidth, viewportHeight, 0, 0};
     plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, viewport, engine);
+  }
+  if (ReducedRasterMayAdmit(
+          GeodeFilterPlanRefusal(filterGraph, plan, budget, surfaceBudget, engine),
+          mayRequestChunk && FitsAnEmptyFrame(plan, surfaceBudget))) {
+    if (std::optional<GeodeFilterAdmission> reduced = AdmitReducedGeodeFilter(
+            filterGraph, filterRegion, deviceFromFilter, *buffer, budget, surfaceBudget, engine)) {
+      return reduced;
+    }
   }
   if (!GeodeFilterSurfacesFit(plan, budget, surfaceBudget)) {
     budget.requireMemoryChunk();
@@ -2076,6 +2207,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::optional<size_t> failFrameEncoderCloseForTesting;
   /// One-shot: the next filter-budget split runs without a budget rejection asking for it.
   bool forceFilterBudgetChunkForTesting = false;
+  /// Filter graphs this frame ran on a reduced-resolution raster.
+  std::uint64_t filterReducedRasters = 0;
+  /// Device pixels per raster pixel of this frame's coarsest reduced filter raster, or 1.
+  std::uint32_t filterRasterReduction = 1;
   bool failFilterFrameRestoreForTesting = false;
   bool frameRecordingAbandoned = false;
   bool frameArenaWriteFailed = false;
@@ -3181,14 +3316,29 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   [[nodiscard]] bool filterBudgetNeedsChunkSubmit() const {
     return filterExecutionBudget->rejectionReason() ==
                components::FilterExecutionBudget::RejectionReason::MemoryLimit &&
-           filterExecutionBudget->activeGpuReservations() == 0 &&
+           filterChunkFreesMemory();
+  }
+
+  /// Whether submitting the frame's work so far would free filter memory the budget still holds.
+  [[nodiscard]] bool filterChunkFreesMemory() const {
+    return filterExecutionBudget->activeGpuReservations() == 0 &&
            filterExecutionBudget->retainedGpuBytes() != 0;
+  }
+
+  /// Whether the frame can be split mid-frame to submit a filter budget chunk.
+  [[nodiscard]] bool canSubmitFilterBudgetChunk() const {
+    return device && frameRecordingOpen && target.isValid() && filterStack.empty();
+  }
+
+  /// Whether a filter refused for memory can be admitted again after \ref submitFilterBudgetChunk.
+  [[nodiscard]] bool filterBudgetChunkAvailable() const {
+    return filterExecutionBudget->executions() != 0 && canSubmitFilterBudgetChunk() &&
+           filterChunkFreesMemory();
   }
 
   bool submitFilterBudgetChunk() {
     const bool forced = std::exchange(forceFilterBudgetChunkForTesting, false);
-    if (!device || !frameRecordingOpen || !target.isValid() || !filterStack.empty() ||
-        (!forced && !filterBudgetNeedsChunkSubmit())) {
+    if (!canSubmitFilterBudgetChunk() || (!forced && !filterBudgetNeedsChunkSubmit())) {
       return false;
     }
 
@@ -3663,6 +3813,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Box2d filterRegion;
     Transform2d deviceFromFilter;  // Full CTM at push time.
     std::optional<Transform2d> localCaptureFromParent;
+    /// Raster pixels from device pixels of a capture reduced to fit the frame's limits.
+    std::optional<Transform2d> reducedRasterFromDevice;
     bool transformedCaptureReserved = false;
     bool localRasterRequiredForBudget = false;
     int filterBufferOffsetX = 0;  // Input margin past the outer target's left edge.
@@ -3760,10 +3912,33 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Transform2d result;
     for (std::size_t index = firstFrame; index < filterStack.size(); ++index) {
       const auto& frame = filterStack[index];
-      result = result * frame.localCaptureFromParent.value_or(Transform2d::Translate(
-                            frame.filterBufferOffsetX, frame.filterBufferOffsetY));
+      result = result * captureFromParent(frame);
     }
     return result;
+  }
+
+  /// Filter user space to the pixels of \p frame's capture, which the filter engine works in: a
+  /// reduced raster's, or the device's shifted by any input margin past the top or left edge.
+  static Transform2d captureFromFilter(const FilterStackFrame& frame) {
+    if (frame.reducedRasterFromDevice) {
+      return frame.deviceFromFilter * *frame.reducedRasterFromDevice;
+    }
+    if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+      return frame.deviceFromFilter *
+             Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
+    }
+    return frame.deviceFromFilter;
+  }
+
+  /// Capture pixels from the pixels of the target \p frame composites onto.
+  static Transform2d captureFromParent(const FilterStackFrame& frame) {
+    if (frame.localCaptureFromParent) {
+      return *frame.localCaptureFromParent;
+    }
+    if (frame.reducedRasterFromDevice) {
+      return *frame.reducedRasterFromDevice;
+    }
+    return Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
   }
 
   /// Fills the clip paths in [\p begin, \p end) of \p clip, one layer of it, into \p mask with
@@ -4092,8 +4267,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   void restoreFilterCaptureTransform(const FilterStackFrame& frame) {
-    if (frame.localCaptureFromParent) {
-      deviceFromLocalTransform = deviceFromLocalTransform * frame.localCaptureFromParent->inverse();
+    if (frame.localCaptureFromParent || frame.reducedRasterFromDevice) {
+      deviceFromLocalTransform = deviceFromLocalTransform * captureFromParent(frame).inverse();
     }
   }
 
@@ -4160,6 +4335,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frame.deviceFromFilter = deviceFromFilter;
     frame.transformedCaptureReserved = admission.transformedCaptureReserved;
     frame.localRasterRequiredForBudget = admission.localRasterRequired;
+    frame.reducedRasterFromDevice = admission.reducedRasterFromDevice;
     if (geometry) {
       frame.localCaptureFromParent =
           FilterRasterFromDevice(deviceFromFilter, geometry->paddedRegion.topLeft,
@@ -4180,9 +4356,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     auto newEncoder =
         std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
                                             target, textureDesc.size, *frameGpuEncoder);
-    deviceFromLocalTransform =
-        deviceFromLocalTransform * frame.localCaptureFromParent.value_or(Transform2d::Translate(
-                                       frame.filterBufferOffsetX, frame.filterBufferOffsetY));
+    deviceFromLocalTransform = deviceFromLocalTransform * captureFromParent(frame);
     filterStack.push_back(std::move(frame));
     configurePathEncoder(*newEncoder);
     newEncoder->clear(css::RGBA(0, 0, 0, 0));
@@ -4345,12 +4519,24 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   void drawDeviceFilterOutput(const FilterStackFrame& frame, const gpu::Texture& filteredTexture,
                               const gpu::TextureDescriptor& filteredDesc) {
+    geode::GeodeTextureEncoder::RetainedQuadBinding* retained =
+        filterOutputComposites.binding(filterOutputComposites.claim(), filteredTexture);
+    if (frame.reducedRasterFromDevice) {
+      // Nearest sampling gives each device pixel the raster pixel that covers its center, so the
+      // result is the filtered raster at its own resolution, with no interpolation added.
+      encoder->setTransform(frame.reducedRasterFromDevice->inverse());
+      encoder->drawTexture(filteredTexture,
+                           Box2d::FromXYWH(0.0, 0.0, static_cast<double>(filteredDesc.size.width),
+                                           static_cast<double>(filteredDesc.size.height)),
+                           kWholeTextureUv, 1.0, /*pixelated=*/true,
+                           /*sourceIsPremultiplied=*/true, retained);
+      syncTransform();
+      return;
+    }
     const gpu::Extent2d outerExtent = targetExtent();
     const FilterInputBuffer buffer{static_cast<int>(frame.layerDesc.size.width),
                                    static_cast<int>(frame.layerDesc.size.height),
                                    frame.filterBufferOffsetX, frame.filterBufferOffsetY};
-    geode::GeodeTextureEncoder::RetainedQuadBinding* retained =
-        filterOutputComposites.binding(filterOutputComposites.claim(), filteredTexture);
     if (!buffer.exceedsViewport(static_cast<int>(outerExtent.width),
                                 static_cast<int>(outerExtent.height))) {
       encoder->blitFullTarget(filteredTexture, 1.0, retained);
@@ -8531,6 +8717,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (ownsFilterExecutionBudget) {
       filterExecutionBudget->reset();
     }
+    filterReducedRasters = 0;
+    filterRasterReduction = 1;
     if (ownsFilterPreparationBudget) {
       filterPreparationBudget->reset();
     }
@@ -9146,6 +9334,9 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .filterGraphsRefused = impl_->filterExecutionBudget->refusedGraphs(),
       .filterBudgetRejected = impl_->filterExecutionBudget->rejected() ||
                               impl_->filterExecutionBudget->refusedGraphs() != 0,
+      .filterReducedRasterSupported = true,
+      .filterReducedRasters = impl_->filterReducedRasters,
+      .filterRasterReduction = impl_->filterRasterReduction,
       .geometryBudgetSupported = true,
       .geometryDraws = impl_->geometryBudget->draws(),
       .geometryItems = impl_->geometryBudget->items(),
@@ -9617,25 +9808,30 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     impl_->pushRejectedFilterFrame();
     return;
   }
-  std::optional<GeodeFilterAdmission> admission = AdmitGeodeFilter(
-      filterGraph, filterRegion, impl_->deviceFromLocalTransform, outerWidth, outerHeight,
-      *impl_->filterExecutionBudget, *impl_->surfaceBudget, *impl_->filterEngine);
+  std::optional<GeodeFilterAdmission> admission =
+      AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform, outerWidth,
+                       outerHeight, *impl_->filterExecutionBudget, *impl_->surfaceBudget,
+                       *impl_->filterEngine, impl_->filterBudgetChunkAvailable());
   if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
       impl_->submitFilterBudgetChunk()) {
     admission = AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
                                  outerWidth, outerHeight, *impl_->filterExecutionBudget,
-                                 *impl_->surfaceBudget, *impl_->filterEngine);
+                                 *impl_->surfaceBudget, *impl_->filterEngine,
+                                 /*mayRequestChunk=*/false);
   }
   if (!admission.has_value()) {
     impl_->pushRejectedFilterFrame();
     return;
   }
-
   if (!impl_->beginFilterCapture(filterGraph, *admission, impl_->deviceFromLocalTransform)) {
     auto reservation = admission->reservation;
     impl_->filterExecutionBudget->release(reservation);
     impl_->filterExecutionBudget->reject();
     impl_->pushRejectedFilterFrame();
+  } else if (admission->reducedRasterFromDevice) {
+    ++impl_->filterReducedRasters;
+    impl_->filterRasterReduction =
+        std::max(impl_->filterRasterReduction, admission->rasterReduction);
   }
 }
 
@@ -9688,13 +9884,7 @@ void RendererGeode::popFilterLayer() {
     return;
   }
 
-  // When the filter buffer has an input margin past the top or left edge, adjust
-  // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
-  const Transform2d bufferDeviceFromFilter =
-      (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
-          ? frame.deviceFromFilter *
-                Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
-          : frame.deviceFromFilter;
+  const Transform2d captureFromFilter = Impl::captureFromFilter(frame);
 
   const Impl::TransformedFilterResult transformed = impl_->tryCompositeTransformedFilter(frame);
   if (transformed == Impl::TransformedFilterResult::Composited) {
@@ -9711,7 +9901,7 @@ void RendererGeode::popFilterLayer() {
   // Run the filter graph on the captured layer texture. Nothing runs it when the graph is empty,
   // in which case the capture itself is what gets composited back.
   std::optional<geode::FilterExecutionResult> execution =
-      impl_->executeFilterGraph(frame, bufferDeviceFromFilter);
+      impl_->executeFilterGraph(frame, captureFromFilter);
   if (!execution.has_value()) {
     return;
   }

@@ -244,6 +244,8 @@ public:
 
   /// Bytes currently reserved by active surfaces.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  /// The frame's limits, including any tighter limits a test installed.
+  [[nodiscard]] Limits limits() const { return limits_; }
   /// Most bytes reserved at once since the last \ref reset.
   [[nodiscard]] std::uint64_t peakBytes() const { return peakBytes_; }
   /// Number of active reserved surfaces.
@@ -779,6 +781,15 @@ struct RendererResourceStats {
   std::uint64_t filterGraphsRefused = 0;
   /// Whether any filter graph was refused or dropped this frame, latched or not.
   bool filterBudgetRejected = false;
+  /// Whether the renderer runs a filter graph whose full-resolution execution does not fit the
+  /// frame's limits on a reduced-resolution raster instead of refusing it.
+  bool filterReducedRasterSupported = false;
+  /// Filter graphs this frame ran on a reduced-resolution raster because their full-resolution
+  /// execution did not fit the frame's limits.
+  std::uint64_t filterReducedRasters = 0;
+  /// Device pixels per raster pixel, along each axis, of the coarsest such raster this frame: 1
+  /// when every filter ran at full resolution, otherwise 2, 4, 8 or 16.
+  std::uint32_t filterRasterReduction = 1;
   bool geometryBudgetSupported = false;
   std::size_t geometryDraws = 0;
   std::size_t geometryItems = 0;
