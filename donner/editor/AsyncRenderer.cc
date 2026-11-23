@@ -1830,15 +1830,15 @@ void AsyncRenderer::workerLoop() {
     // root render.
     const bool editorPromotionEnabled = compositor_ != nullptr;
     InteractionPromotionOutcome interactionPromotion;
-    // Records each request with the retained total and the total budget sampled before the
-    // compositor decides it, so a refused promotion is observable from the published result. See
-    // InteractionPromotionOutcome for which results that comparison can explain.
+    // Records each request with the retained total and the total admission threshold sampled
+    // before the compositor decides it, so a refused promotion is observable from the published
+    // result. See InteractionPromotionOutcome for which results that comparison can explain.
     const auto promoteInteraction = [&](Entity entity, svg::compositor::InteractionHint kind) {
       interactionPromotion = InteractionPromotionOutcome{
           .requested = true,
           .entity = entity,
           .retainedBitmapBytes = compositor_->totalBitmapMemory(),
-          .memoryBudgetBytes = svg::compositor::EffectiveCompositorMemoryBudget(),
+          .memoryBudgetBytes = compositor_->retainedMemoryBudgetBytes(),
       };
       const svg::compositor::CompositorController::PromoteResult promoteResult =
           compositor_->promoteEntity(entity, kind);

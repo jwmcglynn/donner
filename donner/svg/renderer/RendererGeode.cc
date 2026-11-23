@@ -48,6 +48,7 @@
 #include "donner/svg/renderer/HeadlessDevicePool.h"
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/TextureHandOutQueue.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeAnchoredSampling.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
@@ -892,7 +893,8 @@ struct RendererGeodeTextureKey {
 };
 
 struct RendererGeodeTextureBucket {
-  std::vector<gpu::Texture> free;
+  /// Free textures, handed out in the order the most recent frame took them.
+  TextureHandOutQueue<gpu::Texture> free;
   uint64_t lastUsedFrame = 0;
 };
 
@@ -907,6 +909,11 @@ struct RendererGeodeTextureBucket {
  * allocates from rather than taking one per call, because a texture must be destroyed through
  * that device on eviction and in this pool's destructor, where no caller is present to supply
  * one.
+ *
+ * A bucket hands its textures out in the order the most recent frame took them, whatever order
+ * they came back in, so a frame that repeats the previous frame's acquisitions gets back the same
+ * texture for each one. Caches keyed on texture identity, such as the filter engine's views and
+ * bind groups, therefore stay valid across unchanged frames.
  */
 class RendererGeodeTexturePool {
 public:
@@ -918,9 +925,7 @@ public:
   ~RendererGeodeTexturePool() {
     for (auto& [unusedKey, bucket] : buckets_) {
       (void)unusedKey;
-      for (gpu::Texture& texture : bucket.free) {
-        destroyPooledTexture(std::move(texture));
-      }
+      bucket.free.drain([&](gpu::Texture&& texture) { destroyPooledTexture(std::move(texture)); });
     }
   }
 
@@ -938,6 +943,10 @@ public:
     budgetBytes_ = std::clamp(workingSet, kTexturePoolBudgetBytes, kMaximumTexturePoolBudgetBytes);
     evictStalePoolBuckets();
     (void)evictPoolEntriesToFit(0);
+    // A texture kept out longer than a bucket stays alive comes back with no hand-out order.
+    std::erase_if(handedOut_, [&](const auto& entry) {
+      return currentFrameIndex_ - entry.second.frame > kBucketEvictAfterFrames;
+    });
   }
 
   /**
@@ -995,10 +1004,10 @@ public:
       RendererGeodeTextureBucket& bucket = buckets_[key];
       bucket.lastUsedFrame = currentFrameIndex_;
       if (!bucket.free.empty()) {
-        gpu::Texture texture = std::move(bucket.free.back());
-        bucket.free.pop_back();
+        gpu::Texture texture = bucket.free.takeNext();
         pooledTextureBytes_ -= textureByteSize(key);
         --pooledTextureCount_;
+        recordHandOut(texture);
         return texture;
       }
     }
@@ -1007,7 +1016,10 @@ public:
     if (created.hasError()) {
       return gpu::Texture{};
     }
-    return std::move(created).result();
+    gpu::Texture texture = std::move(created).result();
+    std::lock_guard lock(mutex_);
+    recordHandOut(texture);
+    return texture;
   }
 
   /// Returns \p texture to its bucket, or destroys it when a ceiling rejects it.
@@ -1019,6 +1031,12 @@ public:
     }
 
     std::lock_guard lock(mutex_);
+    TextureHandOutStamp stamp;
+    if (const auto handOut = handedOut_.find(IdentityOf(texture)); handOut != handedOut_.end()) {
+      stamp = handOut->second;
+      handedOut_.erase(handOut);
+    }
+
     const RendererGeodeTextureKey key = RendererGeodeTextureKey::From(desc);
     const auto existingBucket = buckets_.find(key);
     const uint64_t textureBytes = textureByteSize(key);
@@ -1038,7 +1056,7 @@ public:
 
     RendererGeodeTextureBucket& bucket = buckets_[key];
     bucket.lastUsedFrame = currentFrameIndex_;
-    bucket.free.push_back(std::move(texture));
+    bucket.free.push(std::move(texture), stamp);
     pooledTextureBytes_ += textureBytes;
     ++pooledTextureCount_;
   }
@@ -1110,12 +1128,10 @@ private:
   }
 
   void destroyPoolBucket(const RendererGeodeTextureKey& key, RendererGeodeTextureBucket& bucket) {
-    const uint64_t bucketBytes = textureByteSize(key) * static_cast<uint64_t>(bucket.free.size());
-    for (gpu::Texture& texture : bucket.free) {
-      destroyPooledTexture(std::move(texture));
-    }
-    pooledTextureBytes_ -= bucketBytes;
-    pooledTextureCount_ -= bucket.free.size();
+    const std::size_t bucketCount = bucket.free.size();
+    bucket.free.drain([&](gpu::Texture&& texture) { destroyPooledTexture(std::move(texture)); });
+    pooledTextureBytes_ -= textureByteSize(key) * static_cast<uint64_t>(bucketCount);
+    pooledTextureCount_ -= bucketCount;
   }
 
   bool evictPoolEntriesToFit(uint64_t incomingBytes) {
@@ -1137,8 +1153,7 @@ private:
         return false;
       }
 
-      destroyPooledTexture(std::move(victim->second.free.back()));
-      victim->second.free.pop_back();
+      destroyPooledTexture(victim->second.free.takeLast());
       pooledTextureBytes_ -= textureByteSize(victim->first);
       --pooledTextureCount_;
       if (victim->second.free.empty()) {
@@ -1159,9 +1174,22 @@ private:
     }
   }
 
+  /// Records that \p texture was handed out now, so its return can be ordered by it.
+  void recordHandOut(const gpu::Texture& texture) {
+    handedOut_[IdentityOf(texture)] = TextureHandOutStamp{currentFrameIndex_, ++handOutCount_};
+  }
+
+  static uint64_t IdentityOf(const gpu::Texture& texture) {
+    return (uint64_t{texture.slotIndex()} << 32) | texture.generation();
+  }
+
   std::shared_ptr<geode::GeodeDevice> device_;
   mutable std::mutex mutex_;
   std::map<RendererGeodeTextureKey, RendererGeodeTextureBucket> buckets_;
+  /// When each texture now out of the pool was handed out, keyed by its runtime identity.
+  std::unordered_map<uint64_t, TextureHandOutStamp> handedOut_;
+  /// Hand-outs so far, the source of \ref TextureHandOutStamp::order.
+  uint64_t handOutCount_ = 0;
   uint64_t pooledTextureBytes_ = 0;
   std::size_t pooledTextureCount_ = 0;
   uint64_t currentFrameIndex_ = 0;
@@ -1861,11 +1889,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // and a filter execution inside the frame adds the chunks it closes here.
   std::vector<gpu::CommandBuffer> frameCommandBuffers;
 
-  // Runtime handles the filter executions of this frame recorded against. They belong to
-  // executions that have already finished, and the frame's submission re-validates every resource
-  // its command buffers name, so they are dropped only once that submission has happened.
-  std::vector<geode::RetainedFilterResources> frameRetainedFilterResources;
-
   // Whether a frame is open for recording. Distinct from `frameGpuEncoder`, which is null while
   // a filter executes between the frame's own encoders.
   bool frameRecordingOpen = false;
@@ -2035,11 +2058,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  /// Keep what a filter execution's command buffers reference alive until the frame submits.
-  void retainUntilFrameSubmits(geode::RetainedFilterResources resources) override {
-    frameRetainedFilterResources.push_back(std::move(resources));
-  }
-
   /// Submit every command buffer the frame has accumulated as one submission, in recording order.
   [[nodiscard]] bool submitFrameCommandBuffers() {
     if (frameArenaWriteFailed) {
@@ -2145,7 +2163,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
     frameCommandBuffers.clear();
-    frameRetainedFilterResources.clear();
     frameRecordingOpen = false;
     frameImportedTextureViews.clear();
     frameSnapshotImports.clear();
@@ -7769,7 +7786,6 @@ void RendererGeode::endFrame() {
     impl_->frameCommandBuffers.clear();
     // Every encoder that could still reach these aliases is gone, and the textures they name are
     // about to be recycled, so drop them before any of them can be handed out again.
-    impl_->frameRetainedFilterResources.clear();
     impl_->frameImportedTextureViews.clear();
     impl_->frameSnapshotImports.clear();
     impl_->frameSnapshotBackings.clear();

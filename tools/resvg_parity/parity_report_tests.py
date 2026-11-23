@@ -408,6 +408,51 @@ class ParityReportTests(unittest.TestCase):
              "Params::DeprecatedInSVG2"],
         )
 
+    def test_marker_classification_maps_reject_stale_and_conflicting_entries(self) -> None:
+        marker = b"ub marker bytes"
+        self.fixture.add_case("painting/fill/marker.svg", marker)
+        self.fixture.add_case("painting/fill/real.svg", b"a real rendering")
+        self.fixture.add_case("painting/fill/compared.svg", marker)
+        self.fixture.add_case("structure/svg/other.svg", marker)
+        marker_path = self.fixture.root / "ub.png"
+        marker_path.write_bytes(marker)
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {'
+                '{\"marker.svg\", Params::UndefinedBehavior(\"marker\")},'
+                '{\"real.svg\", Params::UndefinedBehavior(\"spec UB\")}'
+                '}',
+            ) + _registration(
+                "StructureSvg",
+                '\"structure/svg\", {{\"other.svg\", Params::UndefinedBehavior(\"marker\")}}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        violations = parity_report.marker_case_violations(
+            report,
+            self.fixture.tests_root,
+            marker_path,
+            {
+                "painting/fill/marker.svg": ("known-renderer-divergence", "spec"),
+                "painting/fill/real.svg": ("defined-input-no-reference", "spec"),
+                "painting/fill/compared.svg": ("defined-input-no-reference", "spec"),
+                "structure/svg/other.svg": ("known-renderer-divergence", "spec"),
+            },
+            {"painting/fill/marker.svg": "spec"},
+        )
+
+        self.assertEqual(
+            violations,
+            [
+                "painting/fill/compared.svg: listed, but not an active undefined-behavior case",
+                "painting/fill/marker.svg: listed as both defined and undefined",
+                "painting/fill/real.svg: listed, but its reference is not the UB marker",
+                "structure/svg/other.svg: known renderer divergence without a spec audit ledger",
+            ],
+        )
+
     def test_undefined_behavior_references_must_be_the_ub_marker_or_allowlisted(self) -> None:
         marker = b"ub marker bytes"
         self.fixture.add_case("painting/fill/marker.svg", marker)
@@ -1916,6 +1961,31 @@ class RealTreeParityReportTests(unittest.TestCase):
         tile = by_path["filters/feTile/complex-transform.svg"]
         self.assertEqual(tile["render_only_kind"], "undefined-behavior")
         self.assertEqual(tile["policies"][0]["classification"], "known-renderer-divergence")
+        expected_marker_classes = {
+            "filters/feConvolveMatrix/edgeMode=wrap-with-matrix-larger-than-target.svg":
+                "specification-undefined",
+            "filters/feTile/complex-transform.svg": "known-renderer-divergence",
+            "filters/feTurbulence/stitchTiles=stitch.svg": "known-renderer-divergence",
+            "painting/stroke-width/negative.svg": "known-renderer-divergence",
+            "structure/svg/invalid-id-attribute-1.svg": "upstream-no-reference",
+        }
+        self.assertEqual(
+            {path: by_path[path]["policies"][0]["classification"]
+             for path in expected_marker_classes},
+            expected_marker_classes,
+        )
+        self.assertEqual(
+            sorted(path for path, (cls, _) in parity_report.DEFINED_MARKER_CASES.items()
+                   if cls == "known-renderer-divergence") + sorted(
+                       parity_report.UNDEFINED_MARKER_CASES),
+            ["filters/feTile/complex-transform.svg", "filters/feTurbulence/stitchTiles=stitch.svg",
+             "painting/stroke-width/negative.svg",
+             "filters/feConvolveMatrix/edgeMode=wrap-with-matrix-larger-than-target.svg"],
+        )
+        self.assertIn("docs/spec_audit/painting_properties.md",
+                      by_path["painting/stroke-width/negative.svg"]["policies"][0]["evidence"])
+        self.assertEqual(parity_report.marker_case_violations(
+            report, root / parity_report.TESTS_ROOT, root / parity_report.UB_MARKER_REFERENCE), [])
         blur = by_path["filters/feGaussianBlur/huge-stdDeviation.svg"]
         self.assertEqual(blur["policies"][0]["classification"], "implementation-resource-limit")
         with self.assertRaisesRegex(parity_report.ParityReportError, "stale"):
