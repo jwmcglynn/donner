@@ -1,4 +1,4 @@
-# Design: CSS Cascade Performance and Features
+# Design: CSS Cascade Performance, Features and Live Editing
 
 **Status:** Draft
 **Author:** Claude Fable 5.2
@@ -15,10 +15,12 @@ class, `id`, `style` attribute, presentation attribute or stylesheet restyles th
 and the frame that follows runs the whole-document cascade twice. Each element keeps its own
 4,840-byte computed `PropertyRegistry`, even when hundreds of elements compute the same style.
 Custom properties (`var()`) and cascade layers (`@layer`) are not supported.
+Typing in a `<style>` element reparses the whole stylesheet and restyles the whole document, and
+the source editor has no CSS-aware highlighting or value completion.
 
 This design measures that cost, surveys how browser engines make style resolution fast and how
 they implement the missing features, and commits to
-two parts:
+three parts:
 
 **Part A: Performance.**
 
@@ -36,6 +38,10 @@ two parts:
 **Part B: Cascade features.** CSS custom properties with `var()` substitution (cycles, fallback,
 guaranteed-invalid values, inheritance, hostile-input limits) and cascade layers (`@layer`
 blocks and statements, nested and anonymous layers, `@import ... layer()`, importance reversal).
+
+**Part C: Live stylesheet editing.** Rule-level incremental stylesheet reparse, so a keystroke in
+a `<style>` element restyles only the elements matched by the rules it changed, and a scoped plan
+for CSS syntax highlighting and completion in the editor's source pane.
 
 Computed style stays bit-identical for documents that use only today's features. On the measured
 documents style is 47 to 89 percent of preparing the first frame without rasterization, and 80 to
@@ -100,6 +106,20 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - **No cost when unused.** On documents with no custom properties and no layers, style time does
   not regress by more than 2 percent and computed styles are unchanged.
 
+### Part C: Live Stylesheet Editing
+
+- **Keystroke cost.** A one-character edit inside a declaration value of the splash document's
+  `<style>` element restyles at most the elements the edited rule matched before or after the
+  edit, plus their descendants and `<use>` instances. Next-frame style time falls from 19.2 ms to
+  at most 1 ms and the next null-backend frame from 23.2 ms to at most 5 ms; the source edit call
+  stays at or under its 1.3 ms median.
+- **Equal to a full parse.** After any edit, the incrementally updated stylesheet equals a fresh
+  parse of the new text, enforced by a differential fuzzer; the document is never reparsed.
+- **Highlighting and completion.** Every byte of CSS inside `<style>` elements and `style`
+  attributes is classified from the CSS tokenizer, and completion offers selectors, property
+  names, keyword values, `var()` names and supported at-rules from live data sources (see
+  [CSS Highlighting and Completion](#css-highlighting-and-completion)).
+
 ## Non-Goals
 
 - No change to computed style, cascade order or selector semantics for documents that use only
@@ -116,9 +136,10 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - No change to the public API. The index, filter, cache, counters and invalidation summaries are
   internal; public documentation keeps describing documents, elements and styles.
 - No full document reparse, and no new trigger for one.
-- Narrowing invalidation for stylesheet text edits and element insertion or removal. Those keep
-  the full restyle (once per frame after this design) and are listed under
+- Narrowing invalidation for element insertion or removal; listed under
   [Future Work](#future-work).
+- In the editor, no visual design beyond the classification and completion data, and no CSS
+  formatting, linting, hover documentation, color pickers or browser-compatibility data.
 - Raising the XML parser's default 8,192-node cap, which bounds the element count of documents
   parsed with default options.
 
@@ -246,11 +267,34 @@ Part A estimate: 26 engineering days.
 
 Part B estimate: 16 engineering days.
 
+### Part C Milestones
+
+- [ ] Milestone C1: Rule-level incremental stylesheet reparse (4 days). No dependency.
+  - [ ] Add `StylesheetComponent::applyTextEdit` that reparses the window of rules an edit
+        touches and splices the result, falling back to a full stylesheet reparse where the
+        window does not resynchronize.
+  - [ ] Add the incremental-versus-full differential fuzzer.
+  - Done when: the fuzzer is green and `ProjectStyleContents` uses the incremental path for
+    `<style>` text edits.
+- [ ] Milestone C2: Restyle only elements affected by changed rules (3 days). After C1, A3 and A5.
+  - Done when: the keystroke goals are met and the differential edit test covers stylesheet
+    edits.
+- [ ] Milestone C3: CSS highlighting in the source pane (2 days). No dependency.
+  - Done when: every CSS byte in `<style>` elements and `style` attributes of the test corpus gets
+    a CSS class from the tokenizer, in a headless `TextEditorCore` test.
+- [ ] Milestone C4: CSS completion (3 days). After C3; `var()` names after B2.
+  - Done when: each completion context in
+    [CSS Highlighting and Completion](#css-highlighting-and-completion) has a headless test
+    returning suggestions from its data source.
+
+Part C estimate: 12 engineering days.
+
 ### Order and Total
 
-A1 first; A2, A3, A6, A8 and B4 can then proceed in parallel; A4 follows A3; A7 follows A3 and A6;
-A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B. Total
-committed estimate: 42 engineering days (A 26, B 16).
+A1 first; A2, A3, A6, A8, B4, C1 and C3 can then proceed in parallel; A4 follows A3; A7 follows
+A3 and A6; A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B;
+C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2. Total committed estimate: 54
+engineering days (A 26, B 16, C 12).
 
 ## Background
 
@@ -351,6 +395,27 @@ clears and recomputes every style with animation enabled.
 [0005-incremental_invalidation](0005-incremental_invalidation.md) introduced the dirty flags and
 deferred a selector index for stylesheet-level changes; this design supplies that index and the
 selector-dependency side of invalidation.
+
+**Stylesheet text edits.** The editor's source pane turns a keystroke into
+`SVGDocument::applySourceEdit` (`TryApplyStructuredSourceEdit` in `donner/editor/SourceSync.cc`).
+For a keystroke inside a `<style>` element, `XMLDocument` takes the `ReparseScope::TextNode`
+scope and emits a node-value mutation; `SVGDocument` projects it through `ProjectStyleContents`,
+which concatenates the element's text, reparses the whole stylesheet with its source map, charges
+the parsed-payload budget, and then calls `MarkStylesheetChanged`, which clears every computed
+style and requests a full rebuild. No document reparse happens; the whole-stylesheet reparse and
+whole-document restyle do. A keystroke in a `class` attribute takes `ReparseScope::AttributeValue`
+and reaches the same full restyle through `SVGElement::setClassName`.
+
+**Source-pane highlighting and completion.** `LanguageDefinition::SVG()` in
+`donner/editor/TextEditorCore.cc` colors source with a per-line character tokenizer: XML
+punctuation, SVG element names as keywords and known attribute names as identifiers. It has no CSS
+classes; CSS inside `<style>` and `style=""` is colored like any other text.
+`DetectXmlAutocompleteContext` in `donner/editor/XmlAutocomplete.cc` uses `xml::Tokenize` to find
+element-name, attribute-name and CSS property-name contexts; the property-name context covers both
+`style` attributes and `<style>` text and offers `PropertyRegistry::propertyNames()`.
+`MakeStylePropertyContext` finds the start of the declaration by scanning for `;` and `{`
+characters, which does not account for strings, comments or nested blocks, and there is no
+completion for selectors, values, `var()` names or at-rules.
 
 ### Measured Baseline
 
@@ -500,6 +565,25 @@ attributes cost: on the splash and the tiger, elements with the same rules and p
 differ only in a `fill` attribute. At 4,840 bytes per inline `PropertyRegistry`, bootstrap-icons
 retains 24.9 MB of computed style for 8 distinct values.
 
+#### Stylesheet Keystrokes
+
+One-character source edits on the loaded splash document through `SVGDocument::applySourceEdit`,
+the call the editor's source pane makes, then one frame (load average 12 to 15):
+
+| Keystroke                                          | Scope selected           | Source edit ms   | Null frame ms       | Style ms            | TinySkia frame ms      |
+| -------------------------------------------------- | ------------------------ | ---------------- | ------------------- | ------------------- | ---------------------- |
+| `<style>` declaration value, one hex digit         | `TextNode` (18/18)       | 1.26 (1.20-1.32) | 23.22 (23.01-23.65) | 19.20 (19.06-19.62) | 138.96 (138.30-139.92) |
+| `<style>` selector, insert or delete a letter      | `TextNode` (18/18)       | 1.20 (1.17-1.26) | 22.32 (22.01-22.57) | 18.49 (18.24-18.71) | 139.04 (138.48-139.54) |
+| `<style>` rule's closing brace deleted, restored   | `TextNode` (18/18)       | 1.16 (1.10-1.26) | 22.32 (9.91-22.67)  | 18.52 (6.27-18.80)  | 138.29 (105.52-139.31) |
+| `class` attribute value, insert or delete a letter | `AttributeValue` (18/18) | 0.55 (0.52-0.61) | 22.69 (22.36-23.14) | 18.67 (18.38-19.02) | 139.36 (138.03-141.82) |
+
+Every keystroke stayed incremental at the XML level and none reparsed the document, but each
+reparsed the whole stylesheet (inside the source edit time) and restyled the whole document twice
+(1,069 element cascades, 2 full clears, as for the attribute edits above). Deleting a rule's
+closing brace changes what the stylesheet parse keeps: the two alternating states differ by a
+factor of three in style time (6.3 to 18.8 ms), which is what a reader typing through an
+unbalanced brace sees today.
+
 ### Reproducing the Baseline
 
 The measurements used a local harness that Milestone A1 commits. Until then:
@@ -641,6 +725,20 @@ important declarations: "Layer order bits are flipped for important declarations
 priority"
 ([cascade_priority.h](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/css/resolver/cascade_priority.h)).
 
+**Incremental stylesheet editing and editor data.** Chrome DevTools edits stylesheets by range,
+not by full reparse: `CSS.setStyleTexts` applies a list of `StyleDeclarationEdit`s, each a range
+in the enclosing stylesheet plus replacement text, and `setRuleSelector` edits one selector by
+range ([CSS.pdl](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/CSS.pdl)).
+Editor parsers reuse unchanged subtrees: Lezer reuses cached tree fragments outside the edited
+ranges and warns that an edit such as opening a block comment can force a large reparse
+([Lezer guide](https://lezer.codemirror.net/docs/guide/)); tree-sitter reparses with the old tree
+after it is told about the edit and shares structure with it
+([tree-sitter advanced parsing](https://tree-sitter.github.io/tree-sitter/using-parsers/3-advanced-parsing.html)).
+DevTools generates its property and keyword completion lists from the engine's property table
+(`generate_supported_css.py` reads Blink's `css_properties.json5`,
+[source](https://chromium.googlesource.com/devtools/devtools-frontend/+/main/scripts/build/generate_supported_css.py));
+Donner's equivalent is its own `PropertyRegistry`.
+
 **Ladybird.** The recent Ladybird work is "Differential style resolution"
 ([PR #11088](https://github.com/LadybirdBrowser/ladybird/pull/11088), merged in August 2026). It
 replaced selector matching, style invalidation, the cascade and computed-style retention with a
@@ -715,6 +813,7 @@ Ranked by expected effect on the measured baseline per unit of complexity.
 |   11 | Parallel traversal                             | Reject          | Style runs under the single-owner document lock; most documents are smaller than a work-stealing unit.                                                                                                                        |
 |   12 | Custom properties, with shared maps            | Adopt           | Part B, by operator decision: `var()` is a missing feature, not a speedup. An element that declares no custom property shares its parent's map, as Ladybird and Stylo do, so documents without custom properties pay nothing. |
 |   13 | Cascade layers, ordered inside the priority    | Adopt           | Part B, by operator decision. The layer rank joins `css::Specificity`, as Blink and Stylo pack it into their priority, so the source-order cascade needs no sort.                                                             |
+|   14 | Range-based incremental stylesheet edits       | Adopt           | Part C: a keystroke costs a 19.2 ms whole-document restyle today; a rule-window reparse plus a restyle of the matched elements removes it.                                                                                    |
 
 ## Proposed Architecture, Part A: Performance
 
@@ -885,9 +984,9 @@ differential edit test with the current full restyle replaced by the narrowed se
 corpus, and keeps the full restyle for any attribute whose narrowed result differs until the
 missing dependent is identified.
 
-**Stylesheet edits.** Appending a rule, editing rule text and loading imports keep the full
-restyle, now one cascade per frame. With the index, a rule edit could restyle only elements
-carrying the edited rules' keys; that is [Future Work](#future-work).
+**Stylesheet edits.** Loading imports keeps the full restyle, now one cascade per frame. Rule
+edits restyle only the elements the changed rules match; see
+[Restyle from Changed Rules](#restyle-from-changed-rules).
 
 ### Ancestor Bloom Filter
 
@@ -1142,6 +1241,79 @@ is a stylesheet change and takes the stylesheet path (Part C).
 `@property`, `env()`, `attr()`, `@media`, `@supports`, `@container`, `@scope` and SMIL animation
 of custom properties, as listed under [Non-Goals](#non-goals).
 
+## Proposed Architecture, Part C: Live Stylesheet Editing
+
+### Incremental Stylesheet Reparse
+
+**Entry point.** `ProjectStyleContents` keeps building the element's concatenated text and source
+map; for a node-value mutation that carries an edit range, `SVGDocument` maps the edit into the
+stylesheet's local offsets through the source map and calls `StylesheetComponent::applyTextEdit`
+instead of `parseStylesheet`.
+
+**Rule window.** Every retained rule already carries its `ruleSourceRange`. The window starts at
+the start of the last top-level rule that begins at or before the edit start (or at the sheet
+start) and ends at the end of the first top-level rule that ends at or after the edit end (or at
+the sheet end). The window text is parsed with the same rule parser and limits. The parse
+resynchronizes when it consumes exactly the window: it ends at the window's end at top level, with
+no open block, comment or string. If it does not (an edit that deletes a closing brace or opens a
+comment swallows what follows), the window extends to the end of the sheet. If the window contains
+or produces an `@import`, `@namespace`, `@font-face` or `@layer` rule, or the stylesheet's
+resource stats would exceed a limit, the whole sheet is reparsed as today.
+
+**Splice.** The new rule vector is the rules before the window, the window's rules with source
+ranges shifted to sheet offsets, and the rules after the window with ranges shifted by the edit's
+length change. Rules outside the window keep their identity. The index, dependency summary and
+filter hashes are rebuilt for the sheet (they are linear in its rules and the sheet is capped at
+4,096 rules).
+
+**Behavior while the text is invalid.** The result always equals a fresh parse of the new text,
+which is what export and reload produce, so the rendering follows the specification's error
+recovery while a rule is mid-edit: a declaration with an incomplete value is dropped, and a
+deleted closing brace makes the following rule text part of the broken block until the brace
+returns. The measured brace case shows the visible effect today. Holding the last good rules while
+the text is invalid is an editor policy question below; the engine does not keep stale rules.
+
+### Restyle from Changed Rules
+
+The rules removed from the window and the rules added to it are the changed rules; a window rule
+whose text equals the rule it replaces is unchanged. For each changed rule, old and new, the
+elements it matches are found by testing it against the elements that carry its index keys (or
+all elements for a universal entry) through the same matcher, charged to the style budget. Those
+elements, their descendants and their `<use>` instances are marked for the selective pass; the
+matched properties cache is cleared because rule identities changed. A changed rule that uses
+`:has()`, or a change in layer order, falls back to one full restyle.
+
+### CSS Highlighting and Completion
+
+This is a scoped plan: what the engine provides and how the editor consumes it, not a visual
+design.
+
+**Regions.** CSS regions come from the XML token stream the editor already uses
+(`xml::Tokenize`): the text content of `<style>` elements and the values of `style` attributes.
+Presentation attribute values are CSS values too, and are classified as values of their property.
+
+**Classification.** Each region is tokenized with `css::parser::details::Tokenizer`, and a small
+state machine over the tokens tracks whether it is in a selector prelude, an at-rule prelude, a
+declaration name or a declaration value. Tokens map to the existing `ColorIndex` classes
+(selector parts, property names, keywords, numbers with units, strings, functions, comments,
+punctuation); unknown property names and invalid tokens use the error class. Classification works
+on one region at a time and, after an edit, reclassifies only the edited region.
+
+**Completion contexts and data sources.**
+
+| Context           | Suggestions                                       | Data source                                                                                                   |
+| ----------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Selector prelude  | element names, `.class`, `#id`                    | SVG element registry; the live document's `ClassComponent` and `IdComponent` values                           |
+| Declaration name  | property names and declared custom property names | `PropertyRegistry::propertyNames()`; custom declarations in the document's sheets and `style` attributes      |
+| Declaration value | keywords valid for the property                   | a new `PropertyRegistry::keywordValues(name)`, built from the keyword tables the property parsers already use |
+| Inside `var(`     | declared custom property names                    | same as above                                                                                                 |
+| At-rule name      | `@import`, `@namespace`, `@font-face`, `@layer`   | the at-rules the stylesheet parser supports                                                                   |
+
+Contexts are detected from the CSS token state instead of the character scan in
+`MakeStylePropertyContext`, which is replaced. Left out deliberately: units and numeric value
+templates, color pickers, documentation on hover, browser-compatibility data, formatting and
+linting.
+
 ## Security / Privacy
 
 Stylesheets and documents are untrusted input.
@@ -1173,6 +1345,12 @@ Stylesheets and documents are untrusted input.
   deep reference chains cannot exhaust the native stack.
 - **Layers.** Nesting depth and layer count are capped in the parser, and the layer rank is 16
   bits by construction of the cap.
+- **Incremental reparse.** The window parse runs the same parser with the same limits, and the
+  stylesheet's resource stats are recomputed for the spliced result; any limit failure falls back
+  to the full reparse, which already enforces them. The differential fuzzer feeds random edits,
+  including unbalanced braces, comments and strings.
+- **Editor data.** Completion lists built from document ids and classes are capped (256
+  suggestions per request) and strings are displayed, never executed.
 
 ## Testing and Validation
 
@@ -1241,6 +1419,18 @@ Stylesheets and documents are untrusted input.
 - **Unchanged documents**: the Part A differential test also compares the corpus before and after
   each Part B milestone, which must be identical for documents without `--*`, `var()` or `@layer`.
 
+### Part C Tests
+
+- **Incremental reparse fuzzer** (`//donner/svg/components:stylesheet_edit_differential_fuzzer`,
+  new): a stylesheet and a sequence of random edits (including braces, quotes and comment
+  delimiters); after each edit, the incrementally updated `css::Stylesheet` must equal a fresh
+  parse of the new text, rule ranges included.
+- **Stylesheet edit cases** in the differential edit test: the four measured keystrokes, a rule
+  insertion and deletion, and an edit that changes a selector so the rule moves between elements.
+- **Editor tests** with headless `TextEditorCore` and the autocomplete functions: classification
+  of every CSS byte in the corpus' `<style>` elements and `style` attributes, and one test per
+  completion context returning suggestions from its source.
+
 ## Alternatives Considered
 
 - **Port the differential engine approach (Ladybird #11088).** Retaining match results and
@@ -1266,6 +1456,9 @@ Stylesheets and documents are untrusted input.
 - **Tarjan's algorithm for custom property cycles (Stylo).** It finds cycles across all of an
   element's custom properties in one pass; the depth-first walk with in-progress marks (Blink)
   does the same for the few properties an element declares, with less code.
+- **A general incremental parser (tree-sitter or Lezer style).** Reusing arbitrary subtrees
+  needs an error-tolerant grammar of its own; Donner's rules are flat and carry source ranges, so
+  a rule window gives the same reuse with the existing parser and its limits.
 
 ## Decisions
 
@@ -1289,6 +1482,7 @@ Stylesheets and documents are untrusted input.
 - **Ancestor Bloom filter** is built regardless of its measured payoff, on a reusable
   `donner/base/` helper; its effect is reported by counter.
 - **Custom properties and cascade layers** are in scope (Part B).
+- **Incremental stylesheet reparse, CSS highlighting and completion** are in scope (Part C).
 - **Document scale.** Documents above the XML parser's default 8,192-node cap are not a target of
   these goals. The techniques scale with elements and rules, so larger documents benefit, but no
   goal is stated or measured for them.
@@ -1303,6 +1497,10 @@ Stylesheets and documents are untrusted input.
   specified the parse model; Firefox and Safari support it, Chromium partially. Recommendation:
   support it as a pending substitution at presentation-attribute priority, matching
   `variable-presentation-attribute.html`, and revisit if the specified parse model differs.
+- **Invalid text while typing.** The engine renders what the current text parses to, so typing
+  through an unbalanced brace changes the rendering until it is closed. Recommendation: keep the
+  engine exact (it equals export and reload) and, if the flicker bothers users, add an editor-side
+  debounce that defers applying a stylesheet edit while the source has an unclosed block.
 
 ## Future Work
 
@@ -1311,6 +1509,4 @@ Stylesheets and documents are untrusted input.
 - [ ] Stop a descendant recompute where the recomputed style equals the previous one, so an edit
       that changes no inherited value does not walk the subtree.
 - [ ] Mine `:is()` and `:where()` arguments for index keys.
-- [ ] Restyle only elements carrying the keys of added, removed or edited rules on stylesheet
-      edits.
 - [ ] `@property` registration, as a separate design.
