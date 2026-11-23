@@ -28,7 +28,7 @@ scheduler to the base library, `donner/base/tasks/`, for every parallel client:
   failures reproduce.
 
 Its first client is parallel style traversal, Part D of
-[0072-css_cascade_performance](0072-css_cascade_performance.md). Filter row bands, layer
+[0072-css_cascade](0072-css_cascade.md). Filter row bands, layer
 preparation, stylesheet parsing and resource decoding are named as later clients so the API is
 not shaped by one user.
 
@@ -112,7 +112,7 @@ Estimates are engineering days, including tests and review fixes.
     scaling, and the overhead goals are met.
 
 Total committed estimate: 21.5 engineering days. Part D of
-[0072-css_cascade_performance](0072-css_cascade_performance.md) needs S1 to S3, and S4 for its
+[0072-css_cascade](0072-css_cascade.md) needs S1 to S3, and S4 for its
 race coverage.
 
 ## Background

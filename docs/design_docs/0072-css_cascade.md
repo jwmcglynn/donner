@@ -1,4 +1,4 @@
-# Design: CSS Cascade Performance, Features, Live Editing and Parallel Style
+# Design: CSS Cascade Performance, Custom Properties, Layers, Live Editing and Parallelism
 
 **Status:** Draft
 **Author:** Claude Fable 5.2
