@@ -352,11 +352,14 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   2. reads its parker value;
   3. stores asleep shallow or asleep deep in its state word and decrements `awake`, then issues a
      sequentially consistent fence;
-  4. re-checks: a waiting creator re-checks rules 1 and 2; every worker checks the global queue.
-     If its scope completed, or if the global queue is non-empty and it is not past its margin, it
+  4. re-checks: every worker checks the stop flag, a waiting creator re-checks rules 1 and 2, and
+     every worker checks the global queue. An idle worker that sees the stop flag wakes itself
+     with the swap rule and exits. If its scope completed, or if the global queue is non-empty and
+     it is not past its margin, it
      wakes itself (the swap on its own state word, incrementing `awake` only if the swap
      succeeds) and goes back to work. If the global queue is non-empty, it is past its margin and
-     it was the last awake worker (the decrement returned 1), it first hands the work off: it
+     it was the last awake worker (the decrement returned 1 or less, so that a transiently low
+     count errs toward staying awake), it first hands the work off: it
      looks for a worker asleep shallow and wakes it with the swap rule. If the swap succeeds, the
      woken worker is counted awake and will take the work from its shallow stack; if it fails, the
      worker was already woken and counted by another thread. Either way an awake worker exists
@@ -367,8 +370,8 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
      returns, for any reason (a change, a change that happened before the wait began, or a
      spurious return), the worker first wakes itself with the swap on its own state word,
      incrementing `awake` only if the swap succeeds, and only then does anything else: a waiting
-     creator re-checks its scope and rules 1 and 2, an idle worker looks for work, and either one
-     that finds nothing sleeps again from step 1.
+     creator re-checks its scope and rules 1 and 2, an idle worker exits if the stop flag is set
+     and otherwise looks for work, and either one that finds nothing sleeps again from step 1.
 
   Steps 3 to 5 touch only the global queue's emptiness, state words and parkers; the worker runs,
   pops and steals nothing while its state is asleep. So a worker executing anything other than
@@ -384,8 +387,13 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   increment by the thread that won the swap. A failed swap changes neither side. Workers start
   awake with `awake` equal to the worker count. So the protocol's count invariant is: `awake`
   equals the number of workers whose state word is awake, except for transitions in flight, each
-  of which is one store or swap followed by its single matching decrement or increment. Debug
-  builds assert after every decrement that the result is not negative.
+  of which is one store or swap followed by its single matching decrement or increment. That
+  clause allows a transiently negative count: a publisher can win the swap on a worker and be
+  delayed before its increment while the worker, woken by another waker's parker change, fails its
+  own swap, finds nothing and decrements again. So the invariant is asserted only at quiescence:
+  the destructor, after joining every worker, asserts that `awake` equals the number of workers
+  whose state word is awake, and the scheduler tests assert the same at their quiescent points. No
+  assertion runs on individual decrements.
 
   A thread that publishes to the global queue pushes, issues a sequentially consistent fence, and
   reads `awake`. If no worker is awake, tested as `awake <= 0` so that a count driven below zero
@@ -488,6 +496,11 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     parker. At quiescence `awake` must equal the number of workers whose state is awake, and a
     following schedule with every worker past its margin must complete. Must be observed red with
     the self-wake swap after the parker wait removed (`awake` ends one low).
+  - Shutdown racing an idle worker's sleep: the injected delay holds an idle worker between steps
+    1 and 2 while the destructor sets the stop flag, so the destructor's swap fails and its parker
+    change lands before the worker reads its parker. The destructor's join must return. Must be
+    observed red with the stop-flag re-check in step 4 removed (the worker waits forever on an
+    unchanged parker).
   - Two workers past the margin, each holding the other's scope's flat task below its own
     watermark: both drain into the global queue and the last awake worker runs both tasks.
   - A coroutine-joined scope whose task is drained into the global queue while every worker is
@@ -561,8 +574,14 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   orders, not steals: the deque's compare-and-swap race and real interleavings never happen in
   this mode, and are covered by the stress tests at real worker counts and by ThreadSanitizer.
 - **Shutdown.** The destructor asserts no scope is live (`UTILS_RELEASE_ASSERT`), sets the stop
-  flag, wakes every worker with the same swap rule (so `awake` stays exact until the end) and
-  joins them. A coroutine suspended on `schedule()` after destruction
+  flag, issues a sequentially consistent fence, then wakes every worker with the same swap rule
+  (the swap, then the parker change, whether or not the swap succeeded) and joins them. With no
+  scope live, every worker is idle. A worker's step 3 store is followed by a fence before its
+  step 4 read of the stop flag, and the destructor's flag store by a fence before its swap, so
+  either the worker's re-check sees the flag and it exits, or the swap sees the worker asleep and
+  succeeds; the parker change then follows the worker's step 3, and so its step 2 read, and the
+  wait in step 5 returns. A worker that has not reached step 3 sees the flag at its next
+  re-check. A coroutine suspended on `schedule()` after destruction
   began is a programming error caught by the same assertion.
 - **Nested parallelism.** Scopes nest freely; nested work goes to the current worker's deque, so a
   nested parallel loop inside a task adds parallelism without adding threads.
