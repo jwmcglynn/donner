@@ -1711,11 +1711,22 @@ per-element cost and is calibrated in Milestone D3.
   assertion failure in the parallel path. Offscreen shadow trees are separate roots, started after
   the main tree; entities that no root reaches are cascaded by a serial sweep afterwards, as the
   storage-order loop reaches them today.
-- **Budgets.** `StyleResourceBudget` counters and its reservation map are shared mutable state.
-  Each worker charges a private share (the remaining allowance divided by the worker count). If
-  any share runs out, the parallel pass is abandoned, its computed styles are cleared, and the pass
-  reruns serially, so a budget-limited document gets exactly the serial result and only documents
-  near their limits pay twice.
+- **Budgets.** The serial pass defines every budget outcome; a parallel pass is kept only when no
+  budget could have refused in either path. The `StyleResourceBudget` work counters (rule-element
+  matches, declaration applications and their component and byte work, selector traversal) are
+  charged against per-worker shares of the remaining allowance. Retained computed-style bytes go
+  through the shared `RetainedStyleBytes` account of Part A, whose reserve is a compare-exchange
+  loop that never overshoots the limit. With per-worker caches a parallel pass can create a
+  different number of distinct records than the serial pass, so the retained total differs by
+  schedule and cannot decide a refusal by itself. Each worker therefore also sums, for every
+  element it styles, the bytes of the record that element ends up holding, which is what a
+  per-entity charge would be; every distinct-record total, serial or parallel, is at most that
+  sum. The parallel pass is abandoned, its computed styles discarded (releasing their records), and
+  the pass rerun serially, whenever any work share runs out, any reserve on the account is
+  refused, or the per-entity sum reaches the retained-byte limit. Below that point neither path
+  can refuse anything, so their outcomes match; at or above it the serial rerun decides which
+  element is refused, so a budget-limited document gets exactly the serial result and only
+  documents near their limits pay twice.
 - **Warnings.** Each task records an entity's diagnostics in two per-entity buffers: those from
   before its parent is computed in the serial `computePropertiesInto` (rule application) and those
   from after (animation, colors, inheritance, fonts). After the join the commit replays the serial
