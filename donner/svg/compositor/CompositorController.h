@@ -1369,11 +1369,13 @@ private:
   bool skipRasterizeUnderBudget(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
                                 const Vector2i& canvasSize);
   /// Discards the offscreen whose payload snapshot failed for `layer` and, on a budget
-  /// rejection, records the strike on the layer's plan (switching to direct compose on the
-  /// second strike at the same canvas size).
+  /// rejection of a tile that was the first tile the frame allocated (`failedAlone`), records the
+  /// strike on the layer's plan (switching to direct compose on the second strike at the same
+  /// canvas size). A tile rejected after other tiles of the frame took the budget is retried in
+  /// the next frame without a strike.
   void recordLayerAllocationFailure(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
                                     const ImmediateLayerPlan& freshPlan, const Vector2i& canvasSize,
-                                    std::unique_ptr<RendererInterface> offscreen);
+                                    std::unique_ptr<RendererInterface> offscreen, bool failedAlone);
   /// Carries a span that was switched to immediate presentation at `canvasSize` into this
   /// frame's plan without allocating; returns false when the span rasterizes normally.
   bool adoptBudgetImmediateSpan(size_t slotIndex, const StaticSpanPlan& previousPlan,
@@ -1381,7 +1383,8 @@ private:
   /// Segment counterpart of `recordLayerAllocationFailure`.
   void recordSegmentAllocationFailure(size_t slotIndex, const StaticSpanPlan& previousPlan,
                                       const StaticSpanPlan& freshPlan, const Vector2i& canvasSize,
-                                      std::unique_ptr<RendererInterface> offscreen);
+                                      std::unique_ptr<RendererInterface> offscreen,
+                                      bool failedAlone);
   /// Draws one static segment slot into `offscreen` and takes its payload. Returns false when
   /// the draw was cancelled or the payload allocation failed; the offscreen is recycled only on
   /// success.
@@ -1810,6 +1813,9 @@ private:
   /// Set when a tile allocation was rejected by the per-frame surface budget. The budget
   /// latches its rejection until the next frame scope, so remaining tiles skip allocation.
   bool surfaceBudgetExhaustedThisFrame_ = false;
+  /// Whether a tile payload was allocated in the current frame. A budget rejection before any is
+  /// the tile's own: it does not fit beside the frame target even with no other tile.
+  bool tileAllocatedThisFrame_ = false;
   /// Consecutive frames in which the main renderer declined each static segment's texture
   /// payload; a slot stops re-rasterizing after two strikes. Sized lazily in `composeLayers`.
   std::vector<uint8_t> staticSegmentComposeDeclines_;

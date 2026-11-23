@@ -1652,6 +1652,7 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   const auto warmupStart = std::chrono::steady_clock::now();
   cancelToken_.emplace(token);
   surfaceBudgetExhaustedThisFrame_ = false;
+  tileAllocatedThisFrame_ = false;
   warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
   const bool completed = !token.isCancelled();
   cancelToken_.reset();
@@ -1850,6 +1851,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     lastRenderFrameStats_ = fresh;
   }
   surfaceBudgetExhaustedThisFrame_ = false;
+  tileAllocatedThisFrame_ = false;
   composedStyleWorkIncomplete_ = false;
   // Interaction promotes arrive between frames; more than one active-drag entity means a
   // multi-selection drag.
