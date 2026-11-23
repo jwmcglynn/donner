@@ -297,16 +297,18 @@ Part A estimate: 27.5 engineering days.
         rule a layer; compute the document's layer order.
   - Done when: parser tests and `stylesheet_parser_fuzzer` cover every form, and rules inside
     `@layer` blocks are retained instead of dropped.
-- [ ] Milestone B5: Layer order in the cascade (2 days). After B4.
-  - [ ] Add the layer rank to `css::Specificity` with importance reversal, place presentation
-        attributes below every author layer, and check `Property::inheritFrom` with layered
-        declarations.
+- [ ] Milestone B5: Layer order in the cascade (2.5 days). After B4.
+  - [ ] Build the document layer tree, assign post-order ranks, add the layer rank to
+        `css::Specificity` with importance reversal, place presentation attributes below every
+        author layer, and check `Property::inheritFrom` with layered declarations.
+  - [ ] Cover nested layers declared out of order (`@layer a, b;` then `@layer a.x`), layers
+        extended in a later stylesheet, and rank recomputation after an edit adds a layer.
   - Done when: the ported layer cases pass and computed styles of documents without layers are
     unchanged.
 - [ ] Milestone B6: Conformance cases (2 days). After B3 and B5.
   - Done when: the full set in [Part B tests](#part-b-tests) is committed and green.
 
-Part B estimate: 17 engineering days.
+Part B estimate: 17.5 engineering days.
 
 ### Part C Milestones
 
@@ -364,7 +366,7 @@ A1 first; A2, A3, A6, A8, B4, C1 and C3 can then proceed in parallel; A4 follows
 A3 and A6; A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B;
 C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D1 follows A7, A8, A9 and the
 scheduler milestones S1 to S3 of [0073-task_scheduler](0073-task_scheduler.md); D2 and D3 follow
-D1. Total committed estimate for this document: 65 engineering days (A 27.5, B 17, C 13.5, D 7);
+D1. Total committed estimate for this document: 65.5 engineering days (A 27.5, B 17.5, C 13.5, D 7);
 the scheduler is estimated in 0073.
 
 ## Background
@@ -1192,7 +1194,13 @@ everything a computed style depends on in `computePropertiesInto`:
   `applyStylesheetRules` runs.
 - The local declarations: a hash of `StyleComponent::properties`, computed and stored on the
   `StyleComponent` whenever it changes (parse, `setStyle`, presentation-attribute writes), with
-  full `PropertyRegistry::operator==` on a hash match.
+  full `PropertyRegistry::operator==` on a hash match. With Part B, the element's local custom
+  declarations (from its `style` attribute) are stored on the `StyleComponent` beside the
+  registry, not inside it, and the local registry also holds pending-substitution entries. Both
+  join the key: the hash covers the custom declarations' names and token sequences, and equality
+  compares them and the pending entries' token sequences. Without that, two sibling rectangles
+  with `style="--x:red"` and `style="--x:blue"` matching `rect { fill: var(--x) }` would share one
+  record.
 - The parent's record, by pointer identity. Two elements whose parents share a record inherit the
   same values, including font sizes resolved against the parent.
 - Whether the parent carries `DoNotInheritFillOrStrokeTag`, and whether the element is a symbol
@@ -1215,7 +1223,9 @@ these inputs and found no element whose key matched another's while its computed
 (see [Shared Computed Style Opportunity](#shared-computed-style-opportunity)). Six documents are
 not evidence that the key is complete; the gate is the differential fuzzer, run with the cache on
 and off, whose generator produces presentation attributes, `style` attributes, `<use>` instances,
-external-use documents and animations.
+external-use documents and animations, and, once Part B lands, custom properties declared in rules
+and `style` attributes, inherited and overridden, with `var()` in rules, `style` attributes and
+presentation attributes.
 
 **Where it runs.** Matching still runs for every element; the cache replaces what follows it:
 declaration parsing into the local registry copy, animation hooks, inheritance and font
@@ -1326,11 +1336,16 @@ candidate declaration kept per property. Part B keeps them unsupported, with tod
 and lists them as an open question.
 
 **Interactions.** The rule index is unchanged: custom properties do not affect matching. The
-matched properties cache key is complete without change, because the custom map is a function of
-the matched rules, the local declarations and the parent record. Narrowed invalidation already
-recomputes the descendants of every restyled element, which is what a changed custom property
-needs; the future "stop when equal" optimization must include the custom map in its equality.
-`collectMatchedStyleRules` and the editor's annotations show custom declarations like any other.
+matched properties cache key needs the extension described in
+[Shared Computed Styles](#shared-computed-styles-and-the-matched-properties-cache): an element's
+custom map is a function of the custom declarations of its matched rules (covered by the matched
+rules' identities), its local custom declarations (added to the key), and its parent's computed
+custom map. The inherited map is held in the parent's record, so the parent record pointer
+already in the key captures it: equal parent pointers mean equal inherited maps. Narrowed
+invalidation already recomputes the descendants of every restyled element, which is what a changed
+custom property needs; the future "stop when equal" optimization must include the custom map in its
+equality. `collectMatchedStyleRules` and the editor's annotations show custom declarations like any
+other.
 
 ### Cascade Layers
 
@@ -1347,13 +1362,32 @@ cap the block or import is dropped with a diagnostic.
 same loader, resource limits and import-nesting limits as other imports
 (`ResourceManagerContext::loadStylesheetImports`); no new loading path or origin is added.
 
-**Order.** The document's layer order is the order of first declaration across all applicable
-stylesheets in cascade order (imports first, as today), computed when stylesheets are parsed or
-replaced. Each rule's layer id maps to a rank: the first declared layer has rank 1, later layers
-higher ranks, and unlayered author rules the highest rank. Presentation attributes get rank 0,
-below every author layer, placing them in the presentational-hint origin the specification
-describes; with no layers present this keeps today's result, since presentation attributes
-already lose to every author rule.
+**Order.** Layer order is hierarchical, not the global order of first appearance. Cascade
+Level 5 orders sibling layers by first declaration within their parent, places a nested layer's
+order inside its parent, and places a layer's own declarations (those in the layer but in none of
+its sublayers) after its sublayers for normal declarations; unlayered author styles are the own
+declarations of the implicit outermost layer. For a stylesheet of `@layer a, b;`, then
+`@layer b { rect { fill: blue } }`, then `@layer a.x { rect { fill: red } }`, every normal
+declaration in `b` outranks every one in `a` and `a.x`, although `a.x` is declared after `b`.
+
+The document therefore builds one layer tree across all applicable stylesheets, walking them in
+cascade order (imports first, as today): each `@layer` statement, block or layered import adds its
+dotted path to the tree if absent, appending new children after their existing siblings. Ranks
+are assigned only after the whole tree is known, by a post-order walk: a node's children receive
+ranks in sibling order, then the node's own declarations receive the next rank. The root's own
+declarations, the unlayered author styles, therefore get the highest rank. Presentation attributes
+get rank 0, below every author layer, placing them in the presentational-hint origin the
+specification describes; with no layers present the root is the only node, so every author rule
+gets one rank and presentation attributes still lose to all of them, which is today's result.
+
+Rules store their layer's node id, not a rank; the rank comes from the document's rank table when
+`MatchSelectorRule`'s specificity is built, so recomputing ranks never rewrites rules. The tree
+and ranks are recomputed whenever a stylesheet is parsed or replaced, an import loads, or an
+incremental edit adds, removes or reorders an `@layer` declaration (Part C already reparses the
+whole stylesheet when a window contains an `@layer` rule). If the rank table changes, styles are
+discarded and the document takes one full restyle. The document-wide cap of 16,384 layer nodes
+bounds a post-order walk to at most 16,385 ranks (nodes plus the root's own), which fits the
+16-bit rank.
 
 **Priority.** `css::Specificity` gains a 16-bit layer rank compared after `SpecialType` and before
 the `(a, b, c)` tuple. For the important types (`Important`) the comparison inverts the rank, as
