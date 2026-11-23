@@ -54,6 +54,11 @@ constexpr TranslucentTextCase kCases[] = {
       </svg>)svg"},
 };
 
+/// The suite's default threshold and anti-aliasing handling with no pixel budget, so the helper's
+/// verdict and its actual, expected and diff images match the 0-pixel acceptance condition.
+constexpr editor::tests::BitmapGoldenCompareParams kNoCountedPixels{
+    .threshold = kDefaultThreshold, .maxMismatchedPixels = 0, .includeAntiAliasing = false};
+
 void RenderCase(const TranslucentTextCase& testCase, RendererBackend backend,
                 RendererBitmap* bitmap) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
@@ -82,7 +87,8 @@ TEST(TranslucentTextAcrossBackends, GeodeMatchesCpuRenderer) {
     ASSERT_NO_FATAL_FAILURE(RenderCase(testCase, RendererBackend::TinySkia, &cpu));
     int counted = -1;
     editor::tests::CompareBitmapToBitmap(
-        geode, cpu, "translucent_text_geode_vs_cpu_" + std::string(testCase.name), {}, &counted);
+        geode, cpu, "translucent_text_geode_vs_cpu_" + std::string(testCase.name), kNoCountedPixels,
+        &counted);
     EXPECT_THAT(counted, Eq(0)) << "pixels pixelmatch counts between Geode and the CPU renderer";
   }
 }
