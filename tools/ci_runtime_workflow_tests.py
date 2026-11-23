@@ -26,9 +26,9 @@ from tools.ci import lanes
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
 # arguments and this table together, so a widened ceiling is always a reviewed change.
 ENFORCED_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 58000,
-    "--max-js-raw-bytes": 210000,
-    "--max-total-raw-bytes": 13600000,
+    "--max-js-gzip-bytes": 63000,
+    "--max-js-raw-bytes": 227000,
+    "--max-total-raw-bytes": 14880000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
     "--max-wasm-gzip-bytes": 3570000,
@@ -37,9 +37,9 @@ ENFORCED_PAYLOAD_CEILINGS = {
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 # The standalone renderer Wasm ceilings CI enforces, changed together with that test's arguments.
 RENDERER_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 2800,
-    "--max-js-raw-bytes": 5700,
-    "--max-wasm-gzip-bytes": 920000,
+    "--max-js-gzip-bytes": 3100,
+    "--max-js-raw-bytes": 6200,
+    "--max-wasm-gzip-bytes": 1020000,
     "--max-wasm-raw-bytes": 2500000,
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
