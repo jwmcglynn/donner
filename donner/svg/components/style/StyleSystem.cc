@@ -544,6 +544,9 @@ struct ShadowedElementAdapter {
 
   std::optional<ShadowedElementAdapter> previousSibling(
       css::SelectorTraversalBudget* budget = nullptr) const {
+    if (isShadowTreeRoot(treeEntity_)) {
+      return std::nullopt;
+    }
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).previousSibling();
     return findElementSibling(target, false, budget);
@@ -551,6 +554,9 @@ struct ShadowedElementAdapter {
 
   std::optional<ShadowedElementAdapter> nextSibling(
       css::SelectorTraversalBudget* budget = nullptr) const {
+    if (isShadowTreeRoot(treeEntity_)) {
+      return std::nullopt;
+    }
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).nextSibling();
     return findElementSibling(target, true, budget);
@@ -614,6 +620,17 @@ struct ShadowedElementAdapter {
   }
 
 private:
+  /**
+   * Whether \p treeEntity is the root of an instantiated shadow tree. The main shadow root of a
+   * `<use>` is attached under its host while a frame is built, but instanced content is not part
+   * of the host's tree: a shadow root is never a child or sibling of the elements around it, and
+   * has no siblings of its own, so selectors match the same whether or not it is attached.
+   */
+  bool isShadowTreeRoot(Entity treeEntity) const {
+    return registry_.get().all_of<ShadowTreeRootComponent>(treeEntity);
+  }
+
+  /// The first element at or after \p target in the given direction, skipping shadow roots.
   std::optional<ShadowedElementAdapter> findElementSibling(
       Entity target, bool forward, css::SelectorTraversalBudget* budget) const {
     for (; target != entt::null;
@@ -622,7 +639,8 @@ private:
                       : registry_.get()
                             .get<donner::components::TreeComponent>(target)
                             .previousSibling()) {
-      if (registry_.get().all_of<ElementTypeComponent>(resolveData(target))) {
+      if (!isShadowTreeRoot(target) &&
+          registry_.get().all_of<ElementTypeComponent>(resolveData(target))) {
         return create(target);
       }
       if (budget != nullptr && !budget->consume()) {
