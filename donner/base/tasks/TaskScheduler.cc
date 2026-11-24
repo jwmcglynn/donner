@@ -39,9 +39,11 @@ std::size_t ReduceRange(std::uint32_t value, std::size_t bound) {
 std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
   switch (step) {
     case SchedulerStep::AfterDrain: return os << "AfterDrain";
+    case SchedulerStep::AfterWaitingBit: return os << "AfterWaitingBit";
     case SchedulerStep::AfterSleeperDecrement: return os << "AfterSleeperDecrement";
     case SchedulerStep::BeforeSleeperWaits: return os << "BeforeSleeperWaits";
     case SchedulerStep::BeforeSelfWakeSwap: return os << "BeforeSelfWakeSwap";
+    case SchedulerStep::BeforeHandOff: return os << "BeforeHandOff";
     case SchedulerStep::AfterPublishPush: return os << "AfterPublishPush";
     case SchedulerStep::BetweenWakeSwapAndParkerChange:
       return os << "BetweenWakeSwapAndParkerChange";
@@ -263,7 +265,10 @@ SchedulerWork* TaskScheduler::findTask(Worker& worker) {
     ++worker.localRunsSinceOutside;
     return *local;
   }
-  // A steal round: every outside source first, then every other worker once.
+  return findOtherWork(worker);
+}
+
+SchedulerWork* TaskScheduler::findOtherWork(Worker& worker) {
   if (SchedulerWork* work = takeOutside(worker)) {
     return work;
   }
@@ -289,8 +294,11 @@ void TaskScheduler::runRecord(Worker& worker, TaskRecord* record) {
   std::atomic<std::uint64_t>* const counter = record->scopeCounter();
   Parker<>* const parker = record->parker();
   AsyncTaskScope* const asyncScope = record->asyncScope();
-  // Runs the closure and destroys it.
-  record->run();
+  if (ScopeStop::SkipsQueuedTask(record->stop())) {
+    record->discard();
+  } else {
+    record->run();
+  }
   if (record->pool() == &worker.pool) {
     worker.pool.releaseFromCreator(record);
   } else if (record->pool() == &externalPool_) {
@@ -319,9 +327,124 @@ void TaskScheduler::finishScopeTask(std::atomic<std::uint64_t>* counter, Parker<
   UTILS_RELEASE_ASSERT_MSG(before != 0, "A scope's task count went below zero");
   if (before == 1) {
     hook(SchedulerStep::ScopeFinisherAfterDecrement, workerIndex);
-    // The parker is the scheduler's (in its pool), not the scope's, so it outlives the scope.
-    parker->unpark();
+    // The parker is the scheduler's (a worker's, or in its pool), not the scope's, so it outlives
+    // the scope.
+    if (Worker* creator = workerOwning(parker)) {
+      // A creator that is a worker may be asleep in its wait: the swap counts it awake before the
+      // parker change lets it run.
+      wakeWorker(*creator);
+    } else {
+      parker->unpark();
+    }
   }
+}
+
+TaskScheduler::Worker* TaskScheduler::workerOwning(const Parker<>* parker) const {
+  for (const std::unique_ptr<Worker>& worker : workers_) {
+    if (&worker->parker == parker) {
+      return worker.get();
+    }
+  }
+  return nullptr;
+}
+
+void TaskScheduler::waitOnScope(Worker& worker, const std::atomic<std::uint64_t>& count,
+                                WorkStealingDeque<SchedulerWork*>::Index watermark) {
+  while (true) {
+    // The next take claims bottom - 1. The entry at the watermark belongs to this wait.
+    if (worker.deque.bottom() > watermark) {
+      if (const std::optional<SchedulerWork*> work = worker.deque.take()) {
+        runTask(worker, *work);
+        continue;
+      }
+    }
+
+    // Acquire the task results before returning to the creator.
+    if (count.load(std::memory_order_acquire) == 0) {
+      return;
+    }
+
+    const bool withinMargin =
+        HelpsWithin(StackRemaining(CurrentStackPosition(), worker.stack), options_.helpMarginBytes);
+    if (withinMargin) {
+      if (SchedulerWork* work = findOtherWork(worker)) {
+        runTask(worker, work);
+        continue;
+      }
+    }
+
+    switch (sleepWhileWaiting(worker, count, !withinMargin)) {
+      case WaitSleep::ScopeComplete: return;
+      case WaitSleep::Resume: break;
+      case WaitSleep::RunQueuedPastMargin:
+        // Queued work was visible; another worker may have taken it since, and the rules then
+        // run again.
+        if (SchedulerWork* work = takeOutside(worker)) {
+          pastMarginRuns_.fetch_add(1, std::memory_order_relaxed);
+          runTask(worker, work);
+        }
+        break;
+    }
+  }
+}
+
+TaskScheduler::Worker* TaskScheduler::findAsleepShallow(const Worker& self) const {
+  for (const std::unique_ptr<Worker>& worker : workers_) {
+    if (worker.get() != &self &&
+        worker->state.load(std::memory_order_seq_cst) == WorkerState::AsleepShallow) {
+      return worker.get();
+    }
+  }
+  return nullptr;
+}
+
+TaskScheduler::WaitSleep TaskScheduler::sleepWhileWaiting(Worker& worker,
+                                                          const std::atomic<std::uint64_t>& count,
+                                                          bool pastMargin) {
+  const auto [token, awakeBefore] =
+      prepareSleep(worker, pastMargin ? WorkerState::AsleepDeep : WorkerState::AsleepShallow);
+
+  // 4. Re-check. The stop flag is set only with no scope live, so a waiting creator never sees it.
+  UTILS_RELEASE_ASSERT_MSG(!stop_.load(std::memory_order_seq_cst),
+                           "A task scheduler was destroyed with a live TaskScope");
+  // The finisher may have decremented before swapping our state or changing our parker.
+  if (count.load(std::memory_order_acquire) == 0) {
+    hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
+    swapToAwake(worker);
+    worker.parker.finishWait();
+    return WaitSleep::ScopeComplete;
+  }
+  if (queuedWorkVisible()) {
+    if (!pastMargin) {
+      hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
+      swapToAwake(worker);
+      worker.parker.finishWait();
+      return WaitSleep::Resume;
+    }
+    // A transiently low count errs toward staying awake.
+    const bool lastAwake =
+        awakeBefore <= 1 && (testHooks_ == nullptr || testHooks_->lastAwakeRule());
+    if (lastAwake) {
+      if (Worker* shallow = findAsleepShallow(worker)) {
+        // The hand-off: whether or not this swap succeeds, an awake worker exists that re-checks
+        // before it next sleeps, and it runs the work from its shallow stack.
+        hook(SchedulerStep::BeforeHandOff, worker.index);
+        wakeWorker(*shallow);
+      } else {
+        hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
+        swapToAwake(worker);
+        worker.parker.finishWait();
+        return WaitSleep::RunQueuedPastMargin;
+      }
+    }
+  }
+  hook(SchedulerStep::BeforeSleeperWaits, worker.index);
+
+  // 5. Wait; whatever ends the wait, wake through the swap before doing anything else.
+  worker.parker.wait(token);
+  swapToAwake(worker);
+  worker.parker.finishWait();
+  return WaitSleep::Resume;
 }
 
 bool TaskScheduler::queuedWorkVisible() const {
@@ -363,24 +486,24 @@ void TaskScheduler::wakeAsleepWorker() {
   }
 }
 
-bool TaskScheduler::trySleep(Worker& worker) {
-  // 1. Drain the deque into the global queue, through the owner's take. An idle worker's deque is
-  // already empty here, since its own take just found nothing and only it pushes; a worker waiting
-  // on a scope reaches this with entries below its watermark.
+TaskScheduler::SleepPreparation TaskScheduler::prepareSleep(Worker& worker, WorkerState state) {
   while (const std::optional<SchedulerWork*> work = worker.deque.take()) {
     publishToGlobalQueue(*work);
   }
   hook(SchedulerStep::AfterDrain, worker.index);
 
-  // 2. Set the waiting bit; the token is the word it returns, with the bit.
   const Parker<>::Word token = worker.parker.prepareWait();
+  hook(SchedulerStep::AfterWaitingBit, worker.index);
 
-  // 3. Store asleep, then decrement the awake count; both sequentially consistent.
-  // Must stay sequentially consistent: it pairs with the destructor's stop store and swap.
-  worker.state.store(WorkerState::AsleepShallow, std::memory_order_seq_cst);
-  awake_.fetch_sub(1, std::memory_order_seq_cst);
+  // These operations pair with publishers and shutdown in the same total order.
+  worker.state.store(state, std::memory_order_seq_cst);
+  const std::int64_t awakeBefore = awake_.fetch_sub(1, std::memory_order_seq_cst);
   hook(SchedulerStep::AfterSleeperDecrement, worker.index);
+  return {token, awakeBefore};
+}
 
+bool TaskScheduler::trySleep(Worker& worker) {
+  const auto sleep = prepareSleep(worker, WorkerState::AsleepShallow);
   // 4. Re-check the stop flag and the visible queued work.
   if (stop_.load(std::memory_order_seq_cst)) {
     hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
@@ -397,7 +520,7 @@ bool TaskScheduler::trySleep(Worker& worker) {
   hook(SchedulerStep::BeforeSleeperWaits, worker.index);
 
   // 5. Wait; whatever ends the wait, wake through the swap before doing anything else.
-  worker.parker.wait(token);
+  worker.parker.wait(sleep.token);
   swapToAwake(worker);
   worker.parker.finishWait();
   return !stop_.load(std::memory_order_seq_cst);

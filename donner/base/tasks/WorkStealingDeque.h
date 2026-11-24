@@ -206,6 +206,13 @@ public:
   }
 
   /**
+   * The bottom index: the logical position the next push uses. Owner only, and only outside
+   * `take`, whose transient lowering it never sees. Every entry pushed after this read has a
+   * position at or above it, until a take lowers the bottom past it.
+   */
+  [[nodiscard]] Index bottom() const { return bottom_.load(std::memory_order_relaxed); }
+
+  /**
    * Takes the newest entry from the bottom. Owner only.
    *
    * @return The entry, or `std::nullopt` if the deque was empty or a thief claimed its last entry.

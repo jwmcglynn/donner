@@ -244,12 +244,13 @@ TEST(CreatorRecordPoolTest, AReusedRecordIsCleared) {
   CreatorRecordPool<> pool(1);
   std::atomic<std::uint64_t> counter{0};
   Parker<> parker;
+  ScopeStop stop;
   int calls = 0;
 
   TaskRecord* record = pool.tryAllocate();
   ASSERT_THAT(record, NotNull());
   EXPECT_THAT(record->pool(), Eq(&pool));
-  record->setScope(&counter, &parker);
+  record->setScope(&counter, &parker, &stop);
   record->setNext(record);
   record->setClosure([&] { ++calls; });
   record->run();
@@ -259,6 +260,7 @@ TEST(CreatorRecordPoolTest, AReusedRecordIsCleared) {
   ASSERT_THAT(reused, Eq(record));
   EXPECT_THAT(reused->scopeCounter(), IsNull());
   EXPECT_THAT(reused->parker(), IsNull());
+  EXPECT_THAT(reused->stop(), IsNull());
   EXPECT_THAT(reused->next(), IsNull());
   EXPECT_FALSE(reused->hasClosure());
   EXPECT_THAT(reused->pool(), Eq(&pool));
@@ -466,7 +468,7 @@ TEST(TaskRecordPoisonDeathTest, TouchingARecordAfterReturningItFails) {
         TaskRecord* record = pool.tryAllocate();
         pool.returnFromOtherThread(record);
         std::atomic<std::uint64_t> counter{0};
-        record->setScope(&counter, nullptr);
+        record->setScope(&counter, nullptr, nullptr);
       },
       "use-after-poison");
 }

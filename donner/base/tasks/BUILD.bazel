@@ -26,6 +26,7 @@ donner_cc_library(
     name = "task_record",
     hdrs = [
         "SchedulerWork.h",
+        "ScopeStop.h",
         "TaskRecord.h",
     ],
     deps = [
@@ -156,6 +157,21 @@ donner_cc_test(
         ":scheduler_test_utils",
         ":task_scheduler",
         "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "worker_scope_tests",
+    srcs = [
+        "tests/WorkerScopeLiveness_tests.cc",
+        "tests/WorkerScope_tests.cc",
+    ],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "//donner/base:stall_guard",
         "@com_google_gtest//:gtest",
     ],
 )

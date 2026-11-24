@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "donner/base/tasks/Parker.h"
+#include "donner/base/tasks/ScopeStop.h"
 #include "donner/base/tasks/TaskScheduler.h"
 
 namespace donner::tasks {
@@ -26,11 +27,22 @@ class TaskScopeTestPeer;
  * belongs to the scheduler, so the creator may destroy the scope as soon as it sees the count at
  * zero.
  *
- * In this version the creator is a thread that is not one of the scheduler's workers: it never
- * runs tasks. Its spawns go to the scheduler's global queue, and its wait re-checks the count and
- * sleeps on its parker, from the scheduler's \ref ParkerPool, until a finisher changes it. A scope
- * created on a worker fails a release assertion. With zero workers, every spawn runs inline and a
+ * On a worker, the scope also records the worker's deque bottom index, its watermark: every entry
+ * the creator, or a task run on top of its wait, pushes from then on lies at or above it. The
+ * creator's spawns go to its own deque, and its wait runs entries above the watermark, returns once
+ * the count is zero, and otherwise helps with other work while it has more than
+ * \ref TaskSchedulerOptions::helpMarginBytes of stack left, then sleeps on the worker's parker (see
+ * \ref TaskScheduler). Nested scopes must be joined in last-in, first-out order. A coroutine
+ * must not suspend while a synchronous scope is live.
+ *
+ * On a thread that is not a worker, the creator never runs tasks. Its spawns go to the scheduler's
+ * global queue, and its wait re-checks the count and sleeps on its parker, from the scheduler's
+ * \ref ParkerPool, until a finisher changes it. With zero workers, every spawn runs inline and a
  * wait returns at once.
+ *
+ * \ref requestStop asks the scope's queued tasks not to run: each is destroyed unrun when a thread
+ * takes it, and still completes its scope's accounting, so the wait returns. Running tasks may
+ * poll \ref stopRequested.
  *
  * Creating a scope while the calling thread's own thread-local objects are being destroyed (from
  * another thread-local's destructor, at thread exit) is undefined: the thread's parker entry is a
@@ -78,10 +90,20 @@ public:
   }
 
   /**
-   * Returns once every task spawned into the scope has finished, sleeping on the creator's parker
-   * meanwhile; on return, everything those tasks wrote is visible. On the creating thread only.
+   * Returns once every task spawned into the scope has finished; on return, everything those tasks
+   * wrote is visible. On the creating thread only. On a worker it runs and helps with work
+   * meanwhile; on another thread it sleeps on the creator's parker.
    */
   void wait();
+
+  /**
+   * Requests cooperative cancellation from any thread. A queued task that observes the request
+   * discards its closure and counts as finished. Inline fallback work still runs.
+   */
+  void requestStop() { stop_.request(); }
+
+  /// Whether \ref requestStop was called; tasks that run long poll it.
+  [[nodiscard]] bool stopRequested() const { return stop_.requested(); }
 
 private:
   friend class TaskScopeTestPeer;
@@ -89,21 +111,32 @@ private:
   TaskScheduler& scheduler_;
   const std::thread::id creator_;
 
+  /// The creating worker, or null when the creator is not a worker of the scheduler.
+  TaskScheduler::Worker* const worker_;
+
+  /// The creating worker's deque bottom index when the scope was created; unused off a worker.
+  const WorkStealingDeque<SchedulerWork*>::Index watermark_;
+
   /// Tasks spawned and not yet finished.
   std::atomic<std::uint64_t> count_{0};
 
-  /// The counter and the creator's parker, which every task record of the scope carries. The
-  /// parker is null with zero workers, when no task is ever queued.
+  /// The scope's stop request, checked before each queued task of the scope runs.
+  ScopeStop stop_;
+
+  /// The counter, the creator's parker and the stop request, which every task record of the
+  /// scope carries. The parker is null with zero workers, when no task is ever queued.
   TaskScheduler::ScopeLink link_;
 };
 
 /**
  * Runs \p a and \p b, possibly in parallel, and returns when both have finished.
  *
- * On a thread that is not a worker, \p b is spawned to the scheduler's global queue, \p a runs on
- * the calling thread, and the call then waits for \p b as a \ref TaskScope does. With zero workers,
- * \p a runs and then \p b, both on the calling thread. Calling it on a worker fails a release
- * assertion in this version.
+ * On a worker, \p b is pushed to the worker's deque and \p a runs on the calling thread; the wait
+ * then takes \p b back and runs it if no other worker stole it, and otherwise waits for it as a
+ * \ref TaskScope's creator does. On any other thread, \p b is spawned to the scheduler's global
+ * queue, \p a runs on the calling thread, and the call then waits for \p b as a \ref TaskScope
+ * does; it cannot take \p b back. With zero workers, \p a runs and then \p b, both on the calling
+ * thread.
  *
  * @param scheduler The scheduler that runs \p b.
  * @param a Runs on the calling thread.
