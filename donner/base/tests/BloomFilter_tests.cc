@@ -13,6 +13,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace donner {
@@ -75,6 +76,8 @@ static_assert(alignof(BloomFilter<12>) == alignof(std::uint64_t));
 static_assert(sizeof(BloomFilter<1>) == 8);
 static_assert(sizeof(CountingBloomFilter<12>) == 4096);
 static_assert(alignof(CountingBloomFilter<12>) == 1);
+static_assert(std::is_trivially_copyable_v<BloomFilter<12>>);
+static_assert(std::is_trivially_copyable_v<CountingBloomFilter<12>>);
 static_assert(BloomHash::Of("g", 0).value() == 0x3065F077u, "Of() is usable at compile time");
 
 TEST(BloomHash, OfMatchesReferenceValues) {

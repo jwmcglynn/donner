@@ -231,7 +231,8 @@ public:
 
   /**
    * Removes one occurrence of a key. The key must have been inserted more times than removed
-   * since construction or the last \ref clear.
+   * since construction or the last \ref clear. Removing a key without a matching insertion
+   * can cause false negatives for other keys.
    *
    * @param hash The key's hash.
    */

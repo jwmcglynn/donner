@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string_view>
+#include <utility>
 
 #include "donner/base/BloomFilter.h"
 
@@ -17,6 +18,63 @@ BloomHash KeyHash(std::uint8_t key) {
   const char byte = static_cast<char>(key);
   return BloomHash::Of(std::string_view(&byte, 1), 0);
 }
+
+// Track exact live contributions separately from whether a slot ever saturated.
+template <int kLog2Slots>
+class CheckedCountingFilter {
+  static constexpr std::size_t kSlots = std::size_t{1} << kLog2Slots;
+  static constexpr std::uint32_t kSaturationThreshold = 255;
+
+public:
+  void insert(BloomHash hash) {
+    const auto [first, second] = ProbeIndices(hash);
+    ++liveContributions_[first];
+    ++liveContributions_[second];
+    saturated_[first] = saturated_[first] || liveContributions_[first] >= kSaturationThreshold;
+    saturated_[second] = saturated_[second] || liveContributions_[second] >= kSaturationThreshold;
+
+    if (filter_.insert(hash) != (saturated_[first] || saturated_[second])) {
+      std::abort();
+    }
+    checkSlot(first);
+    checkSlot(second);
+  }
+
+  void remove(BloomHash hash) {
+    const auto [first, second] = ProbeIndices(hash);
+    --liveContributions_[first];
+    --liveContributions_[second];
+    filter_.remove(hash);
+    checkSlot(first);
+    checkSlot(second);
+  }
+
+  void clear() {
+    liveContributions_.fill(0);
+    saturated_.fill(false);
+    filter_.clear();
+  }
+
+  bool mayContain(BloomHash hash) const { return filter_.mayContain(hash); }
+
+private:
+  static std::pair<std::size_t, std::size_t> ProbeIndices(BloomHash hash) {
+    const std::uint32_t value = hash.value();
+    return {value % kSlots, (value / kSlots) % kSlots};
+  }
+
+  void checkSlot(std::size_t slot) const {
+    // A hash with both probes at this slot exposes its occupancy through mayContain().
+    const BloomHash coincident(static_cast<std::uint32_t>(slot + slot * kSlots));
+    if (filter_.mayContain(coincident) != (saturated_[slot] || liveContributions_[slot] != 0)) {
+      std::abort();
+    }
+  }
+
+  CountingBloomFilter<kLog2Slots> filter_;
+  std::array<std::uint32_t, kSlots> liveContributions_{};
+  std::array<bool, kSlots> saturated_{};
+};
 
 /// Aborts unless every key with a live occurrence is reported by every filter.
 template <typename... Filters>
@@ -43,8 +101,8 @@ void CheckNoFalseNegatives(const Oracle& oracle, const Filters&... filters) {
 /// - 2: insert the key `n + 1` times.
 /// - 3: clear every filter when `n` is 0, else remove up to `n` occurrences of the key.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  CountingBloomFilter<5> smallCounting;
-  CountingBloomFilter<12> counting;
+  CheckedCountingFilter<5> smallCounting;
+  CheckedCountingFilter<12> counting;
   BloomFilter<8> growOnly;
   Oracle oracle{};
 
@@ -65,7 +123,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     --oracle[key];
   };
 
-  // Bound the per-operation oracle scan and the live count (at most 64 increments per operation).
+  // Bound the oracle scan and counts. Each operation adds at most 128 probe contributions, so
+  // even one slot receiving every contribution stays below the 32-bit count limit.
   constexpr std::size_t kMaxInputBytes = 64 * 1024;
   const std::size_t inputBytes = std::min(size, kMaxInputBytes);
   for (std::size_t i = 0; i + 1 < inputBytes; i += 2) {
