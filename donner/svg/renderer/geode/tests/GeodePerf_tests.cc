@@ -1290,18 +1290,22 @@ struct SiblingSurfacesCase {
 
 /// Siblings a \p kind scene draws on a canvas with a \p longEdge px long edge.
 ///
-/// From 1024 px on, a quarter of the pool's budget holds fewer than sixteen of these canvas-sized
-/// surfaces, so the pool keeps sixteen of one size and twenty already outgrow it: twenty layers or
-/// clips, or ten masks of two surfaces each. Every surface costs a canvas-sized fill on a software
-/// adapter, and a frame of many masks also drains the GPU queue several times (#2711), so the
-/// large canvases draw no more siblings than that. The smaller canvases draw twenty-four.
+/// From 1024 px on, the pool keeps at most sixteen of these canvas-sized surfaces of one size, and
+/// fewer at 2048 px, where its overall budget binds first. So twenty layers or clips still outgrow
+/// it, as do twelve masks of two surfaces each at 1024 px and ten at 2048 px. Every surface costs a
+/// canvas-sized fill on a software adapter, and a frame of many masks also drains the GPU queue
+/// several times (#2711), so the large canvases draw no more siblings than that. The smaller
+/// canvases draw twenty-four.
 /// \ref SingleUseSurfacesOutgrowThePool checks at every size that the scene still outgrows the
 /// pool.
 int SiblingCount(SiblingSurfaceKind kind, int longEdge) {
   if (longEdge < 1024) {
     return 24;
   }
-  return kind == SiblingSurfaceKind::Masks ? 10 : 20;
+  if (kind == SiblingSurfaceKind::Masks) {
+    return longEdge < 2048 ? 12 : 10;
+  }
+  return 20;
 }
 
 void PrintTo(const SiblingSurfacesCase& c, std::ostream* os) {
