@@ -192,6 +192,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
       acquires the waiting handle before enqueueing the resumption and does not access the scope
       or its frame after enqueueing. The registering awaiter does not touch its frame after
       publishing the join flag.
+      The join completes when the coroutine runs `await_resume`, including the inline path.
+      Destruction requires a completed join and a zero count. The frame owner, including an
+      external coroutine host, keeps the coroutine alive until its join completes.
     - A resumption uses the publisher's worker deque or the intrusive global FIFO if that deque is
       full or the publisher is external. The global wake handshake finishes before unlocking the
       FIFO. The publisher does not access the scheduler or frame once a consumer can take it.
@@ -1829,6 +1832,9 @@ clients that size work from documents.
   workers. The join hooks hold both sides of registration through relaxed flags that don't publish the payload or resume
   handle. A separate interleaving lets the worker resume and destroy the scope and its
   scheduler before the external registrant returns from `await_suspend`.
+  A foreign coroutine test keeps its frame alive and observes the join started but incomplete
+  before the last finisher enqueues it, then complete after resumption.
+  An empty synthetic scope checks that the destructor requires completion even at zero count.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.

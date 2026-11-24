@@ -13,6 +13,7 @@
 namespace donner::tasks {
 
 /// A scope created, joined once, and destroyed by a coroutine. Its scheduler must outlive it.
+/// Keep the coroutine frame alive until its join resumes.
 class AsyncTaskScope {
 public:
   /// @param scheduler Runs the scope's tasks and queues its continuation.
@@ -47,7 +48,7 @@ public:
 
     [[nodiscard]] bool await_ready() const noexcept { return false; }
     bool await_suspend(std::coroutine_handle<> handle) noexcept;
-    void await_resume() const noexcept {}
+    void await_resume() const noexcept { scope_.joinCompleted_ = true; }
 
   private:
     friend class AsyncTaskScope;
@@ -62,6 +63,7 @@ public:
 
 private:
   friend class TaskScheduler;
+  friend class AsyncTaskScopeTestPeer;
 
   static constexpr std::uint64_t kJoinFlag = std::uint64_t{1} << 63;
   static constexpr std::uint64_t kCountMask = kJoinFlag - 1;
@@ -72,7 +74,8 @@ private:
   TaskScheduler& scheduler_;
   std::atomic<std::uint64_t> count_{0};
   const TaskScheduler::ScopeLink link_;
-  std::atomic<bool> joined_{false};
+  std::atomic<bool> joinStarted_{false};
+  bool joinCompleted_ = false;  //!< Set by the creating coroutine when join returns.
   CoroutineResumption* waiting_ = nullptr;
 };
 

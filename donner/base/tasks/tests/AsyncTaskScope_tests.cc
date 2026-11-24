@@ -14,6 +14,21 @@
 #include "donner/base/tasks/tests/SchedulerTestUtils.h"
 
 namespace donner::tasks {
+
+/// Observes join state at scheduler test seams while the scope is alive.
+class AsyncTaskScopeTestPeer {
+public:
+  static bool JoinStarted(const AsyncTaskScope& scope) {
+    return scope.joinStarted_.load(std::memory_order_relaxed);
+  }
+
+  static bool JoinCompleted(const AsyncTaskScope& scope) { return scope.joinCompleted_; }
+
+  static void MarkJoinStarted(AsyncTaskScope& scope) {
+    scope.joinStarted_.store(true, std::memory_order_relaxed);
+  }
+};
+
 namespace {
 
 using Peer = TaskSchedulerTestPeer;
@@ -224,6 +239,56 @@ TEST(AsyncTaskScopeTest, WorkerCanResumeAndDestroyScopeWhileAwaitSuspendIsStillR
   EXPECT_THAT(registration.heldPastHangGuard(), Eq(false));
 }
 
+struct JoinProgress {
+  const AsyncTaskScope* scope = nullptr;
+  bool observedEnqueue = false;
+  bool startedBeforeResume = false;
+  bool completedBeforeResume = false;
+  bool completedAfterResume = false;
+};
+
+class ObserveJoinHandoff : public SchedulerTestHooks {
+public:
+  explicit ObserveJoinHandoff(JoinProgress& progress) : progress_(progress) {}
+
+  void at(SchedulerStep step, std::size_t /*worker*/) override {
+    if (step == SchedulerStep::AsyncJoinBeforeEnqueue) {
+      progress_.observedEnqueue = true;
+      progress_.startedBeforeResume = AsyncTaskScopeTestPeer::JoinStarted(*progress_.scope);
+      progress_.completedBeforeResume = AsyncTaskScopeTestPeer::JoinCompleted(*progress_.scope);
+    }
+  }
+
+private:
+  JoinProgress& progress_;
+};
+
+CoroutineTestRoot JoinFromForeignRoot(TaskScheduler& scheduler, Gate& work,
+                                      JoinProgress& progress) {
+  AsyncTaskScope scope(scheduler);
+  progress.scope = &scope;
+  scope.spawn([&] { work.arriveAndWait(); });
+  co_await scope.join();
+  progress.completedAfterResume = AsyncTaskScopeTestPeer::JoinCompleted(scope);
+}
+
+TEST(AsyncTaskScopeTest, MarksJoinCompleteOnlyWhenAForeignCoroutineResumes) {
+  JoinProgress progress;
+  ObserveJoinHandoff hooks(progress);
+  auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, &hooks);
+  Gate work;
+  Event done;
+  auto root = JoinFromForeignRoot(*scheduler, work, progress);
+  root.start(done);
+  work.release();
+  ASSERT_THAT(done.wait(), Eq(true));
+  EXPECT_THAT(progress.observedEnqueue, Eq(true));
+  EXPECT_THAT(progress.startedBeforeResume, Eq(true));
+  EXPECT_THAT(progress.completedBeforeResume, Eq(false));
+  EXPECT_THAT(progress.completedAfterResume, Eq(true));
+  EXPECT_THAT(work.heldPastHangGuard(), Eq(false));
+}
+
 Task<void> EmptyAndInline(TaskScheduler& scheduler, int& called, bool& queued) {
   AsyncTaskScope scope(scheduler);
   queued = scope.trySpawn([&] { ++called; });
@@ -251,6 +316,17 @@ TEST(AsyncTaskScopeDeathTest, RejectsDestroyingAnUnjoinedScope) {
       {
         TaskScheduler scheduler(TaskSchedulerOptions{});
         const AsyncTaskScope scope(scheduler);
+      },
+      "must be joined before destruction");
+}
+
+TEST(AsyncTaskScopeDeathTest, RejectsDestroyingAnEmptyScopeBeforeJoinCompletes) {
+  EXPECT_DEATH(
+      {
+        TaskScheduler scheduler(TaskSchedulerOptions{});
+        AsyncTaskScope scope(scheduler);
+        // Model an in-progress join without creating a coroutine or enqueueing a handle.
+        AsyncTaskScopeTestPeer::MarkJoinStarted(scope);
       },
       "must be joined before destruction");
 }

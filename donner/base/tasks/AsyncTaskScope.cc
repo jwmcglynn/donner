@@ -8,21 +8,21 @@ AsyncTaskScope::AsyncTaskScope(TaskScheduler& scheduler)
 }
 
 AsyncTaskScope::~AsyncTaskScope() {
-  UTILS_RELEASE_ASSERT_MSG(joined_.load(std::memory_order_relaxed) &&
-                               (count_.load(std::memory_order_relaxed) & kCountMask) == 0,
-                           "An AsyncTaskScope must be joined before destruction");
+  UTILS_RELEASE_ASSERT_MSG(
+      joinCompleted_ && (count_.load(std::memory_order_relaxed) & kCountMask) == 0,
+      "An AsyncTaskScope must be joined before destruction");
   scheduler_.liveScopes_.fetch_sub(1, std::memory_order_relaxed);
 }
 
 void AsyncTaskScope::assertCanSpawn() const {
   // During registration or suspension, a running scoped task still has a record counted.
-  UTILS_RELEASE_ASSERT_MSG(!joined_.load(std::memory_order_relaxed) ||
+  UTILS_RELEASE_ASSERT_MSG(!joinStarted_.load(std::memory_order_relaxed) ||
                                (count_.load(std::memory_order_relaxed) & kCountMask) != 0,
                            "An AsyncTaskScope cannot be reopened after join");
 }
 
 bool AsyncTaskScope::JoinAwaitable::await_suspend(std::coroutine_handle<> handle) noexcept {
-  UTILS_RELEASE_ASSERT_MSG(!scope_.joined_.exchange(true, std::memory_order_relaxed),
+  UTILS_RELEASE_ASSERT_MSG(!scope_.joinStarted_.exchange(true, std::memory_order_relaxed),
                            "An AsyncTaskScope may be joined only once");
   TaskScheduler& scheduler = scope_.scheduler_;
   SchedulerTestHooks* const hooks = scheduler.testHooks_;
