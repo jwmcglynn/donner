@@ -28,8 +28,8 @@ struct PositionedStyle {
   /// Whether stroke is inherited from an external-use host.
   bool externalStroke = false;
 
-  /// Equality operator.
-  bool operator==(const PositionedStyle&) const = default;
+  /// Exact equality including every property payload and resource-opacity priority.
+  bool operator==(const PositionedStyle& other) const;
 
   /// Print the position and the whole computed style, for test failure output.
   friend std::ostream& operator<<(std::ostream& os, const PositionedStyle& value);

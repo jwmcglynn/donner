@@ -20,6 +20,7 @@ cc_library(
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
+        "//donner/svg/components:document_resource_family_budget",
         "//donner/svg/properties:property_parsing",
     ],
 )
@@ -59,6 +60,18 @@ cc_library(
 )
 
 donner_perf_sensitive_cc_library(
+    name = "matched_properties_cache",
+    srcs = ["MatchedPropertiesCache.cc"],
+    hdrs = ["MatchedPropertiesCache.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/css",
+    ],
+)
+
+donner_perf_sensitive_cc_library(
     name = "style_system",
     srcs = [
         "PaintAnimationStyle.cc",
@@ -77,6 +90,7 @@ donner_perf_sensitive_cc_library(
     ],
     deps = [
         ":components",
+        ":matched_properties_cache",
         ":rule_index",
         ":style_system_headers",
         "//donner/base",
@@ -91,6 +105,15 @@ donner_perf_sensitive_cc_library(
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/text:components",
+    ],
+)
+
+donner_cc_test(
+    name = "matched_properties_cache_tests",
+    srcs = ["tests/MatchedPropertiesCache_tests.cc"],
+    deps = [
+        ":matched_properties_cache",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 

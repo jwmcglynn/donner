@@ -315,7 +315,7 @@ namespace {
 
 void RecomputeAnimationStyles(Registry& registry, bool enabled) {
   registry.ctx().get<AnimationStyleContext>().enabled = enabled;
-  registry.clear<ComputedStyleComponent>();
+  StyleSystem::discardComputedStyles(registry);
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   StyleSystem().computeAllStyles(registry, warnings);
 }

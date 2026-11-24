@@ -8,7 +8,6 @@
 #include <optional>
 #include <utility>
 
-#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 
@@ -18,26 +17,15 @@ class StyleResourceBudget;
 
 /// Installed only while the child document's write access is held.
 struct ExternalUseStyleContext {
-  /// Hold the host's computed style after its caller has reserved its dynamic bytes, which stay
-  /// charged while this occurrence keeps the shared record alive.
+  /// Share the host's computed style, whose record owns its lifetime charge.
   ExternalUseStyleContext(Entity root, std::shared_ptr<const ComputedStyle> hostStyle,
                           const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke,
-                          std::shared_ptr<DocumentResourceFamilyBudget> budget,
-                          std::size_t chargedBytes, std::shared_ptr<StyleResourceBudget> work)
+                          std::shared_ptr<StyleResourceBudget> work)
       : root(root),
         parent{.style = std::move(hostStyle)},
         fill(fill),
         stroke(stroke),
-        family(std::move(budget)),
-        chargedBytes(chargedBytes),
         work(std::move(work)) {}
-
-  ~ExternalUseStyleContext() {
-    parent.style.reset();
-    if (family) {
-      family->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, chargedBytes);
-    }
-  }
 
   ExternalUseStyleContext(const ExternalUseStyleContext&) = delete;
   ExternalUseStyleContext& operator=(const ExternalUseStyleContext&) = delete;
@@ -50,8 +38,6 @@ struct ExternalUseStyleContext {
   ComputedStyleComponent parent;  ///< Host's shared computed style and canonical resource values.
   ResolvedPaintServer fill;       ///< Host-registry-qualified fill.
   ResolvedPaintServer stroke;     ///< Host-registry-qualified stroke.
-  std::shared_ptr<DocumentResourceFamilyBudget> family;  ///< Shared retained-byte envelope.
-  std::size_t chargedBytes;                              ///< Live charge for the parent snapshot.
   std::shared_ptr<StyleResourceBudget>
       work;  ///< Frame-wide work allowance, never reset by child passes.
 };

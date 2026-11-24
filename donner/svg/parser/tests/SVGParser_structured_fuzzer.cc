@@ -457,7 +457,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
           element ? element->entityHandle().try_get<donner::svg::components::StyleComponent>()
                   : nullptr;
       if (component == nullptr || !component->styleParseRejected ||
-          component->properties.complexPropertyBytes() != 0) {
+          component->properties().complexPropertyBytes() != 0) {
         std::abort();
       }
     }

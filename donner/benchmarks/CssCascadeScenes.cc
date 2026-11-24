@@ -11,6 +11,7 @@
 #include "donner/base/Utils.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -96,6 +97,7 @@ struct Repetition {
   double frameMs = 0;
   double styleMs = 0;
   StyleCascadeCounters counters;
+  std::size_t distinctComputedStyleRecords = 0;
 };
 
 /// Collects repetitions after the warmup and summarizes them.
@@ -109,10 +111,12 @@ public:
     if (!recorded(repetition)) {
       return;
     }
-    if (!setupMs_.empty() && sample.counters != counters_) {
+    if (!setupMs_.empty() && (sample.counters != counters_ || sample.distinctComputedStyleRecords !=
+                                                                  distinctComputedStyleRecords_)) {
       stable_ = false;
     }
     counters_ = sample.counters;
+    distinctComputedStyleRecords_ = sample.distinctComputedStyleRecords;
     setupMs_.push_back(sample.setupMs);
     frameMs_.push_back(sample.frameMs);
     styleMs_.push_back(sample.styleMs);
@@ -133,6 +137,7 @@ public:
       result.rendererFrame = SummarizeTimings(rendererFrameMs_);
     }
     result.counters = counters_;
+    result.distinctComputedStyleRecords = distinctComputedStyleRecords_;
     result.countersStable = stable_;
     return result;
   }
@@ -156,6 +161,7 @@ private:
   std::vector<double> styleMs_;
   std::vector<double> rendererFrameMs_;
   StyleCascadeCounters counters_;
+  std::size_t distinctComputedStyleRecords_ = 0;
   bool stable_ = true;
 };
 
@@ -186,6 +192,7 @@ Repetition TimeStepAndFrame(SVGDocument& document, svg::RendererInterface& rende
       .frameMs = ElapsedMs(frameEnd - frameStart),
       .styleMs = ElapsedMs(after.styleTime - before.styleTime),
       .counters = after.counters - before.counters,
+      .distinctComputedStyleRecords = after.distinctComputedStyleRecords,
   };
 }
 
@@ -196,7 +203,7 @@ using MakeStep = std::function<std::optional<std::function<void(int)>>(SVGDocume
 std::optional<CascadeMeasurement> MeasureFramesAfterStep(std::string_view source,
                                                          const MakeStep& makeStep,
                                                          CascadeRepetitions repetitions,
-                                                         bool withRenderer) {
+                                                         bool withRenderer, bool disableCache) {
   RepetitionLog log(repetitions);
   for (const bool useRenderer : {false, true}) {
     if (useRenderer && !withRenderer) {
@@ -205,6 +212,9 @@ std::optional<CascadeMeasurement> MeasureFramesAfterStep(std::string_view source
     std::optional<SVGDocument> document = ParseCascadeDocument(source);
     if (!document) {
       return std::nullopt;
+    }
+    if (disableCache) {
+      svg::internal::DisableMatchedPropertiesCacheForTesting(*document);
     }
     std::unique_ptr<svg::RendererInterface> renderer;
     if (useRenderer) {
@@ -332,7 +342,8 @@ std::optional<SVGDocument> ParseCascadeDocument(std::string_view source) {
 StyleCascadeSample CaptureStyleCascade(const SVGDocument& document) {
   const svg::internal::RenderingDiagnostics diagnostics =
       svg::internal::CaptureRenderingDiagnostics(document, 0);
-  return StyleCascadeSample{diagnostics.styleCascade, diagnostics.styleTime};
+  return StyleCascadeSample{diagnostics.styleCascade, diagnostics.styleTime,
+                            diagnostics.distinctComputedStyleRecords};
 }
 
 std::optional<CascadeEditor> CascadeEditor::Create(SVGDocument& document,
@@ -423,7 +434,7 @@ TimingSummary SummarizeTimings(std::vector<double> samplesMs) {
 
 std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
                                                      CascadeRepetitions repetitions,
-                                                     bool withRenderer) {
+                                                     bool withRenderer, bool disableCache) {
   RepetitionLog log(repetitions);
   for (int repetition = 0; repetition < log.total(); ++repetition) {
     const auto parseStart = Clock::now();
@@ -431,6 +442,9 @@ std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
     const auto parseEnd = Clock::now();
     if (!document) {
       return std::nullopt;
+    }
+    if (disableCache) {
+      svg::internal::DisableMatchedPropertiesCacheForTesting(*document);
     }
     NullRenderer renderer;
     Repetition sample = TimeStepAndFrame(*document, renderer, [] {});
@@ -440,6 +454,9 @@ std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
       std::optional<SVGDocument> rendered = ParseCascadeDocument(source);
       if (!rendered) {
         return std::nullopt;
+      }
+      if (disableCache) {
+        svg::internal::DisableMatchedPropertiesCacheForTesting(*rendered);
       }
       svg::Renderer defaultRenderer;
       log.recordRendererFrame(repetition,
@@ -453,7 +470,7 @@ std::optional<CascadeMeasurement> MeasureCascadeEdit(std::string_view source,
                                                      const CascadeEditTarget& target,
                                                      CascadeEdit edit,
                                                      CascadeRepetitions repetitions,
-                                                     bool withRenderer) {
+                                                     bool withRenderer, bool disableCache) {
   return MeasureFramesAfterStep(
       source,
       [&](SVGDocument& document) -> std::optional<std::function<void(int)>> {
@@ -463,7 +480,7 @@ std::optional<CascadeMeasurement> MeasureCascadeEdit(std::string_view source,
         }
         return [editor = *editor](int repetition) mutable { editor.apply(repetition); };
       },
-      repetitions, withRenderer);
+      repetitions, withRenderer, disableCache);
 }
 
 std::optional<CascadeMeasurement> MeasureCascadeKeystroke(std::string_view source,
@@ -483,7 +500,7 @@ std::optional<CascadeMeasurement> MeasureCascadeKeystroke(std::string_view sourc
           }
         };
       },
-      repetitions, withRenderer);
+      repetitions, withRenderer, false);
   if (missingTarget) {
     return std::nullopt;
   }

@@ -4,6 +4,7 @@ donner_cc_library(
     name = "property_parsing",
     srcs = [
         "ClipPath.cc",
+        "LocalDeclarationKey.cc",
         "PaintServer.cc",
         "PropertyParsing.cc",
         "PropertyRegistry.cc",

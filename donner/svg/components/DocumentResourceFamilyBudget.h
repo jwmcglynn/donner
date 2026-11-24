@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 
 namespace donner::svg::components {
 
@@ -75,24 +76,18 @@ public:
    * @return True when the budget is not rejected and both ceilings admit the charge.
    */
   bool canReserve(Kind kind, std::size_t bytes) const {
-    const std::size_t index = static_cast<std::size_t>(kind);
-    if (stats_.rejected || index >= stats_.retainedBytes.size()) {
-      return false;
-    }
-    const std::size_t maximum = maximumFor(kind);
-    return stats_.retainedBytes[index] <= maximum &&
-           bytes <= maximum - stats_.retainedBytes[index] &&
-           stats_.totalRetainedBytes <= limits_.maximumTotalRetainedBytes &&
-           bytes <= limits_.maximumTotalRetainedBytes - stats_.totalRetainedBytes;
+    const std::lock_guard lock(mutex_);
+    return canReserveUnlocked(kind, bytes);
   }
 
   /// Return the additional bytes currently admissible under both category and total limits.
   /// @param kind Resource category to inspect.
   std::size_t availableBytes(Kind kind) const {
-    if (!canReserve(kind, 0)) {
+    const std::lock_guard lock(mutex_);
+    if (!canReserveUnlocked(kind, 0)) {
       return 0;
     }
-    return std::min(maximumFor(kind) - retainedBytes(kind),
+    return std::min(maximumFor(kind) - retainedBytesUnlocked(kind),
                     limits_.maximumTotalRetainedBytes - stats_.totalRetainedBytes);
   }
 
@@ -103,8 +98,9 @@ public:
    * @return True when the charge was accepted; false after a prior or current refusal.
    */
   bool reserve(Kind kind, std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
     const std::size_t index = static_cast<std::size_t>(kind);
-    if (!canReserve(kind, bytes)) {
+    if (!canReserveUnlocked(kind, bytes)) {
       ++stats_.rejectedReservations;
       stats_.rejected = true;
       return false;
@@ -117,6 +113,7 @@ public:
 
   /// Preflight text-path measurement work before it can allocate adaptive samples.
   bool reserveTextPathMeasurementWork(std::size_t units) {
+    const std::lock_guard lock(mutex_);
     if (stats_.textPathMeasurementWorkRejected ||
         stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits ||
         units > limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits) {
@@ -130,6 +127,7 @@ public:
 
   /// Remaining cumulative text-path measurement work before fail-closed rejection.
   std::size_t availableTextPathMeasurementWork() const {
+    const std::lock_guard lock(mutex_);
     if (stats_.textPathMeasurementWorkRejected ||
         stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits) {
       return 0;
@@ -139,12 +137,14 @@ public:
 
   /// Refuse the rest of the current epoch after an admitted measurement exhausts its allowance.
   void rejectTextPathMeasurementWork() {
+    const std::lock_guard lock(mutex_);
     ++stats_.rejectedReservations;
     stats_.textPathMeasurementWorkRejected = true;
   }
 
   /// Begin a nestable render/preparation epoch for cumulative text-path measurement work.
   void beginTextPathMeasurementWorkEpoch() {
+    const std::lock_guard lock(mutex_);
     if (textPathMeasurementWorkEpochDepth_++ == 0u) {
       stats_.textPathMeasurementWorkUnits = 0u;
       stats_.textPathMeasurementWorkRejected = false;
@@ -153,6 +153,7 @@ public:
 
   /// End a text-path measurement epoch begun by beginTextPathMeasurementWorkEpoch().
   void endTextPathMeasurementWorkEpoch() {
+    const std::lock_guard lock(mutex_);
     if (textPathMeasurementWorkEpochDepth_ > 0u) {
       --textPathMeasurementWorkEpochDepth_;
     }
@@ -160,6 +161,7 @@ public:
 
   /// Refund preflight work that the measurement did not consume.
   void releaseUnusedTextPathMeasurementWork(std::size_t units) {
+    const std::lock_guard lock(mutex_);
     stats_.textPathMeasurementWorkUnits = units > stats_.textPathMeasurementWorkUnits
                                               ? 0
                                               : stats_.textPathMeasurementWorkUnits - units;
@@ -171,6 +173,7 @@ public:
    * @param bytes Requested byte reduction, clamped to the retained amount.
    */
   void release(Kind kind, std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
     const std::size_t index = static_cast<std::size_t>(kind);
     if (index >= stats_.retainedBytes.size()) {
       return;
@@ -189,15 +192,21 @@ public:
    * @return Current bytes for a valid category, or zero for an invalid one.
    */
   std::size_t retainedBytes(Kind kind) const {
-    const std::size_t index = static_cast<std::size_t>(kind);
-    return index < stats_.retainedBytes.size() ? stats_.retainedBytes[index] : 0;
+    const std::lock_guard lock(mutex_);
+    return retainedBytesUnlocked(kind);
   }
   /// Return the aggregate retained bytes across all resource kinds.
-  std::size_t totalRetainedBytes() const { return stats_.totalRetainedBytes; }
+  std::size_t totalRetainedBytes() const {
+    const std::lock_guard lock(mutex_);
+    return stats_.totalRetainedBytes;
+  }
   /// Return the active per-kind and aggregate byte ceilings.
   const Limits& limits() const { return limits_; }
   /// Return the current counters and sticky refusal state.
-  const SecurityStats& securityStats() const { return stats_; }
+  SecurityStats securityStats() const {
+    const std::lock_guard lock(mutex_);
+    return stats_;
+  }
 
 private:
   friend class SubDocumentAdmission;
@@ -215,7 +224,25 @@ private:
     return 0;
   }
 
+  bool canReserveUnlocked(Kind kind, std::size_t bytes) const {
+    const std::size_t index = static_cast<std::size_t>(kind);
+    if (stats_.rejected || index >= stats_.retainedBytes.size()) {
+      return false;
+    }
+    const std::size_t maximum = maximumFor(kind);
+    return stats_.retainedBytes[index] <= maximum &&
+           bytes <= maximum - stats_.retainedBytes[index] &&
+           stats_.totalRetainedBytes <= limits_.maximumTotalRetainedBytes &&
+           bytes <= limits_.maximumTotalRetainedBytes - stats_.totalRetainedBytes;
+  }
+
+  std::size_t retainedBytesUnlocked(Kind kind) const {
+    const std::size_t index = static_cast<std::size_t>(kind);
+    return index < stats_.retainedBytes.size() ? stats_.retainedBytes[index] : 0;
+  }
+
   Limits limits_;
+  mutable std::mutex mutex_;
   SecurityStats stats_;
   std::size_t textPathMeasurementWorkEpochDepth_ = 0;
 };

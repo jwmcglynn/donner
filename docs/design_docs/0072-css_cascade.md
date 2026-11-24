@@ -74,7 +74,9 @@ same harness, machine class and method. Each goal names the counter or timer tha
   class under load (one-minute load average 30 to 59): 3.60 ms on the splash and 14.94 ms on the
   synthetic document, whose four runs range from 14.60 to 15.48 ms, so the synthetic goal holds at
   the median but not in every run on a loaded host; the rule-free and bootstrap-icons documents are
-  faster (see the A3 entry in the [Implementation Plan](#implementation-plan)).
+  faster (see the A3 entry in the [Implementation Plan](#implementation-plan)). With matched
+  properties caching, bootstrap-icons takes 8.56 ms (8.51-8.65) on a 64-bit Arm Linux server;
+  every run is below the 15 ms target.
 - **Edit cost.** A class, `style` or presentation-attribute write on one leaf element whose new
   and old values no selector depends on in a combinator position cascades at most the element, its
   descendants and its `<use>` instances, and, when none of the restyled elements is text or
@@ -95,7 +97,9 @@ same harness, machine class and method. Each goal names the counter or timer tha
   computed style is reused reaches at least 60 percent on the splash document (opportunity
   measured at 66 percent) and at least 99 percent on bootstrap-icons (measured at 99.8 percent).
   Retained computed-style records on bootstrap-icons fall from 5,137 (24.9 MB of inline
-  `PropertyRegistry` storage) to at most 50.
+  `PropertyRegistry` storage) to at most 50. Met: 401 of 622 splash styles (64.5 percent)
+  and 5,129 of 5,137 sprite styles (99.84 percent) reuse a record. The sprite retains eight
+  distinct records after its first frame.
 - **Budget headroom.** The rule-element match budget charges rules actually tested, so the
   synthetic 4,000-element, 1,000-rule document, which would exhaust the 1,048,576-match budget if
   every rule were tested, styles completely under unchanged limits. Met: it tests 7,102 candidates
@@ -111,8 +115,8 @@ same harness, machine class and method. Each goal names the counter or timer tha
   ([#2715](https://github.com/jwmcglynn/donner/issues/2715); see
   [Single Cascade per Full Restyle](#single-cascade-per-full-restyle)).
 - **Bounded memory.** The rule index costs at most 16 bytes per selector-list entry plus shared
-  key strings; the ancestor filter costs 4 KiB per style traversal; both and the cache are
-  charged to existing document budgets.
+  key strings. The ancestor filter costs 4 KiB per style traversal. Matched-style key metadata
+  is bounded independently of the document and family accounts for retained record data.
 
 ### Part B: Cascade Features
 
@@ -327,12 +331,14 @@ including tests and review fixes. "After" names the milestones that must land fi
     (load average 20 to 23, six alternating runs) the document takes 0.71 ms (0.68-0.75), from
     1.50 ms (1.38-1.57). Computed styles, warnings and cascade counts are unchanged on every
     document of the resvg suite, the renderer test data, the splash and the sprite.
-- [ ] Milestone A9: Matched properties cache (3.5 days). After A3 and A8.
-  - [ ] Key, look up and insert shared records in `computePropertiesInto`; count hits and
-        uncacheable elements; charge retained bytes per record; evict by clock.
-  - [ ] Run the differential test and fuzzer with the cache on and off.
-  - Done when: the shared-computed-style goals and the bootstrap-icons style-time goal are met and
-    the differential targets are green.
+- [x] Milestone A9: Matched properties cache (3.5 days). After A3 and A8.
+  - [x] Look up shared records in `computePropertiesInto`; count hits, misses, uncacheable elements
+    and avoided declaration parses. Charge retained record bytes until the last holder releases
+    them and evict cached keys with a bucket-local clock.
+  - [x] Run the differential corpus and fuzzers with caching enabled and disabled.
+  - The sprite styles 5,137 elements using eight records. Its first-frame style time is 8.56 ms
+    on a 64-bit Arm Linux server and 2.31 ms on Apple silicon. See
+    [Shared Computed Style Opportunity](#shared-computed-style-opportunity) for the measurements.
 
 Part A estimate: 30.5 engineering days.
 
@@ -786,28 +792,33 @@ the rule index produces.
 
 #### Shared Computed Style Opportunity
 
-The harness grouped elements by the inputs that determine a computed style: the parent's group,
-the element type, whether the parent carries `DoNotInheritFillOrStrokeTag`, whether the element is
-a direct `<use>` instance root, the ordered matched rules with their specificities, and the
-element's local `StyleComponent` properties (compared with `PropertyRegistry::operator==`).
-Elements with animation values or an external-use host were counted as uncacheable (none in these
-documents). For every element whose key matched an earlier group, the harness also compared the
-final computed `PropertyRegistry` with the group's; there were no mismatches, so on these
-documents the key is complete.
+The first frame measures reuse independently of cache misses by counting distinct immutable
+record pointers held by all computed style components. Each document below has zero uncacheable
+elements. The key includes the root record and exact local declarations, including the data
+element's stop and flood opacity inputs.
 
-| Document                         | Elements | Reuse an earlier group | Reuse ignoring local style | Distinct records |
-| -------------------------------- | -------: | ---------------------: | -------------------------: | ---------------: |
-| `donner_splash.svg`              |      622 |       413 (66 percent) |                        507 |              209 |
-| `bootstrap-icons.svg`            |    5,137 |   5,129 (99.8 percent) |                      5,131 |                8 |
-| `Ghostscript_Tiger.svg`          |      484 |       389 (80 percent) |                        434 |               95 |
-| Synthetic 2,000 x 200, mixed     |    2,003 |     1,854 (93 percent) |                      1,854 |              149 |
-| Synthetic `<use>`                |    4,425 |     4,378 (99 percent) |                      4,378 |               47 |
-| Synthetic 1,000 x 100, `.gK .cN` |    1,003 |       991 (99 percent) |                        991 |               12 |
+| Document | Styled elements | Cache hits | Distinct retained records |
+| --- | ---: | ---: | ---: |
+| `donner_splash.svg` | 622 | 401 (64.5 percent) | 221 |
+| `bootstrap-icons.svg` | 5,137 | 5,129 (99.84 percent) | 8 |
+| `Ghostscript_Tiger.svg` | 484 | 388 (80.2 percent) | 96 |
+| Synthetic 2,000 x 200, mixed | 2,003 | 1,854 | 149 |
+| Synthetic `<use>` | 4,425 | 4,378 | 47 |
+| Synthetic 1,000 x 100, descendant | 1,003 | 991 | 12 |
 
-The column that ignores local style shows how much reuse presentation attributes and `style`
-attributes cost: on the splash and the tiger, elements with the same rules and parent often
-differ only in a `fill` attribute. At 4,840 bytes per computed `PropertyRegistry`, one record per
-element, bootstrap-icons retains 24.9 MB of computed style for 8 distinct values.
+First-frame style times are medians of five per-run medians in milliseconds, with the range of
+those medians in parentheses. Each pair alternates the shared-storage baseline and the cache on
+the same host. The 64-bit Arm Linux server uses a single core, with a one-minute load average of
+20.9-23.5. The Apple silicon desktop's load average is 2.0-2.1.
+
+| Document | Arm Linux baseline | Arm Linux cache | Apple silicon baseline | Apple silicon cache |
+| --- | ---: | ---: | ---: | ---: |
+| Splash | 2.18 (2.15-2.19) | 1.98 (1.86-1.99) | 0.44 (0.43-0.55) | 0.40 (0.39-0.52) |
+| Bootstrap icons | 15.80 (15.53-16.01) | 8.56 (8.51-8.65) | 4.09 (4.02-4.14) | 2.31 (2.22-2.38) |
+| Tiger | 1.38 (1.35-1.40) | 1.07 (1.01-1.10) | 0.27 (0.26-0.28) | 0.23 (0.23-0.24) |
+| Mixed | 8.94 (8.77-9.06) | 5.50 (5.36-5.56) | 1.96 (1.94-1.99) | 1.18 (1.15-1.28) |
+| Use instances | 15.08 (14.96-15.35) | 5.98 (5.93-6.05) | 3.59 (3.51-3.64) | 1.73 (1.70-1.89) |
+| Descendant | 3.63 (3.58-3.67) | 1.82 (1.79-1.88) | 0.79 (0.76-0.81) | 0.52 (0.51-0.53) |
 
 #### Stylesheet Keystrokes
 
@@ -1475,13 +1486,9 @@ reader that wrote through it would fail to compile, and static assertions in
 `ComputedStyleComponent.h` fail the build if the stored pointer or the accessor stops being const.
 `ShadowTreeSystem::createShadowEntity` emplaces an empty component;
 `ExternalUseStyleContext::parent` holds the host's `ComputedStyleComponent`, sharing its record,
-and `ExternalUseStyleRetention` keeps the shared record of each retained occurrence. Without the
-cache each element owns one record, released when its component is removed (a selective restyle,
-a full restyle's clear, an element removal, document teardown) unless an external-use occurrence
-still shares it. Those holders charge the document family for the host's dynamic property bytes,
-because they can keep the record alive after the host is restyled. Retained bytes are charged per
-entity through `StyleResourceBudget::reserveComplexPropertyBytes`; the per-record account below
-comes with the cache.
+and `ExternalUseStyleRetention` keeps that record while the occurrence needs it. A restyle replaces
+the affected element's pointer. Other elements, cache entries and external snapshots retain their
+own references.
 
 **Cache key.** The cache maps a key to a `std::shared_ptr<const ComputedStyle>`. The key holds
 everything a computed style depends on in `computePropertiesInto`:
@@ -1491,7 +1498,8 @@ everything a computed style depends on in `computePropertiesInto`:
   `applyStylesheetRules` runs.
 - The local declarations: a hash of `StyleComponent::properties`, computed and stored on the
   `StyleComponent` whenever it changes (parse, `setStyle`, presentation-attribute writes), with
-  full `PropertyRegistry::operator==` on a hash match. With Part B, the element's local custom
+  equality of the complete encoded declarations on every hit. The encoding includes the exact
+  numeric bits, token/source metadata and cascade priorities. With Part B, the element's local custom
   declarations (from its `style` attribute) are stored on the `StyleComponent` beside the
   registry, not inside it, and the local registry also holds pending-substitution entries. Both
   join the key: the hash covers the custom declarations' names and token sequences, and equality
@@ -1504,30 +1512,31 @@ everything a computed style depends on in `computePropertiesInto`:
   that is a direct `<use>` instance root (`ApplySymbolInstanceDisplay`).
 - The element type of the data entity (`ElementTypeComponent`), which the measured opportunity
   keyed on.
+- The data element's base stop and flood opacities, including their declaration states, stored
+  values and cascade priorities. DOM setters can supply these independently of local CSS.
 - The root element's record, for `rem` lengths (`ComputedRootFontSize`).
 
 `externalFill` and `externalStroke` stay on the component, outside the shared record, because
 `inheritComputedParent` derives them from the element's own fill and stroke states, the
-external-use occurrence and the parent component's flags. On a hit they are computed with the same
-`ExternalPaintOrigin` calls from the local `StyleComponent` states (equal for every element with
-this key) and this element's parent component, which costs two state checks.
+external-use occurrence and the parent component's flags. Each entry retains the fill and stroke
+states after stylesheet application and before inheritance. On a hit, `ExternalPaintOrigin`
+combines those states with this occurrence's parent flags and paint-inheritance permission.
 
 Elements are not cached when their data entity, which is the light element for a shadow instance,
 has `AnimatedValuesComponent` (`ApplyAnimatedStyle` and the contextual font size read the data
 entity), when they are an external-use root (`ExternalRootContext`), or when the cascade reported a
-warning to the sink (a cached result would skip the diagnostic). The measured opportunity used
-these inputs and found no element whose key matched another's while its computed style differed
-(see [Shared Computed Style Opportunity](#shared-computed-style-opportunity)). Six documents are
-not evidence that the key is complete; the gate is the differential fuzzer, run with the cache on
-and off, whose generator produces presentation attributes, `style` attributes, `<use>` instances,
-external-use documents and animations, and, once Part B lands, custom properties declared in rules
-and `style` attributes, inherited and overridden, with `var()` in rules, `style` attributes and
-presentation attributes.
+warning, including a diagnostic suppressed by a disabled or full sink. The component differential
+fuzzer compares cached and uncached styles for generated presentation and inline declarations.
+The renderer-level fuzzer exercises animations and internal and external use occurrences. Part B
+adds custom declarations and substitutions to those comparisons.
 
 **Where it runs.** Matching still runs for every element; the cache replaces what follows it:
 declaration parsing into the local registry copy, animation hooks, inheritance and font
 resolution, which the baseline measures at about 4.6 microseconds per element. On a hit the
-element's component takes the cached pointer.
+element's component takes the cached pointer. Matching and declaration admission keep their
+serial order. A hit consumes the same declaration count, component work and source bytes as a miss,
+including resource-opacity declarations. Either setting reaches a declaration-work limit at the
+same declaration and element. A separate counter records declaration parsing saved by hits.
 
 **Lifetime and invalidation.** The cache belongs to the document's style context. It is cleared
 whenever computed styles are discarded as a whole (`MarkStylesheetChanged`,
@@ -1536,36 +1545,30 @@ change. Entries hold strong references, so a cached record outlives the elements
 until the next clear or eviction. Narrowed invalidation needs no cache change: a recomputed
 element builds a new key, and a new parent record changes its children's keys.
 
-**Eviction.** The cache holds at most 4,096 entries and at most 8 per hash bucket. When either is
-full, an insertion evicts by a clock sweep over a reference bit set on every hit, so a long editing
-session in which full clears are rare keeps caching its current working set rather than freezing
-on the first 4,096 keys. An adversary who forces distinct keys makes every insertion evict, which
-costs one sweep step and leaves today's per-element cost.
+**Eviction.** There are 512 lazily populated buckets of eight slots, for at most 4,096 entries.
+Each bucket has its own clock hand. A hit sets the entry's reference bit. For a full bucket an
+insertion clears reference bits as the hand advances, then replaces the first unreferenced entry.
+This takes at most nine probes, including when all eight bits were set. Lookup compares at most
+eight ordered keys. `//donner/svg/components/style:matched_properties_cache_tests` exercises
+collisions, a full bucket with all bits set, second chances and oversize keys.
 
-**Memory budget and ownership.** Retained bytes are charged per distinct record instead of per
-entity, and the charge lives exactly as long as the record. Today the 64 MiB per-document limit is
-kept inside `StyleResourceBudget` itself (`complexPropertyBytes_` against `limits_`, with the
-per-entity `reservations_` map), and `DocumentResourceFamilyBudget` is an optional outer envelope
-whose pointer is null unless a document family is configured. The per-document retained-byte
-counter therefore moves out of `StyleResourceBudget` into a `RetainedStyleBytes` account: a small
-object with an atomic byte count and the 64 MiB limit, always created with the document's style
-context and shared by `std::shared_ptr`, which also forwards each charge and release to the family
-envelope when one exists. When a record is created (by the cache or for an uncacheable element),
-its heap bytes are reserved against that account, and the record keeps a reference to the account
-and its byte count; the record's deleter releases exactly those bytes when its last reference
-goes, whether the cache evicted it long before or never held it. Eviction only drops the cache's
-reference. Records are the only holders of these charges, so the per-entity `reservations_` map
-leaves the computed-style path; `StyleResourceBudget::reset()` still leaves retained bytes alone,
-and in this design `releaseAll()` does not release computed-style bytes itself: clearing the
-`ComputedStyleComponent`s it accompanies drops the references, and each record's deleter releases
-once, so nothing is released twice. Because the account is shared, a record that outlives the
-`StyleResourceBudget` object (through `ExternalUseStyleRetention`, for example) still releases
-correctly, and releases from worker threads in Part D are atomic. A hostile
-document therefore hits the same 64 MiB retained-property limit as today: distinct keys create
-distinct records, each charged until no element points at it. A test
-(`style_index_differential_tests`, hostile case) builds a document whose elements each carry a
-distinct attacker-sized `stroke-dasharray` and asserts that the budget refuses at the same element
-with the cache on and off.
+**Memory budget and ownership.** The document's `RetainedStyleBytes` account charges the dynamic
+property bytes of each distinct immutable record, including records produced on uncacheable
+elements. Its default limit is 64 MiB. Record creation reserves once and the final holder's release
+refunds once, even if the record outlives the document or its cache. The optional family envelope
+synchronizes reserves, releases and observations across all resource kinds. Work-counter resets
+preserve these charges. Before refusing a new record, the serial path drops cache-only references
+and retries admission. A record requiring zero dynamic bytes can still preserve its scalar values
+after a work refusal.
+
+Key metadata has a separate fixed per-document bound. Each slot holds up to 128 matched rule tuples
+and 2,048 bytes of exact local declaration data. The implementation bounds the retained string
+capacity, rule and slot storage and bucket table to 40 MiB in total, excluding allocator overhead.
+Larger keys use the ordinary cascade. Each element retains a hash and empty-key flag; the cache
+holds the key data. Shared record pointers in the keys keep their ordinary record charges alive.
+`//donner/svg/components/style:style_system_tests` checks last-holder accounting and pressure
+eviction. The retained-byte differential in `style_index_differential_tests` checks the first
+refused element for distinct local dash arrays.
 
 ### Interaction with Existing Incremental Paths
 
@@ -2040,11 +2043,8 @@ per-element cost and is calibrated in Milestone D3.
   charged against per-worker shares of the remaining allowance. Matching and traversal work is the
   same per element in both paths, because the ancestor filter's decisions are a function of each
   element's chain (Part A clears and disables it on saturation rather than keeping stuck counters),
-  but declaration-application work depends on cache hits, and a per-worker cache can hit where the
-  serial cache, with its clock eviction, misses. So in a parallel pass declaration work is charged
-  as if every element missed the cache: each element is charged the declaration applications,
-  component work and byte work its matched rules and local declarations would cost on a miss, which
-  is at least what the serial pass charges for it. Retained computed-style bytes go through the
+  and each element pays the same logical declaration cost as in the serial pass regardless of
+  which worker finds a cache hit. Retained computed-style bytes go through the
   shared `RetainedStyleBytes` account of Part A, whose reserve is a compare-exchange loop that never
   overshoots the limit. With per-worker caches a parallel pass can create a different number of
   distinct records than the serial pass, so the retained total differs by schedule and cannot decide
@@ -2160,8 +2160,8 @@ Stylesheets and documents are untrusted input.
   lives with the renderer tests because preparing a frame instantiates the shadow trees. The "every
   rule" candidate source is the test-only `UnindexedCascadeForTesting` context flag; the matcher,
   cascade and inheritance code are shared, so the oracle differs from production only in skipping no
-  rule. Once the ancestor filter and the matched properties cache land, the same test runs with each
-  on and off. Documents whose unindexed or filter-off pass ends budget-rejected are reported
+  rule. The same corpus compares cached and uncached first frames, full restyles and partial updates,
+  including ordered diagnostics and logical work. The ancestor filter adds its own switch. Documents whose unindexed or filter-off pass ends budget-rejected are reported
   separately and must not produce fewer matched rules with the index or the filter. A
   low-traversal-limit case runs the corpus again with
   `StyleResourceBudget::Limits::selectorTraversalSteps` lowered until some documents end
@@ -2170,8 +2170,9 @@ Stylesheets and documents are untrusted input.
   least the rules the filter-off pass matched.
 - **Differential fuzzer** (`//donner/svg/components/style:style_cascade_differential_fuzzer`).
   Takes stylesheet text and a small element tree from the fuzzer input and asserts identical
-  computed styles, matched-rule lists and counters with the index on and off; the filter and cache
-  add their switches when they land. Tags, ids, classes and up to two attributes per element come
+  computed styles, matched-rule lists and logical counters with the index and cache switches.
+  The renderer-level `style_cache_prepared_differential_fuzzer` prepares actual use occurrences and
+  animations. The filter adds its own switch. Tags, ids, classes and up to two attributes per element come
   from short tables: mixed-case, namespaced, unknown and foreign tags, class lists with repeated
   tokens and every whitespace separator, and attribute names that differ only in case. Shadow trees
   and imported sheets stay out, because both need the document prepared for rendering; the

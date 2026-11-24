@@ -81,10 +81,17 @@ bool PrintResult(std::string_view kind, std::string_view name,
   }
   std::printf(" elements_cascaded=%" PRIu64 " rules_tested=%" PRIu64 " rules_matched=%" PRIu64
               " declarations_applied=%" PRIu64 " full_clears=%" PRIu64 " budget_rejections=%" PRIu64
-              " registry_copies=%" PRIu64 " counters_stable=%s\n",
+              " registry_copies=%" PRIu64 " matched_properties_cache_hits=%" PRIu64
+              " matched_properties_cache_misses=%" PRIu64
+              " matched_properties_cache_uncacheable=%" PRIu64
+              " declaration_parses_skipped=%" PRIu64
+              " distinct_computed_style_records=%zu counters_stable=%s\n",
               counters.elementsCascaded, counters.rulesTested, counters.rulesMatched,
               counters.declarationsApplied, counters.fullClears, counters.budgetRejections,
-              counters.registryCopies, measurement->countersStable ? "yes" : "no");
+              counters.registryCopies, counters.matchedPropertiesCacheHits,
+              counters.matchedPropertiesCacheMisses, counters.matchedPropertiesCacheUncacheable,
+              counters.declarationParsesSkipped, measurement->distinctComputedStyleRecords,
+              measurement->countersStable ? "yes" : "no");
   std::fflush(stdout);
   return measurement->countersStable;
 }

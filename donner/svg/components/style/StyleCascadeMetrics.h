@@ -30,6 +30,14 @@ struct StyleCascadeCounters {
   /// writes every property. Building an element's computed style copies its local declarations
   /// once.
   std::uint64_t registryCopies = 0;
+  /// Computed styles reused from the matched-properties cache.
+  std::uint64_t matchedPropertiesCacheHits = 0;
+  /// Cacheable computed styles not found in the matched-properties cache.
+  std::uint64_t matchedPropertiesCacheMisses = 0;
+  /// Element cascades excluded from matched-properties caching.
+  std::uint64_t matchedPropertiesCacheUncacheable = 0;
+  /// Declaration parses avoided by matched-properties cache hits.
+  std::uint64_t declarationParsesSkipped = 0;
 
   /// Equality operator.
   bool operator==(const StyleCascadeCounters&) const = default;
@@ -49,6 +57,14 @@ struct StyleCascadeCounters {
         .fullClears = after.fullClears - before.fullClears,
         .budgetRejections = after.budgetRejections - before.budgetRejections,
         .registryCopies = after.registryCopies - before.registryCopies,
+        .matchedPropertiesCacheHits =
+            after.matchedPropertiesCacheHits - before.matchedPropertiesCacheHits,
+        .matchedPropertiesCacheMisses =
+            after.matchedPropertiesCacheMisses - before.matchedPropertiesCacheMisses,
+        .matchedPropertiesCacheUncacheable =
+            after.matchedPropertiesCacheUncacheable - before.matchedPropertiesCacheUncacheable,
+        .declarationParsesSkipped =
+            after.declarationParsesSkipped - before.declarationParsesSkipped,
     };
   }
 
@@ -60,7 +76,12 @@ struct StyleCascadeCounters {
               << ", declarationsApplied=" << counters.declarationsApplied
               << ", fullClears=" << counters.fullClears
               << ", budgetRejections=" << counters.budgetRejections
-              << ", registryCopies=" << counters.registryCopies << "}";
+              << ", registryCopies=" << counters.registryCopies
+              << ", matchedPropertiesCacheHits=" << counters.matchedPropertiesCacheHits
+              << ", matchedPropertiesCacheMisses=" << counters.matchedPropertiesCacheMisses
+              << ", matchedPropertiesCacheUncacheable="
+              << counters.matchedPropertiesCacheUncacheable
+              << ", declarationParsesSkipped=" << counters.declarationParsesSkipped << "}";
   }
 };
 

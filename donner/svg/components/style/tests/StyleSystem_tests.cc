@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <barrier>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -39,6 +41,7 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
+#include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -714,8 +717,8 @@ TEST_F(StyleSystemTest, ComputeAllStylesDirtyOnlyRecomputesStyleDirtyEntities) {
                                                           .needsFullStyleRecompute = false,
                                                           .hasBeenBuilt = true});
 
-  dirty.get_or_emplace<StyleComponent>().properties.parseStyle("fill: blue");
-  clean.get_or_emplace<StyleComponent>().properties.parseStyle("fill: green");
+  dirty.get_or_emplace<StyleComponent>().updateStyle("fill: blue");
+  clean.get_or_emplace<StyleComponent>().updateStyle("fill: green");
   styleSystem.invalidateComputed(dirty);
 
   document.registry()
@@ -1058,6 +1061,7 @@ TEST_F(StyleSystemTest, PathClipInheritanceChargesAndReleasesRetainedStorage) {
   StyleResourceBudget::Limits limits;
   limits.complexPropertyBytes = 2 * pathBytes;
   auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits, family);
+  document.registry().ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
   ParseWarningSink warnings;
   ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Optional(testing::_));
@@ -1073,12 +1077,12 @@ TEST_F(StyleSystemTest, PathClipInheritanceChargesAndReleasesRetainedStorage) {
   styleSystem.invalidateComputed(first);
   EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
   budget.reset();
-  first.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  first.get<StyleComponent>().updateStyle("clip-path:none");
   EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
   styleSystem.invalidateComputed(parent);
-  parent.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  parent.get<StyleComponent>().updateStyle("clip-path:none");
   EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), 0u);
@@ -1109,6 +1113,7 @@ TEST_F(StyleSystemTest, PolygonInheritanceChargesAndReleasesRetainedStorage) {
   StyleResourceBudget::Limits limits;
   limits.complexPropertyBytes = 2 * kPolygonBytes;
   auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits, family);
+  document.registry().ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
   ParseWarningSink warnings;
   ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Optional(testing::_));
@@ -1125,16 +1130,56 @@ TEST_F(StyleSystemTest, PolygonInheritanceChargesAndReleasesRetainedStorage) {
   styleSystem.invalidateComputed(first);
   EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
   budget.reset();
-  first.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  first.get<StyleComponent>().updateStyle("clip-path:none");
   EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
   styleSystem.invalidateComputed(parent);
-  parent.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  parent.get<StyleComponent>().updateStyle("clip-path:none");
   EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), 0u);
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
+}
+
+TEST_F(StyleSystemTest, RetainedBytePressureClearsCachedRecordsBeforeRefusal) {
+  constexpr std::string_view firstValue = "clip-path:path('M0 0H10V10H0Z')";
+  PropertyRegistry authored;
+  authored.parseStyle(firstValue);
+  const std::size_t pathBytes = PropertyRegistry(authored).complexPropertyBytes();
+  ASSERT_GT(pathBytes, 0u);
+
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="first" style="clip-path:path('M0 0H10V10H0Z')"/>
+      <rect id="second" style="clip-path:path('M0 0H20V20H0Z')"/>
+    </svg>)svg");
+  const auto firstElement = document.querySelector("#first");
+  const auto secondElement = document.querySelector("#second");
+  ASSERT_THAT(firstElement, testing::Optional(testing::_));
+  ASSERT_THAT(secondElement, testing::Optional(testing::_));
+  const EntityHandle first = firstElement->entityHandle();
+  const EntityHandle second = secondElement->entityHandle();
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = pathBytes;
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedStyleBytes = pathBytes;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+  auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits, family);
+  ParseWarningSink warnings;
+
+  EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties()->clipPath.get(),
+              testing::Optional(testing::_));
+  EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
+  styleSystem.invalidateComputed(first);
+  EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
+
+  EXPECT_THAT(styleSystem.computeStyle(second, warnings).properties()->clipPath.get(),
+              testing::Optional(testing::_));
+  EXPECT_FALSE(budget.rejected());
+  EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
+  EXPECT_FALSE(family->securityStats().rejected);
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), pathBytes);
 }
 
 TEST_F(StyleSystemTest, InsetLengthsComputeBeforeInheritanceAndKeepPercentages) {
@@ -1217,15 +1262,13 @@ TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {
 
   StyleResourceBudget::Limits localLimits;
   localLimits.complexPropertyBytes = 1024;
-  Registry registry;
-  const Entity firstEntity = registry.create();
-  const Entity secondEntity = registry.create();
-
   {
     StyleResourceBudget first(localLimits, family);
     StyleResourceBudget second(localLimits, family);
-    EXPECT_TRUE(first.reserveComplexPropertyBytes(firstEntity, 768));
-    EXPECT_FALSE(second.reserveComplexPropertyBytes(secondEntity, 512));
+    auto firstRecord = std::make_shared<ComputedStyle>();
+    auto secondRecord = std::make_shared<ComputedStyle>();
+    EXPECT_TRUE(first.retainComputedStyle(*firstRecord, 768));
+    EXPECT_FALSE(second.retainComputedStyle(*secondRecord, 512));
     EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 768u);
   }
 
@@ -1244,15 +1287,128 @@ TEST(StyleResourceBudgetTest, SpareVectorCapacityReachesExactCapThenRejectsPlusO
   StyleResourceBudget::Limits limits;
   limits.complexPropertyBytes = retainedCapacityBytes;
   StyleResourceBudget budget(limits);
-  Registry registry;
-  const Entity atCap = registry.create();
-  const Entity plusOne = registry.create();
+  auto atCap = std::make_shared<ComputedStyle>();
+  auto plusOne = std::make_shared<ComputedStyle>();
 
-  EXPECT_TRUE(budget.reserveComplexPropertyBytes(atCap, properties.complexPropertyBytes()));
+  EXPECT_TRUE(budget.retainComputedStyle(*atCap, properties.complexPropertyBytes()));
   EXPECT_EQ(budget.complexPropertyBytes(), retainedCapacityBytes);
-  EXPECT_FALSE(budget.reserveComplexPropertyBytes(plusOne, 1));
+  EXPECT_FALSE(budget.retainComputedStyle(*plusOne, 1));
   EXPECT_EQ(budget.complexPropertyBytes(), retainedCapacityBytes);
   EXPECT_TRUE(budget.rejected());
+}
+
+TEST(StyleResourceBudgetTest, SharedRecordHasOneLifetimeCharge) {
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = 1024;
+  StyleResourceBudget budget(limits);
+  auto record = std::make_shared<ComputedStyle>();
+
+  ASSERT_TRUE(budget.retainComputedStyle(*record, 768));
+  std::shared_ptr<const ComputedStyle> first = record;
+  std::shared_ptr<const ComputedStyle> second = record;
+  record.reset();
+  first.reset();
+  EXPECT_EQ(budget.complexPropertyBytes(), 768u);
+  second.reset();
+  EXPECT_EQ(budget.complexPropertyBytes(), 0u);
+}
+
+TEST(StyleResourceBudgetTest, RecordRejectsASecondLifetimeChargeWithoutLeaking) {
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = 1024;
+  StyleResourceBudget budget(limits);
+  auto record = std::make_shared<ComputedStyle>();
+
+  ASSERT_TRUE(budget.retainComputedStyle(*record, 384));
+  EXPECT_FALSE(budget.retainComputedStyle(*record, 256));
+  EXPECT_EQ(budget.complexPropertyBytes(), 384u);
+  record.reset();
+  EXPECT_EQ(budget.complexPropertyBytes(), 0u);
+}
+
+TEST(StyleResourceBudgetTest, FreshZeroByteRecordAttachesOnceAfterStickyRefusal) {
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedStyleBytes = 0;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+  EXPECT_FALSE(family->reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, 1));
+  ASSERT_TRUE(family->securityStats().rejected);
+  StyleResourceBudget::Limits limits;
+  limits.declarationApplications = 0;
+  StyleResourceBudget budget(limits, family);
+  EXPECT_FALSE(budget.reserveDeclarationApplication());
+  ASSERT_TRUE(budget.rejected());
+  auto record = std::make_shared<ComputedStyle>();
+
+  EXPECT_TRUE(budget.canRetainComputedStyle(0));
+  EXPECT_TRUE(budget.retainComputedStyle(*record, 0));
+  EXPECT_FALSE(budget.retainComputedStyle(*record, 0));
+  EXPECT_EQ(budget.complexPropertyBytes(), 0u);
+}
+
+TEST(StyleResourceBudgetTest, ConcurrentLastHolderReleaseReserveAndFamilySnapshotStayExact) {
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedStyleBytes = 2;
+  familyLimits.maximumTotalRetainedBytes = 2;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = 2;
+  StyleResourceBudget budget(limits, family);
+
+  for (int iteration = 0; iteration < 1000; ++iteration) {
+    auto released = std::make_shared<ComputedStyle>();
+    ASSERT_TRUE(budget.retainComputedStyle(*released, 1));
+    std::barrier start(2);
+    std::thread releaser([record = std::move(released), &start]() mutable {
+      start.arrive_and_wait();
+      record.reset();
+    });
+    auto replacement = std::make_shared<ComputedStyle>();
+    start.arrive_and_wait();
+    const bool replacementAdmitted = budget.retainComputedStyle(*replacement, 1);
+    EXPECT_TRUE(replacementAdmitted);
+    const auto snapshot = family->securityStats();
+    EXPECT_LE(snapshot.retainedBytes[static_cast<std::size_t>(
+                  DocumentResourceFamilyBudget::Kind::ComputedStyle)],
+              2u);
+    EXPECT_LE(snapshot.totalRetainedBytes, 2u);
+    EXPECT_EQ(snapshot.totalRetainedBytes, snapshot.retainedBytes[static_cast<std::size_t>(
+                                               DocumentResourceFamilyBudget::Kind::ComputedStyle)]);
+    releaser.join();
+    EXPECT_EQ(budget.complexPropertyBytes(), 1u);
+    replacement.reset();
+    EXPECT_EQ(budget.complexPropertyBytes(), 0u);
+  }
+
+  EXPECT_FALSE(family->securityStats().rejected);
+  EXPECT_EQ(family->totalRetainedBytes(), 0u);
+}
+
+TEST(StyleResourceBudgetTest, CapacityPreflightDoesNotLatchRejection) {
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = 1024;
+  StyleResourceBudget budget(limits);
+  auto record = std::make_shared<ComputedStyle>();
+
+  ASSERT_TRUE(budget.retainComputedStyle(*record, 768));
+  EXPECT_FALSE(budget.canRetainComputedStyle(512));
+  EXPECT_FALSE(budget.rejected());
+  EXPECT_TRUE(budget.canRetainComputedStyle(256));
+}
+
+TEST(StyleResourceBudgetTest, DeclarationPreflightIncludesAggregateCapacity) {
+  StyleResourceBudget::Limits aggregateLimits;
+  aggregateLimits.declarationApplications = 2;
+  aggregateLimits.declarationComponentWork = 8;
+  aggregateLimits.declarationByteWork = 16;
+  StyleResourceBudget aggregate(aggregateLimits);
+  StyleResourceBudget local;
+  local.setAggregateWorkBudget(&aggregate);
+
+  EXPECT_TRUE(local.canReserveDeclarationWork(2, 8, 16));
+  EXPECT_FALSE(local.canReserveDeclarationWork(3, 8, 16));
+  EXPECT_FALSE(local.canReserveDeclarationWork(2, 9, 16));
+  EXPECT_FALSE(local.canReserveDeclarationWork(2, 8, 17));
+  EXPECT_FALSE(local.rejected());
 }
 
 TEST(StyleResourceBudgetTest, ChargesDeclarationSourceBytesPerApplication) {
@@ -1281,8 +1437,10 @@ TEST_F(StyleSystemTest, SymbolDefinitionDisplayExcludesForeignNamesAndPreservesO
   ASSERT_THAT(definition, testing::Optional(testing::_));
   ASSERT_THAT(overridden, testing::Optional(testing::_));
   ASSERT_THAT(foreign, testing::Optional(testing::_));
-  overridden->entityHandle().get_or_emplace<StyleComponent>().properties.display.set(
-      Display::Inline, css::Specificity::Override());
+  overridden->entityHandle().get_or_emplace<StyleComponent>().editProperties(
+      [&](PropertyRegistry& properties) {
+        properties.display.set(Display::Inline, css::Specificity::Override());
+      });
   EXPECT_EQ(definition->getComputedStyle().display.get(), Display::None);
   EXPECT_EQ(overridden->getComputedStyle().display.get(), Display::Inline);
   EXPECT_EQ(foreign->getComputedStyle().display.get(), Display::Inline);
@@ -1337,8 +1495,10 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
   }
   const auto overridden = document.querySelector("#overridden");
   ASSERT_THAT(overridden, testing::Optional(testing::_));
-  overridden->entityHandle().get_or_emplace<StyleComponent>().properties.display.set(
-      Display::Inline, css::Specificity::Override());
+  overridden->entityHandle().get_or_emplace<StyleComponent>().editProperties(
+      [&](PropertyRegistry& properties) {
+        properties.display.set(Display::Inline, css::Specificity::Override());
+      });
   EXPECT_EQ(overridden->getComputedStyle().display.get(), Display::Inline);
   EXPECT_EQ(overridden->getComputedStyle().display.specificity, css::Specificity::Override());
   for (const std::string_view selector : {"#foreign-symbol", "#foreign-style"}) {
@@ -1440,8 +1600,10 @@ TEST_F(StyleSystemTest, SymbolDirectUseRootPreservesNativeDisplayOverride) {
   const auto instance = document.querySelector("#instance");
   ASSERT_THAT(definition, testing::Optional(testing::_));
   ASSERT_THAT(instance, testing::Optional(testing::_));
-  definition->entityHandle().get_or_emplace<StyleComponent>().properties.display.set(
-      Display::None, css::Specificity::Override());
+  definition->entityHandle().get_or_emplace<StyleComponent>().editProperties(
+      [&](PropertyRegistry& properties) {
+        properties.display.set(Display::None, css::Specificity::Override());
+      });
   auto& shadowTree = instance->entityHandle().get_or_emplace<ComputedShadowTreeComponent>();
   ParseWarningSink warnings;
   ShadowTreeSystem().populateInstance(instance->entityHandle(), shadowTree, ShadowBranchType::Main,
@@ -1499,7 +1661,7 @@ TEST_F(StyleSystemTest, SymbolExternalOccurrenceAppliesOnlyToExactRootAndRetires
     auto access = document.writeAccess();
     access.registry().ctx().emplace<ExternalUseStyleContext>(
         root->entityHandle().entity(), std::make_shared<const ComputedStyle>(),
-        ResolvedPaintServer(), ResolvedPaintServer(), nullptr, 0, nullptr);
+        ResolvedPaintServer(), ResolvedPaintServer(), nullptr);
     styleSystem.invalidateComputed(root->entityHandle());
     EXPECT_EQ(root->getComputedStyle().display.get(), Display::Inline);
     EXPECT_EQ(nested->getComputedStyle().display.get(), Display::None);
@@ -1775,6 +1937,29 @@ TEST_F(StyleSystemTest, DeclarationBudgetRefusalCountsOnlyAdmittedDeclarations) 
   EXPECT_THAT(CascadeMetricsOf(document).counters,
               AllOf(Field("declarationsApplied", &StyleCascadeCounters::declarationsApplied, 3u),
                     Field("budgetRejections", &StyleCascadeCounters::budgetRejections, 1u)));
+}
+
+TEST_F(StyleSystemTest, DeclarationRefusalPreservesUnchargedLocalScalarStyle) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>rect { stroke: blue; }</style>
+      <rect id="target" style="fill: red; color: green"/>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  StyleResourceBudget::Limits limits;
+  limits.declarationApplications = 0;
+  auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits);
+  ParseWarningSink warnings;
+
+  const auto* properties = styleSystem.computeStyle(target->entityHandle(), warnings).properties();
+  ASSERT_THAT(properties, NotNull());
+  EXPECT_THAT(
+      properties->fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))))));
+  EXPECT_THAT(properties->color.get(), testing::Optional(css::Color(css::RGBA(0, 128, 0, 255))));
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.complexPropertyBytes(), 0u);
 }
 
 TEST(RuleIndexCharge, StylesheetChargeIncludesItsRuleIndex) {

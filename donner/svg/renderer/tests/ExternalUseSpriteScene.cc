@@ -16,6 +16,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/encoding/Base64.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
@@ -92,14 +93,15 @@ std::string MakeSpriteSheetSource(SpriteKind kind) {
 }
 
 std::optional<ExternalUseDocument> MakeExternalUseDocument(std::string_view hostSource,
-                                                           std::string resourceSource) {
+                                                           std::string resourceSource,
+                                                           bool disableStyleCache) {
   auto resource = std::make_shared<SVGDocumentHandle>();
   auto family = std::make_shared<components::DocumentResourceFamilyBudget>();
   SVGDocument::Settings settings;
   settings.resourceFamilyBudget = family;
   settings.resourceLoader = std::make_unique<SingleResourceLoader>(std::move(resourceSource));
   // Mirrors the parser's default external-document settings, retaining the handle.
-  settings.svgParseCallback = [resource, family](
+  settings.svgParseCallback = [resource, family, disableStyleCache](
                                   const std::vector<uint8_t>& bytes,
                                   ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
     SVGDocument::Settings resourceSettings;
@@ -111,7 +113,11 @@ std::optional<ExternalUseDocument> MakeExternalUseDocument(std::string_view host
     if (parsed.hasError()) {
       return std::nullopt;
     }
-    *resource = parsed.result().handle();
+    SVGDocument document = std::move(parsed.result());
+    if (disableStyleCache) {
+      document.registry().ctx().emplace<components::DisableMatchedPropertiesCacheForTesting>();
+    }
+    *resource = document.handle();
     return *resource;
   };
   ParseWarningSink warnings = ParseWarningSink::Disabled();
@@ -121,7 +127,11 @@ std::optional<ExternalUseDocument> MakeExternalUseDocument(std::string_view host
     ADD_FAILURE() << "External-use host parse failed: " << parsed.error();
     return std::nullopt;
   }
-  return ExternalUseDocument{std::move(parsed.result()), std::move(resource)};
+  SVGDocument document = std::move(parsed.result());
+  if (disableStyleCache) {
+    document.registry().ctx().emplace<components::DisableMatchedPropertiesCacheForTesting>();
+  }
+  return ExternalUseDocument{std::move(document), std::move(resource)};
 }
 
 std::optional<ExternalUseSpriteScene> MakeExternalUseSpriteScene(SpriteKind kind) {

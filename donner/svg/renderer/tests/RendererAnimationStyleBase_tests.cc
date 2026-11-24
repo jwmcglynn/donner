@@ -845,7 +845,9 @@ TEST(RendererAnimationStyleBase, FontOverrideKeepsTypedPriority) {
   document.querySelector("#label")
       ->entityHandle()
       .get_or_emplace<components::StyleComponent>()
-      .properties.fontSize.set(Lengthd(20), css::Specificity::Override());
+      .editProperties([&](PropertyRegistry& properties) {
+        properties.fontSize.set(Lengthd(20), css::Specificity::Override());
+      });
   auto expected = instantiateSubtree("<text y='30' font-size='20'>H</text>",
                                      parser::SVGParser::Options(), Vector2i(64, 48));
   document.setTime(1);

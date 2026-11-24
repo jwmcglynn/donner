@@ -47,9 +47,11 @@ struct ExternalUseSpriteScene {
  *
  * @param hostSource Host document source.
  * @param resourceSource External document source.
+ * @param disableStyleCache Disable matched-properties caching in both documents before styling.
  */
 std::optional<ExternalUseDocument> MakeExternalUseDocument(std::string_view hostSource,
-                                                           std::string resourceSource);
+                                                           std::string resourceSource,
+                                                           bool disableStyleCache = false);
 
 /// Builds the external sprite sheet source.
 std::string MakeSpriteSheetSource(SpriteKind kind);

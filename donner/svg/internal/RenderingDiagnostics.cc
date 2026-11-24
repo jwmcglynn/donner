@@ -1,6 +1,7 @@
 #include "donner/svg/internal/RenderingDiagnostics.h"
 
 #include <array>
+#include <unordered_set>
 #include <utility>
 
 #include "donner/base/xml/components/TreeComponent.h"
@@ -8,9 +9,14 @@
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 
 namespace donner::svg::internal {
+
+void DisableMatchedPropertiesCacheForTesting(SVGDocument& document) {
+  document.registry().ctx().emplace<components::DisableMatchedPropertiesCacheForTesting>();
+}
 namespace {
 
 std::string RenderDiagnosticLabel(const Registry& registry, Entity entity) {
@@ -91,6 +97,14 @@ RenderingDiagnostics CaptureRenderingDiagnostics(const SVGDocument& document,
     result.styleCascade = metrics->counters;
     result.styleTime = metrics->styleTime;
   }
+  std::unordered_set<const components::ComputedStyle*> computedStyleRecords;
+  for (const auto& style : registry.view<const components::ComputedStyleComponent>()) {
+    const auto& component = registry.get<components::ComputedStyleComponent>(style);
+    if (component.style) {
+      computedStyleRecords.insert(component.style.get());
+    }
+  }
+  result.distinctComputedStyleRecords = computedStyleRecords.size();
   for (const Entity entity : registry.view<const components::DirtyFlagsComponent>()) {
     ++result.dirtyCount;
     if (result.dirtyEntities.size() < maxRecords) {

@@ -69,6 +69,12 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "document_resource_family_budget",
+    hdrs = ["DocumentResourceFamilyBudget.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+)
+
+donner_cc_library(
     name = "components_core",
     srcs = [
         "ConditionalProcessingComponent.cc",
@@ -82,7 +88,6 @@ donner_cc_library(
         "ConditionalProcessingComponent.h",
         "DescriptiveTextComponent.h",
         "DirtyFlagsComponent.h",
-        "DocumentResourceFamilyBudget.h",
         "EvaluatedReferenceComponent.h",
         "FontMetricDependenciesComponent.h",
         "FontPaintDependenciesComponent.h",
@@ -103,6 +108,7 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":document_resource_family_budget",
         ":element_type_component",
         ":node_lifetime_component",
         ":svg_document_context",
@@ -113,6 +119,7 @@ donner_cc_library(
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
+        "//donner/svg/components/style:matched_properties_cache",
         "//donner/svg/components/style:rule_index",
         "//donner/svg/parser:parser_core",
         "//donner/svg/properties:property_parsing",

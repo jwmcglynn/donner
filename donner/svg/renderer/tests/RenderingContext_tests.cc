@@ -1219,7 +1219,7 @@ TEST_F(RenderingContextTest, PartialRebuildRestylesOnlyDirtyEntities) {
   // full rebuild, but without a full restyle it must keep every other computed style: one element
   // is cascaded, testing only its candidates (the `*:not(svg)` user agent rule and `rect`), which
   // both match with one declaration each, its local declarations are copied once into its new
-  // record, and nothing is discarded.
+  // record on a cache miss for the newly specified opacity, and nothing is discarded.
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
       <style>rect { fill: blue }</style>
@@ -1247,7 +1247,8 @@ TEST_F(RenderingContextTest, PartialRebuildRestylesOnlyDirtyEntities) {
                                       .declarationsApplied = 2,
                                       .fullClears = 0,
                                       .budgetRejections = 0,
-                                      .registryCopies = 1}));
+                                      .registryCopies = 1,
+                                      .matchedPropertiesCacheMisses = 1}));
 }
 
 TEST_F(RenderingContextTest, FullRestyleMatchesUseHostWithoutItsShadowTree) {

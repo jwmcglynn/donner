@@ -574,15 +574,15 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
   // attribute code path, then style="stroke: green; opacity: 0.5"
   // lands via setStyle.
   auto fillResult =
-      styleComponent.properties.parsePresentationAttribute("fill", "red", element.entityHandle());
+      styleComponent.trySetPresentationAttribute(element.entityHandle(), "fill", "red");
   ASSERT_TRUE(fillResult.hasResult() && fillResult.result());
   styleComponent.setStyle("stroke: green; opacity: 0.5");
 
-  EXPECT_TRUE(styleComponent.properties.fill.isSpecified());
-  EXPECT_TRUE(styleComponent.properties.stroke.isSpecified());
-  EXPECT_TRUE(styleComponent.properties.opacity.isSpecified());
-  EXPECT_EQ(styleComponent.properties.fill.specificity, css::Specificity::FromABC(0, 0, 0));
-  EXPECT_EQ(styleComponent.properties.stroke.specificity, css::Specificity::StyleAttribute());
+  EXPECT_TRUE(styleComponent.properties().fill.isSpecified());
+  EXPECT_TRUE(styleComponent.properties().stroke.isSpecified());
+  EXPECT_TRUE(styleComponent.properties().opacity.isSpecified());
+  EXPECT_EQ(styleComponent.properties().fill.specificity, css::Specificity::FromABC(0, 0, 0));
+  EXPECT_EQ(styleComponent.properties().stroke.specificity, css::Specificity::StyleAttribute());
 
   // Now the editor-rewrite case: user deletes `opacity` from the
   // style attribute and retypes the rest. setStyle must clear the
@@ -592,10 +592,10 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
   // style-origin.
   styleComponent.setStyle("stroke: blue");
 
-  EXPECT_TRUE(styleComponent.properties.fill.isSpecified())
+  EXPECT_TRUE(styleComponent.properties().fill.isSpecified())
       << "fill presentation attribute must survive setStyle rewrite";
-  EXPECT_TRUE(styleComponent.properties.stroke.isSpecified());
-  EXPECT_FALSE(styleComponent.properties.opacity.isSpecified())
+  EXPECT_TRUE(styleComponent.properties().stroke.isSpecified());
+  EXPECT_FALSE(styleComponent.properties().opacity.isSpecified())
       << "opacity must be cleared - it was style-origin and no longer appears";
 }
 
@@ -955,8 +955,10 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
                               css::Specificity::Override());
   siblingComputed->style = std::move(marked);
 
-  target->entityHandle().get_or_emplace<components::StyleComponent>().properties.opacity.set(
-      0.5, css::Specificity::Override());
+  target->entityHandle().get_or_emplace<components::StyleComponent>().editProperties(
+      [&](PropertyRegistry& properties) {
+        properties.opacity.set(0.5, css::Specificity::Override());
+      });
   components::StyleSystem().invalidateComputed(target->entityHandle());
   target->entityHandle().get_or_emplace<components::DirtyFlagsComponent>().mark(
       components::DirtyFlagsComponent::Style);
@@ -1307,8 +1309,10 @@ TEST_F(SVGElementTests, StyleStorageGrowthKeepsComponentAddressesAndValues) {
   for (size_t index = 0; index < kPage * 2 + 1; ++index) {
     const Entity entity = registry.create();
     auto& style = registry.emplace<components::StyleComponent>(entity);
-    style.properties.overflowWrap.set(
-        index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal, css::Specificity());
+    style.editProperties([&](PropertyRegistry& properties) {
+      properties.overflowWrap.set(index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal,
+                                  css::Specificity());
+    });
     retained.emplace_back(entity, &style);
   }
   const Registry& readOnly = registry;
@@ -1319,7 +1323,7 @@ TEST_F(SVGElementTests, StyleStorageGrowthKeepsComponentAddressesAndValues) {
   for (size_t index = 0; index < retained.size(); ++index) {
     const auto* current = registry.try_get<components::StyleComponent>(retained[index].first);
     ASSERT_THAT(current, testing::Eq(retained[index].second));
-    EXPECT_THAT(current->properties.overflowWrap.get(),
+    EXPECT_THAT(current->properties().overflowWrap.get(),
                 Optional(index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal));
   }
   testing::Test::RecordProperty("page_slots", std::to_string(kPage));

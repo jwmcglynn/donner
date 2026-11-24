@@ -15,7 +15,7 @@
 #include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
-#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/MatchedPropertiesCache.h"
 
 namespace donner::svg::components {
 namespace {
@@ -66,7 +66,7 @@ components::RenderTreeState& GetRenderTreeState(EntityHandle handle) {
 }
 
 void MarkNeedsFullRebuild(EntityHandle handle) {
-  handle.registry()->clear<ComputedStyleComponent>();
+  MatchedPropertiesCache::discardComputedStyles(*handle.registry());
   auto& renderState = GetRenderTreeState(handle);
   renderState.needsFullRebuild = true;
   renderState.needsFullStyleRecompute = true;

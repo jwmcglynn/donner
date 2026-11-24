@@ -49,11 +49,16 @@ struct RenderingDiagnostics {
   components::StyleCascadeCounters styleCascade;
   /// Wall-clock time spent in style computation for the document so far.
   std::chrono::nanoseconds styleTime{0};
+  /// Distinct immutable computed-style records retained by document entities.
+  std::size_t distinctComputedStyleRecords = 0;
 };
 
 /// Capture already-prepared values under one read guard, capped per list with true total counts.
 /// Does not render, recompute style, or consume invalidation. Flag names have static lifetime.
 RenderingDiagnostics CaptureRenderingDiagnostics(const SVGDocument& document,
                                                  std::size_t maxRecords = 4096);
+
+/// Disable matched-properties caching before a diagnostic or benchmark prepares its first frame.
+void DisableMatchedPropertiesCacheForTesting(SVGDocument& document);
 
 }  // namespace donner::svg::internal
