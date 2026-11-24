@@ -291,10 +291,13 @@ with workers on needs the release gate.
 - **Sanitizers.** `.bazelrc` defines `--config=tsan`. In CI, ThreadSanitizer runs only on the
   scheduler package's tests: their `ci_tsan_` and `ci_asan_` variants run in the native CI
   invocation on Linux, built through a configuration transition (the AddressSanitizer variants with
-  leak detection off, since the remote test sandbox blocks the ptrace that LeakSanitizer needs), and
-  the nightly Sanitizers workflow runs the AddressSanitizer and UndefinedBehaviorSanitizer lanes
-  over `//donner/...`. Repository rules keep one native Bazel invocation in CI and express variants
-  as target-level transitions, and correctness tests carry no short deadlines; hang guards only.
+  leak detection off on both Linux lanes: the self-hosted lane's remote test sandbox blocks the
+  ptrace that LeakSanitizer needs, and the hosted lane shares the same variant definition; an
+  invocation that sets a sanitizer config of its own skips the variants and runs the plain tests
+  under that config), and the nightly Sanitizers workflow runs the AddressSanitizer and
+  UndefinedBehaviorSanitizer lanes over `//donner/...`. Repository rules keep one native Bazel
+  invocation in CI and express variants as target-level transitions, and correctness tests carry no
+  short deadlines; hang guards only.
 - **WebAssembly.** The plain `wasm` configuration does not pass `-pthread`. The editor's Wasm build
   (`donner/editor/wasm/BUILD.bazel`) passes `-pthread`, `-sPROXY_TO_PTHREAD`,
   `-sOFFSCREENCANVASES_TO_PTHREAD=#canvas` and `-sPTHREAD_POOL_SIZE=2`, and

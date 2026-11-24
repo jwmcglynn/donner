@@ -470,6 +470,7 @@ def _sanitizer_transition_impl(settings, attr):
         features: settings[features] + variant.features,
         linkopt: settings[linkopt] + variant.linkopts,
         "//command_line_option:strip": "never",
+        "//build_defs:sanitizer": attr.sanitizer,
     }
 
 # Not a product variant: it writes no setting of variant_settings.bzl, so libraries below it still
@@ -482,6 +483,7 @@ _sanitizer_transition = transition(
         "//command_line_option:linkopt",
     ],
     outputs = [
+        "//build_defs:sanitizer",
         "//command_line_option:copt",
         "//command_line_option:features",
         "//command_line_option:linkopt",
@@ -533,7 +535,11 @@ def _declare_sanitizer_variants(sanitizers):
                 sanitizer = sanitizer,
                 fixed_test_env = SANITIZER_VARIANTS[sanitizer].test_env,
                 tags = list(rule["tags"]) + ["sanitizer_" + sanitizer],
-                target_compatible_with = ["@platforms//os:linux"],
+                # Linux only, and only in an invocation without a sanitizer config of its own.
+                target_compatible_with = ["@platforms//os:linux"] + select({
+                    "//build_defs:no_sanitizer_config": [],
+                    "//conditions:default": ["@platforms//:incompatible"],
+                }),
                 testonly = True,
                 **timing
             )
