@@ -99,6 +99,11 @@ test the packages outside the libraries, such as the examples and tools, run:
 bazel test //...
 ```
 
+A plain Linux test invocation includes the generated ASan and TSan targets for eligible tests
+in sanitizer-variant packages. Fuzzer corpus targets run through the normal fuzzer targets.
+Running with `--config=asan`, `--config=ubsan`, or `--config=tsan` skips the generated sanitizer
+variants and runs the plain tests under the selected sanitizer.
+
 ## Build Reports
 
 See the latest [Build report](./build_report.md).

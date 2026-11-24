@@ -506,23 +506,30 @@ _donner_sanitizer_test = rule(
 )
 
 def _declare_sanitizer_variants(sanitizers):
-    """Adds a sanitizer variant of every test in the package, for each of `sanitizers`.
+    """Adds sanitizer variants of eligible tests in the package.
 
     The native CI package finalizer calls it for the packages of SANITIZER_VARIANT_PACKAGES, after
-    every rule of the package is declared, so a test added to the package gets its variants
-    without a list to keep. For each `cc_test` that is not `manual` it emits
-    `ci_{sanitizer}_{name}` (a finalizer's targets carry its `ci_` prefix), which builds the test and everything it links with that sanitizer's
-    options (sanitizer_variants.bzl) and runs it with the sanitizer's test environment. The
-    variants are Linux only. They take the test's size, timeout, flakiness, shard count and tags,
-    plus `sanitizer_{sanitizer}`, so the native CI invocation and its affected-target selection
-    run them beside the plain tests, and a test that changes selects its variants.
+    every rule of the package is declared. Each eligible `cc_test` gets a
+    `ci_{sanitizer}_{name}` target that builds and runs with that sanitizer's options. The
+    variants are Linux only and take the source test's size, timeout, flakiness, shard count and
+    tags. The native CI invocation selects them beside the plain tests. Manual tests and fuzzer
+    corpus targets have separate scheduling. Tags that require distinct CI routing counterparts
+    are rejected because the sanitizer variants have no such counterparts.
 
     Args:
       sanitizers: The SANITIZER_VARIANTS keys to emit.
     """
     for rule in native.existing_rules().values():
-        if rule["kind"] != "cc_test" or "manual" in rule["tags"]:
+        if rule["kind"] != "cc_test":
             continue
+        tags = rule["tags"]
+        if "manual" in tags or "fuzz_target" in tags:
+            continue
+        for tag in ("ci-linux-hardware-gpu-source", "perf", "local-gpu-isolated", "fuzz_soak"):
+            if tag in tags:
+                fail("Sanitizer variants of //%s:%s do not support the '%s' CI routing tag" %
+                     (native.package_name(), rule["name"], tag))
+
         # Only the attributes a test set: a view has no entry for one left at its default, and an
         # unset shard count reads as -1.
         timing = {key: rule[key] for key in ("size", "timeout", "flaky") if key in rule}
@@ -534,7 +541,7 @@ def _declare_sanitizer_variants(sanitizers):
                 dep = ":" + rule["name"],
                 sanitizer = sanitizer,
                 fixed_test_env = SANITIZER_VARIANTS[sanitizer].test_env,
-                tags = list(rule["tags"]) + ["sanitizer_" + sanitizer, LINUX_ONLY_TAG],
+                tags = list(tags) + ["sanitizer_" + sanitizer, LINUX_ONLY_TAG],
                 # Linux only, and only in an invocation without a sanitizer config of its own.
                 target_compatible_with = ["@platforms//os:linux"] + select({
                     "//build_defs:no_sanitizer_config": [],
