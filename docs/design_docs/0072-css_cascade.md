@@ -279,7 +279,7 @@ including tests and review fixes. "After" names the milestones that must land fi
   - Done when: each kept change shows a median improvement of at least 5 percent in candidate
     match time on the benchmark; a change that does not is dropped.
 - [ ] Milestone A5: Narrowed invalidation for single-element edits (9.5 days). After A2.
-  - [ ] Compute a `SelectorDependencySummary` per stylesheet at parse time, including the
+  - [x] Compute a `SelectorDependencySummary` per stylesheet at parse time, including the
         directional dependencies of filtered `:nth-child` and `:nth-last-child` selectors.
   - [ ] Route class, `id`, `style` and presentation-attribute writes in `SVGElement` through it,
         marking the affected entities dirty for the existing selective style pass instead of
@@ -1255,20 +1255,35 @@ match time by at least 5 percent is not kept.
 
 ### Narrowed Invalidation for Single-Element Edits
 
-**Dependency summary.** `StylesheetComponent::rebuildSelectorCaches` also builds a
-`SelectorDependencySummary`: for each id, class and attribute local name that appears anywhere in
-a selector, whether it appears only in a subject compound (affects the element itself), in a
-compound left of a descendant or child combinator (affects descendants), or left of a sibling
-combinator (affects following siblings and their descendants). Names inside the `of S` filter of
-`:nth-child(An+B of S)` and `:nth-last-child(An+B of S)` get a direction of their own (see
-routing below). It also records whether any selector uses `:has()`, a structural pseudo-class
-(`:nth-*`, `:first-*`, `:last-*`, `:only-*`, `:empty`), or a key-less attribute selector. The
-summary is the union over the sheet's own and imported rules, and the document view is the union
-over applicable stylesheets.
+**Dependency summary.** `StylesheetComponent::rebuildSelectorCaches` builds a
+`SelectorDependencySummary` (`donner/svg/components/style/SelectorDependencySummary.h`) next to
+the rule index: for each id, class and attribute local name that appears anywhere in a selector,
+the set of relations a change to that name can restyle, relative to the element whose name
+changed. A name in a subject compound affects the element itself; one in a compound left of a
+descendant or child combinator affects descendants; one left of a sibling combinator affects
+following siblings and their subtrees. Names inside the `of S` filter of
+`:nth-child(An+B of S)` and `:nth-last-child(An+B of S)` get a direction of their own (see routing
+below), and names inside `:has()` add ancestors and preceding siblings. It also records whether
+any selector uses `:has()`, a structural pseudo-class (`:nth-*`, `:first-*`, `:last-*`, `:only-*`,
+`:empty`), a wildcard attribute name (which no CSS syntax produces; it is a fail-safe), or `:empty`
+anywhere (text-content dependence). The summary is the union over the sheet's own and imported
+rules, and the document view is the union over applicable stylesheets. Ids and classes compare
+exactly and attribute names ASCII-case-insensitively, ignoring namespaces, as the old attribute
+name cache did. The summary supplies the existing selector dependency checks:
+`usesAttributeInSelector`, which the `transform` and `opacity` presentation-attribute writes
+consult, and `TreeMutation::InvalidateTextContentStyles` read it. The parsed-payload check charges the dependency summary and rule index for initial parsing and
+source-backed edits (`StylesheetComponent::selectorCacheBytes`). The import loader instead bounds
+imported CSS bytes, rules and component values before rebuilding the combined caches. Component-only
+`setContents` follows the existing path described above. Both selector caches share the helpers in
+`SelectorWalk.h`. Building it visits each simple selector once, recursing into pseudo-class
+arguments no deeper than the CSS parser's 64-level nesting limit, and sorts at most one entry per
+named simple selector.
 
-**Routing.** `SVGElement::setClassName`, `setId`, `setStyle`, `updateStyle` and the presentation
+**Routing.** `SVGElement::setClassName`, `setStyle`, `updateStyle` and the presentation
 attribute path in `MarkPresentationAttributeDirty` compute the affected set instead of setting
-`needsFullStyleRecompute`:
+`needsFullStyleRecompute`. `SVGElement::setId` keeps the full restyle in Milestone A5, because an
+id write re-targets references (see render-side dependents below); the summary records id
+positions so that a later change can narrow it with the same lookups.
 
 - The written element always gets `DirtyFlagsComponent::Style` and loses its computed style.
 - Every entity whose own cascade is redone also has its descendants recomputed, whatever the kind
@@ -1634,8 +1649,7 @@ single cache and pressure across sibling caches. The retained-byte differential 
 - `ExternalUseStyleContext` and `ExternalUseStyleRetention` cascade referenced external documents
   with their own registries and stylesheets; each registry has its own index, filter, cache and
   summary, and the external-use aggregate budget is charged per candidate exactly as above.
-- Text-content-dependent selectors (`:empty`) keep their existing `selectorsDependOnTextContent`
-  handling.
+- The dependency summary records text-content-dependent selectors such as `:empty`.
 - No path in this design reparses the document.
 
 ## Proposed Architecture, Part B: Cascade Features
@@ -2364,6 +2378,13 @@ Stylesheets and documents are untrusted input.
   **filter unit tests** for selector-hash extraction (stopping at sibling
   combinators, ignoring pseudo-class arguments) and for chain synchronization in each traversal
   mode, including a pass abandoned by a budget rejection.
+- **Dependency summary unit tests**
+  (`//donner/svg/components/style:selector_dependency_summary_tests`) for the relations of names in
+  subject compounds, left of each combinator, inside `:is()`, `:where()`, `:not()` and `:has()`,
+  and inside the `of S` filter of `:nth-child()` and `:nth-last-child()` (alone, nested, and left
+  of a sibling combinator here or in an enclosing selector), for name comparison and namespaces,
+  for the feature flags, for merging across rules and imported sheets, and for retained bytes; two
+  style-system tests check that the stylesheet charge includes the rule index and the summary.
 - **Base library.** `BloomFilter` property, saturation, removal and false-positive-count tests in
   `//donner/base:base_tests`, and `//donner/base:bloom_filter_fuzzer`.
 - **Existing suites** must stay green unchanged: `//donner/css/...` tests,

@@ -150,29 +150,21 @@ void StylesheetComponent::setImportedStylesheets(std::vector<css::Stylesheet>&& 
 void StylesheetComponent::rebuildSelectorCaches() {
   // Both parsing and import installation change the rules named by the cache key.
   contentRevision_ = NextStylesheetContentRevision();
-  attributeSelectorNames.clear();
-  attributeSelectorMatchesAnyName = false;
-  selectorsDependOnTextContent = false;
-  const auto addRules = [this](const css::Stylesheet& sheet) {
-    for (const css::SelectorRule& rule : sheet.rules()) {
-      rule.selector.collectAttributeSelectorNames(attributeSelectorNames,
-                                                  attributeSelectorMatchesAnyName);
-      selectorsDependOnTextContent =
-          selectorsDependOnTextContent || rule.selector.dependsOnTextContent();
-    }
-  };
+  std::vector<const css::Stylesheet*> sheets;
+  sheets.reserve(importedStylesheets.size() + 1);
   importedRuleIndexes.clear();
   for (const css::Stylesheet& sheet : importedStylesheets) {
-    addRules(sheet);
+    sheets.push_back(&sheet);
     importedRuleIndexes.emplace_back(sheet.rules());
   }
-  addRules(stylesheet);
+  sheets.push_back(&stylesheet);
+  dependencySummary = SelectorDependencySummary(sheets);
   ruleIndex = RuleIndex(stylesheet.rules());
 }
 
-std::size_t StylesheetComponent::ruleIndexBytes() const {
-  std::size_t bytes =
-      ruleIndex.retainedBytes() + importedRuleIndexes.capacity() * sizeof(RuleIndex);
+std::size_t StylesheetComponent::selectorCacheBytes() const {
+  std::size_t bytes = ruleIndex.retainedBytes() + dependencySummary.retainedBytes() +
+                      importedRuleIndexes.capacity() * sizeof(RuleIndex);
   for (const RuleIndex& index : importedRuleIndexes) {
     bytes += index.retainedBytes();
   }

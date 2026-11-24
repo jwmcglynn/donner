@@ -13,6 +13,7 @@
 #include "donner/base/Utils.h"
 #include "donner/css/Stylesheet.h"
 #include "donner/svg/components/style/RuleIndex.h"
+#include "donner/svg/components/style/SelectorDependencySummary.h"
 
 namespace donner::svg::components {
 
@@ -114,22 +115,6 @@ struct StylesheetComponent {
   bool isUserAgentStylesheet = false;
 
   /**
-   * Local names of the attributes referenced by attribute selectors in \ref stylesheet, cached
-   * when the stylesheet is parsed. Used by \ref usesAttributeInSelector.
-   */
-  std::vector<RcString> attributeSelectorNames;
-
-  /**
-   * True when an attribute selector in \ref stylesheet uses a wildcard local name, so any
-   * attribute write can change selector matching. No CSS syntax produces this today.
-   */
-  bool attributeSelectorMatchesAnyName = false;
-
-  /// True when a selector in \ref stylesheet can change matching after a text edit, cached when
-  /// the stylesheet is parsed.
-  bool selectorsDependOnTextContent = false;
-
-  /**
    * Stylesheets loaded through `@import`, flattened in cascade order: each imported sheet follows
    * the sheets it imports, and all of them precede \ref stylesheet's own rules. Populated by
    * \ref ResourceManagerContext::loadStylesheetImports when the document is prepared for
@@ -147,8 +132,13 @@ struct StylesheetComponent {
   /// Candidate-rule index of each sheet in \ref importedStylesheets, in the same order.
   std::vector<RuleIndex> importedRuleIndexes;
 
-  /// Bytes retained by \ref ruleIndex and \ref importedRuleIndexes, charged with the stylesheet.
-  std::size_t ruleIndexBytes() const;
+  /// Which elements a change to each id, class and attribute name named by \ref stylesheet or
+  /// \ref importedStylesheets can restyle, rebuilt whenever they change.
+  SelectorDependencySummary dependencySummary;
+
+  /// Bytes retained by \ref ruleIndex, \ref importedRuleIndexes and \ref dependencySummary,
+  /// charged with the stylesheet.
+  std::size_t selectorCacheBytes() const;
 
   /// Font faces of \ref importedStylesheets followed by \ref stylesheet, populated only when
   /// imports contributed any; see \ref cascadeFontFaces().
@@ -201,13 +191,7 @@ struct StylesheetComponent {
     if (!isCssType()) {
       return false;
     }
-    if (attributeSelectorMatchesAnyName) {
-      return true;
-    }
-
-    return std::any_of(
-        attributeSelectorNames.begin(), attributeSelectorNames.end(),
-        [localName](const RcString& name) { return name.equalsIgnoreCase(localName); });
+    return dependencySummary.usesAttribute(localName);
   }
 
   /**
@@ -235,7 +219,7 @@ struct StylesheetComponent {
                        ParseWarningSink& warnings);
 
 private:
-  /// Recompute the selector-dependency caches and the rule indexes from \ref stylesheet and
+  /// Recompute the dependency summary and the rule indexes from \ref stylesheet and
   /// \ref importedStylesheets.
   void rebuildSelectorCaches();
 

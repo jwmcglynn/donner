@@ -7,34 +7,12 @@
 #include <utility>
 #include <variant>
 
-#include "donner/base/StringUtils.h"
+#include "donner/svg/components/style/SelectorWalk.h"
 
 namespace donner::svg::components {
 namespace {
 
 using Kind = RuleIndexKey::Kind;
-
-bool HasAsciiUppercase(std::string_view text) {
-  return std::any_of(text.begin(), text.end(), [](char ch) { return ch >= 'A' && ch <= 'Z'; });
-}
-
-/// Compare \p stored (already lowercased) with \p probe lowercased, as `<=>` would.
-int CompareLowercased(std::string_view stored, std::string_view probe) {
-  const std::size_t length = std::min(stored.size(), probe.size());
-  for (std::size_t i = 0; i < length; ++i) {
-    const char lhs = stored[i];
-    const char rhs = StringUtils::ToLowerAscii(probe[i]);
-    if (lhs != rhs) {
-      return static_cast<unsigned char>(lhs) < static_cast<unsigned char>(rhs) ? -1 : 1;
-    }
-  }
-  return stored.size() == probe.size() ? 0 : (stored.size() < probe.size() ? -1 : 1);
-}
-
-int CompareExact(std::string_view stored, std::string_view probe) {
-  const int result = stored.compare(probe);
-  return result < 0 ? -1 : (result > 0 ? 1 : 0);
-}
 
 /// One selector-list entry filed under a key, before buckets are formed.
 struct FiledEntry {
@@ -42,32 +20,12 @@ struct FiledEntry {
   std::uint32_t rule;
 };
 
-/// The first simple selector of type \p Selector in \p simple that \p accept admits.
-template <typename Selector, typename Accept>
-const Selector* FindSimple(const std::vector<css::CompoundSelector::Entry>& simple, Accept accept) {
-  for (const auto& entry : simple) {
-    const auto* selector = std::get_if<Selector>(&entry);
-    if (selector != nullptr && accept(*selector)) {
-      return selector;
-    }
-  }
-  return nullptr;
-}
-
-/// Admits every simple selector of the requested type.
-constexpr auto kAnySelector = [](const auto& /*selector*/) { return true; };
-
 bool HasNoNamespace(const css::AttributeSelector& selector) {
   return selector.name.name.namespacePrefix.empty();
 }
 
 bool IsNamedType(const css::TypeSelector& selector) {
   return !selector.isUniversal();
-}
-
-RcString Lowercased(const RcString& name) {
-  return HasAsciiUppercase(name) ? RcString(StringUtils::ToLowerAscii(std::string_view(name)))
-                                 : name;
 }
 
 /// The compounds of \p selector reached from its subject through descendant and child

@@ -497,21 +497,41 @@ TEST_F(StyleSystemTest, NonCssStyleRulesAreHiddenFromQueries) {
 
 TEST_F(StyleSystemTest, InstallingResolvedImportsChangesStylesheetContentRevision) {
   StylesheetComponent stylesheet;
-  stylesheet.parseStylesheet("rect { fill: red; }");
+  stylesheet.parseStylesheet("rect[direct] { fill: red; }");
   const auto parsedRevision = stylesheet.contentRevision();
 
   std::vector<css::Stylesheet> imports;
   StylesheetComponent imported;
-  imported.parseStylesheet("rect { stroke: blue; }");
+  imported.parseStylesheet("rect[incoming]:empty { stroke: blue; }");
   imports.push_back(std::move(imported.stylesheet));
   stylesheet.setImportedStylesheets(std::move(imports), 1);
   EXPECT_NE(stylesheet.contentRevision(), parsedRevision);
   EXPECT_THAT(stylesheet.importedStylesheets, testing::SizeIs(1));
+  EXPECT_TRUE(stylesheet.usesAttributeInSelector("incoming"));
+  EXPECT_TRUE(stylesheet.usesAttributeInSelector("direct"));
+  EXPECT_TRUE(stylesheet.dependencySummary.dependsOnTextContent());
 
   const auto installedRevision = stylesheet.contentRevision();
   stylesheet.setImportedStylesheets({}, 2);
   EXPECT_NE(stylesheet.contentRevision(), installedRevision);
   EXPECT_THAT(stylesheet.importedStylesheets, testing::IsEmpty());
+  EXPECT_FALSE(stylesheet.usesAttributeInSelector("incoming"));
+  EXPECT_TRUE(stylesheet.usesAttributeInSelector("direct"));
+  EXPECT_FALSE(stylesheet.dependencySummary.dependsOnTextContent());
+}
+
+TEST_F(StyleSystemTest, FilteredNthLastChildCanChangeTheEditedSiblingMatch) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g class="a"/><g id="middle" class="a b"/><g class="b"/>
+  </svg>)");
+  constexpr std::string_view kSelector = "g:nth-last-child(2 of .a + .b)";
+  ASSERT_THAT(document.querySelector(kSelector), testing::Optional(testing::_));
+  auto middle = document.querySelector("#middle");
+  ASSERT_THAT(middle, testing::Optional(testing::_));
+  EXPECT_EQ(document.querySelector(kSelector)->entityHandle().entity(),
+            middle->entityHandle().entity());
+  middle->setClassName("b");
+  EXPECT_THAT(document.querySelector(kSelector), Eq(std::nullopt));
 }
 
 TEST_F(StyleSystemTest, CollectMatchedStyleRulesReportsSelectorBranchAndSourceRanges) {
@@ -2835,40 +2855,51 @@ TEST_F(StyleSystemTest, DeclarationRefusalPreservesUnchargedLocalScalarStyle) {
   EXPECT_EQ(budget.complexPropertyBytes(), 0u);
 }
 
-TEST(RuleIndexCharge, StylesheetChargeIncludesItsRuleIndex) {
+namespace {
+
+/// A document holding one `<style>` of \p css.
+SVGDocument ParseStyleDocument(std::string_view css) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto result = parser::SVGParser::ParseSVG(
+      std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)") + std::string(css) +
+          "</style></svg>",
+      warnings);
+  EXPECT_THAT(result, NoParseError());
+  return std::move(result.result());
+}
+
+/// Stylesheet bytes charged to \p document's parsed-payload budget.
+std::size_t StylesheetCharge(SVGDocument& document) {
+  return document.registry()
+      .ctx()
+      .get<ParsedPayloadResourceBudget>()
+      .securityStats()
+      .stylesheetBytes;
+}
+
+/// The `<style>` element's stylesheet component.
+const StylesheetComponent& StyleOf(SVGDocument& document) {
+  const Entity style = document.querySelector("style")->entityHandle().entity();
+  return document.registry().get<StylesheetComponent>(style);
+}
+
+}  // namespace
+
+TEST(SelectorCacheCharge, StylesheetChargeIncludesItsRuleIndex) {
   // Two stylesheets with the same rule, declaration and component-value counts, so the parsed
   // stylesheet estimate is equal; the first files its rules under two class keys and the second
-  // under one, so only their rule indexes differ in size.
-  constexpr std::string_view kTwoKeys = ".a { fill: red } .b { fill: red }";
-  constexpr std::string_view kOneKey = ".a { fill: red } .a { fill: red }";
-  const auto parse = [](std::string_view css) {
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    auto result = parser::SVGParser::ParseSVG(
-        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)") + std::string(css) +
-            "</style></svg>",
-        warnings);
-    EXPECT_THAT(result, NoParseError());
-    return std::move(result.result());
+  // under one, so only their selector caches differ in size.
+  SVGDocument twoKeys = ParseStyleDocument(".a { fill: red } .b { fill: red }");
+  SVGDocument oneKey = ParseStyleDocument(".a { fill: red } .a { fill: red }");
+  const auto cacheBytes = [](SVGDocument& document) {
+    return StyleOf(document).selectorCacheBytes();
   };
-  const auto charge = [](SVGDocument& document) {
-    return document.registry()
-        .ctx()
-        .get<ParsedPayloadResourceBudget>()
-        .securityStats()
-        .stylesheetBytes;
-  };
-  const auto indexBytes = [](SVGDocument& document) {
-    const Entity style = document.querySelector("style")->entityHandle().entity();
-    return document.registry().get<StylesheetComponent>(style).ruleIndexBytes();
-  };
-
-  SVGDocument twoKeys = parse(kTwoKeys);
-  SVGDocument oneKey = parse(kOneKey);
-  ASSERT_GT(indexBytes(twoKeys), indexBytes(oneKey));
-  EXPECT_EQ(charge(twoKeys) - charge(oneKey), indexBytes(twoKeys) - indexBytes(oneKey));
+  ASSERT_GT(StyleOf(twoKeys).ruleIndex.retainedBytes(), StyleOf(oneKey).ruleIndex.retainedBytes());
+  EXPECT_EQ(StylesheetCharge(twoKeys) - StylesheetCharge(oneKey),
+            cacheBytes(twoKeys) - cacheBytes(oneKey));
 
   // A keystroke that turns the second `.a` into `.b` reparses the stylesheet and recharges it,
-  // index included.
+  // caches included.
   const std::string source(oneKey.source());
   const std::size_t at = source.rfind(".a") + 1;
   ASSERT_THAT(oneKey
@@ -2879,41 +2910,36 @@ TEST(RuleIndexCharge, StylesheetChargeIncludesItsRuleIndex) {
                   })
                   .applied,
               testing::Eq(true));
-  EXPECT_EQ(indexBytes(oneKey), indexBytes(twoKeys));
-  EXPECT_EQ(charge(oneKey), charge(twoKeys));
+  EXPECT_EQ(cacheBytes(oneKey), cacheBytes(twoKeys));
+  EXPECT_EQ(StylesheetCharge(oneKey), StylesheetCharge(twoKeys));
+}
+
+TEST(SelectorCacheCharge, StylesheetChargeIncludesItsDependencySummary) {
+  // Same counts and the same single rule-index key (`.a`); only the names under `:not()` differ,
+  // so only the dependency summaries differ in size.
+  SVGDocument twoNames = ParseStyleDocument(".a:not(.b) { fill: red }");
+  SVGDocument oneName = ParseStyleDocument(".a:not(.a) { fill: red }");
+  ASSERT_EQ(StyleOf(twoNames).ruleIndex.retainedBytes(),
+            StyleOf(oneName).ruleIndex.retainedBytes());
+  const std::size_t twoNamesBytes = StyleOf(twoNames).dependencySummary.retainedBytes();
+  const std::size_t oneNameBytes = StyleOf(oneName).dependencySummary.retainedBytes();
+  ASSERT_GT(twoNamesBytes, oneNameBytes);
+  EXPECT_EQ(StylesheetCharge(twoNames) - StylesheetCharge(oneName), twoNamesBytes - oneNameBytes);
 }
 
 TEST(RuleIndexCharge, StylesheetChargeIncludesItsAncestorHashes) {
   // Same counts and the same rule-index key (`.b`); only the child combinator gives the entry an
   // ancestor hash group, so only the indexes' hash storage differs.
-  const auto parse = [](std::string_view css) {
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    auto result = parser::SVGParser::ParseSVG(
-        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)") + std::string(css) +
-            "</style></svg>",
-        warnings);
-    EXPECT_THAT(result, NoParseError());
-    return std::move(result.result());
-  };
-  const auto stylesheet = [](SVGDocument& document) -> const StylesheetComponent& {
-    const Entity style = document.querySelector("style")->entityHandle().entity();
-    return document.registry().get<StylesheetComponent>(style);
-  };
-  const auto charge = [](SVGDocument& document) {
-    return document.registry()
-        .ctx()
-        .get<ParsedPayloadResourceBudget>()
-        .securityStats()
-        .stylesheetBytes;
-  };
-  SVGDocument child = parse(".a > .b { fill: red }");
-  SVGDocument sibling = parse(".a + .b { fill: red }");
-  ASSERT_THAT(stylesheet(child).ruleIndex.ancestorHashes(0), testing::SizeIs(1));
-  ASSERT_THAT(stylesheet(sibling).ruleIndex.ancestorHashes(0), testing::IsEmpty());
+  SVGDocument child = ParseStyleDocument(".a > .b { fill: red }");
+  SVGDocument sibling = ParseStyleDocument(".a + .b { fill: red }");
+  ASSERT_THAT(StyleOf(child).ruleIndex.ancestorHashes(0), testing::SizeIs(1));
+  ASSERT_THAT(StyleOf(sibling).ruleIndex.ancestorHashes(0), testing::IsEmpty());
   const std::size_t extra =
-      stylesheet(child).ruleIndexBytes() - stylesheet(sibling).ruleIndexBytes();
+      StyleOf(child).ruleIndex.retainedBytes() - StyleOf(sibling).ruleIndex.retainedBytes();
   ASSERT_GE(extra, sizeof(RuleIndex::AncestorHashGroup));
-  EXPECT_EQ(charge(child) - charge(sibling), extra);
+  ASSERT_EQ(StyleOf(child).dependencySummary.retainedBytes(),
+            StyleOf(sibling).dependencySummary.retainedBytes());
+  EXPECT_EQ(StylesheetCharge(child) - StylesheetCharge(sibling), extra);
 }
 
 TEST(RuleIndexCandidates, LargePassesDoNotLeaveTheirCandidateListAllocated) {
