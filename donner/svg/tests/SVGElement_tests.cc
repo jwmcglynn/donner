@@ -26,6 +26,7 @@
 #include "donner/svg/SVGTitleElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
@@ -1467,19 +1468,33 @@ TEST_F(SVGElementTests, QuerySelector) {
   }
 }
 
-TEST_F(SVGElementTests, ShadowTreesDoNotEnumerateChildren) {
-  auto element = create();
+TEST_F(SVGElementTests, TraversalSkipsShadowRootsBetweenAuthoredChildren) {
+  auto host = create();
+  auto firstShadow = createWithId("shadow-first");
+  auto middleShadow = createWithId("shadow-middle");
+  auto lastShadow = createWithId("shadow-last");
+  auto label = createWithId("label");
+  auto description = createWithId("description");
+
+  host.appendChild(firstShadow);
+  host.appendChild(label);
+  host.appendChild(middleShadow);
+  host.appendChild(description);
+  host.appendChild(lastShadow);
+
   auto& registry = document_.registry();
+  const Entity hostEntity = host.unsafeEntityHandle().entity();
+  registry.emplace<components::ShadowTreeComponent>(hostEntity);
+  for (const SVGElement& shadow : {firstShadow, middleShadow, lastShadow}) {
+    registry.emplace<components::ShadowTreeRootComponent>(shadow.unsafeEntityHandle().entity(),
+                                                          hostEntity);
+  }
 
-  Entity child = registry.create();
-  registry.emplace<::donner::components::TreeComponent>(child, xml::XMLQualifiedNameRef("rect"));
-  registry.emplace<components::ElementTypeComponent>(child, ElementType::Rect);
-  registry.get<::donner::components::TreeComponent>(element.unsafeEntityHandle().entity())
-      .appendChild(registry, child);
-  registry.emplace<components::ShadowTreeComponent>(element.unsafeEntityHandle().entity());
-
-  EXPECT_EQ(element.firstChild(), std::nullopt);
-  EXPECT_EQ(element.lastChild(), std::nullopt);
+  EXPECT_THAT(children(host), ElementsAre(ElementIdEq("label"), ElementIdEq("description")));
+  EXPECT_THAT(QueriedId(label.previousSibling()), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(description.nextSibling()), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(host.querySelector("#shadow-middle")), testing::Eq(std::nullopt));
+  EXPECT_THAT(host.querySelector("#description"), Optional(ElementIdEq("description")));
 }
 
 TEST_F(SVGElementTests, TraversalSkipsXmlTextNodes) {
