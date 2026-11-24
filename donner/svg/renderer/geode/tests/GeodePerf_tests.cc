@@ -441,6 +441,27 @@ TEST_F(GeodePerfTest, FeImageFragment_RasterIsNotReadBack) {
   EXPECT_THAT(test::CountNonTransparentPixels(renderer.takeSnapshot()), testing::Gt(0u));
 }
 
+TEST_F(GeodePerfTest, OffscreenCountersRestoreTheLastLiveSink) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+
+  RendererGeode host(device);
+  const geode::GeodeCounters* hostCounters = device->counters();
+  ASSERT_THAT(hostCounters, testing::NotNull());
+  std::optional<RendererGeode> displaced(std::in_place, device);
+  auto offscreen = host.createOffscreenInstance();
+  ASSERT_THAT(offscreen, testing::NotNull());
+  const geode::GeodeCounters* offscreenCounters = device->counters();
+
+  // Move-assignment destroys the suspended sink between the host and offscreen sinks.
+  *displaced = std::move(host);
+  EXPECT_THAT(device->counters(), testing::Eq(offscreenCounters));
+  offscreen.reset();
+  EXPECT_THAT(device->counters(), testing::Eq(hostCounters));
+  displaced.reset();
+  EXPECT_THAT(device->counters(), testing::IsNull());
+}
+
 TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
