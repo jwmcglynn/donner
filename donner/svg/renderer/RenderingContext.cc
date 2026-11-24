@@ -2267,12 +2267,21 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   // Stylesheet imports must be in place before any style is computed. Reloading them changes
   // which rules match anywhere in the document, so every cached style is discarded, including
   // styles that queries computed before the first render.
-  if (registry_.ctx().get<components::ResourceManagerContext>().loadStylesheetImports(
-          warningSink)) {
-    StyleSystem::discardComputedStyles(registry_);
-    getRenderTreeState(registry_).needsFullStyleRecompute = true;
+  RenderTreeState& renderState = getRenderTreeState(registry_);
+  const bool importsReloaded =
+      registry_.ctx().get<components::ResourceManagerContext>().loadStylesheetImports(warningSink);
+  if (importsReloaded) {
+    renderState.needsFullStyleRecompute = true;
   }
-  StyleSystem().computeAllStyles(registry_, warningSink);
+  // A full restyle discards every computed style once, here. Both style passes below then compute
+  // only entities without a computed style: the first the document tree, the second the shadow-tree
+  // clones instantiated after it.
+  if (renderState.hasBeenBuilt && renderState.needsFullStyleRecompute) {
+    StyleSystem::discardComputedStylesForFullRestyle(registry_);
+  } else if (importsReloaded) {
+    StyleSystem::discardComputedStyles(registry_);
+  }
+  StyleSystem().computeAllStyles(registry_, warningSink, StyleSystem::FullRestyle::ComputeMissing);
 
   // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,
   // before layout and shape computation.
@@ -2280,7 +2289,7 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   // Expand references from this sample, sharing the original rebuild's resource limits.
   PaintSystem().createShadowTrees(registry_, warningSink);
   InstantiateMainShadowTrees(registry_, warningSink);
-  StyleSystem().computeAllStyles(registry_, warningSink);
+  StyleSystem().computeAllStyles(registry_, warningSink, StyleSystem::FullRestyle::ComputeMissing);
 
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(warningSink);

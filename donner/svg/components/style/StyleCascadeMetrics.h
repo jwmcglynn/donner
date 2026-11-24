@@ -21,7 +21,7 @@ struct StyleCascadeCounters {
   /// Declarations of matched rules admitted by the budget and handed to the property parser,
   /// including ones the parser rejects.
   std::uint64_t declarationsApplied = 0;
-  /// Full style passes that discarded every computed style before recomputing the document.
+  /// Times every computed style was discarded to restyle the whole document.
   std::uint64_t fullClears = 0;
   /// Document style passes, full or dirty-only, that ended with the style budget refusing work.
   /// Refusals while computing an entity list or a single entity's style are not counted.

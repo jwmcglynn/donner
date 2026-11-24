@@ -150,8 +150,10 @@ const CascadeEditTarget kSplashTarget = SplashEditTarget();
 const CascadeEditTarget kSyntheticTarget = SyntheticEditTarget();
 const CascadeEditTarget kIconsTarget = BootstrapIconsEditTarget();
 
-constexpr StyleCascadeCounters kSplashRestyle{1069, 99401, 2414, 2422, 2, 0};
-constexpr StyleCascadeCounters kIconsRestyle{10274, 41088, 18582, 18582, 2, 0};
+// A frame after an edit that restyles the whole document discards every computed style once and
+// cascades each styled entity once, so it does the work of the edited document's first frame.
+constexpr StyleCascadeCounters kSplashRestyle{622, 57838, 1382, 1386, 1, 0};
+constexpr StyleCascadeCounters kIconsRestyle{5137, 20544, 9291, 9291, 1, 0};
 
 INSTANTIATE_TEST_SUITE_P(
     EditFrame, CssCascadeWorkTest,
@@ -159,17 +161,17 @@ INSTANTIATE_TEST_SUITE_P(
         Edit("SplashClass", Document::Splash, kSplashTarget, CascadeEdit::Class, kSplashRestyle),
         Edit("SplashFill", Document::Splash, kSplashTarget, CascadeEdit::Fill, kSplashRestyle),
         Edit("SplashStyle", Document::Splash, kSplashTarget, CascadeEdit::Style, kSplashRestyle),
-        // The appended rule is tested against every element once in each of the two passes.
+        // The appended rule matches nothing and is tested once against every styled entity.
         Edit("SplashAppendRule", Document::Splash, kSplashTarget, CascadeEdit::AppendRule,
-             {1069, 100470, 2414, 2422, 2, 0}, kAppendFrame),
+             {622, 58460, 1382, 1386, 1, 0}, kAppendFrame),
         Edit("SyntheticClass", Document::Synthetic, kSyntheticTarget, CascadeEdit::Class,
-             {4006, 817216, 6510, 9016, 2, 0}),
+             {2003, 408608, 3255, 4508, 1, 0}),
         Edit("SyntheticFill", Document::Synthetic, kSyntheticTarget, CascadeEdit::Fill,
-             {4006, 817216, 6508, 9012, 2, 0}),
+             {2003, 408608, 3254, 4506, 1, 0}),
         Edit("SyntheticStyle", Document::Synthetic, kSyntheticTarget, CascadeEdit::Style,
-             {4006, 817216, 6508, 9012, 2, 0}),
+             {2003, 408608, 3254, 4506, 1, 0}),
         Edit("SyntheticAppendRule", Document::Synthetic, kSyntheticTarget, CascadeEdit::AppendRule,
-             {4006, 821222, 6508, 9012, 2, 0}, kAppendFrame),
+             {2003, 410611, 3254, 4506, 1, 0}, kAppendFrame),
         Edit("IconsClass", Document::Icons, kIconsTarget, CascadeEdit::Class, kIconsRestyle),
         Edit("IconsFill", Document::Icons, kIconsTarget, CascadeEdit::Fill, kIconsRestyle),
         Edit("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style, kIconsRestyle)),
@@ -180,12 +182,12 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         Keystroke("DeclarationValue", CascadeKeystroke::DeclarationValue, kSplashRestyle),
         Keystroke("SelectorLetterInserted", CascadeKeystroke::Selector,
-                  {1069, 99401, 2412, 2420, 2, 0}, kForwardKeystroke),
+                  {622, 57838, 1381, 1385, 1, 0}, kForwardKeystroke),
         // The unclosed rule absorbs the rules after it, so far fewer rules are tested.
         Keystroke("ClosingBraceDeleted", CascadeKeystroke::ClosingBrace,
-                  {1069, 7467, 2138, 2140, 2, 0}, kForwardKeystroke),
+                  {622, 4346, 1244, 1245, 1, 0}, kForwardKeystroke),
         Keystroke("ClassLetterInserted", CascadeKeystroke::ClassAttribute,
-                  {1069, 99401, 2412, 2420, 2, 0}, kForwardKeystroke)),
+                  {622, 57838, 1381, 1385, 1, 0}, kForwardKeystroke)),
     CaseName);
 
 INSTANTIATE_TEST_SUITE_P(
