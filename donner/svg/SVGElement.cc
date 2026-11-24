@@ -1164,7 +1164,7 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStyleComponent& computedStyle =
       components::StyleSystem().computeStyle(handle_, disabledSink);
-  return computedStyle.properties.value();
+  return *computedStyle.properties();
 }
 
 const PropertyRegistry* SVGElement::specifiedStyle() const {
@@ -1181,9 +1181,8 @@ const PropertyRegistry* SVGElement::computedStyleIfPresent() const {
   }
   const auto* computedStyle =
       access.registry().try_get<components::ComputedStyleComponent>(handle_.entity());
-  return computedStyle != nullptr && computedStyle->properties.has_value()
-             ? &*computedStyle->properties
-             : nullptr;
+  return computedStyle != nullptr && computedStyle->properties() ? &*computedStyle->properties()
+                                                                 : nullptr;
 }
 
 std::optional<PaintServer> SVGElement::resolvedFillPaint() const {

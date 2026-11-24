@@ -482,7 +482,7 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
     properties.strokeOpacity.set(1.0, inlineSpecificity);
     properties.fontFamily.set(SmallVector<RcString, 1>{RcString("sans-serif")}, inlineSpecificity);
     properties.fontSize.set(Lengthd(12, Lengthd::Unit::None), inlineSpecificity);
-    style.properties = properties;
+    style.style = std::make_shared<components::ComputedStyle>(properties);
     document.registry().emplace<components::ComputedStyleComponent>(textEntity, style);
 
     components::ComputedTextComponent text;
@@ -1672,10 +1672,13 @@ TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGrap
 
   auto& instance = document.registry().get<components::RenderingInstanceComponent>(rectEntity);
   auto& style = document.registry().get<components::ComputedStyleComponent>(rectEntity);
-  ASSERT_TRUE(style.properties.has_value());
+  ASSERT_THAT(style.properties(), testing::NotNull());
 
+  // Stored records are immutable; the test replaces this one with a recolored copy.
   const css::Specificity inlineSpecificity = css::Specificity::FromABC(1, 0, 0);
-  style.properties->color.set(css::Color(css::RGBA(12, 34, 56, 255)), inlineSpecificity);
+  auto recolored = std::make_shared<components::ComputedStyle>(*style.style);
+  recolored->properties.color.set(css::Color(css::RGBA(12, 34, 56, 255)), inlineSpecificity);
+  style.style = std::move(recolored);
 
   FilterEffect::DropShadow shadow;
   shadow.offsetX = Lengthd(3.0, Lengthd::Unit::Px);

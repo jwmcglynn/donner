@@ -262,7 +262,7 @@ std::optional<ClipGeometry> PrepareClipGeometry(EntityHandle entity, bool enforc
   if ((!path && !isText) || !style) {
     return std::nullopt;
   }
-  const auto& properties = style->properties.value();
+  const auto& properties = *style->properties();
   if (enforceVisibility && (properties.visibility.get().value() != Visibility::Visible ||
                             properties.display.get().value() == Display::None)) {
     return std::nullopt;
@@ -376,8 +376,8 @@ public:
     donner::components::ForAllChildrenRecursivePruned(
         EntityHandle(registry_, styleEntity), [&anyVisible](EntityHandle handle) {
           const auto* style = handle.try_get<ComputedStyleComponent>();
-          if (style != nullptr && style->properties.has_value() &&
-              style->properties->visibility.get().value() == Visibility::Visible) {
+          if (style != nullptr && style->properties() &&
+              style->properties()->visibility.get().value() == Visibility::Visible) {
             anyVisible = true;
             return false;
           }
@@ -451,7 +451,7 @@ public:
     }
 
     const auto& styleComponent = registry_.get<ComputedStyleComponent>(styleEntity);
-    const auto& properties = styleComponent.properties.value();
+    const auto& properties = *styleComponent.properties();
 
     if (properties.display.get().value() == Display::None) {
       return std::nullopt;
@@ -474,7 +474,7 @@ public:
     }
 
     if (auto maybeClipRect = LayoutSystem().clipRect(EntityHandle(registry_, treeEntity))) {
-      const Overflow overflow = styleComponent.properties->overflow.get().value();
+      const Overflow overflow = styleComponent.properties()->overflow.get().value();
 
       if (overflow != Overflow::Visible && overflow != Overflow::Auto) {
         ++layerDepth;
@@ -672,11 +672,11 @@ public:
   /// True when this text content element declares an effect that needs its own rendering layer.
   bool textSpanDeclaresEffect(Entity entity) const {
     const auto* style = registry_.try_get<ComputedStyleComponent>(entity);
-    if (!style || !style->properties.has_value()) {
+    if (!style || !style->properties()) {
       return false;
     }
 
-    const auto& properties = style->properties.value();
+    const auto& properties = *style->properties();
     const std::vector<FilterEffect>* filterEffects = properties.filter.getStoredValue();
     return properties.clipPath.getStoredValue() != nullptr || properties.mask.get().has_value() ||
            (filterEffects != nullptr && !filterEffects->empty());
@@ -694,7 +694,7 @@ public:
   std::optional<PaintServer::ElementReference> spanPaintReference(Entity entity,
                                                                   bool forStroke) const {
     const auto* style = registry_.try_get<ComputedStyleComponent>(entity);
-    if (style == nullptr || !style->properties.has_value()) {
+    if (style == nullptr || !style->properties()) {
       return std::nullopt;
     }
     const std::optional<PaintServer> paint =
@@ -976,7 +976,7 @@ public:
                                   ClipPathCollection& collection) {
     const auto* computedStyle = entity.try_get<ComputedStyleComponent>();
     const ClipPath* clip =
-        computedStyle ? computedStyle->properties->clipPath.getStoredValue() : nullptr;
+        computedStyle ? computedStyle->properties()->clipPath.getStoredValue() : nullptr;
     if (!clip) {
       return true;
     }
@@ -1061,7 +1061,7 @@ public:
       return;
     }
     const auto& [dataEntity, textEntity, clipPathData, computedStyle, isTextClipChild] = *geometry;
-    const auto& style = computedStyle->properties.value();
+    const auto& style = *computedStyle->properties();
     // Keep text glyphs separate for evenodd; reject nested clips until layers preserve groups.
     if (isTextClipChild && style.clipPath.getStoredValue()) {
       collection.valid = false;
@@ -1086,7 +1086,7 @@ public:
       return;
     }
     const auto* useStyle = child.try_get<ComputedStyleComponent>();
-    if (!useStyle || !clipChildIsVisible(useStyle->properties.value(), true)) {
+    if (!useStyle || !clipChildIsVisible(*useStyle->properties(), true)) {
       return;
     }
     const auto* shadow = child.try_get<ComputedShadowTreeComponent>();
@@ -1422,8 +1422,8 @@ public:
       // one level deeper. Break the cycle now to match SVG spec behavior where all masks
       // in a mutual recursion cycle have their mask attributes treated as "none".
       if (const auto* maskStyle = resolvedRef->handle.try_get<ComputedStyleComponent>()) {
-        if (maskStyle->properties.has_value()) {
-          if (auto nestedMask = maskStyle->properties->mask.get()) {
+        if (maskStyle->properties()) {
+          if (auto nestedMask = maskStyle->properties()->mask.get()) {
             if (auto nestedRef = nestedMask->resolve(*styleHandle.registry());
                 nestedRef && activeMaskElements_.count(nestedRef->handle.entity())) {
               return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
@@ -1888,12 +1888,12 @@ bool RenderingContext::HitGeometry::contains(const Vector2d& point, const Path* 
 namespace {
 void ConfigureHitPaint(const ComputedStyleComponent& style, const HitTestConfig& config,
                        RenderingContext::HitGeometry& geometry) {
-  const bool fillPainted = style.properties->fill.get().value() != PaintServer::None();
-  const bool strokePainted = style.properties->stroke.get().value() != PaintServer::None();
-  geometry.strokeWidth = strokePainted ? style.properties->strokeWidth.get().value().value : 0.0;
+  const bool fillPainted = style.properties()->fill.get().value() != PaintServer::None();
+  const bool strokePainted = style.properties()->stroke.get().value() != PaintServer::None();
+  geometry.strokeWidth = strokePainted ? style.properties()->strokeWidth.get().value().value : 0.0;
   geometry.testFill = config.testFill && (!config.requirePaintedFill || fillPainted);
   geometry.testStroke = config.testStroke && (!config.requirePaintedStroke || strokePainted);
-  geometry.fillRule = style.properties->fillRule.get().value();
+  geometry.fillRule = style.properties()->fillRule.get().value();
 }
 
 std::optional<Box2d> TextHitBounds(Registry& registry, Entity entity) {
@@ -1927,7 +1927,7 @@ bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, 
   const auto& style = StyleSystem().computeStyle(EntityHandle(registry_, entity), sink);
   const PointerEvents pointerEvents = mode == HitTestMode::EditorSelection
                                           ? PointerEvents::VisiblePainted
-                                          : style.properties->pointerEvents.get().value();
+                                          : style.properties()->pointerEvents.get().value();
   const HitTestConfig config = configFromPointerEvents(pointerEvents);
   if (pointerEvents == PointerEvents::None || (config.requireVisible && !instance->visible)) {
     return false;
@@ -2088,7 +2088,7 @@ void InstantiateStyledPaintTrees(Registry& registry, ParseWarningSink& warningSi
   for (auto view = registry.view<ComputedStyleComponent>(); auto entity : view) {
     auto [styleComponent] = view.get(entity);
 
-    const auto& properties = styleComponent.properties.value();
+    const auto& properties = *styleComponent.properties();
 
     if (auto fill = StyleSystem::localPaintForInstantiation(styleComponent, false)) {
       InstantiatePaintShadowTree(registry, entity, ShadowBranchType::OffscreenFill, fill.value(),
@@ -2174,10 +2174,10 @@ void InstantiateNestedMarkerTrees(Registry& registry, ParseWarningSink& warningS
         }
         for (const Entity shadowEntity : computedShadow.offscreenShadowEntities(*instanceIndex)) {
           const auto* shadowStyle = registry.try_get<ComputedStyleComponent>(shadowEntity);
-          if (!shadowStyle || !shadowStyle->properties) {
+          if (!shadowStyle || !shadowStyle->properties()) {
             continue;
           }
-          const auto& props = shadowStyle->properties.value();
+          const auto& props = *shadowStyle->properties();
           if (auto m = props.markerStart.get()) {
             nestedMarkerWork.push_back(
                 {shadowEntity, ShadowBranchType::OffscreenMarkerStart, m.value()});

@@ -57,16 +57,17 @@ TEST(StopComponentTest, ParseStopPresentationAttributeErrors) {
 
 TEST(StopComponentTest, ComputedStopComponentResolvesCurrentColorAndWarnings) {
   StopProperties input;
-  ComputedStyleComponent style;
-  style.properties.emplace();
-  style.properties->color.set(Color(RGBA(0, 0xFF, 0, 0xFF)), css::Specificity::Override());
+  auto record = std::make_shared<ComputedStyle>();
+  record->properties.color.set(Color(RGBA(0, 0xFF, 0, 0xFF)), css::Specificity::Override());
 
   css::Declaration stopColorDecl =
       css::CSS::ParseStyleAttribute("stop-color: currentColor").front();
   css::Declaration stopOpacityDecl = css::CSS::ParseStyleAttribute("stop-opacity: 0.25").front();
   css::Declaration invalidDecl = css::CSS::ParseStyleAttribute("stop-color: bogus").front();
-  style.properties->unparsedProperties.emplace(
+  record->properties.unparsedProperties.emplace(
       "stop-color", parser::UnparsedProperty{invalidDecl, css::Specificity::StyleAttribute()});
+  ComputedStyleComponent style;
+  style.style = std::move(record);
 
   std::map<RcString, parser::UnparsedProperty> unparsed;
   unparsed.emplace("stop-color",
@@ -87,7 +88,7 @@ TEST(StopComponentTest, ComputedStopComponentResolvesCurrentColorAndWarnings) {
 TEST(StopComponentTest, ComputedStopComponentReportsInvalidRecognizedProperty) {
   StopProperties input;
   ComputedStyleComponent style;
-  style.properties.emplace();
+  style.style = std::make_shared<ComputedStyle>();
 
   css::Declaration invalidDecl = css::CSS::ParseStyleAttribute("stop-opacity: bogus").front();
   std::map<RcString, parser::UnparsedProperty> unparsed;

@@ -763,7 +763,8 @@ TEST(RendererAnimationStyleBase, SharedTextResolvesFontAnimationPerShadowParent)
     if (document.registry().get<components::ShadowEntityComponent>(entity).lightEntity == label) {
       sizes.push_back(document.registry()
                           .get<components::ComputedStyleComponent>(entity)
-                          .properties->fontSize.get()
+                          .properties()
+                          ->fontSize.get()
                           .value()
                           .value);
     }
@@ -906,7 +907,8 @@ TEST(RendererAnimationStyleBase, RepeatedFontRecipesShareOneWorkAllowance) {
     if (document.registry().get<components::ShadowEntityComponent>(entity).lightEntity == target) {
       sizes.push_back(document.registry()
                           .get<components::ComputedStyleComponent>(entity)
-                          .properties->fontSize.get()
+                          .properties()
+                          ->fontSize.get()
                           .value()
                           .value);
     }

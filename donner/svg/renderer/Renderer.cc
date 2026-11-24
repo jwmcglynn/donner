@@ -185,11 +185,11 @@ bool ResolvedPaintContributesBounds(const components::ResolvedPaintServer& paint
 
 bool RenderingInstanceContributesBounds(const components::RenderingInstanceComponent& instance,
                                         const components::ComputedStyleComponent& style) {
-  if (!style.properties.has_value()) {
+  if (!style.properties()) {
     return true;
   }
 
-  const auto& props = *style.properties;
+  const auto& props = *style.properties();
   const double opacity = props.opacity.get().value();
   if (opacity <= 0.0) {
     return false;
@@ -352,8 +352,8 @@ SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
     }
 
     Box2d local = path->spline.bounds();
-    if (style.properties.has_value()) {
-      const auto& props = *style.properties;
+    if (style.properties()) {
+      const auto& props = *style.properties();
       const double strokeWidth = props.strokeWidth.get().value().value;
       if (ResolvedPaintContributesBounds(
               instance.resolvedStroke,

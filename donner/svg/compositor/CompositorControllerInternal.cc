@@ -403,10 +403,10 @@ void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostE
   }
 
   const auto* style = instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
-  if (style == nullptr || !style->properties.has_value()) {
+  if (style == nullptr || !style->properties()) {
     return;
   }
-  if (!instance->visible || style->properties->display.get().value() == Display::None) {
+  if (!instance->visible || style->properties()->display.get().value() == Display::None) {
     return;
   }
 

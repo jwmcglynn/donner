@@ -76,9 +76,9 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
     // Root font-size for rem units.
     if (ctx->rootEntity != entt::null) {
       if (const auto* rootStyle = registry.try_get<ComputedStyleComponent>(ctx->rootEntity)) {
-        if (rootStyle->properties) {
+        if (rootStyle->properties()) {
           // Use default FontMetrics for resolving root font-size (avoids circular dependency).
-          metrics.rootFontSize = rootStyle->properties->fontSize.get().value().toPixels(
+          metrics.rootFontSize = rootStyle->properties()->fontSize.get().value().toPixels(
               Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
         }
       }
@@ -86,17 +86,17 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   }
 
   // Element's computed font-size for em/ex/ch units.
-  if (style.properties) {
+  if (style.properties()) {
     // Resolve font-size using default metrics (font-size itself can't be em-relative to itself).
-    metrics.fontSize = style.properties->fontSize.get().value().toPixels(Box2d(), FontMetrics(),
-                                                                         Lengthd::Extent::Mixed);
+    metrics.fontSize = style.properties()->fontSize.get().value().toPixels(Box2d(), FontMetrics(),
+                                                                           Lengthd::Extent::Mixed);
   }
 
 #ifdef DONNER_TEXT_ENABLED
   if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-    if (style.properties) {
+    if (style.properties()) {
       if (const auto chUnit =
-              textEngine->measureChUnitInEm(style.properties->fontFamily.get().value(), entity)) {
+              textEngine->measureChUnitInEm(style.properties()->fontFamily.get().value(), entity)) {
         metrics.chUnitInEm = *chUnit;
       }
     }
@@ -141,11 +141,11 @@ bool IsFiniteBox(const Box2d& box) {
 std::optional<StrokeStyle> StrokeStyleFor(EntityHandle handle, double widthScale,
                                           CircleClipGeometryBudget* budget, bool& failed) {
   const auto* style = handle.try_get<ComputedStyleComponent>();
-  if (!style || !style->properties ||
-      style->properties->stroke.get().value() == PaintServer::None()) {
+  if (!style || !style->properties() ||
+      style->properties()->stroke.get().value() == PaintServer::None()) {
     return std::nullopt;
   }
-  const auto& properties = *style->properties;
+  const auto& properties = *style->properties();
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
   const double width = properties.strokeWidth.get().value().toPixels(
                            LayoutSystem().getViewBox(handle), metrics, Lengthd::Extent::Mixed) *
@@ -202,11 +202,11 @@ std::optional<Box2d> StrokeBounds(EntityHandle styleHandle, const Path& centerli
                                   CircleClipGeometryBudget* budget, bool geometryMustStayLocal,
                                   bool& failed) {
   const auto* style = styleHandle.try_get<ComputedStyleComponent>();
-  if (!style || !style->properties) {
+  if (!style || !style->properties()) {
     return std::nullopt;
   }
   const NonScalingStrokeMode mode =
-      ResolveNonScalingStrokeMode(style->properties->vectorEffect.getOr(VectorEffect::None),
+      ResolveNonScalingStrokeMode(style->properties()->vectorEffect.getOr(VectorEffect::None),
                                   worldFromGeometry, geometryMustStayLocal);
   const double authoredWidthScale = mode == NonScalingStrokeMode::ScaledLocal
                                         ? EffectiveStrokeWidth(1.0, mode, worldFromGeometry)
@@ -261,7 +261,7 @@ Lengthd::Extent ShapeLengthExtent(std::string_view name) {
 
 bool ReserveShapeStyleWork(EntityHandle handle, const ComputedStyleComponent& style) {
   auto* budget = handle.registry()->ctx().find<AnimationResourceBudget>();
-  const auto bytes = style.properties->complexPropertyBytes();
+  const auto bytes = style.properties()->complexPropertyBytes();
   return budget && bytes <= AnimationResourceBudget::kMaximumContextualWork / 6 &&
          budget->reserveContextualWork(bytes * 6);
 }
@@ -271,7 +271,7 @@ bool ReserveShapeRecipeWork(EntityHandle handle, const ComputedStyleComponent& s
   if (!budget) {
     return false;
   }
-  const auto bytes = style.properties->complexPropertyBytes();
+  const auto bytes = style.properties()->complexPropertyBytes();
   if (bytes > AnimationResourceBudget::kMaximumContextualWork / 6) {
     return false;
   }
@@ -333,7 +333,7 @@ auto EffectiveShapeProperties(EntityHandle handle, const Component& shape,
       !ReserveShapeStyleWork(handle, style)) {
     return std::nullopt;
   }
-  Computed computed(shape.properties, style.properties->unparsedProperties, warningSink);
+  Computed computed(shape.properties, style.properties()->unparsedProperties, warningSink);
   auto bases = computed.properties;
   if (HasContextualShapeLengths(handle) && ReserveShapeRecipeWork(handle, style)) {
     auto properties = shape.properties;
@@ -349,7 +349,7 @@ auto EffectiveShapeProperties(EntityHandle handle, const Component& shape,
        ...);
     }(std::make_index_sequence<std::tuple_size_v<decltype(source)>>{});
     if (changed) {
-      computed = Computed(properties, style.properties->unparsedProperties, warningSink);
+      computed = Computed(properties, style.properties()->unparsedProperties, warningSink);
     }
   }
   auto result = computed.properties;
@@ -519,7 +519,7 @@ constexpr bool ForEachShape(const F& f) {
 
 bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
   const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
-  return style.properties && style.properties->display.get().value() == Display::None;
+  return style.properties() && style.properties()->display.get().value() == Display::None;
 }
 
 double CircleRadius(const CircleClipPath& circle, const Box2d& box, double x, double y,
@@ -998,7 +998,7 @@ void ShapeSystem::instantiateShadowComputedPath(EntityHandle handle,
                                                 ParseWarningSink& warningSink) {
   const auto* shadow = handle.try_get<ShadowEntityComponent>();
   const auto* style = handle.try_get<ComputedStyleComponent>();
-  if (!shadow || !style || !style->properties) {
+  if (!shadow || !style || !style->properties()) {
     return;
   }
   const EntityHandle light(*handle.registry(), shadow->lightEntity);
@@ -1127,7 +1127,7 @@ Path ShapeSystem::circleClipPath(EntityHandle handle, const CircleClipPath& circ
   }
   const std::optional<Box2d> box = getCircleReferenceBox(handle, circle.box, budget);
   const auto* style = handle.try_get<ComputedStyleComponent>();
-  if (!box || !style || !style->properties) {
+  if (!box || !style || !style->properties()) {
     return {};
   }
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
@@ -1154,7 +1154,7 @@ Path ShapeSystem::ellipseClipPath(EntityHandle handle, const EllipseClipPath& el
   }
   const std::optional<Box2d> box = getCircleReferenceBox(handle, ellipse.box, budget);
   const auto* style = handle.try_get<ComputedStyleComponent>();
-  if (!box || !style || !style->properties) {
+  if (!box || !style || !style->properties()) {
     return {};
   }
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
@@ -1190,7 +1190,7 @@ Path ShapeSystem::polygonClipPath(EntityHandle handle, const PolygonClipPath& po
   }
   const std::optional<Box2d> box = getCircleReferenceBox(handle, polygon.box, budget);
   const auto* style = handle.try_get<ComputedStyleComponent>();
-  if (!box || !style || !style->properties) {
+  if (!box || !style || !style->properties()) {
     return {};
   }
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
@@ -1204,7 +1204,7 @@ Path ShapeSystem::insetClipPath(EntityHandle handle, const InsetClipPath& inset,
   }
   const std::optional<Box2d> box = getCircleReferenceBox(handle, inset.box, budget);
   const auto* style = handle.try_get<ComputedStyleComponent>();
-  if (!box || !style || !style->properties) {
+  if (!box || !style || !style->properties()) {
     return {};
   }
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
@@ -1379,7 +1379,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const PathComponent& path, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   Property<RcString> actualD = path.d;
-  const auto& properties = style.properties->unparsedProperties;
+  const auto& properties = style.properties()->unparsedProperties;
   if (auto it = properties.find("d"); it != properties.end()) {
     auto maybeError = Parse(
         parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,

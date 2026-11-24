@@ -755,7 +755,7 @@ TEST_F(RenderingContextTest, DirtyUseRebuildRecomputesShadowTreeStyles) {
            document.registry().view<donner::components::TreeComponent, ComputedStyleComponent>();
        auto entity : view) {
     const auto& computedStyle = view.get<ComputedStyleComponent>(entity);
-    EXPECT_TRUE(computedStyle.properties.has_value())
+    EXPECT_THAT(computedStyle.properties(), NotNull())
         << "entity " << int(entt::to_integral(entity))
         << " kept an uncomputed style after dirty shadow-tree rebuild";
   }
@@ -913,8 +913,8 @@ TEST_F(RenderingContextTest, ShadowTreeDescendantSelectorMatchesThroughShadowPar
   ASSERT_THAT(instance, NotNull());
 
   const auto& style = instance->styleHandle(document.registry()).get<ComputedStyleComponent>();
-  ASSERT_TRUE(style.properties.has_value());
-  EXPECT_EQ(style.properties->fill.get().value(),
+  ASSERT_THAT(style.properties(), NotNull());
+  EXPECT_EQ(style.properties()->fill.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(1, 2, 3, 0xFF)))));
 }
 
@@ -1218,7 +1218,8 @@ TEST_F(RenderingContextTest, PartialRebuildRestylesOnlyDirtyEntities) {
   // An `opacity` write marks only its element dirty. With retained updates off the frame takes the
   // full rebuild, but without a full restyle it must keep every other computed style: one element
   // is cascaded, testing only its candidates (the `*:not(svg)` user agent rule and `rect`), which
-  // both match with one declaration each, and nothing is discarded.
+  // both match with one declaration each, its local declarations are copied once into its new
+  // record, and nothing is discarded.
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
       <style>rect { fill: blue }</style>
@@ -1245,7 +1246,8 @@ TEST_F(RenderingContextTest, PartialRebuildRestylesOnlyDirtyEntities) {
                                       .rulesMatched = 2,
                                       .declarationsApplied = 2,
                                       .fullClears = 0,
-                                      .budgetRejections = 0}));
+                                      .budgetRejections = 0,
+                                      .registryCopies = 1}));
 }
 
 TEST_F(RenderingContextTest, FullRestyleMatchesUseHostWithoutItsShadowTree) {

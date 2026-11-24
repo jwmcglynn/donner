@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -224,6 +225,42 @@ INSTANTIATE_TEST_SUITE_P(
                                                 kOneRepetition, false);
                     },
                     {4, 2005, 2003, 2003, 0, 0}}),
+    CaseName);
+
+/// Matches a measurement whose repetitions all made \p copies whole-registry copies.
+Matcher<std::optional<CascadeMeasurement>> StableRegistryCopies(std::uint64_t copies) {
+  return Optional(
+      AllOf(Field("countersStable", &CascadeMeasurement::countersStable, true),
+            Field("counters", &CascadeMeasurement::counters,
+                  Field("registryCopies", &StyleCascadeCounters::registryCopies, copies))));
+}
+
+class CssCascadeRegistryCopyTest : public ::testing::TestWithParam<CascadeCase> {};
+
+TEST_P(CssCascadeRegistryCopyTest, CopiesLocalDeclarationsOncePerElement) {
+  EXPECT_THAT(GetParam().measure(), StableRegistryCopies(GetParam().expected.registryCopies));
+}
+
+/// Expected work with only the registry copies set; the other counts are checked above.
+constexpr StyleCascadeCounters RegistryCopies(std::uint64_t copies) {
+  return StyleCascadeCounters{.registryCopies = copies};
+}
+
+// Building an element's computed style copies its local declarations once, and inheritance builds
+// the style in place, so a frame makes one whole-registry copy per cascaded element that has local
+// declarations (presentation attributes or a `style` attribute) and none for the others.
+INSTANTIATE_TEST_SUITE_P(
+    RegistryCopies, CssCascadeRegistryCopyTest,
+    ::testing::Values(Load("Splash", Document::Splash, RegistryCopies(520)),
+                      Load("BootstrapIcons", Document::Icons, RegistryCopies(3057)),
+                      Load("Tiger", Document::Tiger, RegistryCopies(481)),
+                      Load("UseInstances", Document::UseInstances, RegistryCopies(4021)),
+                      Generated("Mixed1000x0", 1000, 0, CascadeRuleKind::Mixed,
+                                RegistryCopies(910)),
+                      Edit("SplashClass", Document::Splash, kSplashTarget, CascadeEdit::Class,
+                           RegistryCopies(520)),
+                      Edit("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style,
+                           RegistryCopies(3057))),
     CaseName);
 
 }  // namespace

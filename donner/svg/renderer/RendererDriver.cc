@@ -366,8 +366,8 @@ std::optional<Box2d> StrokedDeviceBox(Box2d localBox,
                                       double strokeWidth, NonScalingStrokeMode strokeMode,
                                       const Transform2d& worldFromEntity,
                                       const Transform2d& surfaceFromCanvas) {
-  if (style.properties.has_value()) {
-    const auto& props = style.properties.value();
+  if (style.properties()) {
+    const auto& props = *style.properties();
     // Value (not reference): `get()` returns a temporary optional, so binding a
     // reference to its `.value()` would dangle. PaintServer is a small variant.
     const PaintServer strokeServer = props.stroke.get().value();
@@ -415,9 +415,8 @@ std::optional<Box2d> DeviceDrawableBoundsWithStroke(
   if (box.isEmpty()) {
     return std::nullopt;
   }
-  const double strokeWidth = style.properties.has_value()
-                                 ? ResolvedStrokeWidth(registry, instance, *style.properties)
-                                 : 0.0;
+  const double strokeWidth =
+      style.properties() ? ResolvedStrokeWidth(registry, instance, *style.properties()) : 0.0;
   return StrokedDeviceBox(box, style, strokeWidth, strokeMode, worldFromEntity, surfaceFromCanvas);
 }
 
@@ -620,8 +619,8 @@ SpanLayerOwnership ResolveSpanLayerOwnership(Registry& registry, Entity textRoot
     }
 
     if (const auto* style = registry.try_get<components::ComputedStyleComponent>(current);
-        style != nullptr && style->properties.has_value()) {
-      ownership.opacity *= style->properties->opacity.get().value();
+        style != nullptr && style->properties()) {
+      ownership.opacity *= style->properties()->opacity.get().value();
     }
 
     const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
@@ -691,11 +690,11 @@ std::optional<components::TextDecorationOrigin> BuildDecorationOrigin(
     const Box2d& viewBox, const FontMetrics& baseFm, double strokeScale,
     const ResolvePaint& resolveSpanPaint) {
   const auto* providerStyle = registry.try_get<components::ComputedStyleComponent>(provider);
-  if (!providerStyle || !providerStyle->properties) {
+  if (!providerStyle || !providerStyle->properties()) {
     return std::nullopt;
   }
   {
-    const auto& props = *providerStyle->properties;
+    const auto& props = *providerStyle->properties();
     components::TextDecorationOrigin origin;
     origin.lines = declaringProperties.textDecoration.get().value();
     origin.fill = resolveSpanPaint(props.fill.get().value(), providerStyle->externalFill, false);
@@ -779,14 +778,14 @@ void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
       nearestTextStyleEntity = walkEntity;
     }
     const auto* walkStyle = registry.try_get<components::ComputedStyleComponent>(walkEntity);
-    if (walkStyle && walkStyle->properties &&
-        walkStyle->properties->textDecoration.get().value() != TextDecoration::None) {
+    if (walkStyle && walkStyle->properties() &&
+        walkStyle->properties()->textDecoration.get().value() != TextDecoration::None) {
       if (count == origins.size()) {
         return;
       }
       const Entity provider = DecorationProvider(registry, walkEntity, nearestTextStyleEntity);
       if (const auto origin =
-              BuildDecorationOrigin(registry, provider, *walkStyle->properties, viewBox, baseFm,
+              BuildDecorationOrigin(registry, provider, *walkStyle->properties(), viewBox, baseFm,
                                     strokeScale, resolveSpanPaint)) {
         origins[count++] = *origin;
       }
@@ -906,7 +905,7 @@ std::pair<Entity, const components::ComputedStyleComponent*> SpanStyleSource(
     Registry& registry, const TextStyleContext* styleContext, Entity sourceEntity) {
   Entity styleEntity = styleContext ? styleContext->styleEntityFor(sourceEntity) : sourceEntity;
   const auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
-  while ((!style || !style->properties) &&
+  while ((!style || !style->properties()) &&
          registry.all_of<donner::components::TreeComponent>(styleEntity)) {
     const auto& tree = registry.get<donner::components::TreeComponent>(styleEntity);
     if (tree.parent() == entt::null) {
@@ -1026,16 +1025,17 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
 
     const auto [styleEntity, style] = SpanStyleSource(registry, styleContext, span.sourceEntity);
 
-    if (style && style->properties) {
+    if (style && style->properties()) {
       span.resolvedFill =
-          resolveSpanPaint(style->properties->fill.get().value(), style->externalFill, false);
+          resolveSpanPaint(style->properties()->fill.get().value(), style->externalFill, false);
       span.resolvedStroke =
-          resolveSpanPaint(style->properties->stroke.get().value(), style->externalStroke, true);
+          resolveSpanPaint(style->properties()->stroke.get().value(), style->externalStroke, true);
       span.hasComputedPaint = true;
-      span.fillOpacity = style->properties->fillOpacity.get().value();
-      span.strokeOpacity = style->properties->strokeOpacity.get().value();
-      ResolveSpanStroke(*style->properties, styleEntity, viewBox, strokeScale, strokeLengths, span);
-      span.paintOrder = style->properties->paintOrder.get().value();
+      span.fillOpacity = style->properties()->fillOpacity.get().value();
+      span.strokeOpacity = style->properties()->strokeOpacity.get().value();
+      ResolveSpanStroke(*style->properties(), styleEntity, viewBox, strokeScale, strokeLengths,
+                        span);
+      span.paintOrder = style->properties()->paintOrder.get().value();
     }
 
     ResolveSpanDecorations(registry, styleEntity, span, viewBox, baseFm, strokeScale,
@@ -1117,7 +1117,7 @@ PathShape toPathShape(EntityHandle sourceEntity,
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
   shape.path = &path.spline;
-  shape.fillRule = style.properties->fillRule.get().value();
+  shape.fillRule = style.properties()->fillRule.get().value();
   shape.sourceEntity = sourceEntity;
   shape.allowDeferredGeometry =
       !sourceEntity.registry()->ctx().contains<components::ExternalUseStyleContext>();
@@ -1129,7 +1129,7 @@ StrokeParams toStrokeParams(Registry& registry,
                             const components::ComputedStyleComponent& style,
                             NonScalingStrokeMode strokeMode) {
   StrokeParams stroke;
-  const auto& properties = style.properties.value();
+  const auto& properties = *style.properties();
 
   const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   const StrokeLengthResolver toPixels(properties, viewBox);
@@ -1240,7 +1240,7 @@ bool StrokeIsPatternPainted(const components::RenderingInstanceComponent& instan
 NonScalingStrokeMode ShapeNonScalingStrokeMode(
     const components::RenderingInstanceComponent& instance,
     const components::ComputedStyleComponent& style) {
-  return ResolveNonScalingStrokeMode(style.properties->vectorEffect.getOr(VectorEffect::None),
+  return ResolveNonScalingStrokeMode(style.properties()->vectorEffect.getOr(VectorEffect::None),
                                      instance.worldFromEntityTransform,
                                      StrokeIsPatternPainted(instance));
 }
@@ -1271,7 +1271,7 @@ PaintParams toPaintParams(Registry& registry,
                           const components::RenderingInstanceComponent& instance,
                           const components::ComputedStyleComponent& style) {
   PaintParams paint;
-  const auto& properties = style.properties.value();
+  const auto& properties = *style.properties();
 
   paint.opacity = properties.opacity.get().value();
   paint.fill = instance.resolvedFill;
@@ -1352,7 +1352,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       // the referencing element's clip-rule property.
       const bool usesEvenOdd =
           path.clipRule == ClipRule::EvenOdd ||
-          (!path.hasOwnClipRule && style.properties->clipRule.get().value() == ClipRule::EvenOdd);
+          (!path.hasOwnClipRule && style.properties()->clipRule.get().value() == ClipRule::EvenOdd);
       shape.fillRule = usesEvenOdd ? FillRule::EvenOdd : FillRule::NonZero;
       shape.parentFromEntity = path.parentFromEntity;
       shape.layer = path.layer;
@@ -1584,7 +1584,7 @@ bool IsInvisibleInstance(Registry& registry,
   }
   const EntityHandle styleHandle = instance.styleHandle(registry);
   const auto& style = styleHandle.get<components::ComputedStyleComponent>();
-  return style.properties.has_value() && style.properties->opacity.get().value() <= 0.0;
+  return style.properties() && style.properties()->opacity.get().value() <= 0.0;
 }
 
 /// Filtered instances that reach the frame in one pass over @p entities, and the shared content
@@ -2361,7 +2361,7 @@ std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
 
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style) {
-  const auto& properties = style.properties.value();
+  const auto& properties = *style.properties();
   const css::RGBA currentColor = ResolvedCurrentColor(properties);
   const float fillOpacity = NarrowToFloat(properties.fillOpacity.get().value());
 
@@ -2388,7 +2388,7 @@ css::Color resolveFillColor(const components::RenderingInstanceComponent& instan
 NonScalingStrokeMode TextNonScalingStrokeMode(
     const components::RenderingInstanceComponent& instance,
     const components::ComputedStyleComponent& style) {
-  return ResolveNonScalingStrokeMode(style.properties->vectorEffect.getOr(VectorEffect::None),
+  return ResolveNonScalingStrokeMode(style.properties()->vectorEffect.getOr(VectorEffect::None),
                                      instance.worldFromEntityTransform,
                                      /*geometryMustStayLocal=*/true);
 }
@@ -2405,7 +2405,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
                         const components::ComputedStyleComponent& style,
                         const components::TextComponent* textComp, EntityHandle textRootHandle) {
   TextParams params;
-  const auto& properties = style.properties.value();
+  const auto& properties = *style.properties();
   const css::RGBA currentColor = ResolvedCurrentColor(properties);
 
   params.fillColor = resolveFillColor(instance, style);
@@ -2578,7 +2578,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   const auto* textRootStyle = instance.textSpanRoot != entt::null
                                   ? textRootHandle.try_get<components::ComputedStyleComponent>()
                                   : &style;
-  if (textRootStyle == nullptr || !textRootStyle->properties.has_value()) {
+  if (textRootStyle == nullptr || !textRootStyle->properties()) {
     return;
   }
 
@@ -2666,7 +2666,7 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   params.targetRect = Box2d::WithSize(Vector2d(image.image->width, image.image->height));
   params.sourceEntity = instance.dataHandle(registry);
 
-  params.imageRendering = style.properties->imageRendering.get().value();
+  params.imageRendering = style.properties()->imageRendering.get().value();
 
   return params;
 }
@@ -2701,9 +2701,9 @@ std::optional<Box2d> CullableDeviceBounds(Registry& registry,
 }
 
 bool HasNeutralLeafCompositing(const components::ComputedStyleComponent& style) {
-  return style.properties->opacity.get().value() == 1.0 &&
-         style.properties->mixBlendMode.get().value() == MixBlendMode::Normal &&
-         style.properties->isolation.get().value() != Isolation::Isolate;
+  return style.properties()->opacity.get().value() == 1.0 &&
+         style.properties()->mixBlendMode.get().value() == MixBlendMode::Normal &&
+         style.properties()->isolation.get().value() != Isolation::Isolate;
 }
 
 /// Collect a masked host followed by its mask content, including masks shared with an earlier host.
@@ -3197,7 +3197,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     view.advance();
 
     const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
-    if (!style.properties.has_value()) {
+    if (!style.properties()) {
       popEndedSubtrees(subtreeMarkers_, entity);
       continue;
     }
@@ -3229,9 +3229,9 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     const auto* filterStages = preparedFilterStagesFor(entity);
     const std::size_t filterLayerCount = filterStages ? filterStages->size() : 0;
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !filterStages;
-    const double opacity = filterHidesElement ? 0.0 : style.properties->opacity.get().value();
-    const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
-    const Isolation isolation = style.properties->isolation.get().value();
+    const double opacity = filterHidesElement ? 0.0 : style.properties()->opacity.get().value();
+    const MixBlendMode blendMode = style.properties()->mixBlendMode.get().value();
+    const Isolation isolation = style.properties()->isolation.get().value();
     const bool hasIsolatedLayer =
         opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
@@ -3436,8 +3436,7 @@ RangeBoundContribution BoundPathEntity(Registry& registry, Entity entity,
   // widths all reach past half the stroke width.
   const std::optional<Box2d> canvas = StrokedDeviceBox(
       path.spline.bounds(), style,
-      style.properties.has_value() ? ResolvedStrokeWidth(registry, instance, *style.properties)
-                                   : 0.0,
+      style.properties() ? ResolvedStrokeWidth(registry, instance, *style.properties()) : 0.0,
       ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
       surfaceFromCanvas);
   if (!canvas.has_value()) {
@@ -3494,8 +3493,8 @@ RangeBoundContribution BoundVisibleEntity(Registry& registry, Entity entity,
 
 bool IsPaintedBoundsCandidate(const components::RenderingInstanceComponent& instance,
                               const components::ComputedStyleComponent& style) {
-  return style.properties.has_value() && instance.visible &&
-         style.properties->display.get().value() != Display::None;
+  return style.properties() && instance.visible &&
+         style.properties()->display.get().value() != Display::None;
 }
 
 void AddRangeBound(std::optional<Box2d>& accumulated, const Box2d& box) {
@@ -3773,7 +3772,7 @@ const components::RenderingInstanceComponent* RendererDriver::beginPreparingFilt
   }
   syncFilterPreparationStats();
   const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
-  return style.properties.has_value() ? instance : nullptr;
+  return style.properties() ? instance : nullptr;
 }
 
 bool RendererDriver::configureFilterStages(std::vector<components::FilterGraph>& stages,
@@ -3878,8 +3877,8 @@ bool SupportsFilterSpacePaint(Registry& registry,
   }
   const EntityHandle styleHandle = instance.styleHandle(registry);
   const auto* style = styleHandle.try_get<components::ComputedStyleComponent>();
-  return style != nullptr && style->properties.has_value() &&
-         style->properties->vectorEffect.getOr(VectorEffect::None) == VectorEffect::None &&
+  return style != nullptr && style->properties() &&
+         style->properties()->vectorEffect.getOr(VectorEffect::None) == VectorEffect::None &&
          components::ShapeSystem::geometryHandle(styleHandle)
              .all_of<components::ComputedPathComponent>();
 }
@@ -4020,13 +4019,13 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         components::LayoutSystem().getViewBox(instance->dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
-        style.properties->fontSize.get().value().toPixels(filterViewBox, filterBaseFontMetrics);
+        style.properties()->fontSize.get().value().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
     const std::optional<Box2d> elementBounds = filterObjectBounds(registry, entity, *instance);
     std::optional<std::vector<components::FilterGraph>> stages = resolveFilterStages(
         registry, instance->resolvedFilter.value(), *instance,
-        ResolvedCurrentColor(*style.properties), filterViewBox, filterFontMetrics, elementBounds);
+        ResolvedCurrentColor(*style.properties()), filterViewBox, filterFontMetrics, elementBounds);
     if (!stages) {
       continue;
     }
@@ -4046,7 +4045,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     view.advance();
 
     const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
-    if (!style.properties.has_value()) {
+    if (!style.properties()) {
       continue;
     }
 
@@ -4077,9 +4076,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const std::size_t filterLayerCount = filterStages ? filterStages->size() : 0;
     const bool hasFilterLayer = filterLayerCount != 0;
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !filterStages;
-    const double opacity = filterHidesElement ? 0.0 : style.properties->opacity.get().value();
-    const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
-    const Isolation isolation = style.properties->isolation.get().value();
+    const double opacity = filterHidesElement ? 0.0 : style.properties()->opacity.get().value();
+    const MixBlendMode blendMode = style.properties()->mixBlendMode.get().value();
+    const Isolation isolation = style.properties()->isolation.get().value();
     const bool hasIsolatedLayer =
         opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
@@ -4282,7 +4281,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     view.advance();
 
     const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
-    if (!style.properties.has_value()) {
+    if (!style.properties()) {
       popEndedSubtrees(localDeferred, entity);
       continue;
     }
@@ -4308,9 +4307,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const std::size_t filterLayerCount = filterStages ? filterStages->size() : 0;
     const bool hasFilterLayer = filterLayerCount != 0;
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !filterStages;
-    const double opacity = filterHidesElement ? 0.0 : style.properties->opacity.get().value();
-    const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
-    const Isolation isolation = style.properties->isolation.get().value();
+    const double opacity = filterHidesElement ? 0.0 : style.properties()->opacity.get().value();
+    const MixBlendMode blendMode = style.properties()->mixBlendMode.get().value();
+    const Isolation isolation = style.properties()->isolation.get().value();
     const bool hasIsolatedLayer =
         opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
@@ -4575,10 +4574,10 @@ std::pair<MaskType, ColorInterpolation> MaskPaintOptions(EntityHandle maskHandle
   MaskType maskType = MaskType::Luminance;
   ColorInterpolation colorInterpolation = ColorInterpolation::SRGB;
   if (const auto* maskStyle = maskHandle.try_get<components::ComputedStyleComponent>();
-      maskStyle != nullptr && maskStyle->properties.has_value()) {
-    maskType = maskStyle->properties->maskType.get().value_or(MaskType::Luminance);
+      maskStyle != nullptr && maskStyle->properties()) {
+    maskType = maskStyle->properties()->maskType.get().value_or(MaskType::Luminance);
     colorInterpolation =
-        maskStyle->properties->colorInterpolation.get().value_or(ColorInterpolation::SRGB);
+        maskStyle->properties()->colorInterpolation.get().value_or(ColorInterpolation::SRGB);
   }
   return {maskType, colorInterpolation};
 }
@@ -4847,7 +4846,7 @@ void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registr
                                             const components::ComputedStyleComponent& style,
                                             const PaintParams& paint,
                                             const Transform2d& deviceFromLocalForShape) {
-  const PaintOrder paintOrder = style.properties->paintOrder.get().value();
+  const PaintOrder paintOrder = style.properties()->paintOrder.get().value();
   const PathShape pathShape = toPathShape(
       components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), path, style);
 
@@ -5161,7 +5160,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
 
   double markerScale = 1.0;
   if (markerComponent->markerUnits == MarkerUnits::StrokeWidth) {
-    const double strokeWidth = style.properties->strokeWidth.get().value().value;
+    const double strokeWidth = style.properties()->strokeWidth.get().value().value;
     markerScale = strokeWidth;
   }
 
@@ -5190,7 +5189,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   // Apply overflow clipping if needed. The clip rect is in the marker's content coordinates, so it
   // turns with the marker.
   const auto& markerStyle = markerHandle.get<components::ComputedStyleComponent>();
-  const Overflow overflow = markerStyle.properties->overflow.get().value();
+  const Overflow overflow = markerStyle.properties()->overflow.get().value();
   const bool needsClip = overflow != Overflow::Visible && overflow != Overflow::Auto;
 
   if (needsClip) {
@@ -5418,15 +5417,16 @@ public:
         verbose_(verbose),
         hostLease_(
             EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)) {
-    if (!style.properties || child.ctx().contains<components::ExternalUseStyleContext>() ||
+    if (!style.style || child.ctx().contains<components::ExternalUseStyleContext>() ||
         !ReserveExternalWork(*work, charge,
                              child.storage<donner::components::TreeComponent>().size())) {
       return;
     }
     const auto* context = child.ctx().find<components::DocumentResourceFamilyContext>();
     auto family = context ? context->budget : nullptr;
-    const auto& properties = *style.properties;
-    const std::size_t bytes = properties.complexPropertyBytes();
+    // The occurrence shares the host's record; its dynamic bytes stay charged to the family while
+    // the occurrence can keep that record alive past a restyle of the host.
+    const std::size_t bytes = style.style->properties.complexPropertyBytes();
     if (bytes > components::StyleResourceBudget::kMaximumComplexPropertyBytes ||
         (family &&
          !family->reserve(components::DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes))) {
@@ -5436,8 +5436,8 @@ public:
       hostFonts_.emplace(child, std::move(overlay));
     }
     child.ctx()
-        .emplace<components::ExternalUseStyleContext>(root, properties, style.resourceOpacities,
-                                                      fill, stroke, family, bytes, std::move(work))
+        .emplace<components::ExternalUseStyleContext>(root, style.style, fill, stroke, family,
+                                                      bytes, std::move(work))
         .hostFontKey = hostFonts_ ? hostFonts_->key() : 0;
     retainPaintOwner(fill, resourceLeases_[0]);
     retainPaintOwner(stroke, resourceLeases_[1]);
@@ -5571,7 +5571,7 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   const Entity root = fragment.empty()
                           ? child.ctx().get<components::SVGDocumentContext>().rootEntity
                           : components::FindAttachedEntityById(child, RcString(fragment));
-  if (root == entt::null || !style.properties) {
+  if (root == entt::null || !style.properties()) {
     return;
   }
   ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
@@ -5881,7 +5881,7 @@ std::vector<components::BoundsGeometryPiece> RendererDriver::measureExternalUseG
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             child);
   const Entity root = components::FindAttachedEntityById(child, externalUse->fragment);
-  if (root == entt::null || !style.properties) {
+  if (root == entt::null || !style.properties()) {
     return {};
   }
   // Lay the fragment out with the occurrence's styles, exactly as drawing it does. Measuring is

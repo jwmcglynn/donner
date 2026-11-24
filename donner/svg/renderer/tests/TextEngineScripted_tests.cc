@@ -262,6 +262,21 @@ auto RunOnPathIs(auto matcher) {
 
 namespace {
 
+/// A computed style with an empty record, for manually constructed text roots and spans.
+components::ComputedStyleComponent MakeStyle() {
+  components::ComputedStyleComponent style;
+  style.style = std::make_shared<components::ComputedStyle>();
+  return style;
+}
+
+/// Replace \p style's record with a copy edited by \p edit, since stored records are immutable.
+template <typename Edit>
+void EditStyle(components::ComputedStyleComponent& style, const Edit& edit) {
+  auto record = std::make_shared<components::ComputedStyle>(*style.style);
+  edit(record->properties);
+  style.style = std::move(record);
+}
+
 EntityHandle MakeReferenceTextRoot(Registry& registry, Visibility visibility) {
   const Entity root = registry.create();
   registry.emplace<donner::components::TreeComponent>(root, xml::XMLQualifiedNameRef("text"));
@@ -277,11 +292,10 @@ EntityHandle MakeReferenceTextRoot(Registry& registry, Visibility visibility) {
   span.yList = {Lengthd(20, Lengthd::Unit::None)};
   computed.spans.push_back(std::move(span));
   registry.emplace<components::ComputedTextComponent>(root, std::move(computed));
-  components::ComputedStyleComponent style;
-  style.properties.emplace();
-  style.properties->fontSize.set(Lengthd(12, Lengthd::Unit::Px), css::Specificity::Override());
-  style.properties->visibility.set(visibility, css::Specificity::Override());
-  registry.emplace<components::ComputedStyleComponent>(root, std::move(style));
+  auto record = std::make_shared<components::ComputedStyle>();
+  record->properties.fontSize.set(Lengthd(12, Lengthd::Unit::Px), css::Specificity::Override());
+  record->properties.visibility.set(visibility, css::Specificity::Override());
+  registry.emplace<components::ComputedStyleComponent>(root).style = std::move(record);
   return EntityHandle(registry, root);
 }
 
@@ -333,8 +347,10 @@ std::optional<FontVariant> ShapeSmallCapsWithSynthesis(std::string_view policy,
   const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
   root.get<components::TextComponent>().text = RcString("a");
   root.get<components::ComputedTextComponent>().spans.front().text = RcString("a");
-  root.get<components::ComputedStyleComponent>().properties->parseStyle(
-      RcString("font-variant: small-caps; font-synthesis-small-caps: " + std::string(policy)));
+  EditStyle(root.get<components::ComputedStyleComponent>(), [&](PropertyRegistry& properties) {
+    properties.parseStyle(
+        RcString("font-variant: small-caps; font-synthesis-small-caps: " + std::string(policy)));
+  });
   std::size_t work = 100000;
   EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Optional(testing::_));
   return probe->lastShapedVariant;
@@ -364,8 +380,9 @@ TEST(TextEngineScriptedTest, ReferenceSmallCapsCellsKeepFullFontHeight) {
   auto& span = root.get<components::ComputedTextComponent>().spans.front();
   span.text = RcString("a");
   span.fontVariant = FontVariant::SmallCaps;
-  root.get<components::ComputedStyleComponent>().properties->fontVariant.set(
-      FontVariant::SmallCaps, css::Specificity::Override());
+  EditStyle(root.get<components::ComputedStyleComponent>(), [](PropertyRegistry& properties) {
+    properties.fontVariant.set(FontVariant::SmallCaps, css::Specificity::Override());
+  });
   std::size_t work = 100000;
 
   const auto geometry = engine.referenceGeometry(root, false, work);
@@ -526,8 +543,9 @@ TEST(TextEngineScriptedTest, ReferenceVerticalCellsRefuseInsteadOfReturningZeroW
   FontManager manager(registry);
   TextEngine engine = MakeScriptedEngine(registry, manager);
   const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Visible);
-  root.get<components::ComputedStyleComponent>().properties->writingMode.set(
-      WritingMode::VerticalRl, css::Specificity::Override());
+  EditStyle(root.get<components::ComputedStyleComponent>(), [](PropertyRegistry& properties) {
+    properties.writingMode.set(WritingMode::VerticalRl, css::Specificity::Override());
+  });
   std::size_t work = 100000;
   EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Eq(std::nullopt));
   EXPECT_EQ(engine.layoutCallCountForTesting(), 0u);
@@ -617,9 +635,7 @@ TEST(TextEngineScriptedTest, CachedGeometryBuildsCharacterGlyphAndBoundsData) {
   computedText.spans.push_back(std::move(span));
   registry.emplace<components::ComputedTextComponent>(root, computedText);
 
-  components::ComputedStyleComponent style;
-  style.properties.emplace();
-  registry.emplace<components::ComputedStyleComponent>(root, style);
+  registry.emplace<components::ComputedStyleComponent>(root, MakeStyle());
 
   const EntityHandle rootHandle(registry, root);
   // A, combining acute, and B each consume one DOM UTF-16 unit.
@@ -2641,12 +2657,6 @@ std::shared_ptr<const std::vector<uint8_t>> MakeUnparseableOutlineFontData() {
   return std::make_shared<const std::vector<uint8_t>>(std::move(data));
 }
 
-components::ComputedStyleComponent MakeStyle() {
-  components::ComputedStyleComponent style;
-  style.properties.emplace();
-  return style;
-}
-
 /// Creates a text root entity with computed text/style/viewbox components and a single
 /// span sourced from the root, ready for the cached-geometry APIs.
 Entity MakeTextRootWithSpan(Registry& registry, const std::string& textValue,
@@ -2765,7 +2775,9 @@ TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesRequiresRootTextComponent
   registry.emplace<donner::components::TreeComponent>(root, xml::XMLQualifiedNameRef("text"));
   registry.emplace<components::TextRootComponent>(root);
   auto rootStyle = MakeStyle();
-  rootStyle.properties->textAnchor.set(TextAnchor::End, css::Specificity::Override());
+  EditStyle(rootStyle, [](PropertyRegistry& properties) {
+    properties.textAnchor.set(TextAnchor::End, css::Specificity::Override());
+  });
   registry.emplace<components::ComputedStyleComponent>(root, rootStyle);
 
   components::ComputedTextComponent text;
@@ -2791,7 +2803,9 @@ TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesFallsBackToParentStyleAnd
                                                       xml::XMLQualifiedNameRef("tspan"));
   registry.get<donner::components::TreeComponent>(root).appendChild(registry, styledParent);
   auto parentStyle = MakeStyle();
-  parentStyle.properties->textAnchor.set(TextAnchor::End, css::Specificity::Override());
+  EditStyle(parentStyle, [](PropertyRegistry& properties) {
+    properties.textAnchor.set(TextAnchor::End, css::Specificity::Override());
+  });
   registry.emplace<components::ComputedStyleComponent>(styledParent, parentStyle);
 
   const Entity unstyledChild = registry.create();
@@ -2837,9 +2851,10 @@ TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesResolvesKeywordsAncestors
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
 
   const Entity root = MakeTextRootWithSpan(registry, "ABX", MakeSpan("X"));
-  auto& rootStyle = registry.get<components::ComputedStyleComponent>(root);
-  rootStyle.properties->baselineShift.set(Lengthd(5.0, Lengthd::Unit::Px),
-                                          css::Specificity::Override());
+  EditStyle(
+      registry.get<components::ComputedStyleComponent>(root), [](PropertyRegistry& properties) {
+        properties.baselineShift.set(Lengthd(5.0, Lengthd::Unit::Px), css::Specificity::Override());
+      });
 
   auto makeChild = [&](Entity parent, std::optional<Lengthd> baselineShift) {
     const Entity entity = registry.create();
@@ -2847,7 +2862,9 @@ TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesResolvesKeywordsAncestors
     registry.get<donner::components::TreeComponent>(parent).appendChild(registry, entity);
     if (baselineShift.has_value()) {
       auto style = MakeStyle();
-      style.properties->baselineShift.set(*baselineShift, css::Specificity::Override());
+      EditStyle(style, [&](PropertyRegistry& properties) {
+        properties.baselineShift.set(*baselineShift, css::Specificity::Override());
+      });
       registry.emplace<components::ComputedStyleComponent>(entity, style);
     }
     return entity;
@@ -2861,10 +2878,15 @@ TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesResolvesKeywordsAncestors
   const Entity leaf = makeChild(lengthAncestor, Lengthd(-0.33, Lengthd::Unit::Em));
 
   // dominant-baseline: no-change on the leaf resolves to the parent's value.
-  registry.get<components::ComputedStyleComponent>(leaf).properties->dominantBaseline.set(
-      DominantBaseline::NoChange, css::Specificity::Override());
-  registry.get<components::ComputedStyleComponent>(lengthAncestor)
-      .properties->dominantBaseline.set(DominantBaseline::Hanging, css::Specificity::Override());
+  EditStyle(
+      registry.get<components::ComputedStyleComponent>(leaf), [](PropertyRegistry& properties) {
+        properties.dominantBaseline.set(DominantBaseline::NoChange, css::Specificity::Override());
+      });
+  EditStyle(registry.get<components::ComputedStyleComponent>(lengthAncestor),
+            [](PropertyRegistry& properties) {
+              properties.dominantBaseline.set(DominantBaseline::Hanging,
+                                              css::Specificity::Override());
+            });
 
   // Per-span textLength comes from the source element's TextComponent.
   components::TextComponent leafText;
@@ -3555,8 +3577,10 @@ TEST(TextEngineScriptedTest, VerticalTextPathCachedLengthUsesOneInlineAdvance) {
         owner.textLength = Lengthd(24.0, Lengthd::Unit::None);
         owner.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
       }
-      registry.get<components::ComputedStyleComponent>(root).properties->writingMode.set(
-          WritingMode::VerticalRl, css::Specificity::Override());
+      EditStyle(registry.get<components::ComputedStyleComponent>(root),
+                [](PropertyRegistry& properties) {
+                  properties.writingMode.set(WritingMode::VerticalRl, css::Specificity::Override());
+                });
       const EntityHandle handle(registry, root);
       const double advance = adjusted ? 24.0 : 12.0;
       EXPECT_THAT(engine.getComputedTextLength(handle), DoubleEq(advance));

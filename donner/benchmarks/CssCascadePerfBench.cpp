@@ -81,10 +81,10 @@ bool PrintResult(std::string_view kind, std::string_view name,
   }
   std::printf(" elements_cascaded=%" PRIu64 " rules_tested=%" PRIu64 " rules_matched=%" PRIu64
               " declarations_applied=%" PRIu64 " full_clears=%" PRIu64 " budget_rejections=%" PRIu64
-              " counters_stable=%s\n",
+              " registry_copies=%" PRIu64 " counters_stable=%s\n",
               counters.elementsCascaded, counters.rulesTested, counters.rulesMatched,
               counters.declarationsApplied, counters.fullClears, counters.budgetRejections,
-              measurement->countersStable ? "yes" : "no");
+              counters.registryCopies, measurement->countersStable ? "yes" : "no");
   std::fflush(stdout);
   return measurement->countersStable;
 }

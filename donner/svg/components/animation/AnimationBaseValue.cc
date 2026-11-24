@@ -156,16 +156,16 @@ std::optional<std::string> GeometryPropertyValue(Registry& registry, Entity targ
     return std::nullopt;
   }
   const auto* style = registry.try_get<ComputedStyleComponent>(target);
-  if (!style || !style->properties) {
+  if (!style || !style->properties()) {
     return PropertyValue(component->properties, attribute, context);
   }
-  const auto bytes = style->properties->complexPropertyBytes();
+  const auto bytes = style->properties()->complexPropertyBytes();
   if (bytes > AnimationResourceBudget::kMaximumSourceBytes / 6 ||
       !budget.reserveSourceBytes(bytes * 6)) {
     return std::string{};
   }
   ParseWarningSink warnings = ParseWarningSink::Disabled();
-  Computed computed(component->properties, style->properties->unparsedProperties, warnings);
+  Computed computed(component->properties, style->properties()->unparsedProperties, warnings);
   return PropertyValue(computed.properties, attribute, context);
 }
 
@@ -375,15 +375,15 @@ std::optional<std::string> PatternBaseValue(Registry& registry, Entity target,
       properties.*field = *value;
     }
     if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
-        style && style->properties) {
-      const auto bytes = style->properties->complexPropertyBytes();
+        style && style->properties()) {
+      const auto bytes = style->properties()->complexPropertyBytes();
       if (bytes > AnimationResourceBudget::kMaximumSourceBytes / 6 ||
           !budget.reserveSourceBytes(bytes * 6)) {
         return std::string{};
       }
       ParseWarningSink warnings = ParseWarningSink::Disabled();
       properties = LayoutSystem().resolveSizeProperties(
-          properties, style->properties->unparsedProperties, warnings);
+          properties, style->properties()->unparsedProperties, warnings);
     }
     return SerializeValue((properties.*field).get().value_or(Lengthd()), context);
   }
@@ -933,19 +933,19 @@ std::optional<RcString> AnimationReferenceValue(Registry& registry, Entity entit
 void ConfigureAnimationStyleContext(Registry& registry, Entity target, Entity root,
                                     AnimationValueContext& context) {
   if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
-      style && style->properties) {
-    context.linearRgb = style->properties->colorInterpolation.getOr(ColorInterpolation::SRGB) ==
+      style && style->properties()) {
+    context.linearRgb = style->properties()->colorInterpolation.getOr(ColorInterpolation::SRGB) ==
                         ColorInterpolation::LinearRGB;
-    if (const auto color = style->properties->color.get()) {
+    if (const auto color = style->properties()->color.get()) {
       context.currentColor = color->resolve(context.currentColor, 1);
     }
-    if (const auto font = style->properties->fontSize.get()) {
+    if (const auto font = style->properties()->fontSize.get()) {
       context.fontMetrics.fontSize = font->toPixels(context.viewBox, context.fontMetrics);
     }
   }
   if (const auto* style = registry.try_get<ComputedStyleComponent>(root);
-      style && style->properties) {
-    if (const auto font = style->properties->fontSize.get()) {
+      style && style->properties()) {
+    if (const auto font = style->properties()->fontSize.get()) {
       context.fontMetrics.rootFontSize = font->toPixels(context.viewBox, context.fontMetrics);
     }
   }
@@ -1004,10 +1004,10 @@ static std::optional<RcString> AnimationPathData(Registry& registry, Entity targ
     }
   }
   if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
-      style && style->properties) {
-    const auto it = style->properties->unparsedProperties.find("d");
-    if (it != style->properties->unparsedProperties.end()) {
-      if (!budget.reserveSourceBytes(style->properties->complexPropertyBytes())) {
+      style && style->properties()) {
+    const auto it = style->properties()->unparsedProperties.find("d");
+    if (it != style->properties()->unparsedProperties.end()) {
+      if (!budget.reserveSourceBytes(style->properties()->complexPropertyBytes())) {
         return std::nullopt;
       }
       const auto params =
@@ -1108,13 +1108,13 @@ static std::optional<std::string> AnimationBaseOrUnderlyingValue(
     }
   }
   if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
-      style && style->properties) {
-    if (const auto value = StyleValue(*style->properties, attribute, context, budget)) {
+      style && style->properties()) {
+    if (const auto value = StyleValue(*style->properties(), attribute, context, budget)) {
       return *value;
     }
-    const auto it = style->properties->unparsedProperties.find(RcString(attribute));
-    if (it != style->properties->unparsedProperties.end()) {
-      const std::size_t bytes = style->properties->complexPropertyBytes();
+    const auto it = style->properties()->unparsedProperties.find(RcString(attribute));
+    if (it != style->properties()->unparsedProperties.end()) {
+      const std::size_t bytes = style->properties()->complexPropertyBytes();
       if (bytes > AnimationResourceBudget::kMaximumSourceBytes / 6 ||
           !budget.reserveSourceBytes(bytes * 6)) {
         return {};

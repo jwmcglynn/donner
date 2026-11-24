@@ -77,8 +77,8 @@ bool IsPlainPaint(const ResolvedPaintServer& paint) {
 
 /// The occurrence inputs a referenced subtree's computed styles were derived from.
 struct OccurrenceInputs {
-  PropertyRegistry parent;
-  std::optional<ComputedResourceOpacities> resourceOpacities;
+  /// The host's computed style the subtree was styled under.
+  std::shared_ptr<const ComputedStyle> parent;
   ResolvedPaintServer fill;
   ResolvedPaintServer stroke;
   RetainedStyleCharge charge;
@@ -88,10 +88,12 @@ struct OccurrenceInputs {
   std::uint64_t hostFontKey = 0;
 
   bool matches(const ExternalUseStyleContext& occurrence) const {
-    return occurrence.parent.properties && parent == *occurrence.parent.properties &&
-           hostFontKey == occurrence.hostFontKey &&
-           resourceOpacities == occurrence.parent.resourceOpacities &&
-           IsProvablySamePaint(fill, occurrence.fill) &&
+    const std::shared_ptr<const ComputedStyle>& current = occurrence.parent.style;
+    // Records never change once stored, so the same record has the same values.
+    return current &&
+           (parent == current || (parent->properties == current->properties &&
+                                  parent->resourceOpacities == current->resourceOpacities)) &&
+           hostFontKey == occurrence.hostFontKey && IsProvablySamePaint(fill, occurrence.fill) &&
            IsProvablySamePaint(stroke, occurrence.stroke);
   }
 };
@@ -206,18 +208,18 @@ bool Overlaps(const Registry& registry, Entity lhs, Entity rhs) {
 /// refuses the charge, which leaves the subtree restyled on its next draw.
 std::optional<OccurrenceInputs> SnapshotInputs(Registry& registry,
                                                const ExternalUseStyleContext& occurrence) {
-  if (!occurrence.parent.properties) {
+  if (!occurrence.parent.style) {
     return std::nullopt;
   }
-  const PropertyRegistry& parent = *occurrence.parent.properties;
-  const std::size_t bytes = parent.complexPropertyBytes();
+  // The snapshot keeps the host's record alive after the host's style is recomputed, so it stays
+  // charged for the record's dynamic bytes.
+  const std::size_t bytes = occurrence.parent.style->properties.complexPropertyBytes();
   const auto* context = registry.ctx().find<DocumentResourceFamilyContext>();
   std::shared_ptr<DocumentResourceFamilyBudget> family = context ? context->budget : nullptr;
   if (family && !family->reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes)) {
     return std::nullopt;
   }
-  return OccurrenceInputs{.parent = parent,
-                          .resourceOpacities = occurrence.parent.resourceOpacities,
+  return OccurrenceInputs{.parent = occurrence.parent.style,
                           .fill = occurrence.fill,
                           .stroke = occurrence.stroke,
                           .charge = RetainedStyleCharge(std::move(family), bytes),
@@ -459,7 +461,8 @@ bool ElementReadsOutside(Registry& registry, Entity root, Entity entity) {
   const auto* style = registry.try_get<ComputedStyleComponent>(entity);
   const std::optional<ResolvedReference> referenced = ReferencedElement(registry, entity);
   return (instance && InstanceReadsOutside(registry, root, *instance)) ||
-         (style && style->properties && StyleReadsOutside(registry, root, *style->properties)) ||
+         (style && style->properties() &&
+          StyleReadsOutside(registry, root, *style->properties())) ||
          (referenced && IsOutside(registry, root, referenced->handle));
 }
 

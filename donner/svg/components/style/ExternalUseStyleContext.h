@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Temporary, owned computed-parent state for one external-use occurrence.
+/// Temporary computed-parent state for one external-use occurrence.
 
 #include <array>
 #include <cstdint>
@@ -18,14 +18,14 @@ class StyleResourceBudget;
 
 /// Installed only while the child document's write access is held.
 struct ExternalUseStyleContext {
-  /// Create an owned parent snapshot after its caller has reserved its dynamic bytes.
-  ExternalUseStyleContext(Entity root, const PropertyRegistry& properties,
-                          const std::optional<ComputedResourceOpacities>& resourceOpacities,
+  /// Hold the host's computed style after its caller has reserved its dynamic bytes, which stay
+  /// charged while this occurrence keeps the shared record alive.
+  ExternalUseStyleContext(Entity root, std::shared_ptr<const ComputedStyle> hostStyle,
                           const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke,
                           std::shared_ptr<DocumentResourceFamilyBudget> budget,
                           std::size_t chargedBytes, std::shared_ptr<StyleResourceBudget> work)
       : root(root),
-        parent{.properties = properties, .resourceOpacities = resourceOpacities},
+        parent{.style = std::move(hostStyle)},
         fill(fill),
         stroke(stroke),
         family(std::move(budget)),
@@ -33,7 +33,7 @@ struct ExternalUseStyleContext {
         work(std::move(work)) {}
 
   ~ExternalUseStyleContext() {
-    parent.properties.reset();
+    parent.style.reset();
     if (family) {
       family->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, chargedBytes);
     }
@@ -47,7 +47,7 @@ struct ExternalUseStyleContext {
   /// Text prepared under one set of lent fonts is not reused under another.
   std::uint64_t hostFontKey = 0;
   Entity root;                    ///< Referenced instance root.
-  ComputedStyleComponent parent;  ///< Host's owned properties and canonical resource values.
+  ComputedStyleComponent parent;  ///< Host's shared computed style and canonical resource values.
   ResolvedPaintServer fill;       ///< Host-registry-qualified fill.
   ResolvedPaintServer stroke;     ///< Host-registry-qualified stroke.
   std::shared_ptr<DocumentResourceFamilyBudget> family;  ///< Shared retained-byte envelope.

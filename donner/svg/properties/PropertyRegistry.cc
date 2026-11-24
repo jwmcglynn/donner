@@ -3286,6 +3286,42 @@ bool ResolveInsetLengthArray(std::array<Lengthd, 4>& values, const FontMetrics& 
 
 }  // namespace
 
+namespace details {
+
+namespace {
+
+/// Copies and moves of a whole registry on this thread.
+thread_local std::uint64_t gPropertyRegistryCopies = 0;
+
+}  // namespace
+
+std::uint64_t PropertyRegistryCopyCount() {
+  return gPropertyRegistryCopies;
+}
+
+PropertyRegistryCopyCounter::PropertyRegistryCopyCounter(
+    const PropertyRegistryCopyCounter&) noexcept {
+  ++gPropertyRegistryCopies;
+}
+
+PropertyRegistryCopyCounter::PropertyRegistryCopyCounter(PropertyRegistryCopyCounter&&) noexcept {
+  ++gPropertyRegistryCopies;
+}
+
+PropertyRegistryCopyCounter& PropertyRegistryCopyCounter::operator=(
+    const PropertyRegistryCopyCounter&) noexcept {
+  ++gPropertyRegistryCopies;
+  return *this;
+}
+
+PropertyRegistryCopyCounter& PropertyRegistryCopyCounter::operator=(
+    PropertyRegistryCopyCounter&&) noexcept {
+  ++gPropertyRegistryCopies;
+  return *this;
+}
+
+}  // namespace details
+
 PropertyRegistry::PropertyRegistry() = default;
 
 PropertyRegistry::~PropertyRegistry() = default;
@@ -3380,22 +3416,20 @@ size_t PropertyRegistry::numPropertiesSet() const {
 
 [[nodiscard]] PropertyRegistry PropertyRegistry::inheritFrom(const PropertyRegistry& parent,
                                                              PropertyInheritOptions options) const {
-  PropertyRegistry result;
-  result.unparsedProperties = unparsedProperties;  // Unparsed properties are not inherited.
-
-  auto resultProperties = result.allPropertiesMutable();
-  const auto parentProperties = parent.allProperties();
-  const auto selfProperties = allProperties();
-
-  forEachProperty<0, numProperties()>([&resultProperties, &parentProperties, &selfProperties,
-                                       options](auto i) {
-    auto res =
-        std::get<i.value>(selfProperties).inheritFrom(std::get<i.value>(parentProperties), options);
-
-    std::get<i.value>(resultProperties) = res;
-  });
-
+  PropertyRegistry result = *this;
+  result.inherit(parent, options);
   return result;
+}
+
+void PropertyRegistry::inherit(const PropertyRegistry& parent, PropertyInheritOptions options) {
+  // Unparsed properties are not inherited and stay as they are.
+  auto selfProperties = allPropertiesMutable();
+  const auto parentProperties = parent.allProperties();
+  forEachProperty<0, numProperties()>([&selfProperties, &parentProperties, options](auto i) {
+    std::get<i.value>(selfProperties).inherit(std::get<i.value>(parentProperties), options);
+  });
+  // Inline resource-color origins only select a value before inheritance; the result has none.
+  inlineResourceColors_.fill(std::nullopt);
 }
 
 std::size_t PropertyRegistry::complexPropertyBytes() const {

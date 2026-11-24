@@ -179,15 +179,15 @@ std::unordered_map<Entity, std::vector<Entity>> ClipAndMaskUsers(Registry& regis
     }
   };
   for (const auto& [entity, style] : registry.view<const ComputedStyleComponent>().each()) {
-    if (!style.properties.has_value()) {
+    if (!style.properties()) {
       continue;
     }
-    if (const ClipPath* clip = style.properties->clipPath.getStoredValue()) {
+    if (const ClipPath* clip = style.properties()->clipPath.getStoredValue()) {
       if (const auto* reference = std::get_if<Reference>(&clip->value)) {
         addUser(*reference, entity);
       }
     }
-    if (const std::optional<Reference> mask = style.properties->mask.get()) {
+    if (const std::optional<Reference> mask = style.properties()->mask.get()) {
       addUser(*mask, entity);
     }
   }

@@ -2848,6 +2848,27 @@ TEST(PropertyRegistry, LightingColorPreservesOriginsAndExplicitInheritance) {
               Optional(Color(RGBA(0, 255, 0, 255))));
 }
 
+TEST(PropertyRegistry, InheritInPlaceDropsInlineResourceColorOrigins) {
+  // A `style` color over a presentation-attribute color keeps both origins until the cascade
+  // resolves them; the inherited result carries only the resolved value, as a newly built
+  // registry with the same properties does.
+  PropertyRegistry child;
+  EXPECT_THAT(child.parsePresentationAttribute("stop-color", "red"), ParseResultIs(true));
+  child.parseStyle("stop-color: blue");
+  PropertyRegistry resolved;
+  resolved.stopColor = child.stopColor;
+  resolved.unparsedProperties = child.unparsedProperties;
+  ASSERT_THAT(child, Ne(resolved)) << "the inline origin must be retained before inheriting";
+
+  PropertyRegistry parent;
+  parent.parseStyle("color: lime");
+  child.inherit(parent);
+  resolved.color = child.color;
+
+  EXPECT_THAT(child, Eq(resolved));
+  EXPECT_THAT(child.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+}
+
 TEST(PropertyRegistry, ResourceColorInlineStylesPreserveAttributeUpdatesAndClearing) {
   PropertyRegistry registry;
   EXPECT_THAT(registry.parsePresentationAttribute("stop-color", "red"), ParseResultIs(true));

@@ -214,7 +214,8 @@ ComputedResourceOpacities ApplyScalarAnimationStyles(Registry& registry, Entity 
                                                      StyleResourceBudget& budget,
                                                      ParseWarningSink& warnings) {
   static const PropertyRegistry defaults;
-  const PropertyRegistry& inherited = parent && parent->properties ? *parent->properties : defaults;
+  const PropertyRegistry& inherited =
+      parent && parent->properties() ? *parent->properties() : defaults;
   ApplyRegisteredScalar(registry, source, properties, properties.opacity,
                         inherited.opacity.get().value());
   ApplyRegisteredScalar(registry, source, properties, properties.fillOpacity,
@@ -225,8 +226,9 @@ ComputedResourceOpacities ApplyScalarAnimationStyles(Registry& registry, Entity 
                         inherited.strokeMiterlimit.get().value());
   auto stop = ResourceOpacityBase(registry, source, false, properties, budget, warnings);
   auto flood = ResourceOpacityBase(registry, source, true, properties, budget, warnings);
-  const auto parentValues = parent ? parent->resourceOpacities.value_or(ComputedResourceOpacities())
-                                   : ComputedResourceOpacities();
+  const ComputedResourceOpacities parentValues = parent && parent->resourceOpacities()
+                                                     ? *parent->resourceOpacities()
+                                                     : ComputedResourceOpacities();
   const double stopValue = ApplyResourceScalar(registry, source, stop, parentValues.stopOpacity);
   const double floodValue = ApplyResourceScalar(registry, source, flood, parentValues.floodOpacity);
   return {.stopOpacity = stopValue,

@@ -498,7 +498,8 @@ struct PendingTextSpan {
 
 bool IsHiddenByStyle(EntityHandle handle) {
   const auto* style = handle.try_get<ComputedStyleComponent>();
-  return style && style->properties && style->properties->display.get().value() == Display::None;
+  return style && style->properties() &&
+         style->properties()->display.get().value() == Display::None;
 }
 
 bool IsHiddenByConditionalProcessing(EntityHandle handle,
@@ -673,8 +674,9 @@ WhiteSpace CommonAncestorWhiteSpace(Registry& registry, Entity first, Entity sec
   for (Entity entity = second; entity != entt::null; entity = TextParent(registry, entity)) {
     if (ancestors.contains(entity)) {
       const auto* style = registry.try_get<ComputedStyleComponent>(entity);
-      return style && style->properties ? style->properties->whiteSpace.getOr(WhiteSpace::Normal)
-                                        : WhiteSpace::Normal;
+      return style && style->properties()
+                 ? style->properties()->whiteSpace.getOr(WhiteSpace::Normal)
+                 : WhiteSpace::Normal;
     }
   }
   return WhiteSpace::Normal;
@@ -744,16 +746,17 @@ private:
 
   void recordOwnerFontSize(EntityHandle handle) {
     const auto* style = handle.try_get<ComputedStyleComponent>();
-    if (style && style->properties) {
+    if (style && style->properties()) {
       computed_.textLengthOwnerFontSizes.try_emplace(handle.entity(),
-                                                     style->properties->fontSize.get().value());
+                                                     style->properties()->fontSize.get().value());
     }
   }
 
   void emitTextChunks(EntityHandle handle, size_t depth, bool isHidden, LanguageTags language) {
     const auto& text = handle.get<TextComponent>();
     const auto* style = handle.try_get<ComputedStyleComponent>();
-    const auto* property = style && style->properties ? &style->properties->whiteSpace : nullptr;
+    const auto* property =
+        style && style->properties() ? &style->properties()->whiteSpace : nullptr;
     const WhiteSpace mode = property ? property->getOr(WhiteSpace::Normal) : WhiteSpace::Normal;
     const bool legacyPreserve =
         (!property || !property->isSpecified()) && hasXmlSpacePreserve(registry_, handle.entity());
