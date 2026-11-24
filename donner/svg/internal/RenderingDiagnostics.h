@@ -2,6 +2,7 @@
 /// @file
 /// Internal, read-only rendering inspection for diagnostic tools.
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -11,6 +12,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/style/StyleCascadeMetrics.h"
 
 namespace donner::svg::internal {
 
@@ -43,6 +45,10 @@ struct RenderingDiagnostics {
   std::size_t instanceCount = 0;
   std::vector<DirtyEntity> dirtyEntities;
   std::vector<Instance> instances;
+  /// Style cascade work done for the document so far; difference two captures for one frame.
+  components::StyleCascadeCounters styleCascade;
+  /// Wall-clock time spent in style computation for the document so far.
+  std::chrono::nanoseconds styleTime{0};
 };
 
 /// Capture already-prepared values under one read guard, capped per list with true total counts.

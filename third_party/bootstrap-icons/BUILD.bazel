@@ -20,6 +20,7 @@ packaged_resources(
 
 exports_files([
     "LICENSE",
+    "bootstrap-icons.svg",
     "icons/exclude.svg",
     "icons/eye-slash.svg",
     "icons/eye.svg",

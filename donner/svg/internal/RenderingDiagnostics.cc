@@ -8,6 +8,7 @@
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleCascadeMetrics.h"
 
 namespace donner::svg::internal {
 namespace {
@@ -85,6 +86,10 @@ RenderingDiagnostics CaptureRenderingDiagnostics(const SVGDocument& document,
         .needsFullRebuild = state->needsFullRebuild,
         .needsFullStyleRecompute = state->needsFullStyleRecompute,
     };
+  }
+  if (const auto* metrics = registry.ctx().find<components::StyleCascadeMetrics>()) {
+    result.styleCascade = metrics->counters;
+    result.styleTime = metrics->styleTime;
   }
   for (const Entity entity : registry.view<const components::DirtyFlagsComponent>()) {
     ++result.dirtyCount;

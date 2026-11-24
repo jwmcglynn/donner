@@ -16,6 +16,7 @@
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
+#include "donner/svg/components/style/StyleCascadeMetrics.h"
 
 namespace donner::svg::components {
 
@@ -568,7 +569,7 @@ public:
 private:
   void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                             PropertyRegistry& properties, StyleResourceBudget& styleBudget,
-                            ParseWarningSink& warningSink);
+                            StyleCascadeCounters& counters, ParseWarningSink& warningSink);
   PropertyRegistry inheritComputedParent(EntityHandle handle, Entity parent,
                                          PropertyRegistry properties,
                                          ComputedStyleComponent& computed,
