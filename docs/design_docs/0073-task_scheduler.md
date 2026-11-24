@@ -108,27 +108,33 @@ Estimates are engineering days, including tests and review fixes. No milestone h
 milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
 - [ ] Milestone S1: Core scheduler (9.5 days)
-  - [ ] The base scheduler as first estimated (7 days): Chase-Lev deque with the memory orders of
-        Le et al., per-worker deques, the global queue, stealing, help-while-waiting joins with
-        scope watermarks, parkers, drain before sleep, the last-awake sleep rule and its publish
-        protocol, the stack-floor assertion, `trySpawn`, cross-thread slot return, `TaskScope`
-        and `Join`, zero-worker inline mode.
-  - [ ] Changes since, each with its cost: adopted threads with the adopted publish, the
-        visibility reads of adopted deques and the lifetime assertions (1.75 days); the
-        parallelism wake with per-worker `searching` flags (0.5 day); worker QoS and
-        `DefaultWorkerCount()` (0.25 day); the sleep and publish handshakes in read-modify-write
-        form and the parker waiting bit (0.25 day); per-creator record pools and their bounds
-        (0.25 day); `AsyncTaskScope` as a separate type (0.25 day); fixed-capacity deques instead
-        of growable ones (-0.75 day). The mutex-protected global queue costs no more than the
-        lock-free list it replaces.
+  - [ ] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
+        its linearization stress test (1.25 days).
+  - [ ] Per-worker deques and the global queue: the mutex-protected FIFO, its `globalQueued`
+        count and the alternating fairness take (0.75 day).
+  - [ ] Steal rounds: the alternating first source, adopted deques, and every other worker
+        once from a seeded offset (0.5 day).
+  - [ ] `TaskScope`, `AsyncTaskScope` and `Join`: scope records, watermarks, rules 1 to 3 and
+        help within the margin (1.5 days).
+  - [ ] Parkers with the waiting bit, the sleep steps, the hand-off, the last-awake rule, the
+        publish protocol in read-modify-write form, and drain before sleep (1.75 days).
+  - [ ] Per-creator record pools, cross-thread record return and their bounds (0.75 day).
+  - [ ] Adopted threads: slots, the adopted publish, the visibility reads of adopted deques and
+        the lifetime assertions (1.75 days).
+  - [ ] The parallelism wake with per-worker `searching` flags (0.5 day).
+  - [ ] Worker stacks, the stack-floor assertion, worker QoS and `DefaultWorkerCount()`
+        (0.5 day).
+  - [ ] `trySpawn` and the zero-worker inline mode (0.25 day).
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
     liveness tests listed under [Internals](#internals), and the lost-wakeup injected-delay test
     (red with the protocol broken) are green. Each liveness test must be observed red with the
     last-awake rule disabled, through a test hook, before it counts.
 - [ ] Milestone S2: Parallel loops and determinism (3.5 days). After S1.
-  - [ ] `ParallelFor` with grain and adaptive splitting, its const-body check and chunk cap, and
-        the shared-cursor variant for S6 to decide between (0.5 day); seeded deterministic mode;
-        test hooks.
+  - [ ] `ParallelFor` with grain and adaptive splitting, its const-body check and chunk cap
+        (1.5 days).
+  - [ ] The shared-cursor variant behind the same API, for S6 to decide between (0.5 day).
+  - [ ] Seeded deterministic mode (1 day).
+  - [ ] Test hooks for injected delays and counters (0.5 day).
   - Done when: the inline-below-grain counter test, the seeded-mode replay test and the scaling
     benchmark target exist and pass.
 - [ ] Milestone S3: Coroutines (3 days). After S1.
@@ -137,8 +143,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - Done when: coroutine tests at 0, 1 and 4 workers, including resumption from a non-worker
     thread, registration racing completion, and nested awaits, pass under ThreadSanitizer.
 - [ ] Milestone S4: ThreadSanitizer target and fuzzer (3.25 days). After S1.
-  - [ ] A ThreadSanitizer test variant reachable from `//...` through a configuration transition,
-        and `//donner/base/tasks:task_scheduler_fuzzer`.
+  - [ ] A ThreadSanitizer test variant reachable from `//...` through a configuration transition
+        (1.5 days).
+  - [ ] `//donner/base/tasks:task_scheduler_fuzzer` (1.5 days).
   - [ ] The deque's sequentially consistent form for ThreadSanitizer builds, the stress test on
         both forms, and a red run on a deliberately weakened ordering (0.25 day). Verify here
         whether the repository's Clang ThreadSanitizer models standalone fences; the protocol does
@@ -154,9 +161,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 - [ ] Milestone S6: Peer benchmarks (6.25 days). After S2 and S3.
   - [ ] Benchmark-only pinned modules for oneTBB, Taskflow, enkiTS, Filament JobSystem and
         libfork (1.5 days); adapters and workloads W1 to W8 (2 days); the quiet-machine gate,
-        one process per peer, the confirmation rule and the reporting script (1.25 days); runs on
-        the three native platforms and the editor Wasm build, with results recorded in this
-        document (1.5 days).
+        a fresh process per repetition, the confirmation rule and the reporting script
+        (1.25 days); runs on the three native platforms and the editor Wasm build, with results
+        recorded in this document (1.5 days).
   - [ ] Verify here, before relying on them: that each peer builds in the repository's
         exception-free configuration, as listed per peer under [Peer benchmarks](#peer-benchmarks);
         that oneTBB's registry module builds on all three platforms; that the Filament
@@ -353,7 +360,7 @@ Google Filament's `utils::JobSystem` was compared with this design from its sour
 `WorkStealingDequeue.h`). Its 2026 redesign uses a pooled, fixed-size job (one 64-byte record with
 48 bytes of inline storage, from one preallocated pool behind a lock-free free list) and a
 `parallel_for` in which one root job and at most one helper per thread claim chunks from a shared
-atomic cursor, replacing recursive splitting. The redesign's commit message reports
+atomic cursor. The redesign's commit message reports
 `BM_JobSystemParallelFor` falling from 3.71 ms to 0.10 ms on a 16-core Apple silicon Mac and from
 4.02 ms to 0.63 ms on a Pixel 8 Pro; that is the commit's own claim, not reproduced here.
 
@@ -556,8 +563,8 @@ Multithreading is on by default. Two controls change that, one at run time and o
     sets `threading = False`.
   - The shipped plain Wasm module sets the flag itself: `//donner/svg/renderer/wasm:donner_wasm`
     builds its binary through a target-level transition to `threading = false`, so it gets the
-    full compiled-out form, including `-fno-threadsafe-statics`. Setting the flag in `.bazelrc`
-    was rejected: the Wasm builds are configured by `common:wasm` flags, and `common:editor-wasm`
+    full compiled-out form, including `-fno-threadsafe-statics`. The flag is not set in
+    `.bazelrc`: the Wasm builds are configured by `common:wasm` flags, and `common:editor-wasm`
     inherits them through `--config=wasm-geode`, so `threading=false` there would also compile
     threading out of the threaded editor. The editor's Wasm module keeps the default.
   - Targets that cannot work with the flag off are marked incompatible with
@@ -1436,6 +1443,33 @@ clients that size work from documents.
   output between their serial and threaded runs.
 - **No deadlines.** Tests assert ordering and counts; generous hang guards turn a deadlock into a
   named failure.
+- **Each invariant and the CI target that fails when it breaks.**
+  - Queued work always has an awake worker, no lost wakeup, the waiting bit never skips a needed
+    notify, `awake` and `searching` correct at quiescence, the record bounds, the fairness bound,
+    and the scope and adoption lifetime assertions: `//donner/base/tasks:task_scheduler_tests`
+    (the liveness, injected-delay, bound, fairness and death tests above, each observed red with
+    its protocol step broken), and the same tests in the ThreadSanitizer variant of Milestone S4.
+  - Every item is taken exactly once from a deque: `//donner/base/tasks:deque_tests`, on both
+    deque forms.
+  - Results equal sequential evaluation: `//donner/base/tasks:task_scheduler_fuzzer`.
+  - The stack-floor check stops the process with a named failure: a death test in
+    `//donner/base/tasks:task_scheduler_tests`. It is a release assertion, so it is enforced in
+    every build, not only in debug ones.
+  - Peers are never linked into a shipped target:
+    `//donner/benchmarks/tasks:peer_dependency_audit_test`, a `forbidden_transitive_dep_test`
+    over the shipped targets.
+  - No thread symbol in Donner's own objects when compiled out:
+    `//donner:threading_symbol_check_test` in the native compiled-out variant and
+    `//donner/svg/renderer/wasm:threading_symbol_check_test` in the Wasm CI job.
+  - The plain Wasm module's transition is reviewed: `build_defs/check_variant_transitions.py`.
+  - Identical output in `Dedicated` and `Inline`: the render-worker tests
+    (`//donner/editor/tests:async_renderer_tests`, renamed with the class) and the editor's replay
+    golden tests, in both modes.
+  - Bit-identical client output at every worker count: each client's differential tests, the
+    first being 0072's `//donner/svg/components/style:style_parallel_tests`.
+  - The debug-only checks (the in-task flag that rejects document guards and blocking helpers
+    inside tasks, and the Asyncify entry-point assertion) are diagnostic tooling, not guarantees:
+    they run in the debug configurations of the targets above and in the sanitizer lanes.
 
 ## Candidate Clients
 
@@ -1551,7 +1585,7 @@ scheduler.
 - **Editor worker count.** Recommendation: start with 2 scheduler workers in the editor Wasm
   build (raising `PTHREAD_POOL_SIZE` from 2 to 4); with the render worker, a dedicated thread that
   adopts a slot, that is 3 threads doing style. Revisit with W8 and Part D's measurements.
-- **Keep adoption or cut it.** Adoption is kept in a deliberately simple form: adopted pushes
+- **Keep adoption or cut it.** Adoption is specified in a deliberately simple form: adopted pushes
   publish like global-queue pushes, sleeping workers check adopted deques, and the adopted thread
   never helps. Its cost is one sequentially consistent store and load per adopted push and one
   more deque read per adoptable slot in each sleeper's re-check; it buys a fork whose first task
@@ -1579,7 +1613,7 @@ scheduler.
   `RenderWorker` with an inline mode), which keeps one contract per class; adopt option A only
   when a second client needs an asynchronous renderer, and then also run tiny-skia off the
   caller's thread for one uniform contract.
-- **The switch's name, and earlier designs' thread flags.** Recommendation:
+- **The switch's name, and other designs' thread flags.** Recommendation:
   `//donner/base:threading` as specified, in the lowest package every user of it depends on;
   `//donner:threads` was the other candidate. Either way it replaces the pool flags drafted in 0061
   (`--//donner/svg/renderer:render_worker_pool`) and 0060
@@ -1601,8 +1635,8 @@ scheduler.
   main thread cannot `Atomics.wait`).
 - **`RenderWorker` completing synchronously.** In `Inline` mode `requestRender` completes before
   it returns, `isBusy()` is false whenever the caller has control, and cancel and supersede do
-  nothing; the blocking source-pane edit can no longer wait behind a render. That is a change to
-  public behavior (there are no compatibility guarantees before 1.0). Recommendation: accept it;
+  nothing; the blocking source-pane edit has no render in flight to wait behind. That is a change
+  to public behavior (there are no compatibility guarantees before 1.0). Recommendation: accept it;
   the alternative of keeping requests asynchronous in `Inline` mode would need a second thread.
   Whether every `isBusy()` call site in `EditorShell.cc` (41 today) behaves correctly when busy is
   never true across a frame is to be verified in S8.
