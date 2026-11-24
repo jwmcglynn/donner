@@ -596,7 +596,7 @@ private:
   void computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink);
   /// Compute the style of every tree entity without a computed style.
   void computeMissingStyles(Registry& registry, ParseWarningSink& warningSink);
-  void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
+  void applyStylesheetRules(const Registry& registry, Entity treeEntity, Entity dataEntity,
                             StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
                             MatchedPropertiesKey& cacheKey, const StyleComponent* local,
                             ParseWarningSink& warningSink, PendingStyleDeclarations& declarations);

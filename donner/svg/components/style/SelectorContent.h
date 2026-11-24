@@ -71,6 +71,6 @@ void CompleteSelectorContentProjection(EntityHandle parent, bool contentsReparse
  * @param budget Shared selector-work budget, or nullptr for an unbudgeted DOM inspection.
  * @return True if no element or non-whitespace text children exist; false on budget exhaustion.
  */
-bool IsSelectorEmpty(Registry& registry, Entity dataEntity, css::SelectorTraversalBudget* budget);
+bool IsSelectorEmpty(const Registry& registry, Entity dataEntity, css::SelectorTraversalBudget* budget);
 
 }  // namespace donner::svg::components

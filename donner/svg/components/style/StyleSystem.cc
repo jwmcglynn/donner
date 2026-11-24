@@ -584,7 +584,7 @@ void InheritPreservingLocalValues(PropertyRegistry& properties, const PropertyRe
 }
 
 struct ShadowedElementAdapter {
-  ShadowedElementAdapter(Registry& registry, Entity treeEntity, Entity dataEntity)
+  ShadowedElementAdapter(const Registry& registry, Entity treeEntity, Entity dataEntity)
       : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity) {}
 
   bool operator==(const ShadowedElementAdapter& other) const {
@@ -721,7 +721,7 @@ private:
     return ShadowedElementAdapter(registry_.get(), newTreeEntity, resolveData(newTreeEntity));
   }
 
-  std::reference_wrapper<Registry> registry_;
+  std::reference_wrapper<const Registry> registry_;
   Entity treeEntity_;
   Entity dataEntity_;
 };
@@ -1201,7 +1201,7 @@ struct StyleSystem::PendingStyleDeclarations {
   std::shared_ptr<ComputedStyle> streamed;
 };
 
-void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
+void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEntity, Entity dataEntity,
                                        StyleResourceBudget& styleBudget,
                                        StyleCascadeCounters& counters,
                                        MatchedPropertiesKey& cacheKey, const StyleComponent* local,
@@ -1244,8 +1244,8 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
     return true;
   };
 
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+  for (auto view = registry.view<const StylesheetComponent>(); auto stylesheetEntity : view) {
+    const auto& stylesheet = view.get<const StylesheetComponent>(stylesheetEntity);
     if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
       continue;
     }
