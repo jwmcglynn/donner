@@ -1506,31 +1506,34 @@ clients that size work from documents.
 - **Deque stress** (`//donner/base/tasks:deque_tests`): one owner pushing and popping against
   several thieves; every item is taken exactly once. CI runs it in the native lanes of the main
   workflow whenever the affected-target selection includes it: trusted pull requests use the
-  self-hosted Linux arm64 lane, which normally also runs its macOS variant through remote execution,
-  and other runs use the hosted Linux x86-64 and macOS lanes. No CI lane runs ThreadSanitizer, so
-  until the variant of Milestone S4 exists the ThreadSanitizer run (`bazel test --config=tsan
+  self-hosted Linux arm64 lane when it is enabled, which normally also runs its macOS variant
+  through remote execution, and other runs, including trusted pull requests while it is disabled,
+  use the hosted Linux x86-64 and macOS lanes. No CI lane runs ThreadSanitizer, so until the variant
+  of Milestone S4 exists the ThreadSanitizer run (`bazel test --config=tsan
   //donner/base/tasks:deque_tests`) is manual; it checks the sequentially consistent form, and the
   stress cases of the Le et al. form skip themselves there.
-- **Deque orderings no available host distinguishes.** The deque tests have run on Linux ARMv8,
-  Apple silicon and an x86-64 Linux host. On all three, weakening each of these to relaxed leaves
-  every deque test green, so they are not tested: in the Le et al. form, the acquire loads of top in
-  `push` and in `steal` (in `steal` the fence that follows orders it), the release half of the
-  compare-and-swap in `steal` (with the acquire in `push`, these guard against load buffering, which
-  no host shows), and the sequentially consistent success ordering of the compare-and-swap in
-  `take`. Removing the sequentially consistent fence in `steal` is also undetected: ARMv8 and x86-64
-  are multi-copy atomic, so there an acquire load of top followed by an acquire load of bottom
-  already gives the ordering, which the C++ model and POWER need the fence for. A sequentially
-  consistent fence weakened to release is indistinguishable on ARMv8, where both compile to the same
-  barrier. The mutants that the tests catch, on at least one of those hosts or under
-  ThreadSanitizer, are these. In the Le et al. form: the release fence in `push` removed or weakened
-  to acquire, the fence in `take` removed or weakened to acquire, the acquire load of bottom in
-  `steal` made relaxed, the compare-and-swap in `take` removed or replaced by a store, and the one
-  in `steal` replaced by a store. In the sequentially consistent form: the bottom stores in `push`
-  and `take` and the bottom load in `steal` made relaxed, the top load in `take` made acquire and
-  the top load in `steal` made relaxed. Its top load in `push` was not mutated. On the x86-64 host,
-  which reorders only a store with a later load, the tests catch removing the fence in `take` and
-  the compare-and-swap removals and replacements; the other ordering mutants run there survive, and
-  are caught on ARMv8 hardware or under ThreadSanitizer.
+- **Deque orderings no available host distinguishes.** On Linux ARMv8, Apple silicon and x86-64
+  Linux hardware, weakening each of these to relaxed leaves every deque test green, so they are not
+  tested: in the Le et al. form, the acquire loads of top in `push` and in `steal` (in `steal` the
+  fence that follows orders it), the release half of the compare-and-swap in `steal` (with the
+  acquire in `push`, these guard against load buffering, which no host shows), and the sequentially
+  consistent success ordering of the compare-and-swap in `take`. Removing the sequentially
+  consistent fence in `steal` is also undetected: ARMv8 and x86-64 are multi-copy atomic, so there
+  an acquire load of top followed by an acquire load of bottom already gives the ordering, which the
+  C++ model and POWER need the fence for. A sequentially consistent fence weakened to release is
+  indistinguishable on ARMv8, where both compile to the same barrier. The mutants that the tests
+  catch, on at least one of those hosts or under ThreadSanitizer, are these. In the Le et al. form:
+  the release fence in `push` removed or weakened to acquire, the fence in `take` removed or
+  weakened to acquire, the acquire load of bottom in `steal` made relaxed, the compare-and-swap in
+  `take` removed or replaced by a store, and the one in `steal` replaced by a store. In the
+  sequentially consistent form: the bottom stores in `push` and `take` and the bottom load in
+  `steal` made relaxed, the top load in `take` made acquire and the top load in `steal` made
+  relaxed. Its top load in `push` was not mutated. On the x86-64 host, which reorders only a store
+  with a later load, the tests catch removing the fence in `take` and the compare-and-swap removals
+  and replacements, and the other ordering mutants survive. A compare-and-swap made relaxed compiles
+  to the same code there, because every compare-and-swap on x86-64 is a locked, fully ordered
+  instruction. The survivors not listed above as undistinguished are caught on ARMv8 hardware or
+  under ThreadSanitizer.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
