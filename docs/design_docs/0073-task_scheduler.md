@@ -1,3 +1,4 @@
+# Design: Work-Stealing Task Scheduler
 
 **Status:** Draft
 **Author:** Claude Fable 5.2
@@ -1689,7 +1690,14 @@ clients that size work from documents.
   plain load, so seven of the eight change no ordering there; the asleep store alone becomes a plain
   store instead of an exchange, but the locked decrement of the awake count right after it drains
   the store buffer before the stop flag is read. That mutant survived 4,000 iterations of the
-  shutdown stress with injected delays, and 16,000 without, on x86-64.
+  shutdown stress with injected delays, and 16,000 without, on x86-64. These survivals come from the
+  instruction sequences the current code compiles to, not from the memory model: each of the eight
+  operations is one half of a store-buffering pair, which the C++ memory model allows to reorder
+  unless both halves are sequentially consistent, so all eight stay sequentially consistent by
+  specification, and a surviving mutant is no licence to weaken one. In particular, the asleep store
+  is equivalent to a release store on x86-64 only because the locked decrement of the awake count
+  sits between it and the read of the stop flag; moving or removing that decrement would make a
+  weakened store a real store-buffering bug.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.

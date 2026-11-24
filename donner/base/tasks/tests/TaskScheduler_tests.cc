@@ -465,7 +465,11 @@ TEST(TaskSchedulerTest, ADeclinedTrySpawnLeavesTheClosureWithTheCaller) {
     int runs = 0;
     Peer::Spawn(scheduler, [&] {
       auto first = [&] { done.arrive(); };
-      ASSERT_TRUE(Peer::TrySpawn(scheduler, first));
+      const bool firstQueued = Peer::TrySpawn(scheduler, first);
+      EXPECT_TRUE(firstQueued) << limits.name << ": the first spawn was declined";
+      if (!firstQueued) {
+        first();
+      }
       OwningClosure closure{std::make_unique<int>(1), &runs};
       declined = !Peer::TrySpawn(scheduler, closure);
       intactAfterDecline = closure.value != nullptr;
@@ -564,8 +568,8 @@ TEST(TaskSchedulerInterleavingTest, APublishAfterTheSleepersRecheckWakesIt) {
   HoldOnceHooks hooks(SchedulerStep::BeforeSleeperWaits, &sleeper);
   auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, &hooks);
   ASSERT_TRUE(sleeper.waitForArrival());
-  ASSERT_THAT(Peer::AwakeCount(*scheduler), Eq(0));
-  ASSERT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::AsleepShallow));
+  EXPECT_THAT(Peer::AwakeCount(*scheduler), Eq(0));
+  EXPECT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::AsleepShallow));
 
   Completion done;
   Peer::Spawn(*scheduler, [&] { done.arrive(); });
@@ -591,8 +595,8 @@ TEST(TaskSchedulerInterleavingTest, ASelfWakeRacingAPublishersWakeCountsTheWorke
 
   Completion done;
   Peer::Spawn(*scheduler, [&] { done.arrive(); });
-  ASSERT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::Awake));
-  ASSERT_THAT(Peer::AwakeCount(*scheduler), Eq(1));
+  EXPECT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::Awake));
+  EXPECT_THAT(Peer::AwakeCount(*scheduler), Eq(1));
 
   decremented.release();
   ASSERT_TRUE(done.waitFor(1));

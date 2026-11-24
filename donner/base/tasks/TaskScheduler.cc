@@ -264,6 +264,7 @@ bool TaskScheduler::trySleep(Worker& worker) {
   const Parker<>::Word token = worker.parker.prepareWait();
 
   // 3. Store asleep, then decrement the awake count; both sequentially consistent.
+  // Must stay sequentially consistent: it pairs with the destructor's stop store and swap.
   worker.state.store(WorkerState::AsleepShallow, std::memory_order_seq_cst);
   awake_.fetch_sub(1, std::memory_order_seq_cst);
   hook(SchedulerStep::AfterSleeperDecrement, worker.index);
