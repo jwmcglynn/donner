@@ -811,6 +811,9 @@ struct RendererResourceStats {
   /// Device pixels per raster pixel, along each axis, of the coarsest such raster this frame: 1
   /// when every filter ran at full resolution, otherwise 2, 4, 8 or 16.
   std::uint32_t filterRasterReduction = 1;
+  /// Filter graphs this frame ran at full resolution split into more than one tile, each tile
+  /// reading its sampling halo, so their pixels are the untiled graph's.
+  std::uint64_t filterTiledGraphs = 0;
   bool geometryBudgetSupported = false;
   std::size_t geometryDraws = 0;
   std::size_t geometryItems = 0;

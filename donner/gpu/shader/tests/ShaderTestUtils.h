@@ -51,6 +51,16 @@ MATCHER_P(IsShaderError, messageMatcher,
 }
 
 /**
+ * Matches a compiled shader whose \p resource declares \p member at byte \p offset, \p size bytes
+ * wide, of scalar type \p type.
+ */
+MATCHER_P5(HasShaderMember, resource, member, offset, size, type,
+           std::string("declares ") + member + " in " + resource + " at offset " +
+               testing::PrintToString(offset)) {
+  return arg.matchesMember(resource, member, offset, size, type);
+}
+
+/**
  * Unwraps a \ref ShaderResult, adding a test failure and returning a default-constructed value
  * if it holds an error.
  *

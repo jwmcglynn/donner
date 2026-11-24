@@ -19,6 +19,7 @@
 #include <optional>
 #include <ostream>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -13314,7 +13315,7 @@ TEST_F(RendererGeodeTest, SnapshotReplayKeepsMaskCompositeBindings) {
 /// lies under the circle.
 std::string WholeCanvasFilterSource(std::string_view primitives, int viewBoxWidth = 64,
                                     int viewBoxHeight = 64, bool backdrop = false,
-                                    bool filtered = true) {
+                                    bool filtered = true, std::string_view elementTransform = {}) {
   const std::string width = std::to_string(viewBoxWidth);
   const std::string height = std::to_string(viewBoxHeight);
   std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 " + width + " " +
@@ -13327,7 +13328,11 @@ std::string WholeCanvasFilterSource(std::string_view primitives, int viewBoxWidt
   if (filtered) {
     source +=
         "<circle cx=\"32\" cy=\"32\" r=\"18\" fill=\"#3a7\" stroke=\"#124\" "
-        "stroke-width=\"3\" filter=\"url(#f)\"/>";
+        "stroke-width=\"3\" filter=\"url(#f)\"";
+    if (!elementTransform.empty()) {
+      source += " transform=\"" + std::string(elementTransform) + "\"";
+    }
+    source += "/>";
   }
   return source + "</svg>";
 }
@@ -13384,6 +13389,11 @@ testing::Matcher<const RendererResourceStats&> ReducedFilterRasters(std::uint64_
       testing::Field("filterRasterReduction", &RendererResourceStats::filterRasterReduction,
                      reduction),
       testing::Field("filterBudgetRejected", &RendererResourceStats::filterBudgetRejected, false));
+}
+
+/// Matches resource statistics whose filters ran in tiles in \p graphs graphs.
+testing::Matcher<const RendererResourceStats&> TiledFilterGraphs(std::uint64_t graphs) {
+  return testing::Field("filterTiledGraphs", &RendererResourceStats::filterTiledGraphs, graphs);
 }
 
 struct ReducedFilterCase {
@@ -13581,11 +13591,13 @@ TEST_F(RendererGeodeTest, FilterPastTheCoarsestReducedRasterIsLeftOut) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-/// A turbulence and displacement filter over a 2048 x 2048 canvas needs more intermediate memory
-/// than one graph may hold, so it runs on a raster reduced by two: the canvas shows the 1024 x 1024
-/// rendering, each pixel covering a 2 x 2 block, rather than nothing.
+/// A turbulence and displacement filter on a rotated element over a 2048 x 2048 canvas needs more
+/// intermediate memory than one graph may hold, and a rotated filter cannot split into tiles, so it
+/// runs on a raster reduced by two: the canvas shows the 1024 x 1024 rendering, each pixel covering
+/// a 2 x 2 block, rather than nothing.
 TEST_F(RendererGeodeTest, FilterOnA2048CanvasRunsOnAReducedRaster) {
-  const std::string source = WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives);
+  const std::string source = WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives, 64,
+                                                     64, false, true, "rotate(30 32 32)");
   RendererResourceStats stats;
   const RendererBitmap reference =
       RenderFilterCanvas(sharedDevice(), source, {1024, 1024}, std::nullopt, stats);
@@ -13599,11 +13611,11 @@ TEST_F(RendererGeodeTest, FilterOnA2048CanvasRunsOnAReducedRaster) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-/// On a 3840 x 2160 canvas the same filter also exceeds the frame's surface budget at half
+/// On a 3840 x 2160 canvas the same rotated filter also exceeds the frame's surface budget at half
 /// resolution, so it runs on a raster reduced by four.
 TEST_F(RendererGeodeTest, FilterOnA3840x2160CanvasRunsOnAReducedRaster) {
-  const std::string source =
-      WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives, 128, 72);
+  const std::string source = WholeCanvasFilterSource(kResolutionDependentFilters[0].primitives, 128,
+                                                     72, false, true, "rotate(30 64 36)");
   RendererResourceStats stats;
   const RendererBitmap reference =
       RenderFilterCanvas(sharedDevice(), source, {960, 540}, std::nullopt, stats);
@@ -13760,6 +13772,485 @@ TEST_F(RendererGeodeTest, FilterLargerThanTheSurfaceBudgetReducesWithoutAChunk) 
   renderer.endFrame();
   EXPECT_THAT(stats, ReducedFilterRasters(1, 2));
   EXPECT_THAT(renderer.filterBudgetChunksForTesting(), testing::Eq(0u));
+}
+
+/// Filters whose sampling halo is known once each tile carries its origin in the raster: a
+/// displacement map, every lighting primitive under every kind of light, both noise types with and
+/// without stitching, and the combinations the corpus and authors use.
+constexpr std::array<ReducedFilterCase, 20> kTileableFilters = {{
+    {"displacement",
+     R"(<feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="9" xChannelSelector="R"
+                           yChannelSelector="G"/>)"},
+    {"diffuse_distant", kResolutionDependentFilters[2].primitives},
+    {"diffuse_point",
+     R"(<feDiffuseLighting surfaceScale="3" diffuseConstant="1.3" lighting-color="#adf">
+          <fePointLight x="13.7" y="51.3" z="17.9"/>
+        </feDiffuseLighting>)"},
+    {"diffuse_spot",
+     R"(<feDiffuseLighting surfaceScale="2.5" diffuseConstant="1">
+          <feSpotLight x="57.3" y="6.1" z="29.7" pointsAtX="30.2" pointsAtY="35.9"
+                       specularExponent="3" limitingConeAngle="35"/>
+        </feDiffuseLighting>)"},
+    {"specular_distant",
+     R"(<feSpecularLighting surfaceScale="3" specularConstant="1.1" specularExponent="9">
+          <feDistantLight azimuth="133" elevation="27"/>
+        </feSpecularLighting>)"},
+    {"specular_point",
+     R"(<feSpecularLighting surfaceScale="2" specularConstant="1" specularExponent="12"
+                            lighting-color="#fd8">
+          <fePointLight x="50.3" y="12.7" z="20.1"/>
+        </feSpecularLighting>)"},
+    {"specular_spot", kResolutionDependentFilters[1].primitives},
+    {"turbulence", R"(<feTurbulence type="turbulence" baseFrequency="0.07" numOctaves="3"/>)"},
+    {"turbulence_stitched",
+     R"(<feTurbulence type="turbulence" baseFrequency="0.09" numOctaves="2" stitchTiles="stitch"/>)"},
+    {"fractal_noise",
+     R"(<feTurbulence type="fractalNoise" baseFrequency="0.05 0.11" numOctaves="2" seed="7"/>)"},
+    {"fractal_noise_stitched",
+     R"(<feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="3"
+                      stitchTiles="stitch"/>)"},
+    {"turbulence_into_displacement",
+     R"(<feTurbulence type="turbulence" baseFrequency="0.1" numOctaves="2" result="t"/>
+        <feDisplacementMap in="SourceGraphic" in2="t" scale="2.3" xChannelSelector="R"
+                           yChannelSelector="G"/>)"},
+    {"blur_into_lighting",
+     R"(<feGaussianBlur in="SourceAlpha" stdDeviation="1.3" result="b"/>
+        <feSpecularLighting in="b" surfaceScale="4" specularConstant="1" specularExponent="7">
+          <feSpotLight x="9.3" y="55.1" z="25.3" pointsAtX="33" pointsAtY="30"
+                       limitingConeAngle="40"/>
+        </feSpecularLighting>
+        <feComposite in2="SourceGraphic" operator="in"/>)"},
+    {"blur_into_displacement",
+     R"(<feGaussianBlur stdDeviation="1.5" result="b"/>
+        <feDisplacementMap in="b" in2="SourceGraphic" scale="-3.7" xChannelSelector="G"
+                           yChannelSelector="A"/>)"},
+    {"turbulence_into_lighting",
+     R"(<feTurbulence type="fractalNoise" baseFrequency="0.08" numOctaves="2" result="t"/>
+        <feDiffuseLighting in="t" surfaceScale="5" diffuseConstant="1.1">
+          <fePointLight x="21.7" y="44.9" z="12.3"/>
+        </feDiffuseLighting>)"},
+    {"lighting_into_displacement",
+     R"(<feSpecularLighting in="SourceAlpha" surfaceScale="4" specularConstant="1"
+                            specularExponent="5" result="l">
+          <feSpotLight x="60.1" y="3.7" z="22.9" pointsAtX="20.3" pointsAtY="41.1"/>
+        </feSpecularLighting>
+        <feDisplacementMap in="SourceGraphic" in2="l" scale="7.9" xChannelSelector="R"
+                           yChannelSelector="B"/>)"},
+    {"lighting_subregions",
+     R"(<feGaussianBlur in="SourceAlpha" stdDeviation="0.9" x="7.3" y="5.1" width="40.7"
+                       height="47.9" result="b"/>
+        <feDiffuseLighting in="b" surfaceScale="4" diffuseConstant="1.2" x="17.3" y="9.1"
+                           width="30.7" height="41.9">
+          <fePointLight x="21.7" y="44.9" z="12.3"/>
+        </feDiffuseLighting>)"},
+    {"specular_spot_subregion",
+     R"(<feSpecularLighting in="SourceAlpha" surfaceScale="3" specularConstant="1"
+                            specularExponent="6" x="11.9" y="13.3" width="37.1" height="29.7">
+          <feSpotLight x="50.3" y="7.7" z="23.1" pointsAtX="30.1" pointsAtY="33.3"
+                       limitingConeAngle="33"/>
+        </feSpecularLighting>)"},
+    {"displacement_by_noise_subregion",
+     R"(<feTurbulence type="fractalNoise" baseFrequency="0.13" numOctaves="2" x="9.7" y="12.1"
+                      width="33.3" height="30.9" result="t"/>
+        <feDisplacementMap in="SourceGraphic" in2="t" scale="6.3" xChannelSelector="A"
+                           yChannelSelector="B" x="5.5" y="3.3" width="51.1" height="49.7"/>)"},
+    {"displacement_chain",
+     R"(<feGaussianBlur in="SourceGraphic" stdDeviation="1.1" result="b"/>
+        <feDisplacementMap in="SourceGraphic" in2="b" scale="5.9" xChannelSelector="G"
+                           yChannelSelector="R" result="d1"/>
+        <feDisplacementMap in="d1" in2="d1" scale="-4.3" xChannelSelector="B"
+                           yChannelSelector="G"/>)"},
+}};
+
+/// \p source rendered at \p canvas on a fresh device whose filter engine executes at most
+/// \p maximumTileExtent pixels per tile edge, or chooses its own tiles when zero. \p tiles receives
+/// the number of tiles the last filter ran in.
+RendererBitmap RenderOnTiledDevice(const std::string& source, Vector2i canvas,
+                                   uint32_t maximumTileExtent, uint64_t& tiles,
+                                   RendererResourceStats& stats) {
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  EXPECT_THAT(device, testing::NotNull());
+  std::optional<SVGDocument> document;
+  ParseDocumentWithoutWarnings(source, document);
+  if (!device || !document) {
+    return {};
+  }
+  if (maximumTileExtent != 0) {
+    device->filterEngine().setMaximumTileExtentForTesting(maximumTileExtent);
+  }
+  document->setCanvasSize(canvas.x, canvas.y);
+  RendererGeode renderer(device);
+  renderer.draw(*document);
+  tiles = device->filterEngine().lastExecutionMemory().tileExecutions;
+  stats = renderer.resourceStats();
+  return renderer.takeSnapshot();
+}
+
+class TiledFilterExactnessTest : public RendererGeodeTest,
+                                 public testing::WithParamInterface<ReducedFilterCase> {};
+
+/// Tiles reproduce the untiled raster exactly at several tile sizes, under a uniform and a
+/// non-uniform scale. A 900 x 900 canvas and tile extents of 512, 487 and 333 put tile origins at
+/// positions that are not powers of two, where positions computed from a tile-local pixel and a
+/// shifted light or displacement would round differently from the raster's; each tile instead
+/// computes every position in the raster's pixels, from its origin.
+TEST_P(TiledFilterExactnessTest, TilesMatchTheUntiledRaster) {
+  for (const std::string_view transform :
+       {std::string_view{}, std::string_view{"scale(1.25 0.75)"}}) {
+    SCOPED_TRACE(testing::Message() << "element transform '" << transform << "'");
+    const std::string source =
+        WholeCanvasFilterSource(GetParam().primitives, 64, 64,
+                                /*backdrop=*/false, /*filtered=*/true, transform);
+    uint64_t untiledTiles = 0;
+    RendererResourceStats stats;
+    const RendererBitmap untiled =
+        RenderOnTiledDevice(source, {900, 900}, /*maximumTileExtent=*/0, untiledTiles, stats);
+    ASSERT_THAT(untiledTiles, testing::Eq(1u));
+    ASSERT_THAT(test::CountNonTransparentPixels(untiled), testing::Gt(0u));
+    for (const uint32_t extent : {512u, 487u, 333u}) {
+      SCOPED_TRACE(testing::Message() << "tile extent " << extent);
+      uint64_t tiles = 0;
+      const RendererBitmap tiled = RenderOnTiledDevice(source, {900, 900}, extent, tiles, stats);
+      ASSERT_THAT(tiles, testing::Gt(1u)) << "Premise: the filter must execute in tiles";
+      EXPECT_THAT(stats, TiledFilterGraphs(1));
+      editor::tests::CompareBitmapToBitmap(tiled, untiled,
+                                           "tiled_" + std::string(GetParam().name) +
+                                               (transform.empty() ? "" : "_scaled") + "_" +
+                                               std::to_string(extent),
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Filters, TiledFilterExactnessTest, testing::ValuesIn(kTileableFilters),
+                         [](const testing::TestParamInfo<ReducedFilterCase>& info) {
+                           return std::string(info.param.name);
+                         });
+
+/// A graph the frame's surface budget cannot hold untiled, even in an empty frame, tries tiles at
+/// full resolution before a reduced raster: under a 24 MiB budget a 768 x 768 displacement,
+/// lighting or noise graph runs in tiles, never reduced, and equals its untiled rendering.
+TEST_F(RendererGeodeTest, GraphPastTheSurfaceBudgetTriesTilesBeforeAReducedRaster) {
+  for (const std::size_t index : {std::size_t{0}, std::size_t{1}, std::size_t{7}}) {
+    const ReducedFilterCase& filter = kTileableFilters[index];
+    SCOPED_TRACE(filter.name);
+    const std::string source = WholeCanvasFilterSource(filter.primitives);
+    RendererResourceStats stats;
+    const RendererBitmap untiled =
+        RenderFilterCanvas(sharedDevice(), source, {768, 768}, std::nullopt, stats);
+    ASSERT_THAT(stats, TiledFilterGraphs(0)) << "Premise: with room the graph runs untiled";
+    const RendererBitmap tiled =
+        RenderFilterCanvas(sharedDevice(), source, {768, 768}, 24 * 1024 * 1024, stats);
+    EXPECT_THAT(stats, TiledFilterGraphs(1));
+    EXPECT_THAT(stats, ReducedFilterRasters(0, 1));
+    editor::tests::CompareBitmapToBitmap(tiled, untiled,
+                                         "tiled_past_surface_budget_" + std::string(filter.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// \p source rendered at 900 x 900 matches its untiled raster in tiles at extents 487 and 333.
+void ExpectTilesMatchTheUntiledRaster(const std::string& source, std::string_view name) {
+  uint64_t untiledTiles = 0;
+  RendererResourceStats stats;
+  const RendererBitmap untiled =
+      RenderOnTiledDevice(source, {900, 900}, /*maximumTileExtent=*/0, untiledTiles, stats);
+  ASSERT_THAT(untiledTiles, testing::Eq(1u));
+  ASSERT_THAT(test::CountNonTransparentPixels(untiled), testing::Gt(0u));
+  for (const uint32_t extent : {487u, 333u}) {
+    SCOPED_TRACE(testing::Message() << "tile extent " << extent);
+    uint64_t tiles = 0;
+    const RendererBitmap tiled = RenderOnTiledDevice(source, {900, 900}, extent, tiles, stats);
+    ASSERT_THAT(tiles, testing::Gt(1u)) << "Premise: the filter must execute in tiles";
+    EXPECT_THAT(stats, TiledFilterGraphs(1));
+    editor::tests::CompareBitmapToBitmap(tiled, untiled,
+                                         std::string(name) + "_" + std::to_string(extent),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// Tiling admits a transform whose off-diagonal terms are below 1e-6, but the lighting programs
+/// treat axes whose squared cosine passes 0.0003 as sheared and place a spot light's cone from the
+/// user-space position of each pixel. At about 1e-4 device pixels per unit, `matrix(1 0.009 0.009
+/// 1 0 0)` is both, so each tile must compute that position from its origin too.
+TEST_F(RendererGeodeTest, ShearedSpotLightTilesMatchTheUntiledRaster) {
+  ExpectTilesMatchTheUntiledRaster(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 9000000 9000000">
+        <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="9000000" height="9000000">
+          <feDiffuseLighting surfaceScale="3" diffuseConstant="1">
+            <feSpotLight x="7000000" y="1500000" z="2500000" pointsAtX="4000000"
+                         pointsAtY="5000000" limitingConeAngle="35"/>
+          </feDiffuseLighting>
+        </filter>
+        <g transform="matrix(1 0.009 0.009 1 0 0)">
+          <circle cx="4400000" cy="4400000" r="3200000" fill="#3a7" filter="url(#f)"/>
+        </g>
+      </svg>)svg",
+      "sheared_spot_light");
+}
+
+/// A displacement map in objectBoundingBox primitive units scales by the element's bounding box,
+/// and its halo must scale the same way.
+TEST_F(RendererGeodeTest, ObjectBoundingBoxDisplacementTilesMatchTheUntiledRaster) {
+  std::string source = WholeCanvasFilterSource(
+      R"(<feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="0.17"
+                           xChannelSelector="R" yChannelSelector="A"/>)");
+  const std::string filter = "<filter id=\"f\" ";
+  source.replace(source.find(filter), filter.size(),
+                 "<filter id=\"f\" primitiveUnits=\"objectBoundingBox\" ");
+  ExpectTilesMatchTheUntiledRaster(source, "object_bounding_box_displacement");
+}
+
+/// Stitched noise wraps its lattice at the raster's size, not a tile's. Below one device pixel per
+/// user unit the noise coordinates pass the raster's width, so the wrap shows: tiles 487 and 333
+/// pixels wide must wrap where the untiled raster does.
+TEST_F(RendererGeodeTest, StitchedNoiseWrapsAtTheRasterSizeInTiles) {
+  for (const std::size_t index : {std::size_t{8}, std::size_t{10}}) {
+    const ReducedFilterCase& filter = kTileableFilters[index];
+    SCOPED_TRACE(filter.name);
+    const std::string source = WholeCanvasFilterSource(filter.primitives, 2000, 2000);
+    uint64_t untiledTiles = 0;
+    RendererResourceStats stats;
+    const RendererBitmap untiled =
+        RenderOnTiledDevice(source, {900, 900}, /*maximumTileExtent=*/0, untiledTiles, stats);
+    ASSERT_THAT(untiledTiles, testing::Eq(1u));
+    for (const uint32_t extent : {487u, 333u}) {
+      SCOPED_TRACE(testing::Message() << "tile extent " << extent);
+      uint64_t tiles = 0;
+      const RendererBitmap tiled = RenderOnTiledDevice(source, {900, 900}, extent, tiles, stats);
+      ASSERT_THAT(tiles, testing::Gt(1u));
+      EXPECT_THAT(stats, TiledFilterGraphs(1));
+      editor::tests::CompareBitmapToBitmap(
+          tiled, untiled, "stitched_" + std::string(filter.name) + "_" + std::to_string(extent),
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+/// A filter that fits untiled stays untiled, so its pixels are the ones it had before such graphs
+/// could tile.
+TEST_F(RendererGeodeTest, FilterThatFitsUntiledStaysUntiled) {
+  for (const ReducedFilterCase& filter : kTileableFilters) {
+    SCOPED_TRACE(filter.name);
+    uint64_t tiles = 0;
+    RendererResourceStats stats;
+    (void)RenderOnTiledDevice(WholeCanvasFilterSource(filter.primitives), {1024, 1024},
+                              /*maximumTileExtent=*/0, tiles, stats);
+    EXPECT_THAT(tiles, testing::Eq(1u));
+    EXPECT_THAT(stats, ReducedFilterRasters(0, 1));
+  }
+}
+
+/// A large canvas and the view box that fills it. The filter region is the whole view box, and the
+/// view box is centered on the filtered circle at (32, 32).
+struct LargeCanvas {
+  std::string_view name;
+  Vector2i canvas;
+  double viewBoxX;
+  double viewBoxY;
+  int viewBoxWidth;
+  int viewBoxHeight;
+};
+
+/// 2048 x 2048 maps a user unit to 32 device pixels and 3840 x 2160 to 16: powers of two, with view
+/// box origins that are short binary fractions.
+constexpr std::array<LargeCanvas, 2> kLargeCanvases = {{
+    {"2048x2048", {2048, 2048}, 0, 0, 64, 64},
+    {"3840x2160", {3840, 2160}, -88, -35.5, 240, 135},
+}};
+
+/// `x y w h` of \p viewBox, printed exactly.
+std::string ViewBoxText(double x, double y, double width, double height) {
+  std::ostringstream text;
+  text.precision(17);
+  text << x << " " << y << " " << width << " " << height;
+  return text.str();
+}
+
+/// \p primitives on the circle of `WholeCanvasFilterSource`, filling \p large: its view box and
+/// filter region both start at the large canvas's view box origin.
+std::string LargeCanvasSource(std::string_view primitives, const LargeCanvas& large) {
+  std::string source = WholeCanvasFilterSource(primitives, large.viewBoxWidth, large.viewBoxHeight);
+  const std::string viewBox =
+      "viewBox=\"" + ViewBoxText(0, 0, large.viewBoxWidth, large.viewBoxHeight) + "\"";
+  source.replace(
+      source.find(viewBox), viewBox.size(),
+      "viewBox=\"" +
+          ViewBoxText(large.viewBoxX, large.viewBoxY, large.viewBoxWidth, large.viewBoxHeight) +
+          "\"");
+  const std::string origin = "x=\"0\" y=\"0\"";
+  std::ostringstream moved;
+  moved.precision(17);
+  moved << "x=\"" << large.viewBoxX << "\" y=\"" << large.viewBoxY << "\"";
+  source.replace(source.find(origin), origin.size(), moved.str());
+  return source;
+}
+
+/// Graphs past the untiled limits on both large canvases (each lighting graph composites its light
+/// over the source, a second intermediate) whose position arithmetic is exact in `f32` on any
+/// raster: every light position, displacement and pixel position is a short binary
+/// fraction, so a quadrant raster starting at its own corner computes the same values as the
+/// whole canvas. The displacement map passes through a discrete transfer table, so each
+/// displacement is a multiple of a quarter of the scale.
+constexpr std::array<ReducedFilterCase, 4> kExactLargeCanvasFilters = {{
+    {"displacement",
+     R"(<feColorMatrix type="matrix" result="c" color-interpolation-filters="sRGB"
+                       values="0 1 0 0 0  1 0 0 0 0  0 0 1 0 0  0 0 0 1 0"/>
+        <feComponentTransfer in="c" result="map" color-interpolation-filters="sRGB">
+          <feFuncR type="discrete" tableValues="0 0.25 0.5 0.75 1"/>
+          <feFuncG type="discrete" tableValues="1 0.5 0 0.75"/>
+          <feFuncA type="discrete" tableValues="1"/>
+        </feComponentTransfer>
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="0.4375" xChannelSelector="R"
+                           yChannelSelector="G" color-interpolation-filters="sRGB"/>)"},
+    {"diffuse_distant",
+     R"(<feDiffuseLighting surfaceScale="4" diffuseConstant="1" result="l">
+          <feDistantLight azimuth="45" elevation="40"/>
+        </feDiffuseLighting>
+        <feComposite in="SourceGraphic" in2="l" operator="arithmetic" k1="0" k2="1" k3="1"
+                     k4="0"/>)"},
+    {"specular_spot",
+     R"(<feSpecularLighting surfaceScale="3" specularConstant="1.25" specularExponent="8"
+                            lighting-color="white" result="s">
+          <feSpotLight x="10.5" y="12.25" z="30" pointsAtX="32" pointsAtY="32.5"
+                       limitingConeAngle="30"/>
+        </feSpecularLighting>
+        <feComposite in="SourceGraphic" in2="s" operator="arithmetic" k1="0" k2="1" k3="1"
+                     k4="0"/>)"},
+    {"diffuse_point",
+     R"(<feDiffuseLighting surfaceScale="2.5" diffuseConstant="1.5" lighting-color="#adf"
+                           result="l">
+          <fePointLight x="50.25" y="13.75" z="18.5"/>
+        </feDiffuseLighting>
+        <feComposite in="SourceGraphic" in2="l" operator="arithmetic" k1="0" k2="1" k3="1"
+                     k4="0"/>)"},
+}};
+
+/// \p source, laid out on \p large, rendered on \p device as the four quadrants of its view box,
+/// each on its own canvas of half the size, and joined: a reference in which no raster exceeds a
+/// quarter of the canvas.
+RendererBitmap RenderInQuadrants(const std::shared_ptr<geode::GeodeDevice>& device,
+                                 const std::string& source, const LargeCanvas& large) {
+  const Vector2i canvas = large.canvas;
+  const Vector2i half = canvas / 2;
+  RendererBitmap joined;
+  joined.dimensions = canvas;
+  joined.rowBytes = static_cast<std::size_t>(canvas.x) * 4;
+  joined.alphaType = AlphaType::Unpremultiplied;
+  joined.pixels.resize(joined.rowBytes * static_cast<std::size_t>(canvas.y));
+  const std::string fullViewBox =
+      "viewBox=\"" +
+      ViewBoxText(large.viewBoxX, large.viewBoxY, large.viewBoxWidth, large.viewBoxHeight) + "\"";
+  for (int row = 0; row < 2; ++row) {
+    for (int column = 0; column < 2; ++column) {
+      std::string quadrant = source;
+      const std::size_t at = quadrant.find(fullViewBox);
+      EXPECT_THAT(at, testing::Ne(std::string::npos));
+      quadrant.replace(at, fullViewBox.size(),
+                       "viewBox=\"" +
+                           ViewBoxText(large.viewBoxX + column * large.viewBoxWidth / 2.0,
+                                       large.viewBoxY + row * large.viewBoxHeight / 2.0,
+                                       large.viewBoxWidth / 2.0, large.viewBoxHeight / 2.0) +
+                           "\"");
+      RendererResourceStats stats;
+      const RendererBitmap part = RenderFilterCanvas(device, quadrant, half, std::nullopt, stats);
+      EXPECT_THAT(stats, ReducedFilterRasters(0, 1));
+      joined.alphaType = part.alphaType;
+      for (int y = 0; y < half.y && !part.pixels.empty(); ++y) {
+        std::copy_n(part.pixels.begin() + static_cast<std::ptrdiff_t>(y * part.rowBytes),
+                    static_cast<std::ptrdiff_t>(half.x) * 4,
+                    joined.pixels.begin() +
+                        static_cast<std::ptrdiff_t>((row * half.y + y) * joined.rowBytes +
+                                                    static_cast<std::size_t>(column * half.x) * 4));
+      }
+    }
+  }
+  return joined;
+}
+
+class LargeCanvasTilingTest
+    : public RendererGeodeTest,
+      public testing::WithParamInterface<std::tuple<ReducedFilterCase, LargeCanvas>> {};
+
+/// On 2048 x 2048 and 3840 x 2160 canvases each graph is past what one untiled graph may hold, so
+/// it runs in tiles at full resolution, never reduced, and matches the canvas rendered as four
+/// quadrants, each a separate raster no larger than a quarter of the canvas.
+TEST_P(LargeCanvasTilingTest, TilesMatchTheQuadrantReference) {
+  const auto& [filter, large] = GetParam();
+  const std::string source = LargeCanvasSource(filter.primitives, large);
+  uint64_t tiles = 0;
+  RendererResourceStats stats;
+  const RendererBitmap tiled =
+      RenderOnTiledDevice(source, large.canvas, /*maximumTileExtent=*/0, tiles, stats);
+  EXPECT_THAT(tiles, testing::Gt(1u)) << "Premise: the graph does not fit untiled";
+  EXPECT_THAT(stats, TiledFilterGraphs(1));
+  EXPECT_THAT(stats, ReducedFilterRasters(0, 1));
+  ASSERT_THAT(test::CountNonTransparentPixels(tiled), testing::Gt(0u));
+  editor::tests::CompareBitmapToBitmap(tiled, RenderInQuadrants(sharedDevice(), source, large),
+                                       std::string(filter.name) + "_on_" + std::string(large.name),
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Filters, LargeCanvasTilingTest,
+    testing::Combine(testing::ValuesIn(kExactLargeCanvasFilters),
+                     testing::ValuesIn(kLargeCanvases)),
+    [](const testing::TestParamInfo<std::tuple<ReducedFilterCase, LargeCanvas>>& info) {
+      return std::string(std::get<0>(info.param).name) + "_" +
+             std::string(std::get<1>(info.param).name);
+    });
+
+/// Noise generated in tiles on a 2048 x 2048 canvas, where it also fits untiled, matches the
+/// untiled raster at a tile extent that puts origins at 487, 974 and 1461. Noise is anchored at
+/// the filter raster's origin rather than the view box's (#2673), so a quadrant raster would
+/// anchor it at its own corner; the untiled raster is the reference instead.
+TEST_F(RendererGeodeTest, NoiseOnA2048CanvasMatchesTheUntiledRaster) {
+  for (const std::size_t index :
+       {std::size_t{7}, std::size_t{8}, std::size_t{9}, std::size_t{10}}) {
+    const ReducedFilterCase& filter = kTileableFilters[index];
+    SCOPED_TRACE(filter.name);
+    const std::string source = WholeCanvasFilterSource(filter.primitives);
+    uint64_t untiledTiles = 0;
+    uint64_t tiles = 0;
+    RendererResourceStats stats;
+    const RendererBitmap untiled =
+        RenderOnTiledDevice(source, {2048, 2048}, /*maximumTileExtent=*/0, untiledTiles, stats);
+    ASSERT_THAT(untiledTiles, testing::Eq(1u)) << "Premise: noise alone fits untiled";
+    const RendererBitmap tiled =
+        RenderOnTiledDevice(source, {2048, 2048}, /*maximumTileExtent=*/487, tiles, stats);
+    ASSERT_THAT(tiles, testing::Gt(1u));
+    EXPECT_THAT(stats, TiledFilterGraphs(1));
+    editor::tests::CompareBitmapToBitmap(tiled, untiled,
+                                         "noise_on_2048_canvas_" + std::string(filter.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A turbulence-driven displacement is past the untiled limits on 2048 x 2048 and 3840 x 2160
+/// canvases and runs in tiles at full resolution. With no untiled or quadrant reference for noise
+/// at that size (see `NoiseOnA2048CanvasMatchesTheUntiledRaster`), a second, finer tiling with
+/// different tile origins must agree with it to the pixel.
+TEST_F(RendererGeodeTest, TurbulenceDisplacementOnLargeCanvasesRunsInTiles) {
+  for (const LargeCanvas& large : kLargeCanvases) {
+    SCOPED_TRACE(large.name);
+    const std::string source = LargeCanvasSource(kTileableFilters[11].primitives, large);
+    uint64_t tiles = 0;
+    uint64_t finerTiles = 0;
+    RendererResourceStats stats;
+    const RendererBitmap tiled =
+        RenderOnTiledDevice(source, large.canvas, /*maximumTileExtent=*/0, tiles, stats);
+    EXPECT_THAT(tiles, testing::Gt(1u));
+    EXPECT_THAT(stats, TiledFilterGraphs(1));
+    EXPECT_THAT(stats, ReducedFilterRasters(0, 1));
+    ASSERT_THAT(test::CountNonTransparentPixels(tiled), testing::Gt(0u));
+    const RendererBitmap retiled =
+        RenderOnTiledDevice(source, large.canvas, /*maximumTileExtent=*/383, finerTiles, stats);
+    EXPECT_THAT(finerTiles, testing::Gt(tiles));
+    EXPECT_THAT(stats, TiledFilterGraphs(1)) << "Premise: the finer tiling runs at full resolution";
+    editor::tests::CompareBitmapToBitmap(tiled, retiled,
+                                         "turbulence_displacement_on_" + std::string(large.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 }  // namespace

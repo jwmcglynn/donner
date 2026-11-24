@@ -13,6 +13,7 @@
 #include "donner/gpu/shader/programs/LightingParams.h"
 #include "donner/gpu/shader/programs/SpecularLightingSource.h"
 #include "donner/gpu/shader/tests/CompiledSpecularLighting.h"
+#include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 namespace donner::gpu::shader {
 namespace {
@@ -27,6 +28,8 @@ TEST(SpecularLightingProgramTests, ReflectsStorageLayoutAndComputeSurface) {
   const auto* params = shader.resource("params");
   ASSERT_NE(params, nullptr);
   EXPECT_EQ(params->minSizeBytes, sizeof(programs::LightingParams));
+  EXPECT_THAT(shader, HasShaderMember("params", "deviceOriginX", 144, 4, ShaderScalarType::I32));
+  EXPECT_THAT(shader, HasShaderMember("params", "deviceOriginY", 148, 4, ShaderScalarType::I32));
   EXPECT_EQ(params->binding, 2u);
   EXPECT_EQ(params->type, BindingType::ReadOnlyStorageBuffer);
   EXPECT_TRUE(shader.matchesMember("params", "specularExponent", 8, 4, ShaderScalarType::F32));

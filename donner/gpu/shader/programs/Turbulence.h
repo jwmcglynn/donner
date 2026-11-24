@@ -21,6 +21,8 @@ struct TurbulenceParams {
   float filterFromDeviceB;  //!< Device-y coefficient of filter x.
   float filterFromDeviceC;  //!< Device-x coefficient of filter y.
   float filterFromDeviceD;  //!< Device-y coefficient of filter y.
+  int32_t deviceOriginX;    //!< Raster x of the output texture's pixel (0, 0): a tile's origin.
+  int32_t deviceOriginY;    //!< Raster y of the output texture's pixel (0, 0): a tile's origin.
 };
 /// Deterministic permutation and per-channel gradient tables.
 struct TurbulenceTables {
@@ -28,7 +30,7 @@ struct TurbulenceTables {
   std::array<float, kTurbulenceGradientTableSize> gradX{};  //!< Per-channel x gradients.
   std::array<float, kTurbulenceGradientTableSize> gradY{};  //!< Per-channel y gradients.
 };
-static_assert(sizeof(TurbulenceParams) == 48);
+static_assert(sizeof(TurbulenceParams) == 56);
 static_assert(sizeof(TurbulenceTables) == 18504);
 /// Returns authored WGSL and reflection for bounded SVG turbulence or fractal noise.
 /// The host supplies deterministic tables and admitted noise parameters; output is premultiplied.

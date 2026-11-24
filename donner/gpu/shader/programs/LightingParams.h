@@ -7,7 +7,7 @@
 namespace donner::gpu::shader::programs {
 
 /// Byte size of the read-only parameter block.
-inline constexpr uint64_t kLightingParamsSize = 144;
+inline constexpr uint64_t kLightingParamsSize = 160;
 
 /// Host-shareable layout of the lighting parameter storage buffer.
 struct LightingParams {
@@ -52,6 +52,11 @@ struct LightingParams {
   int32_t sampleMinY = 0;  //!< Inclusive sample subregion minimum y.
   int32_t sampleMaxX = 0;  //!< Inclusive sample subregion maximum x.
   int32_t sampleMaxY = 0;  //!< Inclusive sample subregion maximum y.
+
+  int32_t deviceOriginX = 0;  //!< Raster x of the output texture's pixel (0, 0): a tile's origin.
+  int32_t deviceOriginY = 0;  //!< Raster y of the output texture's pixel (0, 0): a tile's origin.
+  int32_t pad1 = 0;           //!< Keeps the trailing group 16 bytes wide.
+  int32_t pad2 = 0;           //!< Keeps the trailing group 16 bytes wide.
 };
 
 static_assert(sizeof(LightingParams) == kLightingParamsSize);

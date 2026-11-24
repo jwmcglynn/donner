@@ -9,6 +9,7 @@
 
 #include "donner/gpu/shader/programs/DiffuseLighting.h"
 #include "donner/gpu/shader/tests/CompiledDiffuseLighting.h"
+#include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 namespace donner::gpu::shader {
 namespace {
@@ -34,6 +35,9 @@ TEST(DiffuseLightingProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
   EXPECT_EQ(shader.resource("params")->group, 0u);
   EXPECT_EQ(shader.resource("params")->binding, 2u);
   EXPECT_EQ(shader.resource("params")->minSizeBytes, sizeof(programs::LightingParams));
+  // A tile's origin in its raster follows the sample bounds.
+  EXPECT_THAT(shader, HasShaderMember("params", "deviceOriginX", 144, 4, ShaderScalarType::I32));
+  EXPECT_THAT(shader, HasShaderMember("params", "deviceOriginY", 148, 4, ShaderScalarType::I32));
   EXPECT_NE(shader.wgsl.find("fn spotLightFactor("), std::string_view::npos);
   EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }

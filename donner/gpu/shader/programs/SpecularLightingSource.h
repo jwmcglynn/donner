@@ -41,6 +41,10 @@ inline constexpr wgsl::SourceText kSpecularLightingSource{R"wgsl(struct Lighting
   sampleMinY: i32,
   sampleMaxX: i32,
   sampleMaxY: i32,
+  deviceOriginX: i32,
+  deviceOriginY: i32,
+  pad1: i32,
+  pad2: i32,
 }
 
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
@@ -103,7 +107,7 @@ fn computeLightDirection(coord: vec2<i32>, surfaceZ: f32) -> vec3<f32> {
   if ((params.lightType == 0u)) {
     return safeNormalize(vec3<f32>((cos(params.azimuthRad) * cos(params.elevationRad)), (sin(params.azimuthRad) * cos(params.elevationRad)), sin(params.elevationRad)));
   }
-  return safeNormalize((vec3<f32>(params.lightX, params.lightY, params.lightZ) - vec3<f32>(f32(coord.x), f32(coord.y), surfaceZ)));
+  return safeNormalize((vec3<f32>(params.lightX, params.lightY, params.lightZ) - vec3<f32>(f32((coord.x + params.deviceOriginX)), f32((coord.y + params.deviceOriginY)), surfaceZ)));
 }
 
 fn spotLightFactor(coord: vec2<i32>, alpha: f32, lightDirection: vec3<f32>) -> f32 {
@@ -116,8 +120,8 @@ fn spotLightFactor(coord: vec2<i32>, alpha: f32, lightDirection: vec3<f32>) -> f
   }
   var cosAngle: f32 = cosAngleDevice;
   if ((params.hasShear != 0u)) {
-    let userX = (((params.pixelToUser0 * f32(coord.x)) + (params.pixelToUser1 * f32(coord.y))) + params.pixelToUser2);
-    let userY = (((params.pixelToUser3 * f32(coord.x)) + (params.pixelToUser4 * f32(coord.y))) + params.pixelToUser5);
+    let userX = (((params.pixelToUser0 * f32((coord.x + params.deviceOriginX))) + (params.pixelToUser1 * f32((coord.y + params.deviceOriginY)))) + params.pixelToUser2);
+    let userY = (((params.pixelToUser3 * f32((coord.x + params.deviceOriginX))) + (params.pixelToUser4 * f32((coord.y + params.deviceOriginY)))) + params.pixelToUser5);
     cosAngle = dot(safeNormalize(vec3<f32>((userX - params.userLightX), (userY - params.userLightY), ((params.surfaceScale * alpha) - params.userLightZ))), safeNormalize(vec3<f32>((params.userPointsAtX - params.userLightX), (params.userPointsAtY - params.userLightY), (params.userPointsAtZ - params.userLightZ))));
     if ((cosAngle <= 0f)) {
       return 0f;

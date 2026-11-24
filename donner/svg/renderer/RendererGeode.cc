@@ -1446,10 +1446,10 @@ GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
                                 const std::optional<Box2d>& filterRegion,
                                 const Transform2d& deviceFromFilter,
                                 const GeodeFilterBuffer& buffer,
-                                const geode::GeodeFilterEngine& engine,
-                                bool allowLocalPlan = true) {
-  GeodeFilterPlan result{
-      buffer, engine.executionPlan(filterGraph, buffer.width, buffer.height, deviceFromFilter)};
+                                const geode::GeodeFilterEngine& engine, bool allowLocalPlan = true,
+                                bool preferTiles = false) {
+  GeodeFilterPlan result{buffer, engine.executionPlan(filterGraph, buffer.width, buffer.height,
+                                                      deviceFromFilter, preferTiles)};
   uint64_t plannedWork = 0;
   uint64_t plannedBytes = 0;
   result.fullExecutionFits = components::FilterGraphExecutionCost(
@@ -1609,6 +1609,48 @@ bool FitsAnEmptyFrame(const GeodeFilterPlan& plan, const RendererSurfaceBudget& 
   return plan.captureBytes <= limit && plan.graphBytes <= limit - plan.captureBytes;
 }
 
+/// Reserves the frame's budgets for \p plan and returns its admission, or nothing when the budget
+/// refuses it.
+std::optional<GeodeFilterAdmission> ReserveGeodeFilter(const components::FilterGraph& filterGraph,
+                                                       const GeodeFilterPlan& plan,
+                                                       components::FilterExecutionBudget& budget,
+                                                       const geode::GeodeFilterEngine& engine) {
+  auto reservation = budget.reserve(filterGraph, plan.bounds.workPixels,
+                                    components::FilterMemoryModel::GpuAllNodes, plan.captureBytes,
+                                    engine.retainedBufferBytes(), plan.bounds.memoryPixels,
+                                    plan.bounds.executions, plan.surfaces);
+  if (!reservation.has_value()) {
+    return std::nullopt;
+  }
+  return GeodeFilterAdmission{
+      plan.buffer.region,      plan.buffer.width,   plan.buffer.height,
+      plan.buffer.offsetX,     plan.buffer.offsetY, plan.localPlan.has_value(),
+      !plan.fullExecutionFits, *reservation,        plan.plan,
+      plan.localPlan};
+}
+
+/// Admits \p filterGraph after its full-resolution plan over \p buffer was refused: split into
+/// tiles at full resolution when its sampling halo allows and the tiles fit, otherwise on a
+/// reduced-resolution raster (\ref AdmitReducedGeodeFilter).
+std::optional<GeodeFilterAdmission> AdmitPastTheFullPlan(const components::FilterGraph& filterGraph,
+                                                         const std::optional<Box2d>& filterRegion,
+                                                         const Transform2d& deviceFromFilter,
+                                                         const GeodeFilterBuffer& buffer,
+                                                         components::FilterExecutionBudget& budget,
+                                                         const RendererSurfaceBudget& surfaceBudget,
+                                                         const geode::GeodeFilterEngine& engine) {
+  const GeodeFilterPlan tiled =
+      PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, buffer, engine,
+                      /*allowLocalPlan=*/true, /*preferTiles=*/true);
+  if (tiled.plan.tiles > 1 && tiled.costKnown &&
+      GeodeFilterPlanRefusal(filterGraph, tiled, budget, surfaceBudget, engine) ==
+          components::FilterExecutionBudget::RejectionReason::None) {
+    return ReserveGeodeFilter(filterGraph, tiled, budget, engine);
+  }
+  return AdmitReducedGeodeFilter(filterGraph, filterRegion, deviceFromFilter, buffer, budget,
+                                 surfaceBudget, engine);
+}
+
 /// Whether a graph refused at full resolution for \p refusal may run on a reduced raster: a memory,
 /// work or estimate refusal may, except a memory refusal that a submitted chunk can lift while
 /// \p mayRequestChunk.
@@ -1627,7 +1669,8 @@ bool ReducedRasterMayAdmit(components::FilterExecutionBudget::RejectionReason re
 }
 
 /// Admits \p filterGraph at full resolution when it fits the frame's limits. A graph that does not
-/// fit runs on a reduced-resolution raster instead (\ref AdmitReducedGeodeFilter), except while
+/// fit runs in tiles or on a reduced-resolution raster instead (\ref AdmitPastTheFullPlan), except
+/// while
 /// \p mayRequestChunk and the refusal is one a submitted chunk can lift: the caller then submits
 /// the chunk and asks again with \p mayRequestChunk false.
 std::optional<GeodeFilterAdmission> AdmitGeodeFilter(
@@ -1660,27 +1703,16 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(
   if (ReducedRasterMayAdmit(
           GeodeFilterPlanRefusal(filterGraph, plan, budget, surfaceBudget, engine),
           mayRequestChunk && FitsAnEmptyFrame(plan, surfaceBudget))) {
-    if (std::optional<GeodeFilterAdmission> reduced = AdmitReducedGeodeFilter(
+    if (std::optional<GeodeFilterAdmission> admitted = AdmitPastTheFullPlan(
             filterGraph, filterRegion, deviceFromFilter, *buffer, budget, surfaceBudget, engine)) {
-      return reduced;
+      return admitted;
     }
   }
   if (!GeodeFilterSurfacesFit(plan, budget, surfaceBudget)) {
     budget.requireMemoryChunk();
     return std::nullopt;
   }
-  auto reservation = budget.reserve(filterGraph, plan.bounds.workPixels,
-                                    components::FilterMemoryModel::GpuAllNodes, plan.captureBytes,
-                                    engine.retainedBufferBytes(), plan.bounds.memoryPixels,
-                                    plan.bounds.executions, plan.surfaces);
-  if (!reservation.has_value()) {
-    return std::nullopt;
-  }
-  return GeodeFilterAdmission{
-      plan.buffer.region,      plan.buffer.width,   plan.buffer.height,
-      plan.buffer.offsetX,     plan.buffer.offsetY, plan.localPlan.has_value(),
-      !plan.fullExecutionFits, *reservation,        plan.plan,
-      plan.localPlan};
+  return ReserveGeodeFilter(filterGraph, plan, budget, engine);
 }
 
 /// Views of pooled render-target textures that outlive the frame that made them, so a cached bind
@@ -2209,6 +2241,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   bool forceFilterBudgetChunkForTesting = false;
   /// Filter graphs this frame ran on a reduced-resolution raster.
   std::uint64_t filterReducedRasters = 0;
+  /// Filter graphs this frame ran at full resolution in more than one tile.
+  std::uint64_t filterTiledGraphs = 0;
   /// Device pixels per raster pixel of this frame's coarsest reduced filter raster, or 1.
   std::uint32_t filterRasterReduction = 1;
   bool failFilterFrameRestoreForTesting = false;
@@ -8713,11 +8747,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     transientTextEncodes.clear();
   }
 
+  /// Counts a captured filter in the frame's reduced-raster or tiled statistics.
+  void countAdmittedFilter(const GeodeFilterAdmission& admission) {
+    if (admission.reducedRasterFromDevice) {
+      ++filterReducedRasters;
+      filterRasterReduction = std::max(filterRasterReduction, admission.rasterReduction);
+    } else if (admission.fullPlan.tiles > 1) {
+      ++filterTiledGraphs;
+    }
+  }
+
   void resetOwnedFrameBudgets() {
     if (ownsFilterExecutionBudget) {
       filterExecutionBudget->reset();
     }
     filterReducedRasters = 0;
+    filterTiledGraphs = 0;
     filterRasterReduction = 1;
     if (ownsFilterPreparationBudget) {
       filterPreparationBudget->reset();
@@ -9341,6 +9386,7 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .filterReducedRasterSupported = true,
       .filterReducedRasters = impl_->filterReducedRasters,
       .filterRasterReduction = impl_->filterRasterReduction,
+      .filterTiledGraphs = impl_->filterTiledGraphs,
       .geometryBudgetSupported = true,
       .geometryDraws = impl_->geometryBudget->draws(),
       .geometryItems = impl_->geometryBudget->items(),
@@ -9834,10 +9880,8 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     impl_->filterExecutionBudget->release(reservation);
     impl_->filterExecutionBudget->reject();
     impl_->pushRejectedFilterFrame();
-  } else if (admission->reducedRasterFromDevice) {
-    ++impl_->filterReducedRasters;
-    impl_->filterRasterReduction =
-        std::max(impl_->filterRasterReduction, admission->rasterReduction);
+  } else {
+    impl_->countAdmittedFilter(*admission);
   }
 }
 

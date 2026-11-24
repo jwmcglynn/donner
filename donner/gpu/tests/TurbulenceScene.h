@@ -200,7 +200,9 @@ void CheckTurbulenceStorage(DeviceType& device, const shader::CompiledShaderView
                         static_cast<float>(scenario.filterFromDevice[0]),
                         static_cast<float>(scenario.filterFromDevice[1]),
                         static_cast<float>(scenario.filterFromDevice[2]),
-                        static_cast<float>(scenario.filterFromDevice[3])};
+                        static_cast<float>(scenario.filterFromDevice[3]),
+                        0,
+                        0};
     const Tables tables = BuildTables(scenario.seed);
     auto paramsBuffer = device.createBuffer(BufferDescriptor{
         "turbulence params", sizeof(params), BufferUsage::Storage | BufferUsage::CopyDst});

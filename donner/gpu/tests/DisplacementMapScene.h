@@ -160,8 +160,8 @@ void CheckDisplacementMapStorage(DeviceType& device, const shader::CompiledShade
     auto outputView = device.createTextureView(output.result(), TextureViewDescriptor{"output"});
     ASSERT_THAT(outputView, HasResult());
 
-    const shader::programs::DisplacementMapParams params{scenario.scale, scenario.xChannel,
-                                                         scenario.yChannel, 0};
+    const shader::programs::DisplacementMapParams params{
+        scenario.scale, scenario.xChannel, scenario.yChannel, 0, 0, 0, 0, 0};
     auto uniform = device.createBuffer(BufferDescriptor{
         "displacement parameters", sizeof(params), BufferUsage::Uniform | BufferUsage::CopyDst});
     ASSERT_THAT(uniform, HasResult());

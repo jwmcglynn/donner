@@ -115,6 +115,16 @@ consteval bool ValidateLightingArtifact() {
                                      sizeof(LightingParams::sampleMaxX), ShaderScalarType::I32));
   static_assert(shader.matchesMember("params", "sampleMaxY", offsetof(LightingParams, sampleMaxY),
                                      sizeof(LightingParams::sampleMaxY), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "deviceOriginX",
+                                     offsetof(LightingParams, deviceOriginX),
+                                     sizeof(LightingParams::deviceOriginX), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "deviceOriginY",
+                                     offsetof(LightingParams, deviceOriginY),
+                                     sizeof(LightingParams::deviceOriginY), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "pad1", offsetof(LightingParams, pad1),
+                                     sizeof(LightingParams::pad1), ShaderScalarType::I32));
+  static_assert(shader.matchesMember("params", "pad2", offsetof(LightingParams, pad2),
+                                     sizeof(LightingParams::pad2), ShaderScalarType::I32));
   return true;
 }
 }  // namespace donner::gpu::shader::programs
