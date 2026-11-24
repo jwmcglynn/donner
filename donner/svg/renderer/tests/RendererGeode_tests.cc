@@ -4464,6 +4464,61 @@ TEST_F(RendererGeodeTest, NestedClipSurfaceRejectionSuppressesTheWholeInnerSubtr
       << "A clip whose required mask could not be allocated must fail closed.";
 }
 
+// Path caches are stored in 64-entry pages, so a document that draws a few paths, such as a
+// sprite sheet or an icon, allocates 64 slots rather than a full default page.
+TEST_F(RendererGeodeTest, PathCacheStorageOfOneDrawnPathUsesSixtyFourEntryPages) {
+  EXPECT_EQ(entt::component_traits<geode::GeodePathCacheComponent>::page_size, 64u);
+  Registry registry;
+  const Entity entity = registry.create();
+  const Path path = PathBuilder().addRect(Box2d({1.0, 1.0}, {4.0, 4.0})).build();
+
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawPath(PathShape{.path = &path, .sourceEntity = EntityHandle(registry, entity)},
+                    StrokeParams{});
+  renderer.endFrame();
+
+  const Registry& readOnly = registry;
+  const auto* storage = readOnly.storage<geode::GeodePathCacheComponent>();
+  ASSERT_THAT(storage, testing::NotNull()) << "The draw must have cached its encode";
+  EXPECT_EQ(storage->size(), 1u);
+  EXPECT_EQ(storage->capacity(), 64u);
+}
+
+// Growing past several pages keeps every path cache at its address with its contents, and the
+// storage still visits each entity once.
+TEST_F(RendererGeodeTest, PathCacheStorageGrowthKeepsComponentAddressesAndValues) {
+  Registry registry;
+  constexpr size_t kPage = entt::component_traits<geode::GeodePathCacheComponent>::page_size;
+  std::vector<std::pair<Entity, const geode::GeodePathCacheComponent*>> retained;
+  for (size_t index = 0; index < kPage * 2 + 1; ++index) {
+    const Entity entity = registry.create();
+    auto& cache = registry.emplace<geode::GeodePathCacheComponent>(entity);
+    cache.strokeUseClock = index + 1;
+    retained.emplace_back(entity, &cache);
+  }
+  const Registry& readOnly = registry;
+  const auto* storage = readOnly.storage<geode::GeodePathCacheComponent>();
+  ASSERT_THAT(storage, testing::NotNull());
+  EXPECT_EQ(storage->capacity(), kPage * 3);
+  EXPECT_EQ(storage->size(), retained.size());
+  for (size_t index = 0; index < retained.size(); ++index) {
+    const auto* current = registry.try_get<geode::GeodePathCacheComponent>(retained[index].first);
+    ASSERT_THAT(current, testing::Eq(retained[index].second));
+    EXPECT_EQ(current->strokeUseClock, index + 1);
+  }
+  std::vector<Entity> visited;
+  for (const auto& [entity, cache] : readOnly.view<const geode::GeodePathCacheComponent>().each()) {
+    visited.push_back(entity);
+  }
+  std::vector<Entity> expected;
+  for (const auto& [entity, cache] : retained) {
+    expected.push_back(entity);
+  }
+  EXPECT_THAT(visited, testing::UnorderedElementsAreArray(expected));
+}
+
 TEST_F(RendererGeodeTest, ResourceStatsAggregateEveryDocumentTouchedInTheFrame) {
   ASSERT_TRUE(sharedDevice() != nullptr);
 

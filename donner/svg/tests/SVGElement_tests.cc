@@ -1220,18 +1220,79 @@ TEST_F(SVGElementTests, PresentationProbePatternTransformRetainsAuthoredName) {
   EXPECT_THAT(pattern.getAttribute("transform"), testing::Eq(std::nullopt));
 }
 
-TEST_F(SVGElementTests, StyleStorageSmallPageHasBoundedInitialAllocation) {
+/// Requires one \p Component to allocate a bounded first page: every document registry, including
+/// each externally referenced one, holds at least one page of every component it uses.
+template <typename Component>
+void ExpectBoundedInitialStorage() {
   Registry registry;
   const Entity entity = registry.create();
-  registry.emplace<components::StyleComponent>(entity);
+  registry.emplace<Component>(entity);
   const Registry& readOnly = registry;
-  const auto* storage = readOnly.storage<components::StyleComponent>();
+  const auto* storage = readOnly.storage<Component>();
   ASSERT_THAT(storage, testing::NotNull());
   EXPECT_EQ(storage->size(), 1u);
-  EXPECT_LE(storage->capacity() * sizeof(components::StyleComponent), 512u * 1024u);
-  testing::Test::RecordProperty("component_bytes",
-                                std::to_string(sizeof(components::StyleComponent)));
+  EXPECT_LE(storage->capacity() * sizeof(Component), 512u * 1024u);
+  testing::Test::RecordProperty("component_bytes", std::to_string(sizeof(Component)));
   testing::Test::RecordProperty("allocated_slots", std::to_string(storage->capacity()));
+}
+
+TEST_F(SVGElementTests, StyleStorageSmallPageHasBoundedInitialAllocation) {
+  ExpectBoundedInitialStorage<components::StyleComponent>();
+}
+
+TEST_F(SVGElementTests, ComputedStyleStorageSmallPageHasBoundedInitialAllocation) {
+  ExpectBoundedInitialStorage<components::ComputedStyleComponent>();
+}
+
+// Computed styles are stored in 64-entry pages, so a document with a few elements, such as a
+// sprite sheet or an icon, allocates 64 slots rather than a full default page.
+TEST_F(SVGElementTests, ComputedStyleStorageUsesSixtyFourEntryPages) {
+  EXPECT_EQ(entt::component_traits<components::ComputedStyleComponent>::page_size, 64u);
+  Registry registry;
+  registry.emplace<components::ComputedStyleComponent>(registry.create());
+  const Registry& readOnly = registry;
+  const auto* storage = readOnly.storage<components::ComputedStyleComponent>();
+  ASSERT_THAT(storage, testing::NotNull());
+  EXPECT_EQ(storage->capacity(), 64u);
+}
+
+// Growing past several pages keeps every computed style at its address with its value, and the
+// storage still visits each entity once.
+TEST_F(SVGElementTests, ComputedStyleStorageGrowthKeepsComponentAddressesAndValues) {
+  Registry registry;
+  constexpr size_t kPage = entt::component_traits<components::ComputedStyleComponent>::page_size;
+  std::vector<std::pair<Entity, const components::ComputedStyleComponent*>> retained;
+  for (size_t index = 0; index < kPage * 2 + 1; ++index) {
+    const Entity entity = registry.create();
+    auto& style = registry.emplace<components::ComputedStyleComponent>(entity);
+    style.properties.emplace();
+    style.properties->overflowWrap.set(
+        index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal, css::Specificity());
+    retained.emplace_back(entity, &style);
+  }
+  const Registry& readOnly = registry;
+  const auto* storage = readOnly.storage<components::ComputedStyleComponent>();
+  ASSERT_THAT(storage, testing::NotNull());
+  EXPECT_EQ(storage->capacity(), kPage * 3);
+  EXPECT_EQ(storage->size(), retained.size());
+  for (size_t index = 0; index < retained.size(); ++index) {
+    const auto* current =
+        registry.try_get<components::ComputedStyleComponent>(retained[index].first);
+    ASSERT_THAT(current, testing::Eq(retained[index].second));
+    ASSERT_THAT(current->properties, testing::Optional(testing::_));
+    EXPECT_THAT(current->properties->overflowWrap.get(),
+                Optional(index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal));
+  }
+  std::vector<Entity> visited;
+  for (const auto& [entity, style] :
+       readOnly.view<const components::ComputedStyleComponent>().each()) {
+    visited.push_back(entity);
+  }
+  std::vector<Entity> expected;
+  for (const auto& [entity, style] : retained) {
+    expected.push_back(entity);
+  }
+  EXPECT_THAT(visited, testing::UnorderedElementsAreArray(expected));
 }
 
 TEST_F(SVGElementTests, StyleStorageGrowthKeepsComponentAddressesAndValues) {
