@@ -733,12 +733,19 @@ queue, and *started* once a thread begins running it.
   per-scope queues: a queue that belongs to a scope would expose the scope's memory to idle workers
   looking for work while the scope's creator completes and destroys it. Fairness: entries leave in
   push order, and a worker with work on its own deque still makes one outside take after every 61
-  tasks it runs from its deque: one global-queue entry, or if that is empty, one steal attempt on
-  each adopted deque. The check is made only where a worker may already take outside work, in its
-  idle loop and in rule 3 within its margin; it is not made while a worker runs rule-1 entries of
-  a scope it waits on, nor past its margin, so it never adds stack depth past the margin or runs
-  another client's task inside a wait where helping would not. So a global-queue or adopted-deque
-  entry waits behind a bounded number of tasks while some worker is in its idle loop or helping
+  tasks it runs from its deque. A per-worker counter alternates the source of that take: on one
+  check it takes one global-queue entry, on the next one steal attempt on each adopted deque, and
+  only if the chosen source is empty does it try the other. So neither source's traffic can keep
+  the other from being served. The check is made only where a worker may already take outside
+  work, in its idle loop and in rule 3 within its margin; it is not made while a worker runs
+  rule-1 entries of a scope it waits on, nor past its margin, so it never adds stack depth past
+  the margin or runs another client's task inside a wait where helping would not. The claim that
+  holds: a global-queue entry waits only behind the global entries ahead of it, and an
+  adopted-deque entry only behind the entries older than it on that deque (steals take the oldest
+  first); a worker that keeps making its checks serves each of the two sources at least once
+  every 122 tasks it runs from its own deque, whatever traffic the other source carries, and an
+  idle worker's steal rounds serve each source first on every second round (below). So both kinds
+  of entry wait behind a bounded number of tasks while some worker is in its idle loop or helping
   within its margin. That is a bound in tasks, not in time, and it does not cover entries deep in
   a worker's own deque: the owner pops newest first, so its oldest entries leave only when a
   thief takes them, as in every work-stealing scheduler.
@@ -789,10 +796,13 @@ queue, and *started* once a thread begins running it.
 
   A worker never runs a deque entry below its innermost live watermark; those entries leave only
   by being stolen from the top or by the drain step before a sleep. An idle worker runs its own
-  deque, then the global queue, then steals, for `idleSpinRounds` rounds before it tries to sleep.
+  deque, then makes steal rounds (the global queue and adopted deques, then other workers, as
+  below), for `idleSpinRounds` rounds before it tries to sleep.
 
-  A steal round takes from the global queue first, then probes every adopted slot's deque in slot
-  order, then probes every other worker exactly once, starting at an offset chosen by a per-worker
+  A steal round first tries the global queue and every adopted slot's deque in slot order, and a
+  per-worker round counter alternates which of the two it tries first, so a global queue that is
+  never empty cannot shadow the adopted deques (or the reverse). It then probes every other
+  worker exactly once, starting at an offset chosen by a per-worker
   generator seeded from the worker index (a minimal-standard linear congruential or xorshift
   generator, never `std::random_device`, with a multiply-shift range reduction) and going round
   in index order. A round that finds nothing has looked at every queue once, so a worker woken
@@ -945,9 +955,11 @@ queue, and *started* once a thread begins running it.
   the argument above establishes.
 
   For an unbounded stream of work, such as the editor's, the first part holds only as far as the
-  fairness rule of the global queue reaches: global-queue and adopted-deque entries are taken
-  within a bounded number of tasks while some worker reaches its idle loop or rule 3, and entries
-  deep in a worker's own deque wait for a thief. No bound in time is claimed.
+  fairness rule of the global queue reaches: a global-queue entry is taken within a bounded number
+  of tasks after the global entries ahead of it, and an adopted-deque entry within a bounded number
+  of tasks after the older entries on its deque, while some worker reaches its idle loop or rule
+  3, however busy the other source is; entries deep in a worker's own deque wait for a thief. No
+  bound in time is claimed.
 - **Parkers and scope lifetime.** A scope lives in its creator's frame and is destroyed as soon as
   its creator sees it complete, so no thread may touch the scope after the change that lets the
   creator return. Every worker and adoptable slot has a parker for the scheduler's lifetime; each
@@ -1066,8 +1078,12 @@ queue, and *started* once a thread begins running it.
     counter never exceeds its bound. The same with an adopted creator and with a non-worker
     against `maxExternalTasks`.
   - The global queue is first in, first out, and a worker with endless local work in its idle
-    loop still takes a global entry within 61 tasks, or, with the global queue empty, an entry
-    from an adopted deque whose owner is blocked outside the scheduler.
+    loop still takes a global entry within 122 tasks. With a non-worker producer keeping the
+    global queue non-empty the whole time and every worker kept busy with endless local work, an
+    adopted thread spawns one task and blocks on a condition variable that only that task
+    signals: the task runs and the thread wakes, under a hang guard and with no timing assertion.
+    Must be observed red with the alternation removed (global queue always first, in both the
+    periodic check and the steal round).
   - One non-worker creating, using and destroying 1,000 schedulers in turn: after each registration
     the number of live `ParkerPool` objects (a test-only counter) is at most 2, and after the last
     scheduler is destroyed and the thread registers with a fresh one it is 1. Must be observed red
