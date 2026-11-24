@@ -95,6 +95,15 @@ public:
     return scheduler.liveScopes_.load(std::memory_order_relaxed);
   }
 
+  static std::size_t RetainedCoroutineFrameBytes(TaskScheduler& scheduler) {
+    std::unique_lock lock(scheduler.framePool_.mutex_);
+    return scheduler.framePool_.retainedBytes_;
+  }
+
+  static void* AllocateCoroutineFrame(TaskScheduler& scheduler, std::size_t bytes) {
+    return scheduler.framePool_.allocate(bytes);
+  }
+
   /// Bytes of stack left on the calling worker, or empty off a worker.
   static std::optional<std::size_t> StackRemaining() {
     return TaskScheduler::CurrentWorkerStackRemaining();

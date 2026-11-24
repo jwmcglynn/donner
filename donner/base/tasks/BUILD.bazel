@@ -24,7 +24,10 @@ donner_cc_library(
 
 donner_cc_library(
     name = "task_record",
-    hdrs = ["TaskRecord.h"],
+    hdrs = [
+        "SchedulerWork.h",
+        "TaskRecord.h",
+    ],
     deps = [
         ":false_sharing",
         ":parker",
@@ -53,10 +56,15 @@ donner_cc_library(
 donner_cc_library(
     name = "task_scheduler",
     srcs = [
+        "AsyncTaskScope.cc",
+        "CoroutineFramePool.cc",
         "TaskScheduler.cc",
         "TaskScope.cc",
     ],
     hdrs = [
+        "AsyncTaskScope.h",
+        "CoroutineFramePool.h",
+        "Task.h",
         "TaskScheduler.h",
         "TaskScope.h",
     ],
@@ -95,7 +103,10 @@ donner_cc_test(
 donner_cc_library(
     name = "scheduler_test_utils",
     testonly = 1,
-    hdrs = ["tests/SchedulerTestUtils.h"],
+    hdrs = [
+        "tests/CoroutineTestUtils.h",
+        "tests/SchedulerTestUtils.h",
+    ],
     deps = [
         ":task_scheduler",
         "//donner/base:stall_guard",
@@ -123,6 +134,28 @@ donner_cc_test(
         ":task_scheduler",
         "//donner/base:gtest_timeout_main",
         "//donner/base:stall_guard",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "task_tests",
+    srcs = ["tests/Task_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "async_task_scope_tests",
+    srcs = ["tests/AsyncTaskScope_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
         "@com_google_gtest//:gtest",
     ],
 )

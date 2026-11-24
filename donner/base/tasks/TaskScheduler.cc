@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include "donner/base/tasks/AsyncTaskScope.h"
+
 namespace donner::tasks {
 
 namespace {
@@ -46,6 +48,12 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
     case SchedulerStep::AfterStopFlagSet: return os << "AfterStopFlagSet";
     case SchedulerStep::ScopeWaiterBeforePrepareWait: return os << "ScopeWaiterBeforePrepareWait";
     case SchedulerStep::ScopeWaiterBeforeWait: return os << "ScopeWaiterBeforeWait";
+    case SchedulerStep::ResumptionPublished: return os << "ResumptionPublished";
+    case SchedulerStep::AsyncJoinBeforeRegister: return os << "AsyncJoinBeforeRegister";
+    case SchedulerStep::AsyncJoinRegistered: return os << "AsyncJoinRegistered";
+    case SchedulerStep::AsyncJoinFinisherAfterDecrement:
+      return os << "AsyncJoinFinisherAfterDecrement";
+    case SchedulerStep::AsyncJoinBeforeEnqueue: return os << "AsyncJoinBeforeEnqueue";
     case SchedulerStep::ScopeFinisherAfterDecrement: return os << "ScopeFinisherAfterDecrement";
   }
   UTILS_UNREACHABLE();
@@ -66,7 +74,8 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
       testHooks_(testHooks),
       generation_(ParkerPool::NextGeneration()),
       parkerPool_(std::make_shared<ParkerPool>()),
-      externalPool_(globalMutex_, options.maxExternalTasks) {
+      externalPool_(globalMutex_, options.maxExternalTasks),
+      framePool_(options.retainedCoroutineFrameBytes) {
   // A scope's count is at most the live-record bound, workers times records per worker plus the
   // external records; keep it clear of the counter's top bits.
   constexpr std::uint64_t kCountLimit = std::uint64_t{1} << 62;
@@ -91,8 +100,10 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
 }
 
 TaskScheduler::~TaskScheduler() {
-  UTILS_RELEASE_ASSERT_MSG(liveScopes_.load(std::memory_order_relaxed) == 0,
-                           "A task scheduler was destroyed with a live TaskScope");
+  framePool_.assertNoLiveFrames();
+  UTILS_RELEASE_ASSERT_MSG(
+      liveScopes_.load(std::memory_order_relaxed) == 0,
+      "A task scheduler was destroyed with a live TaskScope or AsyncTaskScope");
   // Sequentially consistent: half of the shutdown pairing with each sleeper's state store and its
   // re-check of this flag.
   stop_.exchange(true, std::memory_order_seq_cst);
@@ -123,6 +134,24 @@ TaskScheduler::~TaskScheduler() {
   parkerPool_->close();
 }
 
+ScheduleAwaitable TaskScheduler::schedule() noexcept {
+  return ScheduleAwaitable(*this);
+}
+
+void ScheduleAwaitable::await_suspend(std::coroutine_handle<> handle) noexcept {
+  resumption_.handle = handle;
+  scheduler_.enqueueResumption(resumption_);
+}
+
+void TaskScheduler::enqueueResumption(CoroutineResumption& resumption) {
+  UTILS_RELEASE_ASSERT_MSG(!stop_.load(std::memory_order_seq_cst),
+                           "A coroutine tried to suspend while its scheduler was shutting down");
+  if (Worker* worker = currentWorker(); worker != nullptr && worker->deque.push(&resumption)) {
+    return;
+  }
+  publishResumption(resumption);
+}
+
 TaskScheduler::Worker* TaskScheduler::currentWorker() const {
   return tCurrentScheduler == this ? static_cast<Worker*>(tCurrentWorker) : nullptr;
 }
@@ -132,22 +161,41 @@ TaskRecord* TaskScheduler::allocateExternalRecord() {
   return externalPool_.tryAllocate(lock);
 }
 
-void TaskScheduler::pushGlobal(TaskRecord* record) {
-  std::unique_lock lock(globalMutex_);
-  record->setNext(nullptr);
+void TaskScheduler::linkGlobal(SchedulerWork* work) {
+  work->next = nullptr;
   if (globalTail_ == nullptr) {
-    globalHead_ = record;
+    globalHead_ = work;
   } else {
-    globalTail_->setNext(record);
+    globalTail_->next = work;
   }
-  globalTail_ = record;
+  globalTail_ = work;
   // Sequentially consistent: half of the publish pairing with a sleeper's decrement and re-check.
   globalQueued_.fetch_add(1, std::memory_order_seq_cst);
 }
 
-void TaskScheduler::publishToGlobalQueue(TaskRecord* record) {
-  pushGlobal(record);
+void TaskScheduler::publishToGlobalQueue(SchedulerWork* work) {
+  {
+    std::unique_lock lock(globalMutex_);
+    linkGlobal(work);
+  }
   hook(SchedulerStep::AfterPublishPush, 0);
+  wakeAfterPublish();
+}
+
+void TaskScheduler::publishResumption(CoroutineResumption& resumption) {
+  SchedulerTestHooks* const hooks = testHooks_;
+  {
+    std::unique_lock lock(globalMutex_);
+    linkGlobal(&resumption);
+    wakeAfterPublish();
+  }
+  // A consumer may now complete and release this scheduler and the suspended frame.
+  if (hooks != nullptr) {
+    hooks->at(SchedulerStep::ResumptionPublished, 0);
+  }
+}
+
+void TaskScheduler::wakeAfterPublish() {
   // Sequentially consistent: the other half of the publish pairing. A count driven below zero by
   // a defect still leads to a wake rather than to silence.
   if (awake_.load(std::memory_order_seq_cst) <= 0) {
@@ -155,40 +203,40 @@ void TaskScheduler::publishToGlobalQueue(TaskRecord* record) {
   }
 }
 
-TaskRecord* TaskScheduler::takeGlobal() {
+SchedulerWork* TaskScheduler::takeGlobal() {
   // A hint that skips the mutex for an empty queue; the take itself is under the mutex.
   if (globalQueued_.load(std::memory_order_relaxed) == 0) {
     return nullptr;
   }
   std::unique_lock lock(globalMutex_);
-  TaskRecord* record = globalHead_;
-  if (record == nullptr) {
+  SchedulerWork* work = globalHead_;
+  if (work == nullptr) {
     return nullptr;
   }
-  globalHead_ = record->next();
+  globalHead_ = work->next;
   if (globalHead_ == nullptr) {
     globalTail_ = nullptr;
   }
-  record->setNext(nullptr);
+  work->next = nullptr;
   globalQueued_.fetch_sub(1, std::memory_order_seq_cst);
-  return record;
+  return work;
 }
 
-TaskRecord* TaskScheduler::takeOutside(Worker& worker) {
+SchedulerWork* TaskScheduler::takeOutside(Worker& worker) {
   // The outside sources, in a fixed cyclic order. The global queue is the only one a scheduler
   // without adoptable slots has.
   constexpr std::size_t kSources = 1;
   for (std::size_t i = 0; i < kSources; ++i) {
     const std::size_t source = (worker.outsideCursor + i) % kSources;
-    if (TaskRecord* record = takeGlobal()) {
+    if (SchedulerWork* work = takeGlobal()) {
       worker.outsideCursor = (source + 1) % kSources;
-      return record;
+      return work;
     }
   }
   return nullptr;
 }
 
-TaskRecord* TaskScheduler::stealFromWorkers(Worker& worker) {
+SchedulerWork* TaskScheduler::stealFromWorkers(Worker& worker) {
   const std::size_t others = workers_.size() - 1;
   if (others == 0) {
     return nullptr;
@@ -196,7 +244,7 @@ TaskRecord* TaskScheduler::stealFromWorkers(Worker& worker) {
   const std::size_t offset = ReduceRange(XorShift32(worker.stealRng), others);
   for (std::size_t k = 0; k < others; ++k) {
     const std::size_t victim = StealVictim(worker.index, workers_.size(), offset, k);
-    const StealResult<TaskRecord*> result = workers_[victim]->deque.steal();
+    const StealResult<SchedulerWork*> result = workers_[victim]->deque.steal();
     if (result.status == StealStatus::Taken) {
       return result.item;
     }
@@ -204,32 +252,43 @@ TaskRecord* TaskScheduler::stealFromWorkers(Worker& worker) {
   return nullptr;
 }
 
-TaskRecord* TaskScheduler::findTask(Worker& worker) {
+SchedulerWork* TaskScheduler::findTask(Worker& worker) {
   if (worker.localRunsSinceOutside >= kOutsideTakeInterval) {
     worker.localRunsSinceOutside = 0;
-    if (TaskRecord* record = takeOutside(worker)) {
-      return record;
+    if (SchedulerWork* work = takeOutside(worker)) {
+      return work;
     }
   }
-  if (const std::optional<TaskRecord*> local = worker.deque.take()) {
+  if (const std::optional<SchedulerWork*> local = worker.deque.take()) {
     ++worker.localRunsSinceOutside;
     return *local;
   }
   // A steal round: every outside source first, then every other worker once.
-  if (TaskRecord* record = takeOutside(worker)) {
-    return record;
+  if (SchedulerWork* work = takeOutside(worker)) {
+    return work;
   }
   return stealFromWorkers(worker);
 }
 
-void TaskScheduler::runTask(Worker& worker, TaskRecord* record) {
+void TaskScheduler::runTask(Worker& worker, SchedulerWork* work) {
   UTILS_RELEASE_ASSERT_MSG(
       StackRemaining(CurrentStackPosition(), worker.stack) >= kStackReserveBytes,
       "A task scheduler worker is out of stack: less than the reserve is "
       "left below the task it would run");
+  // The dispatch branch lets both queues carry frame-backed resumptions without new records.
+  if (work->kind == SchedulerWork::Kind::Resumption) {
+    const auto handle = static_cast<CoroutineResumption*>(work)->handle;
+    handle.resume();
+    return;
+  }
+  runRecord(worker, static_cast<TaskRecord*>(work));
+}
+
+void TaskScheduler::runRecord(Worker& worker, TaskRecord* record) {
   // Read before the record is returned: the record may be reused at once.
   std::atomic<std::uint64_t>* const counter = record->scopeCounter();
   Parker<>* const parker = record->parker();
+  AsyncTaskScope* const asyncScope = record->asyncScope();
   // Runs the closure and destroys it.
   record->run();
   if (record->pool() == &worker.pool) {
@@ -244,7 +303,9 @@ void TaskScheduler::runTask(Worker& worker, TaskRecord* record) {
   }
   // Last, so that a creator that sees its scope complete finds the task's closure destroyed and
   // its record returned.
-  if (counter != nullptr) {
+  if (asyncScope != nullptr) {
+    asyncScope->finish(worker.index);
+  } else if (counter != nullptr) {
     finishScopeTask(counter, parker, worker.index);
   }
 }
@@ -306,8 +367,8 @@ bool TaskScheduler::trySleep(Worker& worker) {
   // 1. Drain the deque into the global queue, through the owner's take. An idle worker's deque is
   // already empty here, since its own take just found nothing and only it pushes; a worker waiting
   // on a scope reaches this with entries below its watermark.
-  while (const std::optional<TaskRecord*> record = worker.deque.take()) {
-    publishToGlobalQueue(*record);
+  while (const std::optional<SchedulerWork*> work = worker.deque.take()) {
+    publishToGlobalQueue(*work);
   }
   hook(SchedulerStep::AfterDrain, worker.index);
 
@@ -363,9 +424,9 @@ void TaskScheduler::workerMain(Worker& worker) {
   tCurrentWorker = &worker;
   std::size_t emptyRounds = 0;
   while (!stop_.load(std::memory_order_seq_cst)) {
-    if (TaskRecord* record = findTask(worker)) {
+    if (SchedulerWork* work = findTask(worker)) {
       emptyRounds = 0;
-      runTask(worker, record);
+      runTask(worker, work);
       continue;
     }
     if (++emptyRounds < options_.idleSpinRounds) {
