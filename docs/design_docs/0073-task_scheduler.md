@@ -108,8 +108,9 @@ Estimates are engineering days, including tests and review fixes. No milestone h
 milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
 - [ ] Milestone S1: Core scheduler (9.5 days)
-  - [ ] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
-        its linearization stress test (1.25 days).
+  - [x] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
+        its linearization stress test (1.25 days): `//donner/base/tasks:work_stealing_deque`,
+        which also has the sequentially consistent form, and `//donner/base/tasks:deque_tests`.
   - [ ] Per-worker deques and the global queue: the mutex-protected FIFO, its `globalQueued`
         count and the periodic outside take on the rotating cursor (0.75 day).
   - [ ] Steal rounds: every outside source from the rotating cursor, then every other worker
@@ -151,10 +152,8 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] A ThreadSanitizer test variant reachable from `//...` through a configuration transition
         (1.5 days).
   - [ ] `//donner/base/tasks:task_scheduler_fuzzer` (1.5 days).
-  - [ ] The deque's sequentially consistent form for ThreadSanitizer builds, the stress test on
-        both forms, and a red run on a deliberately weakened ordering (0.25 day). Verify here
-        whether the repository's Clang ThreadSanitizer models standalone fences; the protocol does
-        not depend on the answer, but the record of it decides whether the second form stays.
+  - [ ] `//donner/base/tasks:deque_tests` in the variant, which checks the deque's sequentially
+        consistent form, and a red run there on a deliberately weakened ordering (0.25 day).
   - Done when: the variant runs the scheduler tests in normal CI and the fuzzer is green.
 - [ ] Milestone S5: WebAssembly (4 days). After S1.
   - [ ] The inline path for Emscripten without pthreads; pool sizing, worker stack size, start-up
@@ -717,8 +716,9 @@ task record, or a coroutine resumption; it is *queued* while it is on a deque or
 queue, and *started* once a thread begins running it.
 
 - **Deques.** Each worker and each adoptable slot owns a Chase-Lev deque with signed 64-bit
-  logical indices that only grow and never wrap or reset (the array slot is the index modulo the
-  capacity), so watermarks stay comparable for the life of the scheduler: the owner pushes and pops
+  logical indices that are never wrapped or reset (the top only grows; the bottom grows on a push
+  and shrinks on a take; the array slot is the index modulo the capacity), so watermarks stay
+  comparable for the life of the scheduler: the owner pushes and pops
   at the bottom, thieves take from the top, and the last element is claimed by a compare-and-swap
   on the top index. The memory orders are the C11 ones of Le et al.'s Figure 1 (relaxed and
   release-acquire accesses, sequentially consistent fences in `take` and `steal`, sequentially
@@ -727,13 +727,18 @@ queue, and *started* once a thread begins running it.
   rewriting is not a data race. Each deque is a fixed ring of `dequeCapacity` entries (a power of
   two; 4,096 by default, 1,024 in the editor Wasm build), allocated once and never resized, as in
   Filament's `WorkStealingDequeue`. When a push of a task record would exceed it, `spawn` runs the
-  task inline and `trySpawn` returns false; a resumption that finds its deque full goes to the
-  global queue instead, since it cannot run inline. There is no growth path and so no old array a
-  thief could still be reading. Builds with ThreadSanitizer compile the deque with every index
-  access sequentially consistent and no fences (Filament's deque uses sequentially consistent
-  indices over a plain item array), because whether ThreadSanitizer models standalone fences is to
-  be verified in Milestone S4; the deque stress test runs on both forms, and the production form is
-  the Le et al. one.
+  task inline and `trySpawn` returns false. A push racing a steal can see the deque as full and
+  fail early, because its fullness check reads a top index the thief is advancing; that is
+  correct, since `spawn` then runs the task inline. A resumption that finds its deque full goes to
+  the global queue instead, since it cannot run inline. There is no growth path and so no old array
+  a thief could still be reading. The production form is the Le et al. one. Builds with
+  ThreadSanitizer compile the deque with every index access sequentially consistent and no fences
+  (Filament's deque uses sequentially consistent indices over a plain item array), because the
+  repository's ThreadSanitizer does not model standalone fences: on the Le et al. form it reports a
+  race on entry contents that the release fence publishes. So the sequentially consistent form is
+  the one ThreadSanitizer checks, and the Le et al. form is checked by
+  `//donner/base/tasks:deque_tests` in the native CI lanes (see
+  [Testing and Validation](#testing-and-validation)).
 - **Global queue.** One intrusive first-in, first-out list linked through the task records (and,
   for coroutine resumptions, through the awaiter in the suspended frame), protected by a mutex, so
   pushing needs no allocation and there is no ABA or reclamation question: an entry is owned by
@@ -1274,7 +1279,8 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | Deque bottom and top | owner's take | relaxed store of bottom, seq_cst fence, relaxed load of top; CAS on top seq_cst, failure relaxed (Le et al.) | the owner and a thief agree on the last entry; a failed CAS means a thief took it and carries no data to the owner |
 | Deque top and bottom | thief's steal | acquire load of top, seq_cst fence, acquire load of bottom; CAS on top seq_cst, failure relaxed (Le et al.) | the acquire load of bottom acquires the pushed slot and record; a failed CAS takes nothing |
 | Deque top and bottom | sleeper's visibility reads of adopted deques (step 4) | seq_cst loads | other half of the adopted publish pairing |
-| Deque indices, ThreadSanitizer form | every access | seq_cst, no fences | lets ThreadSanitizer model the deque whether or not it models fences |
+| Deque top | owner's push (fullness check) | acquire load | a thief's read of the slot it claimed happens before the owner rewrites that slot |
+| Deque indices, ThreadSanitizer form | every access | seq_cst, no fences | lets ThreadSanitizer check the deque, which it cannot on the fenced form because it does not model standalone fences |
 | `globalQueued` | increment after linking, decrement after unlinking, both under the queue mutex | seq_cst RMW | the increment is half of the publish pairing; the entries themselves are published by the mutex |
 | `globalQueued` | sleeper's read (step 4) | seq_cst load | other half of the publish pairing |
 | Scope counter | increment on spawn | relaxed RMW | ordered before the child's decrement by the push that publishes the child, and before the spawner's own decrement by coherence |
@@ -1498,7 +1504,36 @@ clients that size work from documents.
 ## Testing and Validation
 
 - **Deque stress** (`//donner/base/tasks:deque_tests`): one owner pushing and popping against
-  several thieves; every item is taken exactly once; run under ThreadSanitizer.
+  several thieves; every item is taken exactly once. CI runs it in the native lanes of the main
+  workflow whenever the affected-target selection includes it: trusted pull requests use the
+  self-hosted Linux arm64 lane when it is enabled, which normally also runs its macOS variant
+  through remote execution, and other runs, including trusted pull requests while it is disabled,
+  use the hosted Linux x86-64 and macOS lanes. No CI lane runs ThreadSanitizer, so until the variant
+  of Milestone S4 exists the ThreadSanitizer run (`bazel test --config=tsan
+  //donner/base/tasks:deque_tests`) is manual; it checks the sequentially consistent form, and the
+  stress cases of the Le et al. form skip themselves there.
+- **Deque orderings no available host distinguishes.** On Linux ARMv8, Apple silicon and x86-64
+  Linux hardware, weakening each of these to relaxed leaves every deque test green, so they are not
+  tested: in the Le et al. form, the acquire loads of top in `push` and in `steal` (in `steal` the
+  fence that follows orders it), the release half of the compare-and-swap in `steal` (with the
+  acquire in `push`, these guard against load buffering, which no host shows), and the sequentially
+  consistent success ordering of the compare-and-swap in `take`. Removing the sequentially
+  consistent fence in `steal` is also undetected: ARMv8 and x86-64 are multi-copy atomic, so there
+  an acquire load of top followed by an acquire load of bottom already gives the ordering, which the
+  C++ model and POWER need the fence for. A sequentially consistent fence weakened to release is
+  indistinguishable on ARMv8, where both compile to the same barrier. The mutants that the tests
+  catch, on at least one of those hosts or under ThreadSanitizer, are these. In the Le et al. form:
+  the release fence in `push` removed or weakened to acquire, the fence in `take` removed or
+  weakened to acquire, the acquire load of bottom in `steal` made relaxed, the compare-and-swap in
+  `take` removed or replaced by a store, and the one in `steal` replaced by a store. In the
+  sequentially consistent form: the bottom stores in `push` and `take` and the bottom load in
+  `steal` made relaxed, the top load in `take` made acquire and the top load in `steal` made
+  relaxed. Its top load in `push` was not mutated. On the x86-64 host, which reorders only a store
+  with a later load, the tests catch removing the fence in `take` and the compare-and-swap removals
+  and replacements, and the other ordering mutants survive. A compare-and-swap made relaxed compiles
+  to the same code there, because every compare-and-swap on x86-64 is a locked, fully ordered
+  instruction. The survivors not listed above as undistinguished are caught on ARMv8 hardware or
+  under ThreadSanitizer.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
@@ -1514,8 +1549,8 @@ clients that size work from documents.
   (spawns, joins, loops, awaits, stops) and checks that its result equals sequential evaluation,
   in seeded mode and with real workers.
 - **ThreadSanitizer variant** reachable from `//...` through a configuration transition, covering
-  the scheduler tests and the deque stress test on both deque forms, and each client's parallel
-  tests as that client lands (the first planned is 0072's
+  the scheduler tests, the deque tests on the sequentially consistent form, and each client's
+  parallel tests as that client lands (the first planned is 0072's
   `//donner/svg/components/style:style_parallel_tests`; the variant does not wait for it).
 - **Both modes.** The default build runs threaded. The compiled-out variant
   ([Configuration](#configuration)) runs the scheduler tests, the renderer's tests and every
@@ -1530,8 +1565,9 @@ clients that size work from documents.
     and the scope and adoption lifetime assertions: `//donner/base/tasks:task_scheduler_tests`
     (the liveness, injected-delay, bound, fairness and death tests above, each observed red with
     its protocol step broken), and the same tests in the ThreadSanitizer variant of Milestone S4.
-  - Every item is taken exactly once from a deque: `//donner/base/tasks:deque_tests`, on both
-    deque forms.
+  - Every item is taken exactly once from a deque: `//donner/base/tasks:deque_tests`, on both deque
+    forms in the native CI lanes, and on the sequentially consistent form under ThreadSanitizer, a
+    manual run until the variant of Milestone S4 exists.
   - Results equal sequential evaluation: `//donner/base/tasks:task_scheduler_fuzzer`.
   - The stack-floor check stops the process with a named failure: a death test in
     `//donner/base/tasks:task_scheduler_tests`. It is a release assertion, so it is enforced in
