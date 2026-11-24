@@ -1,5 +1,9 @@
 """Expose existing build and test roots in the Darwin target configuration."""
 
+# Tag of a rule that has no Darwin counterpart. tools/ci/darwin_selection.py reads the same tag
+# when it maps the Linux selection to Darwin labels, and the two must agree.
+LINUX_ONLY_TAG = "ci-linux-only"
+
 # Fixed suites that need another profile or fresh execution in the mixed graph.
 _SPECIAL = {
     "donner/base": {
@@ -81,8 +85,9 @@ def declare_darwin_variants(ci):
             _variant(ci, name, source, "ordinary", True, True, "ci_darwin_diagnostic_", ["external", "no-cache"])
         if "manual" in tags or source["kind"] in ["test_suite", "package_group", "toolchain_type"]:
             continue
-        if any([tag.startswith("sanitizer_") for tag in tags]):
-            # Sanitizer variants (sanitizer_variants.bzl) are Linux only.
+        if LINUX_ONLY_TAG in tags:
+            # Linux-only test variants (sanitizer_variants.bzl) have no Darwin counterpart;
+            # tools/ci/darwin_selection.py skips the same tag.
             continue
         if any([tag in tags for tag in ["perf", "local-gpu-isolated", "fuzz_soak"]]):
             # A build-only root preserves compilation without starting a filtered Linux test.

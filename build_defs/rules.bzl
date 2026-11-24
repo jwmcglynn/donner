@@ -5,7 +5,7 @@ Helper rules, such as for building fuzzers.
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@bazel_features//:features.bzl", "bazel_features")
-load("//build_defs:ci_darwin.bzl", "declare_darwin_variants")
+load("//build_defs:ci_darwin.bzl", "LINUX_ONLY_TAG", "declare_darwin_variants")
 load("//build_defs:ci_linux_gpu.bzl", "linux_gpu_variant")
 load("//build_defs:ci_xcode.bzl", "ci_xcode_identity")
 load("//build_defs:wasm_profiles.bzl", "WASM_OPTION_INPUTS", "WASM_OPTION_OUTPUTS", "wasm_profile_options")
@@ -534,7 +534,7 @@ def _declare_sanitizer_variants(sanitizers):
                 dep = ":" + rule["name"],
                 sanitizer = sanitizer,
                 fixed_test_env = SANITIZER_VARIANTS[sanitizer].test_env,
-                tags = list(rule["tags"]) + ["sanitizer_" + sanitizer],
+                tags = list(rule["tags"]) + ["sanitizer_" + sanitizer, LINUX_ONLY_TAG],
                 # Linux only, and only in an invocation without a sanitizer config of its own.
                 target_compatible_with = ["@platforms//os:linux"] + select({
                     "//build_defs:no_sanitizer_config": [],

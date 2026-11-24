@@ -12,7 +12,10 @@ load("//build_defs:variant_neutral_tests.bzl", "variant_neutral_test_suite")
 
 exports_files(
     ["ci_darwin.bzl", "ci_metal.bzl"],
-    visibility = ["//tools:__pkg__"],
+    visibility = [
+        "//tools:__pkg__",
+        "//tools/ci:__pkg__",
+    ],
 )
 
 exports_files(
