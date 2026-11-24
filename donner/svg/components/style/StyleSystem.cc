@@ -942,6 +942,32 @@ void SetMatchedKeyRecords(MatchedPropertiesKey& key, const MatchedCacheState& st
   }
 }
 
+/// External roots inherit the host paint; other elements respect the parent paint barrier.
+bool CanInheritPaint(const Registry& registry, Entity parent,
+                     const ExternalUseStyleContext* occurrence = nullptr) {
+  return occurrence || parent == entt::null ||
+         !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+}
+
+void RetainComputedRecord(StyleSystem::CascadePass& pass, ComputedStyle& record,
+                          ComputedStyleComponent& computedStyle,
+                          const ComputedResourceOpacities& resourceOpacities) {
+  const std::size_t retainedBytes = record.properties.complexPropertyBytes();
+  if (!pass.budget.canRetainComputedStyle(retainedBytes)) {
+    pass.cache.clear();
+  }
+  if (pass.budget.retainComputedStyle(record, retainedBytes)) {
+    record.resourceOpacities = resourceOpacities;
+  } else {
+    // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
+    // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
+    computedStyle.externalFill = false;
+    computedStyle.externalStroke = false;
+    record.properties = PropertyRegistry();
+    record.resourceOpacities = ComputedResourceOpacities();
+  }
+}
+
 bool FindAndInstallMatchedStyle(const Registry& registry, MatchedPropertiesCache& cache,
                                 Entity parent, MatchedPropertiesKey& key,
                                 std::size_t matchedDeclarationParsesSkipped,
@@ -952,8 +978,7 @@ bool FindAndInstallMatchedStyle(const Registry& registry, MatchedPropertiesCache
   if (!entry || !ChargeCachedResourceOpacityWork(entry->style->properties, styleBudget, counters)) {
     return false;
   }
-  const bool allowPaint =
-      parent == entt::null || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  const bool allowPaint = CanInheritPaint(registry, parent);
   computed.externalFill =
       ExternalPaintOrigin(entry->fillState, false, state.parentStyle, false, allowPaint);
   computed.externalStroke =
@@ -1339,7 +1364,7 @@ void StyleSystem::inheritComputedParent(const Registry& registry, Entity entity,
   }
   const auto* parentStyle =
       parent != entt::null ? registry.try_get<ComputedStyleComponent>(parent) : nullptr;
-  const bool allowPaint = occurrence || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  const bool allowPaint = CanInheritPaint(registry, parent, occurrence);
   computed.externalFill =
       ExternalPaintOrigin(fillState, occurrence != nullptr, parentStyle, false, allowPaint);
   computed.externalStroke =
@@ -1457,8 +1482,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
                                  properties, styleBudget, warningSink);
   ApplySymbolInstanceDisplay(handle, dataEntity, properties);
   properties.resolveElementColors(warningSink);
-  const bool inheritPaint =
-      occurrence || parent == entt::null || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  const bool inheritPaint = CanInheritPaint(registry, parent, occurrence);
   ApplyPaintAnimationStyles(registry, animationBudget, dataEntity, cacheState.parentStyle,
                             inheritPaint, properties);
   const PropertyState fillState = properties.fill.state;
@@ -1470,20 +1494,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   inheritComputedParent(registry, entity, parent, properties, computedStyle, warningSink,
                         occurrence && serial ? serial->externalResourceRejection() : nullptr);
 
-  const std::size_t retainedBytes = properties.complexPropertyBytes();
-  if (!styleBudget.canRetainComputedStyle(retainedBytes)) {
-    pass.cache.clear();
-  }
-  if (styleBudget.retainComputedStyle(*record, retainedBytes)) {
-    record->resourceOpacities = resourceOpacities;
-  } else {
-    // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
-    // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
-    computedStyle.externalFill = false;
-    computedStyle.externalStroke = false;
-    properties = PropertyRegistry();
-    record->resourceOpacities = ComputedResourceOpacities();
-  }
+  RetainComputedRecord(pass, *record, computedStyle, resourceOpacities);
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
   // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
