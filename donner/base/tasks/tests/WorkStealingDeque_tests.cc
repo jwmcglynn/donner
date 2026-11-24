@@ -178,6 +178,22 @@ TYPED_TEST(WorkStealingDequeModelTest, FullDequeRejectsPushesUntilAnEntryLeaves)
   EXPECT_THAT(deque.take(), Eq(std::nullopt));
 }
 
+TYPED_TEST(WorkStealingDequeModelTest, FullReportsWhetherAPushWouldFail) {
+  typename TestFixture::Deque deque(2);
+  EXPECT_FALSE(deque.full());
+  ASSERT_TRUE(deque.push(1));
+  EXPECT_FALSE(deque.full());
+  ASSERT_TRUE(deque.push(2));
+  EXPECT_TRUE(deque.full()) << "a full deque must report it before a push fails";
+  EXPECT_FALSE(deque.push(3));
+  EXPECT_THAT(deque.steal(), Eq(Stolen(1)));
+  EXPECT_FALSE(deque.full()) << "a steal frees a slot";
+  EXPECT_TRUE(deque.push(3));
+  EXPECT_TRUE(deque.full());
+  EXPECT_THAT(deque.take(), Optional(3));
+  EXPECT_FALSE(deque.full()) << "a take frees a slot";
+}
+
 TYPED_TEST(WorkStealingDequeModelTest, CapacityOneHoldsOneEntry) {
   typename TestFixture::Deque deque(1);
   ASSERT_TRUE(deque.push(1));

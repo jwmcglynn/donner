@@ -193,6 +193,18 @@ public:
   }
 
   /**
+   * Whether a push would fail now. Owner only. Only the owner pushes and a thief only frees slots,
+   * so a push the owner makes after this returned false succeeds.
+   */
+  [[nodiscard]] bool full() const {
+    const Index bottom = bottom_.load(IndexOrder(std::memory_order_relaxed));
+    // Acquire, as in push: a thief's read of the slot it claimed happens before the owner reuses
+    // it.
+    const Index top = top_.load(IndexOrder(std::memory_order_acquire));
+    return bottom - top >= static_cast<Index>(capacity());
+  }
+
+  /**
    * Takes the newest entry from the bottom. Owner only.
    *
    * @return The entry, or `std::nullopt` if the deque was empty or a thief claimed its last entry.
