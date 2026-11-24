@@ -1217,9 +1217,8 @@ TEST_F(RenderingContextTest, FullRestyleRecomputesElementsTheEditDidNotTouch) {
 TEST_F(RenderingContextTest, PartialRebuildRestylesOnlyDirtyEntities) {
   // An `opacity` write marks only its element dirty. With retained updates off the frame takes the
   // full rebuild, but without a full restyle it must keep every other computed style: one element
-  // is cascaded, testing the four user agent rules and the one author rule, of which the
-  // `*:not(svg)` user agent rule and `rect` match with one declaration each, and nothing is
-  // discarded.
+  // is cascaded, testing only its candidates (the `*:not(svg)` user agent rule and `rect`), which
+  // both match with one declaration each, and nothing is discarded.
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
       <style>rect { fill: blue }</style>
@@ -1242,7 +1241,7 @@ TEST_F(RenderingContextTest, PartialRebuildRestylesOnlyDirtyEntities) {
             rebuildsBefore.fullRebuilds + 1);
   EXPECT_THAT(registry.ctx().get<StyleCascadeMetrics>().counters - styleBefore,
               Eq(StyleCascadeCounters{.elementsCascaded = 1,
-                                      .rulesTested = 5,
+                                      .rulesTested = 2,
                                       .rulesMatched = 2,
                                       .declarationsApplied = 2,
                                       .fullClears = 0,

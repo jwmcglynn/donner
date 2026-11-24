@@ -22,6 +22,14 @@ namespace donner::svg::components {
 
 class AnimationContextualWorkBudget;
 
+/**
+ * Test-only switch: while a registry's context holds this, the cascade and
+ * \ref StyleSystem::collectMatchedStyleRules test every rule of every applicable stylesheet
+ * against every element instead of only the rule index's candidates. Differential tests compare
+ * the two; nothing else changes, so any difference is a rule the index wrongly skipped.
+ */
+struct UnindexedCascadeForTesting {};
+
 /** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
 class StyleResourceBudget {
 public:
@@ -448,6 +456,15 @@ struct StyleRuleAtSourceOffset {
  */
 class StyleSystem {
 public:
+  /// Candidate rule positions the per-thread list used by the cascade keeps between elements, in
+  /// entries: an element's cascade that needed more releases the list afterwards, so a large
+  /// stylesheet does not pin its memory for the life of the thread. Equal to the stylesheet
+  /// parser's rule limit, the most candidates one sheet has once duplicates are removed.
+  static constexpr std::size_t kRetainedCandidateCapacity = 4096;
+
+  /// Capacity of the calling thread's candidate list, in entries, for tests of the retention cap.
+  static std::size_t CandidateListCapacityForTesting();
+
   /**
    * Compute the style for the given entity handle, applying the CSS cascade and inheritance rules.
    *

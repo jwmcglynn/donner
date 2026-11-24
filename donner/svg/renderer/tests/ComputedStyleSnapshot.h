@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -33,6 +34,20 @@ struct PositionedStyle {
   /// Print the position and the whole computed style, for test failure output.
   friend std::ostream& operator<<(std::ostream& os, const PositionedStyle& value);
 };
+
+/// An entity reachable from a document's root, with its position as in \ref PositionedStyle.
+struct PositionedEntity {
+  std::string position;  //!< See \ref PositionedStyle::position.
+  Entity entity;         //!< The entity.
+};
+
+/**
+ * Every entity reachable from the root of \p document through the document tree and the shadow
+ * trees, in the order and with the positions \ref PositionedStyles uses.
+ *
+ * @param document Document to walk.
+ */
+std::vector<PositionedEntity> PositionedEntities(SVGDocument& document);
 
 /**
  * Computed style of every entity reachable from the root of \p document through the document tree

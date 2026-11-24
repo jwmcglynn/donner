@@ -6,80 +6,31 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <cctype>
 #include <filesystem>
-#include <fstream>
-#include <ostream>
-#include <sstream>
-#include <string>
-#include <string_view>
-#include <utility>
+#include <optional>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
-#include "donner/base/tests/Runfiles.h"
-#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/ComputedStyleSnapshot.h"
+#include "donner/svg/renderer/tests/SvgCorpus.h"
 
 namespace donner::svg::components {
 namespace {
 
-/// A corpus document: its path and a test name derived from where it sits in the corpus.
-struct CorpusDocument {
-  std::filesystem::path path;
-  std::string name;
-};
-
-std::ostream& operator<<(std::ostream& os, const CorpusDocument& document) {
-  return os << document.path.string();
-}
-
-void AddDocuments(const std::filesystem::path& root, std::string_view prefix,
-                  std::vector<CorpusDocument>& documents) {
-  for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-    if (entry.path().extension() != ".svg") {
-      continue;
-    }
-    std::string name(prefix);
-    for (const char c : entry.path().lexically_relative(root).replace_extension().string()) {
-      name.push_back(std::isalnum(static_cast<unsigned char>(c)) ? c : '_');
-    }
-    documents.push_back({entry.path(), std::move(name)});
-  }
-}
-
-std::vector<CorpusDocument> CorpusDocuments() {
-  std::vector<CorpusDocument> documents;
-  AddDocuments(Runfiles::instance().Rlocation("third_party/resvg-test-suite/tests"), "resvg_",
-               documents);
-  AddDocuments(Runfiles::instance().Rlocation("donner/svg/renderer/testdata"), "testdata_",
-               documents);
-  documents.push_back({Runfiles::instance().Rlocation("donner_splash.svg"), "donner_splash"});
-  documents.push_back(
-      {Runfiles::instance().Rlocation("third_party/bootstrap-icons/bootstrap-icons.svg"),
-       "bootstrap_icons"});
-  std::sort(
-      documents.begin(), documents.end(),
-      [](const CorpusDocument& lhs, const CorpusDocument& rhs) { return lhs.name < rhs.name; });
-  return documents;
-}
+using tests::CorpusDocument;
+using tests::CorpusDocuments;
 
 class FullRestyleCorpusTest : public ::testing::TestWithParam<CorpusDocument> {};
 
 TEST_P(FullRestyleCorpusTest, FullRestyleMatchesFirstFrame) {
-  std::ifstream file(GetParam().path, std::ios::binary);
-  std::ostringstream source;
-  source << file.rdbuf();
-  ASSERT_THAT(source.str(), ::testing::Not(::testing::IsEmpty())) << "Unreadable: " << GetParam();
-
-  ParseWarningSink warnings = ParseWarningSink::Disabled();
-  auto parsed = parser::SVGParser::ParseSVG(source.str(), warnings);
-  if (parsed.hasError()) {
-    GTEST_SKIP() << "Does not parse: " << parsed.error();
+  ASSERT_THAT(std::filesystem::file_size(GetParam().path), ::testing::Gt(0u)) << GetParam();
+  std::optional<SVGDocument> parsed = tests::ParseCorpusDocument(GetParam());
+  if (!parsed) {
+    GTEST_SKIP() << "Does not parse";
   }
-  SVGDocument document = std::move(parsed.result());
+  SVGDocument& document = *parsed;
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
   Registry& registry = document.registry();
   auto& context = registry.ctx().emplace<RenderingContext>(registry);
 

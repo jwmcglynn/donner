@@ -1643,6 +1643,22 @@ donner_multi_transitioned_test(
 )
 
 donner_cc_library(
+    name = "svg_corpus",
+    testonly = 1,
+    srcs = ["SvgCorpus.cc"],
+    hdrs = ["SvgCorpus.h"],
+    # Its headers come through //donner/svg, whose compile follows the text-tier variant of the
+    # test that links it, so one variant-neutral compile cannot serve them all.
+    variant_neutral = False,
+    deps = [
+        "//donner/base",
+        "//donner/base:runfiles",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
     name = "computed_style_snapshot",
     testonly = 1,
     srcs = ["ComputedStyleSnapshot.cc"],
@@ -1674,7 +1690,33 @@ donner_cc_test(
     shard_count = 8,
     deps = [
         ":computed_style_snapshot",
-        "//donner/base:runfiles",
+        ":svg_corpus",
+        "//donner/svg/renderer:rendering_context",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# The rule index only skips rules that cannot match: over the same corpora, the indexed cascade
+# computes every style and reports every matched rule exactly as the cascade that tests every rule.
+donner_cc_test(
+    name = "style_index_differential_tests",
+    srcs = ["StyleIndexDifferential_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+        "//donner/svg/renderer/testdata",
+        "//third_party/bootstrap-icons:bootstrap-icons.svg",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    # Two parses, two frames and every matched-rule list per document. Under ASan the whole icon
+    # sprite took about 23 s of the 60 s `size = "small"` limit, so it is compared in two halves of
+    # about 13 s each; with thirty-two shards the slowest shard took about 22 s.
+    shard_count = 32,
+    deps = [
+        ":computed_style_snapshot",
+        ":svg_corpus",
+        "//donner/base:base_test_utils",
+        "//donner/svg",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/parser",
         "//donner/svg/renderer:rendering_context",
         "@com_google_gtest//:gtest_main",

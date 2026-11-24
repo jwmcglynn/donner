@@ -109,7 +109,8 @@ std::optional<ParseDiagnostic> ReserveProjectedAttributes(EntityHandle handle,
 }
 
 std::optional<std::size_t> StylesheetPayloadBytes(std::size_t projectedSourceBytes,
-                                                  const css::Stylesheet::SecurityStats& stats) {
+                                                  const css::Stylesheet::SecurityStats& stats,
+                                                  std::size_t ruleIndexBytes) {
   constexpr std::size_t kEstimatedBytesPerComponentValue = 64;
   constexpr std::size_t kEstimatedBytesPerDeclaration = 128;
   constexpr std::size_t kEstimatedBytesPerRule = 128;
@@ -121,7 +122,8 @@ std::optional<std::size_t> StylesheetPayloadBytes(std::size_t projectedSourceByt
                                 stats.componentValues * kEstimatedBytesPerComponentValue) ||
       !CheckedAddProjectionSize(projectedSourceBytes,
                                 stats.declarations * kEstimatedBytesPerDeclaration) ||
-      !CheckedAddProjectionSize(projectedSourceBytes, stats.rules * kEstimatedBytesPerRule)) {
+      !CheckedAddProjectionSize(projectedSourceBytes, stats.rules * kEstimatedBytesPerRule) ||
+      !CheckedAddProjectionSize(projectedSourceBytes, ruleIndexBytes)) {
     return std::nullopt;
   }
   return projectedSourceBytes;
@@ -628,8 +630,8 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   projected.type = stylesheet->type;
   projected.isUserAgentStylesheet = stylesheet->isUserAgentStylesheet;
   projected.parseStylesheet(std::string_view(combined), std::move(sourceMap));
-  const std::optional<std::size_t> retainedBytes =
-      StylesheetPayloadBytes(*projectedSourceBytes, projected.stylesheet.securityStats());
+  const std::optional<std::size_t> retainedBytes = StylesheetPayloadBytes(
+      *projectedSourceBytes, projected.stylesheet.securityStats(), projected.ruleIndexBytes());
   if (!retainedBytes.has_value() ||
       !budget.reserve(handle.entity(), *retainedBytes,
                       components::ParsedPayloadResourceBudget::Category::Stylesheet)) {

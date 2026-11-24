@@ -12,6 +12,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/css/Stylesheet.h"
+#include "donner/svg/components/style/RuleIndex.h"
 
 namespace donner::svg::components {
 
@@ -137,6 +138,15 @@ struct StylesheetComponent {
    */
   std::vector<css::Stylesheet> importedStylesheets;
 
+  /// Candidate-rule index of \ref stylesheet, rebuilt whenever it or its imports change.
+  RuleIndex ruleIndex;
+
+  /// Candidate-rule index of each sheet in \ref importedStylesheets, in the same order.
+  std::vector<RuleIndex> importedRuleIndexes;
+
+  /// Bytes retained by \ref ruleIndex and \ref importedRuleIndexes, charged with the stylesheet.
+  std::size_t ruleIndexBytes() const;
+
   /// Font faces of \ref importedStylesheets followed by \ref stylesheet, populated only when
   /// imports contributed any; see \ref cascadeFontFaces().
   std::vector<css::FontFace> combinedFontFaces;
@@ -216,7 +226,8 @@ struct StylesheetComponent {
                        ParseWarningSink& warnings);
 
 private:
-  /// Recompute the selector-dependency caches from \ref stylesheet and \ref importedStylesheets.
+  /// Recompute the selector-dependency caches and the rule indexes from \ref stylesheet and
+  /// \ref importedStylesheets.
   void rebuildSelectorCaches();
 };
 

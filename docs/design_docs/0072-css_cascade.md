@@ -26,7 +26,7 @@ four parts:
 
 1. Cascade each element once per full restyle (Milestone A2).
 2. A per-stylesheet rule index keyed on the rightmost compound selector, so an element tests only
-   the rules that can match it.
+   the rules that can match it (Milestone A3).
 3. Constant-factor fixes in the selector matcher, each kept only if its benchmark moves.
 4. Narrow style invalidation for single-element edits (class, `id`, `style`, presentation
    attributes) from the whole document to the elements whose style can change.
@@ -65,11 +65,16 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - **Rules tested per element.** On `donner_splash.svg` (89 author rules, 4 user agent rules),
   rules tested per first frame fall from 57,838 to at most 5,000 (from 93 per element to at most
   8). On the synthetic 2,000-element, 200-rule document they fall from 408,608 to at most 20,000.
+  Met: 1,384 on the splash document (2.2 per element) and 3,543 on the synthetic document.
 - **First-frame style time.** On `donner_splash.svg` style time falls from a 10.8 ms median to at
   most 5 ms. On the synthetic 2,000-element, 200-rule document it falls from 77.6 ms to at most
   15 ms. Style time on the rule-free synthetic and bootstrap-icons documents does not regress by
   more than 5 percent before the matched properties cache lands, and on bootstrap-icons falls from
-  31.5 ms to at most 15 ms after it.
+  31.5 ms to at most 15 ms after it. Met at the median with the rule index on the baseline machine
+  class under load (one-minute load average 30 to 59): 3.60 ms on the splash and 14.94 ms on the
+  synthetic document, whose four runs range from 14.60 to 15.48 ms, so the synthetic goal holds at
+  the median but not in every run on a loaded host; the rule-free and bootstrap-icons documents are
+  faster (see the A3 entry in the [Implementation Plan](#implementation-plan)).
 - **Edit cost.** A class, `style` or presentation-attribute write on one leaf element whose new
   and old values no selector depends on in a combinator position cascades at most the element, its
   descendants and its `<use>` instances, and, when none of the restyled elements is text or
@@ -92,8 +97,9 @@ same harness, machine class and method. Each goal names the counter or timer tha
   Retained computed-style records on bootstrap-icons fall from 5,137 (24.9 MB of inline
   `PropertyRegistry` storage) to at most 50.
 - **Budget headroom.** The rule-element match budget charges rules actually tested, so the
-  synthetic 4,000-element, 1,000-rule document, which exhausts the 1,048,576-match budget today,
-  styles completely under unchanged limits.
+  synthetic 4,000-element, 1,000-rule document, which would exhaust the 1,048,576-match budget if
+  every rule were tested, styles completely under unchanged limits. Met: it tests 7,102 candidates
+  and matches 6,555 rules.
 - **No behavior change.** For every document whose cascade completes within its budgets today,
   every computed style is identical before and after each Part A step, enforced by differential
   tests and fuzzers (see [Testing and Validation](#testing-and-validation)). A document whose
@@ -193,8 +199,8 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ## Next Steps
 
-- Land the rule index (Milestone A3), which cuts the rules each full restyle tests, and narrowed
-  invalidation (Milestone A5), which follows A2.
+- Land narrowed invalidation (Milestone A5) and the matcher constant factors (Milestone A4), which
+  follows the rule index.
 - Land the base-library Bloom filter (Milestone A6), which has no dependency, in parallel.
 
 ## Implementation Plan
@@ -237,18 +243,31 @@ including tests and review fixes. "After" names the milestones that must land fi
     [Measured Baseline](#measured-baseline)). Not met: on the baseline machine class (the same harness pinned
     to one core, load average 27 to 36, four alternating runs of the old and new binaries) the
     splash class edit's style time falls from 17.93 ms (17.10-18.54) to 10.67 ms (10.45-10.72), and
-    on an Apple M4 Pro (14 cores, one-minute load average 4.7 to 8.0, six alternating runs) from
+    on a 14-core Apple silicon desktop (load average 4.7 to 8.0, six alternating runs) from
     4.33 ms (4.28-4.40) to 2.49 ms (2.45-2.52). The time falls roughly by the share of cascades
     removed, 447 of 1,069 (the 175 shadow-tree clones were already cascaded once), not by half; the
     remaining 0.7 ms is left to the rule index (Milestone A3).
-- [ ] Milestone A3: Rule index (4 days). After A1.
-  - [ ] Build `RuleIndex` for a stylesheet's own rules and for each imported sheet when
-        `StylesheetComponent::rebuildSelectorCaches` runs.
-  - [ ] Collect candidates per element in `StyleSystem::applyStylesheetRules` and
-        `collectMatchedStyleRules`; charge the budget per candidate.
-  - [ ] Add the differential test and the differential fuzzer.
+- [x] Milestone A3: Rule index (4 days,
+      [#2730](https://github.com/jwmcglynn/donner/pull/2730)). After A1.
+  - [x] Build `RuleIndex` for a stylesheet's own rules and for each imported sheet when
+        `StylesheetComponent::rebuildSelectorCaches` runs, and charge it with the stylesheet.
+  - [x] Collect candidates per element in `StyleSystem::applyStylesheetRules` and
+        `collectMatchedStyleRules`, each bucket at most once per element; charge the budget per
+        candidate.
+  - [x] Add the differential test (`//donner/svg/renderer/tests:style_index_differential_tests`),
+        the differential fuzzer (`//donner/svg/components/style:style_cascade_differential_fuzzer`)
+        and the key unit tests (`//donner/svg/components/style:rule_index_tests`).
   - Done when: rules tested and style time meet the load goals, the differential test and fuzzer
-    are green, and the Wasm size check passes with its current ceiling.
+    are green, and the Wasm size check passes with its current ceiling. Met: rules tested as in
+    the goals; on the baseline machine class (the benchmark pinned to one core, load average 30 to
+    59, four alternating runs of the previous and new binaries) first-frame style time is 3.60 ms
+    on the splash (from 10.45 ms), 14.94 ms (runs 14.60 to 15.48 ms) on the synthetic 2,000 x 200
+    document (from 76.94 ms), 29.08 ms on bootstrap-icons (from 30.69 ms) and 5.31 ms on the
+    rule-free 1,000-element document (from 6.03 ms); on a 14-core Apple silicon desktop (load
+    average 5.8 to 8.1, six alternating runs) 0.87, 3.95, 8.51 and 1.32 ms (from 2.55, 20.17, 8.86
+    and 1.44 ms). The differential test, the fuzzer and the Wasm size checks pass: the renderer's
+    Wasm is 2,340,052 bytes raw and 925,917 gzipped (ceilings 2,500,000 and 1,020,000), the editor's
+    10,623,727 and 3,385,346 (ceilings 10,880,000 and 3,570,000).
 - [ ] Milestone A4: Matcher constant factors (2 days, one commit per change). After A3.
   - [ ] Remove the per-attempt heap allocation of the backtracking stack in
         `ComplexSelector::matchChain`.
@@ -438,10 +457,11 @@ Pseudo-class names are compared as strings while matching (`PseudoClassSelector`
 selector tested. Every traversal step is charged to `css::SelectorTraversalBudget`.
 
 **Matching.** `StyleSystem::applyStylesheetRules` iterates every `StylesheetComponent`, each
-imported sheet, then the sheet's own rules, and calls `MatchSelectorRule` for every rule. There
-is no index. `MatchSelectorRule` returns the first selector-list entry that matches, with that
-entry's specificity. A match is charged to `StyleResourceBudget::reserveRuleElementMatch` before
-the selector runs, so the budget counts rules tested, not rules matched.
+imported sheet, then the sheet's own rules, and calls `MatchSelectorRule` for each of the
+element's candidates from the sheet's rule index (see [Rule Index](#rule-index)), in rule order.
+`MatchSelectorRule` returns the first selector-list entry that matches, with that entry's
+specificity. Each candidate is charged to `StyleResourceBudget::reserveRuleElementMatch` before the
+selector runs, so the budget counts rules tested, not rules matched.
 
 **Cascade.** There is no sort. `computePropertiesInto` starts from the element's
 `StyleComponent::properties`, which hold presentation attributes at specificity `(0,0,0)` and
@@ -546,7 +566,7 @@ completion for selectors, values, `var()` names or at-rules.
 
 ### Measured Baseline
 
-Machine: an Arm Neoverse-N1 Linux machine, optimized build (`-c opt`), the benchmark process
+Machine: a 64-bit Arm Linux server, optimized build (`-c opt`), the benchmark process
 pinned to one core while unrelated work ran on other cores (load average 40 to 72 during the
 load, edit and scaling runs, 12 to 15 during the opportunity and keystroke runs). Revision
 `a4cd11c9` for load, edits and scaling, and `867a4136` (this design's branch on a later main) for
@@ -614,22 +634,34 @@ columns; style is 80 to 95 percent of the frame preparation that precedes raster
 case measured.
 
 An edit frame cascades every styled entity once with one full clear, the work of the edited
-document's first frame. `css_cascade_perf_tests_correctness` asserts these counts:
+document's first frame, and each element tests only the rule index's candidates.
+`css_cascade_perf_tests_correctness` asserts these counts:
 
 | Document and edit                                     | Elements cascaded | Rules tested | Rules matched | Declarations applied | Full clears |
 | ----------------------------------------------------- | ----------------: | -----------: | ------------: | -------------------: | ----------: |
-| Splash, `class`, `fill` or `style`; declaration value |               622 |       57,838 |         1,382 |                1,386 |           1 |
-| Splash, append one rule                               |               622 |       58,460 |         1,382 |                1,386 |           1 |
-| Splash, selector or `class` letter inserted           |               622 |       57,838 |         1,381 |                1,385 |           1 |
-| Splash, closing brace deleted                         |               622 |        4,346 |         1,244 |                1,245 |           1 |
-| Synthetic 2,000 x 200, `class`                        |             2,003 |      408,608 |         3,255 |                4,508 |           1 |
-| Synthetic 2,000 x 200, `fill` or `style`              |             2,003 |      408,608 |         3,254 |                4,506 |           1 |
-| Synthetic 2,000 x 200, append rule                    |             2,003 |      410,611 |         3,254 |                4,506 |           1 |
-| Bootstrap icons, `class`, `fill` or `style`           |             5,137 |       20,544 |         9,291 |                9,291 |           1 |
+| Splash, first frame                                   |               622 |        1,384 |         1,382 |                1,386 |           0 |
+| Splash, `class`, `fill` or `style`; declaration value |               622 |        1,384 |         1,382 |                1,386 |           1 |
+| Splash, append one rule                               |               622 |        1,384 |         1,382 |                1,386 |           1 |
+| Splash, selector or `class` letter inserted           |               622 |        1,383 |         1,381 |                1,385 |           1 |
+| Splash, closing brace deleted                         |               622 |        1,246 |         1,244 |                1,245 |           1 |
+| Synthetic 2,000 x 200, first frame                    |             2,003 |        3,543 |         3,254 |                4,506 |           0 |
+| Synthetic 2,000 x 200, `class`                        |             2,003 |        3,544 |         3,255 |                4,508 |           1 |
+| Synthetic 2,000 x 200, `fill`, `style` or append rule |             2,003 |        3,543 |         3,254 |                4,506 |           1 |
+| Bootstrap icons, first frame                          |             5,137 |        9,293 |         9,291 |                9,291 |           0 |
+| Bootstrap icons, `class`, `fill` or `style`           |             5,137 |        9,293 |         9,291 |                9,291 |           1 |
+| `Ghostscript_Tiger.svg`, first frame                  |               484 |          483 |           481 |                  481 |           0 |
+| Synthetic `<use>`, first frame                        |             4,425 |        8,848 |         8,846 |                8,846 |           0 |
+| Synthetic 4,000 x 1,000 mixed, first frame            |             4,003 |        7,102 |         6,555 |                9,108 |           0 |
+| Repeated class tokens, first frame                    |                 4 |        2,005 |         2,003 |                2,003 |           0 |
 
 The splash styles 447 document elements and 175 shadow-tree clones; the synthetic document and the
-sprite have no clones. The measured rows above count each document element twice and each clone
-once. An appended rule that matches nothing adds one test per styled entity.
+sprite have no clones. Rules tested equal the candidates of
+[Ancestor Filter Opportunity](#ancestor-filter-opportunity). On the splash, sprite and tiger
+documents all but two candidate tests per document match; on the synthetic document 289 do not. A
+rule appended for a class no element carries is no element's candidate. The 4,000 x 1,000 document
+styles completely; testing every rule would exhaust the 1,048,576-test budget after 1,702 matches.
+The repeated-token document has 2,000 `.a` rules and one rect whose `class` names `a` 20,000 times;
+it tests each rule once.
 
 **Scaling.** Synthetic documents with groups of ten `<rect>` elements, each with one class, and
 `R` rules of one kind (first-frame style time, median of 9):
@@ -658,9 +690,9 @@ selectors. Findings:
   much as a descendant selector, so the per-test overhead, not the combinator walk, dominates.
 - Outside matching, each element costs about 4.6 microseconds (style minus match, divided by
   elements, on the rule-free documents and the sprite).
-- At 4,000 elements and 1,000 rules the 1,048,576 rule-element budget is exhausted and later
-  elements are left with partial styles. Any document with more than about one million
-  element-rule pairs is affected today, whatever it actually matches.
+- At 4,000 elements and 1,000 rules, testing every rule exhausts the 1,048,576 rule-element budget
+  and leaves later elements with partial styles, whatever they actually match; with the rule index
+  that document tests 7,102 candidates and styles completely.
 
 #### Ancestor Filter Opportunity
 
@@ -686,7 +718,8 @@ stylesheets it removes most failing walks: 47 percent of candidates and 57 perce
 traversal steps on the descendant-only document. At the measured 155 ns per rule test, all 1,913
 candidates of that document cost about 0.3 ms, so the filter's time effect is bounded by a few
 tenths of a millisecond even there. The simulated candidate counts also confirm the index goal:
-1,384 candidates on the splash document against 57,838 rules tested today.
+1,384 candidates on the splash document against 57,838 rules in the every-rule cascade, the count
+the rule index produces.
 
 #### Shared Computed Style Opportunity
 
@@ -748,8 +781,8 @@ Run it from the repository root, or with `bazel run`, so it finds the three docu
 edit whose two directions do different work (appending and removing a rule, inserting and
 deleting a character, deleting and restoring a brace) prints one line per direction, from its
 alternate repetitions, and the run fails if the repetitions of any line differ in work.
-`//donner/benchmarks:css_cascade_perf_tests_correctness` asserts the load counter columns above and
-the current edit-frame counts, and
+`//donner/benchmarks:css_cascade_perf_tests_correctness` asserts the current counts above (the
+load and scaling counter columns are the every-rule cascade they replace), and
 `//donner/benchmarks:css_cascade_perf_tests_wallclock` (manual, `perf`) records the splash
 first-frame, splash class-edit, bootstrap-icons and synthetic 2,000 x 200 style times.
 
@@ -1015,17 +1048,18 @@ cover those.
 
 ### Rule Index
 
-**Data structure.** `RuleIndex` lives next to `StylesheetComponent` in
-`donner/svg/components/style/`, one per `css::Stylesheet` (own sheet and each imported sheet). It
-is built by `rebuildSelectorCaches` and rebuilt whenever the sheet is reparsed or its imports are
-replaced. It holds:
+**Data structure.** `RuleIndex` lives in `donner/svg/components/style/RuleIndex.h`, one per
+`css::Stylesheet`: `StylesheetComponent::ruleIndex` for the sheet's own rules and
+`importedRuleIndexes` for each imported sheet. `rebuildSelectorCaches` builds them, so every parse
+and every import replacement rebuilds them; the cascade asserts that an index was built from as
+many rules as its sheet has, so a sheet changed without a rebuild fails loudly. It holds:
 
 - Four sorted flat vectors of `(key, firstEntry, count)` for id, class, lowercased type name and
   lowercased attribute local name, pointing into one `entries` vector.
 - One `universal` span of entries.
 - Each entry is `{uint32_t ruleIndex}` (4 bytes); the per-key arrays add 8 bytes per distinct key
-  besides the key itself, which is the `RcString` already held by the selector (shared, not
-  copied).
+  besides the key itself, an `RcString` that shares the selector's storage, or a lowercased copy
+  for a type or attribute name written with capitals.
 
 Lookups are binary searches with exact (id, class) or ASCII-lowercased (type, attribute)
 comparison. Sorted vectors avoid hashing attacker-chosen strings, keep the structure contiguous,
@@ -1052,15 +1086,22 @@ rule are removed during candidate collection.
 
 **Candidate collection.** `applyStylesheetRules` builds, per element and per sheet, the sorted,
 de-duplicated list of candidate `ruleIndex` values from: the entry for the element's id, one per
-class (split once with `StringUtils::SplitAsciiWhitespace`, the same split `ClassSelector` uses),
-the lowercased tag name, one per attribute local name, and `universal`. All lookups go through
-`ShadowedElementAdapter`, so shadow entities use exactly the structure-from-tree,
-data-from-light-element rule they use today. The adapter has `id()`, `className()`, `tagName()`,
-`hasAttribute()`, `getAttribute()` and `findMatchingAttributes()` but no way to list attributes,
-so the index adds one internal method, `forEachAttributeLocalName(callback)`, which visits the
-light element's `AttributesComponent` names (no allocation); and `classNames()`, which returns the
-element's class list split once per cascade (shared with the `ClassSelector` change in
-Milestone A4).
+class (split with `StringUtils::SplitAsciiWhitespace`, the same split `ClassSelector` uses), the
+tag name, one per attribute local name, and `universal`. The keys are read through
+`RuleIndexElementView`, which follows the rule of `ShadowedElementAdapter` (a shadow entity's tag
+from its tree entity, its id, classes and attributes from its light element), reads the
+components without copying, visits attribute names through
+`AttributesComponent::forEachAttributeName` without allocating, and is asked only for the key
+kinds the sheet's index has: the user agent sheet has only type keys and universal entries, so it
+never splits a class list or lists attributes. The list is reused across elements.
+Each bucket is gathered at most once per element, however often the element names its key: a
+class list that repeats a token, or attribute names that differ only in case, find the same bucket
+again and add nothing. Every filed entry sits in exactly one bucket or the universal span, so an
+element gathers at most the index's entry count (one per selector-list entry) before duplicates are
+removed, whatever its markup; the remaining collection work is one lookup per key the element
+carries, linear in the element's own source. Gathering a bucket once per key occurrence instead
+would let a rect whose `class` repeats `a` 20,000 times against 2,000 `.a` rules gather 40 million
+positions to test 2,000 rules.
 Candidates are visited in ascending rule order and passed to the unchanged `MatchSelectorRule`,
 which still tests every entry of the rule in list order and returns the first match. Sheet order,
 import order and rule order are preserved, so the declarations applied, their order and their
@@ -1076,12 +1117,22 @@ exhausted the budget only because of rules that could not match now styles compl
 the only intended behavior difference, and it is limited to documents that currently end with
 `StyleResourceBudget::rejected()`.
 
-**Memory accounting.** Index bytes (vector capacities plus per-key records) are computed when it
-is built and added to the stylesheet's charge in the document's `ParsedPayloadResourceBudget`
-(`Category::Stylesheet`) alongside the parsed stylesheet bytes. The index never exceeds 16 bytes
+**Memory accounting.** Index bytes (vector capacities plus per-key records and lowercased key
+copies) are computed when it is built and added to the stylesheet's charge in the document's
+`ParsedPayloadResourceBudget` (`Category::Stylesheet`) alongside the parsed stylesheet bytes, when
+a `<style>` element is parsed and when a source edit reparses it
+(`RuleIndexCharge.StylesheetChargeIncludesItsRuleIndex` in
+`//donner/svg/components/style:style_system_tests`). Imported sheets are not charged to that
+budget; their rules and component values are bounded by the import budget
+(`StylesheetImportBudget`). The index never exceeds 16 bytes
 per selector-list entry plus vector slack, and selector-list entries are already bounded by the
 parser's per-stylesheet rule and component-value limits (`RuleParser::kMaximumRules`,
-`Stylesheet::kMaximumDeclarations`, `kMaximumComponentValues`).
+`Stylesheet::kMaximumDeclarations`, `kMaximumComponentValues`). `SVGStyleElement::setContents`
+reparses without charging the parsed-payload budget (issue #2726); the candidate list collected
+per element is bounded by the index's entry count and reused across elements, and a cascade that
+grew it past 4,096 entries (`StyleSystem::kRetainedCandidateCapacity`, the parser's rule limit and
+so the most candidates one sheet has once duplicates are removed) releases it afterwards, so a
+thread never keeps more than 16 KB of it.
 
 **Wasm size.** The index adds code to the shipped editor and renderer. Milestone A3 runs the Wasm
 size test and package size checks against the current ceilings and reports the measured size.
@@ -2016,24 +2067,36 @@ Stylesheets and documents are untrusted input.
 
 ### Part A Tests
 
-- **Differential cascade test** (`//donner/svg/components/style:style_index_differential_tests`,
-  new). For every SVG in the repository's test corpora (the resvg suite, renderer test data, the
-  splash and icon files), compute all styles with the index and with the candidate list replaced
-  by every rule, then compare every entity's computed `PropertyRegistry` with
-  `PropertyRegistry::operator==`, plus `MatchedStyleRule` lists from `collectMatchedStyleRules`.
-  The "every rule" candidate source is a test-only option on `StyleSystem`; the matcher, cascade
-  and inheritance code are shared, so the oracle differs from production only in skipping no
-  rule. The same test runs with the ancestor filter and the matched properties cache each on and
-  off. Documents whose unindexed or filter-off pass ends budget-rejected are reported separately
-  and must not produce fewer matched rules with the index or the filter. A low-traversal-limit
-  case runs the corpus again with `StyleResourceBudget::Limits::selectorTraversalSteps` lowered
-  until some documents end traversal-rejected with the filter off, and asserts that every
-  document that completes with the filter off is identical with it on, and that every rejected
-  one matches, with the filter on, at least the rules the filter-off pass matched.
-- **Differential fuzzer** (`//donner/svg/components/style:style_cascade_differential_fuzzer`,
-  new). Generates a small element tree and a stylesheet from the fuzzer input, built on the
-  existing `selector_parser_fuzzer` and `stylesheet_parser_fuzzer` inputs, and asserts identical
-  computed styles with the index, filter and cache on and off. Run under `--config=asan-fuzzer`.
+- **Differential cascade test** (`//donner/svg/renderer/tests:style_index_differential_tests`). For
+  every SVG in the repository's test corpora (the resvg suite, renderer test data, the splash and
+  icon files; the icon sprite, which has no stylesheet, in two halves of its symbols to bound the
+  case under ASan), prepare a frame with the index and with the candidate list replaced by every
+  rule, then compare every entity's computed style, document and shadow-tree entities alike, plus
+  the `collectMatchedStyleRules` lists and the matched-rule and declaration counters; a further case
+  edits the stylesheet through a source keystroke and through the DOM after the index was built,
+  and small documents built around how the index reads keys cover attribute and type names in
+  mixed case in both directions (including `linearGradient`, `clipPath`, `foreignObject` and an
+  unknown element), class lists separated by tab, line feed, carriage return and form feed with
+  leading, trailing and repeated separators, a `<use>` shadow tree, and an imported sheet. It
+  lives with the renderer tests because preparing a frame instantiates the shadow trees. The "every
+  rule" candidate source is the test-only `UnindexedCascadeForTesting` context flag; the matcher,
+  cascade and inheritance code are shared, so the oracle differs from production only in skipping no
+  rule. Once the ancestor filter and the matched properties cache land, the same test runs with each
+  on and off. Documents whose unindexed or filter-off pass ends budget-rejected are reported
+  separately and must not produce fewer matched rules with the index or the filter. A
+  low-traversal-limit case runs the corpus again with
+  `StyleResourceBudget::Limits::selectorTraversalSteps` lowered until some documents end
+  traversal-rejected with the filter off, and asserts that every document that completes with the
+  filter off is identical with it on, and that every rejected one matches, with the filter on, at
+  least the rules the filter-off pass matched.
+- **Differential fuzzer** (`//donner/svg/components/style:style_cascade_differential_fuzzer`).
+  Takes stylesheet text and a small element tree from the fuzzer input and asserts identical
+  computed styles, matched-rule lists and counters with the index on and off; the filter and cache
+  add their switches when they land. Tags, ids, classes and up to two attributes per element come
+  from short tables: mixed-case, namespaced, unknown and foreign tags, class lists with repeated
+  tokens and every whitespace separator, and attribute names that differ only in case. Shadow trees
+  and imported sheets stay out, because both need the document prepared for rendering; the
+  differential test covers them. Run under `--config=asan-fuzzer`.
 - **Differential edit test** (`//donner/svg/components/style:style_invalidation_differential_tests`,
   new). For each corpus document and each edit kind (class add, remove and replace; `id`;
   `style`; every presentation attribute the document uses), apply the edit, prepare a frame with
@@ -2053,9 +2116,14 @@ Stylesheets and documents are untrusted input.
   `retainedUpdates` and leaves `fullRebuilds` unchanged, and an ineligible one increments
   `fullRebuilds`. The eligible class edit must be observed red with `FlagsAreRetainable`
   unchanged before it counts.
-- **Index unit tests** for key extraction on every selector shape in
+- **Index unit tests** (`//donner/svg/components/style:rule_index_tests`) for key extraction on
+  every selector shape in
   [Donner Today](#donner-today), including namespaces, case, `:is()`, `:not()` and `:has()` in
-  the subject compound; **filter unit tests** for selector-hash extraction (stopping at sibling
+  the subject compound, and for candidate collection, including that an element gathers each
+  bucket once (repeated class tokens, attribute names differing in case, one rule under every key
+  kind) and never more positions than the index has entries; a style-system test checks that a
+  cascade needing more than 4,096 candidate entries leaves the per-thread list released;
+  **filter unit tests** for selector-hash extraction (stopping at sibling
   combinators, ignoring pseudo-class arguments) and for chain synchronization in each traversal
   mode, including a pass abandoned by a budget rejection.
 - **Base library.** `BloomFilter` property, saturation, removal and false-positive-count tests in

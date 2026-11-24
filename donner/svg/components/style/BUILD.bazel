@@ -1,5 +1,11 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//build_defs:rules.bzl", "donner_cc_test", "donner_perf_sensitive_cc_library")
+load(
+    "//build_defs:rules.bzl",
+    "donner_cc_fuzzer",
+    "donner_cc_library",
+    "donner_cc_test",
+    "donner_perf_sensitive_cc_library",
+)
 
 cc_library(
     name = "components",
@@ -15,6 +21,21 @@ cc_library(
     ],
     deps = [
         "//donner/svg/properties:property_parsing",
+    ],
+)
+
+# Per-stylesheet index of candidate rules by the subject compound's id, class, attribute or type.
+donner_cc_library(
+    name = "rule_index",
+    srcs = ["RuleIndex.cc"],
+    hdrs = ["RuleIndex.h"],
+    visibility = [
+        "//donner/svg:__subpackages__",
+        "//donner/svg/components:__subpackages__",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/css",
     ],
 )
 
@@ -56,6 +77,7 @@ donner_perf_sensitive_cc_library(
     ],
     deps = [
         ":components",
+        ":rule_index",
         ":style_system_headers",
         "//donner/base",
         "//donner/base/parser",
@@ -69,6 +91,31 @@ donner_perf_sensitive_cc_library(
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/text:components",
+    ],
+)
+
+donner_cc_test(
+    name = "rule_index_tests",
+    srcs = ["tests/RuleIndex_tests.cc"],
+    deps = [
+        ":rule_index",
+        "//donner/base",
+        "//donner/css",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# The cascade over the rule index's candidates must equal the cascade over every rule, for a
+# stylesheet and an element tree built from the input.
+donner_cc_fuzzer(
+    name = "style_cascade_differential_fuzzer",
+    srcs = ["tests/StyleCascadeDifferential_fuzzer.cc"],
+    corpus = "tests/style_cascade_differential_corpus",
+    deps = [
+        ":style_system",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg/parser",
     ],
 )
 

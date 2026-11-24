@@ -307,7 +307,8 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
           stats.rules <= std::numeric_limits<std::size_t>::max() / kEstimatedBytesPerRule &&
           CheckedAdd(retainedBytes, stats.componentValues * kEstimatedBytesPerComponentValue) &&
           CheckedAdd(retainedBytes, stats.declarations * kEstimatedBytesPerDeclaration) &&
-          CheckedAdd(retainedBytes, stats.rules * kEstimatedBytesPerRule);
+          CheckedAdd(retainedBytes, stats.rules * kEstimatedBytesPerRule) &&
+          CheckedAdd(retainedBytes, stylesheetComponent.ruleIndexBytes());
       if (!estimateValid ||
           !payloadBudget.reserve(element.entityHandle().entity(), retainedBytes,
                                  components::ParsedPayloadResourceBudget::Category::Stylesheet)) {

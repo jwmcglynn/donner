@@ -125,6 +125,18 @@ struct AttributesComponent {
     return result;
   }
 
+  /**
+   * Call \p visit with the name of every attribute, without allocating a name list.
+   *
+   * @param visit Callable taking a `const xml::XMLQualifiedNameRef&`.
+   */
+  template <typename Visitor>
+  void forEachAttributeName(Visitor&& visit) const {
+    for (const auto& [name, _] : attributes_) {
+      visit(name);
+    }
+  }
+
   /// Number of attributes retained by this component, without allocating a name list.
   std::size_t attributeCount() const { return attributes_.size(); }
 
