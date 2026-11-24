@@ -51,8 +51,10 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
   UTILS_UNREACHABLE();
 }
 
-TaskScheduler::Worker::Worker(std::size_t index, const TaskSchedulerOptions& options)
-    : index(index),
+TaskScheduler::Worker::Worker(TaskScheduler& scheduler, std::size_t index,
+                              const TaskSchedulerOptions& options)
+    : scheduler(scheduler),
+      index(index),
       deque(options.dequeCapacity),
       pool(options.maxTasksPerCreator),
       stealRng(StealSeed(index)) {}
@@ -74,15 +76,17 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
     boundFits = options_.maxTasksPerCreator <= (kCountLimit - 1 - external) / options_.workerCount;
   }
   UTILS_RELEASE_ASSERT_MSG(boundFits, "A task scheduler's live-record bound must be below 2^62");
+  if (options_.workerCount != 0) {
+    (void)WorkerStackSize(options_.workerStackBytes);  // Rejects a size the workers cannot use.
+  }
   workers_.reserve(options_.workerCount);
   for (std::size_t i = 0; i < options_.workerCount; ++i) {
-    workers_.push_back(std::make_unique<Worker>(i, options_));
+    workers_.push_back(std::make_unique<Worker>(*this, i, options_));
   }
   // Workers start awake and counted, before any of them runs.
   awake_.store(static_cast<std::int64_t>(workers_.size()), std::memory_order_relaxed);
   for (const std::unique_ptr<Worker>& worker : workers_) {
-    Worker* w = worker.get();
-    w->thread = std::thread([this, w] { workerMain(*w); });
+    worker->thread = StartThreadWithStack(options_.workerStackBytes, &WorkerEntry, worker.get());
   }
 }
 
@@ -97,7 +101,8 @@ TaskScheduler::~TaskScheduler() {
     wakeWorker(*worker);
   }
   for (const std::unique_ptr<Worker>& worker : workers_) {
-    worker->thread.join();
+    UTILS_RELEASE_ASSERT_MSG(pthread_join(worker->thread, nullptr) == 0,
+                             "A task scheduler worker thread could not be joined");
   }
 
   std::int64_t awakeStates = 0;
@@ -218,6 +223,10 @@ TaskRecord* TaskScheduler::findTask(Worker& worker) {
 }
 
 void TaskScheduler::runTask(Worker& worker, TaskRecord* record) {
+  UTILS_RELEASE_ASSERT_MSG(
+      StackRemaining(CurrentStackPosition(), worker.stack) >= kStackReserveBytes,
+      "A task scheduler worker is out of stack: less than the reserve is "
+      "left below the task it would run");
   // Read before the record is returned: the record may be reused at once.
   std::atomic<std::uint64_t>* const counter = record->scopeCounter();
   Parker<>* const parker = record->parker();
@@ -331,6 +340,22 @@ bool TaskScheduler::trySleep(Worker& worker) {
   swapToAwake(worker);
   worker.parker.finishWait();
   return !stop_.load(std::memory_order_seq_cst);
+}
+
+std::optional<std::size_t> TaskScheduler::CurrentWorkerStackRemaining() {
+  const Worker* worker = static_cast<const Worker*>(tCurrentWorker);
+  if (worker == nullptr) {
+    return std::nullopt;
+  }
+  return StackRemaining(CurrentStackPosition(), worker->stack);
+}
+
+void* TaskScheduler::WorkerEntry(void* worker) {
+  Worker& self = *static_cast<Worker*>(worker);
+  self.stack = UsableStack(CurrentThreadStackBounds(),
+                           WorkerStackSize(self.scheduler.options_.workerStackBytes));
+  self.scheduler.workerMain(self);
+  return nullptr;
 }
 
 void TaskScheduler::workerMain(Worker& worker) {
