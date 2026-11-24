@@ -1866,7 +1866,10 @@ TEST_F(StyleSystemTest, PreparedSiblingsCascadeConcurrentlyIntoOwnedSlots) {
   auto doc = ParseAndComputeStyles(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <style>g > rect:empty { fill: red; stroke-dasharray: 2 3 5; }</style>
-      <g font-size="19"><rect id="a"/><rect id="b"/><rect id="c"/><rect id="d"/></g>
+      <g font-size="19">
+        <rect id="a" style="stroke:blue"/><rect id="b" style="stroke:blue"/>
+        <rect id="c" style="stroke:blue"/><rect id="d" style="stroke:blue"/>
+      </g>
     </svg>)");
   Registry& registry = doc.registry();
   std::array<Entity, 4> entities;
@@ -1911,6 +1914,7 @@ TEST_F(StyleSystemTest, PreparedSiblingsCascadeConcurrentlyIntoOwnedSlots) {
   EXPECT_EQ(before, view.ctx().get<StyleCascadeMetrics>().counters);
   for (std::size_t worker = 0; worker < counts.size(); ++worker) {
     EXPECT_EQ(counts[worker].elementsCascaded, 2u);
+    EXPECT_EQ(counts[worker].registryCopies, 1u);
     EXPECT_EQ(counts[worker].matchedPropertiesCacheMisses, 1u);
     EXPECT_EQ(counts[worker].matchedPropertiesCacheHits, 1u);
     EXPECT_EQ(warningCounts[worker], 0u);
@@ -1920,12 +1924,7 @@ TEST_F(StyleSystemTest, PreparedSiblingsCascadeConcurrentlyIntoOwnedSlots) {
     ASSERT_TRUE(slots[i]->style);
     const auto& actual = *slots[i]->properties();
     const auto& expected = serial[i]->properties;
-    EXPECT_EQ(actual.fill.get(), expected.fill.get());
-    ASSERT_TRUE(actual.strokeDasharray.get());
-    ASSERT_TRUE(expected.strokeDasharray.get());
-    EXPECT_THAT(*actual.strokeDasharray.get(),
-                testing::ElementsAreArray(*expected.strokeDasharray.get()));
-    EXPECT_EQ(actual.fontSize.get(), expected.fontSize.get());
+    EXPECT_TRUE(actual.exactlyEquals(expected));
     EXPECT_EQ(slots[i]->style->resourceOpacities, serial[i]->resourceOpacities);
   }
   EXPECT_NE(slots[0]->style, slots[1]->style);

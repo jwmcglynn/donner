@@ -476,13 +476,16 @@ public:
   struct CascadePass {
     StyleResourceBudget& budget;     ///< Work allowance and shared record account.
     StyleCascadeCounters& counters;  ///< Work attributed to this pass.
-    MatchedPropertiesCache& cache;   ///< Cache owned by this worker or the serial document.
-    unsigned activeCascades = 0;     ///< Nesting for whole-registry copy accounting.
+    MatchedPropertiesCache&
+        cache;  ///< Cache exclusive to this worker and this stylesheet generation.
+    unsigned activeCascades = 0;  ///< Nesting for whole-registry copy accounting.
   };
 
   /**
    * Cascade a static element after its parent and the document root have been published.
-   * The caller holds document access and keeps all component pools stable until the join.
+   * The caller holds document access, initializes the component types before dispatch, and
+   * keeps the pools stable until the join. The cache belongs to this document and stylesheet
+   * generation. Animated documents and external occurrences use the serial cascade.
    * @param registry Read-only document storage.
    * @param entity Element whose slot the caller owns exclusively.
    * @param output Previously emplaced computed-style slot for the element.

@@ -411,14 +411,13 @@ Part C estimate: 13.5 engineering days.
 ### Part D Milestones
 
 - [ ] Milestone D0: Read-only cascade signatures (2 days). After A8.
-  - [ ] The cascade takes `Registry&` and `EntityHandle` throughout, `ShadowedElementAdapter` holds
-        a `std::reference_wrapper<Registry>`, and `GetStyleResourceBudget` emplaces into the
-        registry context. Change the read paths (`applyStylesheetRules`, `MatchSelectorRule`, the
-        adapter, `inheritProperties`, `computePropertiesInto`) to take `const Registry&`, route the
-        only write (the computed-style slot) through a narrow writer, and move context creation
-        into the pre-region step. Serial behavior is unchanged.
-  - Done when: the existing style suites and the differential tests are green, and the parallel
-    path compiles against the const view only.
+  - [x] Selector matching, inheritance and record construction read a `const Registry&`.
+        `StyleSystem::computePreparedStyle` takes one existing output slot and worker-owned work
+        counters, cache and warning sink. The serial entry prepares the document contexts and
+        supplies missing parents, contextual animation work and external-use diagnostics.
+  - Verification: `//donner/svg/components/style:style_system_tests` compares concurrently styled
+    siblings with their serial records and verifies cache hits and shared retained-byte charges.
+    `//donner/svg/renderer/tests:style_index_differential_tests` covers the serial corpus.
 - [ ] Milestone D1: Parallel style pass (4 days). After D0, A7, A9 and scheduler milestones S1 to
       S3.
   - [ ] Pre-region step: create every pool and context object, pre-emplace computed-style slots
