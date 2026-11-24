@@ -648,6 +648,10 @@ void Renderer::setOffscreenCreationHookForTesting(std::function<void()> hook) {
   impl_->setOffscreenCreationHookForTesting(std::move(hook));
 }
 
+void Renderer::replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits limits) {
+  impl_->replaceSurfaceBudgetLimitsForTesting(limits);
+}
+
 RendererResourceStats Renderer::resourceStats() const {
   return impl_->resourceStats();
 }

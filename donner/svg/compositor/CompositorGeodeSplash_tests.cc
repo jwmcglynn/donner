@@ -514,6 +514,170 @@ TEST(CompositorGeodeSplashTest, FailedExclusiveParentAllocationRestoresMandatory
   EXPECT_FALSE(previousCompleteTiles.empty());
 }
 
+/// Bytes of one RGBA surface the size of the 200x200 budget-test canvas.
+constexpr std::uint64_t kBudgetCanvasBytes = 200u * 200u * 4u;
+
+/// A 200x200 document with a white background and two half-transparent groups, each of which owns
+/// a mandatory layer covering the canvas.
+constexpr std::string_view kTwoCanvasLayersSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+      <rect width="200" height="200" fill="white"/>
+      <g id="a" opacity="0.5"><rect width="200" height="200" fill="red"/></g>
+      <g id="b" opacity="0.5"><rect width="200" height="200" fill="blue"/></g>
+    </svg>)svg";
+
+/// Parses @p source into @p document at a 200x200 canvas; call through `ASSERT_NO_FATAL_FAILURE`.
+void ParseBudgetDocument(std::string_view source, SVGDocument& document) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  document = std::move(parsed.result());
+  document.setCanvasSize(200, 200);
+}
+
+/// Compositor settings of the budget tests: tiles for every slot, warmed on the first frame.
+CompositorConfig BudgetTestConfig() {
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  config.complexityBucketing = false;
+  config.dynamicImmediateStaticSpans = false;
+  return config;
+}
+
+/// Whether any layer or static span of @p compositor is presented directly after budget strikes.
+bool AnySlotPresentedDirectly(const CompositorController& compositor, SVGDocument& document,
+                              std::initializer_list<const char*> layerIds) {
+  for (const char* id : layerIds) {
+    const auto element = document.querySelector(id);
+    const CompositorLayer* layer =
+        element ? compositor.findLayerForTest(element->unsafeEntityHandle().entity()) : nullptr;
+    if (layer != nullptr && layer->immediatePlan().budgetImmediate) {
+      return true;
+    }
+  }
+  return std::ranges::any_of(
+      compositor.snapshotStaticSpanPlansForTesting(),
+      [](const CompositorController::StaticSpanPlan& plan) { return plan.budgetImmediate; });
+}
+
+// A tile the per-frame surface budget refused only because another tile of the same frame took
+// it would fit on its own. Zooming re-rasterizes both layers in each zoomed frame, so the second
+// is refused in two frames running; it must be retried rather than presented directly, and the
+// tile set completes once each tile has had a frame to itself. The budget holds one and a half
+// canvas-sized surfaces.
+TEST(CompositorGeodeBudgetTest, TileRefusedBehindAnotherTileIsRetriedNotPresentedDirectly) {
+  SVGDocument document;
+  ASSERT_NO_FATAL_FAILURE(ParseBudgetDocument(kTwoCanvasLayersSvg, document));
+  RendererGeode renderer;
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/256, kBudgetCanvasBytes * 3 / 2);
+  CompositorController compositor(document, renderer, BudgetTestConfig());
+  const RenderViewport viewport{Vector2d(200, 200)};
+
+  compositor.renderFrame(viewport, Transform2d::Scale(1.0));
+  compositor.renderFrame(viewport, Transform2d::Scale(1.1));
+  ASSERT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureCount, ::testing::Gt(0))
+      << "the zoomed frame must refuse a tile for this case to mean anything";
+  bool complete = false;
+  for (int frame = 0; frame < 8 && !complete; ++frame) {
+    compositor.renderFrame(viewport, Transform2d::Scale(1.2));
+    complete = compositor.hasCompleteTileSetForPresentation();
+    EXPECT_FALSE(AnySlotPresentedDirectly(compositor, document, {"#a", "#b"}))
+        << "frame " << frame << ": every tile fits the budget on its own";
+  }
+  EXPECT_TRUE(complete) << "each tile fits on its own, so the tile set must complete";
+}
+
+// The span half of the rule: two canvas-sized static spans separated by a mandatory layer that lies
+// off the canvas and so allocates nothing. Editing the background each frame keeps the first span
+// dirty, so it takes the budget before the second span in every frame and the second is refused
+// behind it, frame after frame. The first span's tile is the only tile those frames allocate and
+// the second span fits on its own, so it must stay a tile to retry rather than be presented
+// directly, and once the edits stop the tile set completes.
+TEST(CompositorGeodeBudgetTest, SpanRefusedBehindAnotherSpanIsRetriedNotPresentedDirectly) {
+  constexpr std::string_view kTwoSpansSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+        <rect id="background" width="200" height="200" fill="white"/>
+        <g opacity="0.5"><rect x="400" y="90" width="20" height="20" fill="red"/></g>
+        <rect x="10" y="10" width="180" height="180" fill="blue" fill-opacity="0.5"/>
+      </svg>)svg";
+  SVGDocument document;
+  ASSERT_NO_FATAL_FAILURE(ParseBudgetDocument(kTwoSpansSvg, document));
+  auto background = document.querySelector("#background");
+  ASSERT_THAT(background, ::testing::Optional(::testing::_));
+  RendererGeode renderer;
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/256, kBudgetCanvasBytes * 3 / 2);
+  CompositorConfig config = BudgetTestConfig();
+  config.immediateStaticSpans = false;
+  config.tightBoundedSegments = false;
+  CompositorController compositor(document, renderer, config);
+  const RenderViewport viewport{Vector2d(200, 200)};
+  const auto noSpanPresentedDirectly = [&] {
+    return std::ranges::none_of(
+        compositor.snapshotStaticSpanPlansForTesting(),
+        [](const CompositorController::StaticSpanPlan& plan) { return plan.budgetImmediate; });
+  };
+
+  int refusedFrames = 0;
+  for (int frame = 0; frame < 4; ++frame) {
+    background->setAttribute("fill", frame % 2 == 0 ? "#fefefe" : "white");
+    compositor.renderFrame(viewport);
+    refusedFrames += compositor.lastRenderFrameStats().textureAllocationFailureCount > 0 ? 1 : 0;
+    EXPECT_TRUE(noSpanPresentedDirectly()) << "edited frame " << frame;
+  }
+  ASSERT_THAT(refusedFrames, ::testing::Ge(2))
+      << "the second span must be refused behind the first in several frames for this case to "
+         "mean anything";
+  bool complete = false;
+  for (int frame = 0; frame < 6 && !complete; ++frame) {
+    compositor.renderFrame(viewport);
+    complete = compositor.hasCompleteTileSetForPresentation();
+    EXPECT_TRUE(noSpanPresentedDirectly()) << "quiet frame " << frame;
+  }
+  EXPECT_TRUE(complete) << "each span fits on its own, so the tile set must complete";
+}
+
+// A span whose tile cannot fit the budget even alone is struck although another tile allocated
+// before it in the same frame. Editing a small span ahead of it keeps that span dirty, so it takes
+// the first allocation of every frame; the canvas-sized span after it needs more than the whole
+// budget of three quarters of a surface. It must be struck in the first two frames that refuse it
+// and then drawn directly, with no further refusals, rather than drawn and refused in every frame.
+TEST(CompositorGeodeBudgetTest, SpanTooLargeForTheBudgetIsStruckBehindAnEditedSpan) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+        <rect id="small" width="20" height="20" fill="white"/>
+        <g opacity="0.5"><rect x="400" y="90" width="20" height="20" fill="red"/></g>
+        <rect width="200" height="200" fill="blue"/>
+      </svg>)svg";
+  SVGDocument document;
+  ASSERT_NO_FATAL_FAILURE(ParseBudgetDocument(kSource, document));
+  auto small = document.querySelector("#small");
+  ASSERT_THAT(small, ::testing::Optional(::testing::_));
+  RendererGeode renderer;
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/256, kBudgetCanvasBytes * 3 / 4);
+  CompositorConfig config = BudgetTestConfig();
+  config.immediateStaticSpans = false;
+  CompositorController compositor(document, renderer, config);
+  const RenderViewport viewport{Vector2d(200, 200)};
+  const auto canvasSpanDrawnDirectly = [&] {
+    return std::ranges::any_of(
+        compositor.snapshotStaticSpanPlansForTesting(),
+        [](const CompositorController::StaticSpanPlan& plan) { return plan.budgetImmediate; });
+  };
+
+  for (int frame = 0; frame < 10; ++frame) {
+    SCOPED_TRACE(frame);
+    small->setAttribute("fill", frame % 2 == 0 ? "#fefefe" : "white");
+    compositor.renderFrame(viewport);
+    if (frame >= 2) {
+      EXPECT_TRUE(canvasSpanDrawnDirectly()) << "struck in the first two frames that refused it";
+    }
+    if (frame >= 3) {
+      EXPECT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureCount, ::testing::Eq(0))
+          << "a span drawn directly is not drawn into a tile again";
+    }
+  }
+}
+
 TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRelease) {
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("geode_splash.svg");

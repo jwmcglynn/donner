@@ -486,6 +486,32 @@ void CompositorController::recycleOffscreen(std::unique_ptr<RendererInterface> o
   pooledOffscreen_ = std::move(offscreen);
 }
 
+std::uint64_t CompositorController::noteTileAttempt() {
+  const std::uint64_t reserved = renderer().resourceStats().surfaceBytes;
+  if (!bytesBeforeFirstTile_.has_value()) {
+    bytesBeforeFirstTile_ = reserved;
+  }
+  return reserved;
+}
+
+bool CompositorController::refusedTileCannotFitAlone(std::uint64_t slotStartBytes,
+                                                     const RendererInterface& offscreen) const {
+  if (!tileAllocatedThisFrame_) {
+    return true;
+  }
+  // What the tile reserved before the refusal, plus the reservation that was refused, is the least
+  // the tile needs. A frame gives it at most the limit less what the frame reserved before its
+  // first tile (its target, in a frame that drew flat first), whatever other tiles take.
+  const RendererResourceStats stats = offscreen.resourceStats();
+  const std::uint64_t reservedByTile =
+      stats.surfaceBytes > slotStartBytes ? stats.surfaceBytes - slotStartBytes : 0;
+  const std::uint64_t unavoidable = bytesBeforeFirstTile_.value_or(0);
+  const std::uint64_t available =
+      stats.surfaceLimitBytes > unavoidable ? stats.surfaceLimitBytes - unavoidable : 0;
+  return stats.surfaceRefusedRequestBytes > available ||
+         reservedByTile > available - stats.surfaceRefusedRequestBytes;
+}
+
 bool CompositorController::discardFailedOffscreen(std::unique_ptr<RendererInterface> offscreen) {
   const bool budgetRejected = offscreen->resourceStats().surfaceBudgetRejected;
   ++lastRenderFrameStats_.textureAllocationFailureCount;
@@ -520,11 +546,11 @@ bool CompositorController::skipRasterizeUnderBudget(CompositorLayer& layer,
 void CompositorController::recordLayerAllocationFailure(
     CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
     const ImmediateLayerPlan& freshPlan, const Vector2i& canvasSize,
-    std::unique_ptr<RendererInterface> offscreen) {
-  if (!discardFailedOffscreen(std::move(offscreen))) {
+    std::unique_ptr<RendererInterface> offscreen, bool failedAlone) {
+  if (!discardFailedOffscreen(std::move(offscreen)) || !failedAlone) {
     return;
   }
-  // First rejection of this frame's budget (a latched one never reaches here). Keep the
+  // The layer was rejected as the frame's first tile, so it cannot fit on its own. Keep the
   // previous plan's presentation choice and refresh only the geometry and cost estimates; a
   // second strike at the same canvas size stops retrying and presents the layer directly so
   // its content stays visible.
@@ -573,13 +599,11 @@ bool CompositorController::adoptBudgetImmediateSpan(size_t slotIndex,
 
 void CompositorController::recordSegmentAllocationFailure(
     size_t slotIndex, const StaticSpanPlan& previousPlan, const StaticSpanPlan& freshPlan,
-    const Vector2i& canvasSize, std::unique_ptr<RendererInterface> offscreen) {
-  if (!discardFailedOffscreen(std::move(offscreen))) {
-    return;
-  }
-  // A first-of-frame rejection is one strike; a second at the same canvas size switches the
-  // span to immediate presentation. The previous plan's mode and cost telemetry survive a
-  // failure so a span that was already immediate stays so.
+    const Vector2i& canvasSize, std::unique_ptr<RendererInterface> offscreen, bool failedAlone) {
+  const bool budgetRejected = discardFailedOffscreen(std::move(offscreen));
+  // The slot keeps this frame's span range whatever the cause, so the tile set reads as
+  // incomplete until the slot holds a payload. The previous plan's mode and cost telemetry
+  // survive a failure so a span that was already immediate stays so.
   StaticSpanPlan plan = previousPlan;
   plan.slotIndex = slotIndex;
   plan.firstEntity = freshPlan.firstEntity;
@@ -591,14 +615,20 @@ void CompositorController::recordSegmentAllocationFailure(
   plan.estimatedPathVerbs = freshPlan.estimatedPathVerbs;
   plan.estimatedUsesAreaCostlyPaint = freshPlan.estimatedUsesAreaCostlyPaint;
   plan.hasExpensiveEffect = freshPlan.hasExpensiveEffect;
-  plan.budgetImmediate = previousPlan.budgetRejected && previousPlan.budgetCanvasSize == canvasSize;
-  plan.budgetRejected = true;
-  plan.budgetCanvasSize = canvasSize;
-  if (plan.budgetImmediate) {
-    plan.mode = StaticSpanMode::Immediate;
-    // Nothing draws an immediately presented span's retained payload; release it.
-    staticSegments_[slotIndex] = RendererBitmap{};
-    staticSegmentTextures_[slotIndex].reset();
+  if (budgetRejected && failedAlone) {
+    // A rejection as the frame's first tile is one strike; a second at the same canvas size
+    // switches the span to immediate presentation. A span rejected after other tiles of the
+    // frame took the budget is retried next frame without a strike.
+    plan.budgetImmediate =
+        previousPlan.budgetRejected && previousPlan.budgetCanvasSize == canvasSize;
+    plan.budgetRejected = true;
+    plan.budgetCanvasSize = canvasSize;
+    if (plan.budgetImmediate) {
+      plan.mode = StaticSpanMode::Immediate;
+      // Nothing draws an immediately presented span's retained payload; release it.
+      staticSegments_[slotIndex] = RendererBitmap{};
+      staticSegmentTextures_[slotIndex].reset();
+    }
   }
   staticSpanPlans_[slotIndex] = plan;
 }
@@ -608,6 +638,7 @@ bool CompositorController::rasterizeSegmentSlot(
     Entity lastEntity, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
     const StaticSpanPlan& previousPlan, const StaticSpanPlan& freshPlan,
     const Vector2i& canvasSize) {
+  const std::uint64_t slotStartBytes = noteTileAttempt();
   {
     RendererDriver driver(*offscreen, false, nullptr, styleWork_);
     if (!driver.drawEntityRangeInterruptibly(document().registry(), firstEntity, lastEntity,
@@ -618,10 +649,12 @@ bool CompositorController::rasterizeSegmentSlot(
   }
   if (!SetSegmentPayloadFromOffscreen(staticSegments_[slotIndex], staticSegmentTextures_[slotIndex],
                                       *offscreen)) {
+    const bool failedAlone = refusedTileCannotFitAlone(slotStartBytes, *offscreen);
     recordSegmentAllocationFailure(slotIndex, previousPlan, freshPlan, canvasSize,
-                                   std::move(offscreen));
+                                   std::move(offscreen), failedAlone);
     return false;
   }
+  tileAllocatedThisFrame_ = true;
   staticSegmentStyleWorkIncomplete_[slotIndex] = styleWork_->rejected();
   recycleOffscreen(std::move(offscreen));
   return true;
@@ -702,6 +735,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
          presentationCost.redrawCost <= presentationCost.cacheOverheadCost);
   }
 
+  const std::uint64_t slotStartBytes = noteTileAttempt();
   auto offscreen = acquireOffscreen();
   // The offscreen-support probe in `renderFrameImpl` / `warmFirstFrameCaches`
   // latches off before any rasterize runs when creation fails, so a null here
@@ -726,11 +760,13 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                                                      .surfaceFromCanvas = surfaceFromCanvas,
                                                      .styleWorkIncomplete = styleWork_->rejected()};
   if (!SetLayerPayloadFromOffscreen(layer, *offscreen, surfaceFromEntity, payloadRaster)) {
+    const bool failedAlone = refusedTileCannotFitAlone(slotStartBytes, *offscreen);
     recordLayerAllocationFailure(layer, previousImmediatePlan, immediatePlan, canvasSize,
-                                 std::move(offscreen));
+                                 std::move(offscreen), failedAlone);
     layer.markDirty();
     return;
   }
+  tileAllocatedThisFrame_ = true;
   // The snapshot detached the offscreen's target; the instance is clean and
   // reusable. Cancellation paths above return without recycling, so a
   // half-drawn frame's state is destroyed rather than pooled.
@@ -828,6 +864,7 @@ bool CompositorController::rasterizeLayerDamage(CompositorLayer& layer,
     discardFailedOffscreen(std::move(offscreen));
     return false;
   }
+  tileAllocatedThisFrame_ = true;
   layer.setGeneration(nextTileGeneration_++);
   layer.setCanvasOffset(geometry.canvasOffset);
   layer.setLastRasterizeMs(
@@ -926,6 +963,7 @@ CompositorController::drawMaskedChildDragPiece(Registry& registry,
     discardFailedOffscreen(std::move(offscreen));
     return std::nullopt;
   }
+  tileAllocatedThisFrame_ = true;
   recycleOffscreen(std::move(offscreen));
   return texture;
 }
@@ -997,6 +1035,7 @@ bool CompositorController::composeMaskedOwnerFromPieces(CompositorLayer& owner,
     discardFailedOffscreen(std::move(offscreen));
     return false;
   }
+  tileAllocatedThisFrame_ = true;
   owner.setGeneration(nextTileGeneration_++);
   owner.setCanvasOffset(geometry.canvasOffset);
   owner.setLastRasterizeMs(
@@ -1658,6 +1697,70 @@ bool CompositorController::hasCompleteTileSetForPresentation() const {
   return true;
 }
 
+bool CompositorController::hasBudgetDirectSlot(const Vector2i& canvasSize) const {
+  const bool directLayer = std::ranges::any_of(layers_, [&](const CompositorLayer& layer) {
+    return layer.immediatePlan().budgetImmediate &&
+           layer.immediatePlan().budgetCanvasSize == canvasSize;
+  });
+  return directLayer || std::ranges::any_of(staticSpanPlans_, [&](const StaticSpanPlan& plan) {
+           return plan.budgetImmediate && plan.budgetCanvasSize == canvasSize &&
+                  plan.mode == StaticSpanMode::Immediate;
+         });
+}
+
+bool CompositorController::layersHavePayloadOrDrawDirectly(const Vector2i& canvasSize) const {
+  return std::ranges::all_of(layers_, [&](const CompositorLayer& layer) {
+    const ImmediateLayerPlan& plan = layer.immediatePlan();
+    return layer.hasRenderablePayload() ||
+           (plan.budgetImmediate && plan.budgetCanvasSize == canvasSize);
+  });
+}
+
+bool CompositorController::spansHavePayloadOrDrawDirectly(const Vector2i& canvasSize) const {
+  for (size_t index = 0; index < staticSpanPlans_.size(); ++index) {
+    const StaticSpanPlan& plan = staticSpanPlans_[index];
+    const bool emptySpan = plan.firstEntity == entt::null || plan.lastEntity == entt::null;
+    const bool hasBitmap = index < staticSegments_.size() && !staticSegments_[index].empty();
+    const bool hasTexture =
+        index < staticSegmentTextures_.size() && staticSegmentTextures_[index] != nullptr;
+    const bool drawnDirectly = plan.budgetImmediate && plan.budgetCanvasSize == canvasSize &&
+                               plan.mode == StaticSpanMode::Immediate;
+    if (!emptySpan && !hasBitmap && !hasTexture && !drawnDirectly) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void CompositorController::noteFlatFrameDrawn() {
+  flatFrameDrawnThisFrame_ = !renderer().resourceStats().surfaceBudgetRejected;
+}
+
+bool CompositorController::composedFrameStandsInForTiles() const {
+  if (hasCompleteTileSetForPresentation()) {
+    return false;
+  }
+  if (flatFrameDrawnThisFrame_) {
+    return true;
+  }
+  const bool frameComplete = mainFrameComposedThisFrame_ &&
+                             lastRenderFrameStats_.textureAllocationFailureCount == 0 &&
+                             lastRenderFrameStats_.composePayloadRefusalCount == 0;
+  if (!frameComplete || !hasLastViewport_) {
+    return false;
+  }
+  const Vector2i canvasSize = BitmapDimensionsForViewport(lastViewport_);
+  return hasBudgetDirectSlot(canvasSize) && layersHavePayloadOrDrawDirectly(canvasSize) &&
+         spansHavePayloadOrDrawDirectly(canvasSize);
+}
+
+bool CompositorController::canSkipMainCompose(const RenderViewport& viewport) const {
+  // A slot presented directly after budget strikes has no tile: only the composed frame shows it.
+  return skipMainComposeDuringSplit_ && hasSplitStaticLayers() && mainRendererHasCachedFrame_ &&
+         !config_.verifyPixelIdentity &&
+         !hasBudgetDirectSlot(BitmapDimensionsForViewport(viewport));
+}
+
 void CompositorController::recordComposePayloadRefusal() {
   ++lastRenderFrameStats_.composePayloadRefusalCount;
   ++lastRenderFrameStats_.composePayloadRefusalTotal;
@@ -1751,14 +1854,14 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
 
   // Tile-only callers do not consume the main frame. Keep the cold-frame guard and force
   // composition when pixel verification reads the main renderer as its actual image.
-  const bool skipMainCompose = skipMainComposeDuringSplit_ && hasSplitStaticLayers() &&
-                               mainRendererHasCachedFrame_ && !config_.verifyPixelIdentity;
-  if (skipMainCompose) {
+  if (canSkipMainCompose(viewport)) {
     return;
   }
 
   const auto composeStart = std::chrono::steady_clock::now();
   ++lastRenderFrameStats_.mainComposeCount;
+  // The compose replaces any flat frame drawn earlier this frame.
+  flatFrameDrawnThisFrame_ = false;
   renderer().beginFrame(viewport);
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {
@@ -1887,6 +1990,9 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   markRefusedTilesDirty(refusedLayers, refusedSegments);
 
   renderer().endFrame();
+  // A refused frame target latches the shared budget, so a frame composed without one reads as
+  // rejected here.
+  mainFrameComposedThisFrame_ = !renderer().resourceStats().surfaceBudgetRejected;
   lastRenderFrameStats_.mainComposeMs =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - composeStart)
           .count();

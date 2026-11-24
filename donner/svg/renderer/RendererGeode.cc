@@ -9298,6 +9298,10 @@ void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,
   impl_->surfaceBudget->setLimitsForTesting({.bytes = maximumBytes, .surfaces = maximumSurfaces});
 }
 
+void RendererGeode::replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits limits) {
+  impl_->surfaceBudget->replaceLimitsWithinDefaultsForTesting(limits);
+}
+
 void RendererGeode::setTextMaterializationBudgetForTesting(
     RendererTextMaterializationBudget::Cost limits, std::size_t maximumGlyphOccurrences) {
   impl_->textMaterializationBudget->setLimitsForTesting(limits);
@@ -9347,6 +9351,8 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .surfaceCount = impl_->surfaceBudget->surfaces(),
       .surfaceBytes = impl_->surfaceBudget->bytes(),
       .surfacePeakBytes = impl_->surfaceBudget->peakBytes(),
+      .surfaceRefusedRequestBytes = impl_->surfaceBudget->refusedRequestBytes(),
+      .surfaceLimitBytes = impl_->surfaceBudget->limitBytes(),
       .surfaceBudgetRejected = impl_->surfaceBudget->rejected(),
       .gradientStops = impl_->drawBudget->gradientStops(),
       .drawBudgetRejected = impl_->drawBudget->rejected(),

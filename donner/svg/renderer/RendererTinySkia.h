@@ -296,6 +296,10 @@ public:
   void setFrameDashMeasureStepLimitForTesting(std::size_t maximumSteps);
   /// Reduce materialized gradient stops for a boundary test.
   void setGradientStopBudgetForTesting(std::size_t maximumStops);
+
+  void replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits limits) override {
+    surfaceBudget_->replaceLimitsWithinDefaultsForTesting(limits);
+  }
   /// Reduce decoded-outline and path-copy ceilings for a boundary test.
   void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits);
 

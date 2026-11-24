@@ -2870,6 +2870,8 @@ TEST_F(CompositorControllerTest, NullOffscreenFallsBackToFlatWithoutCrash) {
   const auto rowsAfterSecond = compositor.snapshotLayerInspectorRows();
   ASSERT_EQ(rowsAfterSecond.size(), 1u);
   EXPECT_FALSE(rowsAfterSecond.front().hasValidBitmap);
+  EXPECT_TRUE(compositor.composedFrameStandsInForTiles())
+      << "the flat frame of a renderer without offscreens is the whole document";
 }
 
 namespace {
@@ -3479,6 +3481,65 @@ TEST_F(CompositorControllerTest, PersistentSurfaceBudgetRejectionFallsBackToDire
   // A smaller canvas may fit, so the budget fallback resets and retries.
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize / 2});
   EXPECT_THAT(state->snapshotAttempts, Gt(attemptsAfterFallback));
+}
+
+namespace {
+
+/// Main renderer whose frame target the per-frame surface budget can refuse.
+class FrameTargetBudgetRenderer : public NiceMock<MockRendererInterface> {
+public:
+  RendererResourceStats resourceStats() const override {
+    RendererResourceStats stats;
+    stats.surfaceBudgetSupported = true;
+    stats.surfaceBudgetRejected = frameTargetRefused;
+    return stats;
+  }
+
+  bool frameTargetRefused = false;
+};
+
+}  // namespace
+
+// Once every slot without a tile is one the budget refused twice on its own and the compose draws
+// directly, the composed frame is the whole document: the compositor reports that it stands in
+// for the incomplete tile set. A frame whose target the budget refuses holds no document and does
+// not stand in.
+TEST_F(CompositorControllerTest, ComposedFrameStandsInForTilesPresentedDirectly) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs><filter id="blur"><feGaussianBlur stdDeviation="1" /></filter></defs>
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" filter="url(#blur)" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto state = std::make_shared<TextureFailureState>();
+  state->budgetRejected = true;
+  FrameTargetBudgetRenderer renderer;
+  ConfigureBudgetAwareOffscreens(renderer, state);
+  int directDraws = 0;
+  ON_CALL(renderer, drawPath(_, _))
+      .WillByDefault([&directDraws](const PathShape&, const StrokeParams&) { ++directDraws; });
+
+  CompositorController compositor(document, renderer, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  bool standsIn = false;
+  for (int frame = 0; frame < 12 && !standsIn; ++frame) {
+    compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+    EXPECT_FALSE(compositor.hasCompleteTileSetForPresentation()) << "frame " << frame;
+    standsIn = compositor.composedFrameStandsInForTiles();
+  }
+  ASSERT_TRUE(standsIn) << "every slot is drawn directly, so the composed frame is the document";
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, Gt(0));
+
+  const int directDrawsBefore = directDraws;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_TRUE(compositor.composedFrameStandsInForTiles());
+  EXPECT_THAT(directDraws, Gt(directDrawsBefore))
+      << "each frame draws the directly presented slots";
+
+  renderer.frameTargetRefused = true;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_FALSE(compositor.composedFrameStandsInForTiles())
+      << "a frame whose target the budget refused holds no document to present";
 }
 
 // A texture allocation failure that is not a budget rejection leaves the layer's

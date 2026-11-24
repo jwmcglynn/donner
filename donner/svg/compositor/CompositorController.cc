@@ -1652,6 +1652,10 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   const auto warmupStart = std::chrono::steady_clock::now();
   cancelToken_.emplace(token);
   surfaceBudgetExhaustedThisFrame_ = false;
+  tileAllocatedThisFrame_ = false;
+  bytesBeforeFirstTile_.reset();
+  mainFrameComposedThisFrame_ = false;
+  flatFrameDrawnThisFrame_ = false;
   warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
   const bool completed = !token.isCancelled();
   cancelToken_.reset();
@@ -1736,6 +1740,7 @@ void CompositorController::renderWithoutPromotedLayers(const RenderViewport& vie
     }
   }
   mainRendererHasCachedFrame_ = true;
+  noteFlatFrameDrawn();
   // The guarded draw runs preparation for the first frame. Defensively clear
   // the rebuild flag so the eager-warmed compositor caches survive the next
   // `renderFrame`.
@@ -1806,6 +1811,7 @@ void CompositorController::renderAfterLastLayerRemoved(const RenderViewport& vie
     mainRendererHasCachedFrame_ = false;
     return;
   }
+  noteFlatFrameDrawn();
   staticSegments_.clear();
   staticSegmentStyleWorkIncomplete_.clear();
   staticSegmentTextures_.clear();
@@ -1850,6 +1856,10 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     lastRenderFrameStats_ = fresh;
   }
   surfaceBudgetExhaustedThisFrame_ = false;
+  tileAllocatedThisFrame_ = false;
+  bytesBeforeFirstTile_.reset();
+  mainFrameComposedThisFrame_ = false;
+  flatFrameDrawnThisFrame_ = false;
   composedStyleWorkIncomplete_ = false;
   // Interaction promotes arrive between frames; more than one active-drag entity means a
   // multi-selection drag.
@@ -2381,6 +2391,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   if (!offscreenSupported_) {
     RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.draw(document(), viewport, surfaceFromCanvas);
+    noteFlatFrameDrawn();
     rootDirty_ = false;
     return;
   }
@@ -2737,12 +2748,15 @@ bool CompositorController::retainedMemoryAtBudget() const {
   const size_t retainedBytes =
       heapBitmapBytes + breakdown.segmentTextureBytes + breakdown.layerTextureBytes;
   // A frame that rebuilds every tile charges each of them and its frame target, one canvas-sized
-  // surface, against the renderer's per-frame surface budget.
+  // surface, against the renderer's per-frame surface budget. While a slot is presented directly
+  // the editor also holds the composed frame it presents in place of the tiles, a second
+  // canvas-sized surface.
   std::uint64_t frameTargetBytes = 0;
   if (hasLastViewport_) {
     const Vector2i canvasSize = BitmapDimensionsForViewport(lastViewport_);
-    frameTargetBytes = static_cast<std::uint64_t>(std::max(canvasSize.x, 0)) *
-                       static_cast<std::uint64_t>(std::max(canvasSize.y, 0)) * 4u;
+    const std::uint64_t canvasBytes = static_cast<std::uint64_t>(std::max(canvasSize.x, 0)) *
+                                      static_cast<std::uint64_t>(std::max(canvasSize.y, 0)) * 4u;
+    frameTargetBytes = hasBudgetDirectSlot(canvasSize) ? 2u * canvasBytes : canvasBytes;
   }
   return static_cast<std::uint64_t>(retainedBytes) + frameTargetBytes >=
              static_cast<std::uint64_t>(retainedMemoryBudgetBytes()) ||

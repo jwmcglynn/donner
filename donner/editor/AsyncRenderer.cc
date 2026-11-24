@@ -459,6 +459,20 @@ bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
   return !hasCompositor || overviewInfillOnly || geometryDebugOverlay;
 }
 
+/// Whether a frame without a complete tile set may present one full-canvas frame instead. A flat
+/// overview may, and so may the compositor's main frame when it holds the whole document: a flat
+/// draw of it from this frame, or a compose whose only slots without tiles are ones the surface
+/// budget refused on their own and the compose drew directly.
+bool FullCanvasPresentationAllowed(const svg::compositor::CompositorController* compositor,
+                                   bool hasCompositedPreview, bool overviewInfillOnly,
+                                   bool geometryDebugOverlay) {
+  if (CanUseFullCanvasPresentation(compositor != nullptr, overviewInfillOnly,
+                                   geometryDebugOverlay)) {
+    return true;
+  }
+  return !hasCompositedPreview && compositor->composedFrameStandsInForTiles();
+}
+
 /// The controller's lifetime fast-path counters, or zeros when composited rendering is Off.
 svg::compositor::CompositorController::FastPathCounters FastPathCountersOf(
     const std::unique_ptr<svg::compositor::CompositorController>& compositor) {
@@ -2276,9 +2290,11 @@ void AsyncRenderer::workerLoop() {
     (void)request.selection;
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
-    // A flat overview remains a fallback when a complete paint-order tile set is unavailable.
-    const bool fullCanvasPresentationAllowed = CanUseFullCanvasPresentation(
-        compositor_ != nullptr, request.overviewInfillOnly, geometryDebugOverlay);
+    // A flat overview, or a composed frame standing in for directly drawn slots, remains a
+    // fallback when a complete paint-order tile set is unavailable.
+    const bool fullCanvasPresentationAllowed =
+        FullCanvasPresentationAllowed(compositor_.get(), compositedPreview.has_value(),
+                                      request.overviewInfillOnly, geometryDebugOverlay);
     const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
         compositedPreview.has_value(), fullCanvasPresentationAllowed,
         requestRenderer.requiresTextureSnapshotPresentation(), request.captureCpuSnapshot);

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -171,13 +172,17 @@ public:
     peakBytes_ = 0;
     surfaces_ = 0;
     rejected_ = false;
+    refusedRequestBytes_ = 0;
   }
 
   /// Reserves matching surfaces; invalid dimensions or exhausted capacity latch rejection.
   [[nodiscard]] bool reserve(int width, int height, std::size_t surfaceCount = 1,
                              std::uint64_t bytesPerPixel = 4) {
-    if (rejected_ || width < 0 || height < 0 || bytesPerPixel == 0 ||
-        surfaces_ > limits_.surfaces || surfaceCount > limits_.surfaces - surfaces_) {
+    if (rejected_) {
+      return false;
+    }
+    if (width < 0 || height < 0 || bytesPerPixel == 0 || surfaces_ > limits_.surfaces ||
+        surfaceCount > limits_.surfaces - surfaces_) {
       rejected_ = true;
       return false;
     }
@@ -191,11 +196,13 @@ public:
         pixelWidth * pixelHeight > limits_.bytes / bytesPerPixel ||
         pixelWidth * pixelHeight * bytesPerPixel > limits_.bytes / surfaceCount) {
       rejected_ = true;
+      refusedRequestBytes_ = std::numeric_limits<std::uint64_t>::max();
       return false;
     }
     const std::uint64_t byteCount = pixelWidth * pixelHeight * bytesPerPixel * surfaceCount;
     if (bytes_ > limits_.bytes || byteCount > limits_.bytes - bytes_) {
       rejected_ = true;
+      refusedRequestBytes_ = byteCount;
       return false;
     }
 
@@ -252,6 +259,11 @@ public:
   [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
   /// Whether a reservation or release has failed in this frame.
   [[nodiscard]] bool rejected() const { return rejected_; }
+  /// Bytes the reservation that latched this frame's refusal asked for (saturated when the request
+  /// alone overflows the limit), or zero when no byte limit refused it.
+  [[nodiscard]] std::uint64_t refusedRequestBytes() const { return refusedRequestBytes_; }
+  /// The aggregate byte limit.
+  [[nodiscard]] std::uint64_t limitBytes() const { return limits_.bytes; }
 
   /// Tightens limits for a test without raising an existing limit.
   void setLimitsForTesting(Limits limits) {
@@ -259,8 +271,17 @@ public:
     limits_.surfaces = std::min(limits_.surfaces, limits.surfaces);
   }
 
+  /// Sets the limits for a test to \p limits, clamped to the production defaults: unlike
+  /// \ref setLimitsForTesting it may raise a limit a test lowered earlier, but never above
+  /// \ref kMaximumBytes or \ref kMaximumSurfaces.
+  void replaceLimitsWithinDefaultsForTesting(Limits limits) {
+    limits_.bytes = std::min(limits.bytes, kMaximumBytes);
+    limits_.surfaces = std::min(limits.surfaces, kMaximumSurfaces);
+  }
+
 private:
   Limits limits_;
+  std::uint64_t refusedRequestBytes_ = 0;
   std::uint64_t bytes_ = 0;
   std::uint64_t peakBytes_ = 0;
   std::size_t surfaces_ = 0;
@@ -803,6 +824,11 @@ struct RendererResourceStats {
   std::uint64_t surfaceBytes = 0;
   /// Most surface bytes reserved at once during the frame.
   std::uint64_t surfacePeakBytes = 0;
+  /// Bytes the surface reservation that was refused this frame asked for; see
+  /// \ref RendererSurfaceBudget::refusedRequestBytes.
+  std::uint64_t surfaceRefusedRequestBytes = 0;
+  /// The per-frame surface byte limit.
+  std::uint64_t surfaceLimitBytes = 0;
   bool surfaceBudgetRejected = false;
   bool drawBudgetSupported = false;
   std::size_t drawCalls = 0;
@@ -1520,6 +1546,15 @@ public:
 
   /// Install a zero-default hook entered from inside offscreen backend construction.
   virtual void setOffscreenCreationHookForTesting(std::function<void()> /*hook*/) {}
+
+  /// Sets the per-frame surface budget this renderer shares with its offscreens to \p limits,
+  /// clamped to the production defaults. Unlike the tighten-only budget hooks it can raise a
+  /// limit lowered earlier, which tests of the budget-direct fallback need: a budget below one
+  /// canvas-sized surface refuses every tile until the slots are drawn directly, and only a raised
+  /// budget then holds the frame target that composes them. The limits apply to the next
+  /// reservation; a refusal already latched this frame stays until the frame's budget resets.
+  /// Renderers without a surface budget ignore it.
+  virtual void replaceSurfaceBudgetLimitsForTesting(RendererSurfaceBudget::Limits /*limits*/) {}
 
   /// Number of filter-budget command-buffer chunks submitted by this renderer family.
   [[nodiscard]] virtual std::uint64_t filterBudgetChunksForTesting() const { return 0; }
