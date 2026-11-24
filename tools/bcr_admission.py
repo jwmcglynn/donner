@@ -24,6 +24,8 @@ def validate(upstream: Path, registry: Path, artifacts: Path, commit: str, repor
     source = json.loads((registry / f"modules/donner/{version}/source.json").read_text())
     if source["url"] != bcr_source.source_url(version):
         raise ValueError("BCR entry must retain its canonical stable release asset URL")
+    # The validator's global checks review the files a submission commits on top of `main`.
+    bcr_source.propose_entry(registry, version)
     root = subprocess.check_output(
         ["git", "-C", str(upstream), "rev-parse", "--show-toplevel"], text=True).strip()
     if Path(root).resolve() != upstream.resolve():

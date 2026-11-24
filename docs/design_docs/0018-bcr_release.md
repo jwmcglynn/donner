@@ -117,7 +117,11 @@ Preflight generates the real entry with `bazel-contrib/publish-to-bcr`, pinned t
 and executes the current upstream BCR validator. The entry retains the stable release URL. Only the source download transport
 uses the local candidate bytes, because the approved release does not exist yet. URL policy,
 integrity, module identity, compatibility level, metadata, presubmit and global admission checks
-remain enabled. The report records the validator revision. Live asset availability is checked after
+remain enabled. The validator reviews a submission's files as the registry checkout's
+`main...HEAD`, so the disposable registry is a Git checkout whose `main` holds the copied registry
+state and whose candidate branch commits exactly the generated entry; `//tools:bcr_source_tests`
+and `//tools:bcr_admission_tests` pin that shape. The report records the validator revision.
+Live asset availability is checked after
 release publication. BCR may change its policy before submission, so preflight is not a promise of
 future admission. Preflight retains the entry and its report as `donner-bcr-entry-<attempt>`. The
 candidate record binds that artifact as its `bcr-entry` role. Fork preparation submits its

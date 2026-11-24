@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -339,6 +340,162 @@ class ValidatedEntryTest(unittest.TestCase):
                 self.write_metadata({**self.template, "versions": ["0.9.0", "1.0.0"], **change})
                 with self.assertRaisesRegex(ValueError, "registry metadata"):
                     self.verify()
+
+
+# The base refs, in order, and the diff that the upstream BCR validator's binary-file check uses
+# (`_resolve_base_ref` and `verify_no_binary_files` in BCR's `tools/bcr_validation.py`).
+UPSTREAM_BASE_REFS = ("refs/remotes/upstream/main", "refs/remotes/origin/main", "refs/heads/main")
+GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def upstream_review(registry):
+    """`(path, binary)` for each file the upstream check reviews, or None if it finds no base."""
+    # Stop Git at the registry, as on the runner, so no enclosing checkout supplies a base.
+    env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(registry.parent)}
+    for ref in UPSTREAM_BASE_REFS:
+        found = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                               cwd=registry, env=env, capture_output=True)
+        if found.returncode == 0:
+            break
+    else:
+        return None
+    output = subprocess.check_output(
+        ["git", "diff", f"{ref}...HEAD", "--numstat", "--no-renames", "--diff-filter=d", "-z"],
+        cwd=registry, env={**env, "GIT_ATTR_SOURCE": GIT_EMPTY_TREE}, text=True)
+    reviewed = []
+    for entry in filter(None, output.split("\0")):
+        added, deleted, path = entry.split("\t", 2)
+        reviewed.append((path, added == "-" and deleted == "-"))
+    return sorted(reviewed)
+
+
+class RegistryCheckoutTest(unittest.TestCase):
+    """The disposable registry presents the candidate entry as a submission's proposed change."""
+
+    ENTRY = ["modules/donner/1.0.0/MODULE.bazel", "modules/donner/1.0.0/presubmit.yml",
+             "modules/donner/1.0.0/source.json", "modules/donner/metadata.json"]
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        env = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull,
+                                           "GIT_CONFIG_NOSYSTEM": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.upstream = self.base / "upstream"
+        (self.upstream / "modules/rules_cc").mkdir(parents=True)
+        (self.upstream / "modules/donner/0.9.0").mkdir(parents=True)
+        (self.upstream / "modules/donner/0.9.0/MODULE.bazel").write_text(
+            'module(name="donner", version="0.9.0")\n')
+        (self.upstream / "modules/donner/metadata.json").write_text(
+            json.dumps({"versions": ["0.9.0"], "yanked_versions": {}}))
+        (self.upstream / "bazel_registry.json").write_text("{}")
+
+    def registry(self, name="registry"):
+        registry = self.base / name
+        source.prepare_registry(self.upstream, registry, "1.0.0")
+        return registry
+
+    def write_entry(self, registry, module=b'module(name="donner", version="1.0.0")\n'):
+        entry = registry / "modules/donner/1.0.0"
+        entry.mkdir()
+        (entry / "MODULE.bazel").write_bytes(module)
+        (entry / "presubmit.yml").write_text("tasks: {}\n")
+        (entry / "source.json").write_text(json.dumps(source.expected_source_json("1.0.0", "c" * 64)))
+        (registry / "modules/donner/metadata.json").write_text(
+            json.dumps({"versions": ["0.9.0", "1.0.0"], "yanked_versions": {}}))
+
+    def git(self, registry, *args):
+        return subprocess.check_output(["git", "-C", str(registry), *args], text=True).strip()
+
+    def test_main_holds_the_copied_registry_and_the_candidate_branch_starts_there(self):
+        registry = self.registry()
+        self.assertEqual(upstream_review(registry), [],
+                         "the upstream check must find a base ref with no change on top yet")
+        self.assertEqual(self.git(registry, "ls-tree", "-r", "--name-only", "refs/heads/main"),
+                         "\n".join(["bazel_registry.json", "modules/donner/0.9.0/MODULE.bazel",
+                                    "modules/donner/metadata.json"]))
+        self.assertEqual(self.git(registry, "symbolic-ref", "--short", "HEAD"), "donner-1.0.0")
+        self.assertEqual(self.git(registry, "status", "--porcelain", "--untracked-files=all"), "")
+
+    def test_entry_is_the_one_change_the_upstream_check_reviews(self):
+        registry = self.registry()
+        self.write_entry(registry)
+        source.propose_entry(registry, "1.0.0")
+        self.assertEqual(upstream_review(registry), [(path, False) for path in self.ENTRY])
+        self.assertEqual(self.git(registry, "rev-parse", "HEAD^"),
+                         self.git(registry, "rev-parse", "refs/heads/main"))
+        self.assertEqual(self.git(registry, "status", "--porcelain", "--untracked-files=all"), "")
+
+    def test_binary_entry_file_reaches_the_upstream_check(self):
+        registry = self.registry()
+        self.write_entry(registry, module=b"module(\0)\n")
+        source.propose_entry(registry, "1.0.0")
+        self.assertIn(("modules/donner/1.0.0/MODULE.bazel", True), upstream_review(registry))
+
+    def test_global_ignore_and_attribute_rules_do_not_change_what_is_committed(self):
+        config = self.base / "global"
+        (config / "git").mkdir(parents=True)
+        # Global and default user ignore files that hide an entry file and a registry base file,
+        # and global attributes that would convert line endings when a file is added.
+        (config / "ignore").write_text("presubmit.yml\n")
+        (config / "git/ignore").write_text("bazel_registry.json\n")
+        (config / "attributes").write_text("* text eol=lf\n")
+        (config / "gitconfig").write_text(
+            f"[core]\n\texcludesFile = {config / 'ignore'}\n"
+            f"\tattributesFile = {config / 'attributes'}\n")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config / "gitconfig"),
+                                          "XDG_CONFIG_HOME": str(config)}):
+            registry = self.registry()
+            self.write_entry(registry)
+            presubmit = registry / "modules/donner/1.0.0/presubmit.yml"
+            presubmit.write_bytes(b"tasks: {}\r\n")
+            source.propose_entry(registry, "1.0.0")
+        self.assertEqual(upstream_review(registry), [(path, False) for path in self.ENTRY])
+        self.assertEqual(self.git(registry, "ls-tree", "-r", "--name-only", "refs/heads/main"),
+                         "\n".join(["bazel_registry.json", "modules/donner/0.9.0/MODULE.bazel",
+                                     "modules/donner/metadata.json"]))
+        committed = subprocess.check_output(
+            ["git", "-C", str(registry), "show", "HEAD:modules/donner/1.0.0/presubmit.yml"])
+        self.assertEqual(committed, b"tasks: {}\r\n")
+
+    def test_entry_with_other_changes_or_on_another_commit_is_refused(self):
+        def extra_file(registry):
+            (registry / "modules/donner/1.0.0/patches").mkdir()
+            (registry / "modules/donner/1.0.0/patches/a.patch").write_text("x")
+
+        def missing_file(registry):
+            (registry / "modules/donner/1.0.0/presubmit.yml").unlink()
+
+        def changed_base_file(registry):
+            (registry / "bazel_registry.json").write_text('{"mirrors": []}')
+
+        def earlier_commit(registry):
+            self.git(registry, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "commit", "-q", "--allow-empty", "-m", "other")
+
+        def changes(*paths):
+            return re.escape(f"the registry has changes to {sorted(paths)}")
+
+        # (change, expected error, commits the change itself leaves on the candidate branch)
+        cases = {
+            "extra file": (extra_file,
+                           changes(*self.ENTRY, "modules/donner/1.0.0/patches/a.patch"), 0),
+            "missing file": (missing_file, changes(*(path for path in self.ENTRY
+                                                     if not path.endswith("presubmit.yml"))), 0),
+            "changed base file": (changed_base_file, changes("bazel_registry.json", *self.ENTRY), 0),
+            "earlier commit": (earlier_commit, "must be on branch donner-1.0.0 at main", 1),
+        }
+        for index, (name, (change, message, commits)) in enumerate(cases.items()):
+            with self.subTest(case=name):
+                registry = self.registry(f"registry-{index}")
+                self.write_entry(registry)
+                change(registry)
+                with self.assertRaisesRegex(ValueError, message):
+                    source.propose_entry(registry, "1.0.0")
+                self.assertEqual(self.git(registry, "rev-list", "--count", "refs/heads/main..HEAD"),
+                                 str(commits), "a refused entry must not be committed")
 
 
 class RegistryVersionOrderTest(unittest.TestCase):
