@@ -1641,6 +1641,45 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+donner_cc_library(
+    name = "computed_style_snapshot",
+    testonly = 1,
+    srcs = ["ComputedStyleSnapshot.cc"],
+    hdrs = ["ComputedStyleSnapshot.h"],
+    # Its headers come through //donner/svg, whose compile follows the text-tier variant of the
+    # test that links it, so one variant-neutral compile cannot serve them all.
+    variant_neutral = False,
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components",
+    ],
+)
+
+# Every SVG of the repository's corpora, restyled in full after its first frame without any edit,
+# must keep every computed style. Nothing is edited, so it cannot see stale styles or extra work;
+# the cascade counter test and the RenderingContext tests cover those. No pixels are drawn, so the
+# default configuration alone covers the corpus; about 1,800 documents take 26 s in one fastbuild
+# process, so shards keep ASan runs well inside the limit.
+donner_cc_test(
+    name = "full_restyle_corpus_tests",
+    srcs = ["FullRestyleCorpus_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+        "//donner/svg/renderer/testdata",
+        "//third_party/bootstrap-icons:bootstrap-icons.svg",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    shard_count = 8,
+    deps = [
+        ":computed_style_snapshot",
+        "//donner/base:runfiles",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "renderer_driver_tests",
     srcs = [
@@ -1656,6 +1695,7 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":computed_style_snapshot",
         ":mock_renderer_interface",
         "//donner/base:base_test_utils",
         "//donner/base/encoding:base64",

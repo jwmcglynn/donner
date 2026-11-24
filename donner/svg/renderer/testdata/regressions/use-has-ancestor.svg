@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16" viewBox="0 0 32 16">
+  <!-- A :has() on an ancestor of a <use> must not match the instanced content. -->
+  <style>
+    g:has(rect) { stroke: red; stroke-width: 3 }
+    g:has(> use > rect) { fill: red }
+  </style>
+  <defs><rect id="shape" width="8" height="8"/></defs>
+  <g id="group" fill="green"><use href="#shape" x="4" y="4"/></g>
+  <g fill="blue"><rect x="20" y="4" width="8" height="8"/></g>
+</svg>

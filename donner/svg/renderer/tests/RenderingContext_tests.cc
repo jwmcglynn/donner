@@ -35,7 +35,9 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/tests/ComputedStyleSnapshot.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextTier.h"
@@ -1130,6 +1132,152 @@ TEST_F(RenderingContextTest, RecursiveMarkerKeepsNestedSubtreeOutsideParentRende
   // Nested markers are rendered through their referencing path, not as part of the parent's direct
   // range. Renderer cleanup must still skip their separate inline ranges after drawing the parent.
   EXPECT_GT(nestedLastOrder, rootLastOrder);
+}
+
+// --- full restyle ---
+
+namespace {
+
+/// A document whose styles depend on SMIL animation: an animated fill and geometry on a shape drawn
+/// through `<use>`, a `<use>` whose target is animated, and an animated inherited color.
+std::string AnimatedRestyleDocument(std::string_view shapeClass) {
+  return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 16">
+      <style>.a { stroke: green } .b { stroke: purple; stroke-width: 2px }</style>
+      <defs>
+        <rect id="shape" class=")svg" +
+         std::string(shapeClass) + R"svg(" width="8" height="8" fill="red">
+          <animate attributeName="fill" from="red" to="blue" dur="2s"/>
+          <animate attributeName="x" from="0" to="4" dur="2s"/>
+        </rect>
+        <circle id="dot" class="a" r="4"/>
+        <circle id="ring" class="a" r="4" fill="none"/>
+      </defs>
+      <g id="group" color="black">
+        <set attributeName="color" to="red"/>
+        <use id="instance" href="#shape"/>
+        <use id="retargeted" href="#dot" x="16"><set attributeName="href" to="#ring"/></use>
+        <rect id="local" y="8" width="8" height="8" fill="currentColor"/>
+      </g>
+    </svg>)svg";
+}
+
+}  // namespace
+
+TEST_F(RenderingContextTest, AnimatedDocumentFullRestyleMatchesFirstFrame) {
+  // A class edit restyles the whole document. After its frame, every computed style, animated or
+  // not and in the document or a shadow tree, must equal what a document parsed with the edit
+  // already applied computes on its first frame at the same time.
+  auto edited = ParseSVG(AnimatedRestyleDocument("a"));
+  edited.setTime(1);
+  RenderingContext editedContext(edited.registry());
+  editedContext.instantiateRenderTree(false, warningSink_);
+  edited.querySelector("#shape")->setClassName("b");
+  editedContext.instantiateRenderTree(false, warningSink_);
+
+  auto reference = ParseSVG(AnimatedRestyleDocument("b"));
+  reference.setTime(1);
+  RenderingContext referenceContext(reference.registry());
+  referenceContext.instantiateRenderTree(false, warningSink_);
+
+  EXPECT_THAT(PositionedStyles(edited), testing::ElementsAreArray(PositionedStyles(reference)));
+
+  // The comparison is not vacuous: the edited frame applied both the new class and the animation.
+  const PropertyRegistry& shape = edited.querySelector("#shape")->getComputedStyle();
+  EXPECT_THAT(shape.stroke.get(),
+              Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(128, 0, 128, 0xFF))))));
+  EXPECT_THAT(shape.fill.get(), Optional(testing::Ne(PaintServer(
+                                    PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF)))))));
+  EXPECT_THAT(edited.querySelector("#local")->getComputedStyle().color.get(),
+              Optional(css::Color(css::RGBA(0xFF, 0, 0, 0xFF))));
+}
+
+TEST_F(RenderingContextTest, FullRestyleRecomputesElementsTheEditDidNotTouch) {
+  // A class edit invalidates only the edited element's own style; the full restyle it requests
+  // must still recompute the rest, here a child inheriting the class's fill and a sibling selected
+  // through it.
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+      <style>.a { fill: red } .b { fill: blue } .b + rect { stroke: green }</style>
+      <g id="group" class="a"><rect id="child" width="8" height="8"/></g>
+      <rect id="sibling" x="8" width="8" height="8"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+  document.querySelector("#group")->setClassName("b");
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  EXPECT_THAT(document.querySelector("#child")->getComputedStyle().fill.get(),
+              Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
+  EXPECT_THAT(document.querySelector("#sibling")->getComputedStyle().stroke.get(),
+              Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0x80, 0, 0xFF))))));
+}
+
+TEST_F(RenderingContextTest, PartialRebuildRestylesOnlyDirtyEntities) {
+  // An `opacity` write marks only its element dirty. With retained updates off the frame takes the
+  // full rebuild, but without a full restyle it must keep every other computed style: one element
+  // is cascaded, testing the four user agent rules and the one author rule, of which the
+  // `*:not(svg)` user agent rule and `rect` match with one declaration each, and nothing is
+  // discarded.
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+      <style>rect { fill: blue }</style>
+      <rect id="edited" width="8" height="8"/>
+      <circle cx="12" cy="12" r="4"/>
+    </svg>
+  )svg");
+  Registry& registry = document.registry();
+  registry.ctx().emplace<RenderTreeState>().retainedUpdatesEnabled = false;
+
+  RenderingContext ctx(registry);
+  ctx.instantiateRenderTree(false, warningSink_);
+  const StyleCascadeCounters styleBefore = registry.ctx().get<StyleCascadeMetrics>().counters;
+  const RenderTreeState::Counters rebuildsBefore = registry.ctx().get<RenderTreeState>().counters;
+
+  document.querySelector("#edited")->setAttribute("opacity", "0.5");
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  EXPECT_EQ(registry.ctx().get<RenderTreeState>().counters.fullRebuilds,
+            rebuildsBefore.fullRebuilds + 1);
+  EXPECT_THAT(registry.ctx().get<StyleCascadeMetrics>().counters - styleBefore,
+              Eq(StyleCascadeCounters{.elementsCascaded = 1,
+                                      .rulesTested = 5,
+                                      .rulesMatched = 2,
+                                      .declarationsApplied = 2,
+                                      .fullClears = 0,
+                                      .budgetRejections = 0}));
+}
+
+TEST_F(RenderingContextTest, FullRestyleMatchesUseHostWithoutItsShadowTree) {
+  // A `<use>` shadow tree is not part of the host's children for selector matching, so `:empty`
+  // and `:has()` must match the same way on the first frame and after an edit restyles the whole
+  // document, even though the shadow root is attached under the host while the frame is built.
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+      <style>
+        use { fill: blue }
+        use:empty { fill: green }
+        g:has(rect) { stroke: red }
+      </style>
+      <defs><rect id="shape" width="8" height="8"/></defs>
+      <g id="group"><use id="instance" href="#shape"/></g>
+      <circle id="other" r="1"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+  const std::vector<PositionedStyle> firstFrame = PositionedStyles(document);
+
+  document.querySelector("#other")->setClassName("edited");
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  EXPECT_THAT(PositionedStyles(document), testing::ElementsAreArray(firstFrame));
+  const PaintServer green(PaintServer::Solid(css::Color(css::RGBA(0, 0x80, 0, 0xFF))));
+  EXPECT_THAT(document.querySelector("#instance")->getComputedStyle().fill.get(), Optional(green));
+  EXPECT_THAT(document.querySelector("#group")->getComputedStyle().stroke.get(),
+              Optional(PaintServer(PaintServer::None())));
 }
 
 // --- context-fill / context-stroke resolution ---

@@ -61,6 +61,15 @@ void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& reg
       stylesheet.fontFaceRevision);
 }
 
+/// Register the `@font-face` rules of every stylesheet with the document's resources.
+void SynchronizeAllStylesheetFonts(Registry& registry) {
+  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    auto [stylesheet] = view.get(stylesheetEntity);
+    SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
+  }
+}
+
 bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
                               const StylesheetComponent& stylesheet) {
   return HasSvgNamespace(registry, entity) && !stylesheet.isUserAgentStylesheet &&
@@ -1072,7 +1081,8 @@ std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
   return std::nullopt;
 }
 
-void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink) {
+void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink,
+                                   FullRestyle fullRestyle) {
   StyleCascadeMetrics& metrics = GetStyleCascadeMetrics(registry);
   const StyleTimeScope timeScope(metrics);
   auto& styleBudget = GetStyleResourceBudget(registry);
@@ -1098,31 +1108,30 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
   // writes that feed selectors, structural changes) cannot express themselves through per-entity
   // flags at all, and must instead request RenderTreeState::needsFullStyleRecompute.
   if (hasBeenBuilt && hasDirtyEntities && !needsFullStyleRecompute) {
-    for (auto entity : registry.view<DirtyFlagsComponent>()) {
-      const auto& dirty = registry.get<DirtyFlagsComponent>(entity);
-      if (!dirty.test(DirtyFlagsComponent::Style)) {
-        continue;
-      }
-
-      std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
-      computeStyle(EntityHandle(registry, entity), warningSink);
+    computeDirtyStyles(registry, warningSink);
+  } else {
+    if (hasBeenBuilt && needsFullStyleRecompute &&
+        fullRestyle == FullRestyle::DiscardAndRecompute) {
+      discardComputedStylesForFullRestyle(registry);
     }
-
-    ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
-    for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-      auto [stylesheet] = view.get(stylesheetEntity);
-      SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
-    }
-
-    return;
+    computeMissingStyles(registry, warningSink);
   }
 
-  if (hasBeenBuilt && needsFullStyleRecompute) {
-    ++metrics.counters.fullClears;
-    styleBudget.releaseAll();
-    registry.clear<ComputedStyleComponent>();
-  }
+  SynchronizeAllStylesheetFonts(registry);
+}
 
+void StyleSystem::computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink) {
+  for (auto entity : registry.view<DirtyFlagsComponent>()) {
+    if (!registry.get<DirtyFlagsComponent>(entity).test(DirtyFlagsComponent::Style)) {
+      continue;
+    }
+
+    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
+    computeStyle(EntityHandle(registry, entity), warningSink);
+  }
+}
+
+void StyleSystem::computeMissingStyles(Registry& registry, ParseWarningSink& warningSink) {
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating
   // computed style components also creates the parents, and we can't modify the component list
   // while iterating it.
@@ -1131,21 +1140,22 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
     std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
   }
 
-  // Compute the styles for all elements.
+  // Compute the styles for all elements; computeStyle returns early for computed ones.
   for (auto entity : view) {
     computeStyle(EntityHandle(registry, entity), warningSink);
-  }
-
-  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    auto [stylesheet] = view.get(stylesheetEntity);
-    SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
   }
 }
 
 void StyleSystem::discardComputedStyles(Registry& registry) {
   GetStyleResourceBudget(registry).releaseAll();
   registry.clear<ComputedStyleComponent>();
+}
+
+void StyleSystem::discardComputedStylesForFullRestyle(Registry& registry) {
+  StyleCascadeMetrics& metrics = GetStyleCascadeMetrics(registry);
+  const StyleTimeScope timeScope(metrics);
+  ++metrics.counters.fullClears;
+  discardComputedStyles(registry);
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,

@@ -11,13 +11,12 @@
 ## Summary
 
 Donner resolves style by testing every rule of every applicable stylesheet against every element,
-then re-parsing each matched declaration into the element's `PropertyRegistry`. Any edit to a
-class, `id`, `style` attribute, presentation attribute or stylesheet restyles the whole document,
-and the frame that follows runs the whole-document cascade twice. Each element keeps its own
-4,840-byte computed `PropertyRegistry`, even when hundreds of elements compute the same style.
-Custom properties (`var()`) and cascade layers (`@layer`) are not supported.
-Typing in a `<style>` element reparses the whole stylesheet and restyles the whole document, and
-the source editor has no CSS-aware highlighting or value completion.
+then re-parsing each matched declaration into the element's `PropertyRegistry`. Any edit to a class,
+`id`, `style` attribute, presentation attribute or stylesheet restyles the whole document. Each
+element keeps its own 4,840-byte computed `PropertyRegistry`, even when hundreds of elements compute
+the same style. Custom properties (`var()`) and cascade layers (`@layer`) are not supported. Typing
+in a `<style>` element reparses the whole stylesheet and restyles the whole document, and the source
+editor has no CSS-aware highlighting or value completion.
 
 This design measures that cost, surveys how browser engines make style resolution fast and how
 they implement the missing features, and commits to
@@ -25,7 +24,7 @@ four parts:
 
 **Part A: Performance.**
 
-1. Cascade each element once per full restyle (today a full restyle cascades every element twice).
+1. Cascade each element once per full restyle (Milestone A2).
 2. A per-stylesheet rule index keyed on the rightmost compound selector, so an element tests only
    the rules that can match it.
 3. Constant-factor fixes in the selector matcher, each kept only if its benchmark moves.
@@ -61,8 +60,8 @@ same harness, machine class and method. Each goal names the counter or timer tha
 ### Part A: Performance
 
 - **One cascade per element per full restyle.** A frame that follows a full restyle cascades each
-  styled entity once. Today the splash document cascades 1,069 elements after a one-element class
-  edit and the bootstrap-icons sprite cascades 10,274, twice its 5,137 entities.
+  styled entity once. Met: after a one-element class edit the splash document cascades its 622
+  styled entities and the bootstrap-icons sprite its 5,137.
 - **Rules tested per element.** On `donner_splash.svg` (89 author rules, 4 user agent rules),
   rules tested per first frame fall from 57,838 to at most 5,000 (from 93 per element to at most
   8). On the synthetic 2,000-element, 200-rule document they fall from 408,608 to at most 20,000.
@@ -100,7 +99,11 @@ same harness, machine class and method. Each goal names the counter or timer tha
   tests and fuzzers (see [Testing and Validation](#testing-and-validation)). A document whose
   cascade ends budget-rejected today can style further, because the rule index and the ancestor
   filter skip work for rules that cannot match; that is the one intended behavior change (see
-  [Decisions](#decisions)).
+  [Decisions](#decisions)). A full-restyle frame computes the first frame's styles, so a `:has()`
+  on an ancestor of a `<use>` element does not match the instanced content on either; a frame
+  that takes the retained update can still match it
+  ([#2715](https://github.com/jwmcglynn/donner/issues/2715); see
+  [Single Cascade per Full Restyle](#single-cascade-per-full-restyle)).
 - **Bounded memory.** The rule index costs at most 16 bytes per selector-list entry plus shared
   key strings; the ancestor filter costs 4 KiB per style traversal; both and the cache are
   charged to existing document budgets.
@@ -190,8 +193,8 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ## Next Steps
 
-- Land the single-cascade fix (Milestone A2): the smallest change with the largest measured effect
-  on edits.
+- Land the rule index (Milestone A3), which cuts the rules each full restyle tests, and narrowed
+  invalidation (Milestone A5), which follows A2.
 - Land the base-library Bloom filter (Milestone A6), which has no dependency, in parallel.
 
 ## Implementation Plan
@@ -216,16 +219,28 @@ including tests and review fixes. "After" names the milestones that must land fi
         (CPU-invariant, PR-gated) and whose wall-clock target records times (manual, `perf` tag).
   - Done when: the counters reproduce this document's counter columns exactly for the splash,
     bootstrap-icons and synthetic documents.
-- [ ] Milestone A2: One cascade per full restyle (1 day). After A1.
-  - [ ] Clear computed styles once per rebuild in `RenderingContext::createComputedComponents`,
-        and make its second `StyleSystem::computeAllStyles` call compute only entities without a
-        computed style (the shadow-tree clones the first call could not see).
-  - [ ] Establish with a test, before the change, whether `ApplyAnimationPresentation` depends on
-        the second pass discarding its overrides; keep animated documents on their current path if
-        it does.
-  - Done when: the correctness counter test shows elements cascaded equal to the styled entity
-    count on the edit frames, and the next-frame style time after a splash class edit is at most
-    10 ms (from 18.8 ms).
+- [ ] Milestone A2: One cascade per full restyle (1 day,
+      [#2717](https://github.com/jwmcglynn/donner/pull/2717)). After A1.
+  - [x] Clear computed styles once per rebuild in `RenderingContext::createComputedComponents`
+        (`StyleSystem::discardComputedStylesForFullRestyle`), and make both of its
+        `StyleSystem::computeAllStyles` calls compute only entities without a computed style
+        (`FullRestyle::ComputeMissing`), so the second computes only the shadow-tree clones the
+        first could not see.
+  - [x] Establish with a test, before the change, whether `ApplyAnimationPresentation` depends on
+        the second pass discarding its overrides: it does not, so animated documents take the same
+        path (`RenderingContextTest.AnimatedDocumentFullRestyleMatchesFirstFrame` in
+        `//donner/svg/renderer/tests:renderer_driver_tests`).
+  - Done when: the correctness counter test shows elements cascaded equal to the styled entity count
+    on the edit frames, and the next-frame style time after a splash class edit is at most 10 ms
+    (from 18.8 ms). Met: every edit and keystroke row of `css_cascade_perf_tests_correctness`
+    cascades each styled entity once with one full clear (see
+    [Measured Baseline](#measured-baseline)). Not met: on the baseline machine class (the same harness pinned
+    to one core, load average 27 to 36, four alternating runs of the old and new binaries) the
+    splash class edit's style time falls from 17.93 ms (17.10-18.54) to 10.67 ms (10.45-10.72), and
+    on an Apple M4 Pro (14 cores, one-minute load average 4.7 to 8.0, six alternating runs) from
+    4.33 ms (4.28-4.40) to 2.49 ms (2.45-2.52). The time falls roughly by the share of cascades
+    removed, 447 of 1,069 (the 175 shadow-tree clones were already cascaded once), not by half; the
+    remaining 0.7 ms is left to the rule index (Milestone A3).
 - [ ] Milestone A3: Rule index (4 days). After A1.
   - [ ] Build `RuleIndex` for a stylesheet's own rules and for each imported sheet when
         `StylesheetComponent::rebuildSelectorCaches` runs.
@@ -467,8 +482,10 @@ component read `properties` (through `.value()`, `*` or `->`). The only writers 
 `computePropertiesInto` (including its budget-refusal branch),
 `ShadowTreeSystem::createShadowEntity`, which emplaces an empty component, and
 `ExternalUseStyleContext`, which holds a copy of the host's computed style as its `parent`.
-Whole-component clears happen in the full pass of `computeAllStyles`, `MarkStylesheetChanged`,
-`MarkNeedsFullRebuild`, `StyleSystem::discardComputedStyles` and `RecomputeAnimationStyles`.
+Whole-component clears happen in `StyleSystem::discardComputedStylesForFullRestyle` (once per
+full-restyle rebuild, and in the full pass of `computeAllStyles` for its other callers),
+`MarkStylesheetChanged`, `MarkNeedsFullRebuild`, `StyleSystem::discardComputedStyles` and
+`RecomputeAnimationStyles`.
 
 **Shadow trees.** `<use>`, pattern, marker and mask instances are shadow entities.
 `ShadowedElementAdapter` matches selectors against the shadow tree's structure (parent, siblings,
@@ -483,7 +500,8 @@ cascades a referenced external document in its own registry.
 
 **Invalidation.** `StyleSystem::computeAllStyles` has two modes. The selective pass recomputes
 entities flagged `DirtyFlagsComponent::Style` whose computed style was removed. The full pass
-clears every `ComputedStyleComponent` and recomputes the document, and runs whenever
+computes every entity without a computed style, after discarding every `ComputedStyleComponent`
+unless its caller already did (`StyleSystem::FullRestyle`), and runs whenever
 `RenderTreeState::needsFullStyleRecompute` is set. That flag is set by `SVGElement::setClassName`,
 `setId`, `setStyle` and `updateStyle`, by presentation-attribute writes other than `transform` and
 `opacity` (`MarkPresentationAttributeDirty`), by stylesheet changes (`MarkStylesheetChanged`), and
@@ -494,12 +512,12 @@ path in `RenderingContext::ensureComputedComponents`, which tears down and re-in
 trees, because `tryRetainedUpdate` declines when the flag is set.
 
 `RenderingContext::createComputedComponents` calls `StyleSystem::computeAllStyles` twice: before
-and after shadow-tree instantiation. `needsFullStyleRecompute` is cleared only after both return,
-so on a full-restyle frame both calls take the full pass and the second discards and recomputes
-everything the first produced. On the first frame of a freshly parsed document `hasBeenBuilt` is
-false, so the second call only fills in the new shadow entities. Animated documents add a third
-whole-document cascade: `ApplyAnimationPresentation` calls `RecomputeAnimationStyles`, which
-clears and recomputes every style with animation enabled.
+and after shadow-tree instantiation. On a full-restyle frame it first discards every computed
+style once, and both calls compute only entities without a computed style: the first the document
+tree, the second the shadow-tree clones instantiated in between. A full-restyle frame therefore
+cascades each styled entity once, the work of the edited document's first frame. Animated
+documents add a second whole-document cascade: `ApplyAnimationPresentation` calls
+`RecomputeAnimationStyles`, which clears and recomputes every style with animation enabled.
 
 [0005-incremental_invalidation](0005-incremental_invalidation.md) introduced the dirty flags and
 deferred a selector index for stylesheet-level changes; this design supplies that index and the
@@ -587,13 +605,31 @@ prepared. The append case rewrites the `<style>` element's contents through
 | Bootstrap icons, `fill`            |            10,274 |       41,088 | 70.97 (69.42-72.98)    | 63.98 (62.29-65.41)    |  90 percent | 70.83 (68.95-74.23)    |
 | Bootstrap icons, `style`           |            10,274 |       41,088 | 70.50 (69.00-72.98)    | 63.41 (62.08-65.66)    |  90 percent | 69.87 (67.83-72.19)    |
 
-Every edit, including a `fill` write on one shape, restyles the whole document twice (2 full
-clears per frame in every row). The append rows give the work of the frame after the rule is
-appended; the frame that removes it again tests the original 99,401 and 817,216 rules. Their times
-are medians over both frames of the alternation. The editor presents through its compositor and
-Geode rather than a full TinySkia frame, so its edit-to-frame cost lies between the two frame
+In these measurements every edit, including a `fill` write on one shape, cascades the whole document
+twice (2 full clears per frame in every row). The append rows give the work of the frame after the
+rule is appended; the frame that removes it again tests the original 99,401 and 817,216 rules. Their
+times are medians over both frames of the alternation. The editor presents through its compositor
+and Geode rather than a full TinySkia frame, so its edit-to-frame cost lies between the two frame
 columns; style is 80 to 95 percent of the frame preparation that precedes rasterization in every
 case measured.
+
+An edit frame cascades every styled entity once with one full clear, the work of the edited
+document's first frame. `css_cascade_perf_tests_correctness` asserts these counts:
+
+| Document and edit                                     | Elements cascaded | Rules tested | Rules matched | Declarations applied | Full clears |
+| ----------------------------------------------------- | ----------------: | -----------: | ------------: | -------------------: | ----------: |
+| Splash, `class`, `fill` or `style`; declaration value |               622 |       57,838 |         1,382 |                1,386 |           1 |
+| Splash, append one rule                               |               622 |       58,460 |         1,382 |                1,386 |           1 |
+| Splash, selector or `class` letter inserted           |               622 |       57,838 |         1,381 |                1,385 |           1 |
+| Splash, closing brace deleted                         |               622 |        4,346 |         1,244 |                1,245 |           1 |
+| Synthetic 2,000 x 200, `class`                        |             2,003 |      408,608 |         3,255 |                4,508 |           1 |
+| Synthetic 2,000 x 200, `fill` or `style`              |             2,003 |      408,608 |         3,254 |                4,506 |           1 |
+| Synthetic 2,000 x 200, append rule                    |             2,003 |      410,611 |         3,254 |                4,506 |           1 |
+| Bootstrap icons, `class`, `fill` or `style`           |             5,137 |       20,544 |         9,291 |                9,291 |           1 |
+
+The splash styles 447 document elements and 175 shadow-tree clones; the synthetic document and the
+sprite have no clones. The measured rows above count each document element twice and each clone
+once. An appended rule that matches nothing adds one test per styled entity.
 
 **Scaling.** Synthetic documents with groups of ten `<rect>` elements, each with one class, and
 `R` rules of one kind (first-frame style time, median of 9):
@@ -690,10 +726,10 @@ the call the editor's source pane makes, then one frame (load average 12 to 15):
 | `class` attribute value, insert or delete a letter | `AttributeValue` (18/18) | 0.55 (0.52-0.61) | 22.69 (22.36-23.14) | 18.67 (18.38-19.02) | 139.36 (138.03-141.82) |
 
 Every keystroke stayed incremental at the XML level and none reparsed the document, but each
-reparsed the whole stylesheet (inside the source edit time) and restyled the whole document twice
-(1,069 element cascades, 2 full clears, as for the attribute edits above). Deleting a rule's
-closing brace changes what the stylesheet parse keeps: the two alternating states differ by a
-factor of three in style time (6.3 to 18.8 ms), which is what a reader typing through an
+reparsed the whole stylesheet (inside the source edit time) and restyled the whole document (1,069
+element cascades and 2 full clears in these measurements, as for the attribute edits above).
+Deleting a rule's closing brace changes what the stylesheet parse keeps: the two alternating states
+differ by a factor of three in style time (6.3 to 18.8 ms), which is what a reader typing through an
 unbalanced brace sees today.
 
 ### Reproducing the Baseline
@@ -712,7 +748,8 @@ Run it from the repository root, or with `bazel run`, so it finds the three docu
 edit whose two directions do different work (appending and removing a rule, inserting and
 deleting a character, deleting and restoring a brace) prints one line per direction, from its
 alternate repetitions, and the run fails if the repetitions of any line differ in work.
-`//donner/benchmarks:css_cascade_perf_tests_correctness` asserts the counter columns above, and
+`//donner/benchmarks:css_cascade_perf_tests_correctness` asserts the load counter columns above and
+the current edit-frame counts, and
 `//donner/benchmarks:css_cascade_perf_tests_wallclock` (manual, `perf`) records the splash
 first-frame, splash class-edit, bootstrap-icons and synthetic 2,000 x 200 style times.
 
@@ -936,18 +973,45 @@ Ranked by expected effect on the measured baseline per unit of complexity.
 ### Single Cascade per Full Restyle
 
 `RenderingContext::createComputedComponents` performs the full-restyle clear itself, once, before
-the first `computeAllStyles` call, and both calls then compute only entities without a computed
-style. Concretely, `StyleSystem::computeAllStyles` gains an internal mode parameter (full clear or
-fill missing), used only by `createComputedComponents`; other callers keep today's behavior. The
-second call already only needs the shadow-tree clones that `InstantiateMainShadowTrees` and
-`PaintSystem::createShadowTrees` created after the first call.
+the first `computeAllStyles` call (`StyleSystem::discardComputedStylesForFullRestyle`, counted in
+`fullClears` and in the style time), and both calls run with
+`StyleSystem::FullRestyle::ComputeMissing`, which computes only entities without a computed style.
+Other callers of `computeAllStyles` keep `FullRestyle::DiscardAndRecompute`. The second call
+computes only the clones that `PaintSystem::createShadowTrees` and `InstantiateMainShadowTrees`
+create after the first call; clones created later (`InstantiateStyledPaintTrees`,
+`InstantiateNestedMarkerTrees`, `createFeImageShadowTree`) are styled through `computeStylesFor`.
+The style budget is reset at the start of each `computeAllStyles` call, so the second call charges
+only the clones, as on a first frame, and a call that ends refused counts once in
+`budgetRejections`. The dirty-entity pass, the retained update and the first frame do not discard: a
+full rebuild without the full-restyle flag (for example an `opacity` edit with retained updates off)
+restyles only the dirty entities, which
+`RenderingContextTest.PartialRebuildRestylesOnlyDirtyEntities` pins with exact counters.
 
-Risk: `ApplyAnimationPresentation` runs between the two calls and, for animated documents,
-recomputes every style through `RecomputeAnimationStyles`. Documents with
-`AnimatedValuesComponent` are forced onto the full restyle in `ensureComputedComponents`.
-Milestone A2 first adds a test that pins what an animated document's computed style is after an
-edit frame, then changes the pass structure; if animation correctness depends on the second clear,
-animated documents keep the current path and the change applies to the rest.
+**Animation.** `ApplyAnimationPresentation` runs between the two calls and, for animated documents
+(which `ensureComputedComponents` always sends through the full restyle), recomputes every style
+through `RecomputeAnimationStyles` with animation enabled. Its other overrides go to geometry,
+transform, reference and element-attribute components, not to computed styles, so nothing depends on
+the second call discarding styles.
+`RenderingContextTest.AnimatedDocumentFullRestyleMatchesFirstFrame` pins this: after a class edit,
+every computed style of an animated document (an animated fill and geometry drawn through `<use>`,
+an animated `<use>` target and an animated inherited color) equals the first frame of the document
+parsed with the edit applied. Animated documents take the same path; their animation recompute stays
+a second whole-document cascade and a second full clear on every rebuild.
+
+**Shadow trees and selectors.** The main shadow root of a `<use>` is attached under its host while
+the frame is built. A full rebuild styles the document tree before that, so on first frames and
+full-restyle frames selector matching for document elements does not see `<use>` shadow content:
+a `:has()` on an ancestor of a `<use>` does not match the instanced content.
+`RenderingContextTest.FullRestyleMatchesUseHostWithoutItsShadowTree` pins this. A retained update
+restyles dirty entities with the shadow trees still attached, so a `:has()` on a restyled ancestor
+can match the instanced content there
+([#2715](https://github.com/jwmcglynn/donner/issues/2715)).
+
+`//donner/svg/renderer/tests:full_restyle_corpus_tests` checks that an unedited full restyle leaves
+every computed style of every corpus document (the resvg suite, the renderer test data, the splash
+and the icon sprite) as its first frame computed it. Nothing is edited, so it cannot detect stale
+styles, a skipped discard or extra work; the counter test and the `RenderingContextTest` cases
+cover those.
 
 ### Rule Index
 
@@ -2006,7 +2070,8 @@ Stylesheets and documents are untrusted input.
   correctness tests carry no time limits.
 - The invariant "computed style is unchanged" is enforced by the three differential targets
   above; the rule "a full restyle cascades each element once" and "the filter rejects the
-  expected candidates" by the counter test.
+  expected candidates" by the counter test; and "a full restyle computes the first frame's
+  styles" by `//donner/svg/renderer/tests:full_restyle_corpus_tests`.
 
 ### Part B Tests
 

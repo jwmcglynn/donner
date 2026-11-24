@@ -457,13 +457,26 @@ public:
    */
   const ComputedStyleComponent& computeStyle(EntityHandle handle, ParseWarningSink& warningSink);
 
+  /// What \ref computeAllStyles does with existing computed styles when the whole document needs
+  /// restyling (\ref RenderTreeState::needsFullStyleRecompute on a built document).
+  enum class FullRestyle {
+    /// Discard every computed style, then compute the whole document.
+    DiscardAndRecompute,
+    /// Compute only entities without a computed style. For a caller that already discarded the
+    /// stale styles with \ref discardComputedStylesForFullRestyle and runs several passes over one
+    /// rebuild, so each entity is cascaded once.
+    ComputeMissing,
+  };
+
   /**
    * Computes the style for all entities in the registry.
    *
    * @param registry Registry to compute the styles, used to query for all entities in the tree.
    * @param warningSink Containing any warnings found
+   * @param fullRestyle What a whole-document restyle does with existing computed styles.
    */
-  void computeAllStyles(Registry& registry, ParseWarningSink& warningSink);
+  void computeAllStyles(Registry& registry, ParseWarningSink& warningSink,
+                        FullRestyle fullRestyle = FullRestyle::DiscardAndRecompute);
 
   /**
    * Computes the style for the given entities in the registry.
@@ -530,6 +543,15 @@ public:
    */
   static void discardComputedStyles(Registry& registry);
 
+  /**
+   * Discard every computed style and its retained style budget to restyle the whole document,
+   * counted in \ref StyleCascadeCounters::fullClears. Style passes that follow with
+   * \ref FullRestyle::ComputeMissing then compute every entity again, once.
+   *
+   * @param registry Registry containing the document.
+   */
+  static void discardComputedStylesForFullRestyle(Registry& registry);
+
   /// Inherit fallback values from an external-use computed parent without transferring specificity.
   /// Resolved ordinary host paint, retained only during the guarded occurrence.
   static ResolvedPaintServer externalHostPaint(Registry& registry, bool stroke);
@@ -567,6 +589,11 @@ public:
   void invalidateAll(EntityHandle handle);
 
 private:
+  /// Compute the style of every entity flagged \ref DirtyFlagsComponent::Style whose computed
+  /// style was removed.
+  void computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink);
+  /// Compute the style of every tree entity without a computed style.
+  void computeMissingStyles(Registry& registry, ParseWarningSink& warningSink);
   void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                             PropertyRegistry& properties, StyleResourceBudget& styleBudget,
                             StyleCascadeCounters& counters, ParseWarningSink& warningSink);
