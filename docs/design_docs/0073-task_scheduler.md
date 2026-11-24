@@ -1728,7 +1728,7 @@ clients that size work from documents.
   slots at stable addresses, one parker per thread and scheduler, slots returned at thread exit, the
   sweep, and, at 1, 2 and 4 workers, a scheduler destroyed before a thread holding its parker exits
   and one thread using 1,000 schedulers in turn (at most 2 live pools after each registration, 1 at
-  the end); that last case is the slowest, at under 3 s under either sanitizer. Stress runs one task
+  the end); that last case is the slowest, under 3 s under either sanitizer. Stress runs one task
   per scope, and several creators at once with flat spawns, with no hooks and with delays injected
   at every step. Each step was observed red with it broken: the creator's re-check after its waiting
   bit removed (the interleaving, and every injected-delay stress case); the finisher's parker change
