@@ -15,9 +15,11 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/base/tasks/CoroutineFramePool.h"
 #include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/Parker.h"
 #include "donner/base/tasks/ParkerPool.h"
+#include "donner/base/tasks/SchedulerWork.h"
 #include "donner/base/tasks/TaskRecord.h"
 #include "donner/base/tasks/WorkStealingDeque.h"
 #include "donner/base/tasks/WorkerStack.h"
@@ -44,6 +46,9 @@ struct TaskSchedulerOptions {
   /// Each worker's stack, rounded up to whole pages. At least the platform's minimum thread stack
   /// and twice \ref kStackReserveBytes.
   std::size_t workerStackBytes = 512 * 1024;
+
+  /// Bytes of freed coroutine-frame allocations to retain. 0 disables reuse.
+  std::size_t retainedCoroutineFrameBytes = 64 * 1024;
 };
 
 /// A worker's state word.
@@ -82,6 +87,11 @@ enum class SchedulerStep : std::uint8_t {
                                    //!< its parker's waiting bit.
   ScopeWaiterBeforeWait,  //!< A scope's creator set the waiting bit and its re-check found tasks
                           //!< outstanding, before it waits.
+  ResumptionPublished,    //!< A coroutine resumption is visible; the publisher released the queue.
+  AsyncJoinBeforeRegister,  //!< The awaiter loaded a nonzero count, before setting the join flag.
+  AsyncJoinRegistered,      //!< The awaiter published its resumption, before returning.
+  AsyncJoinFinisherAfterDecrement,  //!< The last task finished, before any resumption is queued.
+  AsyncJoinBeforeEnqueue,       //!< The last finisher copied the resumption, before enqueueing it.
   ScopeFinisherAfterDecrement,  //!< A finisher's decrement brought its scope's count to zero,
                                 //!< before it changes the recorded parker.
 };
@@ -92,7 +102,8 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step);
 /**
  * Test seam: called at each \ref SchedulerStep with the index of the worker the step concerns.
  * Production schedulers have none, and each step then costs one branch on a path that is already
- * about to sleep or wake a thread.
+ * about to sleep or wake a thread. A supplied hook must outlive the scheduler and any resumption
+ * publication or join registration still returning after its continuation ran.
  */
 class SchedulerTestHooks {
 public:
@@ -110,6 +121,10 @@ public:
 };
 
 class TaskSchedulerTestPeer;
+class ScheduleAwaitable;
+namespace detail {
+class TaskPromiseBase;
+}
 class TaskScope;
 
 /**
@@ -162,14 +177,21 @@ public:
   /// True when the options asked for zero workers.
   [[nodiscard]] bool threadingDisabledByConfiguration() const { return options_.workerCount == 0; }
 
+  /// Suspends and queues the caller on this scheduler unless it has zero workers.
+  [[nodiscard]] ScheduleAwaitable schedule() noexcept;
+
 private:
   friend class TaskSchedulerTestPeer;
+  friend class AsyncTaskScope;
+  friend class ScheduleAwaitable;
+  friend class detail::TaskPromiseBase;
   friend class TaskScope;
 
   /// What a task's finisher touches: its scope's counter and the parker the scope recorded.
   struct ScopeLink {
     std::atomic<std::uint64_t>* counter;
     Parker<>* parker;
+    AsyncTaskScope* asyncScope = nullptr;
   };
 
   /**
@@ -177,7 +199,7 @@ private:
    * test peer.
    *
    * @param options The scheduler's options.
-   * @param testHooks Called at each \ref SchedulerStep; must outlive the scheduler.
+   * @param testHooks Called at each \ref SchedulerStep. See \ref SchedulerTestHooks for lifetime.
    */
   TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* testHooks);
 
@@ -187,7 +209,7 @@ private:
 
     TaskScheduler& scheduler;
     const std::size_t index;
-    WorkStealingDeque<TaskRecord*> deque;
+    WorkStealingDeque<SchedulerWork*> deque;
     CreatorRecordPool<> pool;
     Parker<> parker;
     alignas(kFalseSharingBytes) std::atomic<WorkerState> state{WorkerState::Awake};
@@ -255,6 +277,7 @@ private:
     record->setClosure(std::forward<F>(work));
     if (scope != nullptr) {
       record->setScope(scope->counter, scope->parker);
+      record->setAsyncScope(scope->asyncScope);
       // Relaxed: the push that publishes the task orders this before the task's decrement.
       scope->counter->fetch_add(1, std::memory_order_relaxed);
     }
@@ -270,23 +293,32 @@ private:
   /// Allocates a record from the external pool. @return Null at its bound.
   TaskRecord* allocateExternalRecord();
 
-  /// Links \p record into the global queue, then wakes a worker if none is awake.
-  void publishToGlobalQueue(TaskRecord* record);
+  /// Queues a resumption on the current worker or, if unavailable or full, the global queue.
+  void enqueueResumption(CoroutineResumption& resumption);
 
-  /// Links \p record into the global queue under the mutex.
-  void pushGlobal(TaskRecord* record);
+  /// Links \p work into the global queue, then wakes a worker if none is awake.
+  void publishToGlobalQueue(SchedulerWork* work);
+
+  /// Links a resumption and finishes the wake handshake before making the entry available.
+  void publishResumption(CoroutineResumption& resumption);
+
+  /// Links a work item while the caller holds the global mutex.
+  void linkGlobal(SchedulerWork* work);
+
+  /// Wakes a sleeping worker if the publish handshake finds no worker awake.
+  void wakeAfterPublish();
 
   /// Takes the oldest global entry. @return Null if the queue is empty.
-  TaskRecord* takeGlobal();
+  SchedulerWork* takeGlobal();
 
   /// Takes from the outside sources from the worker's cursor. @return Null if all are empty.
-  TaskRecord* takeOutside(Worker& worker);
+  SchedulerWork* takeOutside(Worker& worker);
 
   /// The next task for an awake worker in its idle loop. @return Null if a steal round found none.
-  TaskRecord* findTask(Worker& worker);
+  SchedulerWork* findTask(Worker& worker);
 
   /// Probes every other worker once from a seeded offset. @return Null if none had work.
-  TaskRecord* stealFromWorkers(Worker& worker);
+  SchedulerWork* stealFromWorkers(Worker& worker);
 
   /**
    * The victim at position \p k of a steal round by worker \p self among \p workers workers,
@@ -298,9 +330,11 @@ private:
     return (self + 1 + (offset + k) % others) % workers;
   }
 
-  /// Runs \p record and returns it to its pool. Fails a release assertion first if the worker has
-  /// less than \ref kStackReserveBytes of stack left.
-  void runTask(Worker& worker, TaskRecord* record);
+  /// Runs \p work after checking the worker stack reserve.
+  void runTask(Worker& worker, SchedulerWork* work);
+
+  /// Runs a record, returns it to its pool, and notifies its scope.
+  void runRecord(Worker& worker, TaskRecord* record);
 
   /// Bytes of stack left below the caller's frame on the calling worker, of any scheduler; empty on
   /// a thread that is not a worker.
@@ -351,15 +385,34 @@ private:
   /// Protects the global queue's list and the external record pool. On its own cache line, away
   /// from the read-mostly options and hooks pointer, as the deque separates its indices.
   alignas(kFalseSharingBytes) std::mutex globalMutex_;
-  TaskRecord* globalHead_ = nullptr;
-  TaskRecord* globalTail_ = nullptr;
+  SchedulerWork* globalHead_ = nullptr;
+  SchedulerWork* globalTail_ = nullptr;
   ExternalRecordPool externalPool_;
+  CoroutineFramePool framePool_;
 
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> globalQueued_{0};
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> awake_{0};
   alignas(kFalseSharingBytes) std::atomic<bool> stop_{false};
 
   std::vector<std::unique_ptr<Worker>> workers_;
+};
+
+/// Stores its queue entry in the suspended caller's frame.
+class ScheduleAwaitable {
+public:
+  ScheduleAwaitable(const ScheduleAwaitable&) = delete;
+  ScheduleAwaitable& operator=(const ScheduleAwaitable&) = delete;
+
+  [[nodiscard]] bool await_ready() const noexcept { return scheduler_.workerCount() == 0; }
+  void await_suspend(std::coroutine_handle<> handle) noexcept;
+  void await_resume() const noexcept {}
+
+private:
+  friend class TaskScheduler;
+  explicit ScheduleAwaitable(TaskScheduler& scheduler) : scheduler_(scheduler) {}
+
+  TaskScheduler& scheduler_;
+  CoroutineResumption resumption_;
 };
 
 }  // namespace donner::tasks

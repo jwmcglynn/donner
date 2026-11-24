@@ -174,9 +174,30 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - Done when: the inline-below-grain counter test, the seeded-mode replay test and the scaling
     benchmark target exist and pass.
 - [ ] Milestone S3: Coroutines (3.25 days). After S1.
-  - [ ] `AsyncTaskScope`: spawns, cooperative stop and the destructor's assertion (0.25 day).
-  - [ ] `Task<T>`, `TaskScheduler::schedule()` and the `AsyncTaskScope` join awaitable, frame
+  - [ ] `AsyncTaskScope` cooperative stop through the worker-scope stop check (0.25 day).
+    The scope supports spawns, one join, and the destructor assertion.
+  - [x] `Task<T>`, `TaskScheduler::schedule()` and the `AsyncTaskScope` join awaitable, frame
         allocation from the scheduler's pool (3 days).
+    - A coroutine returning `Task<T>` takes `TaskScheduler&` as its first explicit parameter,
+      including for member coroutines. The scheduler is selected before the body starts.
+      `retainedCoroutineFrameBytes` defaults to 64 KiB; zero disables reuse. The limit counts
+      requested allocation bytes for free frames, including trailers and padding. The allocator's
+      own overhead is outside the limit. The pool allocates on an exact-size cache miss.
+    - A Task is lazy and move-only, and has one await. The host supplies the root coroutine.
+      An owner may discard an unstarted Task and must survive an in-progress await. The caller
+      serializes owner operations, and the allocating scheduler must outlive the Task frame
+      even if allocation was elided. The frame can be freed on another thread.
+    - The creating coroutine joins its AsyncTaskScope once. Only its outstanding work can spawn
+      after join starts, and the scope cannot be reopened after completion. The last finisher
+      acquires the waiting handle before enqueueing the resumption and does not access the scope
+      or its frame after enqueueing. The registering awaiter does not touch its frame after
+      publishing the join flag.
+    - A resumption uses the publisher's worker deque or the intrusive global FIFO if that deque is
+      full or the publisher is external. The global wake handshake finishes before unlocking the
+      FIFO. The publisher does not access the scheduler or frame once a consumer can take it.
+      The scheduler used for a resumption stays alive until the continuation resumes.
+    - Seeded readiness, adopted-thread resumptions and deep sleep/hand-off depend on later or
+      separate scheduler work. The ThreadSanitizer cases here cover 0, 1 and 4 workers.
   - Done when: coroutine tests at 0, 1 and 4 workers, including resumption from a non-worker
     thread, registration racing completion, and nested awaits, pass under ThreadSanitizer. The
     race test covers both outcomes: the last task finishing while `await_suspend` registers, so
@@ -1397,6 +1418,9 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | `globalQueued` | worker's check before it locks the queue to take | relaxed load | a hint; the take itself is under the mutex |
 | Scope counter | increment on spawn | relaxed RMW | ordered before the child's decrement by the push that publishes the child, and before the spawner's own decrement by coherence |
 | Scope counter | finisher's decrement | acq_rel RMW | release publishes the task's results; acquire lets the last finisher read the join handle; all decrements form one release sequence |
+| Async scope join marker | join registration | relaxed exchange | rejects a second join even when the count was already zero |
+| Task promise owner state | await starts and consumes the result | relaxed CAS and store | diagnoses repeated awaits and premature owner destruction; owners serialize their own operations |
+| Live coroutine promises | promise construction, destruction and shutdown check | relaxed RMW and load | shutdown assertion also covers compiler-elided frame allocations |
 | Scope counter | creator's read in rule 2 | acquire load | on zero, sees every task's results |
 | Scope counter | `join()`'s initial load | acquire load | on zero, continues without suspending and sees every task's results |
 | Scope counter | `join()`'s flag-setting CAS | acq_rel on success, acquire on failure | release publishes the handle; a failure that observes zero acquires the results |
@@ -1798,6 +1822,13 @@ clients that size work from documents.
   address is red only under AddressSanitizer, where it trips the floor check, and equivalent
   elsewhere. Ignoring a failed thread start survives: no test can make thread creation fail
   portably.
+- **Coroutine tests** (`//donner/base/tasks:task_tests`,
+  `//donner/base/tasks:async_task_scope_tests`): lazy single-consumer ownership, nested results,
+  over-aligned frame storage, cross-thread frame return and the retained-byte limit, schedule
+  from a non-worker, the asleep-worker wake and full deque fallback, and joins at 0, 1 and 4
+  workers. The join hooks hold both sides of registration through relaxed flags that don't publish the payload or resume
+  handle. A separate interleaving lets the worker resume and destroy the scope and its
+  scheduler before the external registrant returns from `await_suspend`.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.

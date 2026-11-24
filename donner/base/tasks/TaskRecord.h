@@ -13,6 +13,7 @@
 #include "donner/base/Utils.h"
 #include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/Parker.h"
+#include "donner/base/tasks/SchedulerWork.h"
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -29,20 +30,22 @@
 
 namespace donner::tasks {
 
+class AsyncTaskScope;
+
 /**
  * One spawned task: its closure, and what the thread that finishes it needs.
  *
- * Layout: an intrusive link, the identity of the pool that allocated it, the address of its
- * scope's counter and the parker its scope recorded, the closure's call function, and 64 bytes of
+ * Layout: an intrusive link and work kind, its allocating pool, its scope's completion metadata,
+ * the closure's call function, and 64 bytes of
  * inline closure storage. A closure that does not fit, or needs more than `max_align_t`
  * alignment, is moved into a heap block that the record owns. The record is 128 bytes, two cache
  * lines.
  *
- * Records are recycled by their pool. While a record is free, everything after its link is
- * poisoned in AddressSanitizer builds, so a thread that touches a record after returning it fails
- * there.
+ * Records are recycled by their pool. While a record is free, everything after its intrusive link
+ * is poisoned in AddressSanitizer builds, so a thread that touches a record after returning it
+ * fails there.
  */
-class alignas(64) TaskRecord {
+class alignas(64) TaskRecord : public SchedulerWork {
 public:
   /// Bytes of closure storage inside the record.
   static constexpr std::size_t kInlineBytes = 64;
@@ -55,7 +58,7 @@ public:
   static constexpr bool kStoredInline =
       sizeof(std::decay_t<F>) <= kInlineBytes && alignof(std::decay_t<F>) <= kInlineAlignment;
 
-  TaskRecord() = default;
+  TaskRecord() : SchedulerWork(Kind::Record) {}
 
   TaskRecord(const TaskRecord&) = delete;
   TaskRecord(TaskRecord&&) = delete;
@@ -105,6 +108,11 @@ public:
     parker_ = parker;
   }
 
+  /// Records the asynchronous scope to notify after returning this record.
+  void setAsyncScope(AsyncTaskScope* scope) { asyncScope_ = scope; }
+
+  [[nodiscard]] AsyncTaskScope* asyncScope() const { return asyncScope_; }
+
   /// The scope counter set by \ref setScope, or null.
   [[nodiscard]] std::atomic<std::uint64_t>* scopeCounter() const { return scopeCounter_; }
 
@@ -112,10 +120,10 @@ public:
   [[nodiscard]] Parker<>* parker() const { return parker_; }
 
   /// The intrusive link, owned by whichever list holds the record.
-  [[nodiscard]] TaskRecord* next() const { return next_; }
+  [[nodiscard]] TaskRecord* next() const { return static_cast<TaskRecord*>(SchedulerWork::next); }
 
   /// Sets the intrusive link.
-  void setNext(TaskRecord* next) { next_ = next; }
+  void setNext(TaskRecord* next) { SchedulerWork::next = next; }
 
   /// The identity of the pool that allocated the record.
   [[nodiscard]] const void* pool() const { return pool_; }
@@ -151,35 +159,37 @@ private:
     call(*this, action);
   }
 
-  /// Clears every field after the link for a new owner, and records the allocating pool.
+  /// Clears the owner's state and records the allocating pool.
   void resetForAllocation(const void* pool) {
-    next_ = nullptr;
+    SchedulerWork::next = nullptr;
     pool_ = pool;
     scopeCounter_ = nullptr;
     parker_ = nullptr;
+    asyncScope_ = nullptr;
   }
 
-  /// Marks the record free: everything after the link becomes unaddressable under AddressSanitizer.
+  /// Marks the record free: everything after the intrusive link becomes unaddressable under
+  /// AddressSanitizer.
   void poisonWhileFree() {
 #if defined(DONNER_TASKS_RECORD_ASAN)
-    ASAN_POISON_MEMORY_REGION(&pool_, PayloadBytes());
+    ASAN_POISON_MEMORY_REGION(&this->SchedulerWork::next + 1, PayloadBytes());
 #endif
   }
 
   /// Makes a free record addressable again before it is reused or deleted.
   void unpoison() {
 #if defined(DONNER_TASKS_RECORD_ASAN)
-    ASAN_UNPOISON_MEMORY_REGION(&pool_, PayloadBytes());
+    ASAN_UNPOISON_MEMORY_REGION(&this->SchedulerWork::next + 1, PayloadBytes());
 #endif
   }
 
-  /// Bytes after the link, which alone stays usable while the record is on a free list.
+  /// Bytes after the intrusive link, which alone stays usable while the record is on a free list.
   static constexpr std::size_t PayloadBytes() { return sizeof(TaskRecord) - sizeof(TaskRecord*); }
 
-  TaskRecord* next_ = nullptr;
   const void* pool_ = nullptr;
   std::atomic<std::uint64_t>* scopeCounter_ = nullptr;
   Parker<>* parker_ = nullptr;
+  AsyncTaskScope* asyncScope_ = nullptr;
   void (*call_)(TaskRecord&, Action) = nullptr;
   alignas(kInlineAlignment) std::byte storage_[kInlineBytes];
 };
@@ -211,7 +221,7 @@ public:
   ~RecordStore() {
     UTILS_RELEASE_ASSERT_MSG(live_ == 0, "A task record pool was destroyed with live records");
     while (TaskRecord* record = freeHead_) {
-      freeHead_ = record->next_;
+      freeHead_ = record->next();
       record->unpoison();
       delete record;
     }
@@ -226,7 +236,7 @@ public:
   [[nodiscard]] TaskRecord* allocate(const void* pool) {
     TaskRecord* record = freeHead_;
     if (record != nullptr) {
-      freeHead_ = record->next_;
+      freeHead_ = record->next();
       record->unpoison();
     } else if (created_ < maxLive_) {
       record = new TaskRecord;
@@ -257,8 +267,8 @@ public:
   std::size_t releaseList(TaskRecord* head) {
     std::size_t count = 0;
     while (head != nullptr) {
-      TaskRecord* next = head->next_;
-      head->next_ = freeHead_;
+      TaskRecord* next = head->next();
+      head->setNext(freeHead_);
       freeHead_ = head;
       head = next;
       ++count;
@@ -283,7 +293,7 @@ public:
 
 private:
   void pushFree(TaskRecord* record) {
-    record->next_ = freeHead_;
+    record->setNext(freeHead_);
     record->poisonWhileFree();
     freeHead_ = record;
   }
@@ -371,7 +381,7 @@ public:
     TaskRecord* head = returned_.load(std::memory_order_relaxed);
     while (true) {
       UTILS_RELEASE_ASSERT_MSG(head != record, "A task record was returned twice");
-      record->next_ = head;
+      record->setNext(head);
       Hooks::BeforeReturnPublishes();
       // Release: the returner's last writes to the record happen before the creator reuses it.
       if (returned_.compare_exchange_weak(head, record, std::memory_order_release,
