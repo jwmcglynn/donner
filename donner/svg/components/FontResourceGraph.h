@@ -145,8 +145,16 @@ public:
     std::size_t graphBuilds = 0;        ///< Dependency graphs constructed.
     std::size_t targetCollections = 0;  ///< Target traversals computed.
     std::size_t cacheHits = 0;          ///< Target collections reused.
-    std::size_t work = 0;               ///< Charged units against the cache work ceiling.
-    bool resourceLimit = false;         ///< True after the work ceiling is exhausted.
+    /// Charged units. The ceiling applies to this counter's current value, so a caller-owned
+    /// counter that starts above zero leaves that much less room.
+    std::size_t work = 0;
+    bool resourceLimit = false;  ///< True after the work ceiling is exhausted.
+    /// Collections answered without building a graph because the document renders nothing that
+    /// depends on a font.
+    std::size_t fontIndependentCollections = 0;
+    /// Units of document the font-independence scan visited, charged or not: one per filter,
+    /// filter graph node, paint capture, rendering instance and filter function list entry.
+    std::size_t fontIndependenceScanUnits = 0;
   };
   /// Create a cache using caller-owned counters or internal counters.
   /// @param stats Optional counters that must outlive the cache.
@@ -187,6 +195,20 @@ private:
                  const std::vector<FontFaceDependency>& currentFaces, bool scopeComplete) const;
   };
   bool reserve(std::size_t work);
+  /**
+   * The collection of a document whose rendering cannot depend on a font resource, answered
+   * without building the dependency graph; empty when the document may depend on one. Such a
+   * document holds no text, no length resolved against font metrics, no nested SVG document (whose
+   * text would be a dependency of its own), no filter image (which can render a fragment or
+   * document that has text), no filter function list naming an element (a fragment the collection
+   * reports as unprepared), no paint capture that recorded a face, a child document or a resource
+   * limit, and no overflowed font dependency list (a resource limit the collection reports). Its
+   * collection has no dependencies and nothing unprepared for every target, whatever its revision.
+   * A spent ceiling is reported before the document is read, and the scan admits each item
+   * against the remaining ceiling before reading it.
+   */
+  std::optional<FontResourceGraph::Collection> collectFontIndependent(
+      const Registry& registry, Entity target, FontResourceGraph::Purpose purpose);
   bool prepareEntry(Entry& entry, const SVGDocumentHandle& document);
   Stats ownedStats_;
   Stats* stats_;
