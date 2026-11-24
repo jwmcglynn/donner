@@ -295,7 +295,7 @@ including tests and review fixes. "After" names the milestones that must land fi
     comparisons for every edit routed to the narrowed path, and every eligible edit in it took
     the retained update.
 - [x] Milestone A6: Base-library Bloom filter (2 days,
-      [#A6_PR](https://github.com/jwmcglynn/donner/pull/A6_PR)). No dependency.
+      [#2735](https://github.com/jwmcglynn/donner/pull/2735)). No dependency.
   - [x] Add `donner/base/BloomFilter.h` with `BloomFilter`, `CountingBloomFilter` and `BloomHash`,
         unit tests in `//donner/base:base_tests` and `//donner/base:bloom_filter_fuzzer`.
   - Done when: the no-false-negative property test, the counting-removal and saturation tests,
@@ -1361,9 +1361,9 @@ be decremented, which would leave the filter's content depending on history rath
 when an insertion would saturate a counter, the filter is cleared and disabled (every probe
 answers "may contain") until synchronization pops back above the ancestor whose insertion
 saturated it, and then rebuilt from the chain. Saturation needs 255 live probe contributions to
-one counter. An insertion contributes two when its probes coincide. With that rule, whether the filter
-is enabled and what it contains are functions of E's ancestor chain alone, so the filter is
-correct in every traversal mode and makes the same decisions in the serial and parallel passes:
+one counter. An insertion contributes two when its probes coincide. With that rule, whether the
+filter is enabled and what it contains are functions of E's ancestor chain alone, so the filter
+is correct in every traversal mode and makes the same decisions in the serial and parallel passes:
 
 - Full pass in storage order: consecutive elements usually share most of their chain, so the
   cost is the difference between two chains. A later change may visit in tree order to make it
