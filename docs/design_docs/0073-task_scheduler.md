@@ -108,8 +108,9 @@ Estimates are engineering days, including tests and review fixes. No milestone h
 milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
 - [ ] Milestone S1: Core scheduler (9.5 days)
-  - [ ] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
-        its linearization stress test (1.25 days).
+  - [x] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
+        its linearization stress test (1.25 days): `//donner/base/tasks:work_stealing_deque`,
+        which also has the sequentially consistent form, and `//donner/base/tasks:deque_tests`.
   - [ ] Per-worker deques and the global queue: the mutex-protected FIFO, its `globalQueued`
         count and the periodic outside take on the rotating cursor (0.75 day).
   - [ ] Steal rounds: every outside source from the rotating cursor, then every other worker
