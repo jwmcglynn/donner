@@ -754,8 +754,8 @@ Known gaps:
 - The append-only C ABI policy has no ABI-diff check yet. Follow-up: add one before the first
   release that promises ABI stability.
 - Sharing one loaded composition across threads is a documented contract without a CI target.
-  A shared-composition test under `--config=tsan` is planned, but no CI lane runs that
-  configuration today.
+  A shared-composition test under `--config=tsan` is planned, but no CI lane would run it today:
+  the only ThreadSanitizer lane covers `//donner/base/tasks/...`.
 - Whether iostream reaches a minimal Donner Tiny link is measured by the footprint work, not
   enforced.
 - Lottie conformance has no external test suite in the repository comparable to the resvg suite;

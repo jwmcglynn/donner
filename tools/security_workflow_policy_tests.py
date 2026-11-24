@@ -75,6 +75,11 @@ SECRET_USES = {
      None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy read-only cache",
      None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
+    (".github/workflows/sanitizers-pr.yml", "tasks-sanitizers", "Configure BuildBuddy remote cache",
+     None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/sanitizers-pr.yml", "tasks-sanitizers",
+     "Configure BuildBuddy read-only cache", None, "./.github/actions/buildbuddy-cache"): {
+         "BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/sanitizers.yml", "asan", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/sanitizers.yml", "ubsan", "Configure BuildBuddy remote cache", None,
@@ -280,6 +285,7 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/main.yml", "linux"),
     (".github/workflows/main.yml", "macos"),
     (".github/workflows/sanitizers-pr.yml", "asan-geode"),
+    (".github/workflows/sanitizers-pr.yml", "tasks-sanitizers"),
     (".github/workflows/sanitizers.yml", "asan"),
     (".github/workflows/sanitizers.yml", "ubsan"),
 }
@@ -4150,6 +4156,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                                    "--test_env=ASAN_OPTIONS=detect_leaks=0", *filters],
             "ubsan-lane": ["--config=ubsan", "--test_output=errors", *filters],
             "asan-geode-pr": ["--config=asan", "--config=geode", "--test_output=errors"],
+            "tsan-lane": ["--config=tsan", "--test_output=errors", *filters],
         }
         for lane, flags in expected.items():
             self.assertEqual(_lane_config_flags(lane), flags, lane)
@@ -4166,6 +4173,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         pull_request = _read(".github/workflows/sanitizers-pr.yml")
         self.assertIn("run: bazelisk test --config=asan-geode-pr //tools/ci:asan_geode_pr\n",
                       pull_request)
+        tasks = _jobs(pull_request)["tasks-sanitizers"]
+        for lane in ("asan-lane", "tsan-lane"):
+            self.assertIn("run: bazelisk test --config=%s -- //donner/base/tasks/..." % lane, tasks)
 
     def _assert_rejected(self, check, cases):
         """Each weakened file must differ from the checked-in one and fail `check` for its reason.

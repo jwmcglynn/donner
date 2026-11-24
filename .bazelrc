@@ -546,6 +546,13 @@ test:ubsan-corpus-geode --build_tag_filters=fuzz_ubsan_geode
 test:asan-geode-pr --config=asan
 test:asan-geode-pr --config=geode
 test:asan-geode-pr --test_output=errors
+# The pull-request TSan lane for //donner/base/tasks/..., beside its asan-lane run, with the same
+# test selection as the lanes above.
+test:tsan-lane --config=tsan
+test:tsan-lane --test_output=errors
+test:tsan-lane --build_tests_only
+test:tsan-lane --test_tag_filters=-fuzz_target,-ci-remote-gpu
+test:tsan-lane --build_tag_filters=-fuzz_target,-ci-remote-gpu
 
 # Thread sanitizer builds
 build:tsan --config=latest_llvm

@@ -194,9 +194,11 @@ Facts that matter when reading reports (all set in `.bazelrc`):
   Sanitizer findings and fuzzer findings are the same bug class caught by different harnesses.
 
 CI: `sanitizers.yml` runs `--config=asan` and `--config=ubsan` over `//donner/...` nightly (with
-a gatekeeper that skips idle days). `sanitizers-pr.yml` runs an informational, non-blocking
+a gatekeeper that skips idle days). `sanitizers-pr.yml` runs
 `--config=asan --config=geode //donner/svg/renderer/tests:resvg_test_suite_geode` on PRs touching
-Geode renderer paths (kept non-blocking per doc 0031 M1.2 while issue #552's fix is in flight).
+Geode renderer paths. Its `tasks-sanitizers` job runs `--config=asan-lane` and
+`--config=tsan-lane` over `//donner/base/tasks/...` on PRs touching that package; no other lane
+runs ThreadSanitizer.
 
 ## 7. Coverage
 

@@ -16,6 +16,7 @@ on:
       - "donner/svg/renderer/geode/**"
       - "donner/svg/renderer/RendererDriver.*"
       - "donner/svg/renderer/RendererGeode.*"
+      - "donner/base/tasks/**"
 
 # A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
 # Only opened, synchronize and reopened events share the per-PR group. Every other run (push,
@@ -128,3 +129,64 @@ jobs:
 
       - name: Test Geode with ASan
         run: bazelisk test --config=asan-geode-pr //tools/ci:asan_geode_pr
+
+  # The task scheduler under AddressSanitizer and ThreadSanitizer. Its races and lifetime faults
+  # are often visible only to a sanitizer, and the nightly Sanitizers workflow runs no
+  # ThreadSanitizer, so a pull request that touches the package runs both here.
+  tasks-sanitizers:
+    name: tasks-sanitizers
+    runs-on: ubuntu-26.04
+    needs: trust
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
+    # Budget: only the two test commands were measured (x86-64, 4 build jobs), not the hosted
+    # cache restore. Cold, they take about 6 minutes, nearly all of it fetching the LLVM toolchain
+    # and sysroot; with the external repositories present, each takes under 30 seconds. The
+    # package's tests need no system packages, so this job installs none.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The same external repositories the asan-geode job restores; see its comment.
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.2
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: |
+            name: ci-linux
+            manifest:
+              "emsdk++emscripten_deps+emscripten_bin_linux": false
+              "+_repo_rules3+playwright_chromium_headless_linux_x64": false
+              "+_repo_rules3+playwright_chromium_linux_x64": false
+              "rules_nodejs++node+nodejs_linux_amd64": false
+          cache-save: false
+
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.trust.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          download-outputs: minimal
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.trust.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          download-outputs: minimal
+
+      - name: Test the task scheduler with ASan
+        run: bazelisk test --config=asan-lane -- //donner/base/tasks/...
+
+      - name: Test the task scheduler with TSan
+        run: bazelisk test --config=tsan-lane -- //donner/base/tasks/...

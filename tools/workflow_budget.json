@@ -1,7 +1,7 @@
 {
   "tree": {
-    "lines": 5155,
-    "comment_lines": 536,
+    "lines": 5217,
+    "comment_lines": 546,
     "multiline_runs": 66,
     "longest_run": 194,
     "run_expressions": 12,
@@ -161,8 +161,8 @@
       "longest_if": 237
     },
     ".github/workflows/sanitizers-pr.yml": {
-      "lines": 130,
-      "comment_lines": 34,
+      "lines": 192,
+      "comment_lines": 44,
       "multiline_runs": 0,
       "longest_run": 0,
       "run_expressions": 0,
