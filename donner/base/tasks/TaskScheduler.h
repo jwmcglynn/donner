@@ -15,7 +15,9 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/Parker.h"
+#include "donner/base/tasks/ParkerPool.h"
 #include "donner/base/tasks/TaskRecord.h"
 #include "donner/base/tasks/WorkStealingDeque.h"
 
@@ -71,6 +73,12 @@ enum class SchedulerStep : std::uint8_t {
   AfterPublishPush,       //!< A publisher queued work, before it reads the awake count.
   BetweenWakeSwapAndParkerChange,  //!< A waker made its swap, before it changes the parker.
   AfterStopFlagSet,                //!< The destructor set the stop flag, before its wakes.
+  ScopeWaiterBeforePrepareWait,    //!< A scope's creator found tasks outstanding, before it sets
+                                   //!< its parker's waiting bit.
+  ScopeWaiterBeforeWait,  //!< A scope's creator set the waiting bit and its re-check found tasks
+                          //!< outstanding, before it waits.
+  ScopeFinisherAfterDecrement,  //!< A finisher's decrement brought its scope's count to zero,
+                                //!< before it changes the recorded parker.
 };
 
 /// Ostream output operator for \ref SchedulerStep, for test diagnostics.
@@ -89,13 +97,15 @@ public:
    * Called at \p step.
    *
    * @param step The protocol step.
-   * @param worker The worker the step concerns: the sleeper, the woken worker, or for
-   *   \ref SchedulerStep::AfterPublishPush and \ref SchedulerStep::AfterStopFlagSet, zero.
+   * @param worker The worker the step concerns: the sleeper, the woken worker or the finisher;
+   *   zero for \ref SchedulerStep::AfterPublishPush, \ref SchedulerStep::AfterStopFlagSet and the
+   *   steps of a scope's creator, which is not a worker.
    */
   virtual void at(SchedulerStep step, std::size_t worker) = 0;
 };
 
 class TaskSchedulerTestPeer;
+class TaskScope;
 
 /**
  * A work-stealing task scheduler.
@@ -115,6 +125,10 @@ class TaskSchedulerTestPeer;
  * sequentially consistent operations, so either the sleeper sees the work or the publisher sees no
  * worker awake: whenever a task is queued, at least one worker is awake.
  *
+ * Work reaches the scheduler through a \ref TaskScope, which counts its outstanding tasks: the
+ * thread that finishes a task decrements its scope's count and, on reaching zero, changes the
+ * parker the scope recorded, waking the scope's creator.
+ *
  * With zero workers every spawn runs inline on the spawning thread.
  */
 class TaskScheduler {
@@ -131,8 +145,9 @@ public:
   TaskScheduler& operator=(const TaskScheduler&) = delete;
   TaskScheduler& operator=(TaskScheduler&&) = delete;
 
-  /// Sets the stop flag, wakes and joins every worker. Fails a release assertion if any task is
-  /// still queued, or if the awake count disagrees with the workers' state words.
+  /// Sets the stop flag, wakes and joins every worker, then closes the parker pool. Fails a release
+  /// assertion if a \ref TaskScope is live, if any task is still queued, or if the awake count
+  /// disagrees with the workers' state words.
   ~TaskScheduler();
 
   /// The workers started: every one requested, since a thread that fails to start ends the
@@ -144,6 +159,13 @@ public:
 
 private:
   friend class TaskSchedulerTestPeer;
+  friend class TaskScope;
+
+  /// What a task's finisher touches: its scope's counter and the parker the scope recorded.
+  struct ScopeLink {
+    std::atomic<std::uint64_t>* counter;
+    Parker<>* parker;
+  };
 
   /**
    * Starts the workers, with a test seam called at each protocol step. Reached only through the
@@ -155,14 +177,14 @@ private:
   TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* testHooks);
 
   /// A worker's state: its deque, record pool and parker, its state word, and its thread.
-  struct alignas(128) Worker {
+  struct alignas(kFalseSharingBytes) Worker {
     Worker(std::size_t index, const TaskSchedulerOptions& options);
 
     const std::size_t index;
     WorkStealingDeque<TaskRecord*> deque;
     CreatorRecordPool<> pool;
     Parker<> parker;
-    alignas(128) std::atomic<WorkerState> state{WorkerState::Awake};
+    alignas(kFalseSharingBytes) std::atomic<WorkerState> state{WorkerState::Awake};
     std::thread thread;
 
     // Owner-only state.
@@ -175,10 +197,15 @@ private:
   /**
    * Spawns \p work as a task, or returns false and leaves \p work untouched: with zero workers,
    * when the spawning thread's record pool is at its bound, or when the spawning worker's deque is
-   * full.
+   * full. \p work is copied or moved into the record, as it was passed, only once the spawn cannot
+   * fail.
+   *
+   * @param work The task's closure.
+   * @param scope The scope the task counts in, or null for a task no scope accounts for (tests
+   *   only). Its count is incremented before the task is pushed, so the task's decrement follows.
    */
   template <typename F>
-  [[nodiscard]] bool trySpawn(F& work) {
+  [[nodiscard]] bool trySpawn(F&& work, const ScopeLink* scope = nullptr) {
     if (workers_.empty()) {
       return false;
     }
@@ -191,7 +218,7 @@ private:
         worker->pool.releaseFromCreator(record);
         return false;
       }
-      record->setClosure(std::move(work));
+      prepareRecord(record, std::forward<F>(work), scope);
       const bool pushed = worker->deque.push(record);
       UTILS_RELEASE_ASSERT_MSG(pushed, "A worker deque that was not full rejected a push");
       return true;
@@ -200,18 +227,34 @@ private:
     if (record == nullptr) {
       return false;
     }
-    record->setClosure(std::move(work));
+    prepareRecord(record, std::forward<F>(work), scope);
     publishToGlobalQueue(record);
     return true;
   }
 
   /// Spawns \p work as a task, or runs it inline on this thread when \ref trySpawn cannot.
   template <typename F>
-  void spawn(F&& work) {
-    if (!trySpawn(work)) {
-      work();
+  void spawn(F&& work, const ScopeLink* scope = nullptr) {
+    // A declined trySpawn leaves the closure untouched, so it is still there to run.
+    if (!trySpawn(std::forward<F>(work), scope)) {
+      work();  // NOLINT(bugprone-use-after-move): not moved when declined.
     }
   }
+
+  /// Stores \p work in \p record and links it to \p scope, counting it there.
+  template <typename F>
+  static void prepareRecord(TaskRecord* record, F&& work, const ScopeLink* scope) {
+    record->setClosure(std::forward<F>(work));
+    if (scope != nullptr) {
+      record->setScope(scope->counter, scope->parker);
+      // Relaxed: the push that publishes the task orders this before the task's decrement.
+      scope->counter->fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  /// Decrements \p counter for a finished task and, on reaching zero, changes \p parker.
+  void finishScopeTask(std::atomic<std::uint64_t>* counter, Parker<>* parker,
+                       std::size_t workerIndex);
 
   /// The calling thread's worker of this scheduler, or null.
   Worker* currentWorker() const;
@@ -278,16 +321,27 @@ private:
   const TaskSchedulerOptions options_;
   SchedulerTestHooks* const testHooks_;
 
+  /// Unique for the life of the process, so a thread's parker entry is never confused with that of
+  /// a destroyed scheduler at the same address.
+  const std::uint64_t generation_;
+
+  /// Parkers for non-worker scope creators; closed after the workers are joined.
+  const std::shared_ptr<ParkerPool> parkerPool_;
+
+  /// Live \ref TaskScope objects. Relaxed: the destructor's check needs only the happens-before
+  /// that a correct program already has between a scope's destruction and the scheduler's.
+  std::atomic<std::size_t> liveScopes_{0};
+
   /// Protects the global queue's list and the external record pool. On its own cache line, away
   /// from the read-mostly options and hooks pointer, as the deque separates its indices.
-  alignas(128) std::mutex globalMutex_;
+  alignas(kFalseSharingBytes) std::mutex globalMutex_;
   TaskRecord* globalHead_ = nullptr;
   TaskRecord* globalTail_ = nullptr;
   ExternalRecordPool externalPool_;
 
-  alignas(128) std::atomic<std::int64_t> globalQueued_{0};
-  alignas(128) std::atomic<std::int64_t> awake_{0};
-  alignas(128) std::atomic<bool> stop_{false};
+  alignas(kFalseSharingBytes) std::atomic<std::int64_t> globalQueued_{0};
+  alignas(kFalseSharingBytes) std::atomic<std::int64_t> awake_{0};
+  alignas(kFalseSharingBytes) std::atomic<bool> stop_{false};
 
   std::vector<std::unique_ptr<Worker>> workers_;
 };

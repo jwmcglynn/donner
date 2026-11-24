@@ -44,6 +44,9 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
     case SchedulerStep::BetweenWakeSwapAndParkerChange:
       return os << "BetweenWakeSwapAndParkerChange";
     case SchedulerStep::AfterStopFlagSet: return os << "AfterStopFlagSet";
+    case SchedulerStep::ScopeWaiterBeforePrepareWait: return os << "ScopeWaiterBeforePrepareWait";
+    case SchedulerStep::ScopeWaiterBeforeWait: return os << "ScopeWaiterBeforeWait";
+    case SchedulerStep::ScopeFinisherAfterDecrement: return os << "ScopeFinisherAfterDecrement";
   }
   UTILS_UNREACHABLE();
 }
@@ -59,7 +62,18 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options) : TaskScheduler(optio
 TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* testHooks)
     : options_(options),
       testHooks_(testHooks),
+      generation_(ParkerPool::NextGeneration()),
+      parkerPool_(std::make_shared<ParkerPool>()),
       externalPool_(globalMutex_, options.maxExternalTasks) {
+  // A scope's count is at most the live-record bound, workers times records per worker plus the
+  // external records; keep it clear of the counter's top bits.
+  constexpr std::uint64_t kCountLimit = std::uint64_t{1} << 62;
+  const std::uint64_t external = options_.maxExternalTasks;
+  bool boundFits = external < kCountLimit;
+  if (boundFits && options_.workerCount != 0) {
+    boundFits = options_.maxTasksPerCreator <= (kCountLimit - 1 - external) / options_.workerCount;
+  }
+  UTILS_RELEASE_ASSERT_MSG(boundFits, "A task scheduler's live-record bound must be below 2^62");
   workers_.reserve(options_.workerCount);
   for (std::size_t i = 0; i < options_.workerCount; ++i) {
     workers_.push_back(std::make_unique<Worker>(i, options_));
@@ -73,6 +87,8 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
 }
 
 TaskScheduler::~TaskScheduler() {
+  UTILS_RELEASE_ASSERT_MSG(liveScopes_.load(std::memory_order_relaxed) == 0,
+                           "A task scheduler was destroyed with a live TaskScope");
   // Sequentially consistent: half of the shutdown pairing with each sleeper's state store and its
   // re-check of this flag.
   stop_.exchange(true, std::memory_order_seq_cst);
@@ -97,6 +113,9 @@ TaskScheduler::~TaskScheduler() {
   UTILS_RELEASE_ASSERT_MSG(
       globalHead_ == nullptr && globalQueued_.load(std::memory_order_relaxed) == 0,
       "A task scheduler was destroyed with queued tasks");
+
+  // Every worker is joined and no scope is live, so none of the pool's slots will be used again.
+  parkerPool_->close();
 }
 
 TaskScheduler::Worker* TaskScheduler::currentWorker() const {
@@ -199,6 +218,10 @@ TaskRecord* TaskScheduler::findTask(Worker& worker) {
 }
 
 void TaskScheduler::runTask(Worker& worker, TaskRecord* record) {
+  // Read before the record is returned: the record may be reused at once.
+  std::atomic<std::uint64_t>* const counter = record->scopeCounter();
+  Parker<>* const parker = record->parker();
+  // Runs the closure and destroys it.
   record->run();
   if (record->pool() == &worker.pool) {
     worker.pool.releaseFromCreator(record);
@@ -209,6 +232,25 @@ void TaskScheduler::runTask(Worker& worker, TaskRecord* record) {
     // Every other record belongs to another worker of this scheduler.
     static_cast<CreatorRecordPool<>*>(const_cast<void*>(record->pool()))
         ->returnFromOtherThread(record);
+  }
+  // Last, so that a creator that sees its scope complete finds the task's closure destroyed and
+  // its record returned.
+  if (counter != nullptr) {
+    finishScopeTask(counter, parker, worker.index);
+  }
+}
+
+void TaskScheduler::finishScopeTask(std::atomic<std::uint64_t>* counter, Parker<>* parker,
+                                    std::size_t workerIndex) {
+  // Acquire-release: the release half publishes the task's results to the creator; all the
+  // decrements form one release sequence. This is the task's last access to the scope, which its
+  // creator may destroy as soon as it reads zero.
+  const std::uint64_t before = counter->fetch_sub(1, std::memory_order_acq_rel);
+  UTILS_RELEASE_ASSERT_MSG(before != 0, "A scope's task count went below zero");
+  if (before == 1) {
+    hook(SchedulerStep::ScopeFinisherAfterDecrement, workerIndex);
+    // The parker is the scheduler's (in its pool), not the scope's, so it outlives the scope.
+    parker->unpark();
   }
 }
 
