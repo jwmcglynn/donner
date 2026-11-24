@@ -8,6 +8,7 @@
 
 using testing::AllOf;
 using testing::ElementsAre;
+using testing::HasSubstr;
 
 namespace donner::svg::parser {
 
@@ -97,6 +98,13 @@ TEST(Number2dParser, ParseErrors) {
     ParseResult<Number2dParser::Result> result = Number2dParser::Parse("1,2");
     EXPECT_THAT(result, ParseErrorIs("Failed to parse number: Unexpected character"));
   }
+}
+
+/// Numbers too large for a double are an error, not infinity.
+TEST(Number2dParser, RejectsOutOfRange) {
+  EXPECT_THAT(Number2dParser::Parse("1e400"), ParseErrorIs(HasSubstr("Out of range")));
+  EXPECT_THAT(Number2dParser::Parse("1 -1e400"), ParseErrorIs(HasSubstr("Out of range")));
+  EXPECT_THAT(Number2dParser::Parse("1e308 1e308"), NoParseError());
 }
 
 }  // namespace donner::svg::parser

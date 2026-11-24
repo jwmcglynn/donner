@@ -417,4 +417,22 @@ TEST(TransformParser, ToSVGTransformStringGeneralMatrixRoundTrip) {
   }
 }
 
+/**
+ * Each number is in range, but composing the functions overflows. The parser reports an error
+ * rather than returning a transform with infinite or NaN components.
+ */
+TEST(TransformParser, RejectsTransformsThatOverflow) {
+  EXPECT_THAT(TransformParser::Parse("scale(1e308) scale(10)"),
+              testing::AllOf(ParseErrorIs("Transform out of range"), ParseErrorPos(0, 13)));
+  EXPECT_THAT(TransformParser::Parse("scale(1e200) scale(1e200) scale(0)"),
+              ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(TransformParser::Parse("translate(1e308) translate(1e308)"),
+              ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(TransformParser::Parse("matrix(1e308 0 0 1 0 0) matrix(10 0 0 1 0 0)"),
+              ParseErrorIs("Transform out of range"));
+
+  // Large values that stay finite still parse.
+  EXPECT_THAT(TransformParser::Parse("translate(1e308) scale(0.5)"), NoParseError());
+}
+
 }  // namespace donner::svg::parser

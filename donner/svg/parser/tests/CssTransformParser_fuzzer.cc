@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <string_view>
 
 #include "donner/css/parser/ValueParser.h"
@@ -15,7 +16,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::vector<css::ComponentValue> components = css::parser::ValueParser::Parse(input);
 
   auto result = CssTransformParser::Parse(components);
-  (void)result;
+  // A successfully parsed transform must be finite.
+  if (result.hasResult() && !result.result().isFinite()) {
+    std::abort();
+  }
 
   return 0;
 }

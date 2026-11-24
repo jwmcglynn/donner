@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cmath>
 #include <variant>
 #include <vector>
 
@@ -105,6 +106,28 @@ public:
    * @param y Y offset.
    */
   void appendTranslate(Lengthd x, Lengthd y) { elements_.emplace_back(Translate{x, y}); }
+
+  /**
+   * Returns true if every component of the stored transform chain is finite. Parsers use this to
+   * reject transforms whose values overflowed, so infinite or NaN values never reach layout.
+   */
+  bool isFinite() const {
+    for (const auto& element : elements_) {
+      if (const auto* simple = std::get_if<Simple>(&element)) {
+        for (double value : simple->transform.data) {
+          if (!std::isfinite(value)) {
+            return false;
+          }
+        }
+      } else if (const auto* translate = std::get_if<Translate>(&element)) {
+        if (!std::isfinite(translate->x.value) || !std::isfinite(translate->y.value)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
 
 private:
   std::vector<Element> elements_;

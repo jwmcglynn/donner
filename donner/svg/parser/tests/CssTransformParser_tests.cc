@@ -619,4 +619,22 @@ TEST(TransformParserCss, CompositeCaseSensitivity) {
       << "Function names are case-insensitive";
 }
 
+/**
+ * CSS number tokens can be infinite (`1e400`), and composing finite functions can overflow. Both
+ * are reported as errors rather than producing a transform with infinite or NaN components.
+ */
+TEST(TransformParserCss, RejectsTransformsThatOverflow) {
+  EXPECT_THAT(parseAsCss("scale(1e400)"), ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(parseAsCss("matrix(1e400, 0, 0, 1, 0, 0)"), ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(parseAsCss("translate(1e400px)"), ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(parseAsCss("translateY(-1e400px)"), ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(parseAsCss("rotate(1e400deg)"), ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(parseAsCss("scale(1e200) scale(1e200)"), ParseErrorIs("Transform out of range"));
+  EXPECT_THAT(parseAsCss("scale(1e200) scale(1e200) scale(0)"),
+              ParseErrorIs("Transform out of range"));
+
+  // Large values that stay finite still parse.
+  EXPECT_THAT(parseAsCss("scale(1e200) scale(1e-200)"), NoParseError());
+}
+
 }  // namespace donner::svg::parser

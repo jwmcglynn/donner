@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <tuple>
 
 #include "donner/base/tests/BaseTestUtils.h"
@@ -887,6 +888,37 @@ TEST(PathParser, CommandListCapsScalarStorageBeforeAppending) {
   ASSERT_THAT(result.hasResult(), testing::IsTrue());
   EXPECT_EQ(result.result().commands.size(), curves + 1);
   EXPECT_EQ(result.result().parameters.size(), curves * 6 + 2);
+}
+
+/**
+ * Relative coordinates accumulate onto the current point, so a path whose numbers are each in
+ * range can still overflow. The parser rejects the overflowing command and keeps the path parsed
+ * before it.
+ */
+TEST(PathParser, RejectsCoordinatesThatOverflow) {
+  for (const char* source :
+       {"M1e308 0 l1e308 0", "M1e308 0 h1e308", "M0 1e308 v1e308", "M1e308 0 a1 1 0 0 0 1e308 0",
+        "m1e308 0 z m1e308 0", "M1e308 0 c0 0 0 0 1e308 0", "M1e308 0 q0 0 1e308 0"}) {
+    SCOPED_TRACE(source);
+    ParseResult<Path> result = PathParser::Parse(source);
+    EXPECT_THAT(result, ParseErrorIs("Path coordinate out of range"));
+    ASSERT_TRUE(result.hasResult());
+    ASSERT_FALSE(result.result().points().empty());
+    for (const Vector2d& point : result.result().points()) {
+      EXPECT_TRUE(std::isfinite(point.x) && std::isfinite(point.y)) << point;
+    }
+  }
+
+  // A reflected control point can overflow even when the command's own coordinates do not.
+  EXPECT_THAT(PathParser::Parse("M0 0 C0 0 -1e308 -1e308 1e308 1e308 S1 1 2 2"),
+              ParseResultAndError(PointsAndCommandsAre(
+                                      ElementsAre(Vector2d(0, 0), Vector2d(0, 0),
+                                                  Vector2d(-1e308, -1e308), Vector2d(1e308, 1e308)),
+                                      ElementsAre(Command{CommandType::MoveTo, 0},
+                                                  Command{CommandType::CurveTo, 1})),
+                                  ParseErrorIs("Path coordinate out of range")));
+  EXPECT_THAT(PathParser::Parse("M0 0 Q-1e308 -1e308 1e308 1e308 T2 2"),
+              ParseErrorIs("Path coordinate out of range"));
 }
 
 }  // namespace donner::svg::parser
