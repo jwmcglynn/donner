@@ -1653,6 +1653,7 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
   cancelToken_.emplace(token);
   surfaceBudgetExhaustedThisFrame_ = false;
   tileAllocatedThisFrame_ = false;
+  bytesBeforeFirstTile_.reset();
   mainFrameComposedThisFrame_ = false;
   flatFrameDrawnThisFrame_ = false;
   warmFirstFrameCaches(lastViewport_, lastSurfaceFromCanvas_);
@@ -1856,6 +1857,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   }
   surfaceBudgetExhaustedThisFrame_ = false;
   tileAllocatedThisFrame_ = false;
+  bytesBeforeFirstTile_.reset();
   mainFrameComposedThisFrame_ = false;
   flatFrameDrawnThisFrame_ = false;
   composedStyleWorkIncomplete_ = false;

@@ -1378,6 +1378,14 @@ private:
   /// budget rejections at `canvasSize`, or the frame's budget has already latched a rejection.
   bool skipRasterizeUnderBudget(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
                                 const Vector2i& canvasSize);
+  /// Records that the frame attempts a tile and returns the surface bytes reserved before it.
+  std::uint64_t noteTileAttempt();
+  /// True when the tile drawn into `offscreen` and refused by the budget could not fit even with
+  /// no other tile in the frame: it was the frame's first tile, or what it reserved since
+  /// `slotStartBytes` plus the refused reservation exceeds the limit less what the frame reserved
+  /// before its first tile.
+  [[nodiscard]] bool refusedTileCannotFitAlone(std::uint64_t slotStartBytes,
+                                               const RendererInterface& offscreen) const;
   /// Discards the offscreen whose payload snapshot failed for `layer` and, on a budget
   /// rejection of a tile that was the first tile the frame allocated (`failedAlone`), records the
   /// strike on the layer's plan (switching to direct compose on the second strike at the same
@@ -1840,6 +1848,9 @@ private:
   /// Whether a tile payload was allocated in the current frame. A budget rejection before any is
   /// the tile's own: it does not fit beside the frame target even with no other tile.
   bool tileAllocatedThisFrame_ = false;
+  /// Surface bytes the frame had reserved when it attempted its first tile: its target, when the
+  /// frame drew flat first, and nothing otherwise. Unset until the frame attempts a tile.
+  std::optional<std::uint64_t> bytesBeforeFirstTile_;
   /// Whether this frame's compose ran and allocated its frame target.
   bool mainFrameComposedThisFrame_ = false;
   /// Whether the main frame holds a flat draw of the whole document from this frame that no

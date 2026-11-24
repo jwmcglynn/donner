@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -171,13 +172,17 @@ public:
     peakBytes_ = 0;
     surfaces_ = 0;
     rejected_ = false;
+    refusedRequestBytes_ = 0;
   }
 
   /// Reserves matching surfaces; invalid dimensions or exhausted capacity latch rejection.
   [[nodiscard]] bool reserve(int width, int height, std::size_t surfaceCount = 1,
                              std::uint64_t bytesPerPixel = 4) {
-    if (rejected_ || width < 0 || height < 0 || bytesPerPixel == 0 ||
-        surfaces_ > limits_.surfaces || surfaceCount > limits_.surfaces - surfaces_) {
+    if (rejected_) {
+      return false;
+    }
+    if (width < 0 || height < 0 || bytesPerPixel == 0 || surfaces_ > limits_.surfaces ||
+        surfaceCount > limits_.surfaces - surfaces_) {
       rejected_ = true;
       return false;
     }
@@ -191,11 +196,13 @@ public:
         pixelWidth * pixelHeight > limits_.bytes / bytesPerPixel ||
         pixelWidth * pixelHeight * bytesPerPixel > limits_.bytes / surfaceCount) {
       rejected_ = true;
+      refusedRequestBytes_ = std::numeric_limits<std::uint64_t>::max();
       return false;
     }
     const std::uint64_t byteCount = pixelWidth * pixelHeight * bytesPerPixel * surfaceCount;
     if (bytes_ > limits_.bytes || byteCount > limits_.bytes - bytes_) {
       rejected_ = true;
+      refusedRequestBytes_ = byteCount;
       return false;
     }
 
@@ -252,6 +259,11 @@ public:
   [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
   /// Whether a reservation or release has failed in this frame.
   [[nodiscard]] bool rejected() const { return rejected_; }
+  /// Bytes the reservation that latched this frame's refusal asked for (saturated when the request
+  /// alone overflows the limit), or zero when no byte limit refused it.
+  [[nodiscard]] std::uint64_t refusedRequestBytes() const { return refusedRequestBytes_; }
+  /// The aggregate byte limit.
+  [[nodiscard]] std::uint64_t limitBytes() const { return limits_.bytes; }
 
   /// Tightens limits for a test without raising an existing limit.
   void setLimitsForTesting(Limits limits) {
@@ -269,6 +281,7 @@ public:
 
 private:
   Limits limits_;
+  std::uint64_t refusedRequestBytes_ = 0;
   std::uint64_t bytes_ = 0;
   std::uint64_t peakBytes_ = 0;
   std::size_t surfaces_ = 0;
@@ -811,6 +824,11 @@ struct RendererResourceStats {
   std::uint64_t surfaceBytes = 0;
   /// Most surface bytes reserved at once during the frame.
   std::uint64_t surfacePeakBytes = 0;
+  /// Bytes the surface reservation that was refused this frame asked for; see
+  /// \ref RendererSurfaceBudget::refusedRequestBytes.
+  std::uint64_t surfaceRefusedRequestBytes = 0;
+  /// The per-frame surface byte limit.
+  std::uint64_t surfaceLimitBytes = 0;
   bool surfaceBudgetRejected = false;
   bool drawBudgetSupported = false;
   std::size_t drawCalls = 0;

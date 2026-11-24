@@ -486,6 +486,32 @@ void CompositorController::recycleOffscreen(std::unique_ptr<RendererInterface> o
   pooledOffscreen_ = std::move(offscreen);
 }
 
+std::uint64_t CompositorController::noteTileAttempt() {
+  const std::uint64_t reserved = renderer().resourceStats().surfaceBytes;
+  if (!bytesBeforeFirstTile_.has_value()) {
+    bytesBeforeFirstTile_ = reserved;
+  }
+  return reserved;
+}
+
+bool CompositorController::refusedTileCannotFitAlone(std::uint64_t slotStartBytes,
+                                                     const RendererInterface& offscreen) const {
+  if (!tileAllocatedThisFrame_) {
+    return true;
+  }
+  // What the tile reserved before the refusal, plus the reservation that was refused, is the least
+  // the tile needs. A frame gives it at most the limit less what the frame reserved before its
+  // first tile (its target, in a frame that drew flat first), whatever other tiles take.
+  const RendererResourceStats stats = offscreen.resourceStats();
+  const std::uint64_t reservedByTile =
+      stats.surfaceBytes > slotStartBytes ? stats.surfaceBytes - slotStartBytes : 0;
+  const std::uint64_t unavoidable = bytesBeforeFirstTile_.value_or(0);
+  const std::uint64_t available =
+      stats.surfaceLimitBytes > unavoidable ? stats.surfaceLimitBytes - unavoidable : 0;
+  return stats.surfaceRefusedRequestBytes > available ||
+         reservedByTile > available - stats.surfaceRefusedRequestBytes;
+}
+
 bool CompositorController::discardFailedOffscreen(std::unique_ptr<RendererInterface> offscreen) {
   const bool budgetRejected = offscreen->resourceStats().surfaceBudgetRejected;
   ++lastRenderFrameStats_.textureAllocationFailureCount;
@@ -612,7 +638,7 @@ bool CompositorController::rasterizeSegmentSlot(
     Entity lastEntity, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
     const StaticSpanPlan& previousPlan, const StaticSpanPlan& freshPlan,
     const Vector2i& canvasSize) {
-  const bool firstTileOfFrame = !tileAllocatedThisFrame_;
+  const std::uint64_t slotStartBytes = noteTileAttempt();
   {
     RendererDriver driver(*offscreen, false, nullptr, styleWork_);
     if (!driver.drawEntityRangeInterruptibly(document().registry(), firstEntity, lastEntity,
@@ -623,8 +649,9 @@ bool CompositorController::rasterizeSegmentSlot(
   }
   if (!SetSegmentPayloadFromOffscreen(staticSegments_[slotIndex], staticSegmentTextures_[slotIndex],
                                       *offscreen)) {
+    const bool failedAlone = refusedTileCannotFitAlone(slotStartBytes, *offscreen);
     recordSegmentAllocationFailure(slotIndex, previousPlan, freshPlan, canvasSize,
-                                   std::move(offscreen), firstTileOfFrame);
+                                   std::move(offscreen), failedAlone);
     return false;
   }
   tileAllocatedThisFrame_ = true;
@@ -708,7 +735,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
          presentationCost.redrawCost <= presentationCost.cacheOverheadCost);
   }
 
-  const bool firstTileOfFrame = !tileAllocatedThisFrame_;
+  const std::uint64_t slotStartBytes = noteTileAttempt();
   auto offscreen = acquireOffscreen();
   // The offscreen-support probe in `renderFrameImpl` / `warmFirstFrameCaches`
   // latches off before any rasterize runs when creation fails, so a null here
@@ -733,8 +760,9 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                                                      .surfaceFromCanvas = surfaceFromCanvas,
                                                      .styleWorkIncomplete = styleWork_->rejected()};
   if (!SetLayerPayloadFromOffscreen(layer, *offscreen, surfaceFromEntity, payloadRaster)) {
+    const bool failedAlone = refusedTileCannotFitAlone(slotStartBytes, *offscreen);
     recordLayerAllocationFailure(layer, previousImmediatePlan, immediatePlan, canvasSize,
-                                 std::move(offscreen), firstTileOfFrame);
+                                 std::move(offscreen), failedAlone);
     layer.markDirty();
     return;
   }

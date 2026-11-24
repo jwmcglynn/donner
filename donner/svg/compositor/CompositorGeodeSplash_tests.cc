@@ -636,6 +636,48 @@ TEST(CompositorGeodeBudgetTest, SpanRefusedBehindAnotherSpanIsRetriedNotPresente
   EXPECT_TRUE(complete) << "each span fits on its own, so the tile set must complete";
 }
 
+// A span whose tile cannot fit the budget even alone is struck although another tile allocated
+// before it in the same frame. Editing a small span ahead of it keeps that span dirty, so it takes
+// the first allocation of every frame; the canvas-sized span after it needs more than the whole
+// budget of three quarters of a surface. It must be struck in the first two frames that refuse it
+// and then drawn directly, with no further refusals, rather than drawn and refused in every frame.
+TEST(CompositorGeodeBudgetTest, SpanTooLargeForTheBudgetIsStruckBehindAnEditedSpan) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+        <rect id="small" width="20" height="20" fill="white"/>
+        <g opacity="0.5"><rect x="400" y="90" width="20" height="20" fill="red"/></g>
+        <rect width="200" height="200" fill="blue"/>
+      </svg>)svg";
+  SVGDocument document;
+  ASSERT_NO_FATAL_FAILURE(ParseBudgetDocument(kSource, document));
+  auto small = document.querySelector("#small");
+  ASSERT_THAT(small, ::testing::Optional(::testing::_));
+  RendererGeode renderer;
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/256, kBudgetCanvasBytes * 3 / 4);
+  CompositorConfig config = BudgetTestConfig();
+  config.immediateStaticSpans = false;
+  CompositorController compositor(document, renderer, config);
+  const RenderViewport viewport{Vector2d(200, 200)};
+  const auto canvasSpanDrawnDirectly = [&] {
+    return std::ranges::any_of(
+        compositor.snapshotStaticSpanPlansForTesting(),
+        [](const CompositorController::StaticSpanPlan& plan) { return plan.budgetImmediate; });
+  };
+
+  for (int frame = 0; frame < 10; ++frame) {
+    SCOPED_TRACE(frame);
+    small->setAttribute("fill", frame % 2 == 0 ? "#fefefe" : "white");
+    compositor.renderFrame(viewport);
+    if (frame >= 2) {
+      EXPECT_TRUE(canvasSpanDrawnDirectly()) << "struck in the first two frames that refused it";
+    }
+    if (frame >= 3) {
+      EXPECT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureCount, ::testing::Eq(0))
+          << "a span drawn directly is not drawn into a tile again";
+    }
+  }
+}
+
 TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRelease) {
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("geode_splash.svg");

@@ -9351,6 +9351,8 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .surfaceCount = impl_->surfaceBudget->surfaces(),
       .surfaceBytes = impl_->surfaceBudget->bytes(),
       .surfacePeakBytes = impl_->surfaceBudget->peakBytes(),
+      .surfaceRefusedRequestBytes = impl_->surfaceBudget->refusedRequestBytes(),
+      .surfaceLimitBytes = impl_->surfaceBudget->limitBytes(),
       .surfaceBudgetRejected = impl_->surfaceBudget->rejected(),
       .gradientStops = impl_->drawBudget->gradientStops(),
       .drawBudgetRejected = impl_->drawBudget->rejected(),
