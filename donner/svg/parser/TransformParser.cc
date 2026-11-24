@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include "donner/base/parser/details/ParserBase.h"
 
@@ -155,32 +156,48 @@ public:
         return err;
       }
 
-      if (!IsFiniteTransform(transform)) {
-        ParseDiagnostic err;
-        err.reason = "Transform out of range";
-        err.range = rangeFrom(functionStart.offset.value());
-        return err;
+      if (auto error = finishFunction(transform, functionStart)) {
+        return std::move(error.value());
       }
-
-      // Whitespace before closing ')'
-      skipWhitespace();
-
-      if (remaining_.starts_with(')')) {
-        remaining_.remove_prefix(1);
-        skipWhitespace();
-        allowComma = true;
-      } else {
-        ParseDiagnostic err;
-        err.reason = "Expected ')'";
-        err.range = currentRange(0, 1);
-        return err;
-      }
+      allowComma = true;
     }
 
     return transform;
   }
 
 private:
+  /**
+   * Finishes a transform function: checks that the transform composed so far is finite, then
+   * consumes the ')' that ends the function, with the whitespace around it.
+   *
+   * @param transform Transform composed up to and including this function.
+   * @param functionStart Offset of the start of this function, for the error range.
+   * @return An error if the transform is not finite or the next character is not ')'.
+   */
+  std::optional<ParseDiagnostic> finishFunction(const Transform2d& transform,
+                                                const FileOffset& functionStart) {
+    if (!IsFiniteTransform(transform)) {
+      ParseDiagnostic err;
+      err.reason = "Transform out of range";
+      err.range = rangeFrom(functionStart.offset.value());
+      return err;
+    }
+
+    // Whitespace before closing ')'
+    skipWhitespace();
+
+    if (!remaining_.starts_with(')')) {
+      ParseDiagnostic err;
+      err.reason = "Expected ')'";
+      err.range = currentRange(0, 1);
+      return err;
+    }
+
+    remaining_.remove_prefix(1);
+    skipWhitespace();
+    return std::nullopt;
+  }
+
   ParseResult<std::string_view> readFunction() {
     for (size_t i = 0; i < remaining_.size(); ++i) {
       if (remaining_[i] == '(') {
