@@ -8889,7 +8889,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       retireOwnedTargetAtFrameBoundary();
       return false;
     }
-    device->setCounters(&counters);
+    device->activateCounters(counters);
     if (hostTarget.isValid()) {
       return prepareHostFrameTarget();
     }
@@ -9008,8 +9008,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
     if (device) {
       device->drainDeferredDestroys();
+      waitForQueueIdleAtTeardown();
+      device->removeCounters(counters);
     }
-    waitForQueueIdleAtTeardown();
   }
 
   /// Wire up per-renderer state against the shared GeodeDevice. Before
@@ -9025,7 +9026,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     texturePoolDestroyListener = texturePool->addDestroyListener(
         [this](const gpu::ResourceIdentity& texture) { releaseRetainedViewsOf(texture); });
     textureFormat = device->textureFormat();
-    device->setCounters(&counters);
+    device->activateCounters(counters);
     pipeline = &device->pipeline();
     gradientPipeline = &device->gradientPipeline();
     imagePipeline = &device->imagePipeline();
@@ -9221,36 +9222,9 @@ void RendererGeode::setAntialias(bool antialias) {
   impl_->antialias = antialias;
 }
 
-RendererGeode::~RendererGeode() {
-  // GeodeDevice holds a raw `counters_` pointer into our Impl (see `Impl::initPipelines` →
-  // `device->setCounters(&counters)`). If this renderer's counters are still the ones the
-  // (shared) device refers to, clear the pointer before our Impl (and its `counters` member) is
-  // freed. Otherwise the next `countBuffer`/`countTexture` call by any peer renderer sharing this
-  // device will dereference freed memory - which is exactly how chained feImage rendering
-  // crashes: multiple offscreen renderers share one device, each one overrides `counters_` in
-  // `initPipelines`, and the first one destroyed leaves `counters_` dangling for the others.
-  if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
-    impl_->device->setCounters(nullptr);
-  }
-}
+RendererGeode::~RendererGeode() = default;
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
-RendererGeode& RendererGeode::operator=(RendererGeode&& other) noexcept {
-  if (this == &other) {
-    return *this;
-  }
-
-  // `unique_ptr` move-assignment destroys our current Impl without invoking
-  // `RendererGeode::~RendererGeode()`. Detach its counter sink first so a
-  // shared device cannot retain a pointer into the displaced Impl. The moved
-  // Impl itself stays at the same address, so a binding to `other` remains
-  // valid after ownership transfers to `this`.
-  if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
-    impl_->device->setCounters(nullptr);
-  }
-
-  impl_ = std::move(other.impl_);
-  return *this;
-}
+RendererGeode& RendererGeode::operator=(RendererGeode&&) noexcept = default;
 
 void RendererGeode::draw(SVGDocument& document) {
   drawDocument(document, nullptr);

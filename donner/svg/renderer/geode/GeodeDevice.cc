@@ -120,6 +120,7 @@ struct GeodeDevice::Impl {
   /// resources below can be destroyed through it. Null only before construction finishes.
   gpu::Device* runtimeDevice = nullptr;
   uint64_t runtimeDeviceId = 0;
+  std::vector<GeodeCounters*> suspendedCounters;
   std::mutex textureBackingRetirementMutex;
   std::vector<gpu::Texture> textureBackingsAwaitingRetirement;
   struct FencedTextureBacking {
@@ -276,6 +277,38 @@ GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
     if (pending || pollRequested) {
       owner->wakeIdleOwner();
     }
+  }
+}
+
+void GeodeDevice::setCounters(GeodeCounters* counters) {
+  impl_->suspendedCounters.clear();
+  counters_ = counters;
+}
+
+void GeodeDevice::activateCounters(GeodeCounters& counters) {
+  if (counters_ == &counters) {
+    return;
+  }
+
+  auto& suspended = impl_->suspendedCounters;
+  std::erase(suspended, &counters);
+  if (counters_ != nullptr) {
+    suspended.push_back(counters_);
+  }
+  counters_ = &counters;
+}
+
+void GeodeDevice::removeCounters(GeodeCounters& counters) {
+  auto& suspended = impl_->suspendedCounters;
+  if (counters_ != &counters) {
+    std::erase(suspended, &counters);
+    return;
+  }
+
+  counters_ = nullptr;
+  if (!suspended.empty()) {
+    counters_ = suspended.back();
+    suspended.pop_back();
   }
 }
 
