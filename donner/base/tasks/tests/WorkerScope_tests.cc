@@ -735,24 +735,28 @@ TEST(WorkerInterleavingTest, ZeroCountRecheckPublishesResultBeforeFinisherWakesC
   bool sawSleep = false;
   auto scheduler =
       Peer::Make(TaskSchedulerOptions{.workerCount = 2, .idleSpinRounds = kNeverSleepIdle}, &hooks);
-  Peer::Spawn(*scheduler, [&] {
-    {
-      TaskScope scope(*scheduler);
-      scope.spawn([&] {
-        stolen.set();
-        sawSleep = PollUntil([&] { return hooks.mayFinish.load(std::memory_order_relaxed); });
-        result = 41;
-      });
-      sawSteal = stolen.wait();
-      scope.wait();
-      observed = result;
-      hooks.beforeWake.release();
-    }
-    joined.set();
-  });
+  bool completed;
+  {
+    TaskScope roots(*scheduler);
+    roots.spawn([&] {
+      {
+        TaskScope scope(*scheduler);
+        scope.spawn([&] {
+          stolen.set();
+          sawSleep = PollUntil([&] { return hooks.mayFinish.load(std::memory_order_relaxed); });
+          result = 41;
+        });
+        sawSteal = stolen.wait();
+        scope.wait();
+        observed = result;
+        hooks.beforeWake.release();
+      }
+      joined.set();
+    });
 
-  const bool completed = joined.wait();
-  hooks.beforeWake.release();
+    completed = joined.wait();
+    hooks.beforeWake.release();
+  }
   scheduler.reset();
   EXPECT_TRUE(completed);
   EXPECT_TRUE(sawSteal);
