@@ -1363,8 +1363,10 @@ testing::Matcher<const PropertyRegistry&> SelectorStyledLike(const PropertyRegis
 
 TEST_F(RenderingContextTest, ShadowTreeSelectorsMatchWithinTheirOwnTree) {
   // Inside a `<use>` shadow tree, structural pseudo-classes, sibling combinators and `:has()`
-  // match among the cloned elements as they do among the elements they clone. The clone of the
-  // referenced element is the root of its tree, so the host's own children are not its siblings.
+  // match among the cloned elements as they do among the elements they clone, except the instance
+  // root, the clone of the referenced element, which is the only element of its tree: the host's
+  // own children are not its siblings. Here the referenced `<g>` is also an only child, so its
+  // clone matches as it does.
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
       <style>

@@ -5,6 +5,7 @@
 
 #include <limits>
 #include <map>
+#include <tuple>
 
 #include "donner/base/RcString.h"
 #include "donner/base/element/tests/FakeElement.h"
@@ -146,6 +147,40 @@ TEST_F(SelectorTests, HasSiblingTraversalSharesTheWorkBudget) {
   EXPECT_FALSE(parsed.result().matches(a, options).matched);
   EXPECT_TRUE(budget.rejected());
   EXPECT_EQ(budget.steps(), 1u);
+}
+
+TEST_F(SelectorTests, NthChildChargesTheElementAndEachPrecedingSiblingTwice) {
+  // Derived before running: one step for the compound, one for the element, then for each
+  // sibling walked one navigation step and one visit, and one navigation step that ends the walk,
+  // so the element at position p costs 2p + 1 steps.
+  FakeElement parent("parent");
+  FakeElement first("a");
+  FakeElement second("a");
+  FakeElement third("a");
+  parent.appendChild(first);
+  parent.appendChild(second);
+  parent.appendChild(third);
+  const auto run = [&](std::string_view selector, std::size_t limit) {
+    auto parsed = SelectorParser::Parse(selector);
+    EXPECT_THAT(parsed, NoParseError());
+    SelectorTraversalBudget budget(limit);
+    SelectorMatchOptions<FakeElement> options;
+    options.traversalBudget = &budget;
+    const bool matched = parsed.result().matches(third, options).matched;
+    return std::make_tuple(matched, budget.steps(), budget.rejected());
+  };
+
+  EXPECT_EQ(run(":nth-child(3)", 100), std::make_tuple(true, std::size_t{7}, false));
+  EXPECT_EQ(run(":nth-child(1)", 100), std::make_tuple(false, std::size_t{7}, false));
+  EXPECT_EQ(run(":nth-of-type(3)", 100), std::make_tuple(true, std::size_t{7}, false));
+  // From the end the third child is first: the compound, the element and the walk's end.
+  EXPECT_EQ(run(":nth-last-child(1)", 100), std::make_tuple(true, std::size_t{3}, false));
+  // Six steps are one short: the walk stops and the match is rejected, not counted as a match.
+  EXPECT_EQ(std::get<0>(run(":nth-child(3)", 6)), false);
+  EXPECT_EQ(std::get<2>(run(":nth-child(3)", 6)), true);
+  // An element outside the `of S` filter is not walked: the compound, the element, and the
+  // filter's own compound.
+  EXPECT_EQ(run(":nth-child(1 of .x)", 100), std::make_tuple(false, std::size_t{3}, false));
 }
 
 TEST_F(SelectorTests, ClassAndIncludesUseCssWhitespace) {

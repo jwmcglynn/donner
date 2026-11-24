@@ -192,14 +192,18 @@ private:
   /**
    * The 1-based position of \p element among its siblings that match \p matchingType, counted
    * from the first sibling, or from the last with \p fromEnd; -1 when \p element does not match
-   * \p matchingType or the traversal budget runs out.
+   * \p matchingType.
    *
    * Counted through the element's own sibling walks, the same walks `:first-child` and
-   * `:last-child` use, so every structural pseudo-class agrees on an element's place: an element
-   * the tree adapter gives no siblings, such as the root of a `<use>` shadow tree, is index 1 of 1,
-   * and an element whose adapter hides some siblings, such as an attached shadow root among its
-   * host's children, never counts them. Each candidate costs one traversal step, the element
-   * itself included.
+   * `:last-child` use, so the structural pseudo-classes agree on the place of an element whose
+   * parent's child walks would not reach it: an element the tree adapter gives no siblings, such as
+   * a `<use>` instance root, is index 1 of 1, and an element whose adapter hides some siblings,
+   * such as an attached shadow root among its host's children, never counts them.
+   *
+   * Charges the element, then each sibling twice (the walk and the visit), and the walk's last
+   * step, so the element at position p costs 2p steps here (2p + 1 with its compound's own step),
+   * as the parent-order walk did. If the budget runs out the walk stops early and the partial index
+   * is discarded with the rejected match.
    */
   template <ElementLike T, details::OptionalSelectorLike<T> SelectorType>
   static int getIndexAmongSiblings(const T& element, bool fromEnd, const SelectorType& matchingType,
