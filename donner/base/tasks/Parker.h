@@ -4,19 +4,54 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 #include "donner/base/Utils.h"
 
 namespace donner::tasks {
 
 /**
- * Test seam for a \ref Parker: the platform wait and notify, and a hook at each step of
- * \ref Parker::parkUntil. Production code uses this policy, whose wait and notify are
- * `std::atomic::wait` and `std::atomic::notify_one` and whose hooks compile to nothing.
- * Deterministic tests pass a policy that models the platform wait queue, counts notifications, or
- * holds the sleeper inside a hook.
+ * The parker word's type: exactly the type the standard library's `std::atomic::wait` waits on
+ * natively, so a parker never goes through the library's shared contention table, whose buckets
+ * unrelated addresses share. It is the one place the word type is chosen.
+ *
+ * - libc++ (Linux, Apple): `__atomic/atomic_sync.h` waits and notifies on the address itself only
+ *   when the value type is the library's contention type `__cxx_contention_t`
+ *   (`__atomic/contention_t.h`), as decided by `__has_native_atomic_wait`
+ *   (`__atomic/atomic_waitable_traits.h`) or, in the older interface Apple's SDK uses, by the
+ *   overloads on `__cxx_atomic_contention_t`. With the ABI version these builds use, that type is
+ *   `int32_t` on Linux and `int64_t` on Apple, and it must match exactly: an unsigned word of the
+ *   same width, or `long` on Apple, takes the table.
+ * - libstdc++ (Linux): `bits/atomic_wait.h` waits on the futex for every 4-byte scalar
+ *   (`__platform_wait_uses_type`), so `std::int32_t` is native there too.
+ * - Emscripten's libc++ has no platform wait: its `src/atomic.cpp` polls with a timed backoff and
+ *   its notify does nothing, whatever the type. The word stays a signed 32-bit integer there, the
+ *   width of `emscripten_futex_wait`, for a direct futex wait.
+ * - Windows is not built; which types its standard library waits on natively is not verified.
  */
-struct NoParkerHooks {
+#if defined(__APPLE__)
+using NativeParkerWord = std::int64_t;
+#else
+using NativeParkerWord = std::int32_t;
+#endif
+
+static_assert(std::atomic<NativeParkerWord>::is_always_lock_free,
+              "The parker word must be a lock-free atomic");
+
+/**
+ * The platform policy of a \ref Parker over \p WordT: `std::atomic::wait` and
+ * `std::atomic::notify_one`, and a hook at each step of \ref Parker::parkUntil that compiles to
+ * nothing. Production code uses \ref NoParkerHooks; tests instantiate other word types, and pass
+ * policies that model the platform wait queue, count notifications, or hold the sleeper inside a
+ * hook.
+ *
+ * @tparam WordT The parker word's type, a signed integer.
+ */
+template <typename WordT>
+struct PlatformParkerHooks {
+  /// The parker word's type.
+  using Word = WordT;
+
   /**
    * Blocks while \p word holds \p token.
    *
@@ -24,14 +59,13 @@ struct NoParkerHooks {
    * @param token The value to wait on.
    * @param order Ordering of the loads that compare the word with \p token.
    */
-  static void Wait(const std::atomic<std::uint32_t>& word, std::uint32_t token,
-                   std::memory_order order) {
+  static void Wait(const std::atomic<Word>& word, Word token, std::memory_order order) {
     word.wait(token, order);
   }
 
   /// Wakes the thread blocked on \p word, if there is one. This is the call that may enter the
   /// kernel.
-  static void NotifyOne(std::atomic<std::uint32_t>& word) { word.notify_one(); }
+  static void NotifyOne(std::atomic<Word>& word) { word.notify_one(); }
 
   /// Called by \ref Parker::parkUntil after its condition was false, before it sets the waiting
   /// bit.
@@ -48,13 +82,17 @@ struct NoParkerHooks {
   static void BetweenChangeAndNotify() {}
 };
 
+/// The production policy: the platform wait on \ref NativeParkerWord.
+using NoParkerHooks = PlatformParkerHooks<NativeParkerWord>;
+
 /**
- * A parker: one 32-bit atomic word holding a waiting bit and a 31-bit epoch, that one thread, its
- * sleeper, waits on and any thread changes to wake it. 32 bits is the width of the Linux futex and
- * of WebAssembly `Atomics.wait`.
+ * A parker: one atomic word holding a waiting bit and an epoch, that one thread, its sleeper,
+ * waits on and any thread changes to wake it. The word is \ref NativeParkerWord, 64 bits on Apple
+ * platforms and 32 bits elsewhere.
  *
- * The waiting bit is bit 0 and the epoch is bits 1 to 31, so a change adds 2 and wraps without
- * touching the bit. Only the sleeper sets and clears the bit. A sleeper:
+ * The waiting bit is bit 0 and the epoch is the remaining bits, so a change adds 2 and wraps
+ * (atomic arithmetic on a signed integer wraps in two's complement) without touching the bit. Only
+ * the sleeper sets and clears the bit. A sleeper:
  *
  * 1. calls \ref prepareWait, which sets the waiting bit with a sequentially consistent
  *    read-modify-write and returns the token, the old word with the waiting bit set;
@@ -68,7 +106,8 @@ struct NoParkerHooks {
  * `prepareWait` is read by it, with everything the waker wrote before the change, so the re-check
  * in step 2 sees the condition; a change ordered after it returns a word with the bit set, so the
  * waker notifies. A notify is therefore never skipped for a thread that will wait. The sleeper
- * misses a change only if exactly 2^31 changes land between its `prepareWait` and its wait.
+ * misses a change only if a multiple of 2^(bits - 1) changes land between its `prepareWait` and
+ * its wait: 2^31 for a 32-bit word, 2^63 for a 64-bit one.
  *
  * \ref parkUntil runs those steps in a loop. A wake that is not for the condition being waited
  * for is a spurious wake: the sleeper re-checks and waits again.
@@ -76,13 +115,20 @@ struct NoParkerHooks {
  * The parker must outlive every \ref unpark call in progress, because `unpark` notifies after its
  * change, when the sleeper may already have returned.
  *
- * @tparam Hooks Test seam, see \ref NoParkerHooks.
+ * @tparam Hooks Platform policy and test seam, see \ref PlatformParkerHooks; it names the word
+ *   type.
  */
 template <typename Hooks = NoParkerHooks>
 class Parker {
 public:
   /// The parker word.
-  using Word = std::uint32_t;
+  using Word = typename Hooks::Word;
+
+  /// The word's bits read as unsigned, as epochs are.
+  using UnsignedWord = std::make_unsigned_t<Word>;
+
+  static_assert(std::is_integral_v<Word> && std::is_signed_v<Word>,
+                "The parker word is a signed integer, as the native wait types are");
 
   /// The bit the sleeper sets before it waits.
   static constexpr Word kWaitingBit = 1;
@@ -178,7 +224,7 @@ public:
   }
 
   /// The epoch of a parker word.
-  static constexpr Word EpochOf(Word word) { return word >> 1; }
+  static constexpr UnsignedWord EpochOf(Word word) { return static_cast<UnsignedWord>(word) >> 1; }
 
   /// A snapshot of the word, for tests and diagnostics. Relaxed: it orders nothing.
   [[nodiscard]] Word word() const { return word_.load(std::memory_order_relaxed); }
@@ -186,8 +232,5 @@ public:
 private:
   std::atomic<Word> word_{0};
 };
-
-static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
-              "The parker word must be a lock-free 32-bit atomic");
 
 }  // namespace donner::tasks

@@ -24,11 +24,9 @@ namespace {
 
 using testing::Eq;
 
-using Word = std::uint32_t;
-
 /// What a parker word holds, decoded for test diagnostics.
 struct DecodedWord {
-  Word epoch = 0;
+  std::uint64_t epoch = 0;
   bool waiting = false;
 
   friend bool operator==(const DecodedWord&, const DecodedWord&) = default;
@@ -38,12 +36,28 @@ struct DecodedWord {
   }
 };
 
+template <typename Word>
 DecodedWord Decode(Word word) {
-  return DecodedWord{Parker<>::EpochOf(word), (word & Parker<>::kWaitingBit) != 0};
+  using UnsignedWord = std::make_unsigned_t<Word>;
+  return DecodedWord{static_cast<UnsignedWord>(word) >> 1, (word & 1) != 0};
 }
 
+/// The word types every parker test runs at: the 32-bit and the 64-bit native wait types, so both
+/// are compiled and tested on every platform whichever one \ref NativeParkerWord names.
+using WordTypes = testing::Types<std::int32_t, std::int64_t>;
+
+class WordTypeNames {
+public:
+  template <typename T>
+  static std::string GetName(int /*index*/) {
+    return std::is_same_v<T, std::int32_t> ? "Word32" : "Word64";
+  }
+};
+
 /// Hooks that count the platform calls and pass them through.
+template <typename WordT>
 struct CountingHooks {
+  using Word = WordT;
   static inline std::atomic<int> notifies{0};
   static inline std::atomic<int> waits{0};
 
@@ -68,32 +82,45 @@ struct CountingHooks {
 
 // Single-thread model tests: every operation and boundary of one parker.
 
+template <typename WordT>
 class ParkerModelTest : public testing::Test {
 protected:
-  void SetUp() override { CountingHooks::Reset(); }
+  using Word = WordT;
+  using UnsignedWord = std::make_unsigned_t<Word>;
+  using Hooks = CountingHooks<Word>;
+  using ParkerT = Parker<Hooks>;
+
+  static constexpr int kBits = static_cast<int>(sizeof(Word) * 8);
+
+  /// The word whose unsigned bits are \p bits.
+  static Word FromBits(UnsignedWord bits) { return static_cast<Word>(bits); }
+
+  void SetUp() override { Hooks::Reset(); }
 };
 
-TEST_F(ParkerModelTest, NewParkerHasEpochZeroAndNoWaitingBit) {
-  Parker<CountingHooks> parker;
+TYPED_TEST_SUITE(ParkerModelTest, WordTypes, WordTypeNames);
+
+TYPED_TEST(ParkerModelTest, NewParkerHasEpochZeroAndNoWaitingBit) {
+  typename TestFixture::ParkerT parker;
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{0, false}));
 }
 
-TEST_F(ParkerModelTest, UnparkWithNoWaiterAdvancesTheEpochAndNeverNotifies) {
-  Parker<CountingHooks> parker;
+TYPED_TEST(ParkerModelTest, UnparkWithNoWaiterAdvancesTheEpochAndNeverNotifies) {
+  typename TestFixture::ParkerT parker;
   for (int i = 0; i < 1000; ++i) {
     EXPECT_FALSE(parker.unpark()) << "unpark " << i << " found the waiting bit set";
   }
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{1000, false}));
-  EXPECT_THAT(CountingHooks::notifies.load(), Eq(0))
+  EXPECT_THAT(TestFixture::Hooks::notifies.load(), Eq(0))
       << "a change with no waiting bit must not take the notify path";
 }
 
-TEST_F(ParkerModelTest, PrepareWaitReturnsTheOldWordWithTheWaitingBit) {
-  Parker<CountingHooks> parker;
+TYPED_TEST(ParkerModelTest, PrepareWaitReturnsTheOldWordWithTheWaitingBit) {
+  typename TestFixture::ParkerT parker;
   parker.unpark();
   parker.unpark();
 
-  const Word token = parker.prepareWait();
+  const typename TestFixture::Word token = parker.prepareWait();
   EXPECT_THAT(Decode(token), Eq(DecodedWord{2, true}));
   EXPECT_THAT(parker.word(), Eq(token));
 
@@ -101,12 +128,12 @@ TEST_F(ParkerModelTest, PrepareWaitReturnsTheOldWordWithTheWaitingBit) {
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{2, false}));
 }
 
-TEST_F(ParkerModelTest, UnparkWithTheWaitingBitSetNotifiesOnceAndKeepsTheBit) {
-  Parker<CountingHooks> parker;
-  const Word token = parker.prepareWait();
+TYPED_TEST(ParkerModelTest, UnparkWithTheWaitingBitSetNotifiesOnceAndKeepsTheBit) {
+  typename TestFixture::ParkerT parker;
+  const typename TestFixture::Word token = parker.prepareWait();
 
   EXPECT_TRUE(parker.unpark());
-  EXPECT_THAT(CountingHooks::notifies.load(), Eq(1));
+  EXPECT_THAT(TestFixture::Hooks::notifies.load(), Eq(1));
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{1, true}));
 
   // The change landed after prepareWait, so the wait returns at once.
@@ -115,42 +142,80 @@ TEST_F(ParkerModelTest, UnparkWithTheWaitingBitSetNotifiesOnceAndKeepsTheBit) {
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{1, false}));
 
   EXPECT_FALSE(parker.unpark()) << "the cleared bit must stop further notifies";
-  EXPECT_THAT(CountingHooks::notifies.load(), Eq(1));
+  EXPECT_THAT(TestFixture::Hooks::notifies.load(), Eq(1));
 }
 
-TEST_F(ParkerModelTest, EpochWrapsWithoutTouchingTheWaitingBit) {
-  Parker<CountingHooks> clear(0xFFFFFFFEu);
-  EXPECT_THAT(Decode(clear.word()), Eq(DecodedWord{0x7FFFFFFFu, false}));
+// The word is signed, so the epoch's top bit is the sign bit: crossing it makes the word negative,
+// and the epoch read from it must still be the next unsigned value, with the waiting bit kept.
+TYPED_TEST(ParkerModelTest, EpochCrossesTheSignBitWithoutTouchingTheWaitingBit) {
+  using UnsignedWord = typename TestFixture::UnsignedWord;
+  const UnsignedWord signBit = UnsignedWord{1} << (TestFixture::kBits - 1);
+  const std::uint64_t epochAtSignBit = std::uint64_t{1} << (TestFixture::kBits - 2);
+
+  typename TestFixture::ParkerT clear(TestFixture::FromBits(signBit - 2));
+  EXPECT_THAT(Decode(clear.word()), Eq(DecodedWord{epochAtSignBit - 1, false}));
+  EXPECT_FALSE(clear.unpark());
+  EXPECT_THAT(clear.word(), Eq(TestFixture::FromBits(signBit)));
+  EXPECT_THAT(clear.word(), testing::Lt(0)) << "the change must carry into the sign bit";
+  EXPECT_THAT(Decode(clear.word()), Eq(DecodedWord{epochAtSignBit, false}));
+  EXPECT_THAT(TestFixture::ParkerT::EpochOf(clear.word()), Eq(epochAtSignBit));
+
+  typename TestFixture::ParkerT waiting(TestFixture::FromBits(signBit - 2));
+  const typename TestFixture::Word token = waiting.prepareWait();
+  EXPECT_TRUE(waiting.unpark());
+  EXPECT_THAT(TestFixture::Hooks::notifies.load(), Eq(1));
+  EXPECT_THAT(Decode(waiting.word()), Eq(DecodedWord{epochAtSignBit, true}));
+  waiting.wait(token);
+  waiting.finishWait();
+  EXPECT_THAT(Decode(waiting.word()), Eq(DecodedWord{epochAtSignBit, false}));
+}
+
+// At the top epoch a change wraps the whole word back to epoch zero, keeping the waiting bit.
+TYPED_TEST(ParkerModelTest, EpochWrapsWithoutTouchingTheWaitingBit) {
+  using UnsignedWord = typename TestFixture::UnsignedWord;
+  const UnsignedWord allOnes = ~UnsignedWord{0};
+  const std::uint64_t topEpoch = allOnes >> 1;
+
+  typename TestFixture::ParkerT clear(TestFixture::FromBits(allOnes - 1));
+  EXPECT_THAT(Decode(clear.word()), Eq(DecodedWord{topEpoch, false}));
   EXPECT_FALSE(clear.unpark());
   EXPECT_THAT(Decode(clear.word()), Eq(DecodedWord{0, false}));
 
-  Parker<CountingHooks> waiting(0xFFFFFFFFu);
+  typename TestFixture::ParkerT waiting(TestFixture::FromBits(allOnes - 1));
+  const typename TestFixture::Word token = waiting.prepareWait();
+  EXPECT_THAT(Decode(token), Eq(DecodedWord{topEpoch, true}));
   EXPECT_TRUE(waiting.unpark());
   EXPECT_THAT(Decode(waiting.word()), Eq(DecodedWord{0, true}));
+  waiting.wait(token);
   waiting.finishWait();
   EXPECT_THAT(Decode(waiting.word()), Eq(DecodedWord{0, false}));
 }
 
-TEST_F(ParkerModelTest, ParkUntilATrueConditionNeitherSetsTheBitNorWaits) {
-  Parker<CountingHooks> parker;
+TYPED_TEST(ParkerModelTest, ParkUntilATrueConditionNeitherSetsTheBitNorWaits) {
+  typename TestFixture::ParkerT parker;
   parker.parkUntil([] { return true; });
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{0, false}));
-  EXPECT_THAT(CountingHooks::waits.load(), Eq(0));
+  EXPECT_THAT(TestFixture::Hooks::waits.load(), Eq(0));
 }
 
-TEST_F(ParkerModelTest, ParkUntilAConditionTrueOnTheRecheckClearsTheBitWithoutWaiting) {
-  Parker<CountingHooks> parker;
+TYPED_TEST(ParkerModelTest, ParkUntilAConditionTrueOnTheRecheckClearsTheBitWithoutWaiting) {
+  typename TestFixture::ParkerT parker;
   int checks = 0;
   parker.parkUntil([&] { return ++checks > 1; });
   EXPECT_THAT(checks, Eq(2));
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{0, false}));
-  EXPECT_THAT(CountingHooks::waits.load(), Eq(0));
+  EXPECT_THAT(TestFixture::Hooks::waits.load(), Eq(0));
 }
 
-TEST(ParkerDeathTest, ASecondPrepareWaitWithoutFinishWaitFailsAReleaseAssertion) {
+template <typename WordT>
+class ParkerDeathTest : public testing::Test {};
+
+TYPED_TEST_SUITE(ParkerDeathTest, WordTypes, WordTypeNames);
+
+TYPED_TEST(ParkerDeathTest, ASecondPrepareWaitWithoutFinishWaitFailsAReleaseAssertion) {
   EXPECT_DEATH(
       {
-        Parker<> parker;
+        Parker<PlatformParkerHooks<TypeParam>> parker;
         (void)parker.prepareWait();
         (void)parker.prepareWait();
       },
@@ -217,6 +282,7 @@ struct FutexRecord {
 /// A model of the kernel wait queue for one parker word.
 class ModelWaitQueue {
 public:
+  template <typename Word>
   void wait(const std::atomic<Word>& word, Word token, std::memory_order order) {
     std::unique_lock lock(mutex_);
     while (word.load(order) == token) {
@@ -271,7 +337,9 @@ private:
 };
 
 /// Hooks that use the model wait queue and hold the sleeper at a chosen step.
+template <typename WordT>
 struct ModelHooks {
+  using Word = WordT;
   enum class Hold { None, BeforePrepareWait, AfterPrepareWait, BeforeWait, BetweenChangeAndNotify };
 
   static inline ModelWaitQueue* queue = nullptr;
@@ -319,17 +387,20 @@ private:
   std::vector<std::thread*> threads_;
 };
 
+template <typename WordT>
 class ParkerInterleavingTest : public testing::Test {
 protected:
+  using Hooks = ModelHooks<WordT>;
+
   void SetUp() override {
-    ModelHooks::queue = &queue_;
-    ModelHooks::gate = &gate_;
+    Hooks::queue = &queue_;
+    Hooks::gate = &gate_;
   }
 
   void TearDown() override {
-    ModelHooks::hold = ModelHooks::Hold::None;
-    ModelHooks::queue = nullptr;
-    ModelHooks::gate = nullptr;
+    Hooks::hold = Hooks::Hold::None;
+    Hooks::queue = nullptr;
+    Hooks::gate = nullptr;
   }
 
   /// The waker's side: make the condition true, then change the parker.
@@ -345,118 +416,120 @@ protected:
 
   ModelWaitQueue queue_;
   Gate gate_;
-  Parker<ModelHooks> parker_;
+  Parker<Hooks> parker_;
   std::atomic<bool> ready_{false};
   std::thread sleeper_;
 };
 
+TYPED_TEST_SUITE(ParkerInterleavingTest, WordTypes, WordTypeNames);
+
 // The waker finishes before the sleeper sets its waiting bit: no notify, and the sleeper's
 // re-check after setting the bit sees the condition, so it never waits.
-TEST_F(ParkerInterleavingTest, AWakeBeforeTheWaitingBitIsSeenByTheRecheck) {
-  ReleaseAndJoin joinOnExit(gate_, {&sleeper_});
-  ModelHooks::hold = ModelHooks::Hold::BeforePrepareWait;
-  startSleeper();
-  ASSERT_TRUE(gate_.waitForArrival());
+TYPED_TEST(ParkerInterleavingTest, AWakeBeforeTheWaitingBitIsSeenByTheRecheck) {
+  ReleaseAndJoin joinOnExit(this->gate_, {&this->sleeper_});
+  TestFixture::Hooks::hold = TestFixture::Hooks::Hold::BeforePrepareWait;
+  this->startSleeper();
+  ASSERT_TRUE(this->gate_.waitForArrival());
 
-  EXPECT_FALSE(wake()) << "the waiting bit is not set yet, so the waker must not notify";
+  EXPECT_FALSE(this->wake()) << "the waiting bit is not set yet, so the waker must not notify";
 
-  gate_.release();
-  sleeper_.join();
-  EXPECT_THAT(queue_.record(), Eq(FutexRecord{0, 0, false}))
+  this->gate_.release();
+  this->sleeper_.join();
+  EXPECT_THAT(this->queue_.record(), Eq(FutexRecord{0, 0, false}))
       << "the re-check must see the condition, so the sleeper never blocks";
-  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, false}));
-  EXPECT_FALSE(gate_.heldPastHangGuard());
+  EXPECT_THAT(Decode(this->parker_.word()), Eq(DecodedWord{1, false}));
+  EXPECT_FALSE(this->gate_.heldPastHangGuard());
 }
 
 // The waker runs between the sleeper's waiting bit and its re-check: the waker notifies, and the
 // re-check sees the condition.
-TEST_F(ParkerInterleavingTest, AWakeBetweenTheWaitingBitAndTheRecheckNotifies) {
-  ReleaseAndJoin joinOnExit(gate_, {&sleeper_});
-  ModelHooks::hold = ModelHooks::Hold::AfterPrepareWait;
-  startSleeper();
-  ASSERT_TRUE(gate_.waitForArrival());
+TYPED_TEST(ParkerInterleavingTest, AWakeBetweenTheWaitingBitAndTheRecheckNotifies) {
+  ReleaseAndJoin joinOnExit(this->gate_, {&this->sleeper_});
+  TestFixture::Hooks::hold = TestFixture::Hooks::Hold::AfterPrepareWait;
+  this->startSleeper();
+  ASSERT_TRUE(this->gate_.waitForArrival());
 
-  EXPECT_TRUE(wake()) << "the waiting bit is set, so the waker must notify";
+  EXPECT_TRUE(this->wake()) << "the waiting bit is set, so the waker must notify";
 
-  gate_.release();
-  sleeper_.join();
-  EXPECT_THAT(queue_.record(), Eq(FutexRecord{0, 1, false}));
-  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, false}));
-  EXPECT_FALSE(gate_.heldPastHangGuard());
+  this->gate_.release();
+  this->sleeper_.join();
+  EXPECT_THAT(this->queue_.record(), Eq(FutexRecord{0, 1, false}));
+  EXPECT_THAT(Decode(this->parker_.word()), Eq(DecodedWord{1, false}));
+  EXPECT_FALSE(this->gate_.heldPastHangGuard());
 }
 
 // The waker runs after the sleeper's re-check failed and before it waits: the waker notifies, and
 // the wait returns at once because the word no longer equals the token.
-TEST_F(ParkerInterleavingTest, AWakeBetweenTheRecheckAndTheWaitEndsTheWaitAtOnce) {
-  ReleaseAndJoin joinOnExit(gate_, {&sleeper_});
-  ModelHooks::hold = ModelHooks::Hold::BeforeWait;
-  startSleeper();
-  ASSERT_TRUE(gate_.waitForArrival());
+TYPED_TEST(ParkerInterleavingTest, AWakeBetweenTheRecheckAndTheWaitEndsTheWaitAtOnce) {
+  ReleaseAndJoin joinOnExit(this->gate_, {&this->sleeper_});
+  TestFixture::Hooks::hold = TestFixture::Hooks::Hold::BeforeWait;
+  this->startSleeper();
+  ASSERT_TRUE(this->gate_.waitForArrival());
 
-  EXPECT_TRUE(wake());
+  EXPECT_TRUE(this->wake());
 
-  gate_.release();
-  sleeper_.join();
-  EXPECT_THAT(queue_.record(), Eq(FutexRecord{0, 1, false}))
+  this->gate_.release();
+  this->sleeper_.join();
+  EXPECT_THAT(this->queue_.record(), Eq(FutexRecord{0, 1, false}))
       << "the changed word must end the wait without blocking";
-  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, false}));
-  EXPECT_FALSE(gate_.heldPastHangGuard());
+  EXPECT_THAT(Decode(this->parker_.word()), Eq(DecodedWord{1, false}));
+  EXPECT_FALSE(this->gate_.heldPastHangGuard());
 }
 
 // The waker runs after the sleeper blocked: only the notify can wake it.
-TEST_F(ParkerInterleavingTest, AWakeAfterTheSleeperBlockedNotifiesIt) {
-  ReleaseAndJoin joinOnExit(gate_, {&sleeper_});
-  startSleeper();
-  ASSERT_TRUE(queue_.waitUntilBlocked());
+TYPED_TEST(ParkerInterleavingTest, AWakeAfterTheSleeperBlockedNotifiesIt) {
+  ReleaseAndJoin joinOnExit(this->gate_, {&this->sleeper_});
+  this->startSleeper();
+  ASSERT_TRUE(this->queue_.waitUntilBlocked());
 
-  EXPECT_TRUE(wake());
+  EXPECT_TRUE(this->wake());
 
-  sleeper_.join();
-  EXPECT_THAT(queue_.record(), Eq(FutexRecord{1, 1, false}))
+  this->sleeper_.join();
+  EXPECT_THAT(this->queue_.record(), Eq(FutexRecord{1, 1, false}))
       << "the blocked sleeper must be notified, not left asleep";
-  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, false}));
+  EXPECT_THAT(Decode(this->parker_.word()), Eq(DecodedWord{1, false}));
 }
 
 // The waker is held after its change and before its notify while the sleeper is blocked: the change
 // alone must not wake the sleeper, and the notify that follows must.
-TEST_F(ParkerInterleavingTest, AWakeHeldBetweenItsChangeAndItsNotifyStillWakesTheSleeper) {
+TYPED_TEST(ParkerInterleavingTest, AWakeHeldBetweenItsChangeAndItsNotifyStillWakesTheSleeper) {
   bool notified = false;
   std::thread waker;
-  ReleaseAndJoin joinOnExit(gate_, {&sleeper_, &waker});
-  startSleeper();
-  ASSERT_TRUE(queue_.waitUntilBlocked());
+  ReleaseAndJoin joinOnExit(this->gate_, {&this->sleeper_, &waker});
+  this->startSleeper();
+  ASSERT_TRUE(this->queue_.waitUntilBlocked());
 
-  ModelHooks::hold = ModelHooks::Hold::BetweenChangeAndNotify;
-  waker = std::thread([&] { notified = wake(); });
-  ASSERT_TRUE(gate_.waitForArrival());
-  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, true}))
+  TestFixture::Hooks::hold = TestFixture::Hooks::Hold::BetweenChangeAndNotify;
+  waker = std::thread([&] { notified = this->wake(); });
+  ASSERT_TRUE(this->gate_.waitForArrival());
+  EXPECT_THAT(Decode(this->parker_.word()), Eq(DecodedWord{1, true}))
       << "the change must land before the notify";
-  EXPECT_THAT(queue_.record(), Eq(FutexRecord{1, 0, false}))
+  EXPECT_THAT(this->queue_.record(), Eq(FutexRecord{1, 0, false}))
       << "nothing may notify the sleeper before the change, and the change alone must not wake it";
 
-  gate_.release();
+  this->gate_.release();
   waker.join();
-  sleeper_.join();
+  this->sleeper_.join();
   EXPECT_TRUE(notified);
-  EXPECT_THAT(queue_.record(), Eq(FutexRecord{1, 1, false}));
-  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, false}));
-  EXPECT_FALSE(gate_.heldPastHangGuard());
+  EXPECT_THAT(this->queue_.record(), Eq(FutexRecord{1, 1, false}));
+  EXPECT_THAT(Decode(this->parker_.word()), Eq(DecodedWord{1, false}));
+  EXPECT_FALSE(this->gate_.heldPastHangGuard());
 }
 
 // A change while the condition is still false wakes the sleeper, which re-checks and blocks again.
-TEST_F(ParkerInterleavingTest, AChangeWithoutTheConditionIsASpuriousWake) {
-  ReleaseAndJoin joinOnExit(gate_, {&sleeper_});
-  startSleeper();
-  ASSERT_TRUE(queue_.waitUntilBlocked());
+TYPED_TEST(ParkerInterleavingTest, AChangeWithoutTheConditionIsASpuriousWake) {
+  ReleaseAndJoin joinOnExit(this->gate_, {&this->sleeper_});
+  this->startSleeper();
+  ASSERT_TRUE(this->queue_.waitUntilBlocked());
 
-  EXPECT_TRUE(parker_.unpark());
+  EXPECT_TRUE(this->parker_.unpark());
   // The sleeper wakes, sets the bit again, and blocks on the new epoch.
-  ASSERT_TRUE(queue_.waitUntilBlockedTimes(2));
+  ASSERT_TRUE(this->queue_.waitUntilBlockedTimes(2));
 
-  EXPECT_TRUE(wake());
-  sleeper_.join();
-  EXPECT_THAT(queue_.record(), Eq(FutexRecord{2, 2, false}));
-  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{2, false}));
+  EXPECT_TRUE(this->wake());
+  this->sleeper_.join();
+  EXPECT_THAT(this->queue_.record(), Eq(FutexRecord{2, 2, false}));
+  EXPECT_THAT(Decode(this->parker_.word()), Eq(DecodedWord{2, false}));
 }
 
 // Multi-thread stress with the real platform wait. Each case runs with the hooks compiled out and
@@ -480,7 +553,9 @@ private:
 
 /// Real platform wait and notify, with a short random delay at each sleeper step: usually a yield,
 /// sometimes a few microseconds, so wakers land inside the window far more often.
+template <typename WordT>
 struct DelayedHooks {
+  using Word = WordT;
   static void Wait(const std::atomic<Word>& word, Word token, std::memory_order order) {
     word.wait(token, order);
   }
@@ -502,24 +577,30 @@ struct DelayedHooks {
   }
 };
 
+template <typename WordT>
 struct PlainHooksName {
-  using Hooks = NoParkerHooks;
+  using Hooks = PlatformParkerHooks<WordT>;
   static constexpr int kRounds = 20000;
+  static constexpr const char* kName = "NoHooks";
   static void Delay() {}
 };
+template <typename WordT>
 struct DelayedHooksName {
-  using Hooks = DelayedHooks;
+  using Hooks = DelayedHooks<WordT>;
   static constexpr int kRounds = 4000;
-  static void Delay() { DelayedHooks::Delay(); }
+  static constexpr const char* kName = "InjectedDelay";
+  static void Delay() { DelayedHooks<WordT>::Delay(); }
 };
 
-using HookForms = testing::Types<PlainHooksName, DelayedHooksName>;
+using HookForms = testing::Types<PlainHooksName<std::int32_t>, DelayedHooksName<std::int32_t>,
+                                 PlainHooksName<std::int64_t>, DelayedHooksName<std::int64_t>>;
 
 class HookFormNames {
 public:
   template <typename T>
   static std::string GetName(int /*index*/) {
-    return std::is_same_v<T, PlainHooksName> ? "NoHooks" : "InjectedDelay";
+    using Word = typename T::Hooks::Word;
+    return std::string(T::kName) + (std::is_same_v<Word, std::int32_t> ? "Word32" : "Word64");
   }
 };
 
@@ -602,6 +683,8 @@ template <typename NameT>
 class ParkerStressTest : public testing::Test {
 protected:
   using ParkerT = Parker<typename NameT::Hooks>;
+  using Word = typename ParkerT::Word;
+  using UnsignedWord = typename ParkerT::UnsignedWord;
   static constexpr int kRounds = NameT::kRounds;
 
   /**
@@ -609,7 +692,7 @@ protected:
    * `prepareWait` reads the change, or the wait's load does. Both acquire it, so the caller may
    * then read what the waker wrote with plain loads.
    */
-  static void AwaitChange(ParkerT& parker, Word seenEpoch) {
+  static void AwaitChange(ParkerT& parker, UnsignedWord seenEpoch) {
     NameT::Delay();
     const Word token = parker.prepareWait();
     NameT::Delay();
@@ -638,7 +721,7 @@ TYPED_TEST(ParkerStressTest, PingPongPublishesEveryPayloadThroughTheParkerWord) 
 
   std::thread responder([&] {
     for (int round = 0; round < kRounds; ++round) {
-      TestFixture::AwaitChange(toResponder, static_cast<Word>(round));
+      TestFixture::AwaitChange(toResponder, static_cast<typename TestFixture::UnsignedWord>(round));
       if (breaker.stalled()) {
         return;
       }
@@ -653,7 +736,7 @@ TYPED_TEST(ParkerStressTest, PingPongPublishesEveryPayloadThroughTheParkerWord) 
   for (int round = 0; round < kRounds; ++round) {
     request = PayloadFor(round);
     toResponder.unpark();
-    TestFixture::AwaitChange(toInitiator, static_cast<Word>(round));
+    TestFixture::AwaitChange(toInitiator, static_cast<typename TestFixture::UnsignedWord>(round));
     if (breaker.stalled()) {
       break;
     }
@@ -668,8 +751,10 @@ TYPED_TEST(ParkerStressTest, PingPongPublishesEveryPayloadThroughTheParkerWord) 
   defects.stalled = breaker.stalled();
 
   EXPECT_THAT(defects, Eq(PingPongDefects{0, 0, kRounds, false}));
-  EXPECT_THAT(Decode(toResponder.word()), Eq(DecodedWord{static_cast<Word>(kRounds), false}));
-  EXPECT_THAT(Decode(toInitiator.word()), Eq(DecodedWord{static_cast<Word>(kRounds), false}));
+  EXPECT_THAT(Decode(toResponder.word()),
+              Eq(DecodedWord{static_cast<std::uint64_t>(kRounds), false}));
+  EXPECT_THAT(Decode(toInitiator.word()),
+              Eq(DecodedWord{static_cast<std::uint64_t>(kRounds), false}));
 }
 
 // The scheduler's pattern: each side sleeps with parkUntil on a turn counter it reads with acquire
@@ -739,7 +824,8 @@ TYPED_TEST(ParkerStressTest, ConcurrentWakersLoseNoChange) {
   breaker.finish();
 
   ASSERT_FALSE(breaker.stalled()) << "the sleeper missed the last wake";
-  EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{static_cast<Word>(kWakers * perWaker), false}))
+  EXPECT_THAT(Decode(parker.word()),
+              Eq(DecodedWord{static_cast<std::uint64_t>(kWakers * perWaker), false}))
       << "every waker's change must survive the sleeper's own read-modify-writes";
 }
 
