@@ -79,7 +79,8 @@ void* CoroutineFramePool::allocate(std::size_t frameBytes) {
     }
   }
   auto* frame = static_cast<std::byte*>(::operator new(bytes, FrameAlignment(frameBytes)));
-  // A trailer keeps the compiler-sized frame at the aligned base of the allocation.
+  // The trailer leaves the frame at the aligned base. Retention counts the requested
+  // bytes, including trailer padding; the allocator's alignment overhead is separate.
   ::new (frame + Allocation::TrailerOffset(frameBytes)) Allocation{*this, frameBytes};
   std::unique_lock lock(mutex_);
   ++liveAllocations_;

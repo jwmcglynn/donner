@@ -3,12 +3,16 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "donner/base/tasks/tests/CoroutineTestUtils.h"
 #include "donner/base/tasks/tests/SchedulerTestUtils.h"
@@ -266,6 +270,56 @@ Task<void> Complete(TaskScheduler& scheduler) {
 
 CoroutineTestRoot WaitForTask(Task<void>& task) {
   co_await task;
+}
+
+struct ContinuationStackDepth {
+  std::size_t samples = 0;
+  std::size_t least = std::numeric_limits<std::size_t>::max();
+  std::size_t most = 0;
+
+  void sample(std::size_t remaining) {
+    ++samples;
+    least = std::min(least, remaining);
+    most = std::max(most, remaining);
+  }
+};
+
+Task<void> ObserveContinuationStack(TaskScheduler& scheduler, Task<void>* child,
+                                    ContinuationStackDepth& depth) {
+  if (child != nullptr) {
+    co_await *child;
+  } else {
+    co_await scheduler.schedule();
+  }
+  // Sample the same code path at the leaf and as each parent resumes on the worker.
+  if (const auto remaining = Peer::StackRemaining()) {
+    depth.sample(*remaining);
+  }
+}
+
+TEST(TaskTest, SymmetricTransferKeepsWorkerStackDepthBounded) {
+  constexpr std::size_t kLinks = 64;
+  constexpr std::size_t kStackVariation = 256;
+  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1});
+  ContinuationStackDepth depth;
+  // Keep each owner alive until the worker has returned from the entire chain.
+  std::vector<Task<void>> chain;
+  chain.reserve(kLinks + 1);
+  chain.push_back(ObserveContinuationStack(scheduler, nullptr, depth));
+  for (std::size_t i = 0; i < kLinks; ++i) {
+    chain.push_back(ObserveContinuationStack(scheduler, &chain.back(), depth));
+  }
+  Event done;
+  auto root = WaitForTask(chain.back());
+  root.start(done);
+  ASSERT_THAT(done.wait(), Eq(true));
+  Event unwound;
+  Peer::Spawn(scheduler, [&] { unwound.set(); });
+  ASSERT_THAT(unwound.wait(), Eq(true));
+  ASSERT_THAT(depth.samples, Eq(kLinks + 1));
+  const std::size_t span = depth.most - depth.least;
+  RecordProperty("stack_span_bytes", std::to_string(span));
+  EXPECT_THAT(span, Le(kStackVariation));
 }
 
 TEST(TaskDeathTest, RejectsDestroyingAnOwnerBeforeItsAwaitCompletes) {

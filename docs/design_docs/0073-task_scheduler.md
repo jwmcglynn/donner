@@ -1827,14 +1827,34 @@ clients that size work from documents.
   portably.
 - **Coroutine tests** (`//donner/base/tasks:task_tests`,
   `//donner/base/tasks:async_task_scope_tests`): lazy single-consumer ownership, nested results,
-  over-aligned frame storage, cross-thread frame return and the retained-byte limit, schedule
-  from a non-worker, the asleep-worker wake and full deque fallback, and joins at 0, 1 and 4
-  workers. The join hooks hold both sides of registration through relaxed flags that don't publish the payload or resume
-  handle. A separate interleaving lets the worker resume and destroy the scope and its
-  scheduler before the external registrant returns from `await_suspend`.
-  A foreign coroutine test keeps its frame alive and observes the join started but incomplete
-  before the last finisher enqueues it, then complete after resumption.
-  An empty synthetic scope checks that the destructor requires completion even at zero count.
+  bounded native stack depth during symmetric transfer, over-aligned frame storage, cross-thread
+  frame return and the retained-byte limit, schedule from a non-worker, asleep-worker wake and
+  full-deque fallback, and joins at 0, 1 and 4 workers. The join hooks hold both sides of
+  registration through relaxed flags that do not publish the payload or resume handle. They
+  let a worker resume and destroy the scope and its scheduler before an external registrant
+  returns from `await_suspend`. A foreign coroutine test observes an incomplete join before
+  enqueue, then a completed join after resumption. An empty synthetic scope checks the
+  destructor's completion requirement at zero count.
+  A 64-link chain samples the same worker stack position at the leaf and in each resumed
+  parent. On 64-bit Arm Linux the span is zero bytes with symmetric transfer and 25,600
+  bytes when final suspension resumes the continuation inline, above the 256-byte test limit.
+
+  Observed red with the outside wake, full-deque fallback, final enqueue or count decrement
+  removed, suspension on zero workers or a zero count, eager Task start, a second await or join
+  allowed, scope reopening allowed, flat spawns rejected during join, an ownership or shutdown
+  assertion removed, and retention made unbounded or exact-size reuse removed.
+  AddressSanitizer reports a use after free if an outside publisher touches its scheduler after
+  the coroutine resumes. ThreadSanitizer reports races with the join CAS failure or initial
+  zero-load ordering weakened to relaxed, the CAS success ordering weakened to acquire only,
+  or the finisher decrement weakened to either acquire only or release only.
+  A handle publication moved after the join flag survives native tests and is caught by
+  ThreadSanitizer.
+
+  Dispatch uses one work-kind branch so both queues can carry frame-backed resumptions without
+  allocating separate task records. The size-only coroutine allocation interface requires
+  deriving an alignment from the frame size. The pool charges the requested bytes, including
+  the trailer and its padding. Any additional heap space needed by the allocator to honor the
+  alignment is allocator-dependent and outside that budget.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.

@@ -275,6 +275,7 @@ void TaskScheduler::runTask(Worker& worker, SchedulerWork* work) {
       StackRemaining(CurrentStackPosition(), worker.stack) >= kStackReserveBytes,
       "A task scheduler worker is out of stack: less than the reserve is "
       "left below the task it would run");
+  // The dispatch branch lets both queues carry frame-backed resumptions without new records.
   if (work->kind == SchedulerWork::Kind::Resumption) {
     const auto handle = static_cast<CoroutineResumption*>(work)->handle;
     handle.resume();

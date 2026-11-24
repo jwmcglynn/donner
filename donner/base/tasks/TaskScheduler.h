@@ -388,7 +388,8 @@ private:
   SchedulerWork* globalHead_ = nullptr;
   SchedulerWork* globalTail_ = nullptr;
   ExternalRecordPool externalPool_;
-  CoroutineFramePool framePool_;
+  // Frame allocation and return do not contend with the queue's mutex on one cache line.
+  alignas(kFalseSharingBytes) CoroutineFramePool framePool_;
 
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> globalQueued_{0};
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> awake_{0};
