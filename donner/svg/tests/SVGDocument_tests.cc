@@ -380,6 +380,49 @@ TEST(SVGDocument, QuerySelector) {
   }
 }
 
+TEST(SVGDocument, UseTraversalFindsAuthoredChildrenBeforeAndAfterRendering) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+      <defs><rect id="shape" width="8" height="8"/></defs>
+      <use id="host" href="#shape">
+        <title id="label">Label</title>
+        <desc id="description">Description</desc>
+      </use>
+      <use id="empty-host" href="#shape" x="10"/>
+      <g><title id="group-label">Group label</title></g>
+    </svg>
+  )");
+
+  auto host = document.querySelector("#host");
+  ASSERT_THAT(host, Optional(ElementIdEq("host")));
+  const auto emptyHost = document.querySelector("#empty-host");
+  ASSERT_THAT(emptyHost, Optional(ElementIdEq("empty-host")));
+  const auto expectAuthoredChildren = [&] {
+    EXPECT_THAT(host->firstChild(), Optional(ElementIdEq("label")));
+    EXPECT_THAT(host->lastChild(), Optional(ElementIdEq("description")));
+    EXPECT_THAT(document.querySelector("#label"), Optional(ElementIdEq("label")));
+    EXPECT_THAT(document.querySelector("use > title"), Optional(ElementIdEq("label")));
+    EXPECT_THAT(host->querySelector(":scope > desc"), Optional(ElementIdEq("description")));
+    EXPECT_THAT(document.querySelector("#group-label"), Optional(ElementIdEq("group-label")));
+    EXPECT_THAT(document.querySelector("use > rect"), Eq(std::nullopt));
+    EXPECT_THAT(emptyHost->firstChild(), Eq(std::nullopt));
+    EXPECT_THAT(emptyHost->lastChild(), Eq(std::nullopt));
+  };
+
+  {
+    SCOPED_TRACE("before rendering");
+    expectAuthoredChildren();
+  }
+
+  Renderer renderer;
+  renderer.draw(document);
+
+  {
+    SCOPED_TRACE("after rendering");
+    expectAuthoredChildren();
+  }
+}
+
 TEST(SVGDocument, SourceLessApplySourceEditReportsDiagnostic) {
   SVGDocument document;
 

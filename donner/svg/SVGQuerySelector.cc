@@ -4,7 +4,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/components/ElementTypeComponent.h"
-#include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 
 namespace donner::svg::details {
 namespace {
@@ -16,10 +16,6 @@ public:
 
 bool PushTraversalChildrenReverse(EntityHandle element, SmallVector<Entity, 16>& stack,
                                   css::SelectorTraversalBudget& traversalBudget) {
-  if (element.all_of<components::ShadowTreeComponent>()) {
-    return true;
-  }
-
   const auto& tree = element.get<donner::components::TreeComponent>();
   Registry& registry = *element.registry();
   for (Entity child = tree.lastChild(); child != entt::null;
@@ -27,7 +23,8 @@ bool PushTraversalChildrenReverse(EntityHandle element, SmallVector<Entity, 16>&
     if (!traversalBudget.consume()) {
       return false;
     }
-    if (registry.all_of<components::ElementTypeComponent>(child)) {
+    if (registry.all_of<components::ElementTypeComponent>(child) &&
+        !registry.all_of<components::ShadowTreeRootComponent>(child)) {
       stack.push_back(child);
     }
   }

@@ -26,7 +26,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
-#include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/LineComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -412,27 +412,26 @@ void RemovePresentationAttribute(SVGElement& element, const ElementAnchor& handl
   markNeedsFullStyleRecompute(handle);
 }
 
-std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entity) {
+std::optional<EntityHandle> AuthoredElementHandle(Registry& registry, Entity entity) {
   if (entity == entt::null) {
     return std::nullopt;
   }
 
   EntityHandle handle(registry, entity);
-  return handle.all_of<components::ElementTypeComponent>() ? std::make_optional(handle)
-                                                           : std::nullopt;
+  if (handle.all_of<components::ElementTypeComponent>() &&
+      !handle.all_of<components::ShadowTreeRootComponent>()) {
+    return handle;
+  }
+  return std::nullopt;
 }
 
 std::optional<EntityHandle> FirstElementChild(EntityHandle handle,
                                               css::SelectorTraversalBudget* budget) {
-  if (handle.all_of<components::ShadowTreeComponent>()) {
-    return std::nullopt;
-  }
-
   const auto& tree = handle.get<donner::components::TreeComponent>();
   Registry& registry = *handle.registry();
   for (Entity child = tree.firstChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, child)) {
+    if (std::optional<EntityHandle> element = AuthoredElementHandle(registry, child)) {
       return element;
     }
     if (budget != nullptr && !budget->consume()) {
@@ -445,15 +444,11 @@ std::optional<EntityHandle> FirstElementChild(EntityHandle handle,
 
 std::optional<EntityHandle> LastElementChild(EntityHandle handle,
                                              css::SelectorTraversalBudget* budget) {
-  if (handle.all_of<components::ShadowTreeComponent>()) {
-    return std::nullopt;
-  }
-
   const auto& tree = handle.get<donner::components::TreeComponent>();
   Registry& registry = *handle.registry();
   for (Entity child = tree.lastChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).previousSibling()) {
-    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, child)) {
+    if (std::optional<EntityHandle> element = AuthoredElementHandle(registry, child)) {
       return element;
     }
     if (budget != nullptr && !budget->consume()) {
@@ -470,7 +465,7 @@ std::optional<EntityHandle> PreviousElementSibling(EntityHandle handle,
   Registry& registry = *handle.registry();
   for (Entity sibling = tree.previousSibling(); sibling != entt::null;
        sibling = registry.get<donner::components::TreeComponent>(sibling).previousSibling()) {
-    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, sibling)) {
+    if (std::optional<EntityHandle> element = AuthoredElementHandle(registry, sibling)) {
       return element;
     }
     if (budget != nullptr && !budget->consume()) {
@@ -487,7 +482,7 @@ std::optional<EntityHandle> NextElementSibling(EntityHandle handle,
   Registry& registry = *handle.registry();
   for (Entity sibling = tree.nextSibling(); sibling != entt::null;
        sibling = registry.get<donner::components::TreeComponent>(sibling).nextSibling()) {
-    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, sibling)) {
+    if (std::optional<EntityHandle> element = AuthoredElementHandle(registry, sibling)) {
       return element;
     }
     if (budget != nullptr && !budget->consume()) {
