@@ -157,11 +157,12 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         one process per peer, the confirmation rule and the reporting script (1.25 days); runs on
         the three native platforms and the editor Wasm build, with results recorded in this
         document (1.5 days).
-  - [ ] Verify here, before relying on them: that oneTBB builds with exceptions disabled (or
-        needs `-fexceptions` on its own targets), that its registry module builds on all three
-        platforms, that the Filament `libs/utils` subset needs no more files than listed, and that
-        each peer builds under the repository's toolchains at all. A peer that cannot be built is
-        recorded here with the reason, not dropped silently.
+  - [ ] Verify here, before relying on them: that each peer builds in the repository's
+        exception-free configuration, as listed per peer under [Peer benchmarks](#peer-benchmarks);
+        that oneTBB's registry module builds on all three platforms; that the Filament
+        `libs/utils` subset needs no more files than listed; and that each peer builds under the
+        repository's toolchains at all. A peer that cannot be built exception-free is not built
+        in tree and is recorded in the results as unavailable, with the reason.
   - Done when: every acceptance threshold under [Peer benchmarks](#peer-benchmarks) is met or is
     recorded as an open question with its measured data, and the overhead goals are met. Tuning
     work to close a gap is not in this estimate.
@@ -1252,17 +1253,23 @@ the enabled mode (workers running); the disabled mode has its own threshold unde
 **Peers.** Every peer is a benchmark-only dependency: a `dev_dependency` module or an
 `http_archive` or `http_file` with an overlay build file, pinned to a release tag and
 content-pinned by `sha256`, never a commit, and never linked into a shipped target (a dependency
-audit test on the shipped targets enforces that).
+audit test on the shipped targets enforces that). The repository's rules forbid exceptions,
+including target-specific `-fexceptions`, with no exemption for benchmarks, so every peer is
+built in tree in an exception-free configuration, using its own switch where it has one. The
+last column records what was read in each peer's source at the pinned tag; building each one
+exception-free under the repository's toolchains is verified in S6. A peer that cannot be built
+that way is not built in tree; it is recorded in the results as unavailable, with the reason, and
+the [Open Questions](#open-questions) record the maintainer's choice for it.
 
-| Peer | Pin | License | How it is built |
-|------|-----|---------|-----------------|
-| oneTBB (`task_group`, `parallel_for`, `task_arena`) | `v2023.2.0` | Apache-2.0 | registry module as a `dev_dependency`; exceptions disabled if it builds that way, otherwise `-fexceptions` on its own targets only (to verify in S6) |
-| Taskflow (`Executor`, `Subflow` or `Runtime`, `for_each_index`) | `v4.1.0` | MIT | header-only archive with an overlay `cc_library`; its executor uses `try` and `catch`, so its targets add `-fexceptions` |
-| enkiTS (`TaskScheduler`, `ITaskSet`) | `v1.12` | Zlib | archive with an overlay `cc_library` of `src/TaskScheduler.cpp` |
-| Filament JobSystem (`runAndWait`, child jobs, `jobs::parallel_for`) | `v1.81.0` | Apache-2.0 | the needed `libs/utils` sources and headers fetched as individual files at the tag, each with `sha256`, and an overlay `cc_library` with tracing compiled out (the file list to verify in S6) |
-| libfork (coroutine fork-join) | `v3.8.0` | MPL-2.0 (benchmark binary only, unmodified, not distributed) | header-only archive; coroutine workloads only |
-| `std::thread` pool baseline | in tree | Donner's | one mutex, one condition variable, one shared FIFO; and a plain serial loop |
-| Rayon | none | MIT or Apache-2.0 | Rust, another toolchain; cited, not benchmarked |
+| Peer | Pin | License | How it is built | Exception-free build |
+|------|-----|---------|-----------------|----------------------|
+| oneTBB (`task_group`, `parallel_for`, `task_arena`) | `v2023.2.0` | Apache-2.0 | registry module as a `dev_dependency` | expected: `detail/_config.h` sets `TBB_USE_EXCEPTIONS` to 0 when the compiler has exceptions off, and the `try` blocks read in `src/tbb` sit under platform or exception guards; building the whole library that way, and through its registry module, is to verify in S6 |
+| Taskflow (`Executor`, `Subflow` or `Runtime`, `for_each_index`) | `v4.1.0` | MIT | header-only archive with an overlay `cc_library` defining `TF_DISABLE_EXCEPTION_HANDLING` | expected: that macro removes the executor's `try` and `catch` and makes `TF_THROW` print and terminate (`core/error.hpp`, `core/executor.hpp`); the other `throw` sites read are in documentation comments; compiling every header used with exceptions off is to verify in S6 |
+| enkiTS (`TaskScheduler`, `ITaskSet`) | `v1.12` | Zlib | archive with an overlay `cc_library` of `src/TaskScheduler.cpp` | expected: no `try`, `catch` or `throw` in `src/TaskScheduler.cpp`, `TaskScheduler.h` or `LockLessMultiReadPipe.h`; to verify in S6 |
+| Filament JobSystem (`runAndWait`, child jobs, `jobs::parallel_for`) | `v1.81.0` | Apache-2.0 | the needed `libs/utils` sources and headers fetched as individual files at the tag, each with `sha256`, and an overlay `cc_library` with tracing compiled out (the file list to verify in S6) | expected: Filament's own build has a `FILAMENT_ENABLE_EXCEPTIONS` option that adds `-fno-exceptions`, and `JobSystem.{h,cpp}`, `WorkStealingDequeue.h` and `Allocator.h` contain no `try`, `catch` or `throw`; the rest of the subset is to verify in S6 |
+| libfork (coroutine fork-join) | `v3.8.0` | MPL-2.0 (benchmark binary only, unmodified, not distributed) | header-only archive; coroutine workloads only | expected: `core/macro.hpp` sets `LF_COMPILER_EXCEPTIONS` from `__cpp_exceptions`, and with it 0 `LF_THROW` terminates instead of throwing; to verify in S6 |
+| `std::thread` pool baseline | in tree | Donner's | one mutex, one condition variable, one shared FIFO; and a plain serial loop | yes, Donner code |
+| Rayon | none | MIT or Apache-2.0 | Rust, another toolchain; cited, not benchmarked | not applicable |
 
 **Workloads.** Each runs on every peer that can express it.
 
@@ -1301,29 +1308,27 @@ latency (W5); speedup and scaling efficiency, speedup divided by thread count (W
 relative to serial (W6); idle CPU, the process CPU time consumed during a 1 s idle window after a
 burst, from `getrusage` (W5); peak resident memory per peer (W3 unbalanced).
 
-**Method.** All peers and Donner build in one invocation at `-c opt` with the same compiler,
-standard library and flags; peers that need exceptions get `-fexceptions` on their own targets
-only, recorded with the results. The W6 compiled-out binary is built through the compiled-out
-configuration transition, so it is part of the same invocation. Each repetition of each case
-launches a fresh process for that peer, which creates its pool outside the timed region, warms
+**Method.** All available peers and Donner build in one invocation at `-c opt` with the same
+compiler, standard library and flags, exceptions off for all of them, with each peer's own
+no-exceptions switch recorded with the results. The W6 compiled-out binary is built through the
+compiled-out configuration transition, so it is part of the same invocation. Each repetition of each
+case launches a fresh process for that peer, which creates its pool outside the timed region, warms
 up, runs once and exits, so only one pool exists at a time and an idle peer's spinning workers
-cannot interfere. Thread counts are *participating
-threads*: pool workers plus the calling thread when the peer lets it run tasks (Donner with an
-adopted thread, Filament with an adopted thread, oneTBB's thread in `task_group::wait`, enkiTS's
-main thread, Taskflow's `corun`). Every peer is configured to the same participating count, and
-every threshold below applies at 8 participating threads unless it names another count. Each case
-warms up for at least 1 s in every process, runs 15 repetitions and reports the median and
-median absolute deviation with the minimum and maximum; repetitions are interleaved across peers
-(each peer's first process, then each peer's second) so thermal drift affects all of them
-alike. A quiet-machine
-gate runs before and after: the run is rejected when the 1-minute load average exceeds 0.5 per
-core, when another process used more than 5 percent of a core during the run, or when the median
-of a fixed calibration loop moved by more than 3 percent between the two gates. On Linux the CPU
-frequency governor is set to performance where permitted and the setting recorded. macOS offers
-no way to pin a thread to a performance core: workers of every peer run at the user-interactive
-QoS class, which is a placement hint, and the run records the power source, the thermal state and
-the performance and efficiency core counts. The sleep primitive each peer actually uses on each
-platform is recorded beside its results.
+cannot interfere. Thread counts are *participating threads*: pool workers plus the calling thread
+when the peer lets it run tasks (Donner with an adopted thread, Filament with an adopted thread,
+oneTBB's thread in `task_group::wait`, enkiTS's main thread, Taskflow's `corun`). Every peer is
+configured to the same participating count, and every threshold below applies at 8 participating
+threads unless it names another count. Each case warms up for at least 1 s in every process, runs 15
+repetitions and reports the median and median absolute deviation with the minimum and maximum;
+repetitions are interleaved across peers (each peer's first process, then each peer's second) so
+thermal drift affects all of them alike. A quiet-machine gate runs before and after: the run is
+rejected when the 1-minute load average exceeds 0.5 per core, when another process used more than 5
+percent of a core during the run, or when the median of a fixed calibration loop moved by more than
+3 percent between the two gates. On Linux the CPU frequency governor is set to performance where
+permitted and the setting recorded. macOS offers no way to pin a thread to a performance core:
+workers of every peer run at the user-interactive QoS class, which is a placement hint, and the run
+records the power source, the thermal state and the performance and efficiency core counts. The
+sleep primitive each peer actually uses on each platform is recorded beside its results.
 
 **Platforms.** Apple silicon macOS on a machine with at least 8 performance cores, and Linux
 AArch64 and Linux x86-64 on machines with at least 8 cores, with the hardware model, kernel,
@@ -1331,8 +1336,9 @@ compiler and every peer's pin recorded beside the results. The editor's threaded
 runs W1, W2, W5 and W8 for Donner only, in a cross-origin isolated headless browser, as
 information, not gated.
 
-**Acceptance.** Medians are compared per platform. The best peer is chosen per metric and per
-workload, excluding the `std::thread` baseline: the lowest time per task, the highest throughput,
+**Acceptance.** Medians are compared per platform. The best peer is the best *available* peer,
+chosen per metric and per workload among the peers that built and ran on that platform,
+excluding the `std::thread` baseline: the lowest time per task, the highest throughput,
 the lowest p50 and, separately, the lowest p99, the lowest idle CPU, and the highest scaling
 efficiency. A comparison that misses its threshold by less than the larger of the two median
 absolute deviations is rerun once with 15 more repetitions, and the medians of all 30 decide; a
@@ -1350,6 +1356,10 @@ miss larger than that is a miss.
   faster; the non-worker form's result is recorded, both for 0072's threshold calibration and to
   decide whether adoption stays (see [Open Questions](#open-questions)).
 - The absolute goals under [Goals](#goals) still hold.
+
+**Unavailable peers.** The results list every peer that was not built or not run on a platform,
+and why (for example, no exception-free build), next to the thresholds it would have taken part
+in, so a result against fewer peers is never read as one against all of them.
 
 **When a threshold is missed.** A miss is a finding, not a footnote. The design changes (a
 protocol, a data structure or a default) until the threshold is met, or the miss is recorded under
@@ -1604,6 +1614,19 @@ scheduler.
   symbol check covers Donner's own code and the default configuration, not every third-party
   library. Recommendation: leave third-party libraries out of the check and document which ones
   keep threads, rather than patch them.
+- **A peer that cannot build without exceptions.** S6 expects every listed peer to build
+  exception-free (see the peer table), but if one cannot, the repository rule against exceptions,
+  including target-specific `-fexceptions`, leaves it unavailable. The maintainer may choose
+  either of two ways to measure it anyway. (a) An explicit, written benchmark-only exception to
+  that rule, confined to the peer's adapter targets, with the dependency audit test extended to
+  prove those targets never reach a shipped one: about 0.25 day, and it keeps one invocation and
+  one toolchain, but it is a precedent against a rule that has none. (b) An out-of-tree harness: a
+  separate build outside the repository that compiles the peer with exceptions and Donner's
+  scheduler from the same pinned revision, with the same compiler version and flags except
+  exceptions, run on the same machines by the same gate and process model: about 2 days, it keeps
+  the rule intact, and its results are comparable only as far as the two builds match.
+  Recommendation: neither until a peer actually fails; if one does, (b), because the rule has no
+  exemption today and the comparison does not need one.
 - **Peer benchmark run time.** A fresh process per repetition adds start-up and page-fault
   effects that each process's warm-up should absorb, and it multiplies run time: 15 repetitions
   times warm-up, cases, peers and platforms. Recommendation: S6 records the wall-clock cost of a
