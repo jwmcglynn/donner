@@ -121,27 +121,26 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         once from a seeded offset (0.5 day).
   - [x] `TaskScope` and `Join` from threads that are not workers: scope records, spawns to the
         global queue, and the creator's sleep on the scope's parker (0.5 day):
-        `//donner/base/tasks:task_scheduler` and `//donner/base/tasks:task_scope_tests`. Until
-        waits on workers exist, a `TaskScope` created on a worker, and so `Join` called on one,
-        fails a release assertion. `TaskScope::requestStop()` and `stopRequested()` are in the
-        item for scopes on workers.
+        `//donner/base/tasks:task_scheduler` and `//donner/base/tasks:task_scope_tests`.
   - [x] `ParkerPool`: parker slots for threads that are not workers, shared by reference count,
         with the per-thread sweep of closed pools (0.25 day): `//donner/base/tasks:parker_pool`,
         `//donner/base/tasks:parker_pool_tests` and
         `//donner/base/tasks:scope_main_thread_exit_test`.
-  - [ ] `TaskScope` and `Join` on workers: watermarks, rules 1 to 3 and help within the margin;
+  - [x] `TaskScope` and `Join` on workers: watermarks, rules 1 to 3 and help within the margin;
         and `TaskScope::requestStop()` and `stopRequested()` for every creator, the scope's stop
         flag that a queued task of the scope checks before it runs, still completing its scope's
         accounting (0.75 day: 0.5 for the waits, and 0.25 for the stop, which no item budgeted;
-        `AsyncTaskScope`'s stop in S3 then reuses the check).
+        `AsyncTaskScope`'s stop in S3 then reuses the check): `//donner/base/tasks:task_scheduler`
+        and `//donner/base/tasks:worker_scope_tests`. The stop request is `ScopeStop`
+        (`//donner/base/tasks:task_record`), whose `SkipsQueuedTask` is the check.
   - [x] The parker: the word with the waiting bit and the epoch, its wait, and a notify only
         when the bit was set (0.25 day): `//donner/base/tasks:parker` and
         `//donner/base/tasks:parker_tests`.
   - [x] The sleep steps 1 to 5 for an idle worker, the state words and the `awake` count, the
         swap rule, the publish protocol in read-modify-write form, drain before sleep, and
         shutdown with the stop flag (1 day): `//donner/base/tasks:task_scheduler_tests`.
-  - [ ] The asleep deep state, the last-awake rule and the hand-off, for a waiting worker past
-        its margin (0.5 day).
+  - [x] The asleep deep state, the last-awake rule and the hand-off, for a waiting worker past
+        its margin (0.5 day): `//donner/base/tasks:worker_scope_tests`.
   - [x] The parker word as the standard library's native wait type, `std::int64_t` on Apple
         and `std::int32_t` elsewhere, both widths tested on every platform, and the wake cost
         of the contention table measured against the native path (0.25 day):
@@ -163,8 +162,8 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         `//donner/base/tasks:task_scheduler_tests`.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
     liveness tests listed under [Internals](#internals), and the lost-wakeup injected-delay test
-    (red with the protocol broken) are green. Each liveness test must be observed red with the
-    last-awake rule disabled, through a test hook, before it counts.
+    (red with the protocol broken) are green. For the queued-work liveness case, disabling the
+    last-awake rule through a test hook must leave work pending with every worker asleep.
 - [ ] Milestone S2: Parallel loops and determinism (3.5 days). After S1.
   - [ ] `ParallelFor` with grain and adaptive splitting, its const-body check and chunk cap
         (1.5 days).
@@ -855,11 +854,11 @@ queue, and *started* once a thread begins running it.
   busy worker's deque leaves only when the owner reaches it or a thief happens to take it, as in
   every work-stealing scheduler.
 - **Task storage and bounds.** A spawned closure is stored in a fixed-size task record, so small
-  tasks never call `malloc`. A record is 128 bytes, two cache lines: an intrusive link (used by the
-  free list, the return stack and the global queue, one at a time), the identity of the pool that
-  allocated it, the address of its scope's counter and the parker its scope recorded, the closure's
-  call function, and 64 bytes of inline closure storage; a closure that is larger, or aligned beyond
-  `max_align_t`, is moved into a heap block the record owns. Records come from a pool per
+  tasks never call `malloc`. A record occupies 128 bytes: the intrusive list link and work kind,
+  allocating pool, scope metadata, call function, and 64 bytes of inline closure storage. The kind
+  distinguishes an ordinary record from a coroutine resumption in the same queue. A closure that
+  is larger or aligned beyond `max_align_t` moves into a heap block owned by its record. Records
+  come from a pool per
   *creator*: each worker and adoptable slot has its own pool of at most `maxTasksPerCreator` live
   records, and every other thread shares one pool of at most `maxExternalTasks`, allocated and
   freed under the global queue's mutex, which each call takes as proof (a lock of another mutex, or
@@ -889,11 +888,11 @@ queue, and *started* once a thread begins running it.
   with the publish protocol for adopted pushes (below). A spawn from a non-worker goes to the
   global queue. A finisher that enqueues a coroutine resumption puts it on its own deque if it is a
   worker and into the global queue otherwise, so an adopted thread's deque never holds another
-  client's resumption. Every task record carries what a finisher needs: the address of its scope's
-  counter and the parker the scope recorded at construction, both copied into the record at spawn.
-  The scheduler's own spawn and `trySpawn` are private, to be reached only by the scope types, so
-  that no client spawns a task that no scope accounts for; besides `TaskScope`, only tests reach
-  them, through a test peer. `trySpawn` declines, leaving the closure with the caller, when the
+  client's resumption. A synchronous scope supplies the counter, creator's parker and stop flag.
+  The taker checks the flag before calling the closure. An asynchronous scope supplies its counter
+  and completion receiver. Each finisher copies the data it needs before returning the record to
+  its pool. Clients submit through `TaskScope` or `AsyncTaskScope`; tests also reach the private
+  submission functions through a peer. `trySpawn` leaves the closure with the caller when the
   spawning thread's record pool is at its bound or, on a worker, when its deque is full; the deque's
   owner-only `full()` decides that before the closure moves, since only the owner pushes and a thief
   only frees slots. Each sleep, publish and shutdown step calls an optional test seam,
@@ -904,9 +903,9 @@ queue, and *started* once a thread begins running it.
   worker or adopted thread, the deque and its bottom index (the watermark). Its waits use exactly
   those. Because the record must stay true while the scope lives, `adopt()` and the release of an
   `AdoptedThread` assert that the thread has no live `TaskScope` (a thread-local count), and the
-  scheduler's destructor asserts that no `AdoptedThread` is live. `TaskScope`s nest last in, first
-  out on one thread, because each is joined before its creator returns, so everything the creator
-  spawns from its own stack lies above the watermark. An `AsyncTaskScope` has no watermark and no
+  scheduler's destructor asserts that no `AdoptedThread` is live. A creator must join its nested
+  synchronous scopes in last-in, first-out order. Entries it pushes after creating the innermost
+  scope lie at or above that scope's watermark. An `AsyncTaskScope` has no watermark and no
   parker: its creator is a coroutine whose frame leaves the thread's stack when it suspends, so its
   spawns are ordinary deque or global-queue entries and its completion enqueues the resumption.
 - **Waiting.** A creator that waits on a `TaskScope` applies, in order:
@@ -1187,7 +1186,9 @@ queue, and *started* once a thread begins running it.
   change with the creator returning and destroying the scope at once; that last test runs under
   AddressSanitizer and ThreadSanitizer and must be observed red with the wake word placed inside
   the scope before it counts.
-- **Liveness tests.** Each is a test in Milestone S1, run at 1, 2 and 4 workers:
+- **Liveness tests.** Use 1, 2 and 4 workers for fork-join and whole-pool cases. Steal and
+  hand-off tests require at least two workers. The nested-join publication interleavings use
+  three distinct workers.
 
   - One worker recursing through nested synchronous scopes, the next child still on its own deque
     above the watermark: rule 1 runs the child; recursion depth is the program's own nesting.
@@ -1206,9 +1207,12 @@ queue, and *started* once a thread begins running it.
   - Shutdown racing an idle worker's sleep: the injected delay holds an idle worker between steps
     1 and 2 while the destructor sets the stop flag. The destructor's join must return. Must be
     observed red with the stop-flag re-check in step 4 removed.
-  - Two workers past the margin, each holding the other's scope's flat task below its own
-    watermark: both drain into the global queue and the last awake worker runs both tasks.
-  - An `AsyncTaskScope` whose task is drained into the global queue while every worker but one is
+  - A test peer places a worker scope's counted task in the global queue while its creator has an
+    older entry below the watermark. The creator drains that entry before sleeping and takes the
+    older global task first. A two-worker cross-hold cannot be constructed with synchronous scopes:
+    each scope would have to exist before an entry for it could be placed below the other's
+    creation watermark.
+  - An adopted slot releases an `AsyncTaskScope` task into the global queue while all but one worker are
     past its margin and asleep: the last awake worker runs the task, the finisher enqueues the
     resumption, and the coroutine and every waiter blocked on it complete. `co_await join()` on a
     scope whose count is already zero does not suspend.
@@ -1228,8 +1232,8 @@ queue, and *started* once a thread begins running it.
     children; the first child blocks, under a hang guard, until a child has started on a second
     worker. Must be observed red with the parallelism wake removed. At quiescence the `searching`
     count is 0.
-  - Bounds: one worker spawns `maxTasksPerCreator` tasks into a scope, waits on an inner scope so
-    it drains and sleeps, is woken and spawns again: the extra spawns run inline and the live-record
+  - Bounds: a worker fills its record pool. A test peer arranges an inner scope that forces a
+    nonempty drain. When the worker wakes and spawns while its records are still in use, the extra spawns run inline and the live-record
     counter never exceeds its bound. The same with an adopted creator and with a non-worker
     against `maxExternalTasks`.
   - The global queue is first in, first out, and a worker with endless local work in its idle
@@ -1739,9 +1743,9 @@ clients that size work from documents.
   the stop flag removed, the publisher's wake removed, a failed swap counted, the self-wake after
   the wait removed, the waker's parker change removed or made only on a successful swap, the
   periodic outside take, the steal from other workers, first-in first-out order, the deque fullness
-  check and the idle loop's stop check. Draining before sleep has no effect yet: an idle worker's
-  deque is empty when it sleeps, and the drain acts once a waiting worker can sleep with entries
-  below its watermark. Eight mutants that weaken one sequentially consistent operation of the two
+  check and the idle loop's stop check. An idle worker sleeps only after its own take finds an empty deque.
+  The worker-scope tests below cover a nonempty drain. Eight mutants that weaken one sequentially
+  consistent operation of the two
   pairs survive these tests, natively on Linux ARMv8 and under ThreadSanitizer: the publisher's
   increment of the queued count made release; its read of the awake count made acquire; the
   sleeper's asleep store made release; its decrement of the awake count made release; its re-check
@@ -1789,26 +1793,43 @@ clients that size work from documents.
   bit removed (the interleaving, and every injected-delay stress case); the finisher's parker change
   removed; the change made before the decrement; the count taken after the publish (the scope's
   below-zero assertion fires); the record returned after the decrement; the wake word placed inside
-  the scope (a heap use after free under AddressSanitizer); `Join` running `b` inline; the three
-  misuse assertions removed (their death tests); and in the pool, the sweep, the close, the slot
+  the scope (a heap use after free under AddressSanitizer); `Join` running `b` inline; the assertions against a wrong-thread wait
+  and scheduler destruction with a live scope removed; and in the pool, the sweep, the close, the slot
   return at thread exit, the free-list removal and the per-thread lookup each removed, and the
   thread's entry holding a non-owning pointer (the pool's in-use assertion fires before any use
   after free). Under ThreadSanitizer, the finisher's decrement made relaxed, or either of the
   creator's loads of the count made relaxed, reports a race on a task's result. Two ordering mutants
-  survive there: the decrement made release only, because its acquire half is for the join handle of
-  `AsyncTaskScope`, which does not exist yet; and the closed flag made relaxed: a thread that sees a
-  pool closed only returns its slot, under the pool's mutex, and drops its reference, so nothing is
+  survive there: the decrement made release only, because the synchronous finisher only
+  publishes the task's results and the asynchronous finisher handles join registration separately; and
+  the closed flag made relaxed: a thread that sees a pool closed only returns its slot, under the pool's mutex, and drops its reference, so nothing is
   published through the flag today. The release and acquire in the table are kept by choice, at no
   measurable cost on a path taken once per registration; relaxing them requires re-checking that no
   reader of the flag depends on the workers' last writes. Natively on Linux ARMv8 every ordering
-  mutant survives. No CI lane runs this package under ThreadSanitizer, and no pull-request lane runs
-  it under AddressSanitizer: the nightly Sanitizers workflow runs `//donner/...`, this package
-  included, under AddressSanitizer once main has advanced, and the PR sanitizer workflow runs only
-  the Geode suite. So until the variant of Milestone S4 exists, the mutants that only a sanitizer
-  kills (the wake word inside the scope and a finisher that reads the parker from its returned
-  record under AddressSanitizer, the relaxed orderings under ThreadSanitizer) are caught on a pull
-  request only by a manual `bazel test --config=tsan` or `--config=asan` run of
-  `//donner/base/tasks:all`.
+  mutant survives. Linux pull-request CI selects the package's `ci_tsan_` and `ci_asan_`
+  variants through the same affected-target graph as the native tests.
+- **Scopes on workers** (`//donner/base/tasks:worker_scope_tests`): nested scopes and joins at
+  1, 2 and 4 workers, the saved deque bottom, stealing and helping, cooperative stop, and
+  destruction of a skipped closure before completion. Tests that require a thief keep idle
+  workers searching or hold them at a sleep hook until publication. The parallelism wake remains
+  a separate item. The Linux ARMv8 native build measures 1008 bytes per nested synchronous
+  scope and 880 bytes per help level. The test prints both measurements for each configuration.
+  - A worker creator first pushes its synchronous scope's task locally or runs it inline. A thief must take every
+    older entry before stealing that task, including entries below the creation watermark. Until
+    the first steal, flat spawns into that scope are local too. Rule 1 handles remaining entries
+    above the watermark. Thus ordinary waits do not produce a nonempty drain. Coroutine
+    resumptions do not carry a synchronous scope's count. An adopted slot's drain on release
+    concerns a different deque. The peer test exercises the worker's defensive drain.
+  - Two nested stolen joins exercise both last-awake actions using ordinary submissions. The
+    inner finisher completes before its creator stores asleep. The test holds that creator after
+    its decrement, with a zero count still to recheck. An outside publish before the outer
+    creator's decrement leaves a shallow sleeper for hand-off. A publish after the decrement
+    wakes the shallow worker itself, so the outer creator can take the task past its margin.
+  - The step-4 zero-count check acquires task results even when the finisher has not yet woken
+    the creator. Relaxing that load produces a race in the TSan variant when the finisher is
+    held after decrement. The asleep store and the awake decrement retain sequential consistency
+    for the store-buffering pairing with a publisher even on machines where their weaker
+    orderings are indistinguishable. The test peer also disables the last-awake rule to exhibit
+    queued work left behind with the whole pool asleep.
 - **Worker stacks** (`//donner/base/tasks:worker_stack_tests`): at 1 and 4 workers, a task's frame
   lies inside its worker's recorded bounds, which have the configured size and end at the top of the
   platform's stack, and a task starts near the top; a stack larger than any platform's default for a
@@ -1817,7 +1838,7 @@ clients that size work from documents.
   report no worker stack; a recursion that needs 384 KiB, stopped by the accessor rather than by an
   overflow, fits on a 1 MiB worker stack and not on a 256 KiB one; a task started with less than the
   reserve left fails the release assertion (a death test that reaches the worker's task path at
-  depth through the test peer, which waiting workers will reach by helping); and a stack below the
+  depth through the test peer; `worker_scope_tests` reaches it by helping); and a stack below the
   minimum is rejected. Each was observed red with its step broken, natively and under both
   sanitizers: the floor check removed, the platform's whole stack counted, the size never passed to
   the platform, the accessor unclamped, a non-worker reporting a stack, the minimum not enforced,
@@ -1901,8 +1922,9 @@ clients that size work from documents.
     `ci_tsan_deque_tests` on Linux.
   - Results equal sequential evaluation: `//donner/base/tasks:task_scheduler_fuzzer`.
   - The stack-floor check stops the process with a named failure: a death test in
-    `//donner/base/tasks:worker_stack_tests`. It is a release assertion, so it is enforced in
-    every build, not only in debug ones.
+    `//donner/base/tasks:worker_stack_tests`, and one in `//donner/base/tasks:worker_scope_tests`
+    that reaches it through helping. It is a release assertion, so it is enforced in every build,
+    not only in debug ones.
   - Peers are never linked into a shipped target:
     `//donner/benchmarks/tasks:peer_dependency_audit_test`, a `forbidden_transitive_dep_test`
     over the shipped targets.
