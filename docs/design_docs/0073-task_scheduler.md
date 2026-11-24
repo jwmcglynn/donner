@@ -141,7 +141,12 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] `Task<T>`, `TaskScheduler::schedule()` and the `AsyncTaskScope` join awaitable, frame
         allocation from the scheduler's pool.
   - Done when: coroutine tests at 0, 1 and 4 workers, including resumption from a non-worker
-    thread, registration racing completion, and nested awaits, pass under ThreadSanitizer.
+    thread, registration racing completion, and nested awaits, pass under ThreadSanitizer. The
+    race test covers both outcomes: the last task finishing while `await_suspend` registers, so
+    that the compare-and-swap fails on a zero count and the coroutine continues without
+    suspending, then reads a non-atomic result its tasks wrote; and the suspending outcome.
+    ThreadSanitizer must report no race on either, and must be observed reporting one with the
+    failure ordering weakened to relaxed.
 - [ ] Milestone S4: ThreadSanitizer target and fuzzer (3.25 days). After S1.
   - [ ] A ThreadSanitizer test variant reachable from `//...` through a configuration transition
         (1.5 days).
@@ -831,7 +836,9 @@ queue, and *started* once a thread begins running it.
   creator. The scheduler keeps the `awake` count and a per-worker state word: awake, asleep
   shallow (asleep while within its margin, for example in its top-level idle loop) or asleep deep
   (asleep past its margin). Every transition from either asleep state to awake is one
-  compare-and-swap on that word, and exactly the thread whose swap succeeds increments `awake`; a
+  sequentially consistent compare-and-swap on that word (sequentially consistent on failure too,
+  because a failed swap's read is half of the shutdown pairing), and exactly the thread whose swap
+  succeeds increments `awake`, with a sequentially consistent read-modify-write; a
   thread whose swap fails does not increment, because the thread that won already counted the
   worker. Every waker changes the worker's parker whether or not its swap succeeded, which at worst
   causes a spurious wake, and notifies it only if the parker's waiting bit was set (below). This
@@ -849,19 +856,20 @@ queue, and *started* once a thread begins running it.
      is used: these and the publishers' and destructor's sequentially consistent operations below
      are the two halves of each store-load pairing (the form Filament's JobSystem uses), which
      ThreadSanitizer models as ordinary atomics;
-  4. re-checks: every worker checks the stop flag, a waiting creator re-checks rules 1 and 2, and
-     every worker checks whether queued work is visible. An idle worker that sees the stop flag
-     wakes itself with the swap rule and exits. If its scope completed, or if queued work is
-     visible and it is not past its margin, it wakes itself (the swap on its own state word,
-     incrementing `awake` only if the swap succeeds) and goes back to work. If queued work is
-     visible, it is past its margin and it was the last awake worker (the decrement returned 1 or
-     less, so that a transiently low count errs toward staying awake), it first hands the work
-     off: it looks for a worker asleep shallow and wakes it with the swap rule. If the swap
-     succeeds, the woken worker is counted awake and will take the work from its shallow stack; if
-     it fails, the worker was already woken and counted by another thread. Either way an awake
-     worker exists that will re-check before it next sleeps, and this worker continues to step 5.
-     Only when no worker is asleep shallow does it wake itself and run the work past its margin;
-  5. otherwise waits on its parker for a change from `w | waitingBit`. Whenever that wait returns,
+  4. re-checks: every worker checks the stop flag (a sequentially consistent load), a waiting
+     creator re-checks rules 1 and 2, and every worker checks whether queued work is visible. An
+     idle worker that sees the stop flag wakes itself with the swap rule and exits. If its scope
+     completed, or if queued work is visible and it is not past its margin, it wakes itself (the
+     swap on its own state word, incrementing `awake` only if the swap succeeds) and goes back to
+     work. If queued work is visible, it is past its margin and it was the last awake worker (the
+     decrement returned 1 or less, so that a transiently low count errs toward staying awake), it
+     first hands the work off: it looks for a worker asleep shallow and wakes it with the swap rule.
+     If the swap succeeds, the woken worker is counted awake and will take the work from its shallow
+     stack; if it fails, the worker was already woken and counted by another thread. Either way an
+     awake worker exists that will re-check before it next sleeps, and this worker continues to step
+     5. Only when no worker is asleep shallow does it wake itself and run the work past its margin;
+  5. otherwise waits on its parker for a change from `w | waitingBit`, with the wait's loads
+     sequentially consistent (so acquire). Whenever that wait returns,
      for any reason (a change, a change that happened before the wait began, or a spurious
      return), the worker first wakes itself with the swap on its own state word, incrementing
      `awake` only if the swap succeeds, clears its waiting bit, and only then does anything else
@@ -1011,15 +1019,20 @@ queue, and *started* once a thread begins running it.
     scope until `trySpawn` returns false and asserts the scope is not seen complete until every
     task ran (Filament shipped a defect where a parent with its maximum child count read as
     finished).
-  - `co_await scope.join()` writes its coroutine handle into the scope, then sets the join flag in
-    the counter word with a compare-and-swap loop using release ordering, so the handle is
-    published with the flag. If the loop observes a count of zero, `await_suspend` returns false
-    and the coroutine continues without suspending. Otherwise the finisher whose acquire-release
-    decrement reaches zero sees the flag in the value it replaced, which also acquires the handle,
-    and enqueues the resumption as described under where tasks go, rather than resuming inline, so
-    a resumption never nests on the finisher's stack. The scope is not destroyed in between,
-    because its creator is that suspended coroutine. Milestone S3's ThreadSanitizer tests cover
-    registration racing completion.
+  - `co_await scope.join()` writes its coroutine handle into the scope, loads the counter word
+    with acquire ordering, then sets the join flag with a compare-and-swap loop whose success
+    ordering is acquire-release and whose failure ordering is acquire. The release half publishes
+    the handle with the flag. If the initial load or a failed compare-and-swap observes a count of
+    zero, `await_suspend` returns false and the coroutine continues without suspending; because
+    that observation is an acquire read of the value the last finisher's acquire-release decrement
+    wrote, the coroutine then sees every result the scope's tasks wrote (the decrements form one
+    release sequence). Otherwise the finisher whose decrement reaches zero sees the flag in the
+    value it replaced, which also acquires the handle, and enqueues the resumption as described
+    under where tasks go, rather than resuming inline, so a resumption never nests on the
+    finisher's stack; the resumed coroutine sees the results through that finisher's acquire and
+    the push's release. The scope is not destroyed in between, because its creator is that
+    suspended coroutine. Milestone S3's ThreadSanitizer tests cover registration racing completion
+    on both paths.
   - A creator about to sleep, worker or not, sets its parker's waiting bit, re-checks, and waits
     on `w | waitingBit`, as in the sleep steps. A notify without a change would let
     `std::atomic::wait` block again, so every wake is a change of the parker; a creator woken by an
@@ -1231,6 +1244,61 @@ queue, and *started* once a thread begins running it.
   accept as a wait hook. A brief lock of the global queue's mutex from that thread goes through
   the same wrapped futex wait. The style pass runs on the render worker, not on the application
   pthread.
+
+#### Atomic Orderings
+
+Every atomic operation the design specifies, with its ordering and what the ordering is for.
+Plain per-thread state (the owner's live-record counter, the fairness counter and cursor, the
+`searching` flag itself) is not listed. Everything else that crosses threads goes through a mutex
+(the global queue and the external record pool, the `ParkerPool` free list, the default
+scheduler's configuration and shutdown) and gets its happens-before edges from that mutex.
+
+| Atomic | Operation | Ordering | Why |
+| ------ | --------- | -------- | --- |
+| Worker state word | sleeper stores asleep (step 3) | seq_cst store | half of the shutdown pairing with the stop flag |
+| Worker state word | every swap from asleep to awake | CAS, seq_cst on success and on failure | a failed swap's read is half of the shutdown pairing; one total order with `awake` |
+| `awake` | sleeper's decrement (step 3) | seq_cst RMW | half of the publish pairing; its result decides the last-awake rule |
+| `awake` | swap winner's increment | seq_cst RMW | same total order; made before the parker change |
+| `awake` | publisher's read after a publish | seq_cst load | other half of the publish pairing |
+| `awake`, `searching` | reads for the parallelism wake | relaxed load | hint only; a missed wake costs parallelism, not correctness |
+| `searching` count | owner's increment and decrement | relaxed RMW | hint; exact at quiescence, after the workers are joined |
+| Stop flag | destructor sets it | seq_cst exchange | half of the shutdown pairing |
+| Stop flag | worker reads it (step 4, idle loop) | seq_cst load | other half of the shutdown pairing |
+| Parker word | waker's change (advance epoch, return old word) | release RMW | publishes what the waker wrote first (a zero count, queued work) to a sleeper that reads the change |
+| Parker word | sleeper sets the waiting bit (step 2) | seq_cst `fetch_or` | acquires a change ordered before it; with the changes, one modification order decides notify |
+| Parker word | loads inside the wait (step 5) | seq_cst | acquire on waking |
+| Parker word | clearing the waiting bit after waking | relaxed `fetch_and` | an RMW keeps the epoch; a stale bit only causes a spurious notify |
+| Deque slot | owner's store, any load | relaxed | its contents are published by the index orderings below |
+| Deque bottom | worker's push | release fence, then relaxed store (Le et al.) | publishes the slot and the task record to thieves |
+| Deque bottom | adopted thread's push | seq_cst store | also publishes the slot and record; half of the adopted publish pairing |
+| Deque bottom and top | owner's take | relaxed store of bottom, seq_cst fence, relaxed load of top; CAS on top seq_cst, failure relaxed (Le et al.) | the owner and a thief agree on the last entry; a failed CAS means a thief took it and carries no data to the owner |
+| Deque top and bottom | thief's steal | acquire load of top, seq_cst fence, acquire load of bottom; CAS on top seq_cst, failure relaxed (Le et al.) | the acquire load of bottom acquires the pushed slot and record; a failed CAS takes nothing |
+| Deque top and bottom | sleeper's visibility reads of adopted deques (step 4) | seq_cst loads | other half of the adopted publish pairing |
+| Deque indices, ThreadSanitizer form | every access | seq_cst, no fences | lets ThreadSanitizer model the deque whether or not it models fences |
+| `globalQueued` | increment after linking, decrement after unlinking, both under the queue mutex | seq_cst RMW | the increment is half of the publish pairing; the entries themselves are published by the mutex |
+| `globalQueued` | sleeper's read (step 4) | seq_cst load | other half of the publish pairing |
+| Scope counter | increment on spawn | relaxed RMW | ordered before the child's decrement by the push that publishes the child, and before the spawner's own decrement by coherence |
+| Scope counter | finisher's decrement | acq_rel RMW | release publishes the task's results; acquire lets the last finisher read the join handle; all decrements form one release sequence |
+| Scope counter | creator's read in rule 2 | acquire load | on zero, sees every task's results |
+| Scope counter | `join()`'s initial load | acquire load | on zero, continues without suspending and sees every task's results |
+| Scope counter | `join()`'s flag-setting CAS | acq_rel on success, acquire on failure | release publishes the handle; a failure that observes zero acquires the results |
+| Record return stack | thief's push | CAS, release on success, relaxed on failure | the thief's last writes to the record happen before the owner reuses it |
+| Record return stack | owner takes all | acquire exchange | pairs with the pushes |
+| Adoptable slot mask | `adopt()` claims a slot | CAS, acq_rel on success, relaxed on failure | acquires the previous owner's release of the slot, after its drain |
+| Adoptable slot mask | `AdoptedThread` releases a slot | release `fetch_and` | publishes the drained slot to its next owner |
+| `ParkerPool` closed flag | scheduler destructor sets it | release store | after every worker is joined |
+| `ParkerPool` closed flag | a thread's sweep reads it | acquire load | a pool seen closed has no slot in use |
+| Scope stop request | `requestStop()` and task checks | relaxed store and load | advisory; no data is published through it, and stopped tasks still decrement |
+| Shared-cursor `ParallelFor` cursor | chunk claims | relaxed `fetch_add` | chunk ownership only; results are published by the scope's join |
+| Default scheduler pointer | install, and every `DefaultTaskScheduler()` load | release store under the default-scheduler mutex; acquire load | readers see a fully constructed scheduler; configure and shutdown take the same mutex |
+
+The design has exactly two store-buffering pairs, and both are sequentially consistent on both
+sides. The publish pairing: a publisher's `globalQueued` increment or adopted bottom store, then
+its read of `awake`, against a sleeper's `awake` decrement, then its reads of `globalQueued` and
+of each adopted deque's indices. The shutdown pairing: the destructor's stop-flag exchange, then
+its swap on a worker's state word, against the worker's state-word store, then its read of the
+stop flag. The parker handshake is not a store-buffering pair: both sides are read-modify-writes
+on one word, ordered by that word's modification order.
 
 ### WebAssembly
 
