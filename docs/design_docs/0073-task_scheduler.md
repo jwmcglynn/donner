@@ -152,10 +152,13 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         lifetime assertions, and the fairness tests of the rotating cursor across more than one
         outside source (1.75 days).
   - [ ] The parallelism wake with per-worker `searching` flags (0.5 day).
-  - [ ] Worker stacks, the stack-floor assertion, worker QoS, `DefaultWorkerCount()`, and
-        tolerating a worker thread that fails to start: the scheduler runs with the workers that
-        started and `workerCount()` reports fewer (today a failed start ends the process)
-        (0.5 day).
+  - [x] Worker stacks: workers created with an explicit stack size (`workerStackBytes`), each
+        worker's stack bounds recorded when it starts, the remaining-stack accessor the waits use,
+        and the stack-floor assertion (0.25 day): `//donner/base/tasks:worker_stack` and
+        `//donner/base/tasks:worker_stack_tests`.
+  - [ ] Worker QoS, `DefaultWorkerCount()`, and tolerating a worker thread that fails to start:
+        the scheduler runs with the workers that started and `workerCount()` reports fewer (today
+        a failed start fails a release assertion) (0.25 day).
   - [x] `trySpawn` declining at each bound and the zero-worker inline mode (0.25 day):
         `//donner/base/tasks:task_scheduler_tests`.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
@@ -451,6 +454,7 @@ struct TaskSchedulerOptions {
   std::size_t maxExternalTasks = 64 * 1024;  // Live task records for all other threads together.
   std::size_t adoptableThreads = 1;          // Slots reserved for adopt(); fixed at construction.
   std::size_t helpMarginBytes = 128 * 1024;  // Stack kept free when stealing while waiting.
+  std::size_t workerStackBytes = 512 * 1024; // Each worker's stack, in whole pages.
   std::size_t idleSpinRounds = 1;            // Steal rounds before sleeping; set from S6's W5.
   WorkerQos workerQos = WorkerQos::kInteractive;
 };
@@ -1225,22 +1229,37 @@ queue, and *started* once a thread begins running it.
   is also checked by Donner's own waiting helpers, which assert when called from a task. The rule
   is about tasks; an adopted thread's or non-worker's own code may block, because what it queued
   is covered by the publish protocol.
-- **Worker stacks.** Workers are created with an explicit stack size (512 KiB by default, an
-  option) instead of the platform default, which differs between platforms and toolchains. The
-  margin (`TaskSchedulerOptions::helpMarginBytes`, 128 KiB by default) is a heuristic that decides
-  which worker helps; it is not part of correctness. Because the last awake worker runs queued
-  work even past its margin, native stack depth is bounded by policy instead. Each client declares
-  its tasks' native stack bound and whether its tasks wait (with the declaration below for a client
-  whose tasks wait); a task that waits can, through rule 1 and helping, nest further tasks on the
-  same stack, bounded by the program's own fork-join structure, as in other work-stealing
-  runtimes. A hard limit turns exhaustion into a named failure: before running any task, a worker
-  compares the stack pointer with its stack floor plus a reserve and fails with a release assertion
-  naming the scheduler, instead of overflowing the stack. An adopted thread runs only rule 1, which
-  nests only the program's own structure; the same check applies to it where `adopt()` can read the
-  thread's stack bounds from the platform (to be verified per platform in S1). The style traversal
-  of 0072 Part D declares one task frame and tasks that never wait (one flat scope, an explicit
-  heap stack for the inline part of a subtree, `trySpawn` with the heap stack as the fallback), so
-  each help by a style task adds one frame.
+- **Worker stacks.** Workers are created with an explicit stack size (512 KiB by default, the
+  default for a secondary thread on Apple platforms and below glibc's typical 8 MiB, an option)
+  instead of the platform default, which differs between platforms and toolchains. The margin
+  (`TaskSchedulerOptions::helpMarginBytes`, 128 KiB by default) is a heuristic that decides which
+  worker helps; it is not part of correctness. Because the last awake worker runs queued work even
+  past its margin, native stack depth is bounded by policy instead. Each client declares its tasks'
+  native stack bound and whether its tasks wait (with the declaration below for a client whose tasks
+  wait); a task that waits can, through rule 1 and helping, nest further tasks on the same stack,
+  bounded by the program's own fork-join structure, as in other work-stealing runtimes. A hard limit
+  turns exhaustion into a named failure: before running any task, a worker compares the stack
+  pointer with its stack floor plus a reserve and fails with a release assertion naming the
+  scheduler, instead of overflowing the stack. An adopted thread runs only rule 1, which nests only
+  the program's own structure; the same check applies to it where `adopt()` can read the thread's
+  stack bounds from the platform (to be verified per platform in S1). The style traversal of 0072
+  Part D declares one task frame and tasks that never wait (one flat scope, an explicit heap stack
+  for the inline part of a subtree, `trySpawn` with the heap stack as the fallback), so each help by
+  a style task adds one frame.
+
+  A worker is created with `pthread_create` and a stack of `workerStackBytes`, rounded up to whole
+  pages and at least the platform's minimum thread stack and twice the reserve, and records its
+  bounds when it starts: `pthread_getattr_np` reports them on Linux, and `pthread_get_stackaddr_np`
+  and `pthread_get_stacksize_np` on Apple platforms. A platform can hand a new thread more stack
+  than it asked for (glibc reuses a cached stack up to four times the requested size), so a worker
+  counts only the top `workerStackBytes` of its stack as its own, and the margin and the floor
+  follow the configured size, not the platform's. The reserve is 32 KiB (`kStackReserveBytes`):
+  enough for the failure path itself (the assertion's report, the crash handler and a sanitizer's
+  report frames), not a bound on any task's frames. The stack left is measured from the frame
+  address, which stays on the real stack in every build; the address of a local does not under
+  AddressSanitizer, whose fake stack puts locals on the heap. Frames are larger under the sanitizers
+  (AddressSanitizer's redzones most of all), so a client's declared stack bound holds for the native
+  build. Worker stacks in the Emscripten build are Milestone S5's.
 
   The hand-off in the sleep steps keeps most past-margin work off deep stacks, but not all of it.
   When every other worker is asleep past its margin, the last awake worker runs queued work on
@@ -1754,6 +1773,22 @@ clients that size work from documents.
   record under AddressSanitizer, the relaxed orderings under ThreadSanitizer) are caught on a pull
   request only by a manual `bazel test --config=tsan` or `--config=asan` run of
   `//donner/base/tasks:all`.
+- **Worker stacks** (`//donner/base/tasks:worker_stack_tests`): at 1 and 4 workers, a task's frame
+  lies inside its worker's recorded bounds, which have the configured size and end at the top of the
+  platform's stack, and a task starts near the top; a stack larger than any platform's default for a
+  new thread is granted; the stack left falls by the frame size at each level of a recursion and is
+  zero, never negative, at or below the floor; the main thread and threads that are not workers
+  report no worker stack; a recursion that needs 384 KiB, stopped by the accessor rather than by an
+  overflow, fits on a 1 MiB worker stack and not on a 256 KiB one; a task started with less than the
+  reserve left fails the release assertion (a death test that reaches the worker's task path at
+  depth through the test peer, which waiting workers will reach by helping); and a stack below the
+  minimum is rejected. Each was observed red with its step broken, natively and under both
+  sanitizers: the floor check removed, the platform's whole stack counted, the size never passed to
+  the platform, the accessor unclamped, a non-worker reporting a stack, the minimum not enforced,
+  and the size not rounded to pages. The position taken from a local's address instead of the frame
+  address is red only under AddressSanitizer, where it trips the floor check, and equivalent
+  elsewhere. Ignoring a failed thread start survives: no test can make thread creation fail
+  portably.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
@@ -1795,7 +1830,7 @@ clients that size work from documents.
     manual run until the variant of Milestone S4 exists.
   - Results equal sequential evaluation: `//donner/base/tasks:task_scheduler_fuzzer`.
   - The stack-floor check stops the process with a named failure: a death test in
-    `//donner/base/tasks:task_scheduler_tests`. It is a release assertion, so it is enforced in
+    `//donner/base/tasks:worker_stack_tests`. It is a release assertion, so it is enforced in
     every build, not only in debug ones.
   - Peers are never linked into a shipped target:
     `//donner/benchmarks/tasks:peer_dependency_audit_test`, a `forbidden_transitive_dep_test`
