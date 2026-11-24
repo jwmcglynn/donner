@@ -187,15 +187,16 @@ FilterNode makeFilterNode2(FilterPrimitive primitive, const FilterPrimitiveCompo
 /// diagnostics.
 void ApplyFloodOpacity(Property<double>& opacity, const ComputedStyleComponent& style,
                        ParseWarningSink& warnings) {
-  if (style.resourceOpacities) {
-    opacity.set(style.resourceOpacities->floodOpacity, style.resourceOpacities->floodSpecificity);
+  if (style.resourceOpacities()) {
+    opacity.set(style.resourceOpacities()->floodOpacity,
+                style.resourceOpacities()->floodSpecificity);
     return;
   }
-  if (!style.properties) {
+  if (!style.properties()) {
     return;
   }
-  const auto found = style.properties->unparsedProperties.find(RcString("flood-opacity"));
-  if (found == style.properties->unparsedProperties.end()) {
+  const auto found = style.properties()->unparsedProperties.find(RcString("flood-opacity"));
+  if (found == style.properties()->unparsedProperties.end()) {
     return;
   }
   const auto params =
@@ -215,15 +216,15 @@ template <typename Component>
 void ApplyFloodStyle(Component& properties, const ComputedStyleComponent& style,
                      ParseWarningSink& warnings) {
   ApplyFloodOpacity(properties.floodOpacity, style, warnings);
-  if (!style.properties) {
+  if (!style.properties()) {
     return;
   }
-  const auto& color = style.properties->floodColor;
+  const auto& color = style.properties()->floodColor;
   if (color.isSpecified() && color.specificity >= properties.floodColor.specificity) {
     properties.floodColor = color;
   }
   if (properties.floodColor.isSpecified() && properties.floodColor.get().value().isCurrentColor()) {
-    const auto& currentColor = style.properties->color;
+    const auto& currentColor = style.properties()->color;
     properties.floodColor.set(currentColor.get().value(), currentColor.specificity);
   }
 }
@@ -257,12 +258,12 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
 
   // Overlay computed CSS properties (from attributes, inline styles, or stylesheet rules).
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
-    if (style->properties.has_value()) {
-      const auto& computedColor = style->properties->lightingColor;
+    if (style->properties()) {
+      const auto& computedColor = style->properties()->lightingColor;
       if (computedColor.isSpecified() && computedColor.specificity >= lightingColor.specificity) {
         lightingColor = computedColor;
       }
-      for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
+      for (const auto& [name, unparsedProperty] : style->properties()->unparsedProperties) {
         if (name == "lighting-color") {
           const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
               unparsedProperty.declaration, unparsedProperty.specificity,
@@ -282,7 +283,7 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
 
     // Resolve currentColor.
     if (lightingColor.isSpecified() && lightingColor.get().value().isCurrentColor()) {
-      const auto& currentColor = style->properties->color;
+      const auto& currentColor = style->properties()->color;
       lightingColor.set(currentColor.get().value(), currentColor.specificity);
     }
   }
@@ -296,9 +297,8 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
 std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(const Registry& registry,
                                                                           entt::entity cur) {
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
-    if (style->properties.has_value() &&
-        style->properties->colorInterpolationFilters.isSpecified()) {
-      return style->properties->colorInterpolationFilters.get().value();
+    if (style->properties() && style->properties()->colorInterpolationFilters.isSpecified()) {
+      return style->properties()->colorInterpolationFilters.get().value();
     }
   }
   return std::nullopt;
@@ -487,8 +487,8 @@ void AppendImageNode(Registry& registry, Entity current, FilterGraph& graph,
   primitive.href = component.href;
   primitive.preserveAspectRatio = component.preserveAspectRatio;
   if (const auto* style = registry.try_get<ComputedStyleComponent>(current);
-      style && style->properties.has_value()) {
-    primitive.imageRendering = style->properties->imageRendering.get().value();
+      style && style->properties()) {
+    primitive.imageRendering = style->properties()->imageRendering.get().value();
   }
   if (const auto* loaded = registry.try_get<LoadedImageComponent>(current);
       loaded && loaded->image.has_value()) {

@@ -189,7 +189,19 @@ struct Property {
       const Property<T, kCascade>& parent,
       PropertyInheritOptions options = PropertyInheritOptions::All) const {
     Property<T, kCascade> result = *this;
+    result.inherit(parent, options);
+    return result;
+  }
 
+  /**
+   * Inherit the property from the parent element in place, with the result of \ref inheritFrom.
+   *
+   * @param parent Parent property to inherit into this one. Must not be this property.
+   * @param options Options to control how inheritance is performed, to conditionally disable
+   *   inheritance.
+   */
+  void inherit(const Property<T, kCascade>& parent,
+               PropertyInheritOptions options = PropertyInheritOptions::All) {
     if constexpr (kCascade == PropertyCascade::Inherit ||
                   kCascade == PropertyCascade::PaintInherit) {
       // A parent still in the Inherit state had no ancestor to inherit from, such as `inherit` on
@@ -202,26 +214,24 @@ struct Property {
         if (state == PropertyState::NotSet || state == PropertyState::Inherit ||
             state == PropertyState::ExplicitUnset) {
           // Inherit from parent.
-          result.value = parent.get();
+          value = parent.get();
           // Keep current specificity.
-          result.state = PropertyState::Set;
+          state = PropertyState::Set;
         } else if (parent.specificity > specificity) {
           // Inherit from parent, but with a lower specificity.
-          result.value = parent.get();
-          result.specificity = parent.specificity;
-          result.state = PropertyState::Set;
+          value = parent.get();
+          specificity = parent.specificity;
+          state = PropertyState::Set;
         }
       }
     } else {
       // Inherit only if the state is Inherit.
       if (state == PropertyState::Inherit) {
-        result.value = parent.get();
+        value = parent.get();
         // Keep current specificity.
-        result.state = PropertyState::Set;
+        state = PropertyState::Set;
       }
     }
-
-    return result;
   }
 
   /**

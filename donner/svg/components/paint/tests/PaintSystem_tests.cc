@@ -215,10 +215,10 @@ TEST_F(PaintSystemTest, CreateComputedStopReturnsExistingComponent) {
   auto entity = stopElement.unsafeEntityHandle().entity();
   auto& stop = registry.get<StopComponent>(entity);
   auto& style = registry.emplace<ComputedStyleComponent>(entity);
-  style.properties.emplace();
+  style.style = std::make_shared<ComputedStyle>();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   auto& existing = registry.emplace<ComputedStopComponent>(
-      entity, stop.properties, style, style.properties->unparsedProperties, disabledSink);
+      entity, stop.properties, style, style.properties()->unparsedProperties, disabledSink);
 
   ParseWarningSink warningSink;
   const ComputedStopComponent& result =

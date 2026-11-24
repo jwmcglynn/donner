@@ -385,7 +385,7 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
                                        const components::ComputedStyleComponent& style,
                                        const components::TextComponent& textComp) {
   TextLayoutParams params;
-  const auto& properties = style.properties.value();
+  const auto& properties = *style.properties();
 
   params.fontFamilies = properties.fontFamily.get().value();
   params.fontSize = properties.fontSize.get().value();
@@ -870,11 +870,11 @@ void ResolveBidiEmbeddings(Registry& registry, Entity styleEntity,
       break;
     }
     if (const auto* style = registry.try_get<components::ComputedStyleComponent>(element);
-        style && style->properties) {
-      const UnicodeBidi value = style->properties->unicodeBidi.get().value();
+        style && style->properties()) {
+      const UnicodeBidi value = style->properties()->unicodeBidi.get().value();
       if (value != UnicodeBidi::Normal) {
         span.bidiEmbeddings.push_back(
-            {element, value, style->properties->direction.get().value() == Direction::Rtl});
+            {element, value, style->properties()->direction.get().value() == Direction::Rtl});
       }
     }
     const auto* tree = registry.try_get<donner::components::TreeComponent>(element);
@@ -939,8 +939,8 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     const Entity styleEntity = styleContext ? styleContext->styleEntityFor(owner) : owner;
     if (styleEntity != entt::null) {
       if (const auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
-          style && style->properties) {
-        fontSize = style->properties->fontSize.get().value();
+          style && style->properties()) {
+        fontSize = style->properties()->fontSize.get().value();
       }
     }
   }
@@ -953,7 +953,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     Entity styleEntity =
         styleContext ? styleContext->styleEntityFor(span.sourceEntity) : span.sourceEntity;
     auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
-    if ((!style || !style->properties) &&
+    if ((!style || !style->properties()) &&
         registry.all_of<donner::components::TreeComponent>(styleEntity)) {
       const Entity parent = registry.get<donner::components::TreeComponent>(styleEntity).parent();
       if (parent != entt::null) {
@@ -962,24 +962,24 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       }
     }
 
-    if (!style || !style->properties) {
+    if (!style || !style->properties()) {
       continue;
     }
 
-    span.rightToLeftInline = RightToLeftInline(style->properties->direction.get().value(),
-                                               style->properties->writingMode.get().value(),
+    span.rightToLeftInline = RightToLeftInline(style->properties()->direction.get().value(),
+                                               style->properties()->writingMode.get().value(),
                                                span.pathSpline.has_value());
     ResolveBidiEmbeddings(registry, styleEntity, styleContext, span);
     span.textAnchor =
-        PhysicalTextAnchor(style->properties->textAnchor.get().value(), span.rightToLeftInline);
-    span.textDecoration = style->properties->textDecoration.get().value();
-    span.textOrientation = style->properties->textOrientation.get().value();
-    span.baselineShift = style->properties->baselineShift.get().value();
+        PhysicalTextAnchor(style->properties()->textAnchor.get().value(), span.rightToLeftInline);
+    span.textDecoration = style->properties()->textDecoration.get().value();
+    span.textOrientation = style->properties()->textOrientation.get().value();
+    span.baselineShift = style->properties()->baselineShift.get().value();
 
     // Effective baseline alignment (matching resvg): a non-auto `alignment-baseline`
     // overrides; otherwise the span's (inherited) `dominant-baseline` applies.
     {
-      DominantBaseline dominantBaseline = style->properties->dominantBaseline.get().value();
+      DominantBaseline dominantBaseline = style->properties()->dominantBaseline.get().value();
       if (dominantBaseline == DominantBaseline::NoChange) {
         // `no-change` uses the parent element's dominant baseline (one level, matching
         // resvg). A residual NoChange (parent is also no-change, or there is no parent
@@ -991,35 +991,36 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
                   parent != entt::null
                       ? registry.try_get<components::ComputedStyleComponent>(parent)
                       : nullptr;
-              parentStyle && parentStyle->properties) {
-            dominantBaseline = parentStyle->properties->dominantBaseline.get().value();
+              parentStyle && parentStyle->properties()) {
+            dominantBaseline = parentStyle->properties()->dominantBaseline.get().value();
           }
         }
       }
 
-      const DominantBaseline alignmentBaseline = style->properties->alignmentBaseline.get().value();
+      const DominantBaseline alignmentBaseline =
+          style->properties()->alignmentBaseline.get().value();
       span.alignmentBaseline =
           alignmentBaseline != DominantBaseline::Auto ? alignmentBaseline : dominantBaseline;
     }
 
-    span.fontWeight = style->properties->fontWeight.get().value();
-    span.fontStyle = style->properties->fontStyle.get().value();
-    span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
-    span.fontVariant = style->properties->fontVariant.get().value();
-    span.fontSynthesisSmallCaps = style->properties->fontSynthesisSmallCaps.get().value();
-    span.fontSynthesisStyle = style->properties->fontSynthesisStyle.get().value();
-    span.textTransform = style->properties->textTransform.get().value();
-    span.overflowWrap = style->properties->overflowWrap.get().value();
-    span.fontKerning = style->properties->fontKerning.get().value();
-    span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
-    span.fontSize = style->properties->fontSize.get().value();
+    span.fontWeight = style->properties()->fontWeight.get().value();
+    span.fontStyle = style->properties()->fontStyle.get().value();
+    span.fontStretch = static_cast<FontStretch>(style->properties()->fontStretch.get().value());
+    span.fontVariant = style->properties()->fontVariant.get().value();
+    span.fontSynthesisSmallCaps = style->properties()->fontSynthesisSmallCaps.get().value();
+    span.fontSynthesisStyle = style->properties()->fontSynthesisStyle.get().value();
+    span.textTransform = style->properties()->textTransform.get().value();
+    span.overflowWrap = style->properties()->overflowWrap.get().value();
+    span.fontKerning = style->properties()->fontKerning.get().value();
+    span.fontSizeAdjust.emplace(style->properties()->fontSizeAdjust.get().value());
+    span.fontSize = style->properties()->fontSize.get().value();
     span.hasResolvedFontSize = true;
-    span.fontFamilies = fontFamilyLists.listFor(styleEntity, *style->properties);
-    span.visibility = style->properties->visibility.get().value();
-    span.letterSpacingPx = style->properties->letterSpacing.get().value().toPixels(
+    span.fontFamilies = fontFamilyLists.listFor(styleEntity, *style->properties());
+    span.visibility = style->properties()->visibility.get().value();
+    span.letterSpacingPx = style->properties()->letterSpacing.get().value().toPixels(
         viewBox, fontMetrics, Lengthd::Extent::X);
-    span.wordSpacingPx = style->properties->wordSpacing.get().value().toPixels(viewBox, fontMetrics,
-                                                                               Lengthd::Extent::X);
+    span.wordSpacingPx = style->properties()->wordSpacing.get().value().toPixels(
+        viewBox, fontMetrics, Lengthd::Extent::X);
 
     span.baselineShiftKeyword = BSK::Length;
     span.ancestorBaselineShifts.clear();
@@ -1044,14 +1045,14 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
         }
 
         auto* ancestorStyle = registry.try_get<components::ComputedStyleComponent>(ancestor);
-        if (!ancestorStyle || !ancestorStyle->properties) {
+        if (!ancestorStyle || !ancestorStyle->properties()) {
           continue;
         }
 
-        const Lengthd ancestorShift = ancestorStyle->properties->baselineShift.get().value();
+        const Lengthd ancestorShift = ancestorStyle->properties()->baselineShift.get().value();
         const double ancestorFontSizePx =
-            ancestorStyle->properties->fontSize.get().value().toPixels(viewBox, fontMetrics,
-                                                                       Lengthd::Extent::Mixed);
+            ancestorStyle->properties()->fontSize.get().value().toPixels(viewBox, fontMetrics,
+                                                                         Lengthd::Extent::Mixed);
         BSK ancestorKeyword = BSK::Length;
         if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == -0.33) {
           ancestorKeyword = BSK::Sub;
@@ -2113,8 +2114,8 @@ private:
       return span.fontSize;
     }
     const auto* style = registry_.try_get<components::ComputedStyleComponent>(owner);
-    if (style && style->properties) {
-      return style->properties->fontSize.get().value();
+    if (style && style->properties()) {
+      return style->properties()->fontSize.get().value();
     }
     return std::nullopt;
   }
@@ -3948,7 +3949,7 @@ void TextEngine::resolvePerSpanLayoutStyles(EntityHandle textRootHandle,
   const EntityHandle styleRoot(registry_,
                                styleContext ? styleContext->rootEntity : textRootHandle.entity());
   const auto* style = styleRoot.try_get<components::ComputedStyleComponent>();
-  if (!textComp || !style || !style->properties) {
+  if (!textComp || !style || !style->properties()) {
     return;
   }
 
@@ -6642,10 +6643,10 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
                                              const FontMetrics& fontMetrics) const {
   UTILS_RELEASE_ASSERT(styleOwner.registry() == &registry_);
   const auto* style = registry_.try_get<components::ComputedStyleComponent>(styleOwner.entity());
-  if (!style || !style->properties) {
+  if (!style || !style->properties()) {
     return {};
   }
-  const auto& properties = *style->properties;
+  const auto& properties = *style->properties();
   components::ComputedTextComponent::TextSpan span;
   const SmallVector<RcString, 1> families = properties.fontFamily.get().value();
   span.fontWeight = properties.fontWeight.get().value();
@@ -9031,8 +9032,8 @@ bool ReserveTextStyleContextExpansion(Registry& registry,
     }
     Entity styleEntity = styleContext->styleEntityFor(span.sourceEntity);
     const auto* spanStyle = registry.try_get<components::ComputedStyleComponent>(styleEntity);
-    if (!spanStyle || !spanStyle->properties ||
-        !work.reserve(spanStyle->properties->fontFamily.get().value().size())) {
+    if (!spanStyle || !spanStyle->properties() ||
+        !work.reserve(spanStyle->properties()->fontFamily.get().value().size())) {
       return false;
     }
     if (!ReserveTextStyleAncestors(registry, styleEntity, *styleContext, work)) {
@@ -9060,10 +9061,10 @@ bool AdmitTextReferenceInput(const components::ComputedTextComponent& computed,
                              const components::ComputedStyleComponent& style,
                              TextReferenceWork& work) {
   if (!ReserveTextReferenceInput(computed, work) ||
-      !work.reserve(style.properties->fontFamily.get().value().size())) {
+      !work.reserve(style.properties()->fontFamily.get().value().size())) {
     return false;
   }
-  if (isVertical(style.properties->writingMode.get().value())) {
+  if (isVertical(style.properties()->writingMode.get().value())) {
     // The horizontal glyph-cell contract cannot stand in for upright/sideways vertical cells.
     return work.reject();
   }
@@ -9082,7 +9083,7 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
   const auto* text = registry_.try_get<components::TextComponent>(root);
   const Entity styleRootEntity = styleContext ? styleContext->rootEntity : root;
   const auto* style = registry_.try_get<components::ComputedStyleComponent>(styleRootEntity);
-  if (!computed || !text || !style || !style->properties) {
+  if (!computed || !text || !style || !style->properties()) {
     return ReferenceGeometry();
   }
   if (!AdmitTextReferenceInput(*computed, *style, work)) {
@@ -9142,7 +9143,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   const auto* computedText = registry_.try_get<components::ComputedTextComponent>(textRootEntity);
   const auto* textComp = registry_.try_get<components::TextComponent>(textRootEntity);
   const auto* style = registry_.try_get<components::ComputedStyleComponent>(textRootEntity);
-  if (!computedText || !textComp || !style || !style->properties) {
+  if (!computedText || !textComp || !style || !style->properties()) {
     return emptyAndReturn();
   }
 

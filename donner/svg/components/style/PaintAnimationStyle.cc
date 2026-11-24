@@ -302,7 +302,7 @@ void ApplyPaintAnimationStyles(Registry& registry, Entity source,
     return;
   }
   static const PropertyRegistry defaults;
-  const auto& inherited = parent && parent->properties ? *parent->properties : defaults;
+  const auto& inherited = parent && parent->properties() ? *parent->properties() : defaults;
   const auto& paintParent = inheritPaint ? inherited : defaults;
   SeedResourceColors(registry, source, properties);
   AnimationValueContext context;

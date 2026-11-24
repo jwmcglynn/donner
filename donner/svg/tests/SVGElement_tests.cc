@@ -898,8 +898,8 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
 
   const auto* initialComputed = child->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(initialComputed, nullptr);
-  ASSERT_TRUE(initialComputed->properties.has_value());
-  EXPECT_EQ(initialComputed->properties->fill.get().value(),
+  ASSERT_THAT(initialComputed->properties(), testing::NotNull());
+  EXPECT_EQ(initialComputed->properties()->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))));
 
   parent->setAttribute("fill", "red");
@@ -913,8 +913,8 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
 
   const auto* updatedComputed = child->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(updatedComputed, nullptr);
-  ASSERT_TRUE(updatedComputed->properties.has_value());
-  EXPECT_EQ(updatedComputed->properties->fill.get().value(),
+  ASSERT_THAT(updatedComputed->properties(), testing::NotNull());
+  EXPECT_EQ(updatedComputed->properties()->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0))));
 }
 
@@ -947,10 +947,13 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
 
   auto* siblingComputed = sibling->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(siblingComputed, nullptr);
-  ASSERT_TRUE(siblingComputed->properties.has_value());
+  ASSERT_THAT(siblingComputed->properties(), testing::NotNull());
 
-  siblingComputed->properties->fill.set(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))),
-                                        css::Specificity::Override());
+  // Stored records are immutable; mark the sibling by replacing its record with an edited copy.
+  auto marked = std::make_shared<components::ComputedStyle>(*siblingComputed->style);
+  marked->properties.fill.set(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))),
+                              css::Specificity::Override());
+  siblingComputed->style = std::move(marked);
 
   target->entityHandle().get_or_emplace<components::StyleComponent>().properties.opacity.set(
       0.5, css::Specificity::Override());
@@ -965,13 +968,13 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
 
   const auto* targetComputed = target->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(targetComputed, nullptr);
-  ASSERT_TRUE(targetComputed->properties.has_value());
-  EXPECT_DOUBLE_EQ(targetComputed->properties->opacity.get().value(), 0.5);
+  ASSERT_THAT(targetComputed->properties(), testing::NotNull());
+  EXPECT_DOUBLE_EQ(targetComputed->properties()->opacity.get().value(), 0.5);
 
   siblingComputed = sibling->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(siblingComputed, nullptr);
-  ASSERT_TRUE(siblingComputed->properties.has_value());
-  EXPECT_EQ(siblingComputed->properties->fill.get().value(),
+  ASSERT_THAT(siblingComputed->properties(), testing::NotNull());
+  EXPECT_EQ(siblingComputed->properties()->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))));
 }
 
@@ -1008,8 +1011,8 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
   const auto* initialComputed =
       second->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(initialComputed, nullptr);
-  ASSERT_TRUE(initialComputed->properties.has_value());
-  EXPECT_EQ(initialComputed->properties->fill.get().value(),
+  ASSERT_THAT(initialComputed->properties(), testing::NotNull());
+  EXPECT_EQ(initialComputed->properties()->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))));
 
   first->setClassName("");
@@ -1023,8 +1026,8 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
   const auto* updatedComputed =
       second->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(updatedComputed, nullptr);
-  ASSERT_TRUE(updatedComputed->properties.has_value());
-  EXPECT_EQ(updatedComputed->properties->fill.get().value(),
+  ASSERT_THAT(updatedComputed->properties(), testing::NotNull());
+  EXPECT_EQ(updatedComputed->properties()->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0))));
 }
 
@@ -1266,9 +1269,10 @@ TEST_F(SVGElementTests, ComputedStyleStorageGrowthKeepsComponentAddressesAndValu
   for (size_t index = 0; index < kPage * 2 + 1; ++index) {
     const Entity entity = registry.create();
     auto& style = registry.emplace<components::ComputedStyleComponent>(entity);
-    style.properties.emplace();
-    style.properties->overflowWrap.set(
+    auto record = std::make_shared<components::ComputedStyle>();
+    record->properties.overflowWrap.set(
         index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal, css::Specificity());
+    style.style = std::move(record);
     retained.emplace_back(entity, &style);
   }
   const Registry& readOnly = registry;
@@ -1280,8 +1284,8 @@ TEST_F(SVGElementTests, ComputedStyleStorageGrowthKeepsComponentAddressesAndValu
     const auto* current =
         registry.try_get<components::ComputedStyleComponent>(retained[index].first);
     ASSERT_THAT(current, testing::Eq(retained[index].second));
-    ASSERT_THAT(current->properties, testing::Optional(testing::_));
-    EXPECT_THAT(current->properties->overflowWrap.get(),
+    ASSERT_THAT(current->properties(), testing::NotNull());
+    EXPECT_THAT(current->properties()->overflowWrap.get(),
                 Optional(index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal));
   }
   std::vector<Entity> visited;

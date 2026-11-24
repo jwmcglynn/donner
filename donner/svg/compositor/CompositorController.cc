@@ -150,8 +150,8 @@ bool CanFlattenInteractionSubtree(Registry& registry, Entity root) {
     if (const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity)) {
       const auto* style =
           instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
-      if (style == nullptr || !style->properties.has_value() ||
-          style->properties->mixBlendMode.get().value() != MixBlendMode::Normal ||
+      if (style == nullptr || !style->properties() ||
+          style->properties()->mixBlendMode.get().value() != MixBlendMode::Normal ||
           instance->resolvedFilter.has_value()) {
         return false;
       }
@@ -260,8 +260,8 @@ bool OwnerSupportsDamagePatching(Registry& registry, const CompositorLayer& owne
     }
     const auto* style =
         instance.styleHandle(registry).try_get<components::ComputedStyleComponent>();
-    if (style == nullptr || !style->properties.has_value() ||
-        style->properties->mixBlendMode.get().value() != MixBlendMode::Normal) {
+    if (style == nullptr || !style->properties() ||
+        style->properties()->mixBlendMode.get().value() != MixBlendMode::Normal) {
       return false;
     }
     if (entity == owner.lastEntity()) {
@@ -3325,10 +3325,10 @@ namespace {
 bool OpensCompositingContext(Registry& registry,
                              const components::RenderingInstanceComponent& instance) {
   const auto* style = instance.styleHandle(registry).try_get<components::ComputedStyleComponent>();
-  if (style == nullptr || !style->properties.has_value()) {
+  if (style == nullptr || !style->properties()) {
     return true;
   }
-  const auto& properties = *style->properties;
+  const auto& properties = *style->properties();
   return properties.opacity.get().value() < 1.0 ||
          properties.mixBlendMode.get().value() != MixBlendMode::Normal ||
          properties.isolation.get().value() == Isolation::Isolate || instance.hasClipPath() ||
@@ -3710,8 +3710,8 @@ FallbackReason CompositorController::detectFallbackReasons(
   // style direct-composes; refreshLayerMetadata re-derives the reasons from
   // the fresh style immediately after the prepare in the same frame.
   const auto* style = instance.styleHandle(registry).try_get<components::ComputedStyleComponent>();
-  if (style == nullptr || !style->properties.has_value() ||
-      style->properties->mixBlendMode.get().value() != MixBlendMode::Normal) {
+  if (style == nullptr || !style->properties() ||
+      style->properties()->mixBlendMode.get().value() != MixBlendMode::Normal) {
     reasons |= FallbackReason::BlendMode;
   }
 

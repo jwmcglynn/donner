@@ -92,6 +92,30 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
   return result;
 }
 
+/**
+ * Whole \ref PropertyRegistry copies and moves made on the calling thread: every copy or move
+ * construction and assignment, each of which writes every property. Counts only grow; the style
+ * system reports the difference across a cascade.
+ */
+std::uint64_t PropertyRegistryCopyCount();
+
+/// Empty base of \ref PropertyRegistry that counts its copies and moves in
+/// \ref PropertyRegistryCopyCount.
+class PropertyRegistryCopyCounter {
+public:
+  /// Constructs without counting.
+  PropertyRegistryCopyCounter() = default;
+  /// Counts one copy.
+  PropertyRegistryCopyCounter(const PropertyRegistryCopyCounter&) noexcept;
+  /// Counts one move.
+  PropertyRegistryCopyCounter(PropertyRegistryCopyCounter&&) noexcept;
+  /// Counts one copy.
+  PropertyRegistryCopyCounter& operator=(const PropertyRegistryCopyCounter&) noexcept;
+  /// Counts one move.
+  PropertyRegistryCopyCounter& operator=(PropertyRegistryCopyCounter&&) noexcept;
+  ~PropertyRegistryCopyCounter() = default;
+};
+
 }  // namespace details
 
 /**
@@ -153,7 +177,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `inline-size` | \ref inlineSize | `0` |
  * | `text-indent` | \ref textIndent | `0px` |
  */
-class PropertyRegistry {
+class PropertyRegistry : private details::PropertyRegistryCopyCounter {
 public:
   /// `color` property, which stores the context color of the element. For painting shapes, use \ref
   /// stroke or \ref fill instead.
@@ -653,6 +677,18 @@ public:
   [[nodiscard]] PropertyRegistry inheritFrom(
       const PropertyRegistry& parent,
       PropertyInheritOptions options = PropertyInheritOptions::All) const;
+
+  /**
+   * Inherit the value of each property from \p parent in place, with the result of
+   * \ref inheritFrom but without building a new registry.
+   *
+   * @param parent PropertyRegistry from this element's direct parent, where properties will be
+   *   inherited from. Must not be this registry.
+   * @param options Options for how to inherit properties, which can be used to skip inheritance for
+   *   a category of properties.
+   */
+  void inherit(const PropertyRegistry& parent,
+               PropertyInheritOptions options = PropertyInheritOptions::All);
 
   /// Dynamic bytes in inheritable complex property values that copying would retain.
   [[nodiscard]] std::size_t complexPropertyBytes() const;

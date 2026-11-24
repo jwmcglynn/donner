@@ -176,8 +176,8 @@ TEST_F(ShapeSystemTest, RoundedInsetAdmitsFullCornerWorkBeforeAllocation) {
   ASSERT_THAT(element, testing::Optional(testing::_));
   ParseWarningSink warnings;
   const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
-  ASSERT_THAT(style.properties, testing::Optional(testing::_));
-  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(style.properties(), testing::NotNull());
+  const auto clip = style.properties()->clipPath.get();
   ASSERT_THAT(clip, testing::Optional(testing::Field(
                         &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
   const auto& inset = std::get<InsetClipPath>(clip->value);
@@ -206,8 +206,8 @@ TEST_F(ShapeSystemTest, RoundedInsetHugeRadiiRetainRepresentableTinyUsedCorners)
   ASSERT_THAT(element, testing::Optional(testing::_));
   ParseWarningSink warnings;
   const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
-  ASSERT_THAT(style.properties, testing::Optional(testing::_));
-  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(style.properties(), testing::NotNull());
+  const auto clip = style.properties()->clipPath.get();
   ASSERT_THAT(clip, testing::Optional(testing::Field(
                         &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
   CircleClipGeometryBudget budget;
@@ -229,8 +229,8 @@ TEST_F(ShapeSystemTest, RoundedInsetPreservesTinyCornersAcrossLargeNormalization
   ASSERT_THAT(element, testing::Optional(testing::_));
   ParseWarningSink warnings;
   const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
-  ASSERT_THAT(style.properties, testing::Optional(testing::_));
-  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(style.properties(), testing::NotNull());
+  const auto clip = style.properties()->clipPath.get();
   ASSERT_THAT(clip, testing::Optional(testing::Field(
                         &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
   CircleClipGeometryBudget budget;
@@ -252,8 +252,8 @@ TEST_F(ShapeSystemTest, RoundedInsetLargePercentageAvoidsIntermediateOverflow) {
   ASSERT_THAT(element, testing::Optional(testing::_));
   ParseWarningSink warnings;
   const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
-  ASSERT_THAT(style.properties, testing::Optional(testing::_));
-  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(style.properties(), testing::NotNull());
+  const auto clip = style.properties()->clipPath.get();
   ASSERT_THAT(clip, testing::Optional(testing::Field(
                         &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
   CircleClipGeometryBudget budget;
@@ -275,8 +275,8 @@ TEST_F(ShapeSystemTest, RoundedInsetPercentagePreservesTinyReferenceExtent) {
   ASSERT_THAT(element, testing::Optional(testing::_));
   ParseWarningSink warnings;
   const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
-  ASSERT_THAT(style.properties, testing::Optional(testing::_));
-  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(style.properties(), testing::NotNull());
+  const auto clip = style.properties()->clipPath.get();
   ASSERT_THAT(clip, testing::Optional(testing::Field(
                         &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
   CircleClipGeometryBudget budget;
@@ -748,7 +748,7 @@ TEST_F(ShapeSystemTest, GetShapeBoundsComputesEmptyStylePlaceholder) {
 
   const auto* style = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(style, NotNull());
-  EXPECT_TRUE(style->properties.has_value());
+  EXPECT_THAT(style->properties(), testing::NotNull());
 }
 
 TEST_F(ShapeSystemTest, PathFillIntersects) {

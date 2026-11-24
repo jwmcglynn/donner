@@ -10,6 +10,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <ostream>
 #include <span>
 #include <string>
@@ -255,7 +256,7 @@ TEST_F(StyleSystemTest, ExhaustedPaintWorkPreservesBaseAndRecoversOnTheNextSampl
   styleSystem.invalidateComputed(target);
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   {
-    const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+    const auto& properties = *styleSystem.computeStyle(target, warnings).properties();
     EXPECT_EQ(properties.fill.get(),
               PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));
     EXPECT_EQ(properties.color.get(), css::Color(css::RGBA::RGB(0, 255, 0)));
@@ -265,7 +266,7 @@ TEST_F(StyleSystemTest, ExhaustedPaintWorkPreservesBaseAndRecoversOnTheNextSampl
   registry.ctx().emplace<AnimationStyleContext>().enabled = true;
   styleSystem.invalidateComputed(target);
   {
-    const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+    const auto& properties = *styleSystem.computeStyle(target, warnings).properties();
     EXPECT_EQ(properties.fill.get(),
               PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
     EXPECT_EQ(properties.color.get(), css::Color(css::RGBA::RGB(255, 0, 0)));
@@ -294,7 +295,7 @@ TEST_F(StyleSystemTest, MidStackPaintWorkRefusalDiscardsPartialLowerAnimation) {
 
   styleSystem.invalidateComputed(target);
   ParseWarningSink warnings = ParseWarningSink::Disabled();
-  const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+  const auto& properties = *styleSystem.computeStyle(target, warnings).properties();
   EXPECT_EQ(properties.fill.get(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));
   EXPECT_FALSE(budget.rejected());
@@ -327,7 +328,7 @@ TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
   std::vector<double> opacities;
   for (const Entity target : targets) {
     opacities.push_back(
-        registry.get<ComputedStyleComponent>(target).properties->opacity.get().value());
+        registry.get<ComputedStyleComponent>(target).properties()->opacity.get().value());
   }
   EXPECT_THAT(opacities, testing::UnorderedElementsAre(0.5, 0.5, 0.5, 1.0));
 }
@@ -343,7 +344,7 @@ TEST_F(StyleSystemTest, ComputeAllStylesCreatesComponents) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_TRUE(computed->properties.has_value());
+  EXPECT_THAT(computed->properties(), NotNull());
 }
 
 TEST_F(StyleSystemTest, InlineStyleApplied) {
@@ -357,7 +358,7 @@ TEST_F(StyleSystemTest, InlineStyleApplied) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_TRUE(computed->properties.has_value());
+  EXPECT_THAT(computed->properties(), NotNull());
 }
 
 // --- CSS stylesheet rules ---
@@ -376,7 +377,7 @@ TEST_F(StyleSystemTest, StylesheetRulesApplied) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_TRUE(computed->properties.has_value());
+  EXPECT_THAT(computed->properties(), NotNull());
 }
 
 TEST_F(StyleSystemTest, IdSelectorStyleApplied) {
@@ -393,7 +394,7 @@ TEST_F(StyleSystemTest, IdSelectorStyleApplied) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_TRUE(computed->properties.has_value());
+  EXPECT_THAT(computed->properties(), NotNull());
 }
 
 TEST_F(StyleSystemTest, StylesheetSourceMapMapsRuleBackToSvgSource) {
@@ -542,7 +543,7 @@ TEST_F(StyleSystemTest, StyleInheritedFromParent) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_TRUE(computed->properties.has_value());
+  EXPECT_THAT(computed->properties(), NotNull());
 }
 
 TEST_F(StyleSystemTest, DisplayNoneComputed) {
@@ -556,8 +557,8 @@ TEST_F(StyleSystemTest, DisplayNoneComputed) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_TRUE(computed->properties.has_value());
-  EXPECT_EQ(computed->properties->display.get().value(), Display::None);
+  EXPECT_THAT(computed->properties(), NotNull());
+  EXPECT_EQ(computed->properties()->display.get().value(), Display::None);
 }
 
 TEST_F(StyleSystemTest, VisibilityHiddenComputed) {
@@ -571,8 +572,8 @@ TEST_F(StyleSystemTest, VisibilityHiddenComputed) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_TRUE(computed->properties.has_value());
-  EXPECT_EQ(computed->properties->visibility.get().value(), Visibility::Hidden);
+  EXPECT_THAT(computed->properties(), NotNull());
+  EXPECT_EQ(computed->properties()->visibility.get().value(), Visibility::Hidden);
 }
 
 // --- Individual style computation ---
@@ -588,7 +589,7 @@ TEST_F(StyleSystemTest, ComputeStyleForSingleEntity) {
   ASSERT_TRUE(element.has_value());
   ParseWarningSink warningSink;
   const auto& computed = styleSystem.computeStyle(element->entityHandle(), warningSink);
-  EXPECT_TRUE(computed.properties.has_value());
+  EXPECT_THAT(computed.properties(), NotNull());
 }
 
 // --- Invalidation ---
@@ -624,7 +625,7 @@ TEST_F(StyleSystemTest, MultipleElementsAllComputed) {
     ASSERT_TRUE(element.has_value()) << "Missing element: " << id;
     auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
     ASSERT_THAT(computed, NotNull()) << "No computed style for: " << id;
-    EXPECT_TRUE(computed->properties.has_value()) << "No properties for: " << id;
+    EXPECT_THAT(computed->properties(), NotNull()) << "No properties for: " << id;
   }
 }
 
@@ -672,9 +673,9 @@ TEST_F(StyleSystemTest, UpdateStyleMergesAndInvalidatesComputedStyle) {
 
   ParseWarningSink warningSink;
   const auto& computed = styleSystem.computeStyle(element->entityHandle(), warningSink);
-  EXPECT_EQ(computed.properties->fill.get().value(),
+  EXPECT_EQ(computed.properties()->fill.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 0xFF)))));
-  EXPECT_EQ(computed.properties->stroke.get().value(),
+  EXPECT_EQ(computed.properties()->stroke.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
 }
 
@@ -729,12 +730,14 @@ TEST_F(StyleSystemTest, ComputeAllStylesDirtyOnlyRecomputesStyleDirtyEntities) {
 
   EXPECT_EQ(document.registry()
                 .get<ComputedStyleComponent>(dirty.entity())
-                .properties->fill.get()
+                .properties()
+                ->fill.get()
                 .value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
   EXPECT_EQ(document.registry()
                 .get<ComputedStyleComponent>(clean.entity())
-                .properties->fill.get()
+                .properties()
+                ->fill.get()
                 .value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF)))));
 }
@@ -762,7 +765,8 @@ TEST_F(StyleSystemTest, ComputeAllStylesFullRecomputeClearsAndRebuildsStyles) {
 
   EXPECT_EQ(document.registry()
                 .get<ComputedStyleComponent>(element->unsafeEntityHandle().entity())
-                .properties->fill.get()
+                .properties()
+                ->fill.get()
                 .value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
 }
@@ -916,15 +920,18 @@ TEST_F(StyleSystemTest, DecorationThicknessComputesEmBeforeExplicitInheritance) 
   const auto child = document.querySelector("#child")->entityHandle();
   const auto plain = document.querySelector("#plain")->entityHandle();
   EXPECT_THAT(registry.get<ComputedStyleComponent>(parent.entity())
-                  .properties->textDecorationThickness.get()
+                  .properties()
+                  ->textDecorationThickness.get()
                   ->value,
               LengthIs(testing::DoubleEq(4), Lengthd::Unit::Px));
   EXPECT_THAT(registry.get<ComputedStyleComponent>(child.entity())
-                  .properties->textDecorationThickness.get()
+                  .properties()
+                  ->textDecorationThickness.get()
                   ->value,
               LengthIs(testing::DoubleEq(4), Lengthd::Unit::Px));
   EXPECT_EQ(registry.get<ComputedStyleComponent>(plain.entity())
-                .properties->textDecorationThickness.get()
+                .properties()
+                ->textDecorationThickness.get()
                 ->kind,
             TextDecorationThickness::Kind::Auto);
 }
@@ -942,12 +949,12 @@ TEST_F(StyleSystemTest, DecorationLonghandsDoNotInheritUnlessRequested) {
     ASSERT_THAT(element, testing::Optional(testing::_));
     const auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
     ASSERT_THAT(computed, NotNull());
-    ASSERT_THAT(computed->properties, testing::Optional(testing::_));
+    ASSERT_THAT(computed->properties(), NotNull());
   }
   const auto& registry = document.registry();
   const auto properties = [&](const char* selector) -> const PropertyRegistry& {
     return *registry.get<ComputedStyleComponent>(document.querySelector(selector)->entityHandle())
-                .properties;
+                .properties();
   };
   // The presentation attribute sets every longhand through the shorthand.
   EXPECT_THAT(properties("#parent").textDecoration.get(),
@@ -982,7 +989,8 @@ TEST_F(StyleSystemTest, DecorationThicknessRetainsInheritedPercentage) {
   const auto child = document.querySelector("#child")->entityHandle();
   EXPECT_THAT(document.registry()
                   .get<ComputedStyleComponent>(child.entity())
-                  .properties->textDecorationThickness.get()
+                  .properties()
+                  ->textDecorationThickness.get()
                   ->value,
               LengthIs(testing::DoubleEq(20), Lengthd::Unit::Percent));
 }
@@ -996,7 +1004,8 @@ TEST_F(StyleSystemTest, DecorationRemUsesComputedRootSizeAndRejectsViewportUnits
   const auto child = document.querySelector("#child")->entityHandle();
   EXPECT_THAT(document.registry()
                   .get<ComputedStyleComponent>(child.entity())
-                  .properties->textDecorationThickness.get()
+                  .properties()
+                  ->textDecorationThickness.get()
                   ->value,
               LengthIs(testing::DoubleEq(30), Lengthd::Unit::Px));
 }
@@ -1013,7 +1022,8 @@ TEST_F(StyleSystemTest, RejectedDecorationUnitsPreserveNestedInheritance) {
     const auto child = document.querySelector("#child")->entityHandle();
     EXPECT_THAT(document.registry()
                     .get<ComputedStyleComponent>(child.entity())
-                    .properties->textDecorationThickness.get()
+                    .properties()
+                    ->textDecorationThickness.get()
                     ->value,
                 LengthIs(testing::DoubleEq(5), Lengthd::Unit::Px));
   }
@@ -1049,13 +1059,13 @@ TEST_F(StyleSystemTest, PathClipInheritanceChargesAndReleasesRetainedStorage) {
   limits.complexPropertyBytes = 2 * pathBytes;
   auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits, family);
   ParseWarningSink warnings;
-  ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+  ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Optional(testing::_));
   EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
-  ASSERT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+  ASSERT_THAT(styleSystem.computeStyle(first, warnings).properties()->clipPath.get(),
               testing::Optional(testing::_));
   EXPECT_EQ(budget.complexPropertyBytes(), 2 * pathBytes);
-  EXPECT_THAT(styleSystem.computeStyle(second, warnings).properties->clipPath.get(),
+  EXPECT_THAT(styleSystem.computeStyle(second, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_THAT(budget.rejected(), testing::IsTrue());
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle),
@@ -1064,12 +1074,12 @@ TEST_F(StyleSystemTest, PathClipInheritanceChargesAndReleasesRetainedStorage) {
   EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
   budget.reset();
   first.get<StyleComponent>().properties.parseStyle("clip-path:none");
-  EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+  EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
   styleSystem.invalidateComputed(parent);
   parent.get<StyleComponent>().properties.parseStyle("clip-path:none");
-  EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+  EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), 0u);
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
@@ -1100,13 +1110,13 @@ TEST_F(StyleSystemTest, PolygonInheritanceChargesAndReleasesRetainedStorage) {
   limits.complexPropertyBytes = 2 * kPolygonBytes;
   auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits, family);
   ParseWarningSink warnings;
-  ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+  ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Optional(testing::_));
   EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
-  ASSERT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+  ASSERT_THAT(styleSystem.computeStyle(first, warnings).properties()->clipPath.get(),
               testing::Optional(testing::_));
   EXPECT_EQ(budget.complexPropertyBytes(), 2 * kPolygonBytes);
-  EXPECT_THAT(styleSystem.computeStyle(second, warnings).properties->clipPath.get(),
+  EXPECT_THAT(styleSystem.computeStyle(second, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_THAT(budget.rejected(), testing::IsTrue());
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle),
@@ -1116,12 +1126,12 @@ TEST_F(StyleSystemTest, PolygonInheritanceChargesAndReleasesRetainedStorage) {
   EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
   budget.reset();
   first.get<StyleComponent>().properties.parseStyle("clip-path:none");
-  EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+  EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
   styleSystem.invalidateComputed(parent);
   parent.get<StyleComponent>().properties.parseStyle("clip-path:none");
-  EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+  EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties()->clipPath.get(),
               testing::Eq(std::nullopt));
   EXPECT_EQ(budget.complexPropertyBytes(), 0u);
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
@@ -1142,8 +1152,8 @@ TEST_F(StyleSystemTest, InsetLengthsComputeBeforeInheritanceAndKeepPercentages) 
     ASSERT_THAT(element, testing::Optional(testing::_));
     const auto& properties = document.registry()
                                  .get<ComputedStyleComponent>(element->entityHandle().entity())
-                                 .properties;
-    ASSERT_THAT(properties, testing::Optional(testing::_));
+                                 .properties();
+    ASSERT_THAT(properties, NotNull());
     EXPECT_THAT(properties->clipPath.get(),
                 testing::Optional(Field(
                     &ClipPath::value,
@@ -1161,8 +1171,8 @@ TEST_F(StyleSystemTest, InsetRootOwnRemUsesAlreadyComputedRootFont) {
     <svg xmlns="http://www.w3.org/2000/svg" font-size="30" clip-path="inset(.25rem)"/>)svg");
   const auto& properties = document.registry()
                                .get<ComputedStyleComponent>(document.rootEntityHandle().entity())
-                               .properties;
-  ASSERT_THAT(properties, testing::Optional(testing::_));
+                               .properties();
+  ASSERT_THAT(properties, NotNull());
   EXPECT_THAT(properties->clipPath.get(),
               testing::Optional(
                   Field(&ClipPath::value,
@@ -1188,8 +1198,8 @@ TEST_F(StyleSystemTest, InsetDetachedRootContextUsesInitialFontWithoutRecursion)
     context.rootEntity = missingRoot;
     styleSystem.invalidateComputed(child);
     ParseWarningSink warningSink;
-    const auto& properties = styleSystem.computeStyle(child, warningSink).properties;
-    ASSERT_THAT(properties, testing::Optional(testing::_));
+    const auto& properties = styleSystem.computeStyle(child, warningSink).properties();
+    ASSERT_THAT(properties, NotNull());
     EXPECT_THAT(properties->clipPath.get(),
                 testing::Optional(
                     Field(&ClipPath::value,
@@ -1388,8 +1398,8 @@ TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiatio
     ASSERT_THAT(shadow.mainBranch, testing::Optional(testing::_));
     ASSERT_THAT(shadow.mainBranch->shadowEntities, testing::Not(testing::IsEmpty()));
     EntityHandle proxy(document.registry(), shadow.mainBranch->shadowEntities.front());
-    const auto& proxyProperties = styleSystem.computeStyle(proxy, warnings).properties;
-    ASSERT_THAT(proxyProperties, testing::Optional(testing::_));
+    const auto& proxyProperties = styleSystem.computeStyle(proxy, warnings).properties();
+    ASSERT_THAT(proxyProperties, NotNull());
     EXPECT_THAT(proxyProperties->opacity.get(), testing::Optional(.2));
     const auto nested = document.querySelector("#nested").value();
     const auto leaf = document.querySelector("#leaf").value();
@@ -1406,16 +1416,16 @@ TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiatio
                                           leaf.entityHandle().entity(), RcString("#leaf"),
                                           warnings);
       ASSERT_THAT(nestedShadow.mainBranch, testing::Optional(testing::_));
-      const auto& nestedProperties = styleSystem.computeStyle(nestedProxy, warnings).properties;
-      ASSERT_THAT(nestedProperties, testing::Optional(testing::_));
+      const auto& nestedProperties = styleSystem.computeStyle(nestedProxy, warnings).properties();
+      ASSERT_THAT(nestedProperties, NotNull());
       EXPECT_THAT(nestedProperties->opacity.get(), testing::Optional(.8));
       testedNested = true;
     }
     EXPECT_TRUE(testedNested);
     const bool empty = std::string_view(id) == "empty";
     EXPECT_EQ(host.isEmptyForSelector(nullptr), empty);
-    const auto& properties = styleSystem.computeStyle(host.entityHandle(), warnings).properties;
-    ASSERT_THAT(properties, testing::Optional(testing::_));
+    const auto& properties = styleSystem.computeStyle(host.entityHandle(), warnings).properties();
+    ASSERT_THAT(properties, NotNull());
     EXPECT_THAT(properties->opacity.get(), testing::Optional(empty ? .8 : .2));
   }
 }
@@ -1440,8 +1450,8 @@ TEST_F(StyleSystemTest, SymbolDirectUseRootPreservesNativeDisplayOverride) {
   ASSERT_THAT(shadowTree.mainBranch, testing::Optional(testing::_));
   ASSERT_THAT(shadowTree.mainBranch->shadowEntities, testing::Not(testing::IsEmpty()));
   EntityHandle root(document.registry(), shadowTree.mainBranch->shadowEntities.front());
-  const auto& properties = styleSystem.computeStyle(root, warnings).properties;
-  ASSERT_THAT(properties, testing::Optional(testing::_));
+  const auto& properties = styleSystem.computeStyle(root, warnings).properties();
+  ASSERT_THAT(properties, NotNull());
   EXPECT_EQ(properties->display.get(), Display::None);
   EXPECT_EQ(properties->display.specificity, css::Specificity::Override());
 }
@@ -1464,8 +1474,8 @@ TEST_F(StyleSystemTest, SymbolShadowRootFromNonUseRemainsDefinition) {
   ASSERT_THAT(shadowTree.mainBranch, testing::Optional(testing::_));
   ASSERT_THAT(shadowTree.mainBranch->shadowEntities, testing::Not(testing::IsEmpty()));
   EntityHandle root(document.registry(), shadowTree.mainBranch->shadowEntities.front());
-  const auto& properties = styleSystem.computeStyle(root, warnings).properties;
-  ASSERT_THAT(properties, testing::Optional(testing::_));
+  const auto& properties = styleSystem.computeStyle(root, warnings).properties();
+  ASSERT_THAT(properties, NotNull());
   EXPECT_EQ(properties->display.get(), Display::None);
 }
 
@@ -1488,8 +1498,8 @@ TEST_F(StyleSystemTest, SymbolExternalOccurrenceAppliesOnlyToExactRootAndRetires
   {
     auto access = document.writeAccess();
     access.registry().ctx().emplace<ExternalUseStyleContext>(
-        root->entityHandle().entity(), PropertyRegistry(), std::nullopt, ResolvedPaintServer(),
-        ResolvedPaintServer(), nullptr, 0, nullptr);
+        root->entityHandle().entity(), std::make_shared<const ComputedStyle>(),
+        ResolvedPaintServer(), ResolvedPaintServer(), nullptr, 0, nullptr);
     styleSystem.invalidateComputed(root->entityHandle());
     EXPECT_EQ(root->getComputedStyle().display.get(), Display::Inline);
     EXPECT_EQ(nested->getComputedStyle().display.get(), Display::None);
@@ -1543,12 +1553,12 @@ TEST_F(StyleSystemTest, ShadowTreeSelectorsMatchSiblingAndAttributeState) {
   const auto& rectStyle = document.registry().get<ComputedStyleComponent>(shadowRect);
   const auto& circleStyle = document.registry().get<ComputedStyleComponent>(shadowCircle);
 
-  EXPECT_EQ(rectStyle.properties->fill.get().value(),
+  EXPECT_EQ(rectStyle.properties()->fill.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
-  EXPECT_EQ(rectStyle.properties->visibility.get().value(), Visibility::Hidden);
-  EXPECT_EQ(circleStyle.properties->stroke.get().value(),
+  EXPECT_EQ(rectStyle.properties()->visibility.get().value(), Visibility::Hidden);
+  EXPECT_EQ(circleStyle.properties()->stroke.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 0xFF)))));
-  EXPECT_DOUBLE_EQ(circleStyle.properties->opacity.get().value(), 0.5);
+  EXPECT_DOUBLE_EQ(circleStyle.properties()->opacity.get().value(), 0.5);
 }
 
 // --- Cascade counters and style time ---
@@ -1626,6 +1636,96 @@ TEST_F(StyleSystemTest, StyleTimeCountsNestedParentCascadesOnce) {
   EXPECT_THAT(metrics.activeTimedCalls, Eq(0));
   // The timed interval lies inside the measured call; this is containment, not a time budget.
   EXPECT_THAT(metrics.styleTime.count() - timeBeforeNs, AllOf(Gt(0), Le(wallNs)));
+}
+
+TEST_F(StyleSystemTest, RestyleStoresNewRecordAndKeepsHeldRecordUnchanged) {
+  auto document = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g fill="green">
+        <rect id="r" width="50" height="50" style="stroke: red"/>
+      </g>
+    </svg>
+  )");
+  const EntityHandle rect = document.querySelector("#r")->entityHandle();
+  const std::shared_ptr<const ComputedStyle> held = rect.get<ComputedStyleComponent>().style;
+  ASSERT_THAT(held, NotNull());
+  const PropertyRegistry heldValues = held->properties;
+
+  styleSystem.updateStyle(rect, "stroke: blue");
+  ParseWarningSink warningSink;
+  const ComputedStyleComponent& restyled = styleSystem.computeStyle(rect, warningSink);
+
+  // The edit stores a new record; a holder of the old one, such as a render snapshot, still sees
+  // the values it was computed with.
+  EXPECT_THAT(restyled.style, AllOf(NotNull(), testing::Ne(held)));
+  EXPECT_THAT(held->properties, Eq(heldValues));
+  EXPECT_THAT(
+      restyled.properties()->stroke.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255))))));
+  EXPECT_THAT(
+      restyled.properties()->fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255))))));
+}
+
+TEST_F(StyleSystemTest, RegistryCopiesCountEachLocalDeclarationCopyOnce) {
+  // Cascading the leaf computes every ancestor inside the leaf's own cascade; each element with
+  // local declarations has them copied once into its record, and inheritance copies nothing.
+  constexpr int kDepth = 20;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">)";
+  for (int i = 0; i < kDepth; ++i) {
+    source += i % 2 == 0 ? R"(<g fill="red">)" : "<g>";
+  }
+  source += R"(<rect id="leaf" width="50" height="50" style="stroke: blue"/>)";
+  for (int i = 0; i < kDepth; ++i) {
+    source += "</g>";
+  }
+  source += "</svg>";
+  auto document = ParseSVG(source);
+  const Entity leaf = document.querySelector("#leaf")->entityHandle().entity();
+  // Every element of this document is on the leaf's ancestor chain.
+  const auto withLocalDeclarations =
+      static_cast<std::uint64_t>(document.registry().view<StyleComponent>().size());
+  const auto* parsed = document.registry().ctx().find<StyleCascadeMetrics>();
+  const StyleCascadeCounters before = parsed ? parsed->counters : StyleCascadeCounters();
+
+  ParseWarningSink warningSink;
+  styleSystem.computeStylesFor(document.registry(), std::span<const Entity>(&leaf, 1), warningSink);
+
+  const StyleCascadeCounters work = CascadeMetricsOf(document).counters - before;
+  // The groups, the leaf, the `<svg>` element and the document node above it.
+  EXPECT_THAT(work, AllOf(Field("elementsCascaded", &StyleCascadeCounters::elementsCascaded,
+                                static_cast<std::uint64_t>(kDepth + 3)),
+                          Field("registryCopies", &StyleCascadeCounters::registryCopies,
+                                withLocalDeclarations)));
+  EXPECT_THAT(withLocalDeclarations, Gt(static_cast<std::uint64_t>(kDepth / 2)));
+  EXPECT_THAT(CascadeMetricsOf(document).activeCascades, Eq(0));
+}
+
+TEST_F(StyleSystemTest, LocalDeclarationsOutrankMoreSpecificInheritedDeclarations) {
+  // The group's `style` declarations are more specific than the rectangle's presentation
+  // attributes, yet the rectangle's own values win: inheritance only supplies what it does not
+  // declare.
+  auto document = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g style="fill: red; stroke: red; font-size: 30px; color: red">
+        <rect id="r" width="50" height="50" fill="blue" stroke="green" font-size="10"
+              color="blue"/>
+      </g>
+    </svg>
+  )");
+  const ComputedStyleComponent& style =
+      document.querySelector("#r")->entityHandle().get<ComputedStyleComponent>();
+  ASSERT_THAT(style.properties(), NotNull());
+  EXPECT_THAT(
+      style.properties()->fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255))))));
+  EXPECT_THAT(
+      style.properties()->stroke.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255))))));
+  EXPECT_THAT(style.properties()->fontSize.get(),
+              testing::Optional(LengthIs(testing::DoubleEq(10), Lengthd::Unit::Px)));
+  EXPECT_THAT(style.properties()->color.get(),
+              testing::Optional(css::Color(css::RGBA(0, 0, 255, 255))));
 }
 
 TEST_F(StyleSystemTest, DirtyOnlyPassCountsItsBudgetRejection) {

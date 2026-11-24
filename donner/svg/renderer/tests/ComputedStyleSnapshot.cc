@@ -70,8 +70,12 @@ std::vector<PositionedStyle> PositionedStyles(SVGDocument& document) {
   for (const PositionedEntity& positioned : PositionedEntities(document)) {
     PositionedStyle entry{.position = positioned.position};
     if (const auto* style = registry.try_get<ComputedStyleComponent>(positioned.entity)) {
-      entry.properties = style->properties;
-      entry.resourceOpacities = style->resourceOpacities;
+      if (const PropertyRegistry* properties = style->properties()) {
+        entry.properties = *properties;
+      }
+      if (const ComputedResourceOpacities* opacities = style->resourceOpacities()) {
+        entry.resourceOpacities = *opacities;
+      }
       entry.externalFill = style->externalFill;
       entry.externalStroke = style->externalStroke;
     }

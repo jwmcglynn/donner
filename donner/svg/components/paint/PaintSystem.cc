@@ -240,7 +240,7 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
                                 : LayoutSystem().getViewBox(handle);
 
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
-      handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewBox,
+      handle, computedPattern.sizeProperties, style.properties()->unparsedProperties, tileViewBox,
       FontMetrics(), warningSink);
 
   //
@@ -305,7 +305,7 @@ const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
     EntityHandle handle, const StopComponent& stop, const ComputedStyleComponent& style,
     ParseWarningSink& warningSink) {
   return handle.emplace_or_replace<ComputedStopComponent>(
-      stop.properties, style, style.properties->unparsedProperties, warningSink);
+      stop.properties, style, style.properties()->unparsedProperties, warningSink);
 }
 
 // Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in

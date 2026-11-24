@@ -26,6 +26,10 @@ struct StyleCascadeCounters {
   /// Document style passes, full or dirty-only, that ended with the style budget refusing work.
   /// Refusals while computing an entity list or a single entity's style are not counted.
   std::uint64_t budgetRejections = 0;
+  /// Whole \ref PropertyRegistry copies and moves made while cascading elements, each of which
+  /// writes every property. Building an element's computed style copies its local declarations
+  /// once.
+  std::uint64_t registryCopies = 0;
 
   /// Equality operator.
   bool operator==(const StyleCascadeCounters&) const = default;
@@ -44,6 +48,7 @@ struct StyleCascadeCounters {
         .declarationsApplied = after.declarationsApplied - before.declarationsApplied,
         .fullClears = after.fullClears - before.fullClears,
         .budgetRejections = after.budgetRejections - before.budgetRejections,
+        .registryCopies = after.registryCopies - before.registryCopies,
     };
   }
 
@@ -54,7 +59,8 @@ struct StyleCascadeCounters {
               << ", rulesMatched=" << counters.rulesMatched
               << ", declarationsApplied=" << counters.declarationsApplied
               << ", fullClears=" << counters.fullClears
-              << ", budgetRejections=" << counters.budgetRejections << "}";
+              << ", budgetRejections=" << counters.budgetRejections
+              << ", registryCopies=" << counters.registryCopies << "}";
   }
 };
 
@@ -70,6 +76,9 @@ struct StyleCascadeMetrics {
   std::chrono::nanoseconds styleTime{0};
   /// Style calls currently timed on this registry, so nested calls are not timed twice.
   int activeTimedCalls = 0;
+  /// Element cascades currently running on this registry, so the registry copies of a parent
+  /// cascaded on demand are counted once.
+  int activeCascades = 0;
 };
 
 }  // namespace donner::svg::components

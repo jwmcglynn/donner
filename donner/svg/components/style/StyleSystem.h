@@ -578,12 +578,12 @@ public:
   static std::optional<PaintServer> localPaintForInstantiation(const ComputedStyleComponent& style,
                                                                bool stroke);
 
-  /// Apply inherited values from an external parent while retaining local declaration precedence.
-  /// @param local Declarations in the referenced document.
+  /// Apply inherited values from an external parent in place while retaining local declaration
+  /// precedence.
+  /// @param properties Declarations in the referenced document, which receive the external-parent
+  ///   fallback values.
   /// @param parent Computed declarations inherited from the referencing element.
-  /// @return Local declarations with external-parent fallback values.
-  static PropertyRegistry inheritExternalParent(const PropertyRegistry& local,
-                                                const PropertyRegistry& parent);
+  static void inheritExternalParent(PropertyRegistry& properties, const PropertyRegistry& parent);
 
   /**
    * Returns true if any stylesheet loaded into \p registry contains an attribute selector that
@@ -614,14 +614,12 @@ private:
   void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                             PropertyRegistry& properties, StyleResourceBudget& styleBudget,
                             StyleCascadeCounters& counters, ParseWarningSink& warningSink);
-  PropertyRegistry inheritComputedParent(EntityHandle handle, Entity parent,
-                                         PropertyRegistry properties,
-                                         ComputedStyleComponent& computed,
-                                         ParseWarningSink& warningSink);
+  void inheritComputedParent(EntityHandle handle, Entity parent, PropertyRegistry& properties,
+                             ComputedStyleComponent& computed, ParseWarningSink& warningSink);
   static void resolveComputedParentFonts(EntityHandle handle, Entity parent,
                                          PropertyRegistry& properties);
-  PropertyRegistry inheritProperties(Registry& registry, Entity parent, PropertyRegistry properties,
-                                     ParseWarningSink& warningSink);
+  void inheritProperties(Registry& registry, Entity parent, PropertyRegistry& properties,
+                         ParseWarningSink& warningSink);
   static void resolveRelativeFontProperties(Registry& registry, Entity parent,
                                             PropertyRegistry& properties);
   void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,

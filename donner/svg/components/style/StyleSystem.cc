@@ -5,8 +5,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <numeric>
 #include <span>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -45,14 +47,23 @@ namespace donner::svg::components {
 
 namespace {
 
-/// Root computed font size for rem lengths resolved before descendants inherit them.
-double ComputedRootFontSize(const Registry& registry) {
+/**
+ * Root computed font size for rem lengths resolved before descendants inherit them.
+ * @param registry Registry containing the document.
+ * @param entity Entity whose style is being computed.
+ * @param properties Its computed properties with resolved fonts, used when it is the root.
+ */
+double ComputedRootFontSize(const Registry& registry, Entity entity,
+                            const PropertyRegistry& properties) {
   const auto* context = registry.ctx().find<SVGDocumentContext>();
   if (context && registry.valid(context->rootEntity)) {
+    if (context->rootEntity == entity) {
+      return properties.fontSize.get().value().value;
+    }
     // Installed root properties avoid re-entering style computation for root-owned rem.
     if (const auto* root = registry.try_get<ComputedStyleComponent>(context->rootEntity);
-        root && root->properties) {
-      return root->properties->fontSize.get().value().value;
+        root && root->properties()) {
+      return root->properties()->fontSize.get().value().value;
     }
   }
   return FontMetrics().rootFontSize;
@@ -144,6 +155,29 @@ private:
   std::chrono::steady_clock::time_point start_;
 };
 
+/// Adds the whole-registry copies of the outermost element cascade on a registry to its counters;
+/// a parent cascaded on demand inside it is counted with it.
+class RegistryCopyCount {
+public:
+  explicit RegistryCopyCount(StyleCascadeMetrics& metrics)
+      : metrics_(metrics),
+        outermost_(metrics.activeCascades++ == 0),
+        start_(outermost_ ? details::PropertyRegistryCopyCount() : 0) {}
+  ~RegistryCopyCount() {
+    --metrics_.activeCascades;
+    if (outermost_) {
+      metrics_.counters.registryCopies += details::PropertyRegistryCopyCount() - start_;
+    }
+  }
+  RegistryCopyCount(const RegistryCopyCount&) = delete;
+  RegistryCopyCount& operator=(const RegistryCopyCount&) = delete;
+
+private:
+  StyleCascadeMetrics& metrics_;
+  bool outermost_;
+  std::uint64_t start_;
+};
+
 /// Counts a style pass that ends, from any return path, with its budget refusing work.
 class PassRejectionCount {
 public:
@@ -167,25 +201,44 @@ bool InheritsExternalPaint(PropertyState state) {
          state == PropertyState::ExplicitUnset;
 }
 
+/// Inherit an external-use parent's value in place when the local declaration defers to it.
 template <typename T, PropertyCascade cascade>
-Property<T, cascade> InheritExternalProperty(const Property<T, cascade>& local,
-                                             const Property<T, cascade>& parent) {
+void InheritExternalProperty(Property<T, cascade>& property, const Property<T, cascade>& parent) {
   const bool inherited = cascade != PropertyCascade::None;
-  if (local.state != PropertyState::Inherit && !(inherited && InheritsExternalPaint(local.state))) {
-    return local;
+  if (property.state != PropertyState::Inherit &&
+      !(inherited && InheritsExternalPaint(property.state))) {
+    return;
   }
-  Property<T, cascade> result = local;
-  result.value = parent.get();
-  result.state = PropertyState::Set;
-  result.specificity = css::Specificity().toUserAgentSpecificity();
-  return result;
+  property.value = parent.get();
+  property.state = PropertyState::Set;
+  property.specificity = css::Specificity().toUserAgentSpecificity();
 }
 
+/// Local declaration states that decide whether an inherited external-use resource is refused,
+/// read before inheritance replaces them.
+struct LocalResourceStates {
+  explicit LocalResourceStates(const PropertyRegistry& local)
+      : markerStart(local.markerStart.state),
+        markerMid(local.markerMid.state),
+        markerEnd(local.markerEnd.state),
+        mask(local.mask.state),
+        clipPath(local.clipPath.state),
+        filter(local.filter.state),
+        cursor(local.cursor.state) {}
+
+  PropertyState markerStart;
+  PropertyState markerMid;
+  PropertyState markerEnd;
+  PropertyState mask;
+  PropertyState clipPath;
+  PropertyState filter;
+  PropertyState cursor;
+};
+
 template <PropertyCascade cascade>
-bool BlockExternalReference(Property<Reference, cascade>& property,
-                            const Property<Reference, cascade>& local) {
-  const bool inherits = cascade == PropertyCascade::None ? local.state == PropertyState::Inherit
-                                                         : InheritsExternalPaint(local.state);
+bool BlockExternalReference(Property<Reference, cascade>& property, PropertyState local) {
+  const bool inherits = cascade == PropertyCascade::None ? local == PropertyState::Inherit
+                                                         : InheritsExternalPaint(local);
   const auto reference = property.get();
   if (!inherits || !reference || reference->href.empty()) {
     return false;
@@ -194,9 +247,9 @@ bool BlockExternalReference(Property<Reference, cascade>& property,
   return true;
 }
 
-bool BlockExternalClipPath(PropertyRegistry& properties, const PropertyRegistry& local) {
+bool BlockExternalClipPath(PropertyRegistry& properties, PropertyState local) {
   const ClipPath* clip = properties.clipPath.getStoredValue();
-  if (local.clipPath.state != PropertyState::Inherit || !clip) {
+  if (local != PropertyState::Inherit || !clip) {
     return false;
   }
   const auto* reference = std::get_if<Reference>(&clip->value);
@@ -207,13 +260,13 @@ bool BlockExternalClipPath(PropertyRegistry& properties, const PropertyRegistry&
   return true;
 }
 
-bool BlockExternalResources(PropertyRegistry& properties, const PropertyRegistry& local) {
+bool BlockExternalResources(PropertyRegistry& properties, const LocalResourceStates& local) {
   bool rejected = BlockExternalReference(properties.markerStart, local.markerStart);
   rejected |= BlockExternalReference(properties.markerMid, local.markerMid);
   rejected |= BlockExternalReference(properties.markerEnd, local.markerEnd);
   rejected |= BlockExternalReference(properties.mask, local.mask);
-  rejected |= BlockExternalClipPath(properties, local);
-  if (local.filter.state == PropertyState::Inherit) {
+  rejected |= BlockExternalClipPath(properties, local.clipPath);
+  if (local.filter == PropertyState::Inherit) {
     const auto* effects = properties.filter.getStoredValue();
     if (effects && std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
           return effect.is<FilterEffect::ElementReference>();
@@ -222,8 +275,7 @@ bool BlockExternalResources(PropertyRegistry& properties, const PropertyRegistry
       rejected = true;
     }
   }
-  if (InheritsExternalPaint(local.cursor.state) &&
-      !properties.cursor.get().value().images.empty()) {
+  if (InheritsExternalPaint(local.cursor) && !properties.cursor.get().value().images.empty()) {
     properties.cursor.set(PropertyState::ExplicitInitial, css::Specificity());
     rejected = true;
   }
@@ -406,8 +458,8 @@ void ApplyContextualFontSize(Registry& registry, Entity dataEntity,
     return;
   }
   double parentSize = 12;
-  if (parentStyle && parentStyle->properties) {
-    parentSize = parentStyle->properties->fontSize.get().value().value;
+  if (parentStyle && parentStyle->properties()) {
+    parentSize = parentStyle->properties()->fontSize.get().value().value;
   }
   Lengthd underlying = BaseFontLength(properties, parentSize);
   const auto result = SampleContextualAnimationRecipe(
@@ -420,11 +472,36 @@ void ApplyContextualFontSize(Registry& registry, Entity dataEntity,
   }
 }
 
+/// Properties whose set or explicitly initial local value is kept when the parent's declaration
+/// is more specific.
+constexpr auto kPreservedLocalProperties = std::make_tuple(
+    &PropertyRegistry::fontSize, &PropertyRegistry::textIndent, &PropertyRegistry::color,
+    &PropertyRegistry::fill, &PropertyRegistry::stroke, &PropertyRegistry::colorInterpolation,
+    &PropertyRegistry::opacity, &PropertyRegistry::fillOpacity, &PropertyRegistry::strokeOpacity,
+    &PropertyRegistry::strokeMiterlimit);
+
 template <typename PropertyType>
-void PreserveLocalValue(const PropertyType& local, PropertyType& inherited) {
+std::optional<PropertyType> PreservedLocalValue(const PropertyType& local) {
   if (local.state == PropertyState::Set || local.state == PropertyState::ExplicitInitial) {
-    inherited = local;
+    return local;
   }
+  return std::nullopt;
+}
+
+/// Inherit \p parent into \p properties in place, keeping the preserved local values.
+void InheritPreservingLocalValues(PropertyRegistry& properties, const PropertyRegistry& parent,
+                                  PropertyInheritOptions options) {
+  std::apply(
+      [&](auto... members) {
+        auto preserved = std::make_tuple(PreservedLocalValue(properties.*members)...);
+        properties.inherit(parent, options);
+        std::apply(
+            [&](auto&... values) {
+              ((values ? void(properties.*members = std::move(*values)) : void()), ...);
+            },
+            preserved);
+      },
+      kPreservedLocalProperties);
 }
 
 struct ShadowedElementAdapter {
@@ -896,27 +973,27 @@ std::optional<PaintServer> StyleSystem::localPaintForInstantiation(
   if (stroke ? style.externalStroke : style.externalFill) {
     return std::nullopt;
   }
-  return stroke ? style.properties->stroke.get() : style.properties->fill.get();
+  return stroke ? style.properties()->stroke.get() : style.properties()->fill.get();
 }
 
-PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity parent,
-                                                    PropertyRegistry properties,
-                                                    ComputedStyleComponent& computed,
-                                                    ParseWarningSink& warningSink) {
+void StyleSystem::inheritComputedParent(EntityHandle handle, Entity parent,
+                                        PropertyRegistry& properties,
+                                        ComputedStyleComponent& computed,
+                                        ParseWarningSink& warningSink) {
   Registry& registry = *handle.registry();
   const auto* occurrence = ExternalRootContext(registry, handle.entity());
   const PropertyState fillState = properties.fill.state;
   const PropertyState strokeState = properties.stroke.state;
-  PropertyRegistry result;
   if (occurrence) {
-    result = inheritExternalParent(properties, *occurrence->parent.properties);
-    if (BlockExternalResources(result, properties)) {
+    const LocalResourceStates local(properties);
+    inheritExternalParent(properties, *occurrence->parent.properties());
+    if (BlockExternalResources(properties, local)) {
       rejectExternalHostResource(registry);
       warningSink.add(ParseDiagnostic::Error("External-use inherited URL resources are unsupported",
                                              FileOffset::Offset(0)));
     }
   } else {
-    result = inheritProperties(registry, parent, std::move(properties), warningSink);
+    inheritProperties(registry, parent, properties, warningSink);
   }
   const auto* parentStyle =
       parent != entt::null ? registry.try_get<ComputedStyleComponent>(parent) : nullptr;
@@ -925,13 +1002,12 @@ PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity 
       ExternalPaintOrigin(fillState, occurrence != nullptr, parentStyle, false, allowPaint);
   computed.externalStroke =
       ExternalPaintOrigin(strokeState, occurrence != nullptr, parentStyle, true, allowPaint);
-  return result;
 }
 
 void StyleSystem::resolveComputedParentFonts(EntityHandle handle, Entity parent,
                                              PropertyRegistry& properties) {
   if (const auto* occurrence = ExternalRootContext(*handle.registry(), handle.entity())) {
-    const PropertyRegistry& host = *occurrence->parent.properties;
+    const PropertyRegistry& host = *occurrence->parent.properties();
     properties.resolveFontSize(host.fontSize.get().value().value);
     properties.resolveFontWeight(host.fontWeight.get().value());
     properties.resolveFontStretch(host.fontStretch.get().value());
@@ -940,44 +1016,26 @@ void StyleSystem::resolveComputedParentFonts(EntityHandle handle, Entity parent,
   }
 }
 
-PropertyRegistry StyleSystem::inheritExternalParent(const PropertyRegistry& local,
-                                                    const PropertyRegistry& parent) {
-  PropertyRegistry result = local;
-  auto destination = result.allPropertiesMutable();
-  const auto source = local.allProperties();
+void StyleSystem::inheritExternalParent(PropertyRegistry& properties,
+                                        const PropertyRegistry& parent) {
+  auto destination = properties.allPropertiesMutable();
   const auto inherited = parent.allProperties();
   [&]<std::size_t... index>(std::index_sequence<index...>) {
-    ((std::get<index>(destination) =
-          InheritExternalProperty(std::get<index>(source), std::get<index>(inherited))),
-     ...);
+    (InheritExternalProperty(std::get<index>(destination), std::get<index>(inherited)), ...);
   }(std::make_index_sequence<PropertyRegistry::numProperties()>{});
-  return result;
 }
 
-PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity parent,
-                                                PropertyRegistry properties,
-                                                ParseWarningSink& warningSink) {
+void StyleSystem::inheritProperties(Registry& registry, Entity parent, PropertyRegistry& properties,
+                                    ParseWarningSink& warningSink) {
   if (parent == entt::null) {
-    return properties;
+    return;
   }
   auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
   computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink);
   const PropertyInheritOptions inheritOptions = registry.all_of<DoNotInheritFillOrStrokeTag>(parent)
                                                     ? PropertyInheritOptions::NoPaint
                                                     : PropertyInheritOptions::All;
-  PropertyRegistry inherited =
-      properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
-  PreserveLocalValue(properties.fontSize, inherited.fontSize);
-  PreserveLocalValue(properties.textIndent, inherited.textIndent);
-  PreserveLocalValue(properties.color, inherited.color);
-  PreserveLocalValue(properties.fill, inherited.fill);
-  PreserveLocalValue(properties.stroke, inherited.stroke);
-  PreserveLocalValue(properties.colorInterpolation, inherited.colorInterpolation);
-  PreserveLocalValue(properties.opacity, inherited.opacity);
-  PreserveLocalValue(properties.fillOpacity, inherited.fillOpacity);
-  PreserveLocalValue(properties.strokeOpacity, inherited.strokeOpacity);
-  PreserveLocalValue(properties.strokeMiterlimit, inherited.strokeMiterlimit);
-  return inherited;
+  InheritPreservingLocalValues(properties, *parentStyleComponent.properties(), inheritOptions);
 }
 
 void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity parent,
@@ -986,11 +1044,11 @@ void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity paren
   int parentFontWeight = 400;
   int parentFontStretch = static_cast<int>(FontStretch::Normal);
   if (parent != entt::null) {
-    const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
-    if (parentStyle.properties) {
-      parentFontSizePx = parentStyle.properties->fontSize.get().value().value;
-      parentFontWeight = parentStyle.properties->fontWeight.get().value();
-      parentFontStretch = parentStyle.properties->fontStretch.get().value();
+    if (const PropertyRegistry* parentProperties =
+            registry.get<ComputedStyleComponent>(parent).properties()) {
+      parentFontSizePx = parentProperties->fontSize.get().value().value;
+      parentFontWeight = parentProperties->fontWeight.get().value();
+      parentFontStretch = parentProperties->fontStretch.get().value();
     }
   }
   properties.resolveFontSize(parentFontSizePx);
@@ -1000,25 +1058,27 @@ void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity paren
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
                                         ParseWarningSink& warningSink) {
-  if (computedStyle.properties) {
+  if (computedStyle.style) {
     return;  // Already computed.
   }
 
   Registry& registry = *handle.registry();
   auto& styleBudget = GetStyleResourceBudget(registry);
-  StyleCascadeCounters& counters = GetStyleCascadeMetrics(registry).counters;
+  StyleCascadeMetrics& metrics = GetStyleCascadeMetrics(registry);
+  const RegistryCopyCount copyCount(metrics);
+  StyleCascadeCounters& counters = metrics.counters;
   ++counters.elementsCascaded;
 
   const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
 
-  // Apply local style.
-  PropertyRegistry properties;
-  if (auto* styleComponent = registry.try_get<StyleComponent>(dataEntity)) {
-    properties = styleComponent->properties;
-  } else {
-    properties = PropertyRegistry();
-  }
+  // Apply local style. The record is built in place and stored once it is final, after which it
+  // is never modified.
+  const auto* styleComponent = registry.try_get<StyleComponent>(dataEntity);
+  std::shared_ptr<ComputedStyle> record =
+      styleComponent ? std::make_shared<ComputedStyle>(styleComponent->properties)
+                     : std::make_shared<ComputedStyle>();
+  PropertyRegistry& properties = record->properties;
 
   applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, counters,
                        warningSink);
@@ -1041,33 +1101,29 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
   // Charging the parent's source value alone misses large locally parsed vectors and can also
   // differ from the actual value selected by the cascade.
-  PropertyRegistry finalProperties =
-      inheritComputedParent(handle, parent, std::move(properties), computedStyle, warningSink);
+  inheritComputedParent(handle, parent, properties, computedStyle, warningSink);
 
-  if (styleBudget.reserveComplexPropertyBytes(handle.entity(),
-                                              finalProperties.complexPropertyBytes())) {
-    computedStyle.properties = std::move(finalProperties);
-    computedStyle.resourceOpacities = resourceOpacities;
+  if (styleBudget.reserveComplexPropertyBytes(handle.entity(), properties.complexPropertyBytes())) {
+    record->resourceOpacities = resourceOpacities;
   } else {
     // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
     // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
     styleBudget.release(handle.entity());
     computedStyle.externalFill = false;
     computedStyle.externalStroke = false;
-    computedStyle.properties = PropertyRegistry();
-    computedStyle.resourceOpacities = ComputedResourceOpacities();
+    properties = PropertyRegistry();
+    record->resourceOpacities = ComputedResourceOpacities();
   }
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
   // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
   // font-size, and percentages resolve against the parent font-size (not the viewBox). Local
   // text-indent em lengths compute from that result before descendants inherit them.
-  if (computedStyle.properties) {
-    resolveComputedParentFonts(handle, parent, *computedStyle.properties);
-    const double rootFontSizePx = ComputedRootFontSize(registry);
-    computedStyle.properties->resolveTextDecorationThickness(rootFontSizePx);
-    computedStyle.properties->resolveInsetClipLengths(rootFontSizePx);
-  }
+  resolveComputedParentFonts(handle, parent, properties);
+  const double rootFontSizePx = ComputedRootFontSize(registry, handle.entity(), properties);
+  properties.resolveTextDecorationThickness(rootFontSizePx);
+  properties.resolveInsetClipLengths(rootFontSizePx);
+  computedStyle.style = std::move(record);
 }
 
 std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle handle) const {
@@ -1210,7 +1266,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
   // invariant that mutation hooks must uphold together, because either half alone is inert:
   //
   //   1. The entity's cached ComputedStyleComponent must have been removed. computeStyle() is
-  //      memoized (see computePropertiesInto, which returns early once `properties` is set), so
+  //      memoized (see computePropertiesInto, which returns early once `style` is set), so
   //      a Style dirty flag on an entity whose cached style is still populated does nothing.
   //   2. The entity must be flagged DirtyFlagsComponent::Style. Removing the cached style without
   //      flagging it leaves the entity with no computed style at all, which later passes that

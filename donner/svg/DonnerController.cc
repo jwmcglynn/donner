@@ -115,7 +115,7 @@ std::optional<Cursor> DonnerController::cursorAt(const Vector2d& point) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStyleComponent& style =
       components::StyleSystem().computeStyle(EntityHandle(registry, entity), disabledSink);
-  return style.properties->cursor.get().value();
+  return style.properties()->cursor.get().value();
 }
 
 std::optional<DonnerController::LinkHit> DonnerController::hitTestLink(const Vector2d& point) {

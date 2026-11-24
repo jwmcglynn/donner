@@ -176,7 +176,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         unindexedRegistry.try_get<components::ComputedStyleComponent>(unindexedEntities[i]);
     Require((indexedStyle == nullptr) == (unindexedStyle == nullptr));
     if (indexedStyle != nullptr) {
-      Require(indexedStyle->properties == unindexedStyle->properties);
+      // Compare the computed values; the records of two documents are never the same object.
+      const PropertyRegistry* indexedProperties = indexedStyle->properties();
+      const PropertyRegistry* unindexedProperties = unindexedStyle->properties();
+      Require((indexedProperties == nullptr) == (unindexedProperties == nullptr));
+      Require(indexedProperties == nullptr || *indexedProperties == *unindexedProperties);
     }
     const auto indexedRules =
         styleSystem.collectMatchedStyleRules(EntityHandle(indexedRegistry, indexedEntities[i]));

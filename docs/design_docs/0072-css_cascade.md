@@ -13,10 +13,10 @@
 Donner resolves style by testing every rule of every applicable stylesheet against every element,
 then re-parsing each matched declaration into the element's `PropertyRegistry`. Any edit to a class,
 `id`, `style` attribute, presentation attribute or stylesheet restyles the whole document. Each
-element keeps its own 4,840-byte computed `PropertyRegistry`, even when hundreds of elements compute
-the same style. Custom properties (`var()`) and cascade layers (`@layer`) are not supported. Typing
-in a `<style>` element reparses the whole stylesheet and restyles the whole document, and the source
-editor has no CSS-aware highlighting or value completion.
+element holds its own computed-style record, a 4,840-byte `PropertyRegistry`, even when hundreds of
+elements compute the same style. Custom properties (`var()`) and cascade layers (`@layer`) are not
+supported. Typing in a `<style>` element reparses the whole stylesheet and restyles the whole
+document, and the source editor has no CSS-aware highlighting or value completion.
 
 This design measures that cost, surveys how browser engines make style resolution fast and how
 they implement the missing features, and commits to
@@ -307,15 +307,26 @@ including tests and review fixes. "After" names the milestones that must land fi
   - [ ] Run the differential test and fuzzer with the filter on and off, including the
         low-traversal-limit case.
   - Done when: the ancestor-filter goal is met and the differential targets are green.
-- [ ] Milestone A8: Per-element cost and shared computed-style storage (4 days). After A1.
-  - [ ] Break down the measured 4.6 microseconds of per-element style work outside rule matching
-        with timers, and remove avoidable whole-`PropertyRegistry` copies in
-        `computePropertiesInto`, `inheritComputedParent` and `inheritProperties`.
-  - [ ] Store computed styles as `std::shared_ptr<const ComputedStyle>` records and move every
+- [x] Milestone A8: Per-element cost and shared computed-style storage (4 days,
+      [#2743](https://github.com/jwmcglynn/donner/pull/2743)). After A1.
+  - [x] Break down the measured 4.6 microseconds of per-element style work outside rule matching
+        with timers (see [Per-Element Cost](#per-element-cost)), and remove avoidable
+        whole-`PropertyRegistry` copies in `computePropertiesInto`, `inheritComputedParent` and
+        `inheritProperties`: the cascade builds the record in place, inherits into it with
+        `PropertyRegistry::inherit`, and copies only the element's local declarations, counted in
+        `StyleCascadeCounters::registryCopies`.
+  - [x] Store computed styles as `std::shared_ptr<const ComputedStyle>` records and move every
         reader to the const accessor.
   - Done when: style time on the rule-free 1,000-element synthetic document falls from 6.1 ms by
     at least 20 percent, or the breakdown shows the cost is inherent and the result is recorded
-    here; all existing suites are green on the shared storage.
+    here; all existing suites are green on the shared storage. Met: on the baseline machine class
+    (the benchmark pinned to one core, load average 38 to 45, five alternating runs of the
+    previous and new binaries) style time on that document is 2.83 ms (2.72-2.86), from 5.39 ms
+    (5.16-5.54) with the rule index alone, 54 percent below the 6.1 ms baseline; bootstrap-icons
+    falls from 29.68 to 16.26 ms and the splash from 3.73 to 2.24 ms. On an Apple silicon desktop
+    (load average 20 to 23, six alternating runs) the document takes 0.71 ms (0.68-0.75), from
+    1.50 ms (1.38-1.57). Computed styles, warnings and cascade counts are unchanged on every
+    document of the resvg suite, the renderer test data, the splash and the sprite.
 - [ ] Milestone A9: Matched properties cache (3.5 days). After A3 and A8.
   - [ ] Key, look up and insert shared records in `computePropertiesInto`; count hits and
         uncacheable elements; charge retained bytes per record; evict by clock.
@@ -484,24 +495,30 @@ position of an import relative to the `@layer` statements around it is not kept.
 already stores its value as a `std::vector<ComponentValue>`, which is the token sequence custom
 properties need.
 
-**Computed style.** After the cascade, `ApplyAnimatedStyle`, contextual font sizes, scalar and
-paint animation styles and symbol display are applied, then `inheritComputedParent` merges the
-parent's computed `PropertyRegistry` (computing the parent first if needed). The result is stored
-by value in `ComputedStyleComponent::properties`, a `std::optional<PropertyRegistry>`, and
-memoized: `computePropertiesInto` returns early when it is set. Fonts are resolved to absolute
-values against the parent. `sizeof(PropertyRegistry)` is 4,840 bytes in the measured build, so
-every styled entity holds about 4.7 KiB of computed style inline in its component, plus heap
-storage for strings and lists.
+**Computed style.** `computePropertiesInto` builds each computed style in a new `ComputedStyle`
+record, the computed `PropertyRegistry` and the resource opacities, that starts as a copy of the
+element's local `StyleComponent::properties`. After the cascade, `ApplyAnimatedStyle`, contextual
+font sizes, scalar and paint animation styles and symbol display are applied, then
+`inheritComputedParent` inherits the parent's computed properties into the record in place
+(computing the parent first if needed), and fonts are resolved to absolute values against the
+parent. The record is then stored as `ComputedStyleComponent::style`, a
+`std::shared_ptr<const ComputedStyle>`, and never modified: computing a style again stores a new
+record. It is memoized: `computePropertiesInto` returns early when `style` is set.
+`sizeof(PropertyRegistry)` is 4,840 bytes in the measured build, so every styled entity owns a
+record of about 4.8 KiB on the heap, plus heap storage for strings and lists; the component itself
+is 24 bytes.
 
-**Computed-style readers.** Outside `donner/svg/components/style/`, 32 production files reference
+**Computed-style readers.** Outside `donner/svg/components/style/`, 33 production files reference
 `ComputedStyleComponent`: the renderer (`RendererDriver`, `RenderingContext`,
 `ExternalUseStyleRetention`, `RetainedRenderTreeUpdate`, `AnimationPresentation`), the compositor,
 text (`TextSystem`, `TextEngine`), layout, shape, paint, filter, shadow-tree and animation
 systems, `SVGElement`, `RenderingDiagnostics` and one editor header. Those that access the
-component read `properties` (through `.value()`, `*` or `->`). The only writers are
-`computePropertiesInto` (including its budget-refusal branch),
-`ShadowTreeSystem::createShadowEntity`, which emplaces an empty component, and
-`ExternalUseStyleContext`, which holds a copy of the host's computed style as its `parent`.
+component read through the const accessors `properties()` and `resourceOpacities()`, which return
+null while the style is not computed. The only writer of a record is `computePropertiesInto`
+(including its budget-refusal branch), before it stores the record;
+`ShadowTreeSystem::createShadowEntity` emplaces an empty component, and `ExternalUseStyleContext`
+and the occurrence snapshots of `ExternalUseStyleRetention` share the host's record. Static
+assertions in `ComputedStyleComponent.h` keep the stored record `const`.
 Whole-component clears happen in `StyleSystem::discardComputedStylesForFullRestyle` (once per
 full-restyle rebuild, and in the full pass of `computeAllStyles` for its other callers),
 `MarkStylesheetChanged`, `MarkNeedsFullRebuild`, `StyleSystem::discardComputedStyles` and
@@ -689,10 +706,56 @@ selectors. Findings:
   document, 2.4 percent on the splash). A rejection on the class of a one-class element costs as
   much as a descendant selector, so the per-test overhead, not the combinator walk, dominates.
 - Outside matching, each element costs about 4.6 microseconds (style minus match, divided by
-  elements, on the rule-free documents and the sprite).
+  elements, on the rule-free documents and the sprite); see
+  [Per-Element Cost](#per-element-cost) for where it goes.
 - At 4,000 elements and 1,000 rules, testing every rule exhausts the 1,048,576 rule-element budget
   and leaves later elements with partial styles, whatever they actually match; with the rule index
   that document tests 7,102 candidates and styles completely.
+
+#### Per-Element Cost
+
+Where the style time of a rule-free document goes, per cascaded element, on the 1,000-element
+synthetic document with no author rules (1,002 entities cascaded), from the instrumented build
+described in [Reproducing the Baseline](#reproducing-the-baseline): the benchmark pinned to one core
+of the baseline machine class (load average 45 to 52), with the rule index, median of three
+alternating runs of each build, each run the median of nine first frames. Each row includes about
+35 ns per clock reading, so the instrumented totals run about 0.3 ms above the uninstrumented style
+time. The left column stores the computed `PropertyRegistry` inline in its component; the right
+one is the shared record.
+
+| Phase, nanoseconds per element                               | Inline `PropertyRegistry` | Shared record |
+| ------------------------------------------------------------ | ------------------------: | ------------: |
+| Rule matching and declaration application                    |                       861 |           756 |
+| Copy of the local declarations, with the record's allocation |                       983 |         1,022 |
+| Inheritance from the parent                                  |                     1,474 |           269 |
+| Storing the result in the component                          |                       682 |            40 |
+| Placeholder components created before the pass               |                       656 |            50 |
+| Component lookups and memoization checks                     |                       424 |           244 |
+| Animation hooks (the document has no animations)             |                       367 |           347 |
+| Symbol display and element colors                            |                       120 |           116 |
+| Parent style lookup                                          |                        89 |            88 |
+| Retained-byte charge                                         |                       155 |           203 |
+| Font resolution                                              |                       183 |           141 |
+| Setup and pass overhead                                      |                       150 |           144 |
+| Whole style pass (instrumented median)                       |                     6,148 |         3,493 |
+
+In the left column, inheritance builds a new registry from the element's and moves it into place
+twice, storing moves it into the component, and every placeholder component writes a 4,912-byte
+slot; the shared record removes those copies. Outside matching an element now costs about 2.7
+microseconds instrumented (about 2.1 uninstrumented), down from 5.3 (4.5). What remains is inherent
+to computing each element's own style: one copy of its local declarations into the new record (about
+1 microsecond, which the matched properties cache of Milestone A9 skips on a hit), the animation
+hooks, which look up three animation contexts even on documents without animations, and font
+resolution. The other measured documents agree: per element, inheritance falls from 1.48 to 0.26
+microseconds on bootstrap-icons and from 1.64 to 0.35 on the tiger, and the placeholder step from
+about 0.65 to 0.05 on both.
+
+Memory per element is unchanged: the component shrinks from 4,912 to 24 bytes and the record takes
+about 4.9 KB on the heap (`sizeof(PropertyRegistry)`, the resource opacities and the shared
+pointer's control block). Heap in use after a first frame falls by 67 KB (0.9 percent) on the
+1,000-element document, 24 KB (0.07 percent) on bootstrap-icons, 117 KB (2.7 percent) on the tiger
+and 63 KB (0.9 percent) on the splash, and grows by 13 KB (0.05 percent) on the 4,000-element
+document.
 
 #### Ancestor Filter Opportunity
 
@@ -743,8 +806,8 @@ documents the key is complete.
 
 The column that ignores local style shows how much reuse presentation attributes and `style`
 attributes cost: on the splash and the tiger, elements with the same rules and parent often
-differ only in a `fill` attribute. At 4,840 bytes per inline `PropertyRegistry`, bootstrap-icons
-retains 24.9 MB of computed style for 8 distinct values.
+differ only in a `fill` attribute. At 4,840 bytes per computed `PropertyRegistry`, one record per
+element, bootstrap-icons retains 24.9 MB of computed style for 8 distinct values.
 
 #### Stylesheet Keystrokes
 
@@ -807,6 +870,11 @@ first-frame, splash class-edit, bootstrap-icons and synthetic 2,000 x 200 style 
    `applyStylesheetRules` and, at the end of `computePropertiesInto`, group the element by the key
    in [Shared Computed Style Opportunity](#shared-computed-style-opportunity) and compare its final
    properties with the group's. These counters copy registries and must be off for timing runs.
+   The per-phase times of [Per-Element Cost](#per-element-cost) come from a separate build that
+   reads `std::chrono::steady_clock` at each phase boundary of `computeStyle`,
+   `computePropertiesInto`, `computeAllStyles` and `computeMissingStyles` and adds the interval to
+   the phase being left, so a parent cascaded on demand is charged to its own phases; each reading
+   costs about 35 ns on the baseline machine and is included in the phase it ends.
 
 ### Browser Techniques
 
@@ -991,7 +1059,7 @@ Ranked by expected effect on the measured baseline per unit of complexity.
 |    3 | Narrowed invalidation for single-element edits | Adopt           | Turns an edit from two whole-document cascades into a subtree cascade. Reuses the existing selective pass and dirty flags.                                                                                                              |
 |    4 | Matched properties cache and shared records    | Adopt           | 66 to 99.8 percent of elements reuse an earlier element's computed style on the measured documents, and shared records remove up to 24.9 MB of duplicated computed style. Needs the storage change of Milestone A8.                     |
 |    5 | Matcher constant factors                       | Adopt, measured | 155 ns per rejected test points at per-attempt overhead; each fix is local and independently testable.                                                                                                                                  |
-|    6 | Per-element base cost (copies)                 | Adopt, measured | 4.6 microseconds per element dominates rule-light documents; the breakdown comes first, and the copy removal ships with the storage change of Milestone A8.                                                                             |
+|    6 | Per-element base cost (copies)                 | Adopt, measured | 4.6 microseconds per element dominated rule-light documents; [Per-Element Cost](#per-element-cost) shows where it went, and the copy removal and shared storage cut it to about 2.1.                                                    |
 |    7 | Ancestor Bloom filter                          | Adopt           | Requested regardless of payoff. After indexing it removes one failing walk per real document and 47 percent of candidates on descendant-heavy stylesheets; its effect is measured by a rejection counter, not by time.                  |
 |    8 | Sibling and cousin style sharing               | Reject          | Correctness depends on a complete revalidation set over Donner's full selector support, including shadow-tree adapters; the matched properties cache captures the same reuse with a simpler key.                                        |
 |    9 | Rule tree                                      | Reject          | Its benefit, restyle without re-matching, is delivered by narrowed invalidation and the matched properties cache with far less machinery.                                                                                               |
@@ -1395,19 +1463,25 @@ documents and measures the effect by counter.
 
 ### Shared Computed Styles and the Matched Properties Cache
 
-**Storage.** A new immutable `ComputedStyle` record holds what a computed style is today:
-`PropertyRegistry properties` and `ComputedResourceOpacities resourceOpacities`.
+**Storage.** An immutable `ComputedStyle` record holds a computed style:
+`PropertyRegistry properties` and `std::optional<ComputedResourceOpacities> resourceOpacities`
+(always set by the cascade; absent only on manually constructed styles).
 In Part B it also holds the element's computed custom properties.
 `ComputedStyleComponent` holds `std::shared_ptr<const ComputedStyle> style` and keeps
 `externalFill` and `externalStroke`, which depend on the element's external-use context. Readers
-change from `style.properties.value()`, `*style.properties` and `style.properties->` to a const
-accessor, `style.properties()`, returning `const PropertyRegistry*` (null while the style is not
-computed). The change is mechanical in the 32 reader files listed in
-[Donner Today](#donner-today), and the compiler enforces it: the record is `const`, so a reader
-that wrote through it would fail to compile. `ShadowTreeSystem::createShadowEntity` keeps
-emplacing an empty component; `ExternalUseStyleContext::parent` holds the host's
-`ComputedStyleComponent`, now a shared pointer instead of a copy. Milestone A8 makes this change
-with no caching, so its correctness is checked by the existing suites alone.
+use the const accessors `style.properties()`, returning `const PropertyRegistry*`, and
+`style.resourceOpacities()`, both null while the style is not computed. The record is `const`, so a
+reader that wrote through it would fail to compile, and static assertions in
+`ComputedStyleComponent.h` fail the build if the stored pointer or the accessor stops being const.
+`ShadowTreeSystem::createShadowEntity` emplaces an empty component;
+`ExternalUseStyleContext::parent` holds the host's `ComputedStyleComponent`, sharing its record,
+and `ExternalUseStyleRetention` keeps the shared record of each retained occurrence. Without the
+cache each element owns one record, released when its component is removed (a selective restyle,
+a full restyle's clear, an element removal, document teardown) unless an external-use occurrence
+still shares it. Those holders charge the document family for the host's dynamic property bytes,
+because they can keep the record alive after the host is restyled. Retained bytes are charged per
+entity through `StyleResourceBudget::reserveComplexPropertyBytes`; the per-record account below
+comes with the cache.
 
 **Cache key.** The cache maps a key to a `std::shared_ptr<const ComputedStyle>`. The key holds
 everything a computed style depends on in `computePropertiesInto`:
@@ -1875,9 +1949,10 @@ linting.
 
 Per-element style cost in the baseline (first-frame style time divided by elements cascaded) is
 17.4 microseconds on the splash, 6.1 on the sprite, 6.7 on the tiger, 38.8 on the synthetic
-2,000-element document and 8.8 on the `<use>` document. Part A lowers these; Milestone A8 measures
-the floor. A subtree task of 64 elements therefore carries roughly 0.3 to 1 ms of work, far above
-the per-task cost of a work-stealing deque, so the costs that decide the threshold are waking idle
+2,000-element document and 8.8 on the `<use>` document. Part A lowers these; outside matching an
+element costs 2.1 microseconds with shared records (see [Per-Element Cost](#per-element-cost)).
+A subtree task of 64 elements therefore carries roughly 0.3 to 1 ms of work, far above the
+per-task cost of a work-stealing deque, so the costs that decide the threshold are waking idle
 workers and the serial work around the parallel region (setup, warning commit, font
 synchronization). [0073-task_scheduler](0073-task_scheduler.md) measures the wake latency. With
 four workers, a pass of 1,000 elements at 5 microseconds (5 ms serial) can finish in roughly a
@@ -1937,12 +2012,11 @@ per-element cost and is calibrated in Milestone D3.
   computed-style slot of an entity it owns and its own per-worker state. A debug guard records
   every pool's size and the entity count before the region and asserts they are unchanged after
   it.
-- **The serial placeholder sets the speedup ceiling.** While `ComputedStyleComponent` holds the
-  4,840-byte `PropertyRegistry` inline, the placeholder step costs about 1.7 microseconds per
-  element, about a quarter of style time on the sprite, which caps four workers near 2.3x. With
-  Milestone A8's pointer-sized slot to a shared record it costs about 0.03 microseconds per
-  element. These figures come from a toy experiment on a loaded machine and are indicative only;
-  D3 measures the real ones.
+- **The serial placeholder step is small.** With a pointer-sized slot to a shared record, the
+  placeholder step costs 0.04 microseconds per element on the sprite, clock reading included
+  ([Per-Element Cost](#per-element-cost)), about 1 percent of its style time, against 0.67 with
+  the 4,840-byte `PropertyRegistry` inline in the component, so it does not cap the speedup of four
+  workers. D3 measures the serial phases of the parallel pass.
 - **Parents before children.** Inheritance needs the parent's computed record. The pass is a
   top-down traversal from each root inside one flat `TaskScope`: a task cascades its root, then
   walks each child subtree smaller than the grain (initially 64 elements) with an explicit,
@@ -2135,7 +2209,8 @@ Stylesheets and documents are untrusted input.
   `//donner/base:base_tests`, and `//donner/base:bloom_filter_fuzzer`.
 - **Existing suites** must stay green unchanged: `//donner/css/...` tests,
   `//donner/svg/components/style:style_system_tests`, the CSS-related renderer tests and
-  `//donner/svg/renderer/tests:resvg_test_suite`. Milestone A8's storage change relies on them.
+  `//donner/svg/renderer/tests:resvg_test_suite`. The shared computed-style storage relies on
+  them.
 - **Performance.** `css_cascade_perf_bench` (benchmark binary) and a `donner_perf_cc_test` whose
   correctness target asserts exact counters (elements cascaded, rules tested, full clears, filter
   rejections, cache hits) for fixed documents and edits, so a regression in work done fails the
@@ -2144,7 +2219,14 @@ Stylesheets and documents are untrusted input.
 - The invariant "computed style is unchanged" is enforced by the three differential targets
   above; the rule "a full restyle cascades each element once" and "the filter rejects the
   expected candidates" by the counter test; and "a full restyle computes the first frame's
-  styles" by `//donner/svg/renderer/tests:full_restyle_corpus_tests`.
+  styles" by `//donner/svg/renderer/tests:full_restyle_corpus_tests`. "A stored computed-style
+  record is never modified" is enforced at compile time by the static assertions in
+  `ComputedStyleComponent.h`, which every target that reads computed styles compiles, and
+  `StyleSystemTest.RestyleStoresNewRecordAndKeepsHeldRecordUnchanged` in
+  `//donner/svg/components/style:style_system_tests` checks that a restyle stores a new record and
+  leaves a held one unchanged; "each element's local declarations are copied once and inheritance
+  copies nothing" by the `RegistryCopies` cases of
+  `//donner/benchmarks:css_cascade_perf_tests_correctness`.
 
 ### Part B Tests
 

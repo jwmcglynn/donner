@@ -65,10 +65,10 @@ RenderingDiagnostics::Instance RenderDiagnosticInstance(const Registry& registry
   out.drawOrder = instance.drawOrder;
   out.visible = instance.visible;
   if (const auto* style = registry.try_get<components::ComputedStyleComponent>(entity);
-      style != nullptr && style->properties.has_value()) {
+      style != nullptr && style->properties()) {
     out.style = RenderingDiagnostics::StyleState{
-        .displayNone = style->properties->display.get().value() == Display::None,
-        .visibility = static_cast<int>(style->properties->visibility.get().value()),
+        .displayNone = style->properties()->display.get().value() == Display::None,
+        .visibility = static_cast<int>(style->properties()->visibility.get().value()),
     };
   }
   return out;

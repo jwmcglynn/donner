@@ -763,7 +763,7 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
                                              : getViewBox(entity);
 
   const Box2d bounds =
-      computeSizeProperties(entity, sizedElement.properties, style.properties->unparsedProperties,
+      computeSizeProperties(entity, sizedElement.properties, style.properties()->unparsedProperties,
                             viewBox, fontMetrics, warningSink);
   return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, viewBox);
 }
@@ -780,7 +780,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   TransformComponent& transform = lightEntity.get<TransformComponent>();
 
   // TODO(jwmcglynn): This should avoid recomputing the transform each request.
-  const auto& properties = style.properties->unparsedProperties;
+  const auto& properties = style.properties()->unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
     const parser::UnparsedProperty& property = it->second;
 
@@ -810,7 +810,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   auto& computedTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
   if (transform.transform.get()) {
     computedTransform.rawCssTransform = transform.transform.get().value();
-    const TransformOrigin originValue = style.properties->transformOrigin.get().value();
+    const TransformOrigin originValue = style.properties()->transformOrigin.get().value();
 
     // The transform-origin is relative to the element's bounding box.
     Box2d bounds;
