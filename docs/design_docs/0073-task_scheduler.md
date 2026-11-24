@@ -107,33 +107,48 @@ is not shaped by one user.
 Estimates are engineering days, including tests and review fixes. No milestone here depends on a
 milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
-- [ ] Milestone S1: Core scheduler (9.75 days)
+- [ ] Milestone S1: Core scheduler (9.5 days)
   - [x] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
         its linearization stress test (1.25 days): `//donner/base/tasks:work_stealing_deque`,
         which also has the sequentially consistent form, and `//donner/base/tasks:deque_tests`.
-  - [ ] Per-worker deques and the global queue: the mutex-protected FIFO, its `globalQueued`
-        count and the periodic outside take on the rotating cursor (0.75 day).
-  - [ ] Steal rounds: every outside source from the rotating cursor, then every other worker
+  - [x] The scheduler object and its worker threads, each with its deque and record pool; the
+        mutex-protected FIFO global queue and its `globalQueued` count; submission from threads
+        that are not workers through the external record pool (0.5 day):
+        `//donner/base/tasks:task_scheduler` and `//donner/base/tasks:task_scheduler_tests`.
+  - [x] The idle loop's periodic outside take on the rotating cursor (0.25 day). Until
+        adoptable slots exist the global queue is the only outside source.
+  - [x] Steal rounds: every outside source from the rotating cursor, then every other worker
         once from a seeded offset (0.5 day).
-  - [ ] `TaskScope`, `AsyncTaskScope` and `Join`: scope records, watermarks, rules 1 to 3 and
-        help within the margin (1.5 days).
+  - [ ] `TaskScope` and `Join` from threads that are not workers: scope records, spawns to the
+        global queue, and the creator's sleep on the scope's parker (0.5 day).
+  - [ ] `ParkerPool`: parker slots for threads that are not workers, shared by reference count,
+        with the per-thread sweep of closed pools (0.25 day).
+  - [ ] `TaskScope` and `Join` on workers: watermarks, rules 1 to 3 and help within the margin
+        (0.5 day).
   - [x] The parker: the word with the waiting bit and the epoch, its wait, and a notify only
         when the bit was set (0.25 day): `//donner/base/tasks:parker` and
         `//donner/base/tasks:parker_tests`.
-  - [ ] The sleep steps, the hand-off, the last-awake rule, the publish protocol in
-        read-modify-write form, and drain before sleep (1.5 days).
+  - [x] The sleep steps 1 to 5 for an idle worker, the state words and the `awake` count, the
+        swap rule, the publish protocol in read-modify-write form, drain before sleep, and
+        shutdown with the stop flag (1 day): `//donner/base/tasks:task_scheduler_tests`.
+  - [ ] The asleep deep state, the last-awake rule and the hand-off, for a waiting worker past
+        its margin (0.5 day).
   - [x] The parker word as the standard library's native wait type, `std::int64_t` on Apple
         and `std::int32_t` elsewhere, both widths tested on every platform, and the wake cost
         of the contention table measured against the native path (0.25 day):
         `//donner/base/tasks:parker_tests` and `//donner/base/tasks:parker_wait_bench`.
   - [x] Per-creator record pools, cross-thread record return and their bounds (0.75 day):
         `//donner/base/tasks:task_record` and `//donner/base/tasks:task_record_tests`.
-  - [ ] Adopted threads: slots, the adopted publish, the visibility reads of adopted deques and
-        the lifetime assertions (1.75 days).
+  - [ ] Adopted threads: slots, the adopted publish, the visibility reads of adopted deques, the
+        lifetime assertions, and the fairness tests of the rotating cursor across more than one
+        outside source (1.75 days).
   - [ ] The parallelism wake with per-worker `searching` flags (0.5 day).
-  - [ ] Worker stacks, the stack-floor assertion, worker QoS and `DefaultWorkerCount()`
+  - [ ] Worker stacks, the stack-floor assertion, worker QoS, `DefaultWorkerCount()`, and
+        tolerating a worker thread that fails to start: the scheduler runs with the workers that
+        started and `workerCount()` reports fewer (today a failed start ends the process)
         (0.5 day).
-  - [ ] `trySpawn` and the zero-worker inline mode (0.25 day).
+  - [x] `trySpawn` declining at each bound and the zero-worker inline mode (0.25 day):
+        `//donner/base/tasks:task_scheduler_tests`.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
     liveness tests listed under [Internals](#internals), and the lost-wakeup injected-delay test
     (red with the protocol broken) are green. Each liveness test must be observed red with the
@@ -146,9 +161,10 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] Test hooks for injected delays and counters (0.5 day).
   - Done when: the inline-below-grain counter test, the seeded-mode replay test and the scaling
     benchmark target exist and pass.
-- [ ] Milestone S3: Coroutines (3 days). After S1.
+- [ ] Milestone S3: Coroutines (3.25 days). After S1.
+  - [ ] `AsyncTaskScope`: spawns, cooperative stop and the destructor's assertion (0.25 day).
   - [ ] `Task<T>`, `TaskScheduler::schedule()` and the `AsyncTaskScope` join awaitable, frame
-        allocation from the scheduler's pool.
+        allocation from the scheduler's pool (3 days).
   - Done when: coroutine tests at 0, 1 and 4 workers, including resumption from a non-worker
     thread, registration racing completion, and nested awaits, pass under ThreadSanitizer. The
     race test covers both outcomes: the last task finishing while `await_suspend` registers, so
@@ -243,9 +259,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
 | Milestone | Days |
 | --------- | ---: |
-| S1 Core scheduler | 9.75 |
+| S1 Core scheduler | 9.5 |
 | S2 Parallel loops and determinism | 3.5 |
-| S3 Coroutines | 3 |
+| S3 Coroutines | 3.25 |
 | S4 ThreadSanitizer target and fuzzer | 3.25 |
 | S5 WebAssembly | 4.5 |
 | S6 Peer benchmarks | 6.25 |
@@ -827,6 +843,14 @@ queue, and *started* once a thread begins running it.
   worker and into the global queue otherwise, so an adopted thread's deque never holds another
   client's resumption. Every task record carries what a finisher needs: the address of its scope's
   counter and the parker the scope recorded at construction, both copied into the record at spawn.
+  The scheduler's own spawn and `trySpawn` are private, to be reached only by the scope types, so
+  that no client spawns a task that no scope accounts for; until those types exist, only tests reach
+  them, through a test peer. `trySpawn` declines, leaving the closure with the caller, when the
+  spawning thread's record pool is at its bound or, on a worker, when its deque is full; the deque's
+  owner-only `full()` decides that before the closure moves, since only the owner pushes and a thief
+  only frees slots. Each sleep, publish and shutdown step calls an optional test seam,
+  `SchedulerTestHooks`, given at construction, where tests hold or delay a thread; production
+  schedulers pass none.
 - **Scopes record their creator.** A `TaskScope` records, when it is constructed, its creating
   thread, that thread's parker (a worker's, an adopted slot's, or a `ParkerPool` slot) and, on a
   worker or adopted thread, the deque and its bottom index (the watermark). Its waits use exactly
@@ -1309,6 +1333,7 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | ------ | --------- | -------- | --- |
 | Worker state word | sleeper stores asleep (step 3) | seq_cst store | half of the shutdown pairing with the stop flag |
 | Worker state word | every swap from asleep to awake | CAS, seq_cst on success and on failure | a failed swap's read is half of the shutdown pairing; one total order with `awake` |
+| Worker state word | read before a swap, and a publisher's scan for an asleep worker | seq_cst load | picks the swap's expected value and the worker to wake; the swap decides |
 | `awake` | sleeper's decrement (step 3) | seq_cst RMW | half of the publish pairing; its result decides the last-awake rule |
 | `awake` | swap winner's increment | seq_cst RMW | same total order; made before the parker change |
 | `awake` | publisher's read after a publish | seq_cst load | other half of the publish pairing |
@@ -1326,10 +1351,11 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | Deque bottom and top | owner's take | relaxed store of bottom, seq_cst fence, relaxed load of top; CAS on top seq_cst, failure relaxed (Le et al.) | the owner and a thief agree on the last entry; a failed CAS means a thief took it and carries no data to the owner |
 | Deque top and bottom | thief's steal | acquire load of top, seq_cst fence, acquire load of bottom; CAS on top seq_cst, failure relaxed (Le et al.) | the acquire load of bottom acquires the pushed slot and record; a failed CAS takes nothing |
 | Deque top and bottom | sleeper's visibility reads of adopted deques (step 4) | seq_cst loads | other half of the adopted publish pairing |
-| Deque top | owner's push (fullness check) | acquire load | a thief's read of the slot it claimed happens before the owner rewrites that slot |
+| Deque top | owner's push and `full()` (fullness check) | acquire load | a thief's read of the slot it claimed happens before the owner rewrites that slot |
 | Deque indices, ThreadSanitizer form | every access | seq_cst, no fences | lets ThreadSanitizer check the deque, which it cannot on the fenced form because it does not model standalone fences |
 | `globalQueued` | increment after linking, decrement after unlinking, both under the queue mutex | seq_cst RMW | the increment is half of the publish pairing; the entries themselves are published by the mutex |
 | `globalQueued` | sleeper's read (step 4) | seq_cst load | other half of the publish pairing |
+| `globalQueued` | worker's check before it locks the queue to take | relaxed load | a hint; the take itself is under the mutex |
 | Scope counter | increment on spawn | relaxed RMW | ordered before the child's decrement by the push that publishes the child, and before the spawner's own decrement by coherence |
 | Scope counter | finisher's decrement | acq_rel RMW | release publishes the task's results; acquire lets the last finisher read the join handle; all decrements form one release sequence |
 | Scope counter | creator's read in rule 2 | acquire load | on zero, sees every task's results |
@@ -1628,6 +1654,50 @@ clients that size work from documents.
   cleared, the external pool's lock check removed, and the release assertions for a second sleeper
   on one parker and for the double returns a release build detects removed (their death tests).
   With AddressSanitizer, removing the poison of free records is caught.
+- **Scheduler core** (`//donner/base/tasks:task_scheduler_tests`): the zero-worker inline mode;
+  spawns from threads that are not workers and from workers, at 1 and 4 workers, each run exactly
+  once; the global queue first in, first out; `trySpawn` declining at the external bound, the record
+  bound and a full deque, with `spawn` then running inline; a worker with endless local work still
+  taking a global entry within 61 tasks; an idle worker stealing a busy one's entry; and the steal
+  order visiting every other worker once. Deterministic interleavings through `SchedulerTestHooks`
+  cover both store-buffering pairs: a publish before the sleeper's decrement, seen by its re-check;
+  a publish after the sleeper's re-check, which must wake it; a sleeper's self-wake racing a
+  publisher's wake, counted once; and shutdown before and after the sleeper stores asleep. Stress
+  submits one task at a time from a thread that is not a worker, so that every task is a publish
+  racing a sleep, runs several submitters at once, and destroys schedulers while their workers go to
+  sleep, each with no hooks and with delays injected at every step; a lost wakeup or a lost shutdown
+  fails at the hang guard, and the destructor asserts that the awake count equals the workers whose
+  state is awake. Every case passes pinned to one CPU. Each protocol step was observed red with it
+  broken, deterministically and under injected delays: the sleeper's re-check of queued work or of
+  the stop flag removed, the publisher's wake removed, a failed swap counted, the self-wake after
+  the wait removed, the waker's parker change removed or made only on a successful swap, the
+  periodic outside take, the steal from other workers, first-in first-out order, the deque fullness
+  check and the idle loop's stop check. Draining before sleep has no effect yet: an idle worker's
+  deque is empty when it sleeps, and the drain acts once a waiting worker can sleep with entries
+  below its watermark. Eight mutants that weaken one sequentially consistent operation of the two
+  pairs survive these tests, natively on Linux ARMv8 and under ThreadSanitizer: the publisher's
+  increment of the queued count made release; its read of the awake count made acquire; the
+  sleeper's asleep store made release; its decrement of the awake count made release; its re-check
+  of the queued count made acquire; the destructor's exchange of the stop flag made release; the
+  sleeper's re-check of the stop flag made acquire; and the swap's compare-and-swap made
+  acquire-release, acquire on failure. ThreadSanitizer does not model store buffering, so it never
+  produces the forbidden outcome. On the base ARMv8 instruction set the build targets there, each
+  weakened acquire load is the same load-acquire instruction as before, the weakened
+  compare-and-swap keeps both its acquire and its release halves, and a weakened release store or
+  read-modify-write is still a store-release that the architecture keeps in order with the
+  load-acquire after it, so none of the eight can reorder the store before the load. On x86-64 every
+  read-modify-write is a locked instruction whatever its ordering and an acquire load is the same
+  plain load, so seven of the eight change no ordering there; the asleep store alone becomes a plain
+  store instead of an exchange, but the locked decrement of the awake count right after it drains
+  the store buffer before the stop flag is read. That mutant survived 4,000 iterations of the
+  shutdown stress with injected delays, and 16,000 without, on x86-64. These survivals come from the
+  instruction sequences the current code compiles to, not from the memory model: each of the eight
+  operations is one half of a store-buffering pair, which the C++ memory model allows to reorder
+  unless both halves are sequentially consistent, so all eight stay sequentially consistent by
+  specification, and a surviving mutant is no licence to weaken one. In particular, the asleep store
+  is equivalent to a release store on x86-64 only because the locked decrement of the awake count
+  sits between it and the read of the stop flag; moving or removing that decrement would make a
+  weakened store a real store-buffering bug.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
