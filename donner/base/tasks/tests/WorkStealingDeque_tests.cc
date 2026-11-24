@@ -604,5 +604,30 @@ TYPED_TEST(WorkStealingDequeStressTest, LastEntryRaceTakesEveryEntryExactlyOnce)
   EXPECT_THAT(defects, Eq(StressDefects{}));
 }
 
+// The owner keeps two entries queued and takes both, so a take often finds one entry above a top
+// that thieves are advancing, the case where only the store-load barriers keep the owner and a
+// thief from taking the same entry without a contended claim.
+TYPED_TEST(WorkStealingDequeStressTest, TwoEntryRaceTakesEveryEntryExactlyOnce) {
+  std::int64_t pushedSinceTake = 0;
+  const StressDefects defects = this->run(
+      200000, 4, [&](typename TestFixture::Deque& deque, Record* record, TakerLog& ownerLog) {
+        while (!deque.push(record)) {
+          if (const std::optional<Record*> taken = deque.take()) {
+            ownerLog.record(*taken);
+          }
+        }
+        if (++pushedSinceTake < 2) {
+          return;
+        }
+        pushedSinceTake = 0;
+        for (int i = 0; i < 2; ++i) {
+          if (const std::optional<Record*> taken = deque.take()) {
+            ownerLog.record(*taken);
+          }
+        }
+      });
+  EXPECT_THAT(defects, Eq(StressDefects{}));
+}
+
 }  // namespace
 }  // namespace donner::tasks
