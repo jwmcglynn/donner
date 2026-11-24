@@ -1395,7 +1395,7 @@ TEST_F(RenderingContextTest, ShadowTreeSelectorsMatchWithinTheirOwnTree) {
         registry.try_get<components::ComputedStyleComponent>(shadow.lightEntity);
     ASSERT_NE(cloneStyle, nullptr);
     ASSERT_NE(lightStyle, nullptr);
-    EXPECT_THAT(*cloneStyle->properties, SelectorStyledLike(*lightStyle->properties))
+    EXPECT_THAT(*cloneStyle->properties(), SelectorStyledLike(*lightStyle->properties()))
         << "clone of " << registry.get<donner::components::TreeComponent>(entity).tagName();
     ++clones;
   }
@@ -1448,7 +1448,7 @@ TEST_F(RenderingContextTest, ShadowTreeRootIsTheOnlyElementOfItsTree) {
       }
       ++roots;
       const PropertyRegistry& root =
-          *registry.get<components::ComputedStyleComponent>(entity).properties;
+          *registry.get<components::ComputedStyleComponent>(entity).properties();
       // Non-inherited properties, so a match cannot come from the host's ancestors.
       const css::Color green(css::RGBA(0, 0x80, 0, 0xFF));
       EXPECT_THAT(root.opacity.get(), Optional(0.5));
@@ -1469,7 +1469,7 @@ TEST_F(RenderingContextTest, ShadowTreeRootIsTheOnlyElementOfItsTree) {
            child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
         if (const auto* idComponent = registry.try_get<components::IdComponent>(child);
             idComponent != nullptr && idComponent->id() == id) {
-          return *registry.get<components::ComputedStyleComponent>(child).properties;
+          return *registry.get<components::ComputedStyleComponent>(child).properties();
         }
       }
       ADD_FAILURE() << "no host child " << id;
