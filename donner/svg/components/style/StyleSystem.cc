@@ -48,6 +48,7 @@
 #include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleComponent.h"
+#include "donner/svg/components/style/StyleElementView.h"
 
 namespace donner::svg::components {
 
@@ -601,17 +602,9 @@ struct ShadowedElementAdapter {
   Entity entity() const { return treeEntity_; }
 
   std::optional<ShadowedElementAdapter> parentElement() const {
-    const Entity target =
-        registry_.get().get<donner::components::TreeComponent>(treeEntity_).parent();
-    if (target == entt::null) {
-      return std::nullopt;
-    }
-
-    // Shadow entities don't carry ElementTypeComponent themselves - resolve through the light
-    // (data) entity, otherwise any shadow entity whose parent is also a shadow entity would
-    // appear parentless and incorrectly match `:root`.
-    const bool isSVGElement = registry_.get().all_of<ElementTypeComponent>(resolveData(target));
-    return isSVGElement ? std::make_optional(create(target)) : std::nullopt;
+    // A parentless element matches `:root`; see StyleParentElement for where the walk stops.
+    const Entity target = StyleParentElement(registry_.get(), treeEntity_);
+    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
   }
 
   std::optional<ShadowedElementAdapter> firstChild(
@@ -738,8 +731,7 @@ private:
 
   /// Resolve a tree entity to its data entity: shadow entities proxy their light entity.
   Entity resolveData(Entity treeEntity) const {
-    const auto* shadowComponent = registry_.get().try_get<ShadowEntityComponent>(treeEntity);
-    return shadowComponent ? shadowComponent->lightEntity : treeEntity;
+    return StyleDataEntity(registry_.get(), treeEntity);
   }
 
   ShadowedElementAdapter create(Entity newTreeEntity) const {
@@ -747,48 +739,6 @@ private:
   }
 
   std::reference_wrapper<const Registry> registry_;
-  Entity treeEntity_;
-  Entity dataEntity_;
-};
-
-/// An element as the rule index reads it: straight from its components, without copies, and only
-/// for the key kinds an index has. Valid for one cascade of the element. Like
-/// \ref ShadowedElementAdapter, a shadow entity reads its tag from its own tree entity and its id,
-/// classes and attributes from its light entity.
-class RuleIndexElementView {
-public:
-  RuleIndexElementView(const Registry& registry, Entity treeEntity, Entity dataEntity)
-      : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity) {}
-
-  std::string_view id() const {
-    const auto* component = registry_.try_get<IdComponent>(dataEntity_);
-    return component != nullptr ? std::string_view(component->id()) : std::string_view();
-  }
-
-  std::string_view typeName() const {
-    return registry_.get<donner::components::TreeComponent>(treeEntity_).tagName().name;
-  }
-
-  template <typename Visitor>
-  void forEachClassName(Visitor&& visit) const {
-    if (const auto* component = registry_.try_get<ClassComponent>(dataEntity_)) {
-      for (std::string_view name : StringUtils::SplitAsciiWhitespace(component->className)) {
-        visit(name);
-      }
-    }
-  }
-
-  template <typename Visitor>
-  void forEachAttributeLocalName(Visitor&& visit) const {
-    if (const auto* component =
-            registry_.try_get<donner::components::AttributesComponent>(dataEntity_)) {
-      component->forEachAttributeName(
-          [&](const xml::XMLQualifiedNameRef& name) { visit(std::string_view(name.name)); });
-    }
-  }
-
-private:
-  const Registry& registry_;
   Entity treeEntity_;
   Entity dataEntity_;
 };

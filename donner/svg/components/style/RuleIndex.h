@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/BloomFilter.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
 #include "donner/css/Stylesheet.h"
@@ -116,6 +118,47 @@ public:
    */
   static RuleIndexKey KeyFor(const css::ComplexSelector& selector);
 
+  /// Hashes of keys every ancestor-filter match needs among an element's ancestors: four, with
+  /// repeats when a selector-list entry has fewer than four distinct ones.
+  using AncestorHashGroup = std::array<std::uint32_t, 4>;
+
+  /**
+   * The ancestor-filter hash of a key, as \ref StyleAncestorFilter inserts it for an ancestor and
+   * \ref ancestorHashes records it for a selector.
+   *
+   * @param kind The key's kind; \ref RuleIndexKey::Kind::Universal is not a key.
+   * @param name The key text, ASCII-lowercased for \ref RuleIndexKey::Kind::Type and
+   *   \ref RuleIndexKey::Kind::Attribute.
+   */
+  static BloomHash AncestorKeyHash(RuleIndexKey::Kind kind, std::string_view name) {
+    return BloomHash::Of(name, static_cast<std::uint32_t>(kind) + 1);
+  }
+
+  /**
+   * Up to four keys that every element \p selector matches must have among its ancestors, as
+   * \ref AncestorKeyHash values: from the compounds reached from the subject through descendant
+   * and child combinators, stopping at the first sibling combinator (compounds beyond it are
+   * siblings of an ancestor), taking ids, then classes, then attribute local names without a
+   * namespace, then non-universal type names. Simple selectors inside pseudo-class arguments are
+   * never used, because `:not()` inverts them and `:is()` lists alternatives.
+   *
+   * @param selector One entry of a rule's selector list.
+   * @return The distinct hashes, at most four; empty when no ancestor compound has such a key.
+   */
+  static SmallVector<std::uint32_t, 4> AncestorHashesFor(const css::ComplexSelector& selector);
+
+  /**
+   * The ancestor hash groups of the rule at \p rule, one per selector-list entry, or none when
+   * some entry has no ancestor key. A candidate rule can be skipped when, for every group, some
+   * hash of the group is absent from the element's ancestors; with no groups it is never skipped.
+   *
+   * @param rule Rule position, less than \ref ruleCount.
+   */
+  std::span<const AncestorHashGroup> ancestorHashes(std::uint32_t rule) const {
+    return std::span<const AncestorHashGroup>(hashGroups_)
+        .subspan(hashGroupFirst_[rule], hashGroupFirst_[rule + 1] - hashGroupFirst_[rule]);
+  }
+
   /**
    * Replace \p candidates with the positions of the rules that can match \p element, ascending
    * and without duplicates.
@@ -202,17 +245,30 @@ private:
   std::vector<Bucket>& bucketsFor(RuleIndexKey::Kind kind);
   /// File one entry, in sorted order; returns the key text bytes it added.
   std::size_t addEntry(const RuleIndexKey& key, std::uint32_t rule);
+  /// Record the ancestor hash groups of every rule of \p rules.
+  void addAncestorHashes(std::span<const css::SelectorRule> rules);
 
   std::vector<Bucket> ids_;             //!< Sorted by key.
   std::vector<Bucket> classes_;         //!< Sorted by key.
   std::vector<Bucket> attributes_;      //!< Sorted by lowercased key.
   std::vector<Bucket> types_;           //!< Sorted by lowercased key.
   std::vector<std::uint32_t> entries_;  //!< Rule positions, ascending within each bucket.
-  std::uint32_t universalFirst_ = 0;    //!< First universal position in \ref entries_.
-  std::uint32_t universalCount_ = 0;    //!< Number of universal positions.
-  std::size_t ruleCount_ = 0;           //!< Rules the index was built from.
-  std::size_t retainedBytes_ = 0;       //!< See \ref retainedBytes.
-  std::size_t compactHitsAt_ = 0;       //!< Hit count past which \ref addHit removes repeats.
+  /// Ancestor hash groups, rule by rule; see \ref ancestorHashes.
+  std::vector<AncestorHashGroup> hashGroups_;
+  /// Where each rule's groups start in \ref hashGroups_, plus the end when there are rules.
+  std::vector<std::uint32_t> hashGroupFirst_;
+  std::uint32_t universalFirst_ = 0;  //!< First universal position in \ref entries_.
+  std::uint32_t universalCount_ = 0;  //!< Number of universal positions.
+  std::size_t ruleCount_ = 0;         //!< Rules the index was built from.
+  std::size_t retainedBytes_ = 0;     //!< See \ref retainedBytes.
+  std::size_t compactHitsAt_ = 0;     //!< Hit count past which \ref addHit removes repeats.
+
+public:
+  /// Most bytes one selector-list entry adds to \ref retainedBytes besides key text and vector
+  /// slack: its rule position, at most one key record, its ancestor hash group, and at most one
+  /// per-rule offset. A nonempty index also retains one leading 4-byte offset.
+  static constexpr std::size_t kMaxBytesPerEntry =
+      sizeof(std::uint32_t) + sizeof(Bucket) + sizeof(AncestorHashGroup) + sizeof(std::uint32_t);
 };
 
 }  // namespace donner::svg::components

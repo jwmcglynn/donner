@@ -40,6 +40,28 @@ donner_cc_library(
     ],
 )
 
+# The keys of an element's ancestors as the cascade walks them, kept in a counting Bloom filter,
+# and the element view the rule index and the filter share.
+donner_cc_library(
+    name = "style_ancestor_filter",
+    srcs = ["StyleAncestorFilter.cc"],
+    hdrs = [
+        "StyleAncestorFilter.h",
+        "StyleElementView.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+        "//donner/svg/components:__subpackages__",
+    ],
+    deps = [
+        ":rule_index",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/shadow:components",
+    ],
+)
+
 cc_library(
     name = "style_system_headers",
     hdrs = [
@@ -92,6 +114,7 @@ donner_perf_sensitive_cc_library(
         ":components",
         ":matched_properties_cache",
         ":rule_index",
+        ":style_ancestor_filter",
         ":style_system_headers",
         "//donner/base",
         "//donner/base/parser",
@@ -141,6 +164,37 @@ donner_cc_fuzzer(
         "//donner/svg",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/parser",
+    ],
+)
+
+donner_cc_test(
+    name = "style_ancestor_filter_tests",
+    srcs = ["tests/StyleAncestorFilter_tests.cc"],
+    deps = [
+        ":rule_index",
+        ":style_ancestor_filter",
+        "//donner/base:base_test_utils",
+        "//donner/svg/components/shadow:shadow_tree_system",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Seeded random documents and selectors: the ancestor filter never rejects a rule the cascade
+# matches.
+donner_cc_test(
+    name = "style_ancestor_filter_property_tests",
+    srcs = ["tests/StyleAncestorFilterProperty_tests.cc"],
+    deps = [
+        ":rule_index",
+        ":style_ancestor_filter",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/css",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 
