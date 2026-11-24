@@ -1378,13 +1378,19 @@ private:
   /// budget rejections at `canvasSize`, or the frame's budget has already latched a rejection.
   bool skipRasterizeUnderBudget(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
                                 const Vector2i& canvasSize);
-  /// Records that the frame attempts a tile and returns the surface bytes reserved before it.
-  std::uint64_t noteTileAttempt();
+  /// The frame's surface budget when a tile starts.
+  struct TileAttempt {
+    std::uint64_t startBytes = 0;  ///< Surface bytes reserved before the tile.
+    bool budgetLatched = false;    ///< Whether the budget had already latched a refusal.
+  };
+  /// Records that the frame attempts a tile and returns the budget's state before it.
+  TileAttempt noteTileAttempt();
   /// True when the tile drawn into `offscreen` and refused by the budget could not fit even with
-  /// no other tile in the frame: it was the frame's first tile, or what it reserved since
-  /// `slotStartBytes` plus the refused reservation exceeds the limit less what the frame reserved
-  /// before its first tile.
-  [[nodiscard]] bool refusedTileCannotFitAlone(std::uint64_t slotStartBytes,
+  /// no other tile in the frame: it was the frame's first tile, or what it reserved since it
+  /// started plus the refused reservation exceeds the limit less what the frame reserved before
+  /// its first tile. False when the budget was already latched as the tile started, since the
+  /// recorded refusal is then an earlier tile's.
+  [[nodiscard]] bool refusedTileCannotFitAlone(const TileAttempt& attempt,
                                                const RendererInterface& offscreen) const;
   /// Discards the offscreen whose payload snapshot failed for `layer` and, on a budget
   /// rejection of a tile that was the first tile the frame allocated (`failedAlone`), records the
