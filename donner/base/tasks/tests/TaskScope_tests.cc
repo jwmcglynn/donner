@@ -46,16 +46,16 @@ std::uint64_t EpochOf(const Parker<>* parker) {
 
 /// Counts destructions, so a closure's lifetime is visible after the task ran.
 struct Tracker {
-  int* destroyed;
-  ~Tracker() { ++*destroyed; }
+  std::atomic<int>* destroyed;
+  ~Tracker() { destroyed->fetch_add(1); }
 };
 
 /// A closure that owns a \ref Tracker: running it counts a run, and destroying it, wherever that
 /// happens, counts a destruction.
 struct TrackedClosure {
   std::unique_ptr<Tracker> tracker;
-  int* runs;
-  void operator()() const { ++*runs; }
+  std::atomic<int>* runs;
+  void operator()() const { runs->fetch_add(1); }
 };
 
 // With zero workers nothing is queued: spawns run inline, trySpawn declines, wait returns at once.
@@ -65,12 +65,12 @@ TEST(TaskScopeTest, ZeroWorkersRunSpawnsInlineAndWaitReturnsAtOnce) {
   {
     TaskScope scope(scheduler);
     scope.spawn([&] { ranOn.push_back(std::this_thread::get_id()); });
-    int runs = 0;
-    int destroyed = 0;
+    std::atomic<int> runs{0};
+    std::atomic<int> destroyed{0};
     TrackedClosure closure{std::unique_ptr<Tracker>(new Tracker{&destroyed}), &runs};
     EXPECT_FALSE(scope.trySpawn(std::move(closure)));
     EXPECT_THAT(closure.tracker, NotNull()) << "a declined trySpawn leaves the closure";
-    EXPECT_THAT(runs, Eq(0));
+    EXPECT_THAT(runs.load(), Eq(0));
     EXPECT_THAT(ScopePeer::Count(scope), Eq(0u));
     scope.wait();
   }
@@ -137,7 +137,8 @@ TEST_P(ScopeWorkerCounts, TasksOfTheScopeSpawnIntoIt) {
 }
 
 /// Spawns \p count tracked closures into \p scope and returns: the closures outlive this call.
-void SpawnTracked(TaskScope& scope, int count, int* runs, int* destroyed) {
+void SpawnTracked(TaskScope& scope, int count, std::atomic<int>* runs,
+                  std::atomic<int>* destroyed) {
   for (int i = 0; i < count; ++i) {
     scope.spawn(TrackedClosure{std::unique_ptr<Tracker>(new Tracker{destroyed}), runs});
   }
@@ -148,15 +149,16 @@ void SpawnTracked(TaskScope& scope, int count, int* runs, int* destroyed) {
 TEST(TaskScopeTest, ClosuresOutliveTheSpawningStatementButNotTheScope) {
   constexpr int kTasks = 200;
   TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 2});
-  int runs = 0;
-  int destroyed = 0;
+  std::atomic<int> runs{0};
+  std::atomic<int> destroyed{0};
   {
     TaskScope scope(scheduler);
     SpawnTracked(scope, kTasks, &runs, &destroyed);
     scope.wait();
-    EXPECT_THAT(runs, Eq(kTasks));
-    EXPECT_THAT(destroyed, Eq(kTasks)) << "a finished task's closure is destroyed before its "
-                                          "decrement";
+    EXPECT_THAT(runs.load(), Eq(kTasks));
+    EXPECT_THAT(destroyed.load(), Eq(kTasks))
+        << "a finished task's closure is destroyed before its "
+           "decrement";
     EXPECT_THAT(Peer::ExternalLiveRecords(scheduler), Eq(0u))
         << "a finished task's record is returned before its decrement";
   }
@@ -177,8 +179,8 @@ TEST(TaskScopeTest, ADeclinedSpawnInAScopeRunsInlineAndIsNotCounted) {
   EXPECT_THAT(ranOn, Eq(std::this_thread::get_id())) << "at the external bound spawn runs inline";
   EXPECT_THAT(ScopePeer::Count(scope), Eq(1u)) << "an inline run is not counted";
 
-  int runs = 0;
-  int destroyed = 0;
+  std::atomic<int> runs{0};
+  std::atomic<int> destroyed{0};
   TrackedClosure closure{std::unique_ptr<Tracker>(new Tracker{&destroyed}), &runs};
   EXPECT_FALSE(scope.trySpawn(std::move(closure)));
   EXPECT_THAT(closure.tracker, NotNull()) << "a declined trySpawn leaves the closure";
@@ -186,8 +188,8 @@ TEST(TaskScopeTest, ADeclinedSpawnInAScopeRunsInlineAndIsNotCounted) {
 
   blocker.release();
   scope.wait();
-  EXPECT_THAT(runs, Eq(0));
-  EXPECT_THAT(destroyed, Eq(0));
+  EXPECT_THAT(runs.load(), Eq(0));
+  EXPECT_THAT(destroyed.load(), Eq(0));
 }
 
 // A flat spawn that finds its worker's deque full runs inline on that worker, uncounted, and the
@@ -270,7 +272,8 @@ TEST(TaskScopeTest, JoinFromANonWorkerRunsAOnTheCallerAndBOnAWorker) {
 /// is owned here and shared with the thread, so a thread detached after a failed wait touches
 /// nothing out of scope.
 struct CreatorThreadState {
-  explicit CreatorThreadState(std::size_t workers) {
+  /// Starts the scheduler; holds must be added to \ref hooks before, while no worker reads them.
+  void start(std::size_t workers) {
     scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = workers}, &hooks);
   }
 
@@ -298,6 +301,16 @@ std::thread StartCreator(const std::shared_ptr<CreatorThreadState>& state) {
   });
 }
 
+/// Waits for a thread to arrive at \p gate. @return False, with \p thread detached, if it never
+/// did.
+bool ArrivedOrDetach(Gate& gate, std::thread& thread) {
+  if (gate.waitForArrival()) {
+    return true;
+  }
+  thread.detach();
+  return false;
+}
+
 /// Joins \p thread if the creator returned under the hang guard, otherwise detaches it.
 /// @return Whether it returned.
 bool FinishCreator(std::thread& thread, const std::shared_ptr<CreatorThreadState>& state) {
@@ -313,10 +326,11 @@ bool FinishCreator(std::thread& thread, const std::shared_ptr<CreatorThreadState
 // The last task finishes, and changes the parker, before the creator sets its waiting bit: the
 // creator's re-check after the bit sees the zero count.
 TEST(TaskScopeInterleavingTest, AFinishBeforeTheCreatorsWaitingBitIsSeenByItsRecheck) {
-  auto state = std::make_shared<CreatorThreadState>(1);
+  auto state = std::make_shared<CreatorThreadState>();
   state->hooks.holdAt(SchedulerStep::ScopeWaiterBeforePrepareWait, 1, &state->creatorHold);
+  state->start(1);
   std::thread creator = StartCreator(state);
-  ASSERT_TRUE(state->creatorHold.waitForArrival());
+  ASSERT_TRUE(ArrivedOrDetach(state->creatorHold, creator));
   const TaskScope* scope = state->scope.load();
   const Parker<>* parker = ScopePeer::RecordedParker(*scope);
   const std::uint64_t epochBefore = EpochOf(parker);
@@ -335,10 +349,11 @@ TEST(TaskScopeInterleavingTest, AFinishBeforeTheCreatorsWaitingBitIsSeenByItsRec
 // The creator set its waiting bit and re-checked before the last task finished: the finisher's
 // change must end its wait.
 TEST(TaskScopeInterleavingTest, AFinishAfterTheCreatorsRecheckWakesIt) {
-  auto state = std::make_shared<CreatorThreadState>(1);
+  auto state = std::make_shared<CreatorThreadState>();
   state->hooks.holdAt(SchedulerStep::ScopeWaiterBeforeWait, 1, &state->creatorHold);
+  state->start(1);
   std::thread creator = StartCreator(state);
-  ASSERT_TRUE(state->creatorHold.waitForArrival());
+  ASSERT_TRUE(ArrivedOrDetach(state->creatorHold, creator));
   const Parker<>* parker = ScopePeer::RecordedParker(*state->scope.load());
   const std::uint64_t epochBefore = EpochOf(parker);
   EXPECT_THAT(parker->word() & Parker<>::kWaitingBit, Eq(Parker<>::kWaitingBit))
@@ -362,8 +377,8 @@ TEST(TaskScopeInterleavingTest, AFinisherTouchesNoScopeAfterItsDecrement) {
   hooks.holdAt(SchedulerStep::ScopeFinisherAfterDecrement, 1, &finisherHold);
   auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, &hooks);
 
-  int runs = 0;
-  int destroyed = 0;
+  std::atomic<int> runs{0};
+  std::atomic<int> destroyed{0};
   auto scope = std::make_unique<TaskScope>(*scheduler);
   const Parker<>* parker = ScopePeer::RecordedParker(*scope);
   const std::uint64_t epochBefore = EpochOf(parker);
@@ -372,13 +387,13 @@ TEST(TaskScopeInterleavingTest, AFinisherTouchesNoScopeAfterItsDecrement) {
 
   EXPECT_THAT(ScopePeer::Count(*scope), Eq(0u));
   EXPECT_THAT(EpochOf(parker), Eq(epochBefore)) << "the parker changes only after the decrement";
-  EXPECT_THAT(destroyed, Eq(1)) << "the closure is destroyed before the decrement";
+  EXPECT_THAT(destroyed.load(), Eq(1)) << "the closure is destroyed before the decrement";
   EXPECT_THAT(Peer::ExternalLiveRecords(*scheduler), Eq(0u))
       << "the record is returned before the decrement";
 
   scope->wait();  // Reads zero and returns without sleeping.
   scope.reset();
-  EXPECT_THAT(runs, Eq(1));
+  EXPECT_THAT(runs.load(), Eq(1));
 
   finisherHold.release();
   EXPECT_TRUE(PollUntil([&] { return EpochOf(parker) != epochBefore; }))
@@ -389,10 +404,11 @@ TEST(TaskScopeInterleavingTest, AFinisherTouchesNoScopeAfterItsDecrement) {
 // A spawn counts its task before publishing it: the task runs and finishes while its publisher
 // is still held between its push and its read of the awake count.
 TEST(TaskScopeInterleavingTest, ATaskCountsBeforeItIsPublished) {
-  auto state = std::make_shared<CreatorThreadState>(1);
+  auto state = std::make_shared<CreatorThreadState>();
   Gate busy;
   // The first publish is the busy task below; hold the second, the creator's.
   state->hooks.holdAt(SchedulerStep::AfterPublishPush, 2, &state->creatorHold);
+  state->start(1);
   Peer::Spawn(*state->scheduler, [&] { busy.arriveAndWait(); });
   ASSERT_TRUE(busy.waitForArrival());
 
@@ -404,7 +420,7 @@ TEST(TaskScopeInterleavingTest, ATaskCountsBeforeItIsPublished) {
     }
     state->returned.set();
   });
-  EXPECT_TRUE(state->creatorHold.waitForArrival());
+  ASSERT_TRUE(ArrivedOrDetach(state->creatorHold, creator));
   busy.release();  // The awake worker finishes and takes the creator's task from the global queue.
   EXPECT_TRUE(state->spawned.wait()) << "the queued task runs while its publisher is held";
 
@@ -416,9 +432,10 @@ TEST(TaskScopeInterleavingTest, ATaskCountsBeforeItIsPublished) {
 // that registers, while a finisher of the first thread's scope still holds the parker. The late
 // change is a spurious wake for the new owner, which re-checks its own scope and sleeps again.
 TEST(TaskScopeInterleavingTest, ALateChangeToAReusedParkerIsASpuriousWake) {
-  auto state = std::make_shared<CreatorThreadState>(2);
+  auto state = std::make_shared<CreatorThreadState>();
   Gate finisherHold;
   state->hooks.holdAt(SchedulerStep::ScopeFinisherAfterDecrement, 1, &finisherHold);
+  state->start(2);
   const std::shared_ptr<ParkerPool> pool = Peer::Pool(*state->scheduler);
 
   std::atomic<const Parker<>*> firstParker{nullptr};
@@ -436,13 +453,16 @@ TEST(TaskScopeInterleavingTest, ALateChangeToAReusedParkerIsASpuriousWake) {
   EXPECT_THAT(pool->slotsInUse(), Eq(0u)) << "the exited thread returned its slot";
 
   std::thread second = StartCreator(state);  // Its task stays queued or held at its gate.
-  ASSERT_TRUE(state->spawned.wait());
+  if (!state->spawned.wait()) {
+    second.detach();
+    FAIL() << "the second creator never spawned";
+  }
   const Parker<>* parker = ScopePeer::RecordedParker(*state->scope.load());
   EXPECT_THAT(parker, Eq(firstParker.load())) << "the slot passed to the next thread";
-  ASSERT_TRUE(PollUntil([&] {
+  EXPECT_TRUE(PollUntil([&] {
     return state->hooks.count(SchedulerStep::ScopeWaiterBeforePrepareWait) == 1 &&
            (parker->word() & Parker<>::kWaitingBit) != 0;
-  }));
+  })) << "the second creator sleeps on the reused parker";
 
   finisherHold.release();  // The first scope's finisher now changes the reused parker.
   EXPECT_TRUE(PollUntil([&] {
