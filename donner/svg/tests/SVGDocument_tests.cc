@@ -404,9 +404,9 @@ TEST(SVGDocument, UseTraversalFindsAuthoredChildrenBeforeAndAfterRendering) {
     EXPECT_THAT(document.querySelector("use > title"), Optional(ElementIdEq("label")));
     EXPECT_THAT(host->querySelector(":scope > desc"), Optional(ElementIdEq("description")));
     EXPECT_THAT(document.querySelector("#group-label"), Optional(ElementIdEq("group-label")));
-    EXPECT_THAT(document.querySelector("use > rect"), Eq(std::nullopt));
-    EXPECT_THAT(emptyHost->firstChild(), Eq(std::nullopt));
-    EXPECT_THAT(emptyHost->lastChild(), Eq(std::nullopt));
+    EXPECT_THAT(QueriedId(document.querySelector("use > rect")), Eq(std::nullopt));
+    EXPECT_THAT(QueriedId(emptyHost->firstChild()), Eq(std::nullopt));
+    EXPECT_THAT(QueriedId(emptyHost->lastChild()), Eq(std::nullopt));
   };
 
   {

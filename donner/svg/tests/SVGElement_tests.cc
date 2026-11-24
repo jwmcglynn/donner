@@ -1491,9 +1491,9 @@ TEST_F(SVGElementTests, TraversalSkipsShadowRootsBetweenAuthoredChildren) {
   }
 
   EXPECT_THAT(children(host), ElementsAre(ElementIdEq("label"), ElementIdEq("description")));
-  EXPECT_THAT(label.previousSibling(), testing::Eq(std::nullopt));
-  EXPECT_THAT(description.nextSibling(), testing::Eq(std::nullopt));
-  EXPECT_THAT(host.querySelector("#shadow-middle"), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(label.previousSibling()), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(description.nextSibling()), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(host.querySelector("#shadow-middle")), testing::Eq(std::nullopt));
   EXPECT_THAT(host.querySelector("#description"), Optional(ElementIdEq("description")));
 }
 
