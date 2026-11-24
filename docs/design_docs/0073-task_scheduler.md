@@ -26,19 +26,35 @@ scheduler to the base library, `donner/base/tasks/`, for every parallel client:
 - Same code path at any worker count: zero workers runs everything inline on the caller, and a
   seeded deterministic mode runs tasks on one thread in a reproducible order so ordering-dependent
   failures reproduce.
+- On by default, configurable: the default configuration runs workers, a runtime option sets the
+  worker count or disables them, and one Donner-wide build setting, exposed to consumer modules,
+  compiles threading out of the scheduler and the renderer for targets that cannot have threads.
+- Best in class, and benchmarked: measured against named peer schedulers (oneTBB, Taskflow,
+  enkiTS, Google Filament's JobSystem, libfork) with acceptance thresholds stated against the best
+  peer.
 
-Its first client is parallel style traversal, Part D of
-[0072-css_cascade](0072-css_cascade.md). Filter row bands, layer
-preparation, stylesheet parsing and resource decoding are named as later clients so the API is
-not shaped by one user.
+Its first planned client is parallel style traversal, Part D of
+[0072-css_cascade](0072-css_cascade.md). The scheduler is implemented before that work and no
+milestone here depends on a 0072 milestone. Filter row bands, layer preparation, stylesheet parsing
+and resource decoding are named as later clients so the API is not shaped by one user.
 
 ## Goals
 
 - **Small-task overhead.** Targets, not yet measured: spawning and running an empty task that
   the owner itself pops costs at most 50 ns, and a `Join` of two empty closures that is not stolen
-  costs at most 100 ns, on the benchmark in [Performance](#performance) at `-c opt`. The
+  costs at most 100 ns, on the benchmark in [Peer benchmarks](#peer-benchmarks) at `-c opt`. The
   work-first principle (below) is why these are plausible: the owner's fast path has no
   read-modify-write atomic.
+- **Best in class.** On every workload of the [peer benchmarks](#peer-benchmarks) the scheduler
+  meets the acceptance thresholds stated there against the fastest of the named peers on the same
+  platform, in one build with one toolchain. A missed threshold changes the design until it is met,
+  or is recorded as an open question with the measured data; it is never waived silently.
+- **On by default, off at no cost.** The default configuration of every shipped target that can
+  have threads runs workers ([Configuration](#configuration)). With zero workers at run time, or
+  with threading compiled out, every client runs serially on the calling thread with identical
+  results, and the peer benchmarks' single-thread workload costs at most 2 percent over a plain
+  serial loop. With threading compiled out, neither the scheduler nor the renderer links a thread,
+  pthread, condition-variable or atomic-wait dependency, checked at link time.
 - **Scaling.** A parallel loop over 1,000,000 units of about 100 ns each runs at least 3 times
   faster on 4 workers than inline, and a loop whose total work is below the grain runs inline with
   no task created (asserted by a counter, not a time).
@@ -63,31 +79,47 @@ not shaped by one user.
 - No priorities, deadlines, timers or IO reactor; this is a compute scheduler.
 - No exceptions: the repository builds with `-fno-exceptions`. Errors are values.
 - No preemption or fairness guarantees between unrelated clients; clients bound their own work.
-- No change to the document access model: tasks never acquire document guards.
+- No change to the document access model in threaded builds: tasks never acquire document guards.
+  (With threading compiled out, concurrent document access is unavailable; see
+  [Renderer threading](#renderer-threading).)
 - No GPU command scheduling; Geode keeps its own submission model.
 - No client designs here beyond naming their fit; each client is designed in its own document.
+- No benchmark against schedulers that cannot be built in the same C++ Bazel build with the same
+  toolchain (Rayon, language runtimes, operating-system thread pools); they are cited, not
+  compared. Peer libraries are benchmark-only and never linked into a shipped target.
+- No guarantee that threading compiled out removes threads the platform itself creates (GPU
+  driver callback queues, the browser's worker model); targets that need those stay threaded.
 
 ## Next Steps
 
-- Land Milestone S1 (deque, workers, scopes, join, inline mode, sleep and wake) with its stress
-  tests, then S4's ThreadSanitizer target so every later milestone runs under it.
+- Land Milestone S1 (deque, workers, scopes, join, inline mode, sleep and wake, adoption) with its
+  stress tests, then S4's ThreadSanitizer target so every later milestone runs under it.
+- Land S7's build setting early, so the compiled-out lane runs from the first client onward.
 
 ## Implementation Plan
 
-Estimates are engineering days, including tests and review fixes.
+Estimates are engineering days, including tests and review fixes. No milestone here depends on a
+milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
-- [ ] Milestone S1: Core scheduler (7 days)
-  - [ ] Chase-Lev deque with the memory orders of Le et al. and old-array reclamation,
-        per-worker deques, one intrusive global queue, random-victim stealing, help-while-waiting
-        joins with scope watermarks, parkers, drain before sleep, the last-awake sleep rule and
-        its publish protocol, the stack-floor assertion, `trySpawn`, cross-thread slot return,
-        `TaskScope` and `Join`, zero-worker inline mode.
+- [ ] Milestone S1: Core scheduler (8.75 days)
+  - [ ] Chase-Lev deque with the memory orders of Le et al. on a fixed-capacity ring,
+        per-worker deques, one intrusive global queue, bounded random-victim stealing,
+        help-while-waiting joins with scope watermarks, parkers with the waiting bit, drain
+        before sleep, the last-awake sleep rule and its publish protocol in read-modify-write
+        form, the stack-floor assertion, `trySpawn`, cross-thread slot return, `TaskScope` and
+        `Join`, zero-worker inline mode.
+  - [ ] Adopted threads with the own-deque-only help policy (1.5 days); the wake after a local
+        push and the `searching` count (0.5 day); worker QoS on Apple platforms and
+        `DefaultWorkerCount()` (0.25 day). Fixed-capacity deques save 0.75 day against growable
+        ones.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
     liveness tests listed under [Internals](#internals), and the lost-wakeup injected-delay test
     (red with the protocol broken) are green. Each liveness test must be observed red with the
     last-awake rule disabled, through a test hook, before it counts.
-- [ ] Milestone S2: Parallel loops and determinism (3 days). After S1.
-  - [ ] `ParallelFor` with grain and adaptive splitting; seeded deterministic mode; test hooks.
+- [ ] Milestone S2: Parallel loops and determinism (3.5 days). After S1.
+  - [ ] `ParallelFor` with grain and adaptive splitting, its const-body check and chunk cap, and
+        the shared-cursor variant for S6 to decide between (0.5 day); seeded deterministic mode;
+        test hooks.
   - Done when: the inline-below-grain counter test, the seeded-mode replay test and the scaling
     benchmark target exist and pass.
 - [ ] Milestone S3: Coroutines (3 days). After S1.
@@ -95,9 +127,13 @@ Estimates are engineering days, including tests and review fixes.
         scheduler's pool.
   - Done when: coroutine tests at 0, 1 and 4 workers, including resumption from a non-worker
     thread and nested awaits, pass under ThreadSanitizer.
-- [ ] Milestone S4: ThreadSanitizer target and fuzzer (3 days). After S1.
+- [ ] Milestone S4: ThreadSanitizer target and fuzzer (3.25 days). After S1.
   - [ ] A ThreadSanitizer test variant reachable from `//...` through a configuration transition,
         and `//donner/base/tasks:task_scheduler_fuzzer`.
+  - [ ] The deque's all-sequentially-consistent form for ThreadSanitizer builds, the stress test
+        on both forms, and a red run on a deliberately weakened ordering (0.25 day). Verify here
+        whether the repository's Clang ThreadSanitizer models standalone fences; the protocol does
+        not depend on the answer, but the record of it decides whether the second form stays.
   - Done when: the variant runs the scheduler tests in normal CI and the fuzzer is green.
 - [ ] Milestone S5: WebAssembly (4 days). After S1.
   - [ ] Inline-only build for Wasm without pthreads; pool sizing, worker stack size, start-up and
@@ -106,13 +142,54 @@ Estimates are engineering days, including tests and review fixes.
     count it obtained and the peak heap with the scheduler running, the fixed memory still has
     the headroom its build contract requires, and a test shows scheduler workers' sleeps take the
     pass-through branch of the editor's wrapped futex wait.
-- [ ] Milestone S6: Benchmarks (1.5 days). After S2 and S3.
-  - Done when: `//donner/benchmarks:task_scheduler_bench` reports spawn, join, wake latency and
-    scaling, and the overhead goals are met.
+- [ ] Milestone S6: Peer benchmarks (6 days). After S2 and S3.
+  - [ ] Benchmark-only pinned modules for oneTBB, Taskflow, enkiTS, Filament JobSystem and
+        libfork (1.5 days); adapters and workloads W1 to W8 (2 days); the quiet-machine gate,
+        repetition and reporting script (1 day); runs on the three native platforms and the
+        editor Wasm build, with results recorded in this document (1.5 days).
+  - [ ] Verify here, before relying on them: that oneTBB builds with exceptions disabled (or
+        needs `-fexceptions` on its own targets), that its registry module builds on all three
+        platforms, that the Filament `libs/utils` subset needs no more files than listed, and that
+        each peer builds under the repository's toolchains at all. A peer that cannot be built is
+        recorded here with the reason, not dropped silently.
+  - Done when: every acceptance threshold under [Peer benchmarks](#peer-benchmarks) is met or is
+    recorded as an open question with its measured data, and the overhead goals are met. Tuning
+    work to close a gap is not in this estimate.
+- [ ] Milestone S7: Configuration and threading switch (2 days). After S1; the build setting
+      itself can land first.
+  - [ ] `//donner/base:threading` with its `donner.configure(threading = ...)` attribute, the
+        CMake option `DONNER_THREADING`, and the scheduler's inline implementation selected by it
+        (0.75 day).
+  - [ ] The compiled-out test variant through a configuration transition, added to the variant
+        reset list, with the scheduler tests (0.5 day).
+  - [ ] The shared default scheduler and the runtime options of `donner-cli` and the native
+        editor (0.5 day).
+  - [ ] Document the setting, the module attribute, the CMake option and the runtime option in
+        `docs/building.md` and `docs/multithreading.md` (0.25 day).
+  - Done when: the compiled-out variant and the default (threaded) build both run the scheduler
+    tests in CI, and a consumer-module build with `threading = False` builds `@donner//:donner`.
+- [ ] Milestone S8: Renderer threading switch (3.5 days). After S7.
+  - [ ] The no-op lock type and the conversions listed under
+        [Renderer threading](#renderer-threading) (1.5 days), `ThreadingMode::ConcurrentDom`
+        rejected when compiled out (0.5 day), incompatibility of the editor and native Geode
+        targets with the setting (0.5 day), and the link-time symbol check on Linux, macOS and
+        the renderer Wasm module (1 day).
+  - Done when: the compiled-out variant renders the renderer's golden tests bit-identically to
+    the threaded build, and the symbol check is green and was observed red with one
+    `std::mutex` reinstated.
+- [ ] Release gate, before the first client ships with workers enabled (no estimate; checks):
+  - [ ] Every peer-benchmark threshold met, or recorded as an open question the maintainer
+        accepted with its data.
+  - [ ] The ThreadSanitizer, AddressSanitizer and UndefinedBehaviorSanitizer lanes clean on the
+        scheduler and on that client.
+  - [ ] The default (threaded) build, the runtime zero-worker runs and the compiled-out variant
+        all green in CI.
+  - [ ] Bit-identical output between serial and threaded runs for every client that ships,
+        asserted by that client's differential tests at 0, 1 and N workers.
 
-Total committed estimate: 21.5 engineering days. Part D of
-[0072-css_cascade](0072-css_cascade.md) needs S1 to S3, and S4 for its
-race coverage.
+Total committed estimate: 34 engineering days (S1 8.75, S2 3.5, S3 3, S4 3.25, S5 4, S6 6,
+S7 2, S8 3.5). Part D of [0072-css_cascade](0072-css_cascade.md) needs S1 to S3, and S4 for its
+race coverage; its release with workers on needs the release gate.
 
 ## Background
 
@@ -223,6 +300,45 @@ race coverage.
   an ordinary compiler transform on the web as well.
 - **Threads on the web.** See [WebAssembly](#webassembly).
 
+### Prior Art: Filament JobSystem
+
+Google Filament's `utils::JobSystem` was compared with this design from its source at release tag
+`v1.81.0` (`libs/utils/include/utils/JobSystem.h`, `libs/utils/src/JobSystem.cpp` and
+`WorkStealingDequeue.h`). Its 2026 redesign uses a pooled, fixed-size job (one 64-byte record with
+48 bytes of inline storage, from one preallocated pool behind a lock-free free list) and a
+`parallel_for` in which one root job and at most one helper per thread claim chunks from a shared
+atomic cursor, replacing recursive splitting. The redesign's commit message reports
+`BM_JobSystemParallelFor` falling from 3.71 ms to 0.10 ms on a 16-core Apple silicon Mac and from
+4.02 ms to 0.63 ms on a Pixel 8 Pro; that is the commit's own claim, not reproduced here.
+
+Donner adopts:
+
+- Caller participation: a thread may adopt a worker slot so its spawns go to its own deque
+  (`JobSystem::adopt`), restricted here to its own deque (see [Non-worker waits](#internals)).
+- A wake check on every local push when threads sleep, as Filament's `put` does.
+- Notifying a parker only when its owner may be asleep, as Filament keeps waiter bits beside the
+  running count.
+- Sequentially consistent read-modify-write pairs instead of standalone fences for the sleep
+  handshake, and an all-sequentially-consistent deque form for ThreadSanitizer builds.
+- Fixed-capacity deques, a stated bound on steal probes with a seeded per-worker generator, a
+  const-invocable `ParallelFor` body, a cap on chunk count, and the shared-cursor loop as a
+  measured variant.
+- Worker QoS on Apple platforms, which Filament sets to one interactive class for every thread.
+
+Donner keeps different:
+
+- Per-worker slot free lists, not one global pool: no shared compare-and-swap per task.
+- No global count of queued jobs: Filament updates `mActiveJobs` on every put, pop and steal;
+  the owner path here has no read-modify-write.
+- No one-slot `nextJob` cache: it would hold a stealable entry outside the deque's index space and
+  break the watermark argument.
+- Bounded helping: a Filament waiter runs any job with no stack guard; here watermarks, the margin
+  and the stack-floor assertion bound it.
+- Capacity failure runs work inline or returns false from `trySpawn`; Filament's `create` returns
+  null and running a null job does nothing, so work can be dropped.
+- A global queue for threads that are not workers, coroutines, cooperative stop and the seeded
+  deterministic mode, none of which Filament has.
+
 ## Proposed Architecture
 
 ### API
@@ -232,11 +348,19 @@ target, so code that never schedules work does not link it).
 
 ```cpp
 struct TaskSchedulerOptions {
-  std::size_t workerCount = 0;               // 0: run everything inline on the caller.
+  std::size_t workerCount = DefaultWorkerCount(); // 0: run everything inline on the caller.
   std::optional<std::uint64_t> seed;         // Seeded deterministic mode (tests).
-  std::size_t maxQueuedTasks = 64 * 1024;    // Bound on queued tasks across all queues.
+  std::size_t dequeCapacity = 4096;          // Entries per worker deque; a power of two.
+  std::size_t maxExternalTasks = 64 * 1024;  // Bound on live tasks spawned by non-workers.
+  std::size_t adoptableThreads = 1;          // Slots reserved for adopt(); fixed at construction.
   std::size_t helpMarginBytes = 128 * 1024;  // Stack kept free when stealing while waiting.
+  std::size_t idleSpinRounds = 1;            // Steal rounds before sleeping; set from S6's W5.
 };
+
+// Hardware threads available to the process (the affinity mask on Linux, the active processor
+// count elsewhere) minus one for the adopting caller, at least 1 and at most 32. 0 when threading
+// is compiled out.
+std::size_t DefaultWorkerCount();
 
 class TaskScheduler {
 public:
@@ -244,6 +368,10 @@ public:
   ~TaskScheduler();                          // Joins every worker; asserts no scope is live.
   std::size_t workerCount() const;           // Workers actually started (may be fewer).
   ScheduleAwaitable schedule();              // co_await: continue on a worker.
+  // Gives the calling thread a slot for the lifetime of the returned object: its spawns go to
+  // its own deque, and its synchronous waits run only that deque's entries. Empty when no slot is
+  // free, with zero workers, in seeded mode, and with threading compiled out.
+  [[nodiscard]] AdoptedThread adopt();
 };
 
 class TaskScope {                            // Structured fork-join; the destructor joins.
@@ -273,7 +401,20 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
 - **ParallelFor** never creates a task for a range below `grain`. Above it, it splits in halves
   only while the split half is likely to be stolen: a range is split again when it was stolen
   (adaptive splitting), so on an idle pool work spreads quickly and on a busy pool it stays in
-  large pieces.
+  large pieces. The body is one shared instance invoked concurrently, so `ParallelFor`
+  static_asserts that it is invocable as `const F&` (Filament's `parallel_for` enforces the same).
+  The effective grain is at least `ceil((end - begin) / 4096)`, so a small grain over a large range
+  cannot create millions of tasks. Milestone S2 also implements Filament's shared-cursor scheme
+  (one root, at most `workerCount()` helpers, each claiming `grain`-sized chunks by a relaxed
+  `fetch_add`) behind the same API; Milestone S6 keeps whichever wins workloads W2 and W4, and the
+  other is deleted, not kept as an option.
+- **Zero workers.** `spawn` runs the work inline. `trySpawn` returns false without running it, so a
+  client with its own explicit work stack (0072 Part D) keeps its native stack flat at zero workers
+  as it does at the queue bound, instead of recursing once per spawned level. `Join` runs `a` then
+  `b`; `ParallelFor` runs one `body(begin, end)`. This holds whether zero workers came from the
+  runtime option, from workers that failed to start, or from threading compiled out. Seeded mode is
+  not zero-worker mode: its tasks are queued and run on the calling thread in seeded order, so
+  `trySpawn` there returns true as it does with workers.
 - **Coroutines.** `co_await scheduler.schedule()` enqueues the coroutine handle and suspends; a
   worker resumes it. With zero workers, or in seeded mode, `schedule()` is ready immediately and
   the coroutine continues inline on the calling thread, the same rule every other operation
@@ -288,6 +429,112 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   queued tasks check before running and long tasks poll; stopped tasks still complete their scope
   accounting, so `wait()` always returns.
 
+### Configuration
+
+Multithreading is on by default. Two controls change that, one at run time and one at build time.
+
+- **Runtime option.** `TaskSchedulerOptions::workerCount` sets the worker count; 0 disables
+  workers, and every client then runs serially on the calling thread with identical results (the
+  zero-worker rules above). Donner entry points that run a parallel client accept the scheduler to
+  use; given none, they use a shared default scheduler created with default options on first use
+  and released with its last user. An embedder that wants other options configures the default
+  before its first use, or passes its own scheduler. Tests always pass their own, so their worker
+  counts are explicit.
+- **Build setting.** One Donner-wide setting, `//donner/base:threading`, compiles threading out of
+  the scheduler and the renderer together ([Renderer threading](#renderer-threading)). It follows
+  the convention of the existing renderer settings (`renderer_backend`, `filters`, `text`): a
+  public `bool_flag` whose default comes from the `donner_config` repository that the `donner`
+  module extension writes, with a `config_setting`, `//donner/base:threading_disabled`, that
+  build rules select on.
+  - Values: `true` (the default, threading compiled in) and `false`.
+  - What `false` does: the scheduler API stays source-compatible, and `TaskScheduler`,
+    `TaskScope`, `Join`, `ParallelFor`, `Task<T>` and `adopt()` compile to the inline
+    implementation. `workerCount()` and `DefaultWorkerCount()` are 0, `adopt()` returns an empty
+    object, and every client takes its serial path. No thread, pthread, condition-variable or
+    atomic-wait code is linked by the scheduler or the renderer.
+  - How a consumer module sets it: on the command line,
+    `--@donner//donner/base:threading=false`; or in its `MODULE.bazel`, through the existing
+    extension, `donner.configure(threading = False)`, which only the root module's tag sets, as
+    for the other attributes. Inside this repository it is `--//donner/base:threading=false`.
+  - Relation to the runtime option: compiling out wins. The runtime option is accepted and
+    ignored, and the scheduler reports zero workers.
+  - Targets that force it: the non-threaded Wasm builds (the renderer's `wasm` configuration)
+    set it to `false` through their existing transitions, and a compile-time check rejects
+    threading compiled in for an Emscripten build without `__EMSCRIPTEN_PTHREADS__`. Targets
+    that cannot work without threads (the editor, native Geode, below) are incompatible with
+    `false` through `target_compatible_with`, so a broad build skips them instead of failing.
+  - CMake: the Bazel-to-CMake generator maps the setting to `option(DONNER_THREADING ... ON)`
+    beside `DONNER_FILTERS` and `DONNER_TEXT`, and links `Threads::Threads` only when it is on.
+    The CMake mirror builds the libraries only, which are exactly what the setting covers.
+  - CI: the default build runs threaded. One test variant, a configuration transition in the
+    single native Bazel invocation and listed with the other variant settings in the variant
+    reset list, builds and tests with threading compiled out, and runs the link-time symbol check.
+- **Defaults per shipped target.**
+  - Library: `DefaultWorkerCount()` workers in the shared default scheduler.
+  - `donner-cli`: the shared default, with a `--threads=N` option (`0` serial).
+  - Editor, native: `DefaultWorkerCount()` minus one, at least 1, because the UI thread also
+    runs; the render worker adopts a slot for the style pass. An editor setting changes it.
+  - Editor, threaded Wasm: 2 workers (raising `PTHREAD_POOL_SIZE` from 2 to 4), dropping to the
+    workers that started; see [WebAssembly](#webassembly).
+  - Renderer Wasm without pthreads: threading compiled out, 0 workers.
+
+The scheduler's tests run in both modes: every scheduler test at 0, 1 and 4 workers and in
+seeded mode in the default build, and again in the compiled-out variant, where they run at zero
+workers and assert `workerCount() == 0` whatever the options asked for. Each client's
+differential tests compare serial and threaded output in the default build and run serially in
+the compiled-out variant.
+
+### Renderer Threading
+
+The build setting covers the renderer as well as the scheduler. Read from the tree today, with
+what `threading = false` does to each:
+
+- **Software renderer and compositor.** `RendererTinySkia` and `donner/svg/compositor` create no
+  threads. `CompositorController` holds an `std::atomic<bool>` cancellation flag; plain atomics
+  without wait or notify need no thread runtime and stay.
+- **Document access.** `DocumentState` implements `ThreadingMode::ConcurrentDom` with a mutex and
+  condition variables. Compiled out, that code is removed, the enumerator stays for source
+  compatibility, and selecting it fails with a release assertion naming the setting. Decision for
+  the maintainer, because it changes public behavior: the alternative, removing the enumerator,
+  breaks source compatibility for code that names it.
+- **Process-wide caches and registries.** Mutexes guard shared state in
+  `donner/base/PackagedResource.cc`, `donner/svg/components/resources/SubDocumentAdmission.cc`,
+  `donner/svg/resources/CatalogEncodedFontStore.cc`, the Geode texture-pool registry in
+  `RendererGeode.cc`, `HeadlessDevicePool.h`, `GeodeFilterEngine.cc`'s resource cache,
+  `GeodeHandleRetirement.h` and `donner/gpu/vulkan/VulkanQueueProgress.h`. They change to one
+  Donner lock type that is a mutex when threading is compiled in and a no-op when it is out.
+  Decision for the maintainer: with threading compiled out the library may be called from one
+  thread at a time only, which an embedder that runs its own threads must serialize; that is a
+  documented contract change for that configuration.
+- **Counters and published pointers.** Relaxed atomics for identifiers and statistics
+  (`ImageComponent`, `ResourceManagerContext`, `XMLParser`, `HeapSizeHistogram`,
+  `MemoryAttribution`, the font manager's default provider, Geode encoder and device identifiers)
+  and `thread_local` thread roles in `FatalAbort.cc` stay; they need no thread runtime.
+- **Native Geode.** On Metal, command-buffer completion handlers run on a queue Metal creates
+  (`MetalDevice.h`), and `GeodeWgpuAdapterDevice` waits on a condition variable for completion
+  callbacks. The setting cannot remove driver-created threads, so native Geode targets are
+  incompatible with `threading = false`. The Vulkan device polls fences from its owning thread
+  with no cross-thread callbacks, so it could be made compatible later. Geode's browser backend
+  already runs in the non-threaded renderer Wasm module and stays available there.
+- **Editor.** `AsyncRenderer` owns a render worker `std::thread`, `EditorShell` loads documents
+  with `std::async`, and the browser build relies on `PROXY_TO_PTHREAD`, the GPU-owner thread
+  and Emscripten proxy queues. The editor's architecture requires those threads, so editor targets
+  are incompatible with the setting rather than given a synchronous path.
+
+No public renderer API in `donner/svg/renderer` is asynchronous by contract (none returns a
+future or completes on another thread), so none needs a synchronous replacement. The one
+asynchronous-by-contract renderer is the editor's `AsyncRenderer`, which is unavailable at compile
+time with threading compiled out: a synchronous emulation would change its foreground and
+thumbnail lane semantics, and its only users are editor targets that are already incompatible.
+
+The compiled-out CI variant verifies the claim by a link-time symbol check of `@donner//:donner`
+on Linux and macOS and of the renderer Wasm module: no `pthread_create`, `pthread_cond_*`,
+`pthread_mutex_*`, `std::thread`, `std::condition_variable` or atomic wait and notify symbols
+(the standard libraries' atomic-wait entry points and `emscripten_futex_wait`) are referenced.
+Milestone S8 lands this with the scheduler's first release for the software renderer, the
+library's caches and `DocumentState`; making native Geode on Vulkan compatible is an open question
+below, not part of S8.
+
 ### Internals
 
 - **Deques.** Each worker owns a Chase-Lev deque with signed 64-bit logical indices that only grow
@@ -296,17 +543,23 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   from the top, and the last element is claimed by a compare-and-swap on the top index. The memory
   orders are the C11 ones of Le et al.'s Figure 1 (relaxed and release-acquire accesses,
   sequentially consistent fences in `take` and `steal`, sequentially consistent compare-and-swap),
-  whose ARM counterpart they prove correct, not a port of the original pseudo-code. The array grows
-  by doubling up to the per-worker share of `maxQueuedTasks`; past it, `spawn` runs the task inline
-  and `trySpawn` returns false, which keeps the program correct and memory bounded. A thief can
-  still be reading the old array after the owner grows it, so the old array is kept, not freed: old
-  arrays stay on the deque's list until the scheduler destructor, as Chase and Lev's GC-free variant
-  keeps buffers in a pool. Because arrays double, the kept ones together are smaller than the live
-  one.
+  whose ARM counterpart they prove correct, not a port of the original pseudo-code. Each deque is a
+  fixed ring of `dequeCapacity` entries (a power of two; 4,096 by default, 1,024 in the editor Wasm
+  build), allocated once with its worker or adoptable slot and never resized, as in Filament's
+  `WorkStealingDequeue`. When a push would exceed it, `spawn` runs the task inline and `trySpawn`
+  returns false, which keeps the program correct and memory bounded. There is no growth path and
+  so no old array a thief could still be reading. Builds with ThreadSanitizer compile the deque
+  with every access sequentially consistent and no fences (the form Filament's deque uses),
+  because whether ThreadSanitizer models standalone fences is to be verified in Milestone S4; the
+  deque stress test runs on both forms, and the production form is still the Le et al. one.
 - **Global queue.** Besides the per-worker deques there is one global queue: a multi-producer,
   multi-consumer list linked through the task records themselves (and, for coroutine resumptions,
   through the awaiter in the suspended frame), so pushing needs no allocation and the queue cannot
-  overflow; its length is bounded by the task records, which `maxQueuedTasks` bounds. It receives
+  overflow; its length is bounded by the live task records. Records that workers create are
+  bounded by the deques (a full deque runs work inline), and records that threads which are not
+  workers create are counted, one atomic increment on that already fenced path and one decrement
+  when the record is freed, against `maxExternalTasks`; past it their `spawn` runs inline and
+  `trySpawn` returns false. Drains move existing records and create none. It receives
   spawns from threads that are not workers, coroutine resumptions scheduled from outside a worker,
   and everything a worker drains before it sleeps. There are no per-scope queues: a queue that
   belongs to a scope would expose the scope's memory to idle workers looking for work while the
@@ -314,8 +567,10 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
 - **Where spawned tasks go.** A spawn from a worker goes onto that worker's own deque, whether it
   comes from a scope's creator or from one of the scope's tasks (a flat spawn), so a tree traversal
   gets ordinary deque-to-deque work stealing. A spawn from a thread that is not a worker goes to
-  the global queue. Every task record carries what a finisher needs: the address of its scope's
-  counter and the scope creator's parker, both copied into the record at spawn time.
+  the global queue, except from an adopted thread into a synchronously joined scope, which goes to
+  that thread's own deque (see [Non-worker waits](#internals)). Every task record carries what a
+  finisher needs: the address of its scope's counter and the scope creator's parker, both copied
+  into the record at spawn time.
 - **Watermarks.** A `TaskScope` that its creator waits on synchronously (`wait()`, the destructor,
   `Join`) records the creator worker's deque bottom index when it is constructed. Such scopes nest
   last in, first out on one worker, because each is joined before its creator returns, so
@@ -335,23 +590,34 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
 
   A worker never runs a deque entry below its innermost live watermark; those entries leave only
   by being stolen from the top or by the drain step before a sleep. An idle worker runs its own
-  deque, then the global queue, then steals.
+  deque, then the global queue, then steals, for `idleSpinRounds` rounds before it tries to sleep.
+
+  A steal attempt takes from the global queue first, then probes at most
+  `workerCount() + adoptableThreads - 1` victims (the other workers and the adopted slots), chosen
+  uniformly with replacement by a per-worker generator seeded from the worker index (a
+  minimal-standard linear congruential or xorshift generator, never `std::random_device`) with a
+  multiply-shift range reduction. Finding nothing after the bound counts as finding nothing. The
+  seeded generator also makes real-worker victim sequences reproducible per worker.
 - **Sleeping.** Every worker sleeps on its own parker (below), whether it is idle or a waiting
   creator. The scheduler keeps an `awake` count of workers not asleep and a per-worker state word:
   awake, asleep shallow (asleep while within its margin, for example in its top-level idle loop) or
   asleep deep (asleep past its margin). Every transition from either asleep state to awake is one
   compare-and-swap on that word, and exactly the thread whose swap succeeds increments `awake`; a
   thread whose swap fails does not increment, because the thread that won already counted the
-  worker. Every waker changes and notifies the worker's parker whether or not its swap succeeded,
-  which at worst causes a spurious wake. This rule covers every wake: a sleeper waking itself in
-  step 4, a publisher, a finisher waking an asleep creator, the hand-off below, and shutdown. To
-  sleep, a worker:
+  worker. Every waker changes the worker's parker whether or not its swap succeeded, which at worst
+  causes a spurious wake, and notifies it only if the parker's waiting bit was set (below). This
+  rule covers every wake: a sleeper waking itself in step 4, a publisher, a finisher waking an
+  asleep creator, the hand-off below, and shutdown. To sleep, a worker:
 
   1. drains its own deque into the global queue, removing entries with the owner's Chase-Lev
      `take` (including its compare-and-swap on the last element), never by reading the array;
-  2. reads its parker value;
-  3. stores asleep shallow or asleep deep in its state word and decrements `awake`, then issues a
-     sequentially consistent fence;
+  2. sets the waiting bit in its parker word with a sequentially consistent read-modify-write and
+     keeps the value it returns;
+  3. stores asleep shallow or asleep deep in its state word with a sequentially consistent store
+     and decrements `awake` with a sequentially consistent read-modify-write. No standalone fence
+     is used: these and the publisher's and destructor's sequentially consistent operations below
+     are the two halves of each store-load pairing (the form Filament's JobSystem uses), which
+     ThreadSanitizer models as ordinary atomics;
   4. re-checks: every worker checks the stop flag, a waiting creator re-checks rules 1 and 2, and
      every worker checks the global queue. An idle worker that sees the stop flag wakes itself
      with the swap rule and exits. If its scope completed, or if the global queue is non-empty and
@@ -366,10 +632,11 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
      that will re-check the global queue before it next sleeps, and this worker continues to step
      5. Only when no worker is asleep shallow does it wake itself and run the work past its
      margin;
-  5. otherwise waits on its parker for a change from the value read in step 2. Whenever that wait
+  5. otherwise waits on its parker for a change from the value kept in step 2. Whenever that wait
      returns, for any reason (a change, a change that happened before the wait began, or a
      spurious return), the worker first wakes itself with the swap on its own state word,
-     incrementing `awake` only if the swap succeeds, and only then does anything else: a waiting
+     incrementing `awake` only if the swap succeeds, clears its waiting bit, and only then does
+     anything else (in every path out of steps 4 and 5 the bit is cleared the same way): a waiting
      creator re-checks its scope and rules 1 and 2, an idle worker exits if the stop flag is set
      and otherwise looks for work, and either one that finds nothing sleeps again from step 1.
 
@@ -395,15 +662,18 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   whose state word is awake, and the scheduler tests assert the same at their quiescent points. No
   assertion runs on individual decrements.
 
-  A thread that publishes to the global queue pushes, issues a sequentially consistent fence, and
-  reads `awake`. If no worker is awake, tested as `awake <= 0` so that a count driven below zero
-  by a defect still reads as no worker awake and leads to a wake rather than to silence, it picks
-  an asleep worker, switches that worker's state to awake with a compare-and-swap, increments
-  `awake` if its swap succeeded, and changes and notifies that worker's parker. It
-  may also wake one worker when some are asleep and none is searching, for parallelism. Because the
-  sleeper's step 3 and the publisher's push are each followed by a fence before the other's read,
-  at least one of them sees the other: either the sleeper sees the queued task in step 4, or the
-  publisher sees `awake` at zero and wakes someone. A woken worker that is past its margin may go
+  A thread that publishes to the global queue pushes with a sequentially consistent
+  compare-and-swap, then reads `awake` with a sequentially consistent load. If no worker is awake,
+  tested as `awake <= 0` so that a count driven below zero by a defect still reads as no worker
+  awake and leads to a wake rather than to silence, it picks an asleep worker, switches that
+  worker's state to awake with a compare-and-swap, increments `awake` if its swap succeeded, and
+  changes that worker's parker, notifying it if the waiting bit was set. It may also wake one
+  worker when some are asleep and none is searching, for parallelism (see
+  [Local pushes](#internals) for `searching`). The sleeper's decrement in step 3 and its step 4
+  read of the global queue, and the publisher's push and its read of `awake`, are all
+  sequentially consistent, so they fall in one total order, and at least one of them sees the
+  other: either the sleeper sees the queued task in step 4, or the publisher sees `awake` at zero
+  and wakes someone. A woken worker that is past its margin may go
   back to sleep only under the same steps, so the last awake worker never leaves queued work.
   The thread whose swap succeeds increments `awake` before it changes the woken worker's parker,
   so the count is never low while a woken worker is still starting, and never counts one wake
@@ -419,11 +689,21 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   futex wait, so scheduler workers sleep through `Atomics.wait`, which is permitted on workers;
   Milestone S5 tests that branch.
 - **The invariant and liveness.** The single invariant is: whenever a task is queued anywhere,
-  at least one worker is awake. Deque entries exist only on awake workers, because a worker drains
-  its deque before it sleeps and a worker that pushes is awake. Global-queue entries are covered
-  by the fence pairing above. An awake worker always makes progress: it runs a task, pops one by
+  at least one worker is awake, or the task is on an adopted thread's deque and that thread is
+  awake and will run or drain it. Worker deque entries exist only on awake workers, because a
+  worker drains its deque before it sleeps and a worker that pushes is awake. Adopted-deque entries
+  exist only while their adopted thread is awake, for the same two reasons: it pushes only while
+  awake, and it drains its deque into the global queue, through the publish protocol, before it
+  sleeps ([Non-worker waits](#internals)). Global-queue entries are covered by the sequentially
+  consistent pairing above. An awake worker always makes progress: it runs a task, pops one by
   rule 1, helps, or tries to sleep; it cannot sleep while it is the last awake worker and work is
-  queued. So queued work always has a runner, and the margin decides only which worker runs it.
+  queued. An adopted thread's entries all belong to synchronously joined scopes it is the creator
+  of, or to their descendants that it pushed, so it reaches a wait on each of them, where rule 1
+  runs them or the drain hands them to a worker. So queued work always has a runner, and the
+  margin decides only which worker runs it. Adopted threads are never counted in `awake`, so a
+  thread that is outside the scheduler doing its own work can never be the awake worker the
+  invariant relies on. The wake after a local push (below) only adds parallelism; nothing in this
+  argument uses it, so a missed or skipped one cannot leave work without a runner.
 
   Termination, once, for every kind of task: a program is a finite set of tasks. A task's own code
   runs a finite number of steps except where it waits; it waits only through the scheduler (a
@@ -435,11 +715,22 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   resumption), so the wait completes. By induction on the waits-for order every wait completes,
   whether the scope is waited on synchronously or by a coroutine, whether its tasks were spawned by
   its creator or flatly by its tasks, and whatever every worker's margin is.
-- **Skipping the wake on a push.** A worker pushing onto its own deque may skip the publish
+- **Local pushes.** A worker or adopted thread pushing onto its own deque skips the publish
   protocol, because it is awake and runs, loses to a thief, or drains that entry before it can
-  sleep, so the invariant holds and a missed wake costs parallelism only. Pushes into the global
+  sleep, so the invariant holds without it. It does not skip waking for parallelism: after the
+  push it reads, with relaxed ordering, `awake` and a `searching` count, and if some worker is
+  asleep and none is searching it wakes one asleep worker with the swap rule. A worker is
+  searching from the moment a waker wakes it for parallelism, or it finds its own deque empty,
+  until it runs a task or reaches sleep step 1; a searcher that finds a task and was the last
+  searcher wakes one more asleep worker the same way, so a fork spreads one worker at a time
+  without every push paying a wake. The reads are unfenced, so a wake can be missed; a missed wake
+  costs parallelism only. Filament checks its sleeping count on every `put`, Rayon wakes sleepers
+  when work is posted, and Taskflow keeps one thief awake while any worker is busy, for the same
+  reason: without it, a fork from the one awake worker stays on that worker while the others
+  sleep. The cost on the spawn path is two relaxed loads of lines written only on sleep, wake and
+  search transitions, expected to fit the spawn goal and measured by S6. Pushes into the global
   queue (spawns from non-workers, drains, coroutine resumptions from outside a worker) always take
-  the fenced publish protocol.
+  the publish protocol.
 - **Parkers and scope lifetime.** A scope lives in its creator's frame and is destroyed as soon as
   its creator sees it complete, so no thread may touch the scope after the change that lets the
   creator return. Every worker has a parker, an atomic epoch word, for the scheduler's lifetime;
@@ -447,9 +738,29 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
 
   - A finishing task reads the creator's parker pointer from its task record, then decrements the
     scope's counter with release ordering. That decrement is its last access to the scope. If it
-    reached zero, the finisher changes and notifies the parker (and, if the creator is an asleep
-    worker, first swaps its state to awake, incrementing `awake` only if that swap succeeds),
-    touching only the parker and the scheduler's own state.
+    reached zero, the finisher changes the parker (and, if the creator is an asleep worker, first
+    swaps its state to awake, incrementing `awake` only if that swap succeeds), touching only the
+    parker and the scheduler's own state, and notifies only if the value its change replaced had
+    the waiting bit set, so a creator that is still running pays no system call. Filament's
+    JobSystem keeps waiter bits beside its running count for the same reason. Whether
+    `std::atomic::notify_one` elides the system call when nothing waits is implementation-defined,
+    so the scheduler does not rely on it.
+  - The parker is one `std::atomic<std::uint32_t>`, the width every platform's native wait uses:
+    a waiting bit and a 31-bit epoch. Every change is a release read-modify-write that advances the
+    epoch and returns the old word, and the sleeper's bit-set in step 2 is a sequentially
+    consistent read-modify-write on the same word. Both are in the word's single modification
+    order. A change ordered before the bit-set is read by it, with everything the waker wrote
+    before the change, so the sleeper's step 4 re-check sees the completed scope or the queued
+    work and it does not wait; a change ordered after the bit-set returns a word with the bit set,
+    so the waker notifies. A notify is therefore never skipped for a thread that will wait. The
+    existing lost-wakeup tests cover this and must be observed red with the bit check broken
+    (notify skipped unconditionally).
+  - The counter word is 64 bits, a 63-bit count and the coroutine-join flag in the top bit, and
+    the constructor asserts that the scheduler's bound on live tasks (`workerCount() *
+    dequeCapacity`, plus `maxExternalTasks`, plus the running tasks) is below 2^62, since the bound
+    is known only at run time. A test spawns into one scope until `trySpawn` returns false and
+    asserts the scope is not seen complete until every task ran (Filament shipped a defect where a
+    parent with its maximum child count read as finished).
   - `co_await scope.join()` registers its coroutine handle in the scope and sets a flag in the
     counter word with a compare-and-swap loop. If the loop observes a count of zero,
     `await_suspend` returns false and the coroutine continues without suspending. Otherwise the
@@ -457,9 +768,9 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     resumption (onto its own deque if it is a worker, otherwise into the global queue), rather
     than resuming inline, so a resumption never nests on the finisher's stack. The scope is not
     destroyed in between, because its creator is that suspended coroutine.
-  - A creator about to sleep reads its parker value, re-checks, and waits on that value, as in
-    the sleep steps. A notify without a change would let `std::atomic::wait` block again, so every
-    wake is a change of the parker; a creator woken by an event for an outer scope re-checks its
+  - A creator about to sleep, worker or not, sets its parker's waiting bit and keeps the value,
+    re-checks, and waits on that value, as in the sleep steps. A notify without a change would
+    let `std::atomic::wait` block again, so every wake is a change of the parker; a creator woken by an event for an outer scope re-checks its
     current scope and sleeps again, which is a spurious wake and nothing more.
   - Parker storage for threads that are not workers lives in a `ParkerPool`, a separate object
     the scheduler creates and shares by `std::shared_ptr`: it holds the slots (stable addresses,
@@ -534,6 +845,16 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     thread-local entry holding a raw pointer to the scheduler's free list.
   - A stolen task that waits; `Join` stolen and not stolen; a spawn at the queue bound
     (`spawn` inline, `trySpawn` returning false); a non-worker scope with zero idle workers.
+  - An adopted thread whose children are all stolen sleeps after its drain and is woken by the
+    last finisher; an adopted thread that drains before sleeping while every worker is past its
+    margin, whose drained entries the last awake worker runs; slot exhaustion falls back to the
+    non-worker path; and an adopted thread waiting on its scope never runs a task of another
+    scope queued at the same time, asserted by a per-scope run counter.
+  - The local-push wake: with 4 workers asleep, a non-worker spawns one root that spawns 64
+    children, each a fixed busy loop; at least two workers ran children, asserted by per-worker
+    run counters, not by time. Must be observed red with the local-push wake removed.
+  - Zero workers: `trySpawn` returns false and `spawn` runs inline, at runtime zero workers and in
+    the compiled-out variant; in seeded mode `trySpawn` returns true.
 - **Blocking inside tasks.** A worker that blocks inside a task on anything other than the
   scheduler (a condition variable, an `std::atomic::wait` in client code, a lock held by a thread
   that waits on scheduler work) is counted awake while it holds queued work it cannot run, so the
@@ -577,13 +898,43 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   products and computable. A declaration that is wrong is not caught by the check, and the
   stack-floor assertion is then still what stops the process: a named, clean crash, not a
   recovery.
-- **Non-worker waits.** A thread that is not a worker (the render worker holding document access,
-  for example) is not counted in `awake` and never runs tasks while workers exist: its spawns go
-  to the global queue with the publish protocol, and when it waits it re-checks its scope's counter
-  and sleeps on its parker, which the finisher of its scope's last task changes. It therefore
-  never runs another client's task while it holds a guard, and needs no way to tell its own tasks
-  apart in the global queue. With zero workers, every spawn runs inline on the spawning thread as
-  before.
+
+  **Worker QoS.** On Apple platforms each worker sets its QoS class to the creating thread's
+  (`pthread_get_qos_class_np` on the creator before creation, `pthread_set_qos_class_self_np` in
+  the worker), and an adopted thread keeps its own; elsewhere workers inherit the creator's
+  scheduling. This is not a task-priority feature: it keeps interactive work off efficiency
+  cores, as Filament runs all its threads at one interactive class, and it keeps benchmarks from
+  measuring efficiency cores by accident. `DefaultWorkerCount()` subtracts one for a caller that
+  adopts and does not halve for simultaneous multithreading unless S6 measures that it helps.
+- **Non-worker waits.** A thread that is not a worker and has not adopted a slot (the render
+  worker holding document access, before it adopts, for example) is not counted in `awake` and
+  never runs tasks while workers exist: its spawns go to the global queue with the publish
+  protocol, and when it waits it re-checks its scope's counter and sleeps on its parker, which the
+  finisher of its scope's last task changes. It therefore never runs another client's task while
+  it holds a guard, and needs no way to tell its own tasks apart in the global queue. With zero
+  workers, every spawn runs inline on the spawning thread as before.
+
+  A thread may instead call `adopt()`, which claims one of `adoptableThreads` preallocated slots (a
+  fixed deque and a parker, claimed by a compare-and-swap on a slot mask, as Filament's
+  `JobSystem::adopt` does) and releases it when the returned object is destroyed. An adopted
+  thread is still not a worker: it is not counted in `awake`, has no state word, never steals and
+  never takes from the global queue. What changes is where its spawns go and what its waits run.
+  Its spawns into a scope it joins synchronously go to its own deque, with the local-push wake, so
+  it runs its first task with no wake on the critical path and idle workers steal the rest; its
+  spawns into a coroutine-joined scope, and coroutine resumptions it enqueues, go to the global
+  queue, because no watermark covers them. When it waits synchronously it applies rule 1 (pop its
+  own entries above the scope's watermark) and rule 2 only, and then sleeps as a non-worker does,
+  after first draining its deque into the global queue with the publish protocol so that its
+  remaining entries have a worker. Every entry on its deque was pushed by itself, as a scope's
+  creator or by a task of that scope it ran, so it runs only its own scope's tasks and their
+  descendants, never another client's task while it holds document access. The stack-floor
+  assertion applies to it where `adopt()` can read the thread's stack bounds from the platform
+  (to be verified per platform in S1); rule 1 alone nests only the program's own fork-join
+  structure on its stack. `adopt()` returns an empty object, and the thread keeps the plain
+  non-worker path, when no slot is free, with zero workers, in seeded mode, or with threading
+  compiled out. An adopted thread helping with any task, as a worker does, is not offered: its
+  stack is not the scheduler's and the cross-client rule above would be lost; a thread that wants
+  that should be a worker.
 - **Task storage.** A spawned closure is stored in a fixed-size slot (64 bytes inline, larger
   closures in a per-worker free list of blocks) so small tasks never call `malloc`. A slot is freed
   by whichever thread ran the task: a thief returns it to the owning worker's lock-free return
@@ -598,10 +949,10 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   orders, not steals: the deque's compare-and-swap race and real interleavings never happen in
   this mode, and are covered by the stress tests at real worker counts and by ThreadSanitizer.
 - **Shutdown.** The destructor asserts no scope is live (`UTILS_RELEASE_ASSERT`), sets the stop
-  flag, issues a sequentially consistent fence, then wakes every worker with the same swap rule
+  flag with a sequentially consistent exchange, then wakes every worker with the same swap rule
   (the swap, then the parker change, whether or not the swap succeeded) and joins them. With no
-  scope live, every worker is idle. A worker's step 3 store is followed by a fence before its
-  step 4 read of the stop flag, and the destructor's flag store by a fence before its swap, so
+  scope live, every worker is idle. A worker's step 3 store and its step 4 read of the stop flag
+  are sequentially consistent, as are the destructor's exchange and its swap, so
   either the worker's re-check sees the flag and it exits, or the swap sees the worker asleep and
   succeeds; the parker change then follows the worker's step 3, and so its step 2 read, and the
   wait in step 5 returns. A worker that has not reached step 3 sees the flag at its next
@@ -622,10 +973,11 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
 
 ### WebAssembly
 
-- **Non-threaded builds** (the renderer's `wasm` configuration): the library compiles to the inline
-  implementation (`__EMSCRIPTEN__` without `__EMSCRIPTEN_PTHREADS__`): no thread, atomic wait or
-  `<thread>` code is linked, `workerCount()` is 0, and every client runs its serial path through
-  the same calls.
+- **Non-threaded builds** (the renderer's `wasm` configuration): these targets set
+  `//donner/base:threading` to `false` ([Configuration](#configuration)), so the library compiles to
+  the inline implementation: no thread, atomic wait or `<thread>` code is linked, `workerCount()`
+  is 0, and every client runs its serial path through the same calls. An Emscripten build without
+  `__EMSCRIPTEN_PTHREADS__` and with threading left on fails to compile.
 - **Threaded editor build.** Starting a new Web Worker for `pthread_create` "requires returning
   the main event loop", and `PTHREAD_POOL_SIZE` "creates the Web Workers before main is called, so
   they can just be used when `pthread_create` is called"; `Atomics.wait` does not work on the
@@ -640,10 +992,10 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   inline path.
 - **Fixed memory.** The editor build's linear memory is fixed (`ALLOW_MEMORY_GROWTH=0` with
   `INITIAL_MEMORY` sized to a measured peak), and growth is a crash, not a slow path. Everything the
-  scheduler allocates comes out of that heap: worker stacks (2 workers at 512 KiB), deques (an
-  initial 256 entries each, and `maxQueuedTasks` lowered to 4,096 in this build), task slot blocks
-  and the frame pool's retained bytes. Milestone S5 measures the editor's peak heap with the
-  scheduler running and keeps the build's headroom contract; if it does not fit, the worker count
+  scheduler allocates comes out of that heap: worker stacks (2 workers at 512 KiB), deques (1,024
+  entries each, 4 KiB per worker or adoptable slot, and `maxExternalTasks` lowered to 4,096 in this
+  build), task slot blocks and the frame pool's retained bytes. Milestone S5 measures the
+  editor's peak heap with the scheduler running and keeps the build's headroom contract; if it does not fit, the worker count
   or the memory size changes together with a new measurement, never by enabling growth.
 - **Asyncify.** The editor build enables `-sASYNCIFY` for Geode's synchronous WebGPU bridge with no
   `ASYNCIFY_ONLY`, `ASYNCIFY_REMOVE`, `ASYNCIFY_ADD` or `ASYNCIFY_IGNORE_INDIRECT` setting
@@ -660,20 +1012,114 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
 - **Costs.** The scheduler adds code to both editor and renderer modules; Milestone S5 measures it
   against the size tests and the goals above. Each extra worker costs a Web Worker and its stack.
 
-### Performance
+### Peer Benchmarks
 
-`//donner/benchmarks:task_scheduler_bench` (Google Benchmark, `-c opt`, perf lane only) measures:
-spawn plus owner pop of an empty task, unstolen `Join`, stolen `Join`, wake latency from sleep to
-first task, and `ParallelFor` scaling at 1, 2, 4 and 8 workers over fixed work. Wall-clock goals
-are checked there, never in correctness tests.
+The scheduler is measured against its peers, not only against its own targets.
+`//donner/benchmarks/tasks:task_scheduler_peer_bench` (Google Benchmark, `-c opt`, perf lane
+only, never a correctness test) runs every workload below on Donner and on each peer through a
+thin adapter per library, in one Bazel build with one toolchain and one set of optimization flags.
+Wall-clock goals are checked there, never in correctness tests. The acceptance thresholds apply to
+the enabled mode (workers running); the disabled mode has its own threshold under W6.
+
+**Peers.** Every peer is a benchmark-only dependency: a `dev_dependency` module or an
+`http_archive` or `http_file` with an overlay build file, pinned to a release tag and
+content-pinned by `sha256`, never a commit, and never linked into a shipped target (a dependency
+audit test on the shipped targets enforces that).
+
+| Peer | Pin | License | How it is built |
+|------|-----|---------|-----------------|
+| oneTBB (`task_group`, `parallel_for`, `task_arena`) | `v2023.2.0` | Apache-2.0 | registry module as a `dev_dependency`; exceptions disabled if it builds that way, otherwise `-fexceptions` on its own targets only (to verify in S6) |
+| Taskflow (`Executor`, `Subflow` or `Runtime`, `for_each_index`) | `v4.1.0` | MIT | header-only archive with an overlay `cc_library`; its executor uses `try` and `catch`, so its targets add `-fexceptions` |
+| enkiTS (`TaskScheduler`, `ITaskSet`) | `v1.12` | Zlib | archive with an overlay `cc_library` of `src/TaskScheduler.cpp` |
+| Filament JobSystem (`runAndWait`, child jobs, `jobs::parallel_for`) | `v1.81.0` | Apache-2.0 | the needed `libs/utils` sources and headers fetched as individual files at the tag, each with `sha256`, and an overlay `cc_library` with tracing compiled out (the file list to verify in S6) |
+| libfork (coroutine fork-join) | `v3.8.0` | MPL-2.0 (benchmark binary only, unmodified, not distributed) | header-only archive; coroutine workloads only |
+| `std::thread` pool baseline | in tree | Donner's | one mutex, one condition variable, one shared FIFO; and a plain serial loop |
+| Rayon | none | MIT or Apache-2.0 | Rust, another toolchain; cited, not benchmarked |
+
+**Workloads.** Each runs on every peer that can express it.
+
+- **W1, empty spawn and join.** One creator spawns K empty tasks (K = 1, 64 and 4,096) into one
+  scope, or the peer's equivalent (`task_group::run`, child jobs, a subflow, a task set of size
+  K), and joins; reports time per task. Includes the shape of Filament's
+  `BM_JobSystemAsChildren4k`, and an unstolen and a stolen `Join` of two empty closures.
+- **W2, `ParallelFor` over tiny bodies.** 1,000,000 iterations of a body costing about 5, 25 and
+  100 ns, at grains 1, 16, 256 and 4,096 and the peer's automatic grain.
+- **W3, recursive fork-join.** `fib(30)` with a serial cutoff of 0 and 12, and a balanced and an
+  unbalanced (geometric, UTS-style) tree walk; closure and coroutine forms where the peer has
+  coroutines (Donner `Task<T>`, libfork).
+- **W4, uneven work.** A loop and a task set whose item cost is heavy-tailed (99 percent at 50 ns,
+  1 percent at 50 us, fixed seed), measuring steal effectiveness.
+- **W5, wake latency from idle.** After the pool has been idle for 10 ms, a thread that is not a
+  pool worker submits one task that records a timestamp; reports submit-to-start latency,
+  repeated 10,000 times with idle gaps; and the same from a worker's local push to a sleeping
+  thief.
+- **W6, single-thread overhead.** The W2 and W3 bodies with zero workers at run time, with
+  threading compiled out, and at 1 worker, against a plain serial loop.
+- **W7, scaling.** W2 (25 ns body), W3 and W8 at 1, 2, 4, 8 and all available cores (performance
+  cores only on Apple silicon).
+- **W8, a Donner-shaped style pass.** A synthetic tree with the element counts of the 0072
+  baseline documents (622, 4,425 and 5,137 elements, and 200 and 1,000 for the threshold), a
+  per-element busy body calibrated to 5 us and to 1 us, parents before children, subtrees below
+  64 elements walked with an explicit heap stack and larger ones spawned with `trySpawn`, started
+  by a thread that is not a pool worker. It needs no 0072 code: the tree and the body are
+  synthetic. Donner runs it in two forms (plain non-worker waiter, adopted waiter), and each peer
+  in its natural form (oneTBB `task_group` from an arena-attached thread, Filament from an adopted
+  thread, Taskflow `corun`, enkiTS task sets with a dependency on the parent). Reports pass time
+  against the serial walk.
+
+**Metrics.** Nanoseconds per task (W1, W3); items per second (W2, W4); p50, p99 and maximum wake
+latency (W5); speedup and scaling efficiency, speedup divided by thread count (W7, W8); overhead
+relative to serial (W6); idle CPU, the process CPU time consumed during a 1 s idle window after a
+burst, from `getrusage` (W5); peak resident memory per peer (W3 unbalanced).
+
+**Method.** All peers and Donner build in one invocation at `-c opt` with the same compiler,
+standard library and flags; peers that need exceptions get `-fexceptions` on their own targets
+only, recorded with the results. Every peer uses the same thread count, and each pool is created
+once per process outside the timed region. Each case warms up for at least 1 s, runs 15
+repetitions and reports the median and median absolute deviation with the minimum and maximum;
+peers are interleaved per repetition so thermal drift affects all of them alike. A quiet-machine
+gate runs before and after: the run is rejected when the 1-minute load average exceeds 0.5 per
+core, when another process used more than 5 percent of a core during the run, or when the median
+of a fixed calibration loop moved by more than 3 percent between the two gates. On Linux the CPU
+frequency governor is set to performance where permitted and the setting recorded; on macOS the
+run records the power source and thermal state and scales on performance cores only. The sleep
+primitive each peer actually uses on each platform is recorded beside its results.
+
+**Platforms.** Apple silicon macOS, Linux AArch64 and Linux x86-64, each on a machine with at
+least 8 cores, with the hardware model, kernel, compiler and every peer's pin recorded beside the
+results. The editor's threaded Wasm build runs W1, W2, W5 and W8 for Donner only, in a
+cross-origin isolated headless browser, as information, not gated.
+
+**Acceptance.** Medians are compared per platform. The best peer is the fastest peer on that
+platform and workload, excluding the `std::thread` baseline.
+
+- W1, W2 at grains 1 to 16, and W3 with cutoff 0 (the tiny-task workloads): Donner is faster than
+  the best peer, or within 5 percent of it with the reason recorded here.
+- W2 at larger grains, W3 with cutoff 12, W4 and W7: Donner is within 10 percent of the best
+  peer, and its scaling efficiency at 8 threads is within 10 points of the best peer's.
+- W5: Donner's p50 is within 10 percent and its p99 within 25 percent of the best peer's, and its
+  idle CPU is no higher than the best peer's plus 1 percent of one core.
+- W6, the disabled mode: with zero workers at run time and with threading compiled out, Donner is
+  within 2 percent of the plain serial loop; at 1 worker, within 10 percent.
+- W8: Donner with an adopted waiter is no slower than the fastest peer's natural form; the
+  non-worker form's result is recorded for 0072's threshold calibration.
+- The absolute goals under [Goals](#goals) still hold.
+
+**When a threshold is missed.** A miss is a finding, not a footnote. The design changes (a
+protocol, a data structure or a default) until the threshold is met, or the miss is recorded under
+[Open Questions](#open-questions) with the measured data, the suspected cause and what was tried.
+Nothing is waived silently, and S6 is not done while a miss is in neither state. Peer numbers in
+this document come only from these runs or from cited sources, labelled as the source's own
+claim.
 
 ## Security / Privacy
 
 The scheduler runs only code the process supplies; its untrusted-input exposure comes from
 clients that size work from documents.
 
-- **Bounded queues.** Total queued tasks are capped (`maxQueuedTasks`); past the cap work runs
-  inline, so a client that spawns per document element cannot exhaust memory through the queues.
+- **Bounded queues.** Queued tasks are capped: `dequeCapacity` per worker and adoptable slot, and
+  `maxExternalTasks` for spawns from other threads; past a cap work runs inline, so a client that
+  spawns per document element cannot exhaust memory through the queues.
 - **Bounded recursion, or a named stop.** Helping past the margin is handed to a shallow worker
   when one exists; otherwise the last awake worker stacks queued work, which for waiting tasks is
   bounded by how many are queued at once, as described under worker stacks, and the stack-floor
@@ -703,13 +1149,24 @@ clients that size work from documents.
   (spawns, joins, loops, awaits, stops) and checks that its result equals sequential evaluation,
   in seeded mode and with real workers.
 - **ThreadSanitizer variant** reachable from `//...` through a configuration transition, covering
-  the scheduler tests and every client's parallel tests, starting with
-  `//donner/svg/components/style:style_parallel_tests`.
+  the scheduler tests and the deque stress test on both deque forms, and each client's parallel
+  tests as that client lands (the first planned is 0072's
+  `//donner/svg/components/style:style_parallel_tests`; the variant does not wait for it).
+- **Both modes.** The default build runs threaded. The compiled-out variant
+  ([Configuration](#configuration)) runs the scheduler tests, the renderer's tests and every
+  client's tests with threading compiled out, and the link-time symbol check of
+  [Renderer threading](#renderer-threading). Client differential tests assert bit-identical
+  output between their serial and threaded runs.
 - **No deadlines.** Tests assert ordering and counts; generous hang guards turn a deadlock into a
   named failure.
 
-## Other Clients
+## Candidate Clients
 
+This section lists only the clients this design already names. A survey of the rest of Donner for
+further clients follows and will extend this list; nothing here waits for it.
+
+- **Parallel style traversal** ([0072](0072-css_cascade.md) Part D): the first planned client,
+  designed there.
 - **Filter row bands** ([0061](0061-multithreaded_rendering.md)): independent output rows with a
   join between passes map directly onto `ParallelFor` with the band height as grain, and one
   scheduler satisfies 0061's "one pool, one owner" rule.
@@ -738,7 +1195,13 @@ scheduler.
   dependency measured against the Wasm size ceilings, would have to build under
   `-fno-exceptions` and as an inline-only Wasm library, and would still need the seeded
   deterministic mode the tests rely on. None of those fits is established, while the core needed
-  here (a deque, a sleep protocol, scopes and two awaitables) is small.
+  here (a deque, a sleep protocol, scopes and two awaitables) is small. They remain the yardstick:
+  the [peer benchmarks](#peer-benchmarks) build them as benchmark-only dependencies, so the
+  decision to build rather than adopt is held to measured thresholds.
+- **Adopting Filament's JobSystem as is.** Fast and recently redesigned, but it has no coroutines,
+  no submission from threads that are not adopted, no deterministic mode, unbounded helping and a
+  null-on-exhaustion contract; see [Prior Art: Filament JobSystem](#prior-art-filament-jobsystem)
+  for what is taken from it.
 - **`std::execution`.** The C++26 sender model is the standard's direction, adopted into the C++26
   draft in 2024 ([trip report](https://herbsutter.com/2024/07/02/trip-report-summer-iso-c-standards-meeting-st-louis-mo-usa/)); the awaitable API here maps onto a sender scheduler, and `schedule()` can become
   a sender when the toolchains Donner builds with ship it.
@@ -753,10 +1216,36 @@ scheduler.
 
 ## Open Questions
 
-- **Ownership.** Recommendation: no hidden global scheduler; the application or renderer creates
-  one and passes it by pointer, which keeps tests deterministic and Wasm pool sizing explicit.
+- **Ownership.** Recommendation: the application or renderer creates a scheduler and passes it by
+  pointer, which keeps tests deterministic and Wasm pool sizing explicit; because threading is on
+  by default, entry points given none use the shared default scheduler of
+  [Configuration](#configuration), which is the one process-wide instance and is configurable
+  before first use. Tests never use it.
 - **Editor worker count.** Recommendation: start with 2 scheduler workers in the editor build
-  (raising `PTHREAD_POOL_SIZE` from 2 to 4) and revisit with Part D's measurements.
+  (raising `PTHREAD_POOL_SIZE` from 2 to 4); with the render worker adopting a slot for the pass,
+  that is 3 threads doing style. Revisit with W8 and Part D's measurements.
+- **Defer the help margin.** Milestone S1 could ship the stack-floor assertion without
+  `helpMarginBytes`, the shallow and deep sleep states and the hand-off: a waiting worker would
+  help until the stack floor, as Filament, Rayon and oneTBB do without a margin, and the sleep
+  protocol would have two states. That removes the hand-off, two liveness tests and the deep
+  state, saving an estimated 1.5 days of S1. The cost is that clients whose tasks wait could no
+  longer share a scheduler under the declaration rule of [Worker stacks](#internals) until the
+  margin is reintroduced, and the reintroduction would revisit the sleep protocol and its proofs.
+  No planned client waits inside tasks (style, filter bands and layer preparation do not).
+  Recommendation: keep the margin as designed, because the API allows waiting tasks from the
+  first release; take the saving only if the maintainer prefers to restrict waiting tasks until a
+  client needs them.
+- **Native Geode with threading compiled out.** Native Geode targets are incompatible with
+  `threading = false` in Milestone S8. The Vulkan device polls fences on its owning thread and
+  could be made compatible by converting its locks and the wgpu adapter's completion wait
+  (estimated 1 to 2 days, not in the total); Metal cannot, because its completion handlers run on
+  a queue Metal creates. Recommendation: ship S8 with the software renderer, the library's caches
+  and `DocumentState`, and make Vulkan compatible only when a consumer asks for it.
+- **Single-threaded contract with threading compiled out.** S8 turns the library's locks into
+  no-ops in that configuration, so an embedder that calls Donner from several threads must
+  serialize those calls itself, and `ThreadingMode::ConcurrentDom` fails with a release
+  assertion. Recommendation: accept both and document them with the setting; the alternative of
+  keeping real mutexes would keep a thread-runtime dependency and contradict the link-time check.
 - **0061.** Recommendation: update 0061 to build its row bands on this scheduler when its pool
   milestone starts, rather than editing it in this change.
 - **Memory ordering of the join handle.** A coroutine registering `co_await scope.join()` publishes
