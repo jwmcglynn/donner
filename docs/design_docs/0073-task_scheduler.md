@@ -107,7 +107,7 @@ is not shaped by one user.
 Estimates are engineering days, including tests and review fixes. No milestone here depends on a
 milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
-- [ ] Milestone S1: Core scheduler (9.5 days)
+- [ ] Milestone S1: Core scheduler (9.75 days)
   - [x] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
         its linearization stress test (1.25 days): `//donner/base/tasks:work_stealing_deque`,
         which also has the sequentially consistent form, and `//donner/base/tasks:deque_tests`.
@@ -117,9 +117,16 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         once from a seeded offset (0.5 day).
   - [ ] `TaskScope`, `AsyncTaskScope` and `Join`: scope records, watermarks, rules 1 to 3 and
         help within the margin (1.5 days).
-  - [ ] Parkers with the waiting bit, the sleep steps, the hand-off, the last-awake rule, the
-        publish protocol in read-modify-write form, and drain before sleep (1.75 days).
-  - [ ] Per-creator record pools, cross-thread record return and their bounds (0.75 day).
+  - [x] The parker: the 32-bit word with the waiting bit and the epoch, its wait, and a notify
+        only when the bit was set (0.25 day): `//donner/base/tasks:parker` and
+        `//donner/base/tasks:parker_tests`.
+  - [ ] The sleep steps, the hand-off, the last-awake rule, the publish protocol in
+        read-modify-write form, and drain before sleep (1.5 days).
+  - [ ] On Apple silicon, the 32-bit parker word's wait through libc++'s contention table measured
+        against an `std::int64_t` word on the native path, and the word changed there if the
+        table costs measurably (0.25 day).
+  - [x] Per-creator record pools, cross-thread record return and their bounds (0.75 day):
+        `//donner/base/tasks:task_record` and `//donner/base/tasks:task_record_tests`.
   - [ ] Adopted threads: slots, the adopted publish, the visibility reads of adopted deques and
         the lifetime assertions (1.75 days).
   - [ ] The parallelism wake with per-worker `searching` flags (0.5 day).
@@ -232,7 +239,7 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
 | Milestone | Days |
 | --------- | ---: |
-| S1 Core scheduler | 9.5 |
+| S1 Core scheduler | 9.75 |
 | S2 Parallel loops and determinism | 3.5 |
 | S3 Coroutines | 3 |
 | S4 ThreadSanitizer target and fuzzer | 3.25 |
@@ -240,10 +247,10 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 | S6 Peer benchmarks | 6.25 |
 | S7 Configuration and threading switch | 2.25 |
 | S8 Renderer threading and the render worker | 11.5 |
-| **Committed total** | **43.25** |
+| **Committed total** | **43.5** |
 | S9 Geode browser module compiled out (follow-on) | 2.5 |
 
-Total committed estimate: 43.25 engineering days; 45.75 with S9. The Geode prepare fan-out
+Total committed estimate: 43.5 engineering days; 46 with S9. The Geode prepare fan-out
 (Candidate client 1) is estimated with its own design, not here. Part D of
 [0072-css_cascade](0072-css_cascade.md) needs S1 to S3, and S4 for its race coverage; its release
 with workers on needs the release gate.
@@ -779,15 +786,28 @@ queue, and *started* once a thread begins running it.
   deque, and a thief picks among worker deques from a random offset, so an old entry deep in a
   busy worker's deque leaves only when the owner reaches it or a thief happens to take it, as in
   every work-stealing scheduler.
-- **Task storage and bounds.** A spawned closure is stored in a fixed-size slot (64 bytes inline,
-  larger closures in a heap block owned by the slot) so small tasks never call `malloc`. Records
-  come from a pool per *creator*: each worker and adoptable slot has its own pool of at most
-  `maxTasksPerCreator` live records, and every other thread shares one pool of at most
-  `maxExternalTasks`, allocated and freed under the global queue's mutex. A record is live from
-  allocation until the thread that ran it returns it: a thief returns it to the creator's lock-free
-  return stack (multi-producer, single-consumer), the owner moves returned records to its free list
-  when that list runs empty, and the owner counts live records with a plain counter it alone
-  changes. When a creator's pool is exhausted, `spawn` runs inline and `trySpawn` returns false.
+- **Task storage and bounds.** A spawned closure is stored in a fixed-size task record, so small
+  tasks never call `malloc`. A record is 128 bytes, two cache lines: an intrusive link (used by the
+  free list, the return stack and the global queue, one at a time), the identity of the pool that
+  allocated it, the address of its scope's counter and the parker its scope recorded, the closure's
+  call function, and 64 bytes of inline closure storage; a closure that is larger, or aligned beyond
+  `max_align_t`, is moved into a heap block the record owns. Records come from a pool per
+  *creator*: each worker and adoptable slot has its own pool of at most `maxTasksPerCreator` live
+  records, and every other thread shares one pool of at most `maxExternalTasks`, allocated and
+  freed under the global queue's mutex, which each call takes as proof (a lock of another mutex, or
+  none, fails a release assertion). A pool creates records only on demand, never more than its
+  bound, and recycles them. The creator allocates, and frees the records it ran itself, with no
+  atomic operation. A thief returns a record it ran to the creator's lock-free return stack
+  (multi-producer, single-consumer): it links the record to the head it read and publishes it with
+  a compare-and-swap. The owner takes the whole stack with one exchange when its free list runs
+  empty and moves it to the free list. Because nothing pops single entries, a head that is taken,
+  reused and returned again while another return still holds it cannot corrupt that return: its
+  compare-and-swap succeeds only if the record is the head again, and it then links to the record as
+  it stands. The owner counts live records with a plain counter it alone changes, so a returned
+  record counts as live until the owner's next take. When a creator's free list and return stack
+  are empty and `maxTasksPerCreator` records are live, allocation fails, and `spawn` runs inline and
+  `trySpawn` returns false. While a record is free, everything after its link is poisoned in
+  AddressSanitizer builds, so a thread that touches a record after returning it fails there.
   The bound is on records wherever they are queued, so a drain, which moves records to the global
   queue, does not let a creator exceed it. Live task records in the whole scheduler are therefore
   at most `(workerCount() + adoptableThreads) * maxTasksPerCreator + maxExternalTasks`, a number
@@ -1006,11 +1026,17 @@ queue, and *started* once a thread begins running it.
     `std::atomic::notify_one` elides the system call when nothing waits is implementation-defined,
     so the scheduler does not rely on it.
   - The parker is one 32-bit atomic word, a waiting bit and a 31-bit epoch: 32 bits is the width
-    of the Linux futex and of Wasm `Atomics.wait`. On Apple platforms libc++ may wait on a 64-bit
-    contention type and send a 32-bit wait through its proxy table; S1 measures that and may use a
-    64-bit word there. Every change is a release read-modify-write that advances the epoch and
-    returns the old word, and the sleeper's `fetch_or` in step 2 is a sequentially consistent
-    read-modify-write on the same word, so both are in the word's single modification order. A
+    of the Linux futex and of Wasm `Atomics.wait`. The waiting bit is bit 0 and the epoch bits 1
+    to 31, so a change adds 2 and wraps without touching the bit. On Apple platforms the SDK's
+    libc++ waits natively only on its contention type, `std::int64_t`; a wait on any other atomic,
+    the 32-bit parker word included, goes through its global contention table, whose entries
+    unrelated addresses share, because its native waits on other sizes belong to a newer library
+    ABI that the SDK marks unavailable. The parker tests pass on Apple silicon through the table;
+    an S1 checklist item measures what the table costs against an `std::int64_t` word, which takes
+    the native path, and changes the word there if it costs measurably. Every change is a release read-modify-write that
+    advances the epoch and returns the old word, and the sleeper's `fetch_or` in step 2 is a
+    sequentially consistent read-modify-write on the same word, so both are in the word's single
+    modification order. A
     change ordered before the `fetch_or` is read by it, with everything the waker wrote before the
     change, so the sleeper's step 4 re-check sees the completed scope or the queued work and it
     does not wait. A change ordered after it returns a word with the bit set, so the waker
@@ -1270,7 +1296,7 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | Stop flag | destructor sets it | seq_cst exchange | half of the shutdown pairing |
 | Stop flag | worker reads it (step 4, idle loop) | seq_cst load | other half of the shutdown pairing |
 | Parker word | waker's change (advance epoch, return old word) | release RMW | publishes what the waker wrote first (a zero count, queued work) to a sleeper that reads the change |
-| Parker word | sleeper sets the waiting bit (step 2) | seq_cst `fetch_or` | acquires a change ordered before it; with the changes, one modification order decides notify |
+| Parker word | sleeper sets the waiting bit (step 2) | seq_cst `fetch_or` | acquires a change ordered before it; with the changes, one modification order decides notify; sequentially consistent, not acquire, so that a waker that loaded the word instead of changing it could not form an unfenced store-buffering pair |
 | Parker word | loads inside the wait (step 5) | seq_cst | acquire on waking |
 | Parker word | clearing the waiting bit after waking | relaxed `fetch_and` | an RMW keeps the epoch; a stale bit only causes a spurious notify |
 | Deque slot | owner's store, any load | relaxed | its contents are published by the index orderings below |
@@ -1290,6 +1316,7 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | Scope counter | `join()`'s flag-setting CAS | acq_rel on success, acquire on failure | release publishes the handle; a failure that observes zero acquires the results |
 | Record return stack | thief's push | CAS, release on success, relaxed on failure | the thief's last writes to the record happen before the owner reuses it |
 | Record return stack | owner takes all | acquire exchange | pairs with the pushes |
+| Record return stack | owner's check for returns before the take | relaxed load | a hint: a return it misses is taken by the next take, and the record counts as live until then |
 | Adoptable slot mask | `adopt()` claims a slot | CAS, acq_rel on success, relaxed on failure | acquires the previous owner's release of the slot, after its drain |
 | Adoptable slot mask | `AdoptedThread` releases a slot | release `fetch_and` | publishes the drained slot to its next owner |
 | `ParkerPool` closed flag | scheduler destructor sets it | release store | after every worker is joined |
@@ -1534,6 +1561,51 @@ clients that size work from documents.
   to the same code there, because every compare-and-swap on x86-64 is a locked, fully ordered
   instruction. The survivors not listed above as undistinguished are caught on ARMv8 hardware or
   under ThreadSanitizer.
+- **Parker and record pools** (`//donner/base/tasks:parker_tests`,
+  `//donner/base/tasks:task_record_tests`): single-thread model tests of every operation and
+  boundary, including the epoch's wrap, the record bound, reuse and closure storage; deterministic
+  interleavings through test hooks; and stress with the real platform wait and again with delays
+  injected into each race window. The parker's interleavings run against a model of the kernel wait
+  queue in which only a notify wakes a blocked waiter: a wake before the waiting bit is set (the
+  re-check sees it and nothing is notified), between the bit and the re-check, between the re-check
+  and the wait (a notify, and the wait returns at once), after the sleeper blocked (only the notify
+  wakes it), and a change while the condition is still false (a spurious wake). Its stress cases are
+  a ping-pong synchronized by the parker words alone over plain payloads, a `parkUntil` ping-pong,
+  and concurrent wakers whose changes must all survive the sleeper's own read-modify-writes. The
+  return stack's interleavings are a return during the creator's take, a return not yet published
+  when the creator reaches its bound, two racing returns, and a head taken, reused and returned again
+  while another return holds it; its stress hands records to four threads that return them while
+  the creator reaches its bound every round, and the external pool's bound is checked with the
+  whole bound held while another thread allocates, which must get the inline fallback, and under
+  contention, where the records out at once never exceed it. In AddressSanitizer builds a test
+  checks that a free record is poisoned and that touching one fails. Both components use
+  read-modify-writes and no standalone fence, so ThreadSanitizer checks them fully; until S4's
+  variant exists that run is manual
+  (`bazel test --config=tsan //donner/base/tasks:parker_tests //donner/base/tasks:task_record_tests`).
+- **Parker and return-stack orderings.** Under ThreadSanitizer, on Linux ARMv8, Apple silicon and
+  x86-64 Linux, the tests catch each of these weakened: the release of a parker change made
+  relaxed, the waiting bit's `fetch_or` made relaxed or release, the wait's loads made relaxed, and
+  the return stack's release compare-and-swap and acquire exchange made relaxed; each is a race on a
+  payload or a record that only that ordering publishes. Natively those mutants survive on Apple
+  silicon and x86-64; on Linux ARMv8 the relaxed `fetch_or` was caught in one run, as a lost wakeup
+  in the `parkUntil` ping-pong, and survived another, so natively it is caught only by chance. The
+  waiting bit's `fetch_or` made acquire survives everywhere: the handshake alone needs only its
+  acquire half, because the sleeper and every waker change the one word with a read-modify-write
+  and so meet in its modification order. It stays sequentially consistent in the code and in the
+  orderings table, because that argument holds only while no waker loads the word to decide
+  whether to change it: such a load against the `fetch_or` is a store-buffering pair that needs
+  sequentially consistent operations on both sides, and keeping the stronger ordering costs
+  nothing measurable on a path taken once per sleep. The protocol mutants
+  are caught natively on all three: a notify skipped unconditionally (the blocked-sleeper
+  interleaving), made unconditional (the no-waiter counter) or issued before the change (the
+  interleaving that holds the waker between its change and its notify), the re-check after the waiting bit
+  removed (the interleaving where the wake lands before the bit), the bit cleared by a load and a
+  store (a lost change under concurrent wakers), a change that does not advance the epoch, the
+  return published by a plain store (two racing returns) or taken by a load and a store (lost
+  records in the stress), a missing take at the bound, an off-by-one bound, a reused record not
+  cleared, the external pool's lock check removed, and the release assertions for a second sleeper
+  on one parker and for the double returns a release build detects removed (their death tests).
+  With AddressSanitizer, removing the poison of free records is caught.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
@@ -1565,6 +1637,11 @@ clients that size work from documents.
     and the scope and adoption lifetime assertions: `//donner/base/tasks:task_scheduler_tests`
     (the liveness, injected-delay, bound, fairness and death tests above, each observed red with
     its protocol step broken), and the same tests in the ThreadSanitizer variant of Milestone S4.
+  - A parker change is never left unnotified for a sleeper that will wait, no change is lost, the
+    record bounds hold, and every returned record comes back exactly once:
+    `//donner/base/tasks:parker_tests` and `//donner/base/tasks:task_record_tests`, each race
+    observed red with its step broken; under ThreadSanitizer a manual run until the variant of
+    Milestone S4 exists.
   - Every item is taken exactly once from a deque: `//donner/base/tasks:deque_tests`, on both deque
     forms in the native CI lanes, and on the sequentially consistent form under ThreadSanitizer, a
     manual run until the variant of Milestone S4 exists.
