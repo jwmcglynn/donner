@@ -85,7 +85,7 @@ donner_perf_cc_test(
     name = "css_cascade_perf_tests",
     # Each case cascades up to about a million rule tests; under ASan two such cases together can
     # exceed the `size = "small"` limit, so each runs in its own shard.
-    correctness_shard_count = 33,
+    correctness_shard_count = 34,
     correctness_srcs = ["CssCascadePerfCorrectness_tests.cc"],
     data = [
         "//:donner_splash.svg",

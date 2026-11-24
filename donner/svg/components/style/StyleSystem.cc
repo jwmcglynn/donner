@@ -4,7 +4,11 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <numeric>
+#include <span>
 #include <type_traits>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
@@ -31,6 +35,7 @@
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/PaintAnimationStyle.h"
+#include "donner/svg/components/style/RuleIndex.h"
 #include "donner/svg/components/style/ScalarAnimationStyle.h"
 #include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
@@ -565,6 +570,92 @@ private:
   Entity dataEntity_;
 };
 
+/// An element as the rule index reads it: straight from its components, without copies, and only
+/// for the key kinds an index has. Valid for one cascade of the element. Like
+/// \ref ShadowedElementAdapter, a shadow entity reads its tag from its own tree entity and its id,
+/// classes and attributes from its light entity.
+class RuleIndexElementView {
+public:
+  RuleIndexElementView(const Registry& registry, Entity treeEntity, Entity dataEntity)
+      : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity) {}
+
+  std::string_view id() const {
+    const auto* component = registry_.try_get<IdComponent>(dataEntity_);
+    return component != nullptr ? std::string_view(component->id()) : std::string_view();
+  }
+
+  std::string_view typeName() const {
+    return registry_.get<donner::components::TreeComponent>(treeEntity_).tagName().name;
+  }
+
+  template <typename Visitor>
+  void forEachClassName(Visitor&& visit) const {
+    if (const auto* component = registry_.try_get<ClassComponent>(dataEntity_)) {
+      for (std::string_view name : StringUtils::SplitAsciiWhitespace(component->className)) {
+        visit(name);
+      }
+    }
+  }
+
+  template <typename Visitor>
+  void forEachAttributeLocalName(Visitor&& visit) const {
+    if (const auto* component =
+            registry_.try_get<donner::components::AttributesComponent>(dataEntity_)) {
+      component->forEachAttributeName(
+          [&](const xml::XMLQualifiedNameRef& name) { visit(std::string_view(name.name)); });
+    }
+  }
+
+private:
+  const Registry& registry_;
+  Entity treeEntity_;
+  Entity dataEntity_;
+};
+
+/**
+ * Replace \p candidates with the positions of the rules of \p rules to test against an element:
+ * the index's candidates, or every rule when the unindexed cascade is requested for testing.
+ */
+void CollectCandidateRules(std::span<const css::SelectorRule> rules, const RuleIndex& index,
+                           const RuleIndexElementView& element, bool unindexed,
+                           std::vector<std::uint32_t>& candidates) {
+  UTILS_RELEASE_ASSERT_MSG(index.ruleCount() == rules.size(),
+                           "Rule index is stale: rebuild it when its stylesheet changes");
+  if (unindexed) {
+    candidates.resize(rules.size());
+    std::iota(candidates.begin(), candidates.end(), std::uint32_t{0});
+  } else {
+    index.collectCandidates(element, candidates);
+  }
+}
+
+/// The calling thread's candidate list, reused across elements to avoid an allocation per
+/// cascade; nothing cascades another element while it is in use.
+std::vector<std::uint32_t>& CandidateList() {
+  thread_local std::vector<std::uint32_t> candidates;
+  return candidates;
+}
+
+/// The candidate list for one element's cascade. On release it frees the list if the cascade grew
+/// it past \ref StyleSystem::kRetainedCandidateCapacity, so the thread keeps at most that many
+/// entries between cascades.
+class CandidateListScope {
+public:
+  CandidateListScope() : list_(CandidateList()) {}
+  ~CandidateListScope() {
+    if (list_.capacity() > StyleSystem::kRetainedCandidateCapacity) {
+      std::vector<std::uint32_t>().swap(list_);
+    }
+  }
+  CandidateListScope(const CandidateListScope&) = delete;
+  CandidateListScope& operator=(const CandidateListScope&) = delete;
+
+  std::vector<std::uint32_t>& list() { return list_; }
+
+private:
+  std::vector<std::uint32_t>& list_;
+};
+
 struct MatchedSelectorEntry {
   std::size_t selectorEntryIndex = 0;
   css::Specificity specificity;
@@ -725,15 +816,28 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
   invalidateComputed(handle);
 }
 
+std::size_t StyleSystem::CandidateListCapacityForTesting() {
+  return CandidateList().capacity();
+}
+
 void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                                        PropertyRegistry& properties,
                                        StyleResourceBudget& styleBudget,
                                        StyleCascadeCounters& counters,
                                        ParseWarningSink& warningSink) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
-  // Apply one sheet's rules; returns false once the style budget is exhausted.
-  const auto applyRules = [&](const css::Stylesheet& sheet, bool isUserAgentStylesheet) {
-    for (const css::SelectorRule& rule : sheet.rules()) {
+  const RuleIndexElementView elementKeys(registry, treeEntity, dataEntity);
+  const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
+  CandidateListScope candidateScope;
+  std::vector<std::uint32_t>& candidates = candidateScope.list();
+  // Apply one sheet's candidate rules in rule order; returns false once the style budget is
+  // exhausted. Rules that cannot match are not candidates and cost nothing.
+  const auto applyRules = [&](const css::Stylesheet& sheet, const RuleIndex& index,
+                              bool isUserAgentStylesheet) {
+    const std::span<const css::SelectorRule> rules = sheet.rules();
+    CollectCandidateRules(rules, index, elementKeys, unindexed, candidates);
+    for (const std::uint32_t position : candidates) {
+      const css::SelectorRule& rule = rules[position];
       if (!styleBudget.reserveRuleElementMatch()) {
         return false;
       }
@@ -758,12 +862,16 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
       continue;
     }
     // Imported rules precede the importing sheet's own rules in the cascade.
-    for (const css::Stylesheet& imported : stylesheet.importedStylesheets) {
-      if (!applyRules(imported, stylesheet.isUserAgentStylesheet)) {
+    UTILS_RELEASE_ASSERT(stylesheet.importedRuleIndexes.size() ==
+                         stylesheet.importedStylesheets.size());
+    for (std::size_t i = 0; i < stylesheet.importedStylesheets.size(); ++i) {
+      if (!applyRules(stylesheet.importedStylesheets[i], stylesheet.importedRuleIndexes[i],
+                      stylesheet.isUserAgentStylesheet)) {
         return;
       }
     }
-    if (!applyRules(stylesheet.stylesheet, stylesheet.isUserAgentStylesheet)) {
+    if (!applyRules(stylesheet.stylesheet, stylesheet.ruleIndex,
+                    stylesheet.isUserAgentStylesheet)) {
       return;
     }
   }
@@ -970,21 +1078,25 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
 
   std::vector<MatchedStyleRule> result;
   StyleResourceBudget styleBudget;
+  const ShadowedElementAdapter adapter(registry, handle.entity(), dataEntity);
+  const RuleIndexElementView elementKeys(registry, handle.entity(), dataEntity);
+  const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
+  std::vector<std::uint32_t> candidates;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
       continue;
     }
     const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
+    CollectCandidateRules(rules, stylesheet.ruleIndex, elementKeys, unindexed, candidates);
 
-    for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {
+    for (const std::uint32_t ruleIndex : candidates) {
       if (!styleBudget.reserveRuleElementMatch()) {
         break;
       }
       const css::SelectorRule& rule = rules[ruleIndex];
       std::optional<MatchedSelectorEntry> match =
-          MatchSelectorRule(rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity),
-                            &styleBudget.selectorTraversal());
+          MatchSelectorRule(rule, adapter, &styleBudget.selectorTraversal());
       if (!match.has_value()) {
         continue;
       }

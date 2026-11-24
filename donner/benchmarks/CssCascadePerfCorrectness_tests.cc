@@ -138,12 +138,12 @@ std::string CaseName(const ::testing::TestParamInfo<CascadeCase>& info) {
 INSTANTIATE_TEST_SUITE_P(
     FirstFrame, CssCascadeWorkTest,
     ::testing::Values(
-        Load("Splash", Document::Splash, {622, 57838, 1382, 1386, 0, 0}),
-        Load("BootstrapIcons", Document::Icons, {5137, 20544, 9291, 9291, 0, 0}),
-        Load("Tiger", Document::Tiger, {484, 1928, 481, 481, 0, 0}),
-        Load("Synthetic2000x200", Document::Synthetic, {2003, 408608, 3254, 4506, 0, 0}),
-        Load("UseInstances", Document::UseInstances, {4425, 106196, 8846, 8846, 0, 0}),
-        Load("Descendant1000x100", Document::Descendant, {1003, 104308, 1010, 1018, 0, 0})),
+        Load("Splash", Document::Splash, {622, 1384, 1382, 1386, 0, 0}),
+        Load("BootstrapIcons", Document::Icons, {5137, 9293, 9291, 9291, 0, 0}),
+        Load("Tiger", Document::Tiger, {484, 483, 481, 481, 0, 0}),
+        Load("Synthetic2000x200", Document::Synthetic, {2003, 3543, 3254, 4506, 0, 0}),
+        Load("UseInstances", Document::UseInstances, {4425, 8848, 8846, 8846, 0, 0}),
+        Load("Descendant1000x100", Document::Descendant, {1003, 1913, 1010, 1018, 0, 0})),
     CaseName);
 
 const CascadeEditTarget kSplashTarget = SplashEditTarget();
@@ -152,8 +152,8 @@ const CascadeEditTarget kIconsTarget = BootstrapIconsEditTarget();
 
 // A frame after an edit that restyles the whole document discards every computed style once and
 // cascades each styled entity once, so it does the work of the edited document's first frame.
-constexpr StyleCascadeCounters kSplashRestyle{622, 57838, 1382, 1386, 1, 0};
-constexpr StyleCascadeCounters kIconsRestyle{5137, 20544, 9291, 9291, 1, 0};
+constexpr StyleCascadeCounters kSplashRestyle{622, 1384, 1382, 1386, 1, 0};
+constexpr StyleCascadeCounters kIconsRestyle{5137, 9293, 9291, 9291, 1, 0};
 
 INSTANTIATE_TEST_SUITE_P(
     EditFrame, CssCascadeWorkTest,
@@ -161,17 +161,17 @@ INSTANTIATE_TEST_SUITE_P(
         Edit("SplashClass", Document::Splash, kSplashTarget, CascadeEdit::Class, kSplashRestyle),
         Edit("SplashFill", Document::Splash, kSplashTarget, CascadeEdit::Fill, kSplashRestyle),
         Edit("SplashStyle", Document::Splash, kSplashTarget, CascadeEdit::Style, kSplashRestyle),
-        // The appended rule matches nothing and is tested once against every styled entity.
+        // The appended rule's class is on no element, so it is no element's candidate.
         Edit("SplashAppendRule", Document::Splash, kSplashTarget, CascadeEdit::AppendRule,
-             {622, 58460, 1382, 1386, 1, 0}, kAppendFrame),
+             {622, 1384, 1382, 1386, 1, 0}, kAppendFrame),
         Edit("SyntheticClass", Document::Synthetic, kSyntheticTarget, CascadeEdit::Class,
-             {2003, 408608, 3255, 4508, 1, 0}),
+             {2003, 3544, 3255, 4508, 1, 0}),
         Edit("SyntheticFill", Document::Synthetic, kSyntheticTarget, CascadeEdit::Fill,
-             {2003, 408608, 3254, 4506, 1, 0}),
+             {2003, 3543, 3254, 4506, 1, 0}),
         Edit("SyntheticStyle", Document::Synthetic, kSyntheticTarget, CascadeEdit::Style,
-             {2003, 408608, 3254, 4506, 1, 0}),
+             {2003, 3543, 3254, 4506, 1, 0}),
         Edit("SyntheticAppendRule", Document::Synthetic, kSyntheticTarget, CascadeEdit::AppendRule,
-             {2003, 410611, 3254, 4506, 1, 0}, kAppendFrame),
+             {2003, 3543, 3254, 4506, 1, 0}, kAppendFrame),
         Edit("IconsClass", Document::Icons, kIconsTarget, CascadeEdit::Class, kIconsRestyle),
         Edit("IconsFill", Document::Icons, kIconsTarget, CascadeEdit::Fill, kIconsRestyle),
         Edit("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style, kIconsRestyle)),
@@ -182,40 +182,48 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         Keystroke("DeclarationValue", CascadeKeystroke::DeclarationValue, kSplashRestyle),
         Keystroke("SelectorLetterInserted", CascadeKeystroke::Selector,
-                  {622, 57838, 1381, 1385, 1, 0}, kForwardKeystroke),
-        // The unclosed rule absorbs the rules after it, so far fewer rules are tested.
+                  {622, 1383, 1381, 1385, 1, 0}, kForwardKeystroke),
+        // The unclosed rule absorbs the rules after it, so fewer rules are candidates.
         Keystroke("ClosingBraceDeleted", CascadeKeystroke::ClosingBrace,
-                  {622, 4346, 1244, 1245, 1, 0}, kForwardKeystroke),
+                  {622, 1246, 1244, 1245, 1, 0}, kForwardKeystroke),
         Keystroke("ClassLetterInserted", CascadeKeystroke::ClassAttribute,
-                  {622, 57838, 1381, 1385, 1, 0}, kForwardKeystroke)),
+                  {622, 1383, 1381, 1385, 1, 0}, kForwardKeystroke)),
     CaseName);
 
 INSTANTIATE_TEST_SUITE_P(
     Scaling, CssCascadeWorkTest,
     ::testing::Values(
-        Generated("Mixed1000x0", 1000, 0, CascadeRuleKind::Mixed, {1002, 4004, 1000, 1000, 0, 0}),
-        Generated("Mixed1000x10", 1000, 10, CascadeRuleKind::Mixed,
-                  {1003, 14038, 1911, 2820, 0, 0}),
+        Generated("Mixed1000x0", 1000, 0, CascadeRuleKind::Mixed, {1002, 1002, 1000, 1000, 0, 0}),
+        Generated("Mixed1000x10", 1000, 10, CascadeRuleKind::Mixed, {1003, 1913, 1911, 2820, 0, 0}),
         Generated("Mixed1000x100", 1000, 100, CascadeRuleKind::Mixed,
-                  {1003, 104308, 1646, 2290, 0, 0}),
+                  {1003, 1784, 1646, 2290, 0, 0}),
         Generated("Mixed1000x1000", 1000, 1000, CascadeRuleKind::Mixed,
-                  {1003, 1007008, 1638, 2274, 0, 0}),
-        Generated("Mixed4000x0", 4000, 0, CascadeRuleKind::Mixed, {4002, 16004, 4000, 4000, 0, 0}),
+                  {1003, 1769, 1638, 2274, 0, 0}),
+        Generated("Mixed4000x0", 4000, 0, CascadeRuleKind::Mixed, {4002, 4002, 4000, 4000, 0, 0}),
         Generated("Mixed4000x10", 4000, 10, CascadeRuleKind::Mixed,
-                  {4003, 56038, 7638, 11274, 0, 0}),
+                  {4003, 7640, 7638, 11274, 0, 0}),
         Generated("Mixed4000x100", 4000, 100, CascadeRuleKind::Mixed,
-                  {4003, 416308, 6546, 9090, 0, 0}),
-        // The rule-element budget of 1,048,576 tests ends the pass before the last elements.
-        Generated("Mixed4000x1000BudgetExhausted", 4000, 1000, CascadeRuleKind::Mixed,
-                  {4003, 1048576, 1702, 2362, 0, 1}),
+                  {4003, 7106, 6546, 9090, 0, 0}),
+        // Only candidates are charged to the 1,048,576-test rule-element budget, so this document,
+        // which would test four million rules unindexed, styles completely.
+        Generated("Mixed4000x1000", 4000, 1000, CascadeRuleKind::Mixed,
+                  {4003, 7102, 6555, 9108, 0, 0}),
         Generated("Class1000x1000", 1000, 1000, CascadeRuleKind::Class,
-                  {1003, 1007008, 1911, 2820, 0, 0}),
+                  {1003, 1913, 1911, 2820, 0, 0}),
         Generated("Descendant1000x1000", 1000, 1000, CascadeRuleKind::Descendant,
-                  {1003, 1007008, 1013, 1024, 0, 0}),
+                  {1003, 1913, 1013, 1024, 0, 0}),
+        // Every type rule is keyed on its type, so each rect tests the 125 `rect` rules.
         Generated("Type1000x1000", 1000, 1000, CascadeRuleKind::Type,
-                  {1003, 1007008, 2104, 3206, 0, 0}),
+                  {1003, 126004, 2104, 3206, 0, 0}),
         Generated("Attribute1000x1000", 1000, 1000, CascadeRuleKind::Attribute,
-                  {1003, 1007008, 1002, 1002, 0, 0})),
+                  {1003, 1004, 1002, 1002, 0, 0}),
+        // One rect naming `.a` 20,000 times tests each of the 2,000 `.a` rules once.
+        CascadeCase{"RepeatedClassTokens2000x20000",
+                    [] {
+                      return MeasureCascadeLoad(MakeRepeatedClassTokensDocument(2000, 20000),
+                                                kOneRepetition, false);
+                    },
+                    {4, 2005, 2003, 2003, 0, 0}}),
     CaseName);
 
 }  // namespace

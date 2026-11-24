@@ -65,6 +65,16 @@ std::string MakeUseInstancesDocument(int instanceCount, int symbolChildren, int 
 /// The synthetic many-elements-by-many-rules document: 2,000 elements and 200 mixed rules.
 std::string MakeSyntheticDocument();
 
+/**
+ * Generate a document of \p ruleCount `.a` rules and one rect whose class list repeats `a`
+ * \p tokenCount times, which costs the cascade at most one gathered bucket however often the
+ * class repeats.
+ *
+ * @param ruleCount Stylesheet rules, all `.a`.
+ * @param tokenCount Repetitions of `a` in the rect's class list.
+ */
+std::string MakeRepeatedClassTokensDocument(int ruleCount, int tokenCount);
+
 /// Renderer that records nothing, so a frame costs only document preparation.
 class NullRenderer final : public svg::RendererInterface {
 public:

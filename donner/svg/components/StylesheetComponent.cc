@@ -147,10 +147,22 @@ void StylesheetComponent::rebuildSelectorCaches() {
           selectorsDependOnTextContent || rule.selector.dependsOnTextContent();
     }
   };
+  importedRuleIndexes.clear();
   for (const css::Stylesheet& sheet : importedStylesheets) {
     addRules(sheet);
+    importedRuleIndexes.emplace_back(sheet.rules());
   }
   addRules(stylesheet);
+  ruleIndex = RuleIndex(stylesheet.rules());
+}
+
+std::size_t StylesheetComponent::ruleIndexBytes() const {
+  std::size_t bytes =
+      ruleIndex.retainedBytes() + importedRuleIndexes.capacity() * sizeof(RuleIndex);
+  for (const RuleIndex& index : importedRuleIndexes) {
+    bytes += index.retainedBytes();
+  }
+  return bytes;
 }
 
 }  // namespace donner::svg::components

@@ -113,6 +113,7 @@ donner_cc_library(
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
+        "//donner/svg/components/style:rule_index",
         "//donner/svg/parser:parser_core",
         "//donner/svg/properties:property_parsing",
         "//donner/svg/resources:font_catalog_types",

@@ -25,6 +25,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
@@ -50,6 +51,7 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Field;
+using ::testing::Ge;
 using ::testing::Gt;
 using ::testing::Le;
 
@@ -1673,6 +1675,77 @@ TEST_F(StyleSystemTest, DeclarationBudgetRefusalCountsOnlyAdmittedDeclarations) 
   EXPECT_THAT(CascadeMetricsOf(document).counters,
               AllOf(Field("declarationsApplied", &StyleCascadeCounters::declarationsApplied, 3u),
                     Field("budgetRejections", &StyleCascadeCounters::budgetRejections, 1u)));
+}
+
+TEST(RuleIndexCharge, StylesheetChargeIncludesItsRuleIndex) {
+  // Two stylesheets with the same rule, declaration and component-value counts, so the parsed
+  // stylesheet estimate is equal; the first files its rules under two class keys and the second
+  // under one, so only their rule indexes differ in size.
+  constexpr std::string_view kTwoKeys = ".a { fill: red } .b { fill: red }";
+  constexpr std::string_view kOneKey = ".a { fill: red } .a { fill: red }";
+  const auto parse = [](std::string_view css) {
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    auto result = parser::SVGParser::ParseSVG(
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)") + std::string(css) +
+            "</style></svg>",
+        warnings);
+    EXPECT_THAT(result, NoParseError());
+    return std::move(result.result());
+  };
+  const auto charge = [](SVGDocument& document) {
+    return document.registry()
+        .ctx()
+        .get<ParsedPayloadResourceBudget>()
+        .securityStats()
+        .stylesheetBytes;
+  };
+  const auto indexBytes = [](SVGDocument& document) {
+    const Entity style = document.querySelector("style")->entityHandle().entity();
+    return document.registry().get<StylesheetComponent>(style).ruleIndexBytes();
+  };
+
+  SVGDocument twoKeys = parse(kTwoKeys);
+  SVGDocument oneKey = parse(kOneKey);
+  ASSERT_GT(indexBytes(twoKeys), indexBytes(oneKey));
+  EXPECT_EQ(charge(twoKeys) - charge(oneKey), indexBytes(twoKeys) - indexBytes(oneKey));
+
+  // A keystroke that turns the second `.a` into `.b` reparses the stylesheet and recharges it,
+  // index included.
+  const std::string source(oneKey.source());
+  const std::size_t at = source.rfind(".a") + 1;
+  ASSERT_THAT(oneKey
+                  .applySourceEdit(xml::XMLEditIntent{
+                      .range = {FileOffset::Offset(at), FileOffset::Offset(at + 1)},
+                      .replacement = "b",
+                      .sourceVersion = oneKey.sourceVersion(),
+                  })
+                  .applied,
+              testing::Eq(true));
+  EXPECT_EQ(indexBytes(oneKey), indexBytes(twoKeys));
+  EXPECT_EQ(charge(oneKey), charge(twoKeys));
+}
+
+TEST(RuleIndexCandidates, LargePassesDoNotLeaveTheirCandidateListAllocated) {
+  // Every rule is filed under both of the rect's classes, so its cascade gathers two entries per
+  // rule before duplicates are removed: more than the per-thread list keeps between passes.
+  constexpr std::size_t kRules = 3000;
+  static_assert(2 * kRules > StyleSystem::kRetainedCandidateCapacity);
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)";
+  for (std::size_t i = 0; i < kRules; ++i) {
+    svg += ".a, .b { fill: red }";
+  }
+  svg += R"(</style><rect class="a b" width="1" height="1"/></svg>)";
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(svg, warnings);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed.result());
+
+  StyleSystem().computeAllStyles(document.registry(), warnings);
+  EXPECT_THAT(CascadeMetricsOf(document).counters,
+              AllOf(Field("rulesMatched", &StyleCascadeCounters::rulesMatched, Ge(kRules)),
+                    Field("budgetRejections", &StyleCascadeCounters::budgetRejections, 0u)));
+  EXPECT_THAT(StyleSystem::CandidateListCapacityForTesting(),
+              Le(StyleSystem::kRetainedCandidateCapacity));
 }
 
 }  // namespace donner::svg::components

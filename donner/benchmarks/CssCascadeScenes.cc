@@ -266,6 +266,18 @@ std::string MakeSyntheticDocument() {
   return MakeGroupedRectsDocument(2000, 200, CascadeRuleKind::Mixed);
 }
 
+std::string MakeRepeatedClassTokensDocument(int ruleCount, int tokenCount) {
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)";
+  for (int rule = 0; rule < ruleCount; ++rule) {
+    svg += ".a{fill:red}";
+  }
+  svg += R"(</style><rect class=")";
+  for (int token = 0; token < tokenCount; ++token) {
+    svg += "a ";
+  }
+  return svg + R"(" width="1" height="1"/></svg>)";
+}
+
 CascadeEditTarget SplashEditTarget() {
   return {".cls-71", "cls-71", "cls-88"};
 }
