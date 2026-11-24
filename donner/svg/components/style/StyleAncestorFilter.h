@@ -39,6 +39,12 @@ public:
   /// Most keys one ancestor may contribute before the filter is disabled below it.
   static constexpr std::size_t kMaxKeysPerAncestor = 64;
 
+  /// Longer ancestor chains use ordinary selector matching.
+  static constexpr std::size_t kMaxAncestorDepth = 256;
+
+  /// Combined byte limit for class text and the other key names of one ancestor.
+  static constexpr std::size_t kMaxKeyBytesPerAncestor = 4096;
+
   /**
    * An empty, enabled filter for elements of \p registry.
    *
@@ -59,15 +65,20 @@ public:
    *
    * @param hash A \ref RuleIndex::AncestorKeyHash value.
    */
-  bool mayContain(BloomHash hash) const {
-    return disabledAt_ != kEnabled || filter_.mayContain(hash);
-  }
+  bool mayContain(BloomHash hash) const { return !enabled() || filter_.mayContain(hash); }
 
   /// Whether the filter can reject anything for the element synchronized to.
-  bool enabled() const { return disabledAt_ == kEnabled; }
+  bool enabled() const { return !depthLimitExceeded_ && disabledAt_ == kEnabled; }
 
   /// Number of ancestors held: the depth of the element synchronized to.
-  std::size_t depth() const { return chain_.size(); }
+  std::size_t depth() const { return depthLimitExceeded_ ? 0 : chain_.size(); }
+
+  /// Times pushing an ancestor disabled the filter because an insertion saturated a counter.
+  std::uint64_t saturationDisables() const { return saturationDisables_; }
+
+  /// Times pushing an ancestor disabled the filter because it had more than
+  /// \ref kMaxKeysPerAncestor keys or too many key bytes.
+  std::uint64_t keyLimitDisables() const { return keyLimitDisables_; }
 
 private:
   /// One ancestor and the hashes of its keys, `hashes_[firstHash, firstHash + hashCount)`.
@@ -75,6 +86,7 @@ private:
     Entity treeEntity;
     std::uint32_t firstHash;
     std::uint32_t hashCount;
+    bool keysComplete;
   };
 
   /// \ref disabledAt_ value while the filter is enabled.
@@ -84,21 +96,27 @@ private:
   void push(Entity treeEntity);
   /// Remove the innermost ancestor, re-enabling and rebuilding the filter if it disabled it.
   void pop();
-  /// Append the hashes of \p treeEntity's keys to \ref hashes_, at most one more than
-  /// \ref kMaxKeysPerAncestor.
-  void appendKeyHashes(Entity treeEntity);
+  /// Append the ancestor's keys, returning false before exceeding a count or byte limit.
+  bool appendKeyHashes(Entity treeEntity);
+  /// Append a non-class key if its name fits the remaining ancestor budget.
+  bool appendKeyHash(RuleIndexKey::Kind kind, std::string_view name, std::size_t& remainingBytes);
   /// The ancestor key hash of \p name ASCII-lowercased, lowercased in \ref lowercase_.
   BloomHash lowercasedHash(RuleIndexKey::Kind kind, std::string_view name);
-  /// Insert the hashes of \p frame; false, with the filter cleared, if it disables the filter.
-  bool insertFrame(const Frame& frame);
+  /// Why inserting a frame disabled the filter, if it did.
+  enum class InsertResult : std::uint8_t { Inserted, Saturated, KeyLimit };
+  /// Insert the hashes of \p frame; on any other result than `Inserted` the filter is cleared.
+  InsertResult insertFrame(const Frame& frame);
 
-  const Registry& registry_;           //!< Registry of the synchronized elements.
-  CountingBloomFilter<12> filter_;     //!< Keys of the enabled prefix of \ref chain_.
-  std::vector<Frame> chain_;           //!< Ancestors, outermost first.
-  std::vector<BloomHash> hashes_;      //!< Key hashes of \ref chain_, frame by frame.
-  std::size_t disabledAt_ = kEnabled;  //!< Index in \ref chain_ of the disabling ancestor.
-  std::vector<Entity> target_;         //!< Reused: the chain being synchronized to.
-  std::string lowercase_;              //!< Reused: a name being lowercased.
+  const Registry& registry_;              //!< Registry of the synchronized elements.
+  CountingBloomFilter<12> filter_;        //!< Keys of the enabled prefix of \ref chain_.
+  std::vector<Frame> chain_;              //!< Ancestors, outermost first.
+  std::vector<BloomHash> hashes_;         //!< Key hashes of \ref chain_, frame by frame.
+  std::size_t disabledAt_ = kEnabled;     //!< Index in \ref chain_ of the disabling ancestor.
+  bool depthLimitExceeded_ = false;       //!< The requested chain exceeds the depth limit.
+  std::vector<Entity> target_;            //!< Reused: the chain being synchronized to.
+  std::string lowercase_;                 //!< Reused: a name being lowercased.
+  std::uint64_t saturationDisables_ = 0;  //!< See \ref saturationDisables.
+  std::uint64_t keyLimitDisables_ = 0;    //!< See \ref keyLimitDisables.
 };
 
 }  // namespace donner::svg::components

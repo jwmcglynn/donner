@@ -1,7 +1,9 @@
 /// @file
-/// Differential fuzzer for the rule index: a stylesheet from the input and a small element tree
-/// built from it must cascade identically whether each element tests only the index's candidate
-/// rules or every rule.
+/// Differential fuzzer for the rule index and the ancestor filter: a stylesheet from the input and
+/// a small element tree built from it must cascade identically whether each element tests only the
+/// index's candidate rules or every rule, and with the ancestor filter or without it, the latter on
+/// prepared first frames, full restyles, single-entity restyles, retained updates and partial
+/// rebuilds.
 ///
 /// Input: stylesheet text, a NUL byte, then the tree, three bytes per element. The first byte picks
 /// the tag and how far to step out of the open elements before it; the second picks its id and
@@ -28,8 +30,10 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/ClassComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
@@ -38,6 +42,7 @@
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 namespace {
@@ -146,7 +151,8 @@ void PopulateUses(SVGDocument& document, ParseWarningSink& warnings) {
   }
 }
 
-std::optional<SVGDocument> Cascade(const std::string& svg, bool unindexed, bool cacheDisabled) {
+/// Parse \p svg, writing the form feeds of the class lists, without computing any style.
+std::optional<SVGDocument> Parse(const std::string& svg) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(svg, warnings);
   if (parsed.hasError()) {
@@ -159,14 +165,25 @@ std::optional<SVGDocument> Cascade(const std::string& svg, bool unindexed, bool 
     std::replace(className.begin(), className.end(), '|', '\f');
     component.className = RcString(className);
   }
+  return document;
+}
+
+std::optional<SVGDocument> Cascade(const std::string& svg, bool unindexed, bool cacheDisabled) {
+  std::optional<SVGDocument> document = Parse(svg);
+  if (!document) {
+    return std::nullopt;
+  }
   if (unindexed) {
-    document.registry().ctx().emplace<components::UnindexedCascadeForTesting>();
+    // The oracle skips no rule, so it runs without the ancestor filter as well.
+    document->registry().ctx().emplace<components::UnindexedCascadeForTesting>();
+    document->registry().ctx().emplace<components::UnfilteredCascadeForTesting>();
   }
   if (cacheDisabled) {
-    document.registry().ctx().emplace<components::DisableMatchedPropertiesCacheForTesting>();
+    document->registry().ctx().emplace<components::DisableMatchedPropertiesCacheForTesting>();
   }
-  PopulateUses(document, warnings);
-  components::StyleSystem().computeAllStyles(document.registry(), warnings);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  PopulateUses(*document, warnings);
+  components::StyleSystem().computeAllStyles(document->registry(), warnings);
   return document;
 }
 
@@ -223,6 +240,66 @@ void RequireSameLogicalCounters(const components::StyleCascadeCounters& left,
   Require(left.declarationsApplied == right.declarationsApplied);
   Require(left.fullClears == right.fullClears);
   Require(left.budgetRejections == right.budgetRejections);
+}
+
+const components::StyleCascadeCounters& CountersOf(SVGDocument& document) {
+  return document.registry().ctx().get<components::StyleCascadeMetrics>().counters;
+}
+
+/// One pass of a document with or without the ancestor filter.
+struct FilterPass {
+  components::StyleCascadeCounters work;
+  std::vector<ParseDiagnostic> warnings;
+  bool budgetRejected = false;
+  std::uint64_t fullRebuilds = 0;
+  std::uint64_t retainedUpdates = 0;
+};
+
+/// Run \p pass on \p document with a fresh warning sink and record what it did.
+template <typename Pass>
+FilterPass RecordPass(SVGDocument& document, const Pass& pass) {
+  Registry& registry = document.registry();
+  const components::StyleCascadeCounters before =
+      registry.ctx().contains<components::StyleCascadeMetrics>()
+          ? CountersOf(document)
+          : components::StyleCascadeCounters();
+  const auto* state = registry.ctx().find<components::RenderTreeState>();
+  const components::RenderTreeState::Counters renderBefore =
+      state ? state->counters : components::RenderTreeState::Counters();
+  ParseWarningSink warnings;
+  pass(document, warnings);
+  const auto* budget = registry.ctx().find<components::StyleResourceBudget>();
+  const components::RenderTreeState::Counters renderAfter =
+      registry.ctx().get<components::RenderTreeState>().counters;
+  return FilterPass{CountersOf(document) - before, warnings.warnings(),
+                    budget && budget->rejected(),
+                    renderAfter.fullRebuilds - renderBefore.fullRebuilds,
+                    renderAfter.retainedUpdates - renderBefore.retainedUpdates};
+}
+
+void PrepareFrame(SVGDocument& document, ParseWarningSink& warnings) {
+  Registry& registry = document.registry();
+  if (!registry.ctx().contains<components::RenderingContext>()) {
+    registry.ctx().emplace<components::RenderingContext>(registry);
+  }
+  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(false, warnings);
+}
+
+/// The innermost last element of \p document, which an edit can address.
+SVGElement LastLeafElement(SVGDocument& document) {
+  SVGElement element = document.svgElement();
+  while (std::optional<SVGElement> child = element.lastChild()) {
+    element = *child;
+  }
+  return element;
+}
+
+/// Write `opacity` on the last leaf element and prepare the next frame, through the retained
+/// update or, without it, a render-tree rebuild that restyles only dirty elements.
+void EditAndPrepareFrame(SVGDocument& document, ParseWarningSink& warnings, bool retained) {
+  document.registry().ctx().get<components::RenderTreeState>().retainedUpdatesEnabled = retained;
+  LastLeafElement(document).setAttribute("opacity", retained ? "0.5" : "0.25");
+  PrepareFrame(document, warnings);
 }
 
 void FullRestyle(SVGDocument& document) {
@@ -289,6 +366,66 @@ void ExerciseStylesheetEdits(SVGDocument& cached, SVGDocument& uncached, std::st
     auto replacement = SVGStyleElement::Create(document);
     replacement.setContents(".cache-probe { opacity: .5; }");
     root.appendChild(replacement);
+  });
+}
+
+/// Require the same pass with and without the ancestor filter: every computed style, matched
+/// rule, warning, render-tree path and counter but the filter's own, which the unfiltered pass
+/// leaves at zero. A pass the unfiltered cascade ends budget-rejected may style further with the
+/// filter, which skips walks without charging them.
+void RequireSameFilterIndependentPass(SVGDocument& filtered, SVGDocument& unfiltered,
+                                      const FilterPass& filteredPass,
+                                      const FilterPass& unfilteredPass) {
+  const components::StyleCascadeCounters& left = filteredPass.work;
+  const components::StyleCascadeCounters& right = unfilteredPass.work;
+  Require(right.ancestorFilterRejections == 0 && right.ancestorFilterFalsePositives == 0 &&
+          right.ancestorFilterSaturations == 0 && right.ancestorFilterKeyLimits == 0);
+  Require(left.ancestorFilterRejections + left.ancestorFilterFalsePositives <=
+          left.rulesTested - left.rulesMatched);
+  Require(filteredPass.fullRebuilds == unfilteredPass.fullRebuilds);
+  Require(filteredPass.retainedUpdates == unfilteredPass.retainedUpdates);
+  if (unfilteredPass.budgetRejected) {
+    Require(left.rulesMatched >= right.rulesMatched);
+    return;
+  }
+  components::StyleCascadeCounters leftWork = left;
+  leftWork.ancestorFilterRejections = 0;
+  leftWork.ancestorFilterFalsePositives = 0;
+  leftWork.ancestorFilterSaturations = 0;
+  leftWork.ancestorFilterKeyLimits = 0;
+  Require(leftWork == right);
+  Require(filteredPass.warnings == unfilteredPass.warnings);
+  Require(filteredPass.budgetRejected == unfilteredPass.budgetRejected);
+  RequireSameStylesAndRules(filtered, unfiltered);
+}
+
+/// Compare prepared passes of \p svg with and without the ancestor filter.
+void FuzzAncestorFilter(const std::string& svg) {
+  std::optional<SVGDocument> filtered = Parse(svg);
+  std::optional<SVGDocument> unfiltered = Parse(svg);
+  Require(filtered.has_value() == unfiltered.has_value());
+  if (!filtered) {
+    return;
+  }
+  unfiltered->registry().ctx().emplace<components::UnfilteredCascadeForTesting>();
+  const auto compare = [&](const auto& pass) {
+    const FilterPass filteredPass = RecordPass(*filtered, pass);
+    const FilterPass unfilteredPass = RecordPass(*unfiltered, pass);
+    RequireSameFilterIndependentPass(*filtered, *unfiltered, filteredPass, unfilteredPass);
+  };
+  compare(
+      [](SVGDocument& document, ParseWarningSink& warnings) { PrepareFrame(document, warnings); });
+  compare([](SVGDocument& document, ParseWarningSink& warnings) {
+    components::StyleSystem::discardComputedStylesForFullRestyle(document.registry());
+    components::StyleSystem().computeAllStyles(
+        document.registry(), warnings, components::StyleSystem::FullRestyle::ComputeMissing);
+  });
+  compare([](SVGDocument& document, ParseWarningSink&) { RestyleLastEntity(document); });
+  compare([](SVGDocument& document, ParseWarningSink& warnings) {
+    EditAndPrepareFrame(document, warnings, true);
+  });
+  compare([](SVGDocument& document, ParseWarningSink& warnings) {
+    EditAndPrepareFrame(document, warnings, false);
   });
 }
 
@@ -359,6 +496,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
           uncachedBeforePartial);
 
   ExerciseStylesheetEdits(*cached, *uncached, css);
+  FuzzAncestorFilter(svg);
   return 0;
 }
 

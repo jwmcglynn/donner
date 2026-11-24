@@ -46,6 +46,7 @@
 #include "donner/svg/components/style/RuleIndex.h"
 #include "donner/svg/components/style/ScalarAnimationStyle.h"
 #include "donner/svg/components/style/SelectorContent.h"
+#include "donner/svg/components/style/StyleAncestorFilter.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleElementView.h"
@@ -281,6 +282,95 @@ public:
 private:
   const StyleResourceBudget& budget_;
   StyleCascadeCounters& counters_;
+};
+
+/// The ancestor filter of one style pass, or none while the registry holds
+/// \ref UnfilteredCascadeForTesting. Adds the filter's disables to the counters when the pass
+/// ends, from any return path.
+class PassAncestorFilter {
+public:
+  explicit PassAncestorFilter(Registry& registry)
+      : counters_(GetStyleCascadeMetrics(registry).counters) {
+    if (!registry.ctx().contains<UnfilteredCascadeForTesting>()) {
+      filter_.emplace(registry);
+    }
+  }
+  ~PassAncestorFilter() {
+    if (filter_) {
+      counters_.ancestorFilterSaturations += filter_->saturationDisables();
+      counters_.ancestorFilterKeyLimits += filter_->keyLimitDisables();
+    }
+  }
+  PassAncestorFilter(const PassAncestorFilter&) = delete;
+  PassAncestorFilter& operator=(const PassAncestorFilter&) = delete;
+
+  /// The filter, or null for an unfiltered pass.
+  StyleAncestorFilter* get() { return filter_ ? &*filter_ : nullptr; }
+
+private:
+  StyleCascadeCounters& counters_;
+  std::optional<StyleAncestorFilter> filter_;
+};
+
+/// Consults a pass's ancestor filter about the candidate rules of one element and counts its
+/// answers. The filter is synchronized to the element on the first candidate with ancestor keys,
+/// so an element without one costs no synchronization.
+class AncestorFilterCheck {
+public:
+  AncestorFilterCheck(StyleAncestorFilter* filter, Entity treeEntity,
+                      StyleCascadeCounters& counters)
+      : filter_(filter), treeEntity_(treeEntity), counters_(counters) {}
+
+  /// True, counting a rejection, if every selector-list entry of the rule at \p position needs
+  /// an ancestor key no ancestor has, so the rule cannot match.
+  bool rejects(const RuleIndex& index, std::uint32_t position) {
+    groups_ = filter_ ? index.ancestorHashes(position) : Groups();
+    if (groups_.empty() || groups_.size() > remainingGroups_) {
+      groups_ = Groups();
+      return false;
+    }
+    if (!synchronized_) {
+      filter_->synchronizeTo(treeEntity_);
+      synchronized_ = true;
+    }
+    if (!filter_->enabled()) {
+      groups_ = Groups();
+      return false;
+    }
+    remainingGroups_ -= groups_.size();
+    const bool rejected =
+        std::ranges::all_of(groups_, [&](const RuleIndex::AncestorHashGroup& group) {
+          return std::ranges::any_of(
+              group, [&](std::uint32_t hash) { return !filter_->mayContain(BloomHash(hash)); });
+        });
+    counters_.ancestorFilterRejections += rejected ? 1 : 0;
+    return rejected;
+  }
+
+  /// Use the selector matcher only for a candidate the filter cannot rule out.
+  template <typename Match>
+  auto evaluate(const RuleIndex& index, std::uint32_t position, const Match& match) {
+    if (rejects(index, position)) {
+      return decltype(match()){};
+    }
+    auto result = match();
+    if (!result && !groups_.empty()) {
+      ++counters_.ancestorFilterFalsePositives;
+    }
+    return result;
+  }
+
+private:
+  using Groups = std::span<const RuleIndex::AncestorHashGroup>;
+  // Bound probes across all candidates of an element, independent of selector-list length.
+  static constexpr std::size_t kMaximumGroupsPerElement = 256;
+
+  StyleAncestorFilter* filter_;
+  Entity treeEntity_;
+  StyleCascadeCounters& counters_;
+  Groups groups_;
+  std::size_t remainingGroups_ = kMaximumGroupsPerElement;
+  bool synchronized_ = false;
 };
 
 bool InheritsExternalPaint(PropertyState state) {
@@ -1193,12 +1283,15 @@ struct StyleSystem::RuleTrace {
 class StyleSystem::SerialCascade {
 public:
   SerialCascade(Registry& registry, ParseWarningSink& warnings,
-                std::unordered_map<Entity, RuleTrace>* traces = nullptr)
+                std::unordered_map<Entity, RuleTrace>* traces = nullptr,
+                StyleAncestorFilter* ancestorFilter = nullptr)
       : registry_(registry),
         warnings_(warnings),
         traces_(traces),
-        pass_{GetStyleResourceBudget(registry), GetStyleCascadeMetrics(registry).counters,
-              GetMatchedPropertiesCache(registry)} {}
+        pass_{.budget = GetStyleResourceBudget(registry),
+              .counters = GetStyleCascadeMetrics(registry).counters,
+              .cache = GetMatchedPropertiesCache(registry),
+              .ancestorFilter = ancestorFilter} {}
 
   const ComputedStyleComponent& compute(Entity entity) {
     auto& slot = registry_.get_or_emplace<ComputedStyleComponent>(entity);
@@ -1529,7 +1622,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
                                        MatchedPropertiesKey& cacheKey, const StyleComponent* local,
                                        ParseWarningSink& warningSink,
                                        PendingStyleDeclarations& declarations, RuleTrace* capture,
-                                       RuleTrace* replay) {
+                                       RuleTrace* replay, StyleAncestorFilter* ancestorFilter) {
   const auto admitMatch = [&](const RuleTrace::Match& match) {
     ++counters.rulesMatched;
     cacheKey.addRule(match.revision, match.ordinal, match.position, match.specificity);
@@ -1545,6 +1638,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
   const RuleIndexElementView elementKeys(registry, treeEntity, dataEntity);
   const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
+  AncestorFilterCheck filterCheck(ancestorFilter, treeEntity, counters);
   CandidateListScope candidateScope;
   std::vector<std::uint32_t>& candidates = candidateScope.list();
   // Apply one sheet's candidate rules in rule order; returns false once the style budget is
@@ -1560,7 +1654,9 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
         return false;
       }
       ++counters.rulesTested;
-      auto match = MatchSelectorRule(rule, adapter, &styleBudget.selectorTraversal());
+      const auto match = filterCheck.evaluate(index, position, [&] {
+        return MatchSelectorRule(rule, adapter, &styleBudget.selectorTraversal());
+      });
       if (!match) {
         continue;
       }
@@ -1720,7 +1816,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   PendingStyleDeclarations declarations;
   applyStylesheetRules(registry, handle.entity(), dataEntity, styleBudget, counters, cacheKey,
                        styleComponent, warningSink, declarations, capture,
-                       SerialCascade::findTrace(serial, entity));
+                       SerialCascade::findTrace(serial, entity), pass.ancestorFilter);
 
   PopulateMatchedPropertiesKey(registry, handle, dataEntity, parent, styleComponent, cacheKey);
   MatchedCacheState cacheState =
@@ -1950,7 +2046,8 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
 }
 
 void StyleSystem::computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink) {
-  SerialCascade cascade(registry, warningSink);
+  PassAncestorFilter ancestorFilter(registry);
+  SerialCascade cascade(registry, warningSink, nullptr, ancestorFilter.get());
   for (auto entity : registry.view<DirtyFlagsComponent>()) {
     if (!registry.get<DirtyFlagsComponent>(entity).test(DirtyFlagsComponent::Style)) {
       continue;
@@ -1961,7 +2058,8 @@ void StyleSystem::computeDirtyStyles(Registry& registry, ParseWarningSink& warni
 }
 
 void StyleSystem::computeMissingStyles(Registry& registry, ParseWarningSink& warningSink) {
-  SerialCascade cascade(registry, warningSink);
+  PassAncestorFilter ancestorFilter(registry);
+  SerialCascade cascade(registry, warningSink, nullptr, ancestorFilter.get());
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating
   // computed style components also creates the parents, and we can't modify the component list
   // while iterating it.
@@ -1989,7 +2087,8 @@ void StyleSystem::discardComputedStylesForFullRestyle(Registry& registry) {
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
                                    ParseWarningSink& warningSink) {
-  SerialCascade cascade(registry, warningSink);
+  PassAncestorFilter ancestorFilter(registry);
+  SerialCascade cascade(registry, warningSink, nullptr, ancestorFilter.get());
   const StyleTimeScope timeScope(GetStyleCascadeMetrics(registry));
   for (Entity entity : entities) {
     cascade.compute(entity);

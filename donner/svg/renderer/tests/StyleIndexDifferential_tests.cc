@@ -1,8 +1,9 @@
 /// @file
-/// The rule index only skips rules that cannot match: for every document of the repository's SVG
-/// corpora, and for documents built around how the index reads keys, the cascade that tests only
-/// the index's candidates computes every style, and reports every matched rule, exactly as the
-/// cascade that tests every rule.
+/// The rule index and the ancestor filter only skip rules that cannot match: for every document of
+/// the repository's SVG corpora, and for documents built around how the index reads keys, the
+/// cascade that tests only the index's candidates computes every style, and reports every matched
+/// rule, exactly as the cascade that tests every rule, and the cascade with the ancestor filter
+/// does exactly the same work, apart from its own counters, as the cascade without it.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -598,6 +599,86 @@ void ExpectSameCacheIndependentPass(const CascadePassSnapshot& cached,
   EXPECT_EQ(cached.styleBudgetRejected, disabled.styleBudgetRejected);
 }
 
+/// \p counters without the ancestor filter's own counters, which only the filtered pass counts.
+StyleCascadeCounters WithoutAncestorFilterCounters(StyleCascadeCounters counters) {
+  counters.ancestorFilterRejections = 0;
+  counters.ancestorFilterFalsePositives = 0;
+  counters.ancestorFilterSaturations = 0;
+  counters.ancestorFilterKeyLimits = 0;
+  return counters;
+}
+
+/**
+ * Expect the pass of a document with the ancestor filter to equal the same pass without it:
+ * styles, matched-rule lists, ordered warnings and every counter but the filter's own, which the
+ * unfiltered pass leaves at zero. Skipped candidates are still tested and charged, so even the
+ * work counts agree. A pass the unfiltered cascade ended budget-rejected may only style further
+ * with the filter, because the walks it skips are not charged to the traversal budget.
+ *
+ * The matched-rule lists come from \ref StyleSystem::collectMatchedStyleRules, which runs no
+ * pass and so never consults the filter; the cascade's own matches are compared through the
+ * styles, the matched-rule and declaration counts, and the matched-properties cache counts,
+ * whose keys are the matched rules.
+ */
+void ExpectSameFilterIndependentPass(const CascadePassSnapshot& filtered,
+                                     const CascadePassSnapshot& unfiltered) {
+  EXPECT_EQ(unfiltered.counters.ancestorFilterRejections, 0u);
+  EXPECT_EQ(unfiltered.counters.ancestorFilterFalsePositives, 0u);
+  EXPECT_EQ(unfiltered.counters.ancestorFilterSaturations, 0u);
+  EXPECT_EQ(unfiltered.counters.ancestorFilterKeyLimits, 0u);
+  EXPECT_LE(
+      filtered.counters.ancestorFilterRejections + filtered.counters.ancestorFilterFalsePositives,
+      filtered.counters.rulesTested - filtered.counters.rulesMatched);
+  if (unfiltered.styleBudgetRejected) {
+    ::testing::Test::RecordProperty("unfiltered_budget_rejected", "true");
+    EXPECT_GE(filtered.counters.rulesMatched, unfiltered.counters.rulesMatched);
+    return;
+  }
+  EXPECT_THAT(filtered.styles, ElementsAreArray(unfiltered.styles));
+  EXPECT_THAT(filtered.rules, ElementsAreArray(unfiltered.rules));
+  EXPECT_THAT(filtered.warnings, ElementsAreArray(unfiltered.warnings));
+  EXPECT_EQ(WithoutAncestorFilterCounters(filtered.counters),
+            WithoutAncestorFilterCounters(unfiltered.counters));
+  EXPECT_EQ(filtered.warningAttempts, unfiltered.warningAttempts);
+  EXPECT_EQ(filtered.warningBytes, unfiltered.warningBytes);
+  EXPECT_EQ(filtered.warningLimitExceeded, unfiltered.warningLimitExceeded);
+  EXPECT_EQ(filtered.styleBudgetRejected, unfiltered.styleBudgetRejected);
+}
+
+/// The innermost last element of \p document: its last child element's last child element, and
+/// so on, an element of the authored tree that an edit can address.
+SVGElement LastLeafElement(SVGDocument& document) {
+  SVGElement element = document.svgElement();
+  while (std::optional<SVGElement> child = element.lastChild()) {
+    element = *child;
+  }
+  return element;
+}
+
+/// A frame prepared after an edit, and how the render tree was updated for it.
+struct EditedFrame {
+  CascadePassSnapshot pass;
+  std::uint64_t fullRebuilds = 0;
+  std::uint64_t retainedUpdates = 0;
+};
+
+/**
+ * Write a new `opacity` on \p element and prepare the next frame of \p document.
+ *
+ * @param retained Whether the frame may take the retained update; without it the render tree is
+ *   rebuilt, restyling only the dirty element unless the edit needs a full restyle.
+ */
+EditedFrame EditOpacityAndPrepareFrame(SVGDocument& document, SVGElement element, bool retained) {
+  Registry& registry = document.registry();
+  registry.ctx().get<RenderTreeState>().retainedUpdatesEnabled = retained;
+  const RenderTreeState::Counters before = registry.ctx().get<RenderTreeState>().counters;
+  element.setAttribute("opacity", retained ? "0.5" : "0.25");
+  CascadePassSnapshot pass = PrepareFirstFrameWithDiagnostics(document);
+  const RenderTreeState::Counters after = registry.ctx().get<RenderTreeState>().counters;
+  return EditedFrame{std::move(pass), after.fullRebuilds - before.fullRebuilds,
+                     after.retainedUpdates - before.retainedUpdates};
+}
+
 TEST(MatchedPropertiesCache, RetainedUpdateAndPartialRebuildMatchCacheDisabled) {
   constexpr std::string_view kSource = R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
@@ -640,13 +721,36 @@ TEST(MatchedPropertiesCache, RetainedUpdateAndPartialRebuildMatchCacheDisabled) 
   EXPECT_EQ(disabledPartial.counters.elementsCascaded, 1u);
 }
 
+/// Edit `opacity` on the last leaf element of \p filtered and \p unfiltered and expect the same
+/// frame, prepared through the retained update and then through a render-tree rebuild that
+/// restyles only the edited element.
+void ExpectSameEditedFramesWithoutTheFilter(SVGDocument& filtered, SVGDocument& unfiltered) {
+  const SVGElement edited = LastLeafElement(filtered);
+  const SVGElement editedUnfiltered = LastLeafElement(unfiltered);
+  for (const bool retained : {true, false}) {
+    SCOPED_TRACE(retained ? "retained update" : "partial rebuild");
+    const EditedFrame filteredFrame = EditOpacityAndPrepareFrame(filtered, edited, retained);
+    const EditedFrame unfilteredFrame =
+        EditOpacityAndPrepareFrame(unfiltered, editedUnfiltered, retained);
+    ExpectSameFilterIndependentPass(filteredFrame.pass, unfilteredFrame.pass);
+    EXPECT_EQ(filteredFrame.fullRebuilds, unfilteredFrame.fullRebuilds);
+    EXPECT_EQ(filteredFrame.retainedUpdates, unfilteredFrame.retainedUpdates);
+  }
+}
+
 /// Prepare a frame of \p indexed and of \p unindexed, two parses of one source, the second
 /// testing every rule, and expect the same cascade.
 void ExpectIndexedMatchesEveryRule(SVGDocument& indexed, SVGDocument& unindexed,
-                                   SVGDocument* cacheDisabled = nullptr) {
+                                   SVGDocument* cacheDisabled = nullptr,
+                                   SVGDocument* unfiltered = nullptr) {
+  // The oracle skips no rule, so it runs without the ancestor filter as well.
   unindexed.registry().ctx().emplace<UnindexedCascadeForTesting>();
+  unindexed.registry().ctx().emplace<UnfilteredCascadeForTesting>();
   if (cacheDisabled) {
     cacheDisabled->registry().ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
+  }
+  if (unfiltered) {
+    unfiltered->registry().ctx().emplace<UnfilteredCascadeForTesting>();
   }
   bool unindexedBudgetRejected = false;
   std::uint64_t indexedRulesMatched = 0;
@@ -662,6 +766,9 @@ void ExpectIndexedMatchesEveryRule(SVGDocument& indexed, SVGDocument& unindexed,
       EXPECT_EQ(disabledFirst.counters.matchedPropertiesCacheUncacheable, 0u);
       EXPECT_EQ(disabledFirst.counters.declarationParsesSkipped, 0u);
     }
+    if (unfiltered) {
+      ExpectSameFilterIndependentPass(indexedFirst, PrepareFirstFrameWithDiagnostics(*unfiltered));
+    }
     unindexedBudgetRejected = unindexedFirst.counters.budgetRejections > 0;
     indexedRulesMatched = indexedFirst.counters.rulesMatched;
     unindexedRulesMatched = unindexedFirst.counters.rulesMatched;
@@ -673,19 +780,19 @@ void ExpectIndexedMatchesEveryRule(SVGDocument& indexed, SVGDocument& unindexed,
                 unindexedFirst.counters.declarationsApplied);
     }
   }
-  if (cacheDisabled) {
-    {
-      const CascadePassSnapshot indexedFull = ForceFullRestyleWithDiagnostics(indexed);
-      const CascadePassSnapshot disabledFull = ForceFullRestyleWithDiagnostics(*cacheDisabled);
-      ExpectSameCacheIndependentPass(indexedFull, disabledFull);
+  const auto compareStage = [&](auto stage) {
+    const CascadePassSnapshot reference = stage(indexed);
+    if (cacheDisabled) {
+      ExpectSameCacheIndependentPass(reference, stage(*cacheDisabled));
     }
-    {
-      const CascadePassSnapshot indexedPartial =
-          RecomputeLastPositionedStyleWithDiagnostics(indexed);
-      const CascadePassSnapshot disabledPartial =
-          RecomputeLastPositionedStyleWithDiagnostics(*cacheDisabled);
-      ExpectSameCacheIndependentPass(indexedPartial, disabledPartial);
+    if (unfiltered) {
+      ExpectSameFilterIndependentPass(reference, stage(*unfiltered));
     }
+  };
+  compareStage(ForceFullRestyleWithDiagnostics);
+  compareStage(RecomputeLastPositionedStyleWithDiagnostics);
+  if (unfiltered) {
+    ExpectSameEditedFramesWithoutTheFilter(indexed, *unfiltered);
   }
 
   if (unindexedBudgetRejected) {
@@ -697,7 +804,7 @@ void ExpectIndexedMatchesEveryRule(SVGDocument& indexed, SVGDocument& unindexed,
   }
 }
 
-/// The icon sprite, which is compared in halves (see \ref SpriteHalf).
+/// The icon sprite, which is compared in parts (see \ref SpritePart).
 constexpr std::string_view kSpriteName = "bootstrap_icons";
 
 /// The corpus without the icon sprite.
@@ -715,13 +822,44 @@ TEST_P(StyleIndexDifferentialTest, IndexedCascadeMatchesEveryRuleCascade) {
   std::optional<SVGDocument> indexed = tests::ParseCorpusDocument(GetParam());
   std::optional<SVGDocument> unindexed = tests::ParseCorpusDocument(GetParam());
   std::optional<SVGDocument> cacheDisabled = tests::ParseCorpusDocument(GetParam());
-  if (!indexed || !unindexed || !cacheDisabled) {
+  std::optional<SVGDocument> unfiltered = tests::ParseCorpusDocument(GetParam());
+  if (!indexed || !unindexed || !cacheDisabled || !unfiltered) {
     GTEST_SKIP() << "Does not parse";
   }
-  ExpectIndexedMatchesEveryRule(*indexed, *unindexed, &*cacheDisabled);
+  ExpectIndexedMatchesEveryRule(*indexed, *unindexed, &*cacheDisabled, &*unfiltered);
 }
 
 INSTANTIATE_TEST_SUITE_P(Corpus, StyleIndexDifferentialTest,
+                         ::testing::ValuesIn(CorpusDocumentsExceptTheSprite()),
+                         [](const ::testing::TestParamInfo<CorpusDocument>& info) {
+                           return info.param.name;
+                         });
+
+/// Selector traversal steps allowed per pass in the low-limit run: low enough that the larger
+/// documents end their unfiltered first frame traversal-rejected.
+constexpr std::size_t kLowTraversalSteps = 64;
+
+class StyleFilterLowTraversalTest : public ::testing::TestWithParam<CorpusDocument> {};
+
+TEST_P(StyleFilterLowTraversalTest, FilterStylesAtLeastAsFarUnderALowTraversalLimit) {
+  std::optional<SVGDocument> filtered = tests::ParseCorpusDocument(GetParam());
+  std::optional<SVGDocument> unfiltered = tests::ParseCorpusDocument(GetParam());
+  if (!filtered || !unfiltered) {
+    GTEST_SKIP() << "Does not parse";
+  }
+  StyleResourceBudget::Limits limits;
+  limits.selectorTraversalSteps = kLowTraversalSteps;
+  filtered->registry().ctx().emplace<StyleResourceBudget>(limits);
+  unfiltered->registry().ctx().emplace<StyleResourceBudget>(limits);
+  unfiltered->registry().ctx().emplace<UnfilteredCascadeForTesting>();
+  const CascadePassSnapshot filteredFirst = PrepareFirstFrameWithDiagnostics(*filtered);
+  const CascadePassSnapshot unfilteredFirst = PrepareFirstFrameWithDiagnostics(*unfiltered);
+  ::testing::Test::RecordProperty("filtered_budget_rejected",
+                                  filteredFirst.styleBudgetRejected ? "true" : "false");
+  ExpectSameFilterIndependentPass(filteredFirst, unfilteredFirst);
+}
+
+INSTANTIATE_TEST_SUITE_P(Corpus, StyleFilterLowTraversalTest,
                          ::testing::ValuesIn(CorpusDocumentsExceptTheSprite()),
                          [](const ::testing::TestParamInfo<CorpusDocument>& info) {
                            return info.param.name;
@@ -743,52 +881,69 @@ std::string SpriteSource() {
   return read.str();
 }
 
-/**
- * One half of the icon sprite's `<symbol>` elements under its root `<svg>`. The sprite has no
- * stylesheet of its own and no selector of the user agent sheet relates one symbol to another,
- * so each half cascades its elements exactly as the whole sprite does; together the halves hold
- * every element. Whole, the sprite's two parses and two frames are the slowest case of this test
- * under ASan, about 23 s; halves keep each case near half of that.
- *
- * @param half 0 for the first half of the symbols, 1 for the rest.
- */
-std::string SpriteHalf(int half) {
-  const std::string source = SpriteSource();
+/// Parts the icon sprite is compared in (see \ref SpritePart).
+constexpr int kSpriteParts = 4;
 
+/// Offset of the first `<symbol>` of part \p part of \p source's symbols under its root, or the
+/// root's closing tag for \p part == \ref kSpriteParts.
+std::size_t SpritePartStart(const std::string& source, std::size_t rootOpenEnd,
+                            std::size_t rootClose, int part) {
+  if (part == kSpriteParts) {
+    return rootClose;
+  }
+  return source.find("<symbol", rootOpenEnd + (rootClose - rootOpenEnd) * part / kSpriteParts);
+}
+
+/**
+ * One of \ref kSpriteParts consecutive parts of the icon sprite's `<symbol>` elements under its
+ * root `<svg>`. The sprite has no stylesheet of its own and no selector of the user agent sheet
+ * relates one symbol to another, so each part cascades its elements exactly as the whole sprite
+ * does; together the parts hold every element. Whole, the sprite's four parses and their passes
+ * are the slowest case of this test under ASan, about 70 s; quarters keep each case near a
+ * quarter of that.
+ *
+ * @param part 0 to \ref kSpriteParts - 1.
+ */
+std::string SpritePart(int part) {
+  const std::string source = SpriteSource();
   const std::size_t rootOpenEnd = source.find('>', source.find("<svg")) + 1;
   const std::size_t rootClose = source.rfind("</svg>");
-  const std::size_t split = source.find("<symbol", rootOpenEnd + (rootClose - rootOpenEnd) / 2);
-  EXPECT_NE(source.find("<symbol", rootOpenEnd), split);
-  EXPECT_LT(split, rootClose);
-  const std::string root = source.substr(0, rootOpenEnd);
-  return half == 0 ? root + source.substr(rootOpenEnd, split - rootOpenEnd) + "</svg>"
-                   : root + source.substr(split, rootClose - split) + "</svg>";
+  const std::size_t start = SpritePartStart(source, rootOpenEnd, rootClose, part);
+  const std::size_t end = SpritePartStart(source, rootOpenEnd, rootClose, part + 1);
+  EXPECT_LT(start, end);
+  EXPECT_LE(end, rootClose);
+  // The first part also keeps whatever precedes the first symbol.
+  const std::size_t from = part == 0 ? rootOpenEnd : start;
+  return source.substr(0, rootOpenEnd) + source.substr(from, end - from) + "</svg>";
 }
 
 class StyleIndexSpriteTest : public ::testing::TestWithParam<int> {};
 
 TEST_P(StyleIndexSpriteTest, IndexedCascadeMatchesEveryRuleCascade) {
-  const std::string source = SpriteHalf(GetParam());
+  const std::string source = SpritePart(GetParam());
   ASSERT_THAT(source, ::testing::HasSubstr("<symbol"));
   SVGDocument indexed = ParseSource(source);
   SVGDocument unindexed = ParseSource(source);
   SVGDocument cacheDisabled = ParseSource(source);
-  ExpectIndexedMatchesEveryRule(indexed, unindexed, &cacheDisabled);
+  SVGDocument unfiltered = ParseSource(source);
+  ExpectIndexedMatchesEveryRule(indexed, unindexed, &cacheDisabled, &unfiltered);
 }
 
-INSTANTIATE_TEST_SUITE_P(Halves, StyleIndexSpriteTest, ::testing::Values(0, 1));
+INSTANTIATE_TEST_SUITE_P(Parts, StyleIndexSpriteTest, ::testing::Range(0, kSpriteParts));
 
-TEST(StyleIndexSprite, HalvesTogetherAreTheWholeSprite) {
+TEST(StyleIndexSprite, PartsTogetherAreTheWholeSprite) {
   const std::string source = SpriteSource();
-  const std::string first = SpriteHalf(0);
-  const std::string second = SpriteHalf(1);
   constexpr std::string_view kRootClose = "</svg>";
-  const std::size_t rootOpenEnd = first.find('>') + 1;
-  ASSERT_GT(first.size(), rootOpenEnd + kRootClose.size());
-  ASSERT_GT(second.size(), rootOpenEnd + kRootClose.size());
-  // The first half without its closing tag, then the second without its root's opening tag, is
-  // the sprite up to its closing tag.
-  EXPECT_EQ(first.substr(0, first.size() - kRootClose.size()) + second.substr(rootOpenEnd),
+  const std::size_t rootOpenEnd = source.find('>', source.find("<svg")) + 1;
+  // The parts without their root's opening and closing tags, in order, after the sprite's
+  // opening tag and before its closing tag, are the sprite up to its closing tag.
+  std::string joined = source.substr(0, rootOpenEnd);
+  for (int part = 0; part < kSpriteParts; ++part) {
+    const std::string piece = SpritePart(part);
+    ASSERT_GT(piece.size(), rootOpenEnd + kRootClose.size()) << part;
+    joined += piece.substr(rootOpenEnd, piece.size() - rootOpenEnd - kRootClose.size());
+  }
+  EXPECT_EQ(joined + std::string(kRootClose),
             source.substr(0, source.rfind(kRootClose) + kRootClose.size()));
 }
 
@@ -828,9 +983,12 @@ TEST_P(StyleIndexKeyEdgeCaseTest, IndexedCascadeMatchesEveryRuleCascade) {
   SVGDocument indexed = parse();
   SVGDocument unindexed = parse();
   SVGDocument cacheDisabled = parse();
+  SVGDocument unfiltered = parse();
   unindexed.registry().ctx().emplace<UnindexedCascadeForTesting>();
+  unindexed.registry().ctx().emplace<UnfilteredCascadeForTesting>();
   cacheDisabled.registry().ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
-  for (SVGDocument* document : {&indexed, &unindexed, &cacheDisabled}) {
+  unfiltered.registry().ctx().emplace<UnfilteredCascadeForTesting>();
+  for (SVGDocument* document : {&indexed, &unindexed, &cacheDisabled, &unfiltered}) {
     for (const auto& [id, className] : GetParam().classWrites) {
       std::optional<SVGElement> element = document->querySelector("#" + id);
       ASSERT_TRUE(element.has_value()) << id;
@@ -841,6 +999,7 @@ TEST_P(StyleIndexKeyEdgeCaseTest, IndexedCascadeMatchesEveryRuleCascade) {
   EXPECT_EQ(Counters(unindexed).rulesMatched, GetParam().rulesMatched);
   ExpectSameCascade(indexed, unindexed);
   ExpectSameCascade(indexed, cacheDisabled);
+  ExpectSameCascade(indexed, unfiltered);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -916,6 +1075,7 @@ TEST(StyleIndexDifferential, StylesheetEditsRebuildTheIndex) {
   SVGDocument unindexed = ParseSource(kSource);
   SVGDocument cacheDisabled = ParseSource(kSource);
   unindexed.registry().ctx().emplace<UnindexedCascadeForTesting>();
+  unindexed.registry().ctx().emplace<UnfilteredCascadeForTesting>();
   cacheDisabled.registry().ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
   for (SVGDocument* document : {&indexed, &unindexed, &cacheDisabled}) {
     PrepareFrame(*document);
@@ -986,6 +1146,131 @@ TEST(StyleIndexDifferential, StylesheetEditsRebuildTheIndex) {
   ExpectSameCascade(indexed, unindexed);
   ExpectSameCascade(indexed, cacheDisabled);
 }
+
+TEST(StyleIndexDifferential, StylesheetEditsReplaceAncestorHashes) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.bad #r { fill: red; }</style>
+      <g class="hit"><rect id="r" width="1" height="1"/></g>
+    </svg>)svg";
+  SVGDocument filtered = ParseSource(kSource);
+  SVGDocument unfiltered = ParseSource(kSource);
+  unfiltered.registry().ctx().emplace<UnfilteredCascadeForTesting>();
+
+  const auto check = [&](std::uint64_t rejections, const css::RGBA& rgba) {
+    const auto filteredPass = PrepareFirstFrameWithDiagnostics(filtered);
+    const auto unfilteredPass = PrepareFirstFrameWithDiagnostics(unfiltered);
+    ExpectSameFilterIndependentPass(filteredPass, unfilteredPass);
+    EXPECT_FALSE(unfilteredPass.styleBudgetRejected);
+    EXPECT_EQ(filteredPass.counters.ancestorFilterRejections, rejections);
+    EXPECT_THAT(filtered.querySelector("#r")->getComputedStyle().fill.get(),
+                ::testing::Optional(PaintServer(PaintServer::Solid(css::Color(rgba)))));
+  };
+  check(1, css::RGBA(0, 0, 0, 0xFF));
+
+  // Keep the same number of rules and the same subject key while making the ancestor match.
+  for (SVGDocument* document : {&filtered, &unfiltered}) {
+    const std::size_t start = std::string_view(document->source()).find(".bad");
+    ASSERT_NE(start, std::string_view::npos);
+    const auto edit = document->applySourceEdit(xml::XMLEditIntent{
+        .range = {FileOffset::Offset(start + 1), FileOffset::Offset(start + 4)},
+        .replacement = "hit",
+        .sourceVersion = document->sourceVersion(),
+    });
+    ASSERT_TRUE(edit.applied);
+  }
+  check(0, css::RGBA(0xFF, 0, 0, 0xFF));
+
+  for (SVGDocument* document : {&filtered, &unfiltered}) {
+    document->querySelector("style")->cast<SVGStyleElement>().setContents(".bad #r { fill: red; }");
+  }
+  check(1, css::RGBA(0, 0, 0, 0xFF));
+}
+
+/// A document built around how the ancestor filter reads ancestor keys and selector hashes.
+struct FilterEdgeCase {
+  std::string name;
+  /// Content of the `<svg>` root.
+  std::string body;
+  /// Candidates the filter rejects, and candidates it lets through that then fail, over all
+  /// elements of the first frame.
+  std::uint64_t rejections;
+  std::uint64_t falsePositives;
+
+  friend std::ostream& operator<<(std::ostream& os, const FilterEdgeCase& value) {
+    return os << value.name;
+  }
+};
+
+class StyleFilterEdgeCaseTest : public ::testing::TestWithParam<FilterEdgeCase> {};
+
+TEST_P(StyleFilterEdgeCaseTest, FilteredCascadeMatchesUnfilteredCascade) {
+  const std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">)" +
+                             GetParam().body + "</svg>";
+  SVGDocument filtered = ParseSource(source);
+  SVGDocument unfiltered = ParseSource(source);
+  unfiltered.registry().ctx().emplace<UnfilteredCascadeForTesting>();
+  const CascadePassSnapshot filteredFirst = PrepareFirstFrameWithDiagnostics(filtered);
+  const CascadePassSnapshot unfilteredFirst = PrepareFirstFrameWithDiagnostics(unfiltered);
+  ExpectSameFilterIndependentPass(filteredFirst, unfilteredFirst);
+  EXPECT_FALSE(unfilteredFirst.styleBudgetRejected);
+  EXPECT_EQ(filteredFirst.counters.ancestorFilterRejections, GetParam().rejections);
+  EXPECT_EQ(filteredFirst.counters.ancestorFilterFalsePositives, GetParam().falsePositives);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Ancestors, StyleFilterEdgeCaseTest,
+    ::testing::Values(
+        // A shadow element's chain runs through its `<use>` host: the clone under `g.host`
+        // rejects only `.other rect`, while its source under `<defs>` rejects all three rules.
+        FilterEdgeCase{"UseShadowAncestors",
+                       "<style>.host rect { fill: red } .other rect { stroke: red }"
+                       " g rect { opacity: 0.5 }</style>"
+                       R"(<defs><rect id="src" width="1" height="1"/></defs>)"
+                       R"(<g class="host"><use href="#src"/></g>)",
+                       4, 0},
+        FilterEdgeCase{"AttributeAncestor",
+                       "<style>[data-k] rect { fill: red } [data-q] rect { stroke: red }</style>"
+                       R"(<g data-k="1"><rect width="1" height="1"/></g>)",
+                       1, 0},
+        // Simple selectors inside pseudo-class arguments give no keys, so the first two rules
+        // are never rejected; `.c:not(.d)` still gives `.c`.
+        FilterEdgeCase{"PseudoClassArguments",
+                       "<style>:not(.a) rect { fill: red } :is(.a, .b) rect { stroke: red }"
+                       " .c:not(.d) rect { opacity: 0.5 }</style>"
+                       R"(<g class="b"><rect width="1" height="1"/></g>)",
+                       1, 0},
+        // Keys stop at the first sibling combinator: `.b` is kept and `.a` or `.z` is not, so
+        // `.z ~ .b rect` passes the filter and then fails.
+        FilterEdgeCase{"SiblingCombinators",
+                       "<style>.a + .b rect { fill: red } .z ~ .b rect { stroke: red }"
+                       " .a + .c rect { opacity: 0.5 }</style>"
+                       R"(<g class="a"/><g class="b"><rect width="1" height="1"/></g>)",
+                       1, 1},
+        FilterEdgeCase{"ChildAndId",
+                       "<style>#top > rect { fill: red } #nope > rect { stroke: red }"
+                       " .p > rect { opacity: 0.5 }</style>"
+                       R"(<g id="top"><rect width="1" height="1"/></g>)",
+                       2, 0},
+        // Type keys are compared lowercased on both sides.
+        FilterEdgeCase{"TypeAncestors",
+                       "<style>g rect { fill: red } clipPath rect { opacity: 0.5 }"
+                       " CLIPPATH circle { stroke: red }</style>"
+                       R"(<defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs>)"
+                       R"(<g><rect width="1" height="1"/><circle r="1"/></g>)",
+                       3, 0},
+        // A rule is rejected only when every selector-list entry is.
+        FilterEdgeCase{"SelectorListEntries",
+                       "<style>.nope rect, .x rect { fill: red }"
+                       " .nope rect, .none rect { stroke: red }</style>"
+                       R"(<g class="x"><rect width="1" height="1"/></g>)",
+                       1, 0},
+        // An entry is rejected when any one of its ancestor keys is absent.
+        FilterEdgeCase{"EveryKeyOfAnEntry",
+                       "<style>.x .nope rect { stroke: red } .x g rect { fill: red }</style>"
+                       R"(<g class="x"><g><rect width="1" height="1"/></g></g>)",
+                       1, 0}),
+    [](const ::testing::TestParamInfo<FilterEdgeCase>& info) { return info.param.name; });
 
 }  // namespace
 }  // namespace donner::svg::components

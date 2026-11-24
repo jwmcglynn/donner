@@ -1707,9 +1707,9 @@ donner_cc_test(
         "//third_party/bootstrap-icons:bootstrap-icons.svg",
         "//third_party/resvg-test-suite:tests",
     ],
-    # Three parses, first-frame indexed comparison, cache-on/off full and partial restyles, and
-    # every matched-rule list per document. The icon sprite stays split in halves so each shard
-    # remains bounded under ASan.
+    # Four parses, first-frame indexed comparison, cache-on/off and filter-on/off passes, a
+    # low-traversal-limit run, and every matched-rule list per document. The icon sprite stays
+    # split in quarters so each shard remains bounded under ASan.
     shard_count = 32,
     deps = [
         ":computed_style_snapshot",

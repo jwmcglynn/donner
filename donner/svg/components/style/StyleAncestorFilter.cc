@@ -14,12 +14,17 @@ using Kind = RuleIndexKey::Kind;
 StyleAncestorFilter::StyleAncestorFilter(const Registry& registry) : registry_(registry) {}
 
 void StyleAncestorFilter::synchronizeTo(Entity treeEntity) {
-  // The new chain, innermost first. Its length is bounded by the document's nesting depth.
+  // Keep the last complete chain intact when a DOM or shadow chain exceeds the limit.
   target_.clear();
   for (Entity ancestor = StyleParentElement(registry_, treeEntity); ancestor != entt::null;
        ancestor = StyleParentElement(registry_, ancestor)) {
+    if (target_.size() == kMaxAncestorDepth) {
+      depthLimitExceeded_ = true;
+      return;
+    }
     target_.push_back(ancestor);
   }
+  depthLimitExceeded_ = false;
   std::reverse(target_.begin(), target_.end());
 
   std::size_t shared = 0;
@@ -37,11 +42,17 @@ void StyleAncestorFilter::synchronizeTo(Entity treeEntity) {
 
 void StyleAncestorFilter::push(Entity treeEntity) {
   const auto firstHash = static_cast<std::uint32_t>(hashes_.size());
-  appendKeyHashes(treeEntity);
-  chain_.push_back(
-      Frame{treeEntity, firstHash, static_cast<std::uint32_t>(hashes_.size()) - firstHash});
-  if (disabledAt_ == kEnabled && !insertFrame(chain_.back())) {
+  // Descendants of the disabling ancestor leave the chain before it can be rebuilt.
+  const bool keysComplete = disabledAt_ == kEnabled && appendKeyHashes(treeEntity);
+  chain_.push_back(Frame{treeEntity, firstHash,
+                         static_cast<std::uint32_t>(hashes_.size()) - firstHash, keysComplete});
+  if (disabledAt_ != kEnabled) {
+    return;
+  }
+  const InsertResult result = insertFrame(chain_.back());
+  if (result != InsertResult::Inserted) {
     disabledAt_ = chain_.size() - 1;
+    ++(result == InsertResult::Saturated ? saturationDisables_ : keyLimitDisables_);
   }
 }
 
@@ -60,47 +71,69 @@ void StyleAncestorFilter::pop() {
     disabledAt_ = kEnabled;
     filter_.clear();
     for (const Frame& remaining : chain_) {
-      [[maybe_unused]] const bool inserted = insertFrame(remaining);
-      assert(inserted && "a prefix of an enabled chain inserts without disabling");
+      [[maybe_unused]] const InsertResult result = insertFrame(remaining);
+      assert(result == InsertResult::Inserted && "a prefix of an enabled chain inserts");
     }
   }
 }
 
-bool StyleAncestorFilter::insertFrame(const Frame& frame) {
-  if (frame.hashCount > kMaxKeysPerAncestor) {
+StyleAncestorFilter::InsertResult StyleAncestorFilter::insertFrame(const Frame& frame) {
+  if (!frame.keysComplete) {
     filter_.clear();
-    return false;
+    return InsertResult::KeyLimit;
   }
   for (std::uint32_t i = 0; i < frame.hashCount; ++i) {
     if (filter_.insert(hashes_[frame.firstHash + i])) {
       // A saturated counter could never be decremented again; clear on the first report.
       filter_.clear();
-      return false;
+      return InsertResult::Saturated;
     }
   }
-  return true;
+  return InsertResult::Inserted;
 }
 
-void StyleAncestorFilter::appendKeyHashes(Entity treeEntity) {
+bool StyleAncestorFilter::appendKeyHashes(Entity treeEntity) {
   const RuleIndexElementView element(registry_, treeEntity, StyleDataEntity(registry_, treeEntity));
-  // One key past the cap is enough to disable the filter, so later keys are neither lowercased
-  // nor hashed.
-  const std::size_t end = hashes_.size() + kMaxKeysPerAncestor + 1;
-  const auto room = [&] { return hashes_.size() < end; };
-  hashes_.push_back(lowercasedHash(Kind::Type, element.typeName()));
-  if (const std::string_view id = element.id(); !id.empty()) {
-    hashes_.push_back(RuleIndex::AncestorKeyHash(Kind::Id, id));
+  const std::string_view id = element.id();
+  const std::string_view classes = element.className();
+  const std::size_t attributes = element.attributeCount();
+  const std::size_t fixedKeys = 1 + !id.empty();
+  if (attributes > kMaxKeysPerAncestor - fixedKeys || classes.size() > kMaxKeyBytesPerAncestor) {
+    return false;
   }
-  element.forEachClassName([&](std::string_view name) {
-    if (room()) {
-      hashes_.push_back(RuleIndex::AncestorKeyHash(Kind::Class, name));
+
+  std::size_t remainingBytes = kMaxKeyBytesPerAncestor - classes.size();
+  if (!appendKeyHash(Kind::Type, element.typeName(), remainingBytes) ||
+      (!id.empty() && !appendKeyHash(Kind::Id, id, remainingBytes))) {
+    return false;
+  }
+
+  std::size_t remainingClasses = kMaxKeysPerAncestor - fixedKeys - attributes;
+  for (const std::string_view name : StringUtils::SplitAsciiWhitespace(classes)) {
+    if (remainingClasses == 0) {
+      return false;
     }
-  });
+    --remainingClasses;
+    // The raw class text was already reserved above.
+    hashes_.push_back(RuleIndex::AncestorKeyHash(Kind::Class, name));
+  }
+
+  bool complete = true;
   element.forEachAttributeLocalName([&](std::string_view name) {
-    if (room()) {
-      hashes_.push_back(lowercasedHash(Kind::Attribute, name));
-    }
+    complete = complete && appendKeyHash(Kind::Attribute, name, remainingBytes);
   });
+  return complete;
+}
+
+bool StyleAncestorFilter::appendKeyHash(Kind kind, std::string_view name,
+                                        std::size_t& remainingBytes) {
+  if (name.size() > remainingBytes) {
+    return false;
+  }
+  remainingBytes -= name.size();
+  hashes_.push_back(kind == Kind::Id ? RuleIndex::AncestorKeyHash(kind, name)
+                                     : lowercasedHash(kind, name));
+  return true;
 }
 
 BloomHash StyleAncestorFilter::lowercasedHash(RuleIndexKey::Kind kind, std::string_view name) {
