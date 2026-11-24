@@ -226,6 +226,10 @@ std::optional<float> detail::treatAsHairline(const Paint& paint, float strokeWid
 
 void Painter::fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint& paint,
                        Transform transform, const Mask* mask, BlitterWrapper* wrapper) {
+  // Donner addition: an empty destination has no clip rectangle to build.
+  if (pixmap.size().isEmpty()) {
+    return;
+  }
   if (transform.isIdentity() && !detail::DrawTiler::required(pixmap.width(), pixmap.height())) {
     const auto clip = pixmap.size().toScreenIntRect(0, 0);
 
@@ -251,6 +255,10 @@ void Painter::fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint&
 void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                        FillRule fillRule, Transform transform, const Mask* mask,
                        BlitterWrapper* wrapper, const Rect* deviceAaClip) {
+  // Donner addition: an empty destination has no clip rectangle to build.
+  if (pixmap.size().isEmpty()) {
+    return;
+  }
   if (transform.isIdentity()) {
     // Skip empty paths and horizontal/vertical lines.
     const auto pathBounds = path.bounds();
@@ -497,6 +505,10 @@ void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Pain
 void Painter::strokeHairline(const Path& path, const Paint& paint, LineCap lineCap,
                              std::optional<SubMaskView> mask, MutableSubPixmapView& subpix,
                              BlitterWrapper* wrapper) {
+  // Donner addition: an empty destination has no clip rectangle to build.
+  if (subpix.size.isEmpty()) {
+    return;
+  }
   const auto clip = subpix.size.toScreenIntRect(0, 0);
   auto blitter = pipeline::RasterPipelineBlitter::create(paint, mask, &subpix);
   if (!blitter.has_value()) {

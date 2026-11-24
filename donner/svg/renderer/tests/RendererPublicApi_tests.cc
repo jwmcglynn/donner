@@ -6686,6 +6686,61 @@ TEST(RendererPublicApiTest, TinySkiaDrawBitmapBlitsAutoBilinearly) {
   EXPECT_THAT(cubicDifferences, Gt(0));
 }
 
+// A frame whose target the surface budget refused has an empty surface. Drawing a bitmap into it,
+// scaled or not, does nothing and leaves the frame empty instead of reading a clip rectangle the
+// empty surface cannot have.
+TEST(RendererPublicApiTest, TinySkiaDrawBitmapIntoARefusedFrameTargetDrawsNothing) {
+  RendererTinySkia renderer;
+  renderer.replaceSurfaceBudgetLimitsForTesting(
+      {.bytes = 16u * 16u * 4u / 2u, .surfaces = RendererSurfaceBudget::kMaximumSurfaces});
+  renderer.beginFrame(RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = 1.0});
+  ASSERT_TRUE(renderer.resourceStats().surfaceBudgetRejected)
+      << "the frame target must be refused for this case to mean anything";
+  ImageParams params;
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(2, 2));
+  renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(16, 16));
+  renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
+  renderer.endFrame();
+  EXPECT_TRUE(renderer.takeSnapshot().empty());
+}
+
+// The software renderer's frame is empty when the surface budget refuses its target. Paths and
+// rectangles drawn into it return before rasterizing. An image drawn at its own size reaches the
+// rasterizer's pixmap draw and its rectangle fill, which must return without building a clip from
+// the empty size, and a scaled image takes the transformed fill.
+TEST(RendererPublicApiTest, TinySkiaDrawsIntoARefusedFrameTargetDrawNothing) {
+  RendererTinySkia renderer;
+  renderer.replaceSurfaceBudgetLimitsForTesting(
+      {.bytes = 16u * 16u * 4u / 2u, .surfaces = RendererSurfaceBudget::kMaximumSurfaces});
+  renderer.beginFrame(RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = 1.0});
+  ASSERT_TRUE(renderer.resourceStats().surfaceBudgetRejected)
+      << "the frame target must be refused for this case to mean anything";
+
+  const Path shape =
+      PathBuilder().moveTo({2.0, 2.0}).lineTo({12.0, 3.0}).lineTo({10.0, 12.0}).closePath().build();
+  PaintParams fill;
+  fill.fill = PaintServer::Solid{css::Color(css::RGBA(255, 0, 0, 255))};
+  fill.stroke = PaintServer::None{};
+  renderer.setPaint(fill);
+  renderer.drawPath(PathShape{.path = &shape}, StrokeParams{});
+  renderer.drawRect(Box2d::FromXYWH(1.0, 1.0, 8.0, 8.0), StrokeParams{});
+
+  SetStrokePaint(renderer);
+  renderer.drawPath(PathShape{.path = &shape}, StrokeParams{.strokeWidth = 3.0});
+  renderer.drawPath(PathShape{.path = &shape}, StrokeParams{.strokeWidth = 0.5});
+
+  const ImageResource image{
+      {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255}, 2, 2};
+  ImageParams params;
+  params.targetRect = Box2d::FromXYWH(0.0, 0.0, 2.0, 2.0);
+  renderer.drawImage(image, params);
+  params.targetRect = Box2d::FromXYWH(0.0, 0.0, 16.0, 16.0);
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+  EXPECT_TRUE(renderer.takeSnapshot().empty());
+}
+
 TEST(RendererPublicApiTest, RendererInterfaceDefaultMethodsRejectUnsupportedTexturePaths) {
   DefaultMethodRenderer renderer;
   DefaultTextureSnapshot texture;

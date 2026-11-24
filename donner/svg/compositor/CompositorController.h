@@ -1405,6 +1405,12 @@ private:
   /// True when a tile-only drag frame may skip the main compose: nothing reads the main frame,
   /// and no slot is drawn directly into it in place of a tile.
   [[nodiscard]] bool canSkipMainCompose(const RenderViewport& viewport) const;
+  /// True when the frame's surface budget has latched a refusal by the time the frame target is
+  /// prepared, which leaves the main renderer without a target this frame.
+  [[nodiscard]] bool frameTargetRefused() const;
+  /// Starts the main compose: false when the frame may skip it (\ref canSkipMainCompose) or when
+  /// the budget refused the frame target, which the compose then closes without drawing.
+  [[nodiscard]] bool beginMainCompose(const RenderViewport& viewport);
   /// Records that the main renderer drew the whole document flat this frame, unless the frame's
   /// surface budget refused its target.
   void noteFlatFrameDrawn();

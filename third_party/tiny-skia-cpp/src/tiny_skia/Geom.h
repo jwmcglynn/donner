@@ -30,6 +30,9 @@ class IntSize {
 
   constexpr LengthU32 width() const { return width_; }
   constexpr LengthU32 height() const { return height_; }
+  /// True when either dimension is zero, as for a default-constructed or refused surface. Such a
+  /// size has no valid rectangle: \ref toScreenIntRect and \ref toRect require a non-empty size.
+  [[nodiscard]] constexpr bool isEmpty() const { return width_ == 0u || height_ == 0u; }
   [[nodiscard]] ScreenIntRect toScreenIntRect(std::uint32_t x, std::uint32_t y) const;
   [[nodiscard]] std::optional<IntRect> toIntRect(std::int32_t x, std::int32_t y) const;
   [[nodiscard]] Rect toRect() const;

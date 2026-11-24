@@ -1754,6 +1754,32 @@ bool CompositorController::composedFrameStandsInForTiles() const {
          spansHavePayloadOrDrawDirectly(canvasSize);
 }
 
+bool CompositorController::beginMainCompose(const RenderViewport& viewport) {
+  // Tile-only callers do not consume the main frame. Keep the cold-frame guard and force
+  // composition when pixel verification reads the main renderer as its actual image.
+  if (canSkipMainCompose(viewport)) {
+    return false;
+  }
+  ++lastRenderFrameStats_.mainComposeCount;
+  // The compose replaces any flat frame drawn earlier this frame.
+  flatFrameDrawnThisFrame_ = false;
+  renderer().beginFrame(viewport);
+  if (!frameTargetRefused()) {
+    return true;
+  }
+  // The budget refused the frame target, so there is no frame to draw into: drawing the tiles or
+  // the direct slots would write into a missing surface. Nothing is composed this frame.
+  renderer().endFrame();
+  mainFrameComposedThisFrame_ = false;
+  mainRendererHasCachedFrame_ = false;
+  return false;
+}
+
+bool CompositorController::frameTargetRefused() const {
+  const RendererResourceStats stats = renderer().resourceStats();
+  return stats.surfaceBudgetSupported && stats.surfaceBudgetRejected;
+}
+
 bool CompositorController::canSkipMainCompose(const RenderViewport& viewport) const {
   // A slot presented directly after budget strikes has no tile: only the composed frame shows it.
   return skipMainComposeDuringSplit_ && hasSplitStaticLayers() && mainRendererHasCachedFrame_ &&
@@ -1852,17 +1878,10 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
                                          const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::composeLayersImpl");
 
-  // Tile-only callers do not consume the main frame. Keep the cold-frame guard and force
-  // composition when pixel verification reads the main renderer as its actual image.
-  if (canSkipMainCompose(viewport)) {
+  const auto composeStart = std::chrono::steady_clock::now();
+  if (!beginMainCompose(viewport)) {
     return;
   }
-
-  const auto composeStart = std::chrono::steady_clock::now();
-  ++lastRenderFrameStats_.mainComposeCount;
-  // The compose replaces any flat frame drawn earlier this frame.
-  flatFrameDrawnThisFrame_ = false;
-  renderer().beginFrame(viewport);
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {
     if (segmentIndex >= staticSpanPlans_.size()) {

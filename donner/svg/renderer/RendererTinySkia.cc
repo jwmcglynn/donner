@@ -3339,7 +3339,8 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
   if (rejectedFilterDepth_ != 0) {
     return;
   }
-  if (bitmap.empty()) {
+  // A surface the frame's budget refused is empty; there is nothing to draw into.
+  if (bitmap.empty() || currentPixmap().size().isEmpty()) {
     return;
   }
   if (!drawBudget_->reserve(
