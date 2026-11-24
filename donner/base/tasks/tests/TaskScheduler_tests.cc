@@ -686,5 +686,31 @@ TEST_P(SchedulerStressTest, ConcurrentSubmittersAndWorkerSpawnsRunEveryTaskOnce)
   }
 }
 
+// Schedulers are destroyed while their idle workers go to sleep: the shutdown pairing races the
+// sleep steps on every iteration. A destructor whose join never returns fails at the hang guard.
+TEST_P(SchedulerStressTest, ShutdownRacingIdleWorkersAlwaysJoins) {
+  const int iterations = GetParam().rounds / 10;
+  for (int i = 0; i < iterations; ++i) {
+    auto scheduler = std::make_unique<TaskScheduler>(
+        TaskSchedulerOptions{.workerCount = GetParam().workers}, hooks());
+    if (i % 2 == 0) {
+      Event ran;
+      Peer::Spawn(*scheduler, [&] { ran.set(); });
+      ASSERT_TRUE(ran.wait());
+    }
+    Event destroyed;
+    std::thread destroyer([&] {
+      scheduler.reset();
+      destroyed.set();
+    });
+    const bool joined = destroyed.wait();
+    if (!joined) {
+      destroyer.detach();
+      FAIL() << "iteration " << i << ": the destructor's join never returned";
+    }
+    destroyer.join();
+  }
+}
+
 }  // namespace
 }  // namespace donner::tasks
