@@ -16,6 +16,7 @@ donner_cc_library(
     ],
     hdrs = [
         "BezierUtils.h",
+        "BloomFilter.h",
         "Box.h",
         "ChunkedString.h",
         "ClassicNumberStream.h",
@@ -287,6 +288,7 @@ donner_cc_test(
         "tests/AsyncifySuspendProbe_tests.cc",
         "tests/BaseTestUtils_tests.cc",
         "tests/BezierUtils_tests.cc",
+        "tests/BloomFilter_tests.cc",
         "tests/Box_tests.cc",
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
@@ -417,6 +419,17 @@ donner_cc_fuzzer(
         "tests/BezierUtils_fuzzer.cc",
     ],
     corpus = "tests/bezier_utils_corpus",
+    deps = [
+        ":base",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "bloom_filter_fuzzer",
+    srcs = [
+        "tests/BloomFilter_fuzzer.cc",
+    ],
+    corpus = "tests/bloom_filter_corpus",
     deps = [
         ":base",
     ],

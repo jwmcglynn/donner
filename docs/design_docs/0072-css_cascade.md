@@ -201,7 +201,6 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 - Land narrowed invalidation (Milestone A5) and the matcher constant factors (Milestone A4), which
   follows the rule index.
-- Land the base-library Bloom filter (Milestone A6), which has no dependency, in parallel.
 
 ## Implementation Plan
 
@@ -295,8 +294,9 @@ including tests and review fixes. "After" names the milestones that must land fi
   - Done when: the edit goals are met, the differential edit test is green on all three
     comparisons for every edit routed to the narrowed path, and every eligible edit in it took
     the retained update.
-- [ ] Milestone A6: Base-library Bloom filter (2 days). No dependency.
-  - [ ] Add `donner/base/BloomFilter.h` with `BloomFilter`, `CountingBloomFilter` and `BloomHash`,
+- [x] Milestone A6: Base-library Bloom filter (2 days,
+      [#2735](https://github.com/jwmcglynn/donner/pull/2735)). No dependency.
+  - [x] Add `donner/base/BloomFilter.h` with `BloomFilter`, `CountingBloomFilter` and `BloomHash`,
         unit tests in `//donner/base:base_tests` and `//donner/base:bloom_filter_fuzzer`.
   - Done when: the no-false-negative property test, the counting-removal and saturation tests,
     the deterministic false-positive-rate test and the fuzzer are green.
@@ -1294,17 +1294,22 @@ header in the `//donner/base:base` target, tests in `tests/BloomFilter_tests.cc`
 - `BloomHash`: a 32-bit value that callers build once and reuse. `BloomHash::Of(bytes, salt)`
   computes a fixed, documented, platform-independent hash of a `std::string_view` (not
   `std::hash`, whose values differ between standard libraries, so tests and fuzzer corpora are
-  reproducible).
+  reproducible): 32-bit FNV-1a over the salt's four little-endian bytes and then the key bytes,
+  followed by the MurmurHash3 `fmix32` finalizer.
   The salt separates key kinds that share spelling, such as the tag `g` and the class `g`.
 - `BloomFilter<kLog2Bits>`: a plain bit-array filter with `insert(BloomHash)`,
   `mayContain(BloomHash)` and `clear()`, for sets that only grow.
 - `CountingBloomFilter<kLog2Slots>`: 8-bit saturating counters with `insert`, `remove`,
-  `mayContain` and `clear`. A counter that reaches 255 is never decremented again, so removal
-  cannot create a false negative; the cost is a stuck false positive until `clear()`.
+  `mayContain` and `clear`. `insert` reports whether either probed counter is saturated after
+  adding both probe contributions, including when the probes coincide. A counter that reaches 255
+  is never decremented again, so removal cannot create a false negative; the cost is a stuck false
+  positive until `clear()`. `//donner/base:base_tests` covers the saturation signal and removal.
 - Both derive their two probe positions from disjoint bit ranges of the 32-bit hash (bits 0 to
   `k-1` and `k` to `2k-1`), as Stylo does, so `kLog2Bits` and `kLog2Slots` are at most 16 and a
   `static_assert` enforces it. Sizing guidance in the header gives the expected false-positive
-  rate for a number of keys, and `expectedFalsePositiveRate(keys)` computes it.
+  rate for a number of keys, and `expectedFalsePositiveRate(keys)` estimates it assuming
+  uniform probes and independent occupancy checks. Retained saturated counters after removal
+  can raise the counting filter's false-positive rate.
 
 The documented invariant is: after any sequence of operations in which every `remove(h)` follows
 a matching `insert(h)`, `mayContain(h)` is true for every `h` inserted more times than removed.
@@ -1355,10 +1360,10 @@ ancestors from the outermost down. A counter that would reach 255 saturates and 
 be decremented, which would leave the filter's content depending on history rather than on E. So
 when an insertion would saturate a counter, the filter is cleared and disabled (every probe
 answers "may contain") until synchronization pops back above the ancestor whose insertion
-saturated it, and then rebuilt from the chain. Saturation needs 255 live insertions into one
-counter, so it happens only on very deep chains of repeated keys. With that rule, whether the
-filter is enabled and what it contains are functions of E's ancestor chain alone, so the filter is
-correct in every traversal mode and makes the same decisions in the serial and parallel passes:
+saturated it, and then rebuilt from the chain. Saturation needs 255 live probe contributions to
+one counter. An insertion contributes two when its probes coincide. With that rule, whether the
+filter is enabled and what it contains are functions of E's ancestor chain alone, so the filter
+is correct in every traversal mode and makes the same decisions in the serial and parallel passes:
 
 - Full pass in storage order: consecutive elements usually share most of their chain, so the
   cost is the difference between two chains. A later change may visit in tree order to make it
