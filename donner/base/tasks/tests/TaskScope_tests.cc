@@ -474,13 +474,22 @@ TEST(TaskScopeInterleavingTest, ALateChangeToAReusedParkerIsASpuriousWake) {
   EXPECT_TRUE(FinishCreator(second, state));
 }
 
+/// The worker counts the parker pool's liveness cases run at.
+class PoolWorkerCounts : public testing::TestWithParam<std::size_t> {};
+
+INSTANTIATE_TEST_SUITE_P(Workers, PoolWorkerCounts, testing::Values(1, 2, 4),
+                         [](const testing::TestParamInfo<std::size_t>& info) {
+                           return "Workers" + std::to_string(info.param);
+                         });
+
 // A scheduler destroyed before a thread that holds one of its pooled parkers exits: the thread's
 // entry keeps the pool alive, and the thread's exit returns the slot and frees the pool.
-TEST(TaskScopeTest, ASchedulerDestroyedBeforeAThreadHoldingItsParkerExits) {
+TEST_P(PoolWorkerCounts, ASchedulerDestroyedBeforeAThreadHoldingItsParkerExits) {
   const std::size_t poolsBefore = ParkerPool::LiveCountForTesting();
   std::size_t poolsAfterSchedulerGone = 0;
   std::thread thread([&] {
-    auto scheduler = std::make_unique<TaskScheduler>(TaskSchedulerOptions{.workerCount = 1});
+    auto scheduler =
+        std::make_unique<TaskScheduler>(TaskSchedulerOptions{.workerCount = GetParam()});
     {
       TaskScope scope(*scheduler);
       scope.spawn([] {});
@@ -495,7 +504,7 @@ TEST(TaskScopeTest, ASchedulerDestroyedBeforeAThreadHoldingItsParkerExits) {
 
 // One non-worker creating, using and destroying schedulers in turn: each registration sweeps the
 // pools of destroyed schedulers, so the thread never holds more than the current one.
-TEST(TaskScopeTest, OneThreadUsingManySchedulersInTurnHoldsOnlyTheCurrentPool) {
+TEST_P(PoolWorkerCounts, OneThreadUsingManySchedulersInTurnHoldsOnlyTheCurrentPool) {
   constexpr int kSchedulers = 1000;
   std::vector<std::size_t> poolsAfterRegistration;
   std::size_t poolsAtEnd = 0;
@@ -503,12 +512,12 @@ TEST(TaskScopeTest, OneThreadUsingManySchedulersInTurnHoldsOnlyTheCurrentPool) {
   std::thread thread([&] {
     poolsBefore = ParkerPool::LiveCountForTesting();
     for (int i = 0; i < kSchedulers; ++i) {
-      TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1});
+      TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = GetParam()});
       TaskScope scope(scheduler);
       poolsAfterRegistration.push_back(ParkerPool::LiveCountForTesting());
       scope.spawn([] {});
     }
-    TaskScheduler fresh(TaskSchedulerOptions{.workerCount = 1});
+    TaskScheduler fresh(TaskSchedulerOptions{.workerCount = GetParam()});
     TaskScope scope(fresh);
     poolsAtEnd = ParkerPool::LiveCountForTesting();
   });
