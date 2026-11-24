@@ -24,11 +24,28 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "task_scheduler",
-    srcs = ["TaskScheduler.cc"],
-    hdrs = ["TaskScheduler.h"],
+    name = "parker_pool",
+    srcs = ["ParkerPool.cc"],
+    hdrs = ["ParkerPool.h"],
     deps = [
         ":parker",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "task_scheduler",
+    srcs = [
+        "TaskScheduler.cc",
+        "TaskScope.cc",
+    ],
+    hdrs = [
+        "TaskScheduler.h",
+        "TaskScope.h",
+    ],
+    deps = [
+        ":parker",
+        ":parker_pool",
         ":task_record",
         ":work_stealing_deque",
         "//donner/base",
@@ -56,15 +73,58 @@ donner_cc_test(
     ],
 )
 
+donner_cc_library(
+    name = "scheduler_test_utils",
+    testonly = 1,
+    hdrs = ["tests/SchedulerTestUtils.h"],
+    deps = [
+        ":task_scheduler",
+        "//donner/base:stall_guard",
+    ],
+)
+
 donner_cc_test(
     name = "task_scheduler_tests",
     srcs = ["tests/TaskScheduler_tests.cc"],
     deps = [
+        ":scheduler_test_utils",
         ":task_scheduler",
         "//donner/base:gtest_timeout_main",
         "//donner/base:stall_guard",
         "@com_google_gtest//:gtest",
     ],
+)
+
+donner_cc_test(
+    name = "task_scope_tests",
+    srcs = ["tests/TaskScope_tests.cc"],
+    deps = [
+        ":parker_pool",
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "//donner/base:stall_guard",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "parker_pool_tests",
+    srcs = ["tests/ParkerPool_tests.cc"],
+    deps = [
+        ":parker_pool",
+        ":scheduler_test_utils",
+        "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+# The main thread waits on a scope and destroys the scheduler before returning; its parker entry
+# is destroyed after main() returns. Meaningful under AddressSanitizer.
+donner_cc_test(
+    name = "scope_main_thread_exit_test",
+    srcs = ["tests/ScopeMainThreadExit.cc"],
+    deps = [":task_scheduler"],
 )
 
 donner_cc_test(
