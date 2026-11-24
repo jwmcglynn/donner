@@ -12,6 +12,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/resources/EmbeddedFontProvider.h"
 #include "donner/svg/resources/FontCatalog.h"
@@ -401,7 +402,10 @@ TEST(NestedSvgFontResourcesTest, RepeatedChildTargetsReuseCollectionWithinOnePre
 
 TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregateCeiling) {
   constexpr int kTargets = 512;
-  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  // The text keeps every collection on the dependency graph: a document with nothing
+  // font-dependent is answered without one (see the test below).
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text>t</text>)";
   for (int i = 0; i < kTargets; ++i) {
     source += "<rect id='r" + std::to_string(i) + "' width='1' height='1'/>";
   }
@@ -411,10 +415,14 @@ TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregate
   testing::NiceMock<tests::MockRendererInterface> backend;
   RendererDriver driver(backend);
   driver.draw(*parsed);
+  // Caller-owned counters let the cache start with three quarters of its ceiling spent, so the
+  // test pays for the last quarter only; the graph and its collections are charged the same way.
   components::FontResourceGraphCache::Stats work;
+  work.work = components::FontResourceGraphCache::kMaximumWork -
+              components::FontResourceGraphCache::kMaximumWork / 4;
   components::FontResourceGraphCache cache(&work);
   bool rejected = false;
-  for (int i = 0; i < kTargets; ++i) {
+  for (int i = 0; i < kTargets && !rejected; ++i) {
     const auto target = parsed->querySelector("#r" + std::to_string(i));
     ASSERT_TRUE(target.has_value());
     rejected |=
@@ -426,6 +434,181 @@ TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregate
   EXPECT_GT(work.targetCollections, 1u);
   EXPECT_LT(work.targetCollections, kTargets);
   EXPECT_LE(work.work, components::FontResourceGraphCache::kMaximumWork);
+
+  // A document with nothing font-dependent is answered without a graph by a fresh cache, but once
+  // the ceiling is spent the same collection reports the limit instead of an empty answer.
+  auto textFree = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect id="target" width="4" height="4"/></svg>)");
+  ASSERT_THAT(textFree, testing::Optional(testing::_));
+  driver.draw(*textFree);
+  const auto textFreeTarget = textFree->querySelector("#target");
+  ASSERT_THAT(textFreeTarget, testing::Optional(testing::_));
+  const Entity textFreeEntity = textFreeTarget->unsafeEntityHandle().entity();
+  components::FontResourceGraphCache::Stats fresh;
+  EXPECT_FALSE(components::FontResourceGraphCache(&fresh)
+                   .collect(textFree->handle(), textFreeEntity)
+                   .resourceLimit);
+  EXPECT_EQ(fresh.fontIndependentCollections, 1u) << "a fresh cache answers through the shortcut";
+  const auto limited = cache.collect(textFree->handle(), textFreeEntity);
+  EXPECT_TRUE(limited.resourceLimit) << "a spent ceiling must be reported, not an empty answer";
+  EXPECT_THAT(limited.dependencies, IsEmpty());
+  EXPECT_EQ(work.fontIndependentCollections, 0u);
+}
+
+// The shortcut charges one unit per rendering instance it scans, so repeated answers alone use up
+// the ceiling at a rate that grows with the document.
+TEST(NestedSvgFontResourcesTest, ShortcutChargesItsScanPerRenderingInstance) {
+  const auto rects = [](int count) {
+    std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+    for (int i = 0; i < count; ++i) {
+      source += "<rect id='r" + std::to_string(i) + "' width='1' height='1'/>";
+    }
+    return source + "</svg>";
+  };
+  auto small = ParseDocument(rects(10));
+  auto large = ParseDocument(rects(110));
+  ASSERT_THAT(small, testing::Optional(testing::_));
+  ASSERT_THAT(large, testing::Optional(testing::_));
+  testing::NiceMock<tests::MockRendererInterface> backend;
+  RendererDriver driver(backend);
+  driver.draw(*small);
+  driver.draw(*large);
+  const auto target = [](SVGDocument& document) {
+    return document.querySelector("#r0")->unsafeEntityHandle().entity();
+  };
+  const auto charge = [&](SVGDocument& document) {
+    components::FontResourceGraphCache::Stats stats;
+    components::FontResourceGraphCache cache(&stats);
+    (void)cache.collect(document.handle(), target(document));
+    EXPECT_EQ(stats.fontIndependentCollections, 1u);
+    return stats.work;
+  };
+  const std::size_t smallCharge = charge(*small);
+  EXPECT_EQ(charge(*large) - smallCharge, 100u) << "one unit per added rendering instance";
+
+  // Caller-owned counters let the cache start with all but three answers' worth of its ceiling
+  // spent: three answers fit and the fourth reports the limit.
+  components::FontResourceGraphCache::Stats work;
+  work.work = components::FontResourceGraphCache::kMaximumWork - 3 * smallCharge;
+  components::FontResourceGraphCache cache(&work);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FALSE(cache.collect(small->handle(), target(*small)).resourceLimit) << "answer " << i;
+  }
+  EXPECT_EQ(work.fontIndependentCollections, 3u);
+  EXPECT_TRUE(cache.collect(small->handle(), target(*small)).resourceLimit);
+  EXPECT_EQ(work.fontIndependentCollections, 3u);
+}
+
+TEST(NestedSvgFontResourcesTest, FontIndependentTargetsAreAnsweredWithinTheCeilingWithoutAGraph) {
+  constexpr int kTargets = 128;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  for (int i = 0; i < kTargets; ++i) {
+    source += "<rect id='r" + std::to_string(i) + "' width='1' height='1'/>";
+  }
+  source += "</svg>";
+  auto parsed = ParseDocument(source);
+  ASSERT_THAT(parsed, testing::Optional(testing::_));
+  testing::NiceMock<tests::MockRendererInterface> backend;
+  RendererDriver driver(backend);
+  driver.draw(*parsed);
+  components::FontResourceGraphCache::Stats work;
+  components::FontResourceGraphCache cache(&work);
+  for (int i = 0; i < kTargets; ++i) {
+    const auto target = parsed->querySelector("#r" + std::to_string(i));
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    const auto collection = cache.collect(parsed->handle(), target->unsafeEntityHandle().entity());
+    EXPECT_THAT(collection.dependencies, IsEmpty());
+    EXPECT_FALSE(collection.resourceLimit) << "target " << i;
+  }
+  EXPECT_EQ(work.graphBuilds, 0u);
+  EXPECT_EQ(work.fontIndependentCollections, static_cast<std::size_t>(kTargets));
+  EXPECT_GT(work.work, 0u) << "the shortcut's scan is charged against the ceiling";
+  EXPECT_FALSE(work.resourceLimit) << "the shortcut stays within the ceiling";
+}
+
+// A text-free document whose filters can still draw an element (an `feImage` fragment, or an
+// element named in a filter function list) reports that element as unprepared until it renders, so
+// such a document keeps the full collection, and the cache answers exactly as the graph does.
+TEST(NestedSvgFontResourcesTest, FilterElementReferencesKeepTheFullCollection) {
+  constexpr std::string_view kFilterImage = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+      <rect id="r" width="4" height="4"/>
+      <filter id="f"><feImage href="#r"/></filter>
+      <g id="target" filter="url(#f)"><rect width="10" height="10"/></g>
+    </svg>)svg";
+  constexpr std::string_view kFilterFunctionList = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+      <filter id="f"><feOffset dx="1"/></filter>
+      <g id="target" style="filter: url(#f) blur(1px)"><rect width="10" height="10"/></g>
+    </svg>)svg";
+  for (const std::string_view source : {kFilterImage, kFilterFunctionList}) {
+    SCOPED_TRACE(source);
+    auto parsed = ParseDocument(source);
+    ASSERT_THAT(parsed, testing::Optional(testing::_));
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(*parsed, /*verbose=*/false, warnings);
+    const Registry& registry = parsed->registry();
+    EXPECT_FALSE(components::RendersNothingFontDependent(registry))
+        << "a filter that draws an element can depend on a font";
+
+    const auto target = parsed->querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    const Entity entity = target->unsafeEntityHandle().entity();
+    components::FontResourceGraphCache::Stats work;
+    components::FontResourceGraphCache cache(&work);
+    const auto cached = cache.collect(parsed->handle(), entity);
+    const auto full = components::FontResourceGraph(registry).collect(registry, entity);
+    EXPECT_EQ(work.fontIndependentCollections, 0u);
+    EXPECT_TRUE(full.needsRender) << "the referenced element is unprepared before it renders";
+    EXPECT_EQ(cached.needsRender, full.needsRender);
+    EXPECT_THAT(cached.dependencies, testing::ElementsAreArray(full.dependencies));
+  }
+}
+
+// A host without text that draws an SVG image whose document has text depends on that text's
+// fonts through the image, so it keeps the full collection, and the cache answers exactly as the
+// graph does for both purposes.
+TEST(NestedSvgFontResourcesTest, SvgImageOfTextKeepsTheFullCollection) {
+  auto store = std::make_shared<CatalogEncodedFontStore>();
+  FontCatalog catalog(store);
+  ScopedDefaultProvider defaults(catalog);
+  auto parsed = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><image id="target" width="160" height="70" href=")" +
+      ChildUri() + R"("/></svg>)");
+  ASSERT_THAT(parsed, testing::Optional(testing::_));
+  testing::NiceMock<tests::MockRendererInterface> backend;
+  ON_CALL(backend, drawText(testing::_, testing::_, testing::_))
+      .WillByDefault(
+          [](Registry& registry, const components::ComputedTextComponent& text, const TextParams&) {
+            ASSERT_FALSE(text.spans.empty());
+            (void)registry.ctx().get<TextEngine>().ensureComputedTextGeometryComponent(
+                EntityHandle(registry, text.spans.front().sourceEntity));
+          });
+  RendererDriver driver(backend);
+  driver.draw(*parsed);
+  driver.draw(*parsed);
+  const Registry& registry = parsed->registry();
+  EXPECT_FALSE(components::RendersNothingFontDependent(registry))
+      << "an SVG image of text can depend on a font";
+
+  const auto target = parsed->querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const Entity entity = target->unsafeEntityHandle().entity();
+  const components::FontResourceGraph graph(registry);
+  for (const auto purpose : {components::FontResourceGraph::Purpose::CompleteTarget,
+                             components::FontResourceGraph::Purpose::RenderedFrame}) {
+    SCOPED_TRACE(purpose == components::FontResourceGraph::Purpose::RenderedFrame ? "rendered"
+                                                                                  : "complete");
+    components::FontResourceGraphCache::Stats work;
+    components::FontResourceGraphCache cache(&work);
+    const auto cached = cache.collect(parsed->handle(), entity, purpose);
+    const auto full = graph.collect(registry, entity, purpose);
+    EXPECT_EQ(work.fontIndependentCollections, 0u);
+    EXPECT_THAT(full.dependencies, Not(IsEmpty())) << "the image's text names a face";
+    EXPECT_THAT(cached.dependencies, testing::ElementsAreArray(full.dependencies));
+    EXPECT_EQ(cached.needsRender, full.needsRender);
+    EXPECT_EQ(cached.resourceLimit, full.resourceLimit);
+  }
 }
 
 TEST(NestedSvgFontResourcesTest, TwoStandaloneRangesCannotQualifyAWholeDocument) {

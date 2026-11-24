@@ -51,6 +51,7 @@ donner_cc_test(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_utils",
         "//donner/svg/resources:font_catalog",
         "//donner/svg/resources:font_manager",
         "//donner/svg/text:text_engine",
@@ -2541,12 +2542,15 @@ donner_perf_cc_test(
     # macOS that took up to 49 s in passing runs and exhausted a 60 s timeout in the nightly.
     wallclock_timeout = "moderate",
     deps = [
+        ":mock_renderer_interface",
         ":sprite_field_scene",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/components:font_resource_graph",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_utils",
         "@com_google_gtest//:gtest_main",
     ],

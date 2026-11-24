@@ -6,6 +6,7 @@
 #include <map>
 #include <tuple>
 #include <unordered_set>
+#include <variant>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -16,7 +17,9 @@
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/resources/FontManager.h"
 
@@ -767,6 +770,137 @@ void FontResourceGraphCache::finishRefresh(const SVGDocumentHandle& document,
   entry.completedScope = HasCompletedCurrentScope(document->registry());
 }
 
+namespace {
+
+/// Whether \p registry holds a component of any of \p Types.
+template <typename... Types>
+bool HasAnyComponent(const Registry& registry) {
+  return (... || [&registry] {
+    const auto* storage = registry.storage<Types>();
+    return storage != nullptr && !storage->empty();
+  }());
+}
+
+/// Whether \p registry holds a component that makes its rendering depend on a font: constant
+/// time, the first half of \ref RendersNothingFontDependent.
+bool HasFontDependentComponents(const Registry& registry) {
+  // An overflowed font dependency list is a resource limit the full collection reports.
+  if (const auto* manager = registry.ctx().find<FontManager>();
+      manager != nullptr && manager->fontDependenciesOverflowed()) {
+    return true;
+  }
+  return HasAnyComponent<TextComponent, TextRootComponent, ComputedTextComponent,
+                         ComputedTextGeometryComponent, FontMetricDependenciesComponent,
+                         LoadedSVGImageComponent, ExternalUseComponent>(registry);
+}
+
+/// Whether a paint capture in \p registry recorded a face, a child document or a resource limit.
+/// Filter preparation stamps an empty record on every filtered element, which adds nothing to a
+/// collection. This deliberately overlaps the SVG image and external use checks: drawing a nested
+/// document records it as a child here, so each check catches a document the other would miss.
+bool HasPaintDependencies(const Registry& registry) {
+  const auto* paints = registry.storage<FontPaintDependenciesComponent>();
+  if (paints == nullptr) {
+    return false;
+  }
+  return std::any_of(
+      paints->begin(), paints->end(), [](const FontPaintDependenciesComponent& paint) {
+        return !paint.fontDependencies.empty() || !paint.children.empty() || paint.resourceLimit;
+      });
+}
+
+/// Work units of the filter, paint-capture and render-tree scans in
+/// \ref RendersNothingFontDependent: one per filter, filter graph node, paint capture, rendering
+/// instance and filter function list entry, charged like any other collection work so repeated
+/// shortcut answers stay within the ceiling.
+std::size_t FontIndependenceScanWork(const Registry& registry) {
+  std::size_t work = 1;
+  if (const auto* filters = registry.storage<ComputedFilterComponent>()) {
+    for (const auto& [entity, filter] : filters->each()) {
+      work += 1 + filter.filterGraph.nodes.size();
+    }
+  }
+  if (const auto* instances = registry.storage<RenderingInstanceComponent>()) {
+    for (const auto& [entity, instance] : instances->each()) {
+      const auto* effects = instance.resolvedFilter
+                                ? std::get_if<std::vector<FilterEffect>>(&*instance.resolvedFilter)
+                                : nullptr;
+      work += 1 + (effects != nullptr ? effects->size() : 0u);
+    }
+  }
+  if (const auto* paints = registry.storage<FontPaintDependenciesComponent>()) {
+    work += paints->size();
+  }
+  return work;
+}
+
+/// Whether a filter graph in \p registry has an `feImage`, which can render a fragment or a
+/// document that has text.
+bool HasFilterImage(const Registry& registry) {
+  const auto* filters = registry.storage<ComputedFilterComponent>();
+  if (filters == nullptr) {
+    return false;
+  }
+  for (const auto& [entity, filter] : filters->each()) {
+    if (std::any_of(filter.filterGraph.nodes.begin(), filter.filterGraph.nodes.end(),
+                    [](const auto& node) {
+                      return std::holds_alternative<filter_primitive::Image>(node.primitive);
+                    })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether a filter function list in \p registry names an element: a fragment the full
+/// collection reports as unprepared until it renders. The render tree, not the DOM, is scanned:
+/// it is what the collection walks, and a filter that has not been computed yet still appears
+/// here.
+bool HasFilterListElementReference(const Registry& registry) {
+  const auto* instances = registry.storage<RenderingInstanceComponent>();
+  if (instances == nullptr) {
+    return false;
+  }
+  for (const auto& [entity, instance] : instances->each()) {
+    const auto* effects = instance.resolvedFilter
+                              ? std::get_if<std::vector<FilterEffect>>(&*instance.resolvedFilter)
+                              : nullptr;
+    if (effects != nullptr &&
+        std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
+          return effect.is<FilterEffect::ElementReference>();
+        })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+bool RendersNothingFontDependent(const Registry& registry) {
+  return !HasFontDependentComponents(registry) && !HasPaintDependencies(registry) &&
+         !HasFilterImage(registry) && !HasFilterListElementReference(registry);
+}
+
+std::optional<FontResourceGraph::Collection> FontResourceGraphCache::collectFontIndependent(
+    const Registry& registry, Entity target, FontResourceGraph::Purpose purpose) {
+  if (HasFontDependentComponents(registry)) {
+    return std::nullopt;
+  }
+  if (!reserve(FontIndependenceScanWork(registry))) {
+    return FontResourceGraph::Collection{.resourceLimit = true};
+  }
+  if (!RendersNothingFontDependent(registry)) {
+    return std::nullopt;
+  }
+  ++stats_->fontIndependentCollections;
+  // No dependencies and nothing unprepared, but rendered-frame evidence still covers only what the
+  // completed scope drew, exactly as the full collection reports it.
+  return FontResourceGraph::Collection{.needsRender =
+                                           purpose == FontResourceGraph::Purpose::RenderedFrame &&
+                                           !HasRenderCoverage(registry, target)};
+}
+
 FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentHandle& document,
                                                               Entity target,
                                                               FontResourceGraph::Purpose purpose) {
@@ -776,6 +910,10 @@ FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentH
   if (purpose == FontResourceGraph::Purpose::RenderedFrame &&
       !HasCompletedCurrentScope(document->registry())) {
     return {.needsRender = true};
+  }
+  if (std::optional<FontResourceGraph::Collection> independent =
+          collectFontIndependent(document->registry(), target, purpose)) {
+    return *std::move(independent);
   }
   auto& entry = entries_[document.get()];
   if (!prepareEntry(entry, document)) {
