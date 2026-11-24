@@ -1873,6 +1873,36 @@ TEST_F(CompositorGoldenTest, AdmissionCountsThePresentedFrameWhileASlotIsDrawnDi
       CompositorController::PromoteResult::MemoryLimit);
 }
 
+// The budget holds two canvas-sized surfaces. The masked layer's tile is drawn first and fits; a
+// later span is then refused, and the refusal leaves no room for the frame target. The compose of
+// that frame must not draw the layer's tile into the missing target, and no frame of it may stand
+// in for the tiles.
+TEST_F(CompositorGoldenTest, ComposeOfAFrameWhoseTargetWasRefusedDrawsNothing) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+        <defs><mask id="m"><rect width="200" height="100" fill="white"/></mask></defs>
+        <rect width="200" height="100" fill="white"/>
+        <g opacity="0.5" mask="url(#m)"><rect width="200" height="100" fill="blue"/></g>
+        <rect x="150" y="60" width="10" height="10" fill="green"/>
+      </svg>)svg";
+  SVGDocument document = parseDocument(kSource);
+  SetSurfaceBudgetInCanvases(renderer_, 2.0);
+  CompositorController compositor(document, renderer_, CachedSpanBudgetConfig());
+  int refusedComposeFrames = 0;
+  for (int frame = 0; frame < 4; ++frame) {
+    SCOPED_TRACE(frame);
+    compositor.renderFrame(viewport_);
+    const bool refused = compositor.lastRenderFrameStats().textureAllocationFailureCount > 0;
+    if (refused && compositor.lastRenderFrameStats().mainComposeCount > 0) {
+      ++refusedComposeFrames;
+      EXPECT_FALSE(compositor.composedFrameStandsInForTiles())
+          << "a frame whose target was refused holds no document";
+    }
+  }
+  EXPECT_THAT(refusedComposeFrames, ::testing::Gt(0))
+      << "a frame must compose after a refusal for this case to mean anything";
+}
+
 // With no layers, every frame draws the document flat and then warms the canvas-sized root tile.
 // When the budget holds the flat frame's target but not that tile beside it, the tile is refused
 // in every frame and the tile set never completes. The flat frame is the whole document, so it
