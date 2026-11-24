@@ -117,14 +117,15 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         once from a seeded offset (0.5 day).
   - [ ] `TaskScope`, `AsyncTaskScope` and `Join`: scope records, watermarks, rules 1 to 3 and
         help within the margin (1.5 days).
-  - [x] The parker: the 32-bit word with the waiting bit and the epoch, its wait, and a notify
-        only when the bit was set (0.25 day): `//donner/base/tasks:parker` and
+  - [x] The parker: the word with the waiting bit and the epoch, its wait, and a notify only
+        when the bit was set (0.25 day): `//donner/base/tasks:parker` and
         `//donner/base/tasks:parker_tests`.
   - [ ] The sleep steps, the hand-off, the last-awake rule, the publish protocol in
         read-modify-write form, and drain before sleep (1.5 days).
-  - [ ] On Apple silicon, the 32-bit parker word's wait through libc++'s contention table measured
-        against an `std::int64_t` word on the native path, and the word changed there if the
-        table costs measurably (0.25 day).
+  - [x] The parker word as the standard library's native wait type, `std::int64_t` on Apple
+        and `std::int32_t` elsewhere, both widths tested on every platform, and the wake cost
+        of the contention table measured against the native path (0.25 day):
+        `//donner/base/tasks:parker_tests` and `//donner/base/tasks:parker_wait_bench`.
   - [x] Per-creator record pools, cross-thread record return and their bounds (0.75 day):
         `//donner/base/tasks:task_record` and `//donner/base/tasks:task_record_tests`.
   - [ ] Adopted threads: slots, the adopted publish, the visibility reads of adopted deques and
@@ -162,9 +163,12 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] `//donner/base/tasks:deque_tests` in the variant, which checks the deque's sequentially
         consistent form, and a red run there on a deliberately weakened ordering (0.25 day).
   - Done when: the variant runs the scheduler tests in normal CI and the fuzzer is green.
-- [ ] Milestone S5: WebAssembly (4 days). After S1.
+- [ ] Milestone S5: WebAssembly (4.5 days). After S1.
   - [ ] The inline path for Emscripten without pthreads; pool sizing, worker stack size, start-up
-        and isolation probe for the editor build; size and memory measurements.
+        and isolation probe for the editor build; size and memory measurements (4 days).
+  - [ ] The parker's wait and wake in the threaded build as `emscripten_futex_wait` and
+        `emscripten_futex_wake` on its 32-bit word, since that toolchain's `std::atomic::wait`
+        is timed polling with an empty notify (0.5 day).
   - Done when: both Wasm builds pass their size tests, an editor smoke test records the worker
     count it obtained and the peak heap with the scheduler running, the fixed memory still has
     the headroom its build contract requires, and a test shows scheduler workers' sleeps take the
@@ -243,14 +247,14 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 | S2 Parallel loops and determinism | 3.5 |
 | S3 Coroutines | 3 |
 | S4 ThreadSanitizer target and fuzzer | 3.25 |
-| S5 WebAssembly | 4 |
+| S5 WebAssembly | 4.5 |
 | S6 Peer benchmarks | 6.25 |
 | S7 Configuration and threading switch | 2.25 |
 | S8 Renderer threading and the render worker | 11.5 |
-| **Committed total** | **43.5** |
+| **Committed total** | **44** |
 | S9 Geode browser module compiled out (follow-on) | 2.5 |
 
-Total committed estimate: 43.5 engineering days; 46 with S9. The Geode prepare fan-out
+Total committed estimate: 44 engineering days; 46.5 with S9. The Geode prepare fan-out
 (Candidate client 1) is estimated with its own design, not here. Part D of
 [0072-css_cascade](0072-css_cascade.md) needs S1 to S3, and S4 for its race coverage; its release
 with workers on needs the release gate.
@@ -940,11 +944,13 @@ queue, and *started* once a thread begins running it.
   and wakes another worker, which only adds parallelism. If the shallow worker was waking itself
   at the same moment, exactly one of the two swaps succeeds and only that one counts it.
 
-  On native platforms a parker wait is `std::atomic::wait`; in the editor Wasm build that reaches
-  `emscripten_futex_wait`, which the build wraps (`-Wl,--wrap=emscripten_futex_wait`) for the
-  GPU-owning application pthread. The wrapper passes every other thread straight to the real
-  futex wait, so scheduler workers sleep through `Atomics.wait`, which is permitted on workers;
-  Milestone S5 tests that branch.
+  On native platforms a parker wait is `std::atomic::wait` on the parker word. In the editor Wasm
+  build it is not: that toolchain's `std::atomic::wait` polls with a timed backoff and its notify
+  does nothing, so the parker there calls `emscripten_futex_wait` and `emscripten_futex_wake` on
+  its 32-bit word directly (Milestone S5). The build wraps `emscripten_futex_wait`
+  (`-Wl,--wrap=emscripten_futex_wait`) for the GPU-owning application pthread; the wrapper passes
+  every other thread straight to the real futex wait, so scheduler workers sleep through
+  `Atomics.wait`, which is permitted on workers. Milestone S5 tests that branch.
 - **Local pushes and the parallelism wake.** A worker pushing onto its own deque skips the publish
   protocol: it is awake, and it runs that entry, loses it to a thief, or drains it before it can
   sleep. It does not skip waking for parallelism. Each worker owns a `searching` flag that only it
@@ -1025,25 +1031,40 @@ queue, and *started* once a thread begins running it.
     JobSystem keeps waiter bits beside its running count for the same reason. Whether
     `std::atomic::notify_one` elides the system call when nothing waits is implementation-defined,
     so the scheduler does not rely on it.
-  - The parker is one 32-bit atomic word, a waiting bit and a 31-bit epoch: 32 bits is the width
-    of the Linux futex and of Wasm `Atomics.wait`. The waiting bit is bit 0 and the epoch bits 1
-    to 31, so a change adds 2 and wraps without touching the bit. On Apple platforms the SDK's
-    libc++ waits natively only on its contention type, `std::int64_t`; a wait on any other atomic,
-    the 32-bit parker word included, goes through its global contention table, whose entries
-    unrelated addresses share, because its native waits on other sizes belong to a newer library
-    ABI that the SDK marks unavailable. The parker tests pass on Apple silicon through the table;
-    an S1 checklist item measures what the table costs against an `std::int64_t` word, which takes
-    the native path, and changes the word there if it costs measurably. Every change is a release read-modify-write that
-    advances the epoch and returns the old word, and the sleeper's `fetch_or` in step 2 is a
-    sequentially consistent read-modify-write on the same word, so both are in the word's single
-    modification order. A
-    change ordered before the `fetch_or` is read by it, with everything the waker wrote before the
+  - The parker is one atomic word, a waiting bit and an epoch. Its type, `NativeParkerWord`, is
+    exactly the type the standard library's `std::atomic::wait` waits on natively, so a parker
+    never goes through the library's shared contention table, whose entries unrelated addresses
+    share and whose notify wakes every waiter on an entry: `std::int64_t` on Apple platforms and
+    `std::int32_t` elsewhere. In libc++, at the ABI version these builds use, a wait goes to the
+    platform on the word's own address only when the value type is exactly the library's
+    contention type, `int32_t` on Linux and `int64_t` on Apple, so an unsigned word of the same
+    width takes the table; libstdc++ waits on the futex for every 4-byte scalar. The waiting bit
+    is bit 0 and the epoch the remaining bits, 31 on a 32-bit word and 63 on a 64-bit one; a
+    change adds 2 and wraps, crossing the sign bit, without touching the bit. In Wasm the word is
+    a signed 32-bit integer, the width of `emscripten_futex_wait`. A wake measurement
+    (`//donner/base/tasks:parker_wait_bench`: a sleeper woken by a change after a settle long
+    enough for it to enter its wait, one pair or several pairs on distinct words) counts a sample
+    as waiting when the change found the waiting bit set, and every sample was. It puts the
+    median wake within run-to-run noise for every word type: 6.3 to 7.8 us for one pair and 5.0
+    to 8.5 us for eight pairs on Apple silicon, 9.8 to 10.4 us for one, eight and 32 pairs on a
+    loaded Linux AArch64 host, and a flat 1.9 to 3.0 us for one and three pairs on x86-64 Linux
+    with libstdc++, where every 32-bit type is native. Collisions in the contention table, and
+    the spurious wakes they cause, were not measured. The native type costs nothing and keeps an
+    unrelated waiter's notify from waking the parker. Calling the platform waits directly on one
+    32-bit word everywhere would make the word one width on every platform, at the cost of
+    per-platform code and, on Apple, either a private interface or `os_sync_wait_on_address`,
+    which needs macOS 14.4 and later while these builds target macOS 13.3; the measurement shows
+    the standard library's wait on its native type is enough, so the alias is used instead. Every
+    change is a release read-modify-write that advances the epoch and returns the old word, and
+    the sleeper's `fetch_or` in step 2 is a sequentially consistent read-modify-write on the same
+    word, so both are in the word's single modification order. A change ordered before the
+    `fetch_or` is read by it, with everything the waker wrote before the
     change, so the sleeper's step 4 re-check sees the completed scope or the queued work and it
     does not wait. A change ordered after it returns a word with the bit set, so the waker
     notifies. A notify is therefore never skipped for a thread that will wait. A sleeper could miss
-    a change only if exactly 2^31 changes landed between its step 2 and its wait, which is
-    accepted. The lost-wakeup tests cover this and must be observed red with the bit check broken
-    (notify skipped unconditionally).
+    a change only if a multiple of 2^31 changes (2^63 on a 64-bit word) landed between its step 2
+    and its wait, which is accepted. The lost-wakeup tests cover this and must be observed red
+    with the bit check broken (notify skipped unconditionally).
   - The counter word is 64 bits, a 63-bit count and, for an `AsyncTaskScope`, the join flag in the
     top bit. A scope's count is at most the scheduler's live-record bound, which is known at
     construction, and the constructor asserts that bound is below 2^62. A test spawns into one
@@ -1563,7 +1584,8 @@ clients that size work from documents.
   under ThreadSanitizer.
 - **Parker and record pools** (`//donner/base/tasks:parker_tests`,
   `//donner/base/tasks:task_record_tests`): single-thread model tests of every operation and
-  boundary, including the epoch's wrap, the record bound, reuse and closure storage; deterministic
+  boundary, including the epoch crossing the sign bit and its full wrap at both word widths, the
+  record bound, reuse and closure storage; deterministic
   interleavings through test hooks; and stress with the real platform wait and again with delays
   injected into each race window. The parker's interleavings run against a model of the kernel wait
   queue in which only a notify wakes a blocked waiter: a wake before the waiting bit is set (the

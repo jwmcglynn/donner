@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 package(default_visibility = ["//donner/base/tasks:__subpackages__"])
 
@@ -53,4 +53,13 @@ donner_cc_test(
         "//donner/base:stall_guard",
         "@com_google_gtest//:gtest",
     ],
+)
+
+# Wake latency of a parked thread for word types the standard library waits on natively and through
+# its contention table. A performance probe that prints a table; run it with `bazel run -c opt`.
+donner_cc_binary(
+    name = "parker_wait_bench",
+    testonly = 1,
+    srcs = ["tests/ParkerWaitBench.cc"],
+    tags = ["manual"],
 )
