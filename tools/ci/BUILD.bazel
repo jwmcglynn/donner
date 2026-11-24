@@ -404,6 +404,7 @@ py_test(
     name = "darwin_selection_tests",
     size = "small",
     srcs = ["darwin_selection.py", "darwin_selection_tests.py"],
+    data = ["//build_defs:ci_darwin.bzl"],
     imports = ["."],
 )
 

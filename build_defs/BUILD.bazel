@@ -12,7 +12,10 @@ load("//build_defs:variant_neutral_tests.bzl", "variant_neutral_test_suite")
 
 exports_files(
     ["ci_darwin.bzl", "ci_metal.bzl"],
-    visibility = ["//tools:__pkg__"],
+    visibility = [
+        "//tools:__pkg__",
+        "//tools/ci:__pkg__",
+    ],
 )
 
 exports_files(
@@ -146,6 +149,39 @@ py_test(
     data = [":variant_settings.bzl"],
     main = "check_variant_transitions_tests.py",
     deps = ["@rules_python//python/runfiles"],
+)
+
+# The sanitizer configuration of the invocation: `--config=asan`, `--config=tsan` and `--config=ubsan`
+# set it, and a sanitizer variant's transition sets it to its own sanitizer. Sanitizer variants
+# (sanitizer_variants.bzl) are compatible only where it is `none`: clang rejects one sanitizer's
+# options on top of another's, so a wildcard run under a sanitizer config skips the variants and
+# runs the plain tests under that config instead.
+string_flag(
+    name = "sanitizer",
+    build_setting_default = "none",
+    values = [
+        "asan",
+        "none",
+        "tsan",
+        "ubsan",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "no_sanitizer_config",
+    flag_values = {":sanitizer": "none"},
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "sanitizer_variants_tests",
+    size = "small",
+    srcs = ["sanitizer_variants_tests.py"],
+    data = [
+        ":sanitizer_variants.bzl",
+        "//:.bazelrc",
+    ],
 )
 
 py_test(

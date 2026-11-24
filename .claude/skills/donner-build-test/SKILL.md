@@ -193,10 +193,13 @@ Facts that matter when reading reports (all set in `.bazelrc`):
   the triggering input to the fuzzer corpus — see donner-fuzzing §3's crash-fix protocol.
   Sanitizer findings and fuzzer findings are the same bug class caught by different harnesses.
 
-CI: `sanitizers.yml` runs `--config=asan` and `--config=ubsan` over `//donner/...` nightly (with
-a gatekeeper that skips idle days). `sanitizers-pr.yml` runs an informational, non-blocking
-`--config=asan --config=geode //donner/svg/renderer/tests:resvg_test_suite_geode` on PRs touching
-Geode renderer paths (kept non-blocking per doc 0031 M1.2 while issue #552's fix is in flight).
+CI: `sanitizers.yml` runs `--config=asan` and `--config=ubsan` over `//donner/...` nightly (with a
+gatekeeper that skips idle days). `sanitizers-pr.yml` runs `--config=asan --config=geode
+//donner/svg/renderer/tests:resvg_test_suite_geode` on PRs touching Geode renderer paths. The
+packages in `SANITIZER_VARIANT_PACKAGES` (`build_defs/sanitizer_variants.bzl`; today only
+`//donner/base/tasks`) give every test a ThreadSanitizer and an AddressSanitizer variant
+(`ci_tsan_<test>`, `ci_asan_<test>`), which the main CI invocation runs like any other test on
+Linux; nothing else runs under ThreadSanitizer in CI.
 
 ## 7. Coverage
 
