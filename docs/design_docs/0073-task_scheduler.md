@@ -1575,10 +1575,12 @@ clients that size work from documents.
   return stack's interleavings are a return during the creator's take, a return not yet published
   when the creator reaches its bound, two racing returns, and a head taken, reused and returned again
   while another return holds it; its stress hands records to four threads that return them while
-  the creator reaches its bound every round, and the external pool's bound is checked under
-  contention. In AddressSanitizer builds a test checks that a free record is poisoned and that
-  touching one fails. Both components use read-modify-writes and no standalone fence, so
-  ThreadSanitizer checks them fully; until S4's variant exists that run is manual
+  the creator reaches its bound every round, and the external pool's bound is checked with the
+  whole bound held while another thread allocates, which must get the inline fallback, and under
+  contention, where the records out at once never exceed it. In AddressSanitizer builds a test
+  checks that a free record is poisoned and that touching one fails. Both components use
+  read-modify-writes and no standalone fence, so ThreadSanitizer checks them fully; until S4's
+  variant exists that run is manual
   (`bazel test --config=tsan //donner/base/tasks:parker_tests //donner/base/tasks:task_record_tests`).
 - **Parker and return-stack orderings.** Under ThreadSanitizer, on Linux ARMv8, Apple silicon and
   x86-64 Linux, the tests catch each of these weakened: the release of a parker change made

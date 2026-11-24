@@ -921,8 +921,8 @@ TEST(ExternalRecordPoolStressTest, TheBoundHoldsUnderContention) {
         held.push_back(pool.tryAllocate(lock));
       }
     }
-    ASSERT_THAT(held, testing::Each(NotNull()));
-    TaskRecord* extra = held.front();
+    EXPECT_THAT(held, testing::Each(NotNull()));
+    TaskRecord* extra = nullptr;
     std::thread other([&] {
       std::unique_lock lock(guard);
       extra = pool.tryAllocate(lock);
@@ -930,9 +930,14 @@ TEST(ExternalRecordPoolStressTest, TheBoundHoldsUnderContention) {
     other.join();
     EXPECT_THAT(extra, IsNull())
         << "with the whole bound outstanding, another thread must get the inline fallback";
+    // Return whatever was allocated, so a failure above stays one failing case instead of ending
+    // the binary in the pool's live-record assertion.
+    held.push_back(extra);
     std::unique_lock lock(guard);
     for (TaskRecord* record : held) {
-      pool.release(record, lock);
+      if (record != nullptr) {
+        pool.release(record, lock);
+      }
     }
   }
 
