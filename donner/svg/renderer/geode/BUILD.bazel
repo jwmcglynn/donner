@@ -946,10 +946,6 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    # Per-case hang guard for the 2048 px sibling-surface cases, which take several times longer on
-    # a slow software Vulkan runner than elsewhere; set on the impl so every wrapper inherits it,
-    # and well inside each shard's `medium` timeout.
-    env = {"DONNER_TEST_TIMEOUT_SECONDS": "150"},
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_counters",
@@ -975,7 +971,6 @@ donner_multi_transitioned_test(
     # a software Vulkan runner takes most of a `small` test's 60 s. Three shards put the heaviest
     # scenes in separate processes, and `medium` makes each shard's timeout a hang guard well above
     # its run time rather than a budget the suite has to meet. Each shard creates its own device.
-    # The impl raises the per-case guard for the same scenes.
     size = "medium",
     testonly = 1,
     dep = ":geode_perf_tests_impl",

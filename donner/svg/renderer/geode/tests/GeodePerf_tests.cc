@@ -1254,16 +1254,17 @@ std::ostream& operator<<(std::ostream& os, SiblingSurfaceKind kind) {
   return os;
 }
 
-/// Twenty-four siblings of \p kind on a 400x200 view box, each drawing an overlapping circle, so
-/// a frame draws twenty-four offscreen surfaces of the canvas's size one after another.
-std::string SiblingSurfacesSvg(SiblingSurfaceKind kind) {
+/// \p siblings siblings of \p kind, at most twenty-four, on a 400x200 view box, each drawing an
+/// overlapping circle, so a frame draws that many offscreen surfaces of the canvas's size (two
+/// for each mask) one after another.
+std::string SiblingSurfacesSvg(SiblingSurfaceKind kind, int siblings) {
   std::string source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200">
   <mask id="m"><rect width="400" height="200" fill="#b3b3b3"/></mask>
   <clipPath id="c"><circle cx="200" cy="100" r="95"/></clipPath>
   <rect width="400" height="200" fill="#204080"/>
 )SVG";
   constexpr std::array<std::string_view, 4> kFills = {"red", "lime", "yellow", "white"};
-  for (int i = 0; i < 24; ++i) {
+  for (int i = 0; i < siblings; ++i) {
     std::string group;
     switch (kind) {
       case SiblingSurfaceKind::Layers:
@@ -1283,45 +1284,75 @@ struct SiblingSurfacesCase {
   SiblingSurfaceKind kind;
   int width;
   int height;
+  /// Siblings in the scene; see \ref SiblingCount.
+  int siblings;
 };
 
+/// Siblings a \p kind scene draws on a canvas with a \p longEdge px long edge.
+///
+/// From 1024 px on, a quarter of the pool's budget holds fewer than sixteen of these canvas-sized
+/// surfaces, so the pool keeps sixteen of one size and twenty already outgrow it: twenty layers or
+/// clips, or ten masks of two surfaces each. Every surface costs a canvas-sized fill on a software
+/// adapter, and a frame of many masks also drains the GPU queue several times (#2711), so the
+/// large canvases draw no more siblings than that. The smaller canvases draw twenty-four.
+/// \ref SingleUseSurfacesOutgrowThePool checks at every size that the scene still outgrows the
+/// pool.
+int SiblingCount(SiblingSurfaceKind kind, int longEdge) {
+  if (longEdge < 1024) {
+    return 24;
+  }
+  return kind == SiblingSurfaceKind::Masks ? 10 : 20;
+}
+
 void PrintTo(const SiblingSurfacesCase& c, std::ostream* os) {
-  *os << c.kind << " at " << c.width << "x" << c.height;
+  *os << c.siblings << " " << c.kind << " at " << c.width << "x" << c.height;
 }
 
 class GeodePerfSiblingSurfacesTest : public GeodePerfTest,
                                      public ::testing::WithParamInterface<SiblingSurfacesCase> {};
 
+/// Premise of \ref UnchangedFrameCreatesNothing at this size: a frame that holds one surface per
+/// sibling until it ends returns more textures of one size than the texture pool keeps (sixteen,
+/// or as many as fit a quarter of its budget, 16 MiB at its 64 MiB floor), so it recreates the
+/// surplus on every frame. Without this, a scene that no longer reaches the per-size retention
+/// limit would pass the steady-state case without testing it. It is a case of its own so that
+/// neither case renders both scenes' frames.
+TEST_P(GeodePerfSiblingSurfacesTest, SingleUseSurfacesOutgrowThePool) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+  const SiblingSurfacesCase& param = GetParam();
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(SiblingSurfacesSvg(param.kind, param.siblings), sink);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(param.width, param.height);
+
+  // The renderer starts from an empty pool at its starting budget, so earlier tests on the shared
+  // device cannot change what the pool keeps.
+  RendererGeode singleUse(device);
+  singleUse.trimTexturePool(RendererGeodeTexturePoolTrim::All);
+  singleUse.setWithinFrameTextureReuseForTesting(false);
+  singleUse.draw(document);
+  singleUse.draw(document);
+  EXPECT_THAT(singleUse.lastFrameTimings().counters.textureCreates, testing::Gt(0u))
+      << "one surface per sibling no longer outgrows the pool at this size, so the steady-state "
+         "case no longer reaches the per-size retention limit it guards";
+}
+
 /// An unchanged frame of many sibling offscreen surfaces creates no texture and no bind group at
-/// any canvas size, because the siblings take turns with the same few surfaces. A frame that held
-/// one surface per sibling until it ended would return more textures of one size than the texture
-/// pool keeps (sixteen, or as many as fit a quarter of its budget, 16 MiB at its 64 MiB floor),
-/// from 640x320 on for these scenes, and would recreate the surplus, and rebuild the bind groups
-/// that name it, on every frame.
+/// any canvas size, because the siblings take turns with the same few surfaces, although one
+/// surface per sibling would outgrow the pool (\ref SingleUseSurfacesOutgrowThePool).
 TEST_P(GeodePerfSiblingSurfacesTest, UnchangedFrameCreatesNothing) {
   auto device = sharedDevice();
   ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
   const SiblingSurfacesCase& param = GetParam();
 
   ParseWarningSink sink = ParseWarningSink::Disabled();
-  auto parsed = parser::SVGParser::ParseSVG(SiblingSurfacesSvg(param.kind), sink);
+  auto parsed = parser::SVGParser::ParseSVG(SiblingSurfacesSvg(param.kind, param.siblings), sink);
   ASSERT_THAT(parsed, NoParseError());
   SVGDocument document = std::move(parsed.result());
   document.setCanvasSize(param.width, param.height);
-
-  // Premise: at this size, a frame that keeps one surface per sibling is not steady. Each renderer
-  // starts from an empty pool at its starting budget, so earlier tests on the shared device cannot
-  // change what the pool keeps.
-  {
-    RendererGeode singleUse(device);
-    singleUse.trimTexturePool(RendererGeodeTexturePoolTrim::All);
-    singleUse.setWithinFrameTextureReuseForTesting(false);
-    singleUse.draw(document);
-    singleUse.draw(document);
-    ASSERT_THAT(singleUse.lastFrameTimings().counters.textureCreates, testing::Gt(0u))
-        << "one surface per sibling no longer outgrows the pool at this size, so this case no "
-           "longer reaches the per-size retention limit it guards";
-  }
 
   RendererGeode renderer(device);
   renderer.trimTexturePool(RendererGeodeTexturePoolTrim::All);
@@ -1348,7 +1379,7 @@ std::vector<SiblingSurfacesCase> SiblingSurfacesCases() {
   for (const SiblingSurfaceKind kind :
        {SiblingSurfaceKind::Layers, SiblingSurfaceKind::Masks, SiblingSurfaceKind::ClipPaths}) {
     for (const int longEdge : {640, 800, 1024, 2048}) {
-      cases.push_back({kind, longEdge, longEdge / 2});
+      cases.push_back({kind, longEdge, longEdge / 2, SiblingCount(kind, longEdge)});
     }
   }
   return cases;
