@@ -77,6 +77,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/tests/Runfiles.h"
+#include "donner/base/tests/StallGuard.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -508,6 +509,24 @@ FrameSample sampleFrame(const RendererGeode& renderer) {
                      counters.drawCalls};
 }
 
+/// Read back the frame @p renderer just drew, once its GPU work has finished.
+///
+/// The snapshot's capture deadline is an interactive latency budget, and it also counts the time
+/// the capture waits behind the frame's own GPU work. On a software adapter with few cores, the
+/// blur of a filter scene on a 2048 px canvas can take that whole budget, and the snapshot then
+/// comes back empty while the frame is still making progress. This suite asserts what a frame
+/// renders, not how fast, so it waits for the submitted work first, bounded only by lack of
+/// progress, and leaves the capture deadline to the readback itself.
+///
+/// @param renderer Renderer whose last frame to read back.
+/// @return The frame's pixels, or an empty bitmap when the readback itself failed.
+RendererBitmap SnapshotAfterSubmittedWork(RendererGeode& renderer) {
+  EXPECT_THAT(renderer.waitForSubmittedWork(donner::tests::kHangGuard),
+              testing::Eq(geode::GpuWaitResult::Complete))
+      << "the frame's GPU work stopped making progress before it finished";
+  return renderer.takeSnapshot();
+}
+
 /// The device-shared texture pool a measurement starts from.
 enum class PoolStart {
   /// Whatever the scenes before it left.
@@ -536,7 +555,7 @@ SceneMeasurement measureFrames(const std::shared_ptr<geode::GeodeDevice>& device
   measurement.filterReducedRasters = renderer.resourceStats().filterReducedRasters;
   // Settle frame one through a readback so deferred GPU work completes before
   // the frame that gets measured, and use the pixels for the liveness check.
-  measurement.visiblePixels = test::CountNonTransparentPixels(renderer.takeSnapshot());
+  measurement.visiblePixels = test::CountNonTransparentPixels(SnapshotAfterSubmittedWork(renderer));
 
   renderer.draw(document);
   // Deliberately sampled BEFORE a second snapshot; see the file header.
@@ -702,7 +721,8 @@ TEST_P(GeodeCounterCorpusLargeCanvasTest, RendersVisiblePixels) {
 
   RendererGeode renderer(device);
   renderer.draw(*document);
-  const size_t visiblePixels = test::CountNonTransparentPixels(renderer.takeSnapshot());
+  const size_t visiblePixels =
+      test::CountNonTransparentPixels(SnapshotAfterSubmittedWork(renderer));
   const Vector2i canvas = document->canvasSize();
   std::fprintf(stderr, "[counter-corpus-large-canvas %dx%d] %-48s visiblePixels=%8zu\n", canvas.x,
                canvas.y, name.c_str(), visiblePixels);
