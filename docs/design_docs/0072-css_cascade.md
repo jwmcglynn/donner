@@ -331,7 +331,8 @@ including tests and review fixes. "After" names the milestones that must land fi
     (load average 20 to 23, six alternating runs) the document takes 0.71 ms (0.68-0.75), from
     1.50 ms (1.38-1.57). Computed styles, warnings and cascade counts are unchanged on every
     document of the resvg suite, the renderer test data, the splash and the sprite.
-- [x] Milestone A9: Matched properties cache (3.5 days). After A3 and A8.
+- [x] Milestone A9: Matched properties cache (3.5 days,
+      [#2745](https://github.com/jwmcglynn/donner/pull/2745)). After A3 and A8.
   - [x] Look up shared records in `computePropertiesInto`; count hits, misses, uncacheable elements
     and avoided declaration parses. Charge retained record bytes until the last holder releases
     them and evict cached keys with a bucket-local clock.
