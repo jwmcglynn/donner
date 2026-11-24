@@ -1,0 +1,19 @@
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+
+package(default_visibility = ["//donner/base/tasks:__subpackages__"])
+
+donner_cc_library(
+    name = "work_stealing_deque",
+    hdrs = ["WorkStealingDeque.h"],
+    deps = ["//donner/base"],
+)
+
+donner_cc_test(
+    name = "deque_tests",
+    srcs = ["tests/WorkStealingDeque_tests.cc"],
+    deps = [
+        ":work_stealing_deque",
+        "//donner/base:stall_guard",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
