@@ -56,9 +56,9 @@ is not shaped by one user.
   have threads runs workers ([Configuration](#configuration)). With zero workers at run time, or
   with threading compiled out, every client runs serially on the calling thread with identical
   results, and the peer benchmarks' single-thread workload costs at most 2 percent over a plain
-  serial loop. With threading compiled out, Donner's own code in the default library
-  configuration, the plain Wasm module and the editor built with tiny-skia links no thread,
-  pthread, condition-variable, once or atomic-wait dependency, checked at link time; native Geode
+  serial loop. With threading compiled out, Donner's own object files in the default library
+  configuration and in the shipped plain Wasm module reference no thread, pthread,
+  condition-variable, once, static-guard or atomic-wait symbol, checked at link time; native Geode
   needs driver threads and is excluded ([Renderer threading](#renderer-threading)).
 - **Scaling.** A parallel loop over 1,000,000 units of about 100 ns each runs at least 3 times
   faster on 4 workers than inline, and a loop whose total work is below the grain runs inline with
@@ -178,7 +178,7 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         `docs/multithreading.md` (0.25 day).
   - Done when: the compiled-out variant and the default (threaded) build both run the scheduler
     tests in CI, and a consumer-module build with `threading = False` builds `@donner//:donner`.
-- [ ] Milestone S8: Renderer threading and the render worker (11 days). After S5 and S7.
+- [ ] Milestone S8: Renderer threading and the render worker (11.5 days). After S5 and S7.
   - [ ] The Donner lock type and the conversions in the software path (`PackagedResource`,
         `SubDocumentAdmission`, `CatalogEncodedFontStore`, `SystemFontProvider`'s once flag),
         `-fno-threadsafe-statics` for Donner's sources when compiled out, and
@@ -192,11 +192,14 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] The render-worker tests parameterised by mode (preemption tests in `Dedicated` only),
         replay pixel goldens identical across modes, and a ThreadSanitizer run of the render worker
         in `Dedicated` mode with scheduler workers (2 days).
-  - [ ] Native Geode and the Geode editor marked incompatible with the setting, and the link-time
-        symbol check of [Renderer threading](#renderer-threading) (1 day).
+  - [ ] Native Geode and the Geode editor marked incompatible with the setting, and the symbol
+        check of [Renderer threading](#renderer-threading) over Donner's own object files (1 day).
+  - [ ] The plain Wasm module's target-level transition to `threading = false`, and the symbol
+        check run on it in the Wasm CI job (0.5 day).
   - Done when: the compiled-out variant renders the renderer's golden tests and the editor's
-    replay goldens bit-identically to the threaded build, and the symbol check is green and was
-    observed red with one `std::mutex` reinstated.
+    replay goldens bit-identically to the threaded build, and the symbol check is green on both
+    the native compiled-out variant and the plain Wasm module, and was observed red with one
+    `std::mutex` reinstated.
 - [ ] Follow-on, not in the committed total: Milestone S9, Geode browser module compiled out
       (2.5 days). After S8. The Geode common and browser-bridge locks of
       [Renderer threading](#renderer-threading) converted, and the symbol check extended to the
@@ -207,7 +210,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] The ThreadSanitizer, AddressSanitizer and UndefinedBehaviorSanitizer lanes clean on the
         scheduler and on that client.
   - [ ] The default (threaded) build, the runtime zero-worker runs and the compiled-out variant
-        all green in CI, and the editor's replay goldens identical in `Dedicated` and `Inline`.
+        all green in CI, the editor's replay goldens identical in `Dedicated` and `Inline`, and
+        the symbol check green on the native compiled-out variant and the shipped plain Wasm
+        module.
   - [ ] Bit-identical output between serial and threaded runs for every client that ships,
         asserted by that client's differential tests at 0, 1 and N workers.
 
@@ -220,11 +225,11 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 | S5 WebAssembly | 4 |
 | S6 Peer benchmarks | 6.25 |
 | S7 Configuration and threading switch | 2.25 |
-| S8 Renderer threading and the render worker | 11 |
-| **Committed total** | **42.75** |
+| S8 Renderer threading and the render worker | 11.5 |
+| **Committed total** | **43.25** |
 | S9 Geode browser module compiled out (follow-on) | 2.5 |
 
-Total committed estimate: 42.75 engineering days; 45.25 with S9. The Geode prepare fan-out
+Total committed estimate: 43.25 engineering days; 45.75 with S9. The Geode prepare fan-out
 (Candidate client 1) is estimated with its own design, not here. Part D of
 [0072-css_cascade](0072-css_cascade.md) needs S1 to S3, and S4 for its race coverage; its release
 with workers on needs the release gate.
@@ -407,8 +412,10 @@ std::size_t DefaultWorkerCount();
 
 // The process-wide scheduler that Donner entry points use when given none. Created with the
 // configured (or default) options on first use and kept until ShutdownDefaultTaskScheduler() or
-// process exit; it is never destroyed by a static destructor.
-TaskScheduler& DefaultTaskScheduler();
+// process exit. At exit it is intentionally leaked, never destroyed by a static destructor: its
+// workers stay parked and it stays reachable from a static pointer, so LeakSanitizer does not
+// report it. A program that wants a clean exit calls ShutdownDefaultTaskScheduler().
+TaskScheduler& DefaultTaskScheduler();       // Release-asserts after shutdown; no re-creation.
 bool ConfigureDefaultTaskScheduler(TaskSchedulerOptions options); // False once it exists.
 void ShutdownDefaultTaskScheduler();         // Joins its workers; asserts no scope is live.
 
@@ -533,14 +540,19 @@ Multithreading is on by default. Two controls change that, one at run time and o
     for the other attributes. Inside this repository it is `--//donner/base:threading=false`.
   - Relation to the runtime option: compiling out wins. The runtime option is accepted and
     ignored, and the scheduler reports zero workers.
-  - Emscripten without pthreads: an Emscripten build without `__EMSCRIPTEN_PTHREADS__` gets the
-    inline implementation whatever the setting says, decided in the preprocessor, so the plain
-    `wasm` configuration and every existing downstream non-pthread Emscripten consumer keep
-    building with no change and no error. Setting the flag in `.bazelrc` was rejected: the Wasm
-    builds are configured by `common:wasm` flags, and `common:editor-wasm` inherits them through
-    `--config=wasm-geode`, so `threading=false` there would also compile threading out of the
-    threaded editor unless `editor-wasm` set it back. The plain Wasm builds therefore exercise the
-    inline path automatically, and the compiled-out CI variant exercises the flag itself.
+  - Emscripten without pthreads: one macro, `DONNER_THREADING_ENABLED`, is false when the
+    setting is `false` or when an Emscripten build lacks `__EMSCRIPTEN_PTHREADS__`. The scheduler,
+    the Donner lock type and the once flag all key on it, so every existing downstream non-pthread
+    Emscripten consumer keeps building with no change and no error, and gets the inline scheduler
+    and no-op locks. Only `-fno-threadsafe-statics`, a compiler flag, needs the setting itself;
+    such a consumer keeps Emscripten's guard calls, which are stubs without pthreads, unless it
+    sets `threading = False`.
+  - The shipped plain Wasm module sets the flag itself: `//donner/svg/renderer/wasm:donner_wasm`
+    builds its binary through a target-level transition to `threading = false`, so it gets the
+    full compiled-out form, including `-fno-threadsafe-statics`. Setting the flag in `.bazelrc`
+    was rejected: the Wasm builds are configured by `common:wasm` flags, and `common:editor-wasm`
+    inherits them through `--config=wasm-geode`, so `threading=false` there would also compile
+    threading out of the threaded editor. The editor's Wasm module keeps the default.
   - Targets that cannot work with the flag off are marked incompatible with
     `//donner/base:threading_disabled` through `target_compatible_with`, so a broad build skips
     them instead of failing: native Geode (Metal and Vulkan call back on driver threads) and so
@@ -553,8 +565,11 @@ Multithreading is on by default. Two controls change that, one at run time and o
   - CI: the default build runs threaded. One test variant, a configuration transition in the
     single native Bazel invocation, with the setting added to `VARIANT_SETTINGS` in
     `build_defs/variant_settings.bzl` (the reset list), builds and tests with threading compiled
-    out and runs the link-time symbol check. The W6 compiled-out benchmark binary is built through
-    the same transition, so the peer benchmarks still build in one invocation.
+    out and runs the native symbol check. The Wasm half does not run there: the plain module needs
+    the `common:wasm` flags (`enable_wasm`, `renderer_backend=tiny_skia`, `text=false`), which only
+    `--config=wasm` sets, so the existing Wasm CI job, which builds with `--config=wasm`, runs the
+    symbol check on the module it ships. The W6 compiled-out benchmark binary is built through the
+    native transition, so the peer benchmarks still build in one invocation.
 - **Defaults per shipped target.**
   - Library: `DefaultWorkerCount()` workers in the default scheduler, created on first use.
   - `donner-cli`: the default scheduler, with a `--threads=N` option (`0` serial).
@@ -563,7 +578,7 @@ Multithreading is on by default. Two controls change that, one at run time and o
     pass. An editor setting changes the count.
   - Editor, threaded Wasm: 2 workers (raising `PTHREAD_POOL_SIZE` from 2 to 4), dropping to the
     workers that started; see [WebAssembly](#webassembly).
-  - Renderer Wasm without pthreads: the inline implementation, 0 workers.
+  - Renderer Wasm without pthreads: `threading = false` through its own transition, 0 workers.
 
 The scheduler's tests run in both modes: every scheduler test at 0, 1 and 4 workers and in
 seeded mode in the default build, and again in the compiled-out variant, where they run at zero
@@ -614,17 +629,21 @@ a non-worker when no slot is available.
 
 **Inline mode.** `RenderThreadMode` is `Dedicated` or `Inline`. Both run one iteration function,
 extracted from today's worker loop. `Inline` is forced when threading is compiled out and is
-selected when threading is disabled at run time. In `Inline` mode `requestRender` runs the
-foreground iteration on the caller's thread before it returns and stages the result for
-`pollResult`; `isBusy()` is false whenever control is with the caller; the thumbnail and warmup
-lanes run in bounded slices from a new `runIdleWork(budget)`, which still polls the cancellation
-token between slices; supersede and `cancelInFlight` have nothing to act on, and
-`cancelledRenderCount()` stays 0. The document stays in `ThreadingMode::SingleThreaded`, since the
-guard is taken and released on the caller's thread. The cost of disabling threads is that the UI
-thread is blocked for a whole render. This changes `RenderWorker`'s public behavior in that mode
-(requests complete synchronously), which is the one asynchronous-by-contract renderer API in the
-tree; it is flagged as a decision under Open Questions. No API in `donner/svg/renderer` is
-asynchronous by contract.
+selected when threading is disabled at run time by configuration. Zero workers for any other
+reason (workers that failed to start, for example in the threaded editor Wasm build) leaves the
+render worker `Dedicated`: it is still a thread and still works, and its forks run inline. In the
+threaded editor Wasm build the render worker is always `Dedicated`, even when threading is
+disabled at run time, until the open question on `Inline` there is settled. In `Inline` mode
+`requestRender` runs the foreground iteration on the caller's thread before it returns and stages
+the result for `pollResult`; `isBusy()` is false whenever control is with the caller; the
+thumbnail and warmup lanes run in bounded slices from a new `runIdleWork(budget)`, which still
+polls the cancellation token between slices; supersede and `cancelInFlight` have nothing to
+act on, and `cancelledRenderCount()` stays 0. The document stays in
+`ThreadingMode::SingleThreaded`, since the guard is taken and released on the caller's thread. The
+cost of disabling threads is that the UI thread is blocked for a whole render. This changes
+`RenderWorker`'s public behavior in that mode (requests complete synchronously), which is the one
+asynchronous-by-contract renderer API in the tree; it is flagged as a decision under Open
+Questions. No API in `donner/svg/renderer` is asynchronous by contract.
 
 **Inventory, and what `threading = false` does.** Read from the tree at `origin/main`:
 
@@ -645,19 +664,27 @@ asynchronous by contract.
 | Vulkan: `VulkanDevice` (debug messenger "may invoke the callback from any thread", queue and execution mutexes), `VulkanResourceState`, `VulkanSwapchain`, `VulkanQueueProgress` | mutexes, driver callbacks | incompatible: the driver owns that thread |
 | Editor Wasm: `PROXY_TO_PTHREAD`, GPU-owner pthread, proxy queues | browser architecture | no threadless editor Wasm build (not a goal now) |
 | Wasm owner-wait and abort probes (`pthread_create`, `std::thread`) | test probes | not in compiled-out targets |
+| `EditorShell` catalog font wake target | a mutex (`catalogFontWakeTarget_->mutex`) | unchanged; the editor is not in the symbol check |
+| `NativeMenuMac.h` | `pendingMutex_` (native macOS editor) | unchanged; the editor is not in the symbol check |
 
 With threading compiled out, the threading library dependency is gone from the scheduler, the
-library's caches, `DocumentState` and the render worker. The compiled-out CI variant checks this
-with a link-time symbol check of `@donner//:donner` in its default configuration (tiny-skia, base
-text, filters) on Linux and macOS, of the plain `wasm` renderer module, and of the editor built
-with tiny-skia. Neither Donner's object files nor the link may reference `pthread_create`,
-`pthread_once`, `pthread_cond_*`, `pthread_mutex_*`, `std::thread`, `std::condition_variable`,
-`__cxa_guard_acquire`, the standard libraries' atomic wait and notify entry points, or
-`emscripten_futex_wait` and `emscripten_futex_wake`. Third-party libraries are outside the
-check: the full-text tier's HarfBuzz is built with thread support. Milestone S8 lands this with the
-scheduler's first release. Milestone S9 converts the Geode common and browser-bridge locks so the
-Geode browser renderer module (`wasm-geode`) passes the same check; native Geode cannot, because
-its drivers create threads.
+library's caches, `DocumentState` and the render worker. A symbol check verifies it, scoped to
+Donner's own object files: an aspect over the target collects the object files of `cc_library`
+targets whose labels are in this repository's `//donner/...` packages, and the check lists their
+undefined symbols. Objects of third-party targets (external repositories and `//third_party`)
+and of the toolchain's standard and runtime libraries are not collected, so what they link is
+outside the check; the full-text tier's HarfBuzz, for example, is built with thread support. It
+runs on `@donner//:donner` in its default configuration (tiny-skia, base text, filters) on Linux
+and macOS in the native compiled-out variant, and on the shipped plain Wasm module in the Wasm CI
+job. No collected object may reference `pthread_create`, `pthread_once`, `pthread_cond_*`,
+`pthread_mutex_*`, `std::thread`, `std::condition_variable`, `__cxa_guard_acquire`, the standard
+libraries' atomic wait and notify entry points, or `emscripten_futex_wait` and
+`emscripten_futex_wake`. The editor is not in the check: even built with tiny-skia it needs the
+full text tier and links GLFW, both of which keep threads, and two of its own UI mutexes (listed
+above) stay. With threading off it is checked by its tests, the render worker running `Inline`.
+Milestone S8 lands this with the scheduler's first release. Milestone S9 converts the Geode
+common and browser-bridge locks so the Geode browser renderer module (`wasm-geode`) passes the
+same check; native Geode cannot, because its drivers create threads.
 
 ### Internals
 
@@ -696,9 +723,16 @@ queue, and *started* once a thread begins running it.
   non-workers and adopted threads, resumptions that find a full deque, and drains. There are no
   per-scope queues: a queue that belongs to a scope would expose the scope's memory to idle workers
   looking for work while the scope's creator completes and destroys it. Fairness: entries leave in
-  push order, and a worker with work on its own deque still takes one global-queue entry after
-  every 61 tasks it runs from its deque, so a global entry waits behind a bounded number of tasks
-  while any worker runs tasks. That is a bound in tasks, not in time.
+  push order, and a worker with work on its own deque still makes one outside take after every 61
+  tasks it runs from its deque: one global-queue entry, or if that is empty, one steal attempt on
+  each adopted deque. The check is made only where a worker may already take outside work, in its
+  idle loop and in rule 3 within its margin; it is not made while a worker runs rule-1 entries of
+  a scope it waits on, nor past its margin, so it never adds stack depth past the margin or runs
+  another client's task inside a wait where helping would not. So a global-queue or adopted-deque
+  entry waits behind a bounded number of tasks while some worker is in its idle loop or helping
+  within its margin. That is a bound in tasks, not in time, and it does not cover entries deep in
+  a worker's own deque: the owner pops newest first, so its oldest entries leave only when a
+  thief takes them, as in every work-stealing scheduler.
 - **Task storage and bounds.** A spawned closure is stored in a fixed-size slot (64 bytes inline,
   larger closures in a heap block owned by the slot) so small tasks never call `malloc`. Records
   come from a pool per *creator*: each worker and adoptable slot has its own pool of at most
@@ -870,22 +904,38 @@ queue, and *started* once a thread begins running it.
     only which worker runs it.
   - The parallelism wake is not part of this argument, so missing or skipping it cannot leave work
     without a runner.
-- **Termination.** For a program with finitely many tasks, every task finishes. First, every
-  queued task starts: by the invariant some worker is awake while any task is queued; an awake
-  worker that is not running a task takes queued work, an entry below a waiting worker's watermark
-  is stolen or drained to the global queue when that worker sleeps, and the last awake worker takes
-  visible work even past its margin, so with finitely many tasks each queued one is eventually
-  started. Second, order started tasks by start time (a resumption continues its coroutine's
-  task). A running frame can be held up only by two kinds of edge, and both point to tasks that
-  started later: a wait waits for tasks of its scope, all spawned after the waiter started, and a
-  frame stacked on top of a waiting frame, by rule 1 or by helping, started after it. Suppose some
-  started task never finishes, and take the one with the latest start time. Every task it depends
-  on through either edge started later, so it finished; the scope's last finisher changed the
-  recorded parker (or enqueued the resumption, which starts by the first part); so its waits
-  return, the frames above it have returned, and its own code is finite. It finishes, a
-  contradiction. For an unbounded stream of work, such as the editor's, the same argument holds for
-  each task with the global queue's fairness bound in place of finiteness; no bound in time is
-  claimed.
+- **Termination.** For a program with finitely many tasks, every task finishes. The unit of the
+  argument is a *segment*: a spawned closure from its start to its return, or one stretch of a
+  coroutine from a resumption (or its first start) to its next suspension or completion. Each
+  segment has its own start time, the moment a thread begins running it; a coroutine resumed three
+  times is four segments.
+
+  First, every queued segment starts. By the invariant some worker is awake while anything is
+  queued. Every awake worker is, at any moment, either running finite segment code between
+  scheduler calls, or inside a scheduler loop (its idle loop, or a `TaskScope` wait applying rules
+  1 to 3). In its idle loop it takes visible work or sleeps. In a wait it pops its own entries
+  (rule 1), returns (rule 2), or helps within its margin (rule 3); past its margin it tries to
+  sleep, and the last-awake rule keeps the last awake worker taking visible work even past its
+  margin. An entry below a waiting worker's watermark is stolen, or drained to the global queue
+  when that worker sleeps. With finitely many segments, each of these steps makes progress, so
+  each queued segment is eventually started.
+
+  Second, a running segment can be held up only by two kinds of edge, and both point to segments
+  that started later. A wait inside a segment waits for tasks of its scope, which that segment or
+  its scope's tasks spawned after it started. A segment stacked on top of a waiting segment, by
+  rule 1 or by helping (including a resumption run by rule 1), started after the segment it is
+  stacked on, because it started on that stack while the lower one was already waiting. An
+  `AsyncTaskScope` join is not an edge: the coroutine has suspended, ending its segment, and its
+  resumption is a new segment enqueued only after the scope's tasks finished. Suppose some started
+  segment never finishes, and take the one with the latest start time. Every segment it depends on
+  through either edge started later, so it finished; the scope's last finisher changed the recorded
+  parker; so its waits return, the segments above it have returned, and its own code is finite. It
+  finishes, a contradiction; and each resumption a finisher enqueues starts by the first part.
+
+  For an unbounded stream of work, such as the editor's, the first part holds only as far as the
+  fairness rule of the global queue reaches: global-queue and adopted-deque entries are taken
+  within a bounded number of tasks while some worker reaches its idle loop or rule 3, and entries
+  deep in a worker's own deque wait for a thief. No bound in time is claimed.
 - **Parkers and scope lifetime.** A scope lives in its creator's frame and is destroyed as soon as
   its creator sees it complete, so no thread may touch the scope after the change that lets the
   creator return. Every worker and adoptable slot has a parker for the scheduler's lifetime; each
@@ -1003,8 +1053,9 @@ queue, and *started* once a thread begins running it.
     it drains and sleeps, is woken and spawns again: the extra spawns run inline and the live-record
     counter never exceeds its bound. The same with an adopted creator and with a non-worker
     against `maxExternalTasks`.
-  - The global queue is first in, first out, and a worker with endless local work still takes a
-    global entry within 61 tasks.
+  - The global queue is first in, first out, and a worker with endless local work in its idle
+    loop still takes a global entry within 61 tasks, or, with the global queue empty, an entry
+    from an adopted deque whose owner is blocked outside the scheduler.
   - One non-worker creating, using and destroying 1,000 schedulers in turn: after each registration
     the number of live `ParkerPool` objects (a test-only counter) is at most 2, and after the last
     scheduler is destroyed and the thread registers with a fresh one it is 1. Must be observed red
@@ -1240,16 +1291,17 @@ burst, from `getrusage` (W5); peak resident memory per peer (W3 unbalanced).
 **Method.** All peers and Donner build in one invocation at `-c opt` with the same compiler,
 standard library and flags; peers that need exceptions get `-fexceptions` on their own targets
 only, recorded with the results. The W6 compiled-out binary is built through the compiled-out
-configuration transition, so it is part of the same invocation. Each peer runs in its own
-process, so only one pool exists at a time and an idle peer's spinning workers cannot interfere;
-the pool is created once per process outside the timed region. Thread counts are *participating
+configuration transition, so it is part of the same invocation. Each repetition of each case
+launches a fresh process for that peer, which creates its pool outside the timed region, warms
+up, runs once and exits, so only one pool exists at a time and an idle peer's spinning workers
+cannot interfere. Thread counts are *participating
 threads*: pool workers plus the calling thread when the peer lets it run tasks (Donner with an
 adopted thread, Filament with an adopted thread, oneTBB's thread in `task_group::wait`, enkiTS's
 main thread, Taskflow's `corun`). Every peer is configured to the same participating count, and
 every threshold below applies at 8 participating threads unless it names another count. Each case
-warms up for at least 1 s, runs 15 repetitions and reports the median and median absolute
-deviation with the minimum and maximum; repetitions are interleaved across the peers' processes
-(each peer's first repetition, then each peer's second) so thermal drift affects all of them
+warms up for at least 1 s in every process, runs 15 repetitions and reports the median and
+median absolute deviation with the minimum and maximum; repetitions are interleaved across peers
+(each peer's first process, then each peer's second) so thermal drift affects all of them
 alike. A quiet-machine
 gate runs before and after: the run is rejected when the 1-minute load average exceeds 0.5 per
 core, when another process used more than 5 percent of a core during the run, or when the median
