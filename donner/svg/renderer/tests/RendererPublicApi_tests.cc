@@ -4314,7 +4314,7 @@ TEST(RendererPublicApiTest, DegenerateStrokeBoundsRenderWithoutCrashing) {
 
     Renderer renderer;
     renderer.draw(document);
-    EXPECT_EQ(renderer.takeSnapshot().dimensions, Vector2i(32, 32));
+    EXPECT_THAT(renderer.takeSnapshot().dimensions, testing::Eq(Vector2i(32, 32)));
 
     for (const std::string_view id : {"#a", "#b"}) {
       std::optional<SVGElement> element = document.querySelector(id);
