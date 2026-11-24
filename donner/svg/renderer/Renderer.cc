@@ -59,6 +59,20 @@ struct SubtreeRenderSpan {
   std::optional<Box2d> worldBounds;
 };
 
+/**
+ * Returns true if every corner coordinate of \p box is finite.
+ *
+ * Subtree bounds can overflow while being transformed to world space, for example when coordinates
+ * near the double range meet a skew, leaving an infinite or NaN extent. A NaN extent passes both
+ * \ref Box2::isEmpty and \ref IntersectBoxes, so callers must reject it explicitly.
+ *
+ * @param box Box to check.
+ */
+bool IsFiniteBox(const Box2d& box) {
+  return std::isfinite(box.topLeft.x) && std::isfinite(box.topLeft.y) &&
+         std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y);
+}
+
 std::optional<Box2d> IntersectBoxes(const Box2d& lhs, const Box2d& rhs) {
   const double left = std::max(lhs.topLeft.x, rhs.topLeft.x);
   const double top = std::max(lhs.topLeft.y, rhs.topLeft.y);
@@ -388,7 +402,8 @@ RendererImage RenderElementSubtreeToImage(RendererInterface& offscreenRenderer, 
   CollectSubtreeEntities(element, subtreeEntities);
   const SubtreeRenderSpan span = ResolveSubtreeRenderSpan(registry, subtreeEntities);
   if (span.firstEntity == entt::null || span.lastEntity == entt::null ||
-      !span.worldBounds.has_value() || span.worldBounds->isEmpty()) {
+      !span.worldBounds.has_value() || span.worldBounds->isEmpty() ||
+      !IsFiniteBox(*span.worldBounds)) {
     return RendererImage{};
   }
 

@@ -4212,6 +4212,119 @@ TEST(RendererPublicApiTest, ReusedElementRendererStartsFreshFilterPreparationFra
   EXPECT_FALSE(budget->rejected());
 }
 
+/// A finite path whose world bounds overflow to NaN under a shear produces no element image instead
+/// of sizing the image from a NaN extent.
+TEST(RendererPublicApiTest, RenderElementRejectsNonFiniteSubtreeBounds) {
+  // x' = 2x - 2y maps the corner (1e308, 1e308) to inf - inf, so the world bounds have a NaN
+  // width. The root has no viewBox, so no canvas intersection runs before the image is sized.
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <path id="target" d="M0 0 L1e308 1e308" transform="matrix(2 0 -2 1 0 0)"/>
+    </svg>
+  )svg");
+  std::optional<SVGElement> target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  Renderer renderer;
+  EXPECT_TRUE(renderer.renderElement(*target, Vector2i(24, 24)).empty());
+}
+
+/// Documents shaped like the lunasvg #254 reports, where a stroke bounding box of an empty or
+/// degenerate shape came out negative or NaN, render and produce element images without crashing.
+TEST(RendererPublicApiTest, DegenerateStrokeBoundsRenderWithoutCrashing) {
+  const std::string_view kSources[] = {
+      // Skewed and scaled groups with clip and mask, square-capped dashes, a near-zero-width
+      // gradient-stroked rect, and zero-opacity strokes.
+      R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 200 200">
+      <defs>
+        <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient>
+        <clipPath id="c"><circle cx="100" cy="100" r="80"/></clipPath>
+        <mask id="m"><rect width="200" height="200" fill="white"/></mask>
+      </defs>
+      <g id="a" transform="rotate(-42) skewY(-45)" clip-path="url(#c)" mask="url(#m)">
+        <circle cx="50" cy="50" r="20" fill="none" stroke="url(#g)" stroke-dasharray="0.2 0.8"
+                stroke-linecap="square" stroke-linejoin="bevel"/>
+        <line x1="10" y1="10" x2="90" y2="10" stroke="black" opacity="0"
+              stroke-dasharray="0.2 0.8" stroke-linecap="square"/>
+        <rect x="20" y="20" width="0.0001" height="80" fill="none" stroke="url(#g)"
+              stroke-width="0.3" stroke-linejoin="bevel"/>
+      </g>
+      <g id="b" transform="scale(0.5) rotate(7)" clip-path="url(#c)" mask="url(#m)">
+        <polygon points="10,10 90,10 50,90" fill="none" stroke="url(#g)"
+                 stroke-dasharray="0.2 0.8" stroke-linecap="square" stroke-linejoin="bevel"/>
+        <ellipse cx="100" cy="100" rx="30" ry="0.0001" stroke="green" stroke-width="0.2"
+                 stroke-linecap="square"/>
+        <path d="M10 10 L10 10 Z M20 20 L80 20" stroke="black" opacity="0"
+              stroke-linecap="square" stroke-linejoin="bevel"/>
+      </g>
+    </svg>
+  )svg",
+      // Empty shapes with strokes thinner than one unit, under objectBoundingBox clip and mask.
+      R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+      <defs>
+        <clipPath id="c"><rect width="0" height="0" stroke="black" stroke-width="0.4"/></clipPath>
+        <clipPath id="cb" clipPathUnits="objectBoundingBox"><rect width="1" height="1"/></clipPath>
+        <mask id="m" maskContentUnits="objectBoundingBox">
+          <rect width="1" height="1" fill="white"/>
+        </mask>
+      </defs>
+      <g id="a" clip-path="url(#cb)" mask="url(#m)" opacity="0.5">
+        <rect x="10" y="10" width="0" height="50" stroke="black" stroke-width="0.4"/>
+        <polygon points="" stroke="black" stroke-width="0.4"/>
+        <ellipse cx="50" cy="50" rx="0" ry="10" stroke="black" stroke-width="0.4"/>
+        <circle cx="50" cy="50" r="0" stroke="black" stroke-width="0.4"/>
+        <path d="M50 50 Z" stroke="black" stroke-width="0.4" stroke-linecap="square"/>
+        <line x1="50" y1="50" x2="50" y2="50" stroke="black" stroke-width="0.4"
+              stroke-linecap="square"/>
+      </g>
+      <g id="b" clip-path="url(#c)"><rect width="100" height="100"/></g>
+    </svg>
+  )svg",
+      // Singular and near-singular transforms on stroked, clipped and masked shapes.
+      R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+      <defs>
+        <clipPath id="cb" clipPathUnits="objectBoundingBox">
+          <circle cx="0.5" cy="0.5" r="0.5"/>
+        </clipPath>
+        <mask id="m" maskUnits="objectBoundingBox" maskContentUnits="objectBoundingBox">
+          <rect width="1" height="1" fill="white"/>
+        </mask>
+      </defs>
+      <g id="a" clip-path="url(#cb)" mask="url(#m)">
+        <rect width="50" height="50" stroke="black" stroke-width="2" transform="scale(0)"/>
+        <rect width="50" height="50" stroke="black" stroke-width="2"
+              transform="matrix(1 1 1 1 0 0)"/>
+        <rect width="50" height="50" stroke="black" stroke-width="2" transform="skewY(90)"/>
+      </g>
+      <polyline id="b" points="0,0 100,0 0,0.0000001" stroke="black" stroke-width="3"
+                stroke-linejoin="miter" stroke-miterlimit="100000" clip-path="url(#cb)"
+                mask="url(#m)"/>
+    </svg>
+  )svg",
+  };
+
+  for (const std::string_view source : kSources) {
+    SCOPED_TRACE(source);
+    SVGDocument document = ParseDocument(source);
+
+    Renderer renderer;
+    renderer.draw(document);
+    EXPECT_THAT(renderer.takeSnapshot().dimensions, testing::Eq(Vector2i(32, 32)));
+
+    for (const std::string_view id : {"#a", "#b"}) {
+      std::optional<SVGElement> element = document.querySelector(id);
+      ASSERT_TRUE(element.has_value()) << id;
+      // Only the absence of a crash or sanitizer report matters; the image may be empty.
+      (void)renderer.renderElement(*element, Vector2i(16, 16));
+    }
+  }
+}
+
 TEST(RendererDrawBudgetTest, RejectsEveryAggregateDimensionWithoutOvershoot) {
   RendererDrawBudget budget;
   EXPECT_TRUE(budget.reserve(
