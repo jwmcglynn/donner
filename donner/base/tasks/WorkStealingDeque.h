@@ -33,9 +33,9 @@ enum class DequeOrdering : std::uint8_t {
    */
   WeakMemory,
   /**
-   * Every index access sequentially consistent and no standalone fences, so ThreadSanitizer sees
-   * every ordering the deque relies on as an ordinary atomic, whether or not it models fences.
-   * The default in ThreadSanitizer builds.
+   * Every index access sequentially consistent and no standalone fences. ThreadSanitizer does not
+   * model standalone fences, so this is the form it can check: it sees every ordering the deque
+   * relies on as an ordinary atomic. The default in ThreadSanitizer builds.
    */
   SequentiallyConsistent,
 };

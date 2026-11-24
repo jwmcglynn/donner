@@ -45,6 +45,22 @@ public:
   }
 };
 
+/// Whether a multi-thread case of this form runs in this build. ThreadSanitizer does not model
+/// standalone fences, so on the fenced form it reports races on entries the release fence
+/// publishes; the sequentially consistent form is the one checked there.
+template <typename FormT>
+bool SkippedUnderThreadSanitizer() {
+#if defined(DONNER_TASKS_DEQUE_TSAN)
+  return FormT::kValue == DequeOrdering::WeakMemory;
+#else
+  return false;
+#endif
+}
+
+constexpr const char* kThreadSanitizerSkipReason =
+    "ThreadSanitizer does not model standalone fences, so it cannot check the WeakMemory form; "
+    "the SequentiallyConsistent form is the one checked under ThreadSanitizer";
+
 template <typename T>
 StealResult<T> Stolen(T item) {
   return StealResult<T>{StealStatus::Taken, item};
@@ -311,6 +327,9 @@ protected:
   void SetUp() override {
     InterleavingHooks::takeGate = &takeGate_;
     InterleavingHooks::stealGate = &stealGate_;
+    if (SkippedUnderThreadSanitizer<FormT>()) {
+      GTEST_SKIP() << kThreadSanitizerSkipReason;
+    }
   }
 
   void TearDown() override {
@@ -479,6 +498,12 @@ protected:
   using Deque = WorkStealingDeque<Record*, FormT::kValue>;
 
   static constexpr int kThieves = 3;
+
+  void SetUp() override {
+    if (SkippedUnderThreadSanitizer<FormT>()) {
+      GTEST_SKIP() << kThreadSanitizerSkipReason;
+    }
+  }
 
   /**
    * Runs one owner against \ref kThieves thieves and checks the outcome.
