@@ -2,13 +2,17 @@
 
 from enum import Enum
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from tools import bcr_admission as admission
+from tools import bcr_source
 from tools.ci import github_rate_limit as rate
 
 
@@ -82,6 +86,58 @@ class AdmissionBridgeTest(unittest.TestCase):
                                     "https://release.test/archive", Path("report"))
         self.assertIs(validation.download, original)
         self.assertIs(validation.download_file, original_file)
+
+
+class CandidateCommitTest(unittest.TestCase):
+    """The validator runs on a registry whose candidate branch commits the entry onto `main`."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        env = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull,
+                                           "GIT_CONFIG_NOSYSTEM": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+        # A checkout holding the validator modules that `validate` imports.
+        self.upstream = self.base / "upstream"
+        (self.upstream / "tools").mkdir(parents=True)
+        (self.upstream / "modules").mkdir()
+        (self.upstream / "bazel_registry.json").write_text("{}")
+        for module in ("bcr_validation", "registry"):
+            (self.upstream / "tools" / f"{module}.py").write_text("")
+            self.addCleanup(sys.modules.pop, module, None)
+        subprocess.run(["git", "init", "-q", str(self.upstream)], check=True)
+        self.registry = self.base / "registry"
+        bcr_source.prepare_registry(self.upstream, self.registry, "1.0.0")
+        entry = self.registry / "modules/donner/1.0.0"
+        entry.mkdir(parents=True)
+        for name in ("MODULE.bazel", "presubmit.yml"):
+            (entry / name).write_text(f"{name}\n")
+        (entry / "source.json").write_text(
+            json.dumps(bcr_source.expected_source_json("1.0.0", "c" * 64)))
+        (self.registry / "modules/donner/metadata.json").write_text("{}")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.registry), *args], text=True)
+
+    def test_entry_is_committed_on_main_before_the_validator_runs(self):
+        seen = {}
+
+        def run_validator(validation, registry_api, upstream, registry, *args):
+            seen["proposed"] = self.git("diff", "--name-only", "main...HEAD").split()
+            seen["status"] = self.git("status", "--porcelain", "--untracked-files=all")
+            return 0
+
+        receipt = {"version": "1.0.0", "archive": "donner-1.0.0.tar.gz"}
+        with mock.patch.object(bcr_source, "verify_archive", return_value=receipt), \
+                mock.patch.object(admission, "run_validator", side_effect=run_validator):
+            status = admission.validate(self.upstream, self.registry, self.base / "artifacts",
+                                        "d" * 40, self.base / "report.json")
+        self.assertEqual(status, 0)
+        self.assertEqual(seen, {"proposed": [path.as_posix() for path in
+                                             bcr_source.entry_paths("1.0.0")],
+                                "status": ""})
 
 
 class MaintainerLookupTest(unittest.TestCase):

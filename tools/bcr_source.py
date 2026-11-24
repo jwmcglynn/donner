@@ -211,6 +211,29 @@ def qualify_archive(directory: Path, commit: str, run_id: str, attempt: str) -> 
     return receipt
 
 
+# The upstream validator reviews a submission as the files `HEAD` adds or changes since it left
+# `main` of the registry checkout (`git diff main...HEAD`), so the disposable registry is a Git
+# checkout of that shape: `main` holds the registry state copied from upstream, and the candidate
+# branch commits the generated entry on top of it.
+REGISTRY_BASE_BRANCH = "main"
+# Keep the throwaway commits independent of the runner's hooks, signing, identity, ignore rules
+# and attributes, so what `git add` records never depends on global Git configuration.
+REGISTRY_GIT_CONFIG = ("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                       "-c", "core.excludesFile=", "-c", "core.attributesFile=",
+                       "-c", "user.name=Donner BCR preflight",
+                       "-c", "user.email=bcr-preflight@example.invalid")
+
+
+def registry_git(registry: Path, *args: str) -> str:
+    return subprocess.check_output(["git", "-C", str(registry), *REGISTRY_GIT_CONFIG, *args],
+                                   text=True).strip()
+
+
+def registry_paths(registry: Path, *args: str) -> list[str]:
+    """The sorted, distinct paths a NUL-separated `git` listing names."""
+    return sorted({path for path in registry_git(registry, *args, "-z").split("\0") if path})
+
+
 def prepare_registry(upstream: Path, output: Path, version: str) -> None:
     if not VERSION.fullmatch(version):
         raise ValueError("invalid registry version")
@@ -222,6 +245,36 @@ def prepare_registry(upstream: Path, output: Path, version: str) -> None:
         if module.is_dir() and module.name != "donner":
             (output / "modules" / module.name).mkdir(parents=True)
     copy_previous_versions(upstream / "modules/donner", output / "modules/donner", version)
+    registry_git(output, "init", "-q", f"--initial-branch={REGISTRY_BASE_BRANCH}")
+    registry_git(output, "add", "--", ".")
+    registry_git(output, "commit", "-q", "-m", "Registry before the candidate entry")
+    registry_git(output, "checkout", "-q", "-b", f"donner-{version}")
+
+
+def propose_entry(registry: Path, version: str) -> None:
+    """Commit the generated entry as the one change the candidate branch makes to `main`.
+
+    The registry must still be as `prepare_registry` left it apart from the entry's files, so
+    the validator's `main...HEAD` review covers exactly the files a submission would propose.
+    """
+    paths = sorted(path.as_posix() for path in entry_paths(version))
+    base = registry_git(registry, "rev-parse", "--verify", f"refs/heads/{REGISTRY_BASE_BRANCH}")
+    if (registry_git(registry, "rev-parse", "HEAD") != base or
+            registry_git(registry, "symbolic-ref", "--short", "HEAD") != f"donner-{version}"):
+        raise ValueError(f"the disposable registry must be on branch donner-{version} at "
+                         f"{REGISTRY_BASE_BRANCH} before the entry is committed")
+    # Without --exclude-standard, ignore rules cannot hide an untracked file.
+    changed = registry_paths(registry, "ls-files", "--others", "--modified", "--deleted")
+    if changed != paths:
+        raise ValueError(f"the generated entry must add or change exactly {paths}; "
+                         f"the registry has changes to {changed}")
+    for path in paths:
+        entry_bytes(registry / path)
+    registry_git(registry, "add", "--", *paths)
+    registry_git(registry, "commit", "-q", "-m", f"Add donner@{version}")
+    proposed = registry_paths(registry, "diff", "--name-only", f"{REGISTRY_BASE_BRANCH}...HEAD")
+    if proposed != paths:
+        raise ValueError(f"the candidate commit proposes {proposed}, not the entry {paths}")
 
 
 def copy_previous_versions(old: Path, target: Path, version: str) -> None:
