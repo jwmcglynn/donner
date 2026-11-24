@@ -58,8 +58,9 @@ is not shaped by one user.
   results, and the peer benchmarks' single-thread workload costs at most 2 percent over a plain
   serial loop. With threading compiled out, Donner's own object files in the default library
   configuration and in the shipped plain Wasm module reference no thread, pthread,
-  condition-variable, once, static-guard or atomic-wait symbol, checked at link time; native Geode
-  needs driver threads and is excluded ([Renderer threading](#renderer-threading)).
+  condition-variable, once, static-guard or atomic-wait symbol, checked by a symbol check over
+  Donner's object files; native Geode needs driver threads and is excluded
+  ([Renderer threading](#renderer-threading)).
 - **Scaling.** A parallel loop over 1,000,000 units of about 100 ns each runs at least 3 times
   faster on 4 workers than inline, and a loop whose total work is below the grain runs inline with
   no task created (asserted by a counter, not a time).
@@ -194,8 +195,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         in `Dedicated` mode with scheduler workers (2 days).
   - [ ] Native Geode and the Geode editor marked incompatible with the setting, and the symbol
         check of [Renderer threading](#renderer-threading) over Donner's own object files (1 day).
-  - [ ] The plain Wasm module's target-level transition to `threading = false`, and the symbol
-        check run on it in the Wasm CI job (0.5 day).
+  - [ ] The plain Wasm module's target-level transition to `threading = false`, registered in
+        `build_defs/check_variant_transitions.py` because it writes a `VARIANT_SETTINGS` member,
+        and the symbol check run on it in the Wasm CI job (0.5 day).
   - Done when: the compiled-out variant renders the renderer's golden tests and the editor's
     replay goldens bit-identically to the threaded build, and the symbol check is green on both
     the native compiled-out variant and the plain Wasm module, and was observed red with one
@@ -424,6 +426,10 @@ public:
   explicit TaskScheduler(TaskSchedulerOptions options);
   ~TaskScheduler();      // Joins every worker; asserts no scope and no AdoptedThread is live.
   std::size_t workerCount() const;           // Workers actually started (may be fewer).
+  // True when threading is compiled out or the options asked for zero workers; false when workers
+  // were requested, even if none started. Clients use it to tell a configured disable apart from
+  // failed starts.
+  bool threadingDisabledByConfiguration() const;
   ScheduleAwaitable schedule();              // co_await: continue on a worker.
   // Gives the calling thread a slot for the lifetime of the returned object (see Adopted
   // threads). Empty when no slot is free, with zero workers, in seeded mode, and with threading
@@ -629,7 +635,9 @@ a non-worker when no slot is available.
 
 **Inline mode.** `RenderThreadMode` is `Dedicated` or `Inline`. Both run one iteration function,
 extracted from today's worker loop. `Inline` is forced when threading is compiled out and is
-selected when threading is disabled at run time by configuration. Zero workers for any other
+selected when threading is disabled at run time by configuration, which `RenderWorker` reads from
+its scheduler's `threadingDisabledByConfiguration()` at construction (an explicit
+`RenderWorkerOptions::mode` overrides it). Zero workers for any other
 reason (workers that failed to start, for example in the threaded editor Wasm build) leaves the
 render worker `Dedicated`: it is still a thread and still works, and its forks run inline. In the
 threaded editor Wasm build the render worker is always `Dedicated`, even when threading is
@@ -931,6 +939,9 @@ queue, and *started* once a thread begins running it.
   through either edge started later, so it finished; the scope's last finisher changed the recorded
   parker; so its waits return, the segments above it have returned, and its own code is finite. It
   finishes, a contradiction; and each resumption a finisher enqueues starts by the first part.
+  Waits made by an adopted thread's or a non-worker's own code are not segments; each returns once
+  its scope's segments have finished and the last of them has changed the recorded parker, which
+  the argument above establishes.
 
   For an unbounded stream of work, such as the editor's, the first part holds only as far as the
   fairness rule of the global queue reaches: global-queue and adopted-deque entries are taken
@@ -1187,10 +1198,12 @@ queue, and *started* once a thread begins running it.
 ### WebAssembly
 
 - **Non-threaded builds** (the renderer's `wasm` configuration, and any downstream Emscripten
-  build without pthreads): without `__EMSCRIPTEN_PTHREADS__` the library compiles to the inline
-  implementation whatever `//donner/base:threading` says ([Configuration](#configuration)): no
-  thread, atomic wait or `<thread>` code is linked, `workerCount()` is 0, and every client runs its
-  serial path through the same calls. No `.bazelrc` change is needed, so the threaded
+  build without pthreads): without `__EMSCRIPTEN_PTHREADS__` the scheduler, the Donner lock type
+  and the once flag compile to their inline forms whatever `//donner/base:threading` says, so
+  `workerCount()` is 0 and every client runs its serial path through the same calls. The shipped
+  plain module also sets `threading = false` through its own target-level transition and so gets
+  the full compiled-out form; a downstream consumer keeps Emscripten's guard calls unless it sets
+  the flag ([Configuration](#configuration)). No `.bazelrc` change is made, so the threaded
   `editor-wasm` configuration, which inherits `wasm`, is unaffected.
 - **Threaded editor build.** Starting a new Web Worker for `pthread_create` "requires returning
   the main event loop", and `PTHREAD_POOL_SIZE` "creates the Web Workers before main is called, so
@@ -1392,7 +1405,7 @@ clients that size work from documents.
   `//donner/svg/components/style:style_parallel_tests`; the variant does not wait for it).
 - **Both modes.** The default build runs threaded. The compiled-out variant
   ([Configuration](#configuration)) runs the scheduler tests, the renderer's tests and every
-  client's tests with threading compiled out, and the link-time symbol check of
+  client's tests with threading compiled out, and the symbol check over Donner's object files of
   [Renderer threading](#renderer-threading). Client differential tests assert bit-identical
   output between their serial and threaded runs.
 - **No deadlines.** Tests assert ordering and counts; generous hang guards turn a deadlock into a
@@ -1546,10 +1559,13 @@ scheduler.
   (`--//donner/svg/renderer:render_worker_pool`) and 0060
   (`--//donner/svg/renderer:tiny_skia_prepare_threads`), and those drafts are updated to use it
   rather than land their own.
-- **What runtime disable means.** Recommendation: disabling threading at run time means both zero
-  scheduler workers and an `Inline` render worker, so the runtime switch and the build switch
-  produce the same behavior; the alternative is that it sets the worker count only and leaves the
-  render thread dedicated.
+- **What runtime disable means.** The design takes a configured disable
+  (`threadingDisabledByConfiguration()`) to mean both zero scheduler workers and an `Inline` render
+  worker, so the runtime switch and the build switch produce the same behavior, with two
+  exceptions: zero workers after failed starts keeps the render worker `Dedicated`, and the
+  threaded editor Wasm build always keeps it `Dedicated` (next question). Undecided: whether the
+  maintainer prefers that a configured disable set the worker count only and leave the render
+  thread dedicated everywhere. Recommendation: keep the design as written.
 - **Inline mode in the threaded editor Wasm build, and a threadless editor Wasm build.** In the
   threaded editor build, `Inline` would run on the application pthread, which owns the GPU device
   and must keep servicing dispatch; whether every GPU-owner call then takes the owner-local branch
@@ -1583,10 +1599,15 @@ scheduler.
   no-ops in that configuration, so an embedder that calls Donner from several threads must
   serialize those calls itself, and `ThreadingMode::ConcurrentDom` fails with a release
   assertion. Recommendation: accept both and document them with the setting; keeping real mutexes
-  would keep a thread-runtime dependency and contradict the link-time check.
+  would keep a thread-runtime dependency and contradict the symbol check.
 - **Third-party threading.** The full-text tier's HarfBuzz is built with thread support, so the
   symbol check covers Donner's own code and the default configuration, not every third-party
   library. Recommendation: leave third-party libraries out of the check and document which ones
   keep threads, rather than patch them.
+- **Peer benchmark run time.** A fresh process per repetition adds start-up and page-fault
+  effects that each process's warm-up should absorb, and it multiplies run time: 15 repetitions
+  times warm-up, cases, peers and platforms. Recommendation: S6 records the wall-clock cost of a
+  full run, and allows fewer repetitions on cases whose results are clearly separated (no overlap
+  between the peers' minimum-to-maximum ranges), keeping 15 wherever a threshold is close.
 - **0061.** Recommendation: update 0061 to use this scheduler, the shared switch and the Geode
   fan-out above when its work starts, rather than editing it in this change.
