@@ -149,6 +149,16 @@ py_test(
 )
 
 py_test(
+    name = "sanitizer_variants_tests",
+    size = "small",
+    srcs = ["sanitizer_variants_tests.py"],
+    data = [
+        ":sanitizer_variants.bzl",
+        "//:.bazelrc",
+    ],
+)
+
+py_test(
     name = "sanitizer_runtime_provenance_tests",
     size = "small",
     srcs = ["sanitizer_runtime_provenance_tests.py"],

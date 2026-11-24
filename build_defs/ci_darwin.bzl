@@ -81,6 +81,9 @@ def declare_darwin_variants(ci):
             _variant(ci, name, source, "ordinary", True, True, "ci_darwin_diagnostic_", ["external", "no-cache"])
         if "manual" in tags or source["kind"] in ["test_suite", "package_group", "toolchain_type"]:
             continue
+        if any([tag.startswith("sanitizer_") for tag in tags]):
+            # Sanitizer variants (sanitizer_variants.bzl) are Linux only.
+            continue
         if any([tag in tags for tag in ["perf", "local-gpu-isolated", "fuzz_soak"]]):
             # A build-only root preserves compilation without starting a filtered Linux test.
             native.filegroup(

@@ -1085,8 +1085,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("run: tools/ci/cmake_consumer.sh install-tools", macos)
         self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache", macos)
 
-    def test_pr_sanitizer_lanes_restore_the_main_linux_external_cache(self):
-        # The lanes only run for pull requests, so they never save an external repository manifest
+    def test_geode_asan_pr_lane_restores_the_main_linux_external_cache(self):
+        # The lane only runs for pull requests, so it never saves an external repository manifest
         # of its own. It reads the one main's linux job saves, which setup-bazel names after the
         # lowercased workflow name, with spaces and slashes as hyphens, and the job id. Renaming
         # either side would silently restore nothing and leave every run fetching the toolchain.
@@ -1098,14 +1098,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("          cache-save: ${{ github.event_name != 'pull_request' && "
                       "github.ref == 'refs/heads/main' }}\n", main_setup)
 
-        for job in ("asan-geode", "tasks-sanitizers"):
-            with self.subTest(job=job):
-                lane = self._job_body(job, self.sanitizers_pr)
-                lane_setup = self._step_body(lane, "Setup Bazel")
-                self.assertIn("          external-cache: |\n            name: %s\n" % manifest,
-                              lane_setup)
-                self.assertIn("          cache-save: false\n", lane_setup)
-                self.assertNotIn("disk-cache:", lane_setup)
+        lane = self._job_body("asan-geode", self.sanitizers_pr)
+        lane_setup = self._step_body(lane, "Setup Bazel")
+        self.assertIn("          external-cache: |\n            name: %s\n" % manifest,
+                      lane_setup)
+        self.assertIn("          cache-save: false\n", lane_setup)
+        self.assertNotIn("disk-cache:", lane_setup)
 
     def test_retired_closure_scanner_is_not_invoked(self):
         self.assertNotIn("configured_rust_closure.py", self.main)

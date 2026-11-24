@@ -157,15 +157,18 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
     ThreadSanitizer must report no race on either, and must be observed reporting one with the
     failure ordering weakened to relaxed.
 - [ ] Milestone S4: ThreadSanitizer target and fuzzer (3.25 days). After S1.
-  - [ ] A ThreadSanitizer test variant reachable from `//...` through a configuration transition
-        (1.5 days).
+  - [x] ThreadSanitizer and AddressSanitizer variants of the scheduler package's tests, reachable
+        from `//...` through a configuration transition, so the native CI invocation and its
+        affected-target selection run them on Linux (0.75 day): `SANITIZER_VARIANT_PACKAGES` in
+        `build_defs/sanitizer_variants.bzl`, whose packages get a `ci_tsan_<test>` and a
+        `ci_asan_<test>` of every test from the native CI package finalizer
+        (`build_defs/rules.bzl`).
+  - [ ] The same variants for each client's parallel tests as that client lands (0.75 day).
   - [ ] `//donner/base/tasks:task_scheduler_fuzzer` (1.5 days).
-  - [ ] `//donner/base/tasks:deque_tests` in the variant, which checks the deque's sequentially
-        consistent form, and a red run there on a deliberately weakened ordering (0.25 day).
-  - Done when: the variant runs the scheduler tests in normal CI and the fuzzer is green. Until
-    then, a pull request that touches `donner/base/tasks/` runs the package under
-    ThreadSanitizer through `--config=tsan-lane` in the Sanitizers PR workflow; the variant is
-    still needed to reach the clients' parallel tests from `//...`.
+  - [ ] `//donner/base/tasks:deque_tests` in the variant (`ci_tsan_deque_tests` exists), which
+        checks the deque's sequentially consistent form, and a red run there on a deliberately
+        weakened ordering (0.25 day).
+  - Done when: the variant runs the scheduler tests in normal CI and the fuzzer is green.
 - [ ] Milestone S5: WebAssembly (4.5 days). After S1.
   - [ ] The inline path for Emscripten without pthreads; pool sizing, worker stack size, start-up
         and isolation probe for the editor build; size and memory measurements (4 days).
@@ -285,12 +288,13 @@ with workers on needs the release gate.
   toolchain the repository builds with, including libc++, libstdc++ host builds and Emscripten.
 - **Errors.** `.bazelrc` passes `-fno-exceptions` to every build; errors are explicit values
   (`ParseResult`, diagnostics).
-- **Sanitizers.** `.bazelrc` defines `--config=tsan`. ThreadSanitizer runs in CI only in the
-  Sanitizers PR workflow's `tasks-sanitizers` job, for pull requests that touch
-  `donner/base/tasks/`; the nightly Sanitizers workflow runs only the AddressSanitizer and
-  UndefinedBehaviorSanitizer lanes. Repository rules keep one native Bazel invocation in CI and
-  express variants as target-level transitions, and correctness tests carry no short deadlines; hang
-  guards only.
+- **Sanitizers.** `.bazelrc` defines `--config=tsan`. In CI, ThreadSanitizer runs only on the
+  scheduler package's tests: their `ci_tsan_` and `ci_asan_` variants run in the native CI
+  invocation on Linux, built through a configuration transition (the AddressSanitizer variants with
+  leak detection off, since the remote test sandbox blocks the ptrace that LeakSanitizer needs), and
+  the nightly Sanitizers workflow runs the AddressSanitizer and UndefinedBehaviorSanitizer lanes
+  over `//donner/...`. Repository rules keep one native Bazel invocation in CI and express variants
+  as target-level transitions, and correctness tests carry no short deadlines; hang guards only.
 - **WebAssembly.** The plain `wasm` configuration does not pass `-pthread`. The editor's Wasm build
   (`donner/editor/wasm/BUILD.bazel`) passes `-pthread`, `-sPROXY_TO_PTHREAD`,
   `-sOFFSCREENCANVASES_TO_PTHREAD=#canvas` and `-sPTHREAD_POOL_SIZE=2`, and
@@ -1560,11 +1564,9 @@ clients that size work from documents.
   workflow whenever the affected-target selection includes it: trusted pull requests use the
   self-hosted Linux arm64 lane when it is enabled, which normally also runs its macOS variant
   through remote execution, and other runs, including trusted pull requests while it is disabled,
-  use the hosted Linux x86-64 and macOS lanes. A pull request that touches `donner/base/tasks/` also
-  runs `//donner/base/tasks/...` under AddressSanitizer and ThreadSanitizer, in the
-  `tasks-sanitizers` job of the Sanitizers PR workflow on hosted Linux x86-64 (`bazel test
-  --config=asan-lane` and `--config=tsan-lane`); the ThreadSanitizer run checks the sequentially
-  consistent form, and the stress cases of the Le et al. form skip themselves there.
+  use the hosted Linux x86-64 and macOS lanes. Its ThreadSanitizer variant,
+  `//donner/base/tasks:ci_tsan_deque_tests`, runs in the same native lanes on Linux; it checks the
+  sequentially consistent form, and the stress cases of the Le et al. form skip themselves there.
 - **Deque orderings no available host distinguishes.** On Linux ARMv8, Apple silicon and x86-64
   Linux hardware, weakening each of these to relaxed leaves every deque test green, so they are not
   tested: in the Le et al. form, the acquire loads of top in `push` and in `steal` (in `steal` the
@@ -1606,8 +1608,8 @@ clients that size work from documents.
   whole bound held while another thread allocates, which must get the inline fallback, and under
   contention, where the records out at once never exceed it. In AddressSanitizer builds a test
   checks that a free record is poisoned and that touching one fails. Both components use
-  read-modify-writes and no standalone fence, so ThreadSanitizer checks them fully; under
-  ThreadSanitizer, the pull-request lane above runs them until the variant of Milestone S4 exists.
+  read-modify-writes and no standalone fence, so ThreadSanitizer checks them fully, in their
+  `ci_tsan_` variants in the native CI lanes on Linux.
 - **Parker and return-stack orderings.** Under ThreadSanitizer, on Linux ARMv8, Apple silicon and
   x86-64 Linux, the tests catch each of these weakened: the release of a parker change made
   relaxed, the waiting bit's `fetch_or` made relaxed or release, the wait's loads made relaxed, and
@@ -1649,7 +1651,13 @@ clients that size work from documents.
 - **ThreadSanitizer variant** reachable from `//...` through a configuration transition, covering
   the scheduler tests, the deque tests on the sequentially consistent form, and each client's
   parallel tests as that client lands (the first planned is 0072's
-  `//donner/svg/components/style:style_parallel_tests`; the variant does not wait for it).
+  `//donner/svg/components/style:style_parallel_tests`; the variant does not wait for it). The
+  scheduler package's part exists: the native CI package finalizer (`build_defs/rules.bzl`) gives
+  every test of a package listed in `SANITIZER_VARIANT_PACKAGES`, today `//donner/base/tasks`, a
+  `ci_tsan_` and a `ci_asan_` variant, built through a configuration transition with the flags of
+  `--config=tsan` and `--config=asan` (`build_defs/sanitizer_variants.bzl`, checked against
+  `.bazelrc` by `//build_defs:sanitizer_variants_tests`), which the native CI invocation and its
+  affected-target selection run on Linux.
 - **Both modes.** The default build runs threaded. The compiled-out variant
   ([Configuration](#configuration)) runs the scheduler tests, the renderer's tests and every
   client's tests with threading compiled out, and the symbol check over Donner's object files of
@@ -1666,11 +1674,10 @@ clients that size work from documents.
   - A parker change is never left unnotified for a sleeper that will wait, no change is lost, the
     record bounds hold, and every returned record comes back exactly once:
     `//donner/base/tasks:parker_tests` and `//donner/base/tasks:task_record_tests`, each race
-    observed red with its step broken; under ThreadSanitizer, the pull-request lane above until the
-    variant of Milestone S4 exists.
+    observed red with its step broken; under ThreadSanitizer, their `ci_tsan_` variants on Linux.
   - Every item is taken exactly once from a deque: `//donner/base/tasks:deque_tests`, on both deque
-    forms in the native CI lanes, and on the sequentially consistent form under ThreadSanitizer, the
-    pull-request lane above until the variant of Milestone S4 exists.
+    forms in the native CI lanes, and on the sequentially consistent form under ThreadSanitizer, in
+    `ci_tsan_deque_tests` on Linux.
   - Results equal sequential evaluation: `//donner/base/tasks:task_scheduler_fuzzer`.
   - The stack-floor check stops the process with a named failure: a death test in
     `//donner/base/tasks:task_scheduler_tests`. It is a release assertion, so it is enforced in

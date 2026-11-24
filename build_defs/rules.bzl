@@ -12,6 +12,7 @@ load("//build_defs:wasm_profiles.bzl", "WASM_OPTION_INPUTS", "WASM_OPTION_OUTPUT
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//build_defs:performance.bzl", "native_speed_copts")
+load("//build_defs:sanitizer_variants.bzl", "SANITIZER_VARIANTS", "SANITIZER_VARIANT_PACKAGES")
 load("//build_defs:variant_neutral.bzl", "variant_neutral_srcs")
 load("//build_defs:variant_settings.bzl", "variant_neutral_default", "variant_transition")
 load(
@@ -458,6 +459,84 @@ _donner_multi_transitioned_test = rule(
         ),
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
+
+def _sanitizer_transition_impl(settings, attr):
+    variant = SANITIZER_VARIANTS[attr.sanitizer]
+    copt = "//command_line_option:copt"
+    features = "//command_line_option:features"
+    linkopt = "//command_line_option:linkopt"
+    return {
+        copt: settings[copt] + variant.copts,
+        features: settings[features] + variant.features,
+        linkopt: settings[linkopt] + variant.linkopts,
+        "//command_line_option:strip": "never",
+    }
+
+# Not a product variant: it writes no setting of variant_settings.bzl, so libraries below it still
+# share their compiles across product variants, now in the sanitizer's configuration.
+_sanitizer_transition = transition(
+    implementation = _sanitizer_transition_impl,
+    inputs = [
+        "//command_line_option:copt",
+        "//command_line_option:features",
+        "//command_line_option:linkopt",
+    ],
+    outputs = [
+        "//command_line_option:copt",
+        "//command_line_option:features",
+        "//command_line_option:linkopt",
+        "//command_line_option:strip",
+    ],
+)
+
+_donner_sanitizer_test = rule(
+    implementation = _donner_transitioned_executable_impl,
+    test = True,
+    attrs = {
+        "dep": attr.label(
+            mandatory = True,
+            executable = True,
+            cfg = _sanitizer_transition,
+        ),
+        "fixed_test_env": attr.string_dict(),
+        "sanitizer": attr.string(mandatory = True, values = sorted(SANITIZER_VARIANTS.keys())),
+    } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
+)
+
+def _declare_sanitizer_variants(sanitizers):
+    """Adds a sanitizer variant of every test in the package, for each of `sanitizers`.
+
+    The native CI package finalizer calls it for the packages of SANITIZER_VARIANT_PACKAGES, after
+    every rule of the package is declared, so a test added to the package gets its variants
+    without a list to keep. For each `cc_test` that is not `manual` it emits
+    `ci_{sanitizer}_{name}` (a finalizer's targets carry its `ci_` prefix), which builds the test and everything it links with that sanitizer's
+    options (sanitizer_variants.bzl) and runs it with the sanitizer's test environment. The
+    variants are Linux only. They take the test's size, timeout, flakiness, shard count and tags,
+    plus `sanitizer_{sanitizer}`, so the native CI invocation and its affected-target selection
+    run them beside the plain tests, and a test that changes selects its variants.
+
+    Args:
+      sanitizers: The SANITIZER_VARIANTS keys to emit.
+    """
+    for rule in native.existing_rules().values():
+        if rule["kind"] != "cc_test" or "manual" in rule["tags"]:
+            continue
+        # Only the attributes a test set: a view has no entry for one left at its default, and an
+        # unset shard count reads as -1.
+        timing = {key: rule[key] for key in ("size", "timeout", "flaky") if key in rule}
+        if rule.get("shard_count", -1) >= 0:
+            timing["shard_count"] = rule["shard_count"]
+        for sanitizer in sanitizers:
+            _donner_sanitizer_test(
+                name = "ci_{}_{}".format(sanitizer, rule["name"]),
+                dep = ":" + rule["name"],
+                sanitizer = sanitizer,
+                fixed_test_env = SANITIZER_VARIANTS[sanitizer].test_env,
+                tags = list(rule["tags"]) + ["sanitizer_" + sanitizer],
+                target_compatible_with = ["@platforms//os:linux"],
+                testonly = True,
+                **timing
+            )
 
 # Tag for a test that opens a GPU device. It takes one unit of the `local_gpu` resource while
 # the test runs locally. .bazelrc declares one unit by default, so GPU-opening tests run one at
@@ -1512,6 +1591,9 @@ def wasm_ci_test(actual, profile, required_outputs = [], payload_budget = False)
         )
 
 def _finalize_ci_package(name, visibility):
+    sanitizers = SANITIZER_VARIANT_PACKAGES.get(native.package_name())
+    if sanitizers:
+        _declare_sanitizer_variants(sanitizers)
     declare_darwin_variants(struct(build = ci_platform_build, test = ci_platform_test))
 
 # Consumer builds also support Bazel 7. Only the root CI workspace needs finalizers.

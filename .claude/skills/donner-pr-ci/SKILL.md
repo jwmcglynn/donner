@@ -166,7 +166,7 @@ Workflow map (all in `.github/workflows/`):
 | `pr_metadata.yml`    | PR opened/synchronize/reopened/edited                                                                                        | PR text checks (`tools/check_pr_body.py`); its own concurrency group, never touches CI                         |
 | `cmake.yml`          | push to main + dispatch + PR touching CMake inputs (see its `paths`); branch push: Linux consumer only                       | macOS CMake build/ctest; branch-push Linux consumer with `--check`                                             |
 | `lint.yml`           | push + PR                                                                                                                    | Whole-tree lint (`tools/ci/lint_lane.sh`)                                                                      |
-| `sanitizers-pr.yml`  | PR touching Geode renderer paths or `donner/base/tasks/**`                                                                   | ASan+Geode suite; ASan and TSan over `//donner/base/tasks/...` (`tasks-sanitizers`)                            |
+| `sanitizers-pr.yml`  | PR touching Geode renderer paths                                                                                             | ASan+Geode suite                                                                                               |
 | `sanitizers.yml`     | nightly cron + dispatch                                                                                                      | Full sanitizer sweep                                                                                           |
 | `coverage.yml`       | nightly cron + dispatch (main only)                                                                                          | Complete-tree coverage; separate `upload-coverage` job sends it to Codecov (no PR runs or patch status)        |
 | `fuzz.yml`           | nightly cron + dispatch + PR touching `**/*_fuzzer.{cc,cpp,h}`, `**/corpus/**`, `build_defs/rules.bzl`, or `fuzz.yml` itself | Fuzzer regression suite                                                                                        |
@@ -178,8 +178,8 @@ Workflow map (all in `.github/workflows/`):
 **Check-name collisions**: `gh pr checks` interleaves every workflow's checks, and job names
 repeat — `cmake.yml` also defines `gatekeeper`, `linux`, and `macos` (its build lanes show a
 matrix suffix, e.g. `linux (tiny_skia)`). Other names you will see: `lint` and
-`lint-self-hosted` (lint.yml), `asan-geode` and `tasks-sanitizers` (sanitizers-pr.yml).
-Disambiguate by the run URL's workflow name, never by the job-name column alone.
+`lint-self-hosted` (lint.yml), `asan-geode` (sanitizers-pr.yml). Disambiguate
+by the run URL's workflow name, never by the job-name column alone.
 
 ## 6. Failure decision tree: transient vs real
 
