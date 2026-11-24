@@ -11,16 +11,16 @@ namespace donner::svg::parser {
 namespace {
 
 /**
- * Returns true if every component of \p transform is finite.
+ * Returns true if every component of \p destFromSource is finite.
  *
  * Each number is range-checked as it is parsed, but composing a list of transform functions can
  * still overflow, for example `scale(1e200) scale(1e200)`, and a later zero scale turns that
  * infinity into NaN.
  *
- * @param transform Transform to check.
+ * @param destFromSource Transform to check.
  */
-bool IsFiniteTransform(const Transform2d& transform) {
-  return std::all_of(std::begin(transform.data), std::end(transform.data),
+bool IsFiniteTransform(const Transform2d& destFromSource) {
+  return std::all_of(std::begin(destFromSource.data), std::end(destFromSource.data),
                      [](double value) { return std::isfinite(value); });
 }
 
@@ -170,13 +170,13 @@ private:
    * Finishes a transform function: checks that the transform composed so far is finite, then
    * consumes the ')' that ends the function, with the whitespace around it.
    *
-   * @param transform Transform composed up to and including this function.
+   * @param destFromSource Transform composed up to and including this function.
    * @param functionStart Offset of the start of this function, for the error range.
    * @return An error if the transform is not finite or the next character is not ')'.
    */
-  std::optional<ParseDiagnostic> finishFunction(const Transform2d& transform,
+  std::optional<ParseDiagnostic> finishFunction(const Transform2d& destFromSource,
                                                 const FileOffset& functionStart) {
-    if (!IsFiniteTransform(transform)) {
+    if (!IsFiniteTransform(destFromSource)) {
       ParseDiagnostic err;
       err.reason = "Transform out of range";
       err.range = rangeFrom(functionStart.offset.value());
