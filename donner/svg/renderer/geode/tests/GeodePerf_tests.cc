@@ -396,6 +396,50 @@ TEST_F(GeodePerfTest, DecodedImages_UnchangedFrameWritesAndCreatesNothing) {
   }
 }
 
+/// An element filtered by an `feImage` of a same-document fragment.
+constexpr std::string_view kFeImageFragmentSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <g id="frag">
+      <rect x="10" y="12" width="44" height="30" fill="#c33" fill-opacity="0.6"/>
+      <circle cx="62" cy="62" r="22" fill="#36c"/>
+    </g>
+    <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+      <feImage href="#frag"/>
+    </filter>
+  </defs>
+  <rect x="4" y="4" width="92" height="92" fill="#eee" filter="url(#f)"/>
+</svg>
+)SVG";
+
+/// An `feImage` fragment raster stays on the GPU: neither the first frame nor an unchanged frame
+/// reads it back to the CPU. The readback counter belongs to the device, so it also sees the
+/// offscreen pass that renders the fragment.
+TEST_F(GeodePerfTest, FeImageFragment_RasterIsNotReadBack) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull()) << "GeodeDevice::CreateHeadless failed";
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kFeImageFragmentSvg, sink);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  int offscreenRenders = 0;
+  renderer.setOffscreenCreationHookForTesting([&] { ++offscreenRenders; });
+  (void)device->consumeReadbackStats();
+  for (int frame = 1; frame <= 2; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame);
+    offscreenRenders = 0;
+    renderer.draw(document);
+    const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+    printCounters("FeImageFragment", c);
+    EXPECT_THAT(offscreenRenders, testing::Eq(1)) << "Premise: the frame renders the fragment";
+    EXPECT_THAT(device->consumeReadbackStats().count, testing::Eq(0))
+        << "the fragment raster was read back to the CPU";
+  }
+  EXPECT_THAT(test::CountNonTransparentPixels(renderer.takeSnapshot()), testing::Gt(0u));
+}
+
 TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";

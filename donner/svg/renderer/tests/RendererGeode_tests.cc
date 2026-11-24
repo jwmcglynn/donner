@@ -14253,5 +14253,456 @@ TEST_F(RendererGeodeTest, TurbulenceDisplacementOnLargeCanvasesRunsInTiles) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// feImage rasters prepared on the GPU.
+// ---------------------------------------------------------------------------
+
+/// An `feImage` scene: a name for traces and golden labels, and its document source.
+struct FeImageScene {
+  std::string_view name;
+  std::string source;
+};
+
+/// A 16 x 12 SVG of a semi-transparent triangle over a circle, as a data URL for an `feImage`
+/// sub-document.
+constexpr std::string_view kFeImageSubDocumentHref =
+    "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 12%22%3E"
+    "%3Ccircle cx=%225%22 cy=%226%22 r=%225%22 fill=%22%2327a%22/%3E%3Cpath d=%22M2 11L9 1L15 "
+    "11Z%22 "
+    "fill=%22%23e52%22 fill-opacity=%220.6%22/%3E%3C/svg%3E";
+
+/// \p body inside a 64 x 64 view box, with \p filter defined as `#f` over the whole view box.
+std::string FeImageDocument(std::string_view filter, std::string_view body) {
+  return std::string(
+             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\"><defs>"
+             "<g id=\"frag\"><rect x=\"6\" y=\"8\" width=\"30\" height=\"20\" "
+             "fill=\"#c33\" fill-opacity=\"0.6\"/><circle cx=\"40\" cy=\"40\" r=\"13.5\" "
+             "fill=\"#36c\" stroke=\"#123\" stroke-width=\"1.5\"/></g>"
+             "<filter id=\"f\" filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"64\" "
+             "height=\"64\">") +
+         std::string(filter) + "</filter></defs>" + std::string(body) + "</svg>";
+}
+
+/// The element every scene filters, a light square under the filter `#f`.
+constexpr std::string_view kFeImageFilteredSquare =
+    "<rect x=\"2\" y=\"2\" width=\"60\" height=\"60\" fill=\"#eee\" filter=\"url(#f)\"/>";
+
+/// Scenes covering each way an `feImage` raster is prepared and placed.
+std::vector<FeImageScene> FeImageScenes() {
+  const std::string subDocument = "<feImage href=\"" + std::string(kFeImageSubDocumentHref) + "\" ";
+  const std::string square(kFeImageFilteredSquare);
+  return {
+      {"fragment_in_defs", FeImageDocument("<feImage href=\"#frag\"/>", square)},
+      {"fragment_in_render_tree",
+       FeImageDocument(
+           "<feImage href=\"#shown\"/>",
+           "<g id=\"shown\" transform=\"translate(4 2)\"><use href=\"#frag\"/></g>" + square)},
+      {"primitive_subregion",
+       FeImageDocument("<feImage href=\"#frag\" x=\"10\" y=\"5\" width=\"30\" height=\"40\"/>",
+                       square)},
+      {"rotated_and_scaled_element",
+       FeImageDocument("<feImage href=\"#frag\"/>",
+                       "<g transform=\"rotate(20 32 32) scale(0.9)\">" + square + "</g>")},
+      {"skewed_element", FeImageDocument("<feImage href=\"#frag\"/>",
+                                         "<g transform=\"skewX(15)\">" + square + "</g>")},
+      {"blended_in_linear_rgb",
+       FeImageDocument("<feImage href=\"#frag\" result=\"img\"/><feGaussianBlur in=\"img\" "
+                       "stdDeviation=\"1.5\" result=\"soft\"/><feComposite in=\"soft\" "
+                       "in2=\"SourceGraphic\" operator=\"over\"/>",
+                       square)},
+      {"nested_fragment_chain",
+       FeImageDocument("<feImage href=\"#outer\"/>",
+                       "<defs><filter id=\"inner\" filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" "
+                       "width=\"64\" height=\"64\"><feImage href=\"#frag\" result=\"i\"/>"
+                       "<feOffset in=\"i\" dx=\"7\" dy=\"5\"/></filter><g id=\"outer\">"
+                       "<rect x=\"30\" y=\"4\" width=\"28\" height=\"20\" fill=\"#5a5\" "
+                       "filter=\"url(#inner)\"/></g></defs>" +
+                           square)},
+      {"recursive_reference",
+       FeImageDocument("<feImage href=\"#loop\" result=\"img\"/><feOffset in=\"img\" dx=\"9\" "
+                       "dy=\"6\" result=\"moved\"/><feMerge><feMergeNode in=\"SourceGraphic\"/>"
+                       "<feMergeNode in=\"moved\"/></feMerge>",
+                       "<g id=\"loop\" filter=\"url(#f)\"><rect x=\"8\" y=\"8\" width=\"40\" "
+                       "height=\"30\" fill=\"#a50\"/></g>")},
+      {"mutual_recursion",
+       FeImageDocument("<feImage href=\"#b\" result=\"img\"/><feMerge><feMergeNode "
+                       "in=\"SourceGraphic\"/><feMergeNode in=\"img\"/></feMerge>",
+                       "<defs><filter id=\"g\" filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" "
+                       "width=\"64\" height=\"64\"><feImage href=\"#a\" result=\"img\"/>"
+                       "<feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"img\"/>"
+                       "</feMerge></filter></defs>"
+                       "<g id=\"a\" filter=\"url(#f)\"><rect x=\"4\" y=\"30\" width=\"30\" "
+                       "height=\"20\" fill=\"#07a\"/></g><g id=\"b\" filter=\"url(#g)\">"
+                       "<circle cx=\"44\" cy=\"20\" r=\"12\" fill=\"#a07\"/></g>")},
+      {"sub_document_meet",
+       FeImageDocument(subDocument + "x=\"4\" y=\"10\" width=\"56\" height=\"30\" "
+                                     "preserveAspectRatio=\"xMaxYMid meet\"/>",
+                       square)},
+      {"sub_document_slice",
+       FeImageDocument(subDocument + "x=\"6\" y=\"4\" width=\"20\" height=\"50\" "
+                                     "preserveAspectRatio=\"xMinYMax slice\"/>",
+                       square)},
+      {"sub_document_pixelated",
+       FeImageDocument(
+           subDocument + "x=\"0\" y=\"0\" width=\"64\" height=\"48\" preserveAspectRatio=\"none\" "
+                         "style=\"image-rendering: pixelated\"/>",
+           "<g transform=\"rotate(-12 32 32)\">" + square + "</g>")},
+  };
+}
+
+/// One rendering of a scene and the readbacks drawing it ran, counted before the frame itself is
+/// read back.
+struct CountedRender {
+  RendererBitmap bitmap;
+  int readbacks = 0;
+};
+
+/// \p source drawn at \p canvas on a fresh renderer of \p device, as a single-threaded document or,
+/// with \p mode `ConcurrentDom`, recorded into a snapshot and replayed. A snapshot recorder does
+/// not composite texture snapshots, so the replay reads each `feImage` raster back to CPU pixels:
+/// the path a renderer that keeps them on the GPU must reproduce exactly.
+CountedRender RenderCountingReadbacks(const std::shared_ptr<geode::GeodeDevice>& device,
+                                      const std::string& source, Vector2i canvas,
+                                      ThreadingMode mode) {
+  std::optional<SVGDocument> document = ParseFilterDocument(source);
+  if (!document) {
+    return {};
+  }
+  document->setCanvasSize(canvas.x, canvas.y);
+  // Resources load outside document access, which a concurrent-DOM draw holds while it records.
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(*document, false, warnings);
+  document->setThreadingMode(mode);
+  RendererGeode renderer(device);
+  (void)device->consumeReadbackStats();
+  if (mode == ThreadingMode::ConcurrentDom) {
+    // The renderer's own document draw holds no document access, which a concurrent-DOM
+    // document's capture needs; the driver's draw takes it.
+    RendererDriver driver(renderer);
+    driver.draw(*document);
+  } else {
+    renderer.draw(*document);
+  }
+  CountedRender result;
+  result.readbacks = device->consumeReadbackStats().count;
+  result.bitmap = renderer.takeSnapshot();
+  return result;
+}
+
+/// Each way an `feImage` raster is prepared stays on the GPU, with no readback, and paints exactly
+/// what the same raster read back to CPU pixels and uploaded again paints.
+TEST_F(RendererGeodeTest, FeImageRastersStayOnTheGpuAndPaintWhatReadBackPixelsPaint) {
+  for (const FeImageScene& scene : FeImageScenes()) {
+    SCOPED_TRACE(scene.name);
+    const CountedRender readBack = RenderCountingReadbacks(sharedDevice(), scene.source, {128, 128},
+                                                           ThreadingMode::ConcurrentDom);
+    EXPECT_THAT(readBack.readbacks, testing::Gt(0))
+        << "Premise: the reference reads its feImage raster back";
+    EXPECT_THAT(test::CountNonTransparentPixels(readBack.bitmap), testing::Gt(0u))
+        << "Premise: the scene paints";
+    const CountedRender resident = RenderCountingReadbacks(sharedDevice(), scene.source, {128, 128},
+                                                           ThreadingMode::SingleThreaded);
+    EXPECT_THAT(resident.readbacks, testing::Eq(0))
+        << "the feImage raster was read back to the CPU during the frame";
+    editor::tests::CompareBitmapToBitmap(resident.bitmap, readBack.bitmap,
+                                         "feimage_gpu_" + std::string(scene.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// A tile extent that splits other filters leaves an `feImage` graph whole: it samples its raster
+/// in one execution, on the device grid, whether the raster is a GPU texture or CPU pixels.
+TEST_F(RendererGeodeTest, TileExtentLeavesAnFeImageGraphWhole) {
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  device->filterEngine().setMaximumTileExtentForTesting(48);
+  (void)RenderCountingReadbacks(
+      device, FeImageDocument("<feGaussianBlur stdDeviation=\"2\"/>", kFeImageFilteredSquare),
+      {128, 128}, ThreadingMode::SingleThreaded);
+  ASSERT_THAT(device->filterEngine().lastExecutionMemory().tileExecutions, testing::Gt(1u))
+      << "Premise: the extent splits a blur of the same region";
+  for (const FeImageScene& scene : FeImageScenes()) {
+    if (scene.name != "fragment_in_defs" && scene.name != "sub_document_meet") {
+      continue;
+    }
+    SCOPED_TRACE(scene.name);
+    const CountedRender readBack =
+        RenderCountingReadbacks(device, scene.source, {128, 128}, ThreadingMode::ConcurrentDom);
+    EXPECT_THAT(device->filterEngine().lastExecutionMemory().tileExecutions, testing::Eq(1u));
+    const CountedRender resident =
+        RenderCountingReadbacks(device, scene.source, {128, 128}, ThreadingMode::SingleThreaded);
+    EXPECT_THAT(device->filterEngine().lastExecutionMemory().tileExecutions, testing::Eq(1u));
+    EXPECT_THAT(resident.readbacks, testing::Eq(0));
+    editor::tests::CompareBitmapToBitmap(resident.bitmap, readBack.bitmap,
+                                         "feimage_gpu_untiled_" + std::string(scene.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// The texture of one offscreen frame of \p host's device, \p size pixels square, in which \p draw
+/// paints.
+std::shared_ptr<const RendererTextureSnapshot> RenderOffscreenTexture(
+    RendererGeode& host, int size, const std::function<void(RendererInterface&)>& draw) {
+  std::unique_ptr<RendererInterface> producer = host.createOffscreenInstance();
+  if (!producer) {
+    return nullptr;
+  }
+  RenderViewport viewport;
+  viewport.size = Vector2d(size, size);
+  viewport.devicePixelRatio = 1.0;
+  producer->beginFrame(viewport);
+  draw(*producer);
+  producer->endFrame();
+  return producer->takeTextureSnapshot();
+}
+
+/// A one-node graph that places \p image over the filter region.
+components::FilterGraph SingleImageGraph(components::filter_primitive::Image image) {
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.primitive = std::move(image);
+  graph.nodes.push_back(std::move(node));
+  return graph;
+}
+
+/// Runs \p graph over a \p kViewportSize square in one frame of \p host and returns the frame.
+RendererBitmap RenderImageGraphFrame(RendererGeode& host, components::FilterGraph graph,
+                                     const std::function<void()>& afterFilter = {}) {
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  host.beginFrame(viewport);
+  host.setTransform(Transform2d());
+  host.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  host.popFilterLayer();
+  graph = components::FilterGraph();
+  if (afterFilter) {
+    afterFilter();
+  }
+  host.endFrame();
+  return host.takeSnapshot();
+}
+
+/// A GPU-resident raster is sampled without the unpremultiply and premultiply round trip its CPU
+/// pixels take, uploads nothing, and paints exactly what those pixels paint, edges of partial
+/// coverage and smooth resampling included.
+TEST_F(RendererGeodeTest, PreparedFeImageTextureIsSampledWithoutAnUpload) {
+  RendererGeode host = createRenderer();
+  const std::shared_ptr<const RendererTextureSnapshot> texture =
+      RenderOffscreenTexture(host, 24, [](RendererInterface& producer) {
+        producer.setPaint(solidFill(css::RGBA(30, 160, 220, 140)));
+        producer.drawEllipse(Box2d({1.3, 2.6}, {22.1, 20.4}), StrokeParams{});
+        producer.setPaint(solidFill(css::RGBA(250, 60, 10, 255)));
+        producer.drawRect(Box2d({5.5, 4.25}, {13.75, 21.5}), StrokeParams{});
+      });
+  ASSERT_THAT(texture, testing::NotNull());
+  ASSERT_THAT(texture->alphaType(), testing::Eq(AlphaType::Premultiplied));
+  const RendererBitmap straight = texture->takeSnapshot();
+  ASSERT_THAT(straight.dimensions, testing::Eq(Vector2i(24, 24)));
+
+  // The pixels the raster reached the filter engine as before it stayed on the GPU: read back
+  // and unpremultiplied, to be premultiplied again on upload.
+  components::filter_primitive::Image uploaded;
+  uploaded.imageData = std::make_shared<const std::vector<uint8_t>>(
+      CopyTightRgbaRows(straight.pixels, 24, 24, straight.rowBytes));
+  uploaded.imageWidth = 24;
+  uploaded.imageHeight = 24;
+  components::filter_primitive::Image resident;
+  resident.imageTexture = texture;
+  resident.imageWidth = 24;
+  resident.imageHeight = 24;
+
+  const RendererBitmap fromPixels = RenderImageGraphFrame(host, SingleImageGraph(uploaded));
+  const geode::GeodeCounters pixelFrame = host.lastFrameTimings().counters;
+  const RendererBitmap fromTexture = RenderImageGraphFrame(host, SingleImageGraph(resident));
+  const geode::GeodeCounters textureFrame = host.lastFrameTimings().counters;
+  ASSERT_THAT(pixelFrame.textureWriteBytes, testing::Ge(24u * 24u * 4u))
+      << "Premise: CPU pixels are uploaded";
+  EXPECT_THAT(textureFrame.textureWriteBytes, testing::Eq(0u))
+      << "the GPU-resident raster was uploaded again";
+  ASSERT_THAT(test::CountNonTransparentPixels(fromPixels), testing::Gt(0u));
+  editor::tests::CompareBitmapToBitmap(fromTexture, fromPixels, "feimage_texture_versus_pixels",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A raster whose recorded extent is not its texture's paints transparent: the image pass samples
+/// the whole texture, so any other extent would misplace it.
+TEST_F(RendererGeodeTest, FeImageTextureOfAnotherExtentPaintsTransparent) {
+  RendererGeode host = createRenderer();
+  const std::shared_ptr<const RendererTextureSnapshot> texture =
+      RenderOffscreenTexture(host, 16, [](RendererInterface& producer) {
+        producer.setPaint(solidFill(css::RGBA(20, 120, 40, 255)));
+        producer.drawRect(Box2d({0, 0}, {16, 16}), StrokeParams{});
+      });
+  ASSERT_THAT(texture, testing::NotNull());
+  components::filter_primitive::Image matching;
+  matching.imageTexture = texture;
+  matching.imageWidth = 16;
+  matching.imageHeight = 16;
+  components::filter_primitive::Image mismatched = matching;
+  mismatched.imageWidth = 15;
+  EXPECT_THAT(
+      test::CountNonTransparentPixels(RenderImageGraphFrame(host, SingleImageGraph(matching))),
+      testing::Gt(0u))
+      << "Premise: the texture paints at its own extent";
+  EXPECT_THAT(
+      test::CountNonTransparentPixels(RenderImageGraphFrame(host, SingleImageGraph(mismatched))),
+      testing::Eq(0u));
+}
+
+/// A frame that samples a prepared `feImage` texture keeps it alive until the frame submits, even
+/// once nothing else holds it: the backing is not released while recorded work still names it.
+TEST_F(RendererGeodeTest, PreparedFeImageTextureLivesUntilItsFrameSubmits) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  RendererGeode host(device);
+  std::shared_ptr<const RendererTextureSnapshot> texture =
+      RenderOffscreenTexture(host, 16, [](RendererInterface& producer) {
+        producer.setPaint(solidFill(css::RGBA(200, 40, 20, 255)));
+        producer.drawRect(Box2d({0, 0}, {16, 16}), StrokeParams{});
+      });
+  ASSERT_THAT(texture, testing::NotNull());
+  components::filter_primitive::Image image;
+  image.imageTexture = std::move(texture);
+  image.imageWidth = 16;
+  image.imageHeight = 16;
+  image.preserveAspectRatio = PreserveAspectRatio::None();
+
+  // Once the filter has recorded, the frame is the texture's only holder; retire everything
+  // released so far before the frame submits.
+  const RendererBitmap snapshot = RenderImageGraphFrame(
+      host, SingleImageGraph(std::move(image)), [&] { device->drainDeferredTextureBackings(); });
+  ASSERT_THAT(snapshot.dimensions, testing::Eq(Vector2i(64, 64)));
+  RendererBitmap expected = snapshot;
+  for (std::size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset + 0] = 200;
+    expected.pixels[offset + 1] = 40;
+    expected.pixels[offset + 2] = 20;
+    expected.pixels[offset + 3] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(snapshot, expected, "feimage_texture_outlives_graph",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// A prepared `feImage` texture that another device context produced is registered on the context
+/// that samples it, which then paints exactly what the producer rendered. Preparation always
+/// renders on the host's own device today, so this reaches the registration through a graph that
+/// carries the other context's texture.
+TEST_F(RendererGeodeTest, FeImageTextureFromAnotherContextIsRegisteredBeforeSampling) {
+  const std::shared_ptr<geode::GeodeDevice> producerContext =
+      CreateSharedBackendContext(sharedDevice());
+  const std::shared_ptr<geode::GeodeDevice> consumerContext =
+      CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(producerContext, testing::NotNull());
+  ASSERT_THAT(consumerContext, testing::NotNull());
+  ASSERT_THAT(producerContext->runtimeDevice().deviceId(),
+              testing::Ne(consumerContext->runtimeDevice().deviceId()))
+      << "Premise: the two contexts are separate runtime devices";
+  RendererGeode producer(producerContext);
+  components::filter_primitive::Image image;
+  image.imageTexture = RenderOffscreenTexture(producer, 16, [](RendererInterface& offscreen) {
+    offscreen.setPaint(solidFill(css::RGBA(30, 90, 210, 255)));
+    offscreen.drawRect(Box2d({0, 0}, {16, 16}), StrokeParams{});
+  });
+  ASSERT_THAT(image.imageTexture, testing::NotNull());
+  image.imageWidth = 16;
+  image.imageHeight = 16;
+  image.preserveAspectRatio = PreserveAspectRatio::None();
+
+  RendererGeode consumer(consumerContext);
+  const RendererBitmap snapshot = RenderImageGraphFrame(consumer, SingleImageGraph(image));
+  ASSERT_THAT(snapshot.dimensions, testing::Eq(Vector2i(64, 64)));
+  RendererBitmap expected = snapshot;
+  for (std::size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset + 0] = 30;
+    expected.pixels[offset + 1] = 90;
+    expected.pixels[offset + 2] = 210;
+    expected.pixels[offset + 3] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(snapshot, expected, "feimage_texture_from_another_context",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+/// Textures \p device holds once everything it was handed to retire is retired.
+std::int64_t LiveTexturesAfterRetirement(geode::GeodeDevice& device, RendererGeode& renderer) {
+  EXPECT_THAT(renderer.waitForSubmittedWork(), testing::Eq(geode::GpuWaitResult::Complete));
+  device.drainDeferredTextureBackings();
+  return static_cast<std::int64_t>(device.lifetimeTextureCreates()) -
+         static_cast<std::int64_t>(device.lifetimeTextureReleases());
+}
+
+/// A draw cancelled after its `feImage` raster was prepared reads nothing back, releases the
+/// raster's texture, and leaves the next draw painting the scene exactly.
+TEST_F(RendererGeodeTest, CancelledDrawReleasesItsPreparedFeImageTexture) {
+  const std::string source = FeImageScenes().front().source;
+  std::optional<SVGDocument> document = ParseFilterDocument(source);
+  ASSERT_THAT(document, testing::Ne(std::nullopt)) << "the scene must parse";
+  document->setCanvasSize(128, 128);
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  RendererGeode renderer(device);
+  RendererDriver driver(renderer);
+  RenderViewport viewport;
+  viewport.size = Vector2d(128, 128);
+  viewport.devicePixelRatio = 1.0;
+  ASSERT_THAT(driver.drawInterruptibly(*document, viewport, Transform2d(), {}), testing::IsTrue())
+      << "Premise: an uncancelled draw completes";
+
+  int offscreens = 0;
+  renderer.setOffscreenCreationHookForTesting([&] { ++offscreens; });
+  std::vector<std::int64_t> liveTextures;
+  for (int draw = 0; draw < 3; ++draw) {
+    SCOPED_TRACE(testing::Message() << "cancelled draw " << draw);
+    offscreens = 0;
+    (void)device->consumeReadbackStats();
+    EXPECT_THAT(driver.drawInterruptibly(*document, viewport, Transform2d(),
+                                         [&] { return offscreens > 0; }),
+                testing::IsFalse())
+        << "the draw was not cancelled";
+    EXPECT_THAT(offscreens, testing::Eq(1)) << "Premise: the raster was prepared before the cancel";
+    EXPECT_THAT(device->consumeReadbackStats().count, testing::Eq(0));
+    liveTextures.push_back(LiveTexturesAfterRetirement(*device, renderer));
+  }
+  EXPECT_THAT(liveTextures, testing::Each(testing::Eq(liveTextures.front())))
+      << "each cancelled draw kept the texture of its feImage raster";
+
+  renderer.setOffscreenCreationHookForTesting({});
+  ASSERT_THAT(driver.drawInterruptibly(*document, viewport, Transform2d(), {}), testing::IsTrue())
+      << "the draw after the cancelled ones did not complete";
+  editor::tests::CompareBitmapToBitmap(
+      renderer.takeSnapshot(),
+      RenderCountingReadbacks(device, source, {128, 128}, ThreadingMode::ConcurrentDom).bitmap,
+      "feimage_after_cancelled_draw", editor::tests::PixelmatchIdentityParams());
+}
+
+/// A device lost while an `feImage` raster is prepared ends the frame without reading anything
+/// back or painting it; a new device renders the scene again.
+TEST_F(RendererGeodeTest, DeviceLostWhilePreparingAnFeImageReadsNothingBack) {
+  const std::string source = FeImageScenes().front().source;
+  {
+    const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(device, testing::NotNull());
+    std::optional<SVGDocument> document = ParseFilterDocument(source);
+    ASSERT_THAT(document, testing::Ne(std::nullopt)) << "the scene must parse";
+    document->setCanvasSize(128, 128);
+    RendererGeode renderer(device);
+    renderer.setOffscreenCreationHookForTesting([&] { renderer.injectDeviceLossForTesting(); });
+    (void)device->consumeReadbackStats();
+    renderer.draw(*document);
+    EXPECT_THAT(renderer.deviceLost(), testing::IsTrue())
+        << "Premise: the injected loss took effect";
+    const geode::GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
+    EXPECT_THAT(stats.count, testing::Eq(0));
+    EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  }
+  const std::shared_ptr<geode::GeodeDevice> fresh = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(fresh, testing::NotNull());
+  const CountedRender resident =
+      RenderCountingReadbacks(fresh, source, {128, 128}, ThreadingMode::SingleThreaded);
+  EXPECT_THAT(resident.readbacks, testing::Eq(0));
+  editor::tests::CompareBitmapToBitmap(
+      resident.bitmap,
+      RenderCountingReadbacks(fresh, source, {128, 128}, ThreadingMode::ConcurrentDom).bitmap,
+      "feimage_after_device_loss", editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg

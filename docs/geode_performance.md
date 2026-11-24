@@ -784,6 +784,22 @@ group every frame:
   rasterized by the renderer driver within a per-frame source-image budget of 4 MiB, so on a
   canvas above about 1000 pixels the element is hidden on every backend
   ([#2662](https://github.com/jwmcglynn/donner/issues/2662)).
+- **`feImage` rasters are rendered again on every draw.** The renderer driver renders an
+  `feImage` that references an element or an SVG document into an offscreen target of the same
+  device each time it prepares the filter. On Geode the filter samples that target as a texture:
+  no readback and no upload, charged as RGBA8 bytes to the per-frame source-image budget and,
+  while the texture is held, to the document's computed-filter budget
+  (`FeImageRastersStayOnTheGpuAndPaintWhatReadBackPixelsPaint`,
+  `FeImageFragment_RasterIsNotReadBack`). The offscreen render itself and a new target are
+  repeated by every draw that prepares the filter, and because the target is new, the image pass
+  creates one new texture view and one new bind group for it on every such draw. This repeats
+  because the flag that marks a referenced subtree as changed is consumed by the render-tree
+  update before the driver prepares filters, and nothing persistent records it for a cached raster
+  to key on ([#2710](https://github.com/jwmcglynn/donner/issues/2710)). The host renderer's frame
+  counters do not yet show this cost: the offscreen pass clears the device's counter sink, so the
+  host's later work in that frame goes uncounted
+  ([#2718](https://github.com/jwmcglynn/donner/issues/2718)). A snapshot recorder, which a
+  concurrent-DOM draw uses, still reads the raster back to CPU pixels.
 - **Noise is anchored at the filter raster's origin.** `feTurbulence` evaluates the noise at each
   pixel through the linear part of the filter transform only, so the pattern follows the raster's
   corner rather than the filter's user space, and moves under a pan or a view box offset

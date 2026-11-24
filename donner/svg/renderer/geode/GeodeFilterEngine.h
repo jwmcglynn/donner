@@ -158,6 +158,22 @@ public:
 };
 
 /**
+ * Caller-side resolution of the GPU raster an `feImage` primitive holds in
+ * `filter_primitive::Image::imageTexture`, for a renderer whose texture snapshot type this engine
+ * does not know.
+ */
+class FilterImageTextureSource {
+public:
+  virtual ~FilterImageTextureSource() = default;
+
+  /// The texture holding \p primitive's premultiplied raster on the engine's device, kept alive
+  /// until the caller's frame submits, or null when it cannot be sampled there.
+  /// @param primitive Primitive whose `imageTexture` is set.
+  virtual const gpu::Texture* imageTexture(
+      const svg::components::filter_primitive::Image& primitive) = 0;
+};
+
+/**
  * A texture flowing between filter primitives: the runtime handle holding it and the descriptor
  * it was allocated with.
  *
@@ -343,19 +359,19 @@ public:
    * @param backdropDesc Descriptor \p backdrop was allocated with; ignored without \p backdrop.
    * @param outputClipRegion Optional final clip region in the same coordinates as \p filterRegion.
    *   A renderer may use a wider working region for intermediate primitives of a single effect.
+   * @param imageTextures Resolves `feImage` rasters held as GPU textures, or null when the caller
+   *   holds none; an unresolved one paints transparent.
    * @return The outcome of the execution; see \ref FilterExecutionResult.
    */
-  FilterExecutionResult execute(const svg::components::FilterGraph& graph,
-                                const gpu::Texture& sourceGraphic,
-                                const gpu::TextureDescriptor& sourceGraphicDesc,
-                                const Box2d& filterRegion, const Transform2d& deviceFromFilter,
-                                FilterTextureAllocator& textureAllocator,
-                                svg::components::FilterExecutionBudget* executionBudget = nullptr,
-                                std::optional<FilterTilePlan> admittedPlan = std::nullopt,
-                                FrameCommandBufferSink* frameSink = nullptr,
-                                const gpu::Texture* backdrop = nullptr,
-                                const gpu::TextureDescriptor* backdropDesc = nullptr,
-                                const Box2d* outputClipRegion = nullptr);
+  FilterExecutionResult execute(
+      const svg::components::FilterGraph& graph, const gpu::Texture& sourceGraphic,
+      const gpu::TextureDescriptor& sourceGraphicDesc, const Box2d& filterRegion,
+      const Transform2d& deviceFromFilter, FilterTextureAllocator& textureAllocator,
+      svg::components::FilterExecutionBudget* executionBudget = nullptr,
+      std::optional<FilterTilePlan> admittedPlan = std::nullopt,
+      FrameCommandBufferSink* frameSink = nullptr, const gpu::Texture* backdrop = nullptr,
+      const gpu::TextureDescriptor* backdropDesc = nullptr, const Box2d* outputClipRegion = nullptr,
+      FilterImageTextureSource* imageTextures = nullptr);
 
   /**
    * Begin a new frame for this engine: rewind the parameter scratch cursor and destroy the cached
@@ -624,12 +640,34 @@ private:
   ///   defaulted to the filter region. The image is fit into this rect per
   ///   preserveAspectRatio.
   /// @return The placed-image texture.
+  /// @param imageTextures Resolves a raster held as a GPU texture, or null when none is.
   FilterTexture applyImage(FilterResourceArena& arena,
                            const svg::components::filter_primitive::Image& primitive,
                            uint32_t width, uint32_t height,
                            const svg::components::FilterGraph& graph,
                            const svg::components::FilterNode& node,
-                           const Transform2d& deviceFromFilter, const Box2d& placementRegionUser);
+                           const Transform2d& deviceFromFilter, const Box2d& placementRegionUser,
+                           FilterImageTextureSource* imageTextures);
+
+  /// The texture an image primitive samples, or none, which paints transparent.
+  struct ImageSource {
+    FilterTexture texture;  //!< Source to sample; empty paints transparent.
+    bool failed = false;    //!< Whether recording failed, which fails the execution.
+  };
+
+  /// The GPU-resident raster of \p primitive when it can be sampled here: an 8-bit RGBA texture
+  /// of the raster's extent with sampled usage.
+  /// @param primitive Primitive whose `imageTexture` is set.
+  /// @param imageTextures Resolves the texture, or null when the caller holds none.
+  /// @param desc Receives the texture's descriptor, which the returned value points into.
+  ImageSource residentImageSource(const svg::components::filter_primitive::Image& primitive,
+                                  FilterImageTextureSource* imageTextures,
+                                  std::optional<gpu::TextureDescriptor>& desc);
+
+  /// Uploads \p primitive's straight-alpha CPU pixels as a premultiplied texture.
+  /// @param arena Frame resources. @param primitive Primitive whose `imageData` is set.
+  ImageSource uploadImageSource(FilterResourceArena& arena,
+                                const svg::components::filter_primitive::Image& primitive);
 
   /// Fills an image primitive's output from a transparent sample, or returns empty on refusal.
   /// @param arena Frame resources. @param output Existing image destination.

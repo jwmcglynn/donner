@@ -30,6 +30,10 @@
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
+namespace donner::svg {
+class RendererTextureSnapshot;
+}  // namespace donner::svg
+
 namespace donner::svg::components {
 
 /// Maximum accepted user-space filter offset magnitude.
@@ -530,10 +534,28 @@ struct Image {
   int imageWidth = 0;   ///< Width of loaded image in pixels.
   int imageHeight = 0;  ///< Height of loaded image in pixels.
 
+  /// Pre-rendered sub-document or fragment raster that stayed on the GPU, held instead of
+  /// \ref imageData when the renderer that prepared it composites texture snapshots on its own
+  /// device. Its texels are premultiplied and \ref imageWidth by \ref imageHeight in size.
+  std::shared_ptr<const RendererTextureSnapshot> imageTexture;
+
   /// Whether a nonempty decoded raster payload is available.
   [[nodiscard]] bool hasImageData() const { return imageData && !imageData->empty(); }
   /// Size of the decoded raster payload, or zero when no payload is loaded.
   [[nodiscard]] std::size_t imageDataSize() const { return imageData ? imageData->size() : 0; }
+  /// Whether a raster is available, as CPU pixels or as a GPU texture.
+  [[nodiscard]] bool hasPreparedImage() const { return hasImageData() || imageTexture != nullptr; }
+  /// Bytes of the available raster in either form, or zero when none is available. A texture is
+  /// charged as RGBA8 texels, the size of the same raster as CPU pixels.
+  [[nodiscard]] std::uint64_t preparedImageBytes() const {
+    if (hasImageData()) {
+      return imageData->size();
+    }
+    return imageTexture != nullptr && imageWidth > 0 && imageHeight > 0
+               ? std::uint64_t{static_cast<std::uint32_t>(imageWidth)} *
+                     static_cast<std::uint32_t>(imageHeight) * 4u
+               : 0;
+  }
 
   /// Shared handle to an external SVG sub-document. The renderer pre-renders this to pixel data
   /// before filter execution.
@@ -890,7 +912,7 @@ inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkin
       }
     }
     if (const auto* image = std::get_if<fp::Image>(&node.primitive)) {
-      const std::uint64_t bytes = std::max<std::uint64_t>(4, image->imageDataSize());
+      const std::uint64_t bytes = std::max<std::uint64_t>(4, image->preparedImageBytes());
       if (bytes > kMaximumFilterIntermediateBytes - result.imageBytes) {
         return false;
       }

@@ -371,6 +371,20 @@ private:
   bool reservePreparedFilterShadowTree(Registry& registry, Entity targetEntity);
   std::shared_ptr<const std::vector<std::uint8_t>> adoptPreparedFilterSnapshot(
       RendererBitmap snapshot, std::uint64_t reservedBytes, Registry& registry);
+  /**
+   * Store the raster \p offscreen just finished on \p image. A renderer that composites texture
+   * snapshots keeps it as a texture on the GPU, charged to the document's computed-filter budget;
+   * any other renderer reads it back to CPU pixels. A capture or admission that fails leaves the
+   * image empty, so it paints transparent.
+   *
+   * @param offscreen Renderer whose ended frame holds the raster.
+   * @param image Primitive that receives the raster.
+   * @param reservedBytes Bytes the frame's preparation budget reserved for the raster.
+   * @param registry Registry of the document being prepared.
+   */
+  void adoptPreparedFilterRaster(RendererInterface& offscreen,
+                                 components::filter_primitive::Image& image,
+                                 std::uint64_t reservedBytes, Registry& registry);
 
   /// Return prepared stages whose storage remains valid until the next preparation pass.
   /// A missing entry indicates preparation failed; an empty vector disables filtering.

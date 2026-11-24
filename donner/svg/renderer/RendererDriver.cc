@@ -1994,7 +1994,7 @@ std::optional<std::uint64_t> ExistingFilterImageBytes(const components::FilterGr
     if (!image) {
       continue;
     }
-    const std::uint64_t imageBytes = static_cast<std::uint64_t>(image->imageDataSize());
+    const std::uint64_t imageBytes = image->preparedImageBytes();
     if (imageBytes > RendererDriver::kMaximumPreparedFilterImageBytes - bytes) {
       return std::nullopt;
     }
@@ -3716,6 +3716,49 @@ std::shared_ptr<const std::vector<std::uint8_t>> RendererDriver::adoptPreparedFi
                 snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
   }
   return GetDriverComputedFilterResourceBudget(registry).adoptImage(std::move(tightPixels));
+}
+
+void RendererDriver::adoptPreparedFilterRaster(RendererInterface& offscreen,
+                                               components::filter_primitive::Image& image,
+                                               std::uint64_t reservedBytes, Registry& registry) {
+  if (!renderer_.supportsTextureSnapshotCompositing()) {
+    RendererBitmap snapshot = offscreen.takeSnapshot();
+    const Vector2i snapshotDimensions = snapshot.dimensions;
+    image.imageData = adoptPreparedFilterSnapshot(std::move(snapshot), reservedBytes, registry);
+    if (image.imageData) {
+      image.imageWidth = snapshotDimensions.x;
+      image.imageHeight = snapshotDimensions.y;
+    }
+    return;
+  }
+
+  // The consumer samples the offscreen target where it was rendered; a failed capture is not read
+  // back instead.
+  std::shared_ptr<const RendererTextureSnapshot> texture = offscreen.takeTextureSnapshot();
+  if (!texture || texture->alphaType() != AlphaType::Premultiplied) {
+    return;
+  }
+  const std::optional<std::uint64_t> actualBytes = BoundedRgbaBytes(texture->dimensions());
+  if (!actualBytes.has_value() || *actualBytes > reservedBytes) {
+    return;
+  }
+  std::shared_ptr<const void> charge =
+      GetDriverComputedFilterResourceBudget(registry).admitExternalImage(*actualBytes);
+  if (!charge) {
+    return;
+  }
+  // Members are destroyed in reverse order, so the texture is released before its charge, as the
+  // byte path frees its pixels before their reservation.
+  struct ChargedTexture {
+    std::shared_ptr<const void> charge;
+    std::shared_ptr<const RendererTextureSnapshot> texture;
+  };
+  auto charged =
+      std::make_shared<const ChargedTexture>(ChargedTexture{std::move(charge), std::move(texture)});
+  const RendererTextureSnapshot* snapshot = charged->texture.get();
+  image.imageWidth = snapshot->dimensions().x;
+  image.imageHeight = snapshot->dimensions().y;
+  image.imageTexture = std::shared_ptr<const RendererTextureSnapshot>(std::move(charged), snapshot);
 }
 
 const components::RenderingInstanceComponent* RendererDriver::beginPreparingFilterEntity(
@@ -5918,7 +5961,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
                                           Entity hostEntity) {
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
-    if (!imageNode || !imageNode->svgSubDocument || imageNode->hasImageData()) {
+    if (!imageNode || !imageNode->svgSubDocument || imageNode->hasPreparedImage()) {
       continue;
     }
 
@@ -5964,15 +6007,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
     subDriver.drawSubDocument(subDoc, Box2d::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
                               imageNode->preserveAspectRatio, Transform2d(), registry, hostEntity);
     offscreen->endFrame();
-
-    // Capture the rendered pixels.
-    RendererBitmap snapshot = offscreen->takeSnapshot();
-    const Vector2i snapshotDimensions = snapshot.dimensions;
-    imageNode->imageData = adoptPreparedFilterSnapshot(std::move(snapshot), *imageBytes, registry);
-    if (imageNode->imageData) {
-      imageNode->imageWidth = snapshotDimensions.x;
-      imageNode->imageHeight = snapshotDimensions.y;
-    }
+    adoptPreparedFilterRaster(*offscreen, *imageNode, *imageBytes, registry);
 
     // Clear the sub-document pointer since we've now rendered to pixels.
     imageNode->svgSubDocument.reset();
@@ -6001,7 +6036,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     }
     for (auto& node : filterGraph.nodes) {
       if (auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
-          imageNode && !imageNode->fragmentId.empty() && !imageNode->hasImageData()) {
+          imageNode && !imageNode->fragmentId.empty() && !imageNode->hasPreparedImage()) {
         imageNode->fragmentId = RcString();
       }
     }
@@ -6018,7 +6053,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
 
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
-    if (!imageNode || imageNode->fragmentId.empty() || imageNode->hasImageData()) {
+    if (!imageNode || imageNode->fragmentId.empty() || imageNode->hasPreparedImage()) {
       continue;
     }
 
@@ -6164,15 +6199,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     }
 
     offscreen->endFrame();
-
-    // Capture the rendered pixels.
-    RendererBitmap snapshot = offscreen->takeSnapshot();
-    const Vector2i snapshotDimensions = snapshot.dimensions;
-    imageNode->imageData = adoptPreparedFilterSnapshot(std::move(snapshot), *imageBytes, registry);
-    if (imageNode->imageData) {
-      imageNode->imageWidth = snapshotDimensions.x;
-      imageNode->imageHeight = snapshotDimensions.y;
-    }
+    adoptPreparedFilterRaster(*offscreen, *imageNode, *imageBytes, registry);
 
     // Remove from recursion guard after rendering.
     feImageFragmentGuard_->erase(entityId);
