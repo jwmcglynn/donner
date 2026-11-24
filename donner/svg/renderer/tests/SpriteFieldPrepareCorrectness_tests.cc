@@ -284,7 +284,6 @@ TEST_F(FontCollectionFieldTest, ShortcutMatchesTheFullGraph) {
   for (int use = 0; use < kField.sheets; ++use) {
     SVGDocument sheet = sheetOf(use);
     const Registry& registry = sheet.registry();
-    ASSERT_TRUE(components::RendersNothingFontDependent(registry)) << "sheet of use " << use;
     const components::FontResourceGraph graph(registry);
     for (int index = 0; index < kField.spritesPerSheet; ++index) {
       const std::string id = "#sprite-" + std::to_string(index);

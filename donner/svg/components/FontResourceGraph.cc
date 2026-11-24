@@ -782,7 +782,7 @@ bool HasAnyComponent(const Registry& registry) {
 }
 
 /// Whether \p registry holds a component that makes its rendering depend on a font: constant
-/// time, the first half of \ref RendersNothingFontDependent.
+/// time, ahead of the bounded scan in \ref ScanFontIndependence.
 bool HasFontDependentComponents(const Registry& registry) {
   // An overflowed font dependency list is a resource limit the full collection reports.
   if (const auto* manager = registry.ctx().find<FontManager>();
@@ -794,103 +794,120 @@ bool HasFontDependentComponents(const Registry& registry) {
                          LoadedSVGImageComponent, ExternalUseComponent>(registry);
 }
 
-/// Whether a paint capture in \p registry recorded a face, a child document or a resource limit.
-/// Filter preparation stamps an empty record on every filtered element, which adds nothing to a
-/// collection. This deliberately overlaps the SVG image and external use checks: drawing a nested
-/// document records it as a child here, so each check catches a document the other would miss.
-bool HasPaintDependencies(const Registry& registry) {
-  const auto* paints = registry.storage<FontPaintDependenciesComponent>();
-  if (paints == nullptr) {
-    return false;
-  }
-  return std::any_of(
-      paints->begin(), paints->end(), [](const FontPaintDependenciesComponent& paint) {
-        return !paint.fontDependencies.empty() || !paint.children.empty() || paint.resourceLimit;
-      });
-}
+/// Outcome of \ref ScanFontIndependence.
+enum class IndependenceScan {
+  Independent,  //!< Nothing the document renders can depend on a font.
+  Dependent,    //!< The document may depend on a font; the full collection answers it.
+  OverBudget,   //!< The scan used up its budget before it could tell.
+};
 
-/// Work units of the filter, paint-capture and render-tree scans in
-/// \ref RendersNothingFontDependent: one per filter, filter graph node, paint capture, rendering
-/// instance and filter function list entry, charged like any other collection work so repeated
-/// shortcut answers stay within the ceiling.
-std::size_t FontIndependenceScanWork(const Registry& registry) {
-  std::size_t work = 1;
-  if (const auto* filters = registry.storage<ComputedFilterComponent>()) {
-    for (const auto& [entity, filter] : filters->each()) {
-      work += 1 + filter.filterGraph.nodes.size();
+/// Units a font-independence scan may still visit. Each item is admitted before it is read.
+struct ScanBudget {
+  std::size_t budget = 0;   //!< Most units the scan may visit.
+  std::size_t visited = 0;  //!< Units admitted, including an item that exceeded the budget.
+
+  /// Admits \p units more, returning false once the total exceeds the budget.
+  bool admit(std::size_t units) {
+    visited += units;
+    return visited <= budget;
+  }
+};
+
+/// A paint capture that recorded a face, a child document or a resource limit adds to a
+/// collection. Filter preparation stamps an empty record on every filtered element, which adds
+/// nothing. This deliberately overlaps the SVG image and external use checks: drawing a nested
+/// document records it as a child here, so each check catches a document the other would miss.
+std::optional<IndependenceScan> ScanPaintCaptures(const Registry& registry, ScanBudget& budget) {
+  if (const auto* paints = registry.storage<FontPaintDependenciesComponent>()) {
+    for (const FontPaintDependenciesComponent& paint : *paints) {
+      if (!budget.admit(1)) {
+        return IndependenceScan::OverBudget;
+      }
+      if (!paint.fontDependencies.empty() || !paint.children.empty() || paint.resourceLimit) {
+        return IndependenceScan::Dependent;
+      }
     }
   }
+  return std::nullopt;
+}
+
+/// An `feImage` can render a fragment or a document that has text.
+std::optional<IndependenceScan> ScanFilterGraphs(const Registry& registry, ScanBudget& budget) {
+  if (const auto* filters = registry.storage<ComputedFilterComponent>()) {
+    for (const auto& [entity, filter] : filters->each()) {
+      const auto& nodes = filter.filterGraph.nodes;
+      if (!budget.admit(1 + nodes.size())) {
+        return IndependenceScan::OverBudget;
+      }
+      if (std::any_of(nodes.begin(), nodes.end(), [](const auto& node) {
+            return std::holds_alternative<filter_primitive::Image>(node.primitive);
+          })) {
+        return IndependenceScan::Dependent;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+/// An element named in a filter function list is a fragment the full collection reports as
+/// unprepared until it renders. The render tree, not the DOM, is scanned: it is what the
+/// collection walks, and a filter that has not been computed yet still appears here.
+std::optional<IndependenceScan> ScanFilterLists(const Registry& registry, ScanBudget& budget) {
   if (const auto* instances = registry.storage<RenderingInstanceComponent>()) {
     for (const auto& [entity, instance] : instances->each()) {
       const auto* effects = instance.resolvedFilter
                                 ? std::get_if<std::vector<FilterEffect>>(&*instance.resolvedFilter)
                                 : nullptr;
-      work += 1 + (effects != nullptr ? effects->size() : 0u);
+      if (!budget.admit(1 + (effects != nullptr ? effects->size() : 0u))) {
+        return IndependenceScan::OverBudget;
+      }
+      if (effects != nullptr &&
+          std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
+            return effect.is<FilterEffect::ElementReference>();
+          })) {
+        return IndependenceScan::Dependent;
+      }
     }
   }
-  if (const auto* paints = registry.storage<FontPaintDependenciesComponent>()) {
-    work += paints->size();
-  }
-  return work;
+  return std::nullopt;
 }
 
-/// Whether a filter graph in \p registry has an `feImage`, which can render a fragment or a
-/// document that has text.
-bool HasFilterImage(const Registry& registry) {
-  const auto* filters = registry.storage<ComputedFilterComponent>();
-  if (filters == nullptr) {
-    return false;
-  }
-  for (const auto& [entity, filter] : filters->each()) {
-    if (std::any_of(filter.filterGraph.nodes.begin(), filter.filterGraph.nodes.end(),
-                    [](const auto& node) {
-                      return std::holds_alternative<filter_primitive::Image>(node.primitive);
-                    })) {
-      return true;
+/// Scans what makes a document font-dependent beyond its components (see
+/// \ref FontResourceGraphCache::collectFontIndependent),
+/// in one pass bounded by \p budget: one unit per paint capture, filter, filter graph node,
+/// rendering instance and filter function list entry.
+IndependenceScan ScanFontIndependence(const Registry& registry, ScanBudget& budget) {
+  for (const auto scan : {ScanPaintCaptures, ScanFilterGraphs, ScanFilterLists}) {
+    if (const std::optional<IndependenceScan> result = scan(registry, budget)) {
+      return *result;
     }
   }
-  return false;
-}
-
-/// Whether a filter function list in \p registry names an element: a fragment the full
-/// collection reports as unprepared until it renders. The render tree, not the DOM, is scanned:
-/// it is what the collection walks, and a filter that has not been computed yet still appears
-/// here.
-bool HasFilterListElementReference(const Registry& registry) {
-  const auto* instances = registry.storage<RenderingInstanceComponent>();
-  if (instances == nullptr) {
-    return false;
-  }
-  for (const auto& [entity, instance] : instances->each()) {
-    const auto* effects = instance.resolvedFilter
-                              ? std::get_if<std::vector<FilterEffect>>(&*instance.resolvedFilter)
-                              : nullptr;
-    if (effects != nullptr &&
-        std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
-          return effect.is<FilterEffect::ElementReference>();
-        })) {
-      return true;
-    }
-  }
-  return false;
+  return IndependenceScan::Independent;
 }
 
 }  // namespace
-
-bool RendersNothingFontDependent(const Registry& registry) {
-  return !HasFontDependentComponents(registry) && !HasPaintDependencies(registry) &&
-         !HasFilterImage(registry) && !HasFilterListElementReference(registry);
-}
 
 std::optional<FontResourceGraph::Collection> FontResourceGraphCache::collectFontIndependent(
     const Registry& registry, Entity target, FontResourceGraph::Purpose purpose) {
   if (HasFontDependentComponents(registry)) {
     return std::nullopt;
   }
-  if (!reserve(FontIndependenceScanWork(registry))) {
+  // A spent ceiling stops the collection before it reads the document.
+  if (stats_->resourceLimit || stats_->work >= kMaximumWork) {
+    stats_->resourceLimit = true;
     return FontResourceGraph::Collection{.resourceLimit = true};
   }
-  if (!RendersNothingFontDependent(registry)) {
+  // One unit for the collection itself, the rest for what the scan visits.
+  ScanBudget budget{.budget = kMaximumWork - stats_->work - 1};
+  const IndependenceScan scan = ScanFontIndependence(registry, budget);
+  stats_->fontIndependenceScanUnits += budget.visited;
+  if (scan == IndependenceScan::OverBudget) {
+    stats_->work = kMaximumWork;
+    stats_->resourceLimit = true;
+    return FontResourceGraph::Collection{.resourceLimit = true};
+  }
+  stats_->work += 1 + budget.visited;
+  if (scan == IndependenceScan::Dependent) {
     return std::nullopt;
   }
   ++stats_->fontIndependentCollections;

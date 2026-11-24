@@ -449,10 +449,54 @@ TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregate
                    .collect(textFree->handle(), textFreeEntity)
                    .resourceLimit);
   EXPECT_EQ(fresh.fontIndependentCollections, 1u) << "a fresh cache answers through the shortcut";
+  const std::size_t scannedBefore = work.fontIndependenceScanUnits;
   const auto limited = cache.collect(textFree->handle(), textFreeEntity);
   EXPECT_TRUE(limited.resourceLimit) << "a spent ceiling must be reported, not an empty answer";
   EXPECT_THAT(limited.dependencies, IsEmpty());
   EXPECT_EQ(work.fontIndependentCollections, 0u);
+  EXPECT_EQ(work.fontIndependenceScanUnits, scannedBefore)
+      << "a spent ceiling stops the collection before it scans the document";
+  const auto nextTarget = parsed->querySelector("#r0");
+  ASSERT_THAT(nextTarget, testing::Optional(testing::_));
+  EXPECT_TRUE(
+      cache.collect(parsed->handle(), nextTarget->unsafeEntityHandle().entity()).resourceLimit)
+      << "the next collection of the text document reports the limit too";
+}
+
+// A text-free document larger than the budget the cache has left stops its scan once the budget is
+// used up and reports the limit, rather than scanning the whole document first.
+TEST(NestedSvgFontResourcesTest, ShortcutScanStopsAtTheRemainingBudget) {
+  constexpr int kRects = 500;
+  constexpr std::size_t kRemaining = 10;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  for (int i = 0; i < kRects; ++i) {
+    source += "<rect id='r" + std::to_string(i) + "' width='1' height='1'/>";
+  }
+  source += "</svg>";
+  auto parsed = ParseDocument(source);
+  ASSERT_THAT(parsed, testing::Optional(testing::_));
+  testing::NiceMock<tests::MockRendererInterface> backend;
+  RendererDriver driver(backend);
+  driver.draw(*parsed);
+  const auto target = parsed->querySelector("#r0");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  components::FontResourceGraphCache::Stats full;
+  EXPECT_FALSE(
+      components::FontResourceGraphCache(&full).collect(parsed->handle(), entity).resourceLimit);
+  EXPECT_GT(full.fontIndependenceScanUnits, static_cast<std::size_t>(kRects))
+      << "with room to spare the shortcut scans every rendering instance";
+
+  components::FontResourceGraphCache::Stats work;
+  work.work = components::FontResourceGraphCache::kMaximumWork - kRemaining;
+  components::FontResourceGraphCache cache(&work);
+  const auto limited = cache.collect(parsed->handle(), entity);
+  EXPECT_TRUE(limited.resourceLimit);
+  EXPECT_THAT(limited.dependencies, IsEmpty());
+  EXPECT_EQ(work.fontIndependentCollections, 0u);
+  EXPECT_LE(work.fontIndependenceScanUnits, kRemaining + 1)
+      << "the scan stops within one unit of the remaining budget";
 }
 
 // The shortcut charges one unit per rendering instance it scans, so repeated answers alone use up
@@ -548,8 +592,6 @@ TEST(NestedSvgFontResourcesTest, FilterElementReferencesKeepTheFullCollection) {
     ParseWarningSink warnings = ParseWarningSink::Disabled();
     RendererUtils::prepareDocumentForRendering(*parsed, /*verbose=*/false, warnings);
     const Registry& registry = parsed->registry();
-    EXPECT_FALSE(components::RendersNothingFontDependent(registry))
-        << "a filter that draws an element can depend on a font";
 
     const auto target = parsed->querySelector("#target");
     ASSERT_THAT(target, testing::Optional(testing::_));
@@ -588,8 +630,6 @@ TEST(NestedSvgFontResourcesTest, SvgImageOfTextKeepsTheFullCollection) {
   driver.draw(*parsed);
   driver.draw(*parsed);
   const Registry& registry = parsed->registry();
-  EXPECT_FALSE(components::RendersNothingFontDependent(registry))
-      << "an SVG image of text can depend on a font";
 
   const auto target = parsed->querySelector("#target");
   ASSERT_THAT(target, testing::Optional(testing::_));
