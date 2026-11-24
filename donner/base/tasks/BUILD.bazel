@@ -8,6 +8,20 @@ donner_cc_library(
     deps = ["//donner/base"],
 )
 
+donner_cc_library(
+    name = "parker",
+    hdrs = ["Parker.h"],
+)
+
+donner_cc_library(
+    name = "task_record",
+    hdrs = ["TaskRecord.h"],
+    deps = [
+        ":parker",
+        "//donner/base",
+    ],
+)
+
 donner_cc_test(
     name = "deque_tests",
     srcs = ["tests/WorkStealingDeque_tests.cc"],
@@ -15,5 +29,27 @@ donner_cc_test(
         ":work_stealing_deque",
         "//donner/base:stall_guard",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "parker_tests",
+    srcs = ["tests/Parker_tests.cc"],
+    deps = [
+        ":parker",
+        "//donner/base:gtest_timeout_main",
+        "//donner/base:stall_guard",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "task_record_tests",
+    srcs = ["tests/TaskRecord_tests.cc"],
+    deps = [
+        ":task_record",
+        "//donner/base:gtest_timeout_main",
+        "//donner/base:stall_guard",
+        "@com_google_gtest//:gtest",
     ],
 )
