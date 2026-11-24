@@ -11,6 +11,7 @@
 #include "donner/svg/core/tests/PathTestUtils.h"
 
 using testing::AllOf;
+using testing::Each;
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 using testing::HasSubstr;
@@ -21,6 +22,15 @@ namespace donner::svg::parser {
 
 using Command = Path::Command;
 using CommandType = Path::Verb;
+
+namespace {
+
+/// Matches a \ref Vector2d whose coordinates are both finite.
+MATCHER(IsFinitePoint, "has finite coordinates") {
+  return std::isfinite(arg.x) && std::isfinite(arg.y);
+}
+
+}  // namespace
 
 TEST(PathParser, Empty) {
   ParseResult<Path> result = PathParser::Parse("");
@@ -903,10 +913,7 @@ TEST(PathParser, RejectsCoordinatesThatOverflow) {
     ParseResult<Path> result = PathParser::Parse(source);
     EXPECT_THAT(result, ParseErrorIs("Path coordinate out of range"));
     ASSERT_TRUE(result.hasResult());
-    ASSERT_FALSE(result.result().points().empty());
-    for (const Vector2d& point : result.result().points()) {
-      EXPECT_TRUE(std::isfinite(point.x) && std::isfinite(point.y)) << point;
-    }
+    EXPECT_THAT(result.result().points(), AllOf(testing::Not(IsEmpty()), Each(IsFinitePoint())));
   }
 
   // A reflected control point can overflow even when the command's own coordinates do not.
