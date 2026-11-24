@@ -1,4 +1,3 @@
-# Design: Work-Stealing Task Scheduler
 
 **Status:** Draft
 **Author:** Claude Fable 5.2
@@ -143,7 +142,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         lifetime assertions, and the fairness tests of the rotating cursor across more than one
         outside source (1.75 days).
   - [ ] The parallelism wake with per-worker `searching` flags (0.5 day).
-  - [ ] Worker stacks, the stack-floor assertion, worker QoS and `DefaultWorkerCount()`
+  - [ ] Worker stacks, the stack-floor assertion, worker QoS, `DefaultWorkerCount()`, and
+        tolerating a worker thread that fails to start: the scheduler runs with the workers that
+        started and `workerCount()` reports fewer (today a failed start ends the process)
         (0.5 day).
   - [x] `trySpawn` declining at each bound and the zero-worker inline mode (0.25 day):
         `//donner/base/tasks:task_scheduler_tests`.
@@ -841,11 +842,12 @@ queue, and *started* once a thread begins running it.
   worker and into the global queue otherwise, so an adopted thread's deque never holds another
   client's resumption. Every task record carries what a finisher needs: the address of its scope's
   counter and the parker the scope recorded at construction, both copied into the record at spawn.
-  The scheduler's own spawn and `trySpawn` are private to the scope types, so no client spawns a
-  task that no scope accounts for. `trySpawn` declines, leaving the closure with the caller, when
-  the spawning thread's record pool is at its bound or, on a worker, when its deque is full; the
-  deque's owner-only `full()` decides that before the closure moves, since only the owner pushes
-  and a thief only frees slots. Each sleep, publish and shutdown step calls an optional test seam,
+  The scheduler's own spawn and `trySpawn` are private, to be reached only by the scope types, so
+  that no client spawns a task that no scope accounts for; until those types exist, only tests reach
+  them, through a test peer. `trySpawn` declines, leaving the closure with the caller, when the
+  spawning thread's record pool is at its bound or, on a worker, when its deque is full; the deque's
+  owner-only `full()` decides that before the closure moves, since only the owner pushes and a thief
+  only frees slots. Each sleep, publish and shutdown step calls an optional test seam,
   `SchedulerTestHooks`, given at construction, where tests hold or delay a thread; production
   schedulers pass none.
 - **Scopes record their creator.** A `TaskScope` records, when it is constructed, its creating
@@ -1653,27 +1655,41 @@ clients that size work from documents.
   With AddressSanitizer, removing the poison of free records is caught.
 - **Scheduler core** (`//donner/base/tasks:task_scheduler_tests`): the zero-worker inline mode;
   spawns from threads that are not workers and from workers, at 1 and 4 workers, each run exactly
-  once; the global queue first in, first out; `trySpawn` declining at the external bound, the
-  record bound and a full deque, with `spawn` then running inline; a worker with endless local
-  work still taking a global entry within 61 tasks; an idle worker stealing a busy one's entry;
-  and the steal order visiting every other worker once. Deterministic interleavings through
-  `SchedulerTestHooks` cover both store-buffering pairs: a publish before the sleeper's
-  decrement, seen by its re-check; a publish after the sleeper's re-check, which must wake it; a
-  sleeper's self-wake racing a publisher's wake, counted once; and shutdown before and after the
-  sleeper stores asleep. Stress submits one task at a time from a thread that is not a worker, so
-  that every task is a publish racing a sleep, runs several submitters at once, and destroys
-  schedulers while their workers go to sleep, each with no hooks and with delays injected at
-  every step; a lost wakeup or a lost shutdown fails at the hang guard, and the destructor
-  asserts that the awake count equals the workers whose state is awake. Every case passes
-  pinned to one CPU. Each protocol step was observed red with it broken, deterministically and
-  under injected delays: the sleeper's re-check of queued work or of the stop flag removed, the
-  publisher's wake removed, a failed swap counted, the self-wake after the wait removed, the
-  waker's parker change removed or made only on a successful swap, the periodic outside take,
-  the steal from other workers, first-in first-out order, the deque fullness check and the idle
-  loop's stop check. Draining before sleep has no effect yet: an idle worker's deque is empty
-  when it sleeps, and the drain acts once a waiting worker can sleep with entries below its
-  watermark. Weakening any sequentially consistent operation of the two pairs survives natively
-  on Linux ARMv8 and under ThreadSanitizer, which does not report store-buffering outcomes.
+  once; the global queue first in, first out; `trySpawn` declining at the external bound, the record
+  bound and a full deque, with `spawn` then running inline; a worker with endless local work still
+  taking a global entry within 61 tasks; an idle worker stealing a busy one's entry; and the steal
+  order visiting every other worker once. Deterministic interleavings through `SchedulerTestHooks`
+  cover both store-buffering pairs: a publish before the sleeper's decrement, seen by its re-check;
+  a publish after the sleeper's re-check, which must wake it; a sleeper's self-wake racing a
+  publisher's wake, counted once; and shutdown before and after the sleeper stores asleep. Stress
+  submits one task at a time from a thread that is not a worker, so that every task is a publish
+  racing a sleep, runs several submitters at once, and destroys schedulers while their workers go to
+  sleep, each with no hooks and with delays injected at every step; a lost wakeup or a lost shutdown
+  fails at the hang guard, and the destructor asserts that the awake count equals the workers whose
+  state is awake. Every case passes pinned to one CPU. Each protocol step was observed red with it
+  broken, deterministically and under injected delays: the sleeper's re-check of queued work or of
+  the stop flag removed, the publisher's wake removed, a failed swap counted, the self-wake after
+  the wait removed, the waker's parker change removed or made only on a successful swap, the
+  periodic outside take, the steal from other workers, first-in first-out order, the deque fullness
+  check and the idle loop's stop check. Draining before sleep has no effect yet: an idle worker's
+  deque is empty when it sleeps, and the drain acts once a waiting worker can sleep with entries
+  below its watermark. Eight mutants that weaken one sequentially consistent operation of the two
+  pairs survive these tests, natively on Linux ARMv8 and under ThreadSanitizer: the publisher's
+  increment of the queued count made release; its read of the awake count made acquire; the
+  sleeper's asleep store made release; its decrement of the awake count made release; its re-check
+  of the queued count made acquire; the destructor's exchange of the stop flag made release; the
+  sleeper's re-check of the stop flag made acquire; and the swap's compare-and-swap made
+  acquire-release, acquire on failure. ThreadSanitizer does not model store buffering, so it never
+  produces the forbidden outcome. On the base ARMv8 instruction set the build targets there, each
+  weakened acquire load is the same load-acquire instruction as before, the weakened
+  compare-and-swap keeps both its acquire and its release halves, and a weakened release store or
+  read-modify-write is still a store-release that the architecture keeps in order with the
+  load-acquire after it, so none of the eight can reorder the store before the load. On x86-64 every
+  read-modify-write is a locked instruction whatever its ordering and an acquire load is the same
+  plain load, so seven of the eight change no ordering there; the asleep store alone becomes a plain
+  store instead of an exchange, but the locked decrement of the awake count right after it drains
+  the store buffer before the stop flag is read. That mutant survived 4,000 iterations of the
+  shutdown stress with injected delays, and 16,000 without, on x86-64.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
