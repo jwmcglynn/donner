@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include "donner/base/Utils.h"
+#include "donner/base/tasks/FalseSharing.h"
 
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
@@ -290,9 +291,6 @@ private:
   }
 
   std::size_t slotOf(Index index) const { return static_cast<std::size_t>(index) & mask_; }
-
-  /// Separates the indices that different threads write, so they do not share a cache line.
-  static constexpr std::size_t kFalseSharingBytes = 128;
 
   const std::size_t mask_;
   const std::unique_ptr<std::atomic<T>[]> slots_;

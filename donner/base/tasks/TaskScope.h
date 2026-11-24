@@ -31,6 +31,10 @@ class TaskScopeTestPeer;
  * sleeps on its parker, from the scheduler's \ref ParkerPool, until a finisher changes it. A scope
  * created on a worker fails a release assertion. With zero workers, every spawn runs inline and a
  * wait returns at once.
+ *
+ * Creating a scope while the calling thread's own thread-local objects are being destroyed (from
+ * another thread-local's destructor, at thread exit) is undefined: the thread's parker entry is a
+ * thread-local object and may already be gone.
  */
 class TaskScope {
 public:

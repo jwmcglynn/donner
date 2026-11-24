@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/Parker.h"
 #include "donner/base/tasks/ParkerPool.h"
 #include "donner/base/tasks/TaskRecord.h"
@@ -176,14 +177,14 @@ private:
   TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* testHooks);
 
   /// A worker's state: its deque, record pool and parker, its state word, and its thread.
-  struct alignas(128) Worker {
+  struct alignas(kFalseSharingBytes) Worker {
     Worker(std::size_t index, const TaskSchedulerOptions& options);
 
     const std::size_t index;
     WorkStealingDeque<TaskRecord*> deque;
     CreatorRecordPool<> pool;
     Parker<> parker;
-    alignas(128) std::atomic<WorkerState> state{WorkerState::Awake};
+    alignas(kFalseSharingBytes) std::atomic<WorkerState> state{WorkerState::Awake};
     std::thread thread;
 
     // Owner-only state.
@@ -333,14 +334,14 @@ private:
 
   /// Protects the global queue's list and the external record pool. On its own cache line, away
   /// from the read-mostly options and hooks pointer, as the deque separates its indices.
-  alignas(128) std::mutex globalMutex_;
+  alignas(kFalseSharingBytes) std::mutex globalMutex_;
   TaskRecord* globalHead_ = nullptr;
   TaskRecord* globalTail_ = nullptr;
   ExternalRecordPool externalPool_;
 
-  alignas(128) std::atomic<std::int64_t> globalQueued_{0};
-  alignas(128) std::atomic<std::int64_t> awake_{0};
-  alignas(128) std::atomic<bool> stop_{false};
+  alignas(kFalseSharingBytes) std::atomic<std::int64_t> globalQueued_{0};
+  alignas(kFalseSharingBytes) std::atomic<std::int64_t> awake_{0};
+  alignas(kFalseSharingBytes) std::atomic<bool> stop_{false};
 
   std::vector<std::unique_ptr<Worker>> workers_;
 };

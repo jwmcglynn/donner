@@ -10,6 +10,7 @@
 #include <mutex>
 #include <vector>
 
+#include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/Parker.h"
 
 namespace donner::tasks {
@@ -71,6 +72,10 @@ public:
    * thread with \p pool on the first call for that generation. Registration first drops the
    * thread's entries for closed pools.
    *
+   * The map is a thread-local object, so calling this while the calling thread's own thread-local
+   * objects are being destroyed (from another thread-local's destructor, at thread exit) is
+   * undefined: the map may already be gone. Creating a \ref TaskScope there is the same call.
+   *
    * @param generation The scheduler's generation number, from \ref NextGeneration.
    * @param pool The scheduler's pool.
    */
@@ -87,7 +92,7 @@ private:
   static constexpr std::size_t kBlockSlots = 32;
 
   /// One parker on its own cache line, so threads sleeping on neighbouring slots share none.
-  struct alignas(64) PaddedParker {
+  struct alignas(kFalseSharingBytes) PaddedParker {
     Parker<> parker;
   };
 
@@ -98,6 +103,8 @@ private:
   mutable std::mutex mutex_;
   std::vector<std::unique_ptr<Block>> blocks_;
   std::vector<std::size_t> free_;
+  /// Whether each slot is handed out, indexed by slot, so a return is checked in constant time.
+  std::vector<bool> slotInUse_;
   std::size_t inUse_ = 0;
   std::atomic<bool> closed_{false};
 };

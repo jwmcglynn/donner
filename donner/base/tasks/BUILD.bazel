@@ -3,9 +3,17 @@ load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_
 package(default_visibility = ["//donner/base/tasks:__subpackages__"])
 
 donner_cc_library(
+    name = "false_sharing",
+    hdrs = ["FalseSharing.h"],
+)
+
+donner_cc_library(
     name = "work_stealing_deque",
     hdrs = ["WorkStealingDeque.h"],
-    deps = ["//donner/base"],
+    deps = [
+        ":false_sharing",
+        "//donner/base",
+    ],
 )
 
 donner_cc_library(
@@ -18,6 +26,7 @@ donner_cc_library(
     name = "task_record",
     hdrs = ["TaskRecord.h"],
     deps = [
+        ":false_sharing",
         ":parker",
         "//donner/base",
     ],
@@ -28,6 +37,7 @@ donner_cc_library(
     srcs = ["ParkerPool.cc"],
     hdrs = ["ParkerPool.h"],
     deps = [
+        ":false_sharing",
         ":parker",
         "//donner/base",
     ],
@@ -44,6 +54,7 @@ donner_cc_library(
         "TaskScope.h",
     ],
     deps = [
+        ":false_sharing",
         ":parker",
         ":parker_pool",
         ":task_record",

@@ -1,6 +1,5 @@
 #include "donner/base/tasks/ParkerPool.h"
 
-#include <algorithm>
 #include <utility>
 
 #include "donner/base/Utils.h"
@@ -76,6 +75,7 @@ ParkerPool::Slot ParkerPool::acquire() {
   if (free_.empty()) {
     const std::size_t first = blocks_.size() * kBlockSlots;
     blocks_.push_back(std::make_unique<Block>());
+    slotInUse_.resize(blocks_.size() * kBlockSlots, false);
     // Hand out the lowest index first.
     for (std::size_t i = kBlockSlots; i > 0; --i) {
       free_.push_back(first + i - 1);
@@ -83,15 +83,16 @@ ParkerPool::Slot ParkerPool::acquire() {
   }
   const std::size_t index = free_.back();
   free_.pop_back();
+  slotInUse_[index] = true;
   ++inUse_;
   return Slot{index, &blocks_[index / kBlockSlots]->slots[index % kBlockSlots].parker};
 }
 
 void ParkerPool::release(std::size_t index) {
   std::lock_guard lock(mutex_);
-  UTILS_RELEASE_ASSERT_MSG(index < blocks_.size() * kBlockSlots && inUse_ > 0 &&
-                               std::find(free_.begin(), free_.end(), index) == free_.end(),
+  UTILS_RELEASE_ASSERT_MSG(index < slotInUse_.size() && slotInUse_[index],
                            "A parker slot was returned that is not in use");
+  slotInUse_[index] = false;
   free_.push_back(index);
   --inUse_;
 }

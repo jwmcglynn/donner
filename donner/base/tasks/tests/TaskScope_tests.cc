@@ -81,6 +81,27 @@ TEST(TaskScopeTest, ZeroWorkersRunSpawnsInlineAndWaitReturnsAtOnce) {
   EXPECT_THAT(order, testing::ElementsAre('a', 'b')) << "with zero workers Join runs a then b";
 }
 
+/// Runs \p body on a thread under the hang guard. @return False if it did not finish; the thread
+/// is then detached with \p state, which it keeps alive.
+template <typename State, typename Body>
+bool RunGuarded(const std::shared_ptr<State>& state, Body body) {
+  auto done = std::make_shared<Event>();
+  std::thread thread([state, done, body] {
+    body(*state);
+    done->set();
+  });
+  const bool finished = done->wait();
+  if (finished) {
+    thread.join();
+  } else {
+    thread.detach();
+  }
+  return finished;
+}
+
+/// The message for a case whose creator thread never finished.
+constexpr const char* kCreatorHung = "the creator thread never finished: a wait did not return";
+
 class ScopeWorkerCounts : public testing::TestWithParam<std::size_t> {};
 
 INSTANTIATE_TEST_SUITE_P(Workers, ScopeWorkerCounts, testing::Values(1, 4),
@@ -88,27 +109,44 @@ INSTANTIATE_TEST_SUITE_P(Workers, ScopeWorkerCounts, testing::Values(1, 4),
                            return "Workers" + std::to_string(info.param);
                          });
 
+/// A scheduler and whatever a case's creator thread reaches, owned jointly with that thread.
+template <typename Extra>
+struct CaseState : Extra {
+  std::unique_ptr<TaskScheduler> scheduler;
+};
+
+/// Makes a \ref CaseState with a scheduler built from \p options.
+template <typename Extra>
+std::shared_ptr<CaseState<Extra>> MakeCase(TaskSchedulerOptions options) {
+  auto state = std::make_shared<CaseState<Extra>>();
+  state->scheduler = std::make_unique<TaskScheduler>(options);
+  return state;
+}
+
 // Every task spawned by a non-worker runs exactly once, on a worker, and the wait sees what each
 // wrote without any other synchronization.
 TEST_P(ScopeWorkerCounts, ANonWorkerScopeRunsEveryTaskOnceOnAWorker) {
   constexpr int kTasks = 2000;
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = GetParam()});
-  std::vector<int> runs(kTasks, 0);
-  std::vector<int> ranOnWorker(kTasks, -1);
-  {
-    TaskScope scope(scheduler);
+  struct Extra {
+    std::vector<int> runs = std::vector<int>(kTasks, 0);
+    std::vector<int> ranOnWorker = std::vector<int>(kTasks, -1);
+  };
+  auto state = MakeCase<Extra>(TaskSchedulerOptions{.workerCount = GetParam()});
+  const bool finished = RunGuarded(state, [](CaseState<Extra>& s) {
+    TaskScope scope(*s.scheduler);
     for (int i = 0; i < kTasks; ++i) {
-      scope.spawn([&, i] {
-        ++runs[static_cast<std::size_t>(i)];
-        ranOnWorker[static_cast<std::size_t>(i)] = Peer::WorkerIndex(scheduler);
+      scope.spawn([&s, i] {
+        ++s.runs[static_cast<std::size_t>(i)];
+        s.ranOnWorker[static_cast<std::size_t>(i)] = Peer::WorkerIndex(*s.scheduler);
       });
     }
     scope.wait();
     EXPECT_THAT(ScopePeer::Count(scope), Eq(0u));
-  }
-  EXPECT_THAT(runs, Each(Eq(1)));
-  EXPECT_THAT(ranOnWorker, Each(Ge(0))) << "a non-worker never runs its scope's tasks";
-  EXPECT_THAT(Peer::ExternalLiveRecords(scheduler), Eq(0u));
+  });
+  ASSERT_TRUE(finished) << kCreatorHung;
+  EXPECT_THAT(state->runs, Each(Eq(1)));
+  EXPECT_THAT(state->ranOnWorker, Each(Ge(0))) << "a non-worker never runs its scope's tasks";
+  EXPECT_THAT(Peer::ExternalLiveRecords(*state->scheduler), Eq(0u));
 }
 
 // Tasks of the scope spawn into it from workers (flat spawns): the wait covers every level.
@@ -116,24 +154,29 @@ TEST_P(ScopeWorkerCounts, TasksOfTheScopeSpawnIntoIt) {
   constexpr int kRoots = 16;
   constexpr int kChildren = 16;
   constexpr int kGrandchildren = 4;
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = GetParam()});
-  std::vector<int> leaves(kRoots * kChildren * kGrandchildren, 0);
-  TaskScope scope(scheduler);
-  for (int r = 0; r < kRoots; ++r) {
-    scope.spawn([&, r] {
-      for (int c = 0; c < kChildren; ++c) {
-        scope.spawn([&, r, c] {
-          for (int g = 0; g < kGrandchildren; ++g) {
-            scope.spawn([&, r, c, g] {
-              ++leaves[static_cast<std::size_t>((r * kChildren + c) * kGrandchildren + g)];
-            });
-          }
-        });
-      }
-    });
-  }
-  scope.wait();
-  EXPECT_THAT(leaves, Each(Eq(1)));
+  struct Extra {
+    std::vector<int> leaves = std::vector<int>(kRoots * kChildren * kGrandchildren, 0);
+  };
+  auto state = MakeCase<Extra>(TaskSchedulerOptions{.workerCount = GetParam()});
+  const bool finished = RunGuarded(state, [](CaseState<Extra>& s) {
+    TaskScope scope(*s.scheduler);
+    for (int r = 0; r < kRoots; ++r) {
+      scope.spawn([&, r] {
+        for (int c = 0; c < kChildren; ++c) {
+          scope.spawn([&, r, c] {
+            for (int g = 0; g < kGrandchildren; ++g) {
+              scope.spawn([&, r, c, g] {
+                ++s.leaves[static_cast<std::size_t>((r * kChildren + c) * kGrandchildren + g)];
+              });
+            }
+          });
+        }
+      });
+    }
+    scope.wait();
+  });
+  ASSERT_TRUE(finished) << kCreatorHung;
+  EXPECT_THAT(state->leaves, Each(Eq(1)));
 }
 
 /// Spawns \p count tracked closures into \p scope and returns: the closures outlive this call.
@@ -144,126 +187,150 @@ void SpawnTracked(TaskScope& scope, int count, std::atomic<int>* runs,
   }
 }
 
+/// Counters for tracked closures.
+struct TrackedCounts {
+  std::atomic<int> runs{0};
+  std::atomic<int> destroyed{0};
+};
+
 // A task outlives the statement that spawned it but not the scope: once the wait returns, every
 // closure has run and been destroyed, and every record is back in its pool.
 TEST(TaskScopeTest, ClosuresOutliveTheSpawningStatementButNotTheScope) {
   constexpr int kTasks = 200;
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 2});
-  std::atomic<int> runs{0};
-  std::atomic<int> destroyed{0};
-  {
-    TaskScope scope(scheduler);
-    SpawnTracked(scope, kTasks, &runs, &destroyed);
+  auto state = MakeCase<TrackedCounts>(TaskSchedulerOptions{.workerCount = 2});
+  const bool finished = RunGuarded(state, [](CaseState<TrackedCounts>& s) {
+    TaskScope scope(*s.scheduler);
+    SpawnTracked(scope, kTasks, &s.runs, &s.destroyed);
     scope.wait();
-    EXPECT_THAT(runs.load(), Eq(kTasks));
-    EXPECT_THAT(destroyed.load(), Eq(kTasks))
-        << "a finished task's closure is destroyed before its "
-           "decrement";
-    EXPECT_THAT(Peer::ExternalLiveRecords(scheduler), Eq(0u))
+    EXPECT_THAT(s.runs.load(), Eq(kTasks));
+    EXPECT_THAT(s.destroyed.load(), Eq(kTasks))
+        << "a finished task's closure is destroyed before its decrement";
+    EXPECT_THAT(Peer::ExternalLiveRecords(*s.scheduler), Eq(0u))
         << "a finished task's record is returned before its decrement";
-  }
+  });
+  ASSERT_TRUE(finished) << kCreatorHung;
 }
 
 // A spawn the scheduler cannot queue runs inline on the spawning thread and is not counted; a
 // declined trySpawn leaves the closure with the caller.
 TEST(TaskScopeTest, ADeclinedSpawnInAScopeRunsInlineAndIsNotCounted) {
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1, .maxExternalTasks = 1});
-  Gate blocker;
-  TaskScope scope(scheduler);
-  scope.spawn([&] { blocker.arriveAndWait(); });
-  ASSERT_TRUE(blocker.waitForArrival());
-  EXPECT_THAT(ScopePeer::Count(scope), Eq(1u));
+  struct Extra : TrackedCounts {
+    Gate blocker;
+  };
+  auto state = MakeCase<Extra>(TaskSchedulerOptions{.workerCount = 1, .maxExternalTasks = 1});
+  const bool finished = RunGuarded(state, [](CaseState<Extra>& s) {
+    TaskScope scope(*s.scheduler);
+    scope.spawn([&s] { s.blocker.arriveAndWait(); });
+    EXPECT_TRUE(s.blocker.waitForArrival());
+    EXPECT_THAT(ScopePeer::Count(scope), Eq(1u));
 
-  std::thread::id ranOn;
-  scope.spawn([&] { ranOn = std::this_thread::get_id(); });
-  EXPECT_THAT(ranOn, Eq(std::this_thread::get_id())) << "at the external bound spawn runs inline";
-  EXPECT_THAT(ScopePeer::Count(scope), Eq(1u)) << "an inline run is not counted";
+    std::thread::id ranOn;
+    scope.spawn([&] { ranOn = std::this_thread::get_id(); });
+    EXPECT_THAT(ranOn, Eq(std::this_thread::get_id())) << "at the external bound spawn runs inline";
+    EXPECT_THAT(ScopePeer::Count(scope), Eq(1u)) << "an inline run is not counted";
 
-  std::atomic<int> runs{0};
-  std::atomic<int> destroyed{0};
-  TrackedClosure closure{std::unique_ptr<Tracker>(new Tracker{&destroyed}), &runs};
-  EXPECT_FALSE(scope.trySpawn(std::move(closure)));
-  EXPECT_THAT(closure.tracker, NotNull()) << "a declined trySpawn leaves the closure";
-  EXPECT_THAT(ScopePeer::Count(scope), Eq(1u));
+    TrackedClosure closure{std::unique_ptr<Tracker>(new Tracker{&s.destroyed}), &s.runs};
+    EXPECT_FALSE(scope.trySpawn(std::move(closure)));
+    EXPECT_THAT(closure.tracker, NotNull()) << "a declined trySpawn leaves the closure";
+    EXPECT_THAT(ScopePeer::Count(scope), Eq(1u));
 
-  blocker.release();
-  scope.wait();
-  EXPECT_THAT(runs.load(), Eq(0));
-  EXPECT_THAT(destroyed.load(), Eq(0));
+    s.blocker.release();
+    scope.wait();
+    EXPECT_THAT(s.runs.load(), Eq(0));
+    EXPECT_THAT(s.destroyed.load(), Eq(0));
+  });
+  ASSERT_TRUE(finished) << kCreatorHung;
 }
 
 // A flat spawn that finds its worker's deque full runs inline on that worker, uncounted, and the
 // scope still completes.
 TEST(TaskScopeTest, AFlatSpawnPastAFullDequeRunsInlineOnTheWorker) {
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1, .dequeCapacity = 1});
-  int queuedRuns = 0;
-  int inlineRuns = 0;
-  bool inlineRanBeforeReturn = false;
-  std::uint64_t countDuringInline = 0;
-  TaskScope scope(scheduler);
-  scope.spawn([&] {
-    scope.spawn([&] { ++queuedRuns; });  // Fills the one-entry deque.
-    bool ran = false;
+  struct Extra {
+    int queuedRuns = 0;
+    int inlineRuns = 0;
+    bool inlineRanBeforeReturn = false;
+    std::uint64_t countDuringInline = 0;
+  };
+  auto state = MakeCase<Extra>(TaskSchedulerOptions{.workerCount = 1, .dequeCapacity = 1});
+  const bool finished = RunGuarded(state, [](CaseState<Extra>& s) {
+    TaskScope scope(*s.scheduler);
     scope.spawn([&] {
-      ran = true;
-      ++inlineRuns;
-      countDuringInline = ScopePeer::Count(scope);
+      scope.spawn([&] { ++s.queuedRuns; });  // Fills the one-entry deque.
+      bool ran = false;
+      scope.spawn([&] {
+        ran = true;
+        ++s.inlineRuns;
+        s.countDuringInline = ScopePeer::Count(scope);
+      });
+      s.inlineRanBeforeReturn = ran;
     });
-    inlineRanBeforeReturn = ran;
+    scope.wait();
   });
-  scope.wait();
-  EXPECT_THAT(queuedRuns, Eq(1));
-  EXPECT_THAT(inlineRuns, Eq(1));
-  EXPECT_TRUE(inlineRanBeforeReturn) << "a spawn past a full deque runs inline";
-  EXPECT_THAT(countDuringInline, Eq(2u)) << "the parent and the queued child, not the inline one";
+  ASSERT_TRUE(finished) << kCreatorHung;
+  EXPECT_THAT(state->queuedRuns, Eq(1));
+  EXPECT_THAT(state->inlineRuns, Eq(1));
+  EXPECT_TRUE(state->inlineRanBeforeReturn) << "a spawn past a full deque runs inline";
+  EXPECT_THAT(state->countDuringInline, Eq(2u))
+      << "the parent and the queued child, not the inline one";
 }
 
 // Spawns into one scope until trySpawn declines at the external bound: the scope is not complete
 // until every one of those tasks ran.
 TEST(TaskScopeTest, AScopeAtTheExternalBoundIsNotCompleteUntilEveryTaskRan) {
   constexpr std::size_t kBound = 8;
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1, .maxExternalTasks = kBound});
-  Gate blocker;
-  std::atomic<std::size_t> runs{0};
-  TaskScope scope(scheduler);
-  scope.spawn([&] {
-    blocker.arriveAndWait();
-    runs.fetch_add(1);
+  struct Extra {
+    Gate blocker;
+    std::atomic<std::size_t> runs{0};
+  };
+  auto state = MakeCase<Extra>(TaskSchedulerOptions{.workerCount = 1, .maxExternalTasks = kBound});
+  const bool finished = RunGuarded(state, [](CaseState<Extra>& s) {
+    TaskScope scope(*s.scheduler);
+    scope.spawn([&s] {
+      s.blocker.arriveAndWait();
+      s.runs.fetch_add(1);
+    });
+    EXPECT_TRUE(s.blocker.waitForArrival());
+    std::size_t accepted = 1;
+    while (scope.trySpawn([&s] { s.runs.fetch_add(1); })) {
+      ++accepted;
+    }
+    EXPECT_THAT(accepted, Eq(kBound));
+    EXPECT_THAT(ScopePeer::Count(scope), Eq(kBound)) << "the count carries every queued task";
+    EXPECT_THAT(s.runs.load(), Eq(0u));
+    s.blocker.release();
+    scope.wait();
+    EXPECT_THAT(s.runs.load(), Eq(kBound));
   });
-  ASSERT_TRUE(blocker.waitForArrival());
-  std::size_t accepted = 1;
-  while (scope.trySpawn([&] { runs.fetch_add(1); })) {
-    ++accepted;
-  }
-  EXPECT_THAT(accepted, Eq(kBound));
-  EXPECT_THAT(ScopePeer::Count(scope), Eq(kBound)) << "the count carries every queued task";
-  EXPECT_THAT(runs.load(), Eq(0u));
-  blocker.release();
-  scope.wait();
-  EXPECT_THAT(runs.load(), Eq(kBound));
+  ASSERT_TRUE(finished) << kCreatorHung;
 }
 
 // Join from a non-worker: a runs on the caller, b on a worker, and both finish before it returns.
 TEST(TaskScopeTest, JoinFromANonWorkerRunsAOnTheCallerAndBOnAWorker) {
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 2});
-  std::thread::id aRanOn;
-  int bWorker = -1;
-  int aResult = 0;
-  int bResult = 0;
-  Join(
-      scheduler,
-      [&] {
-        aRanOn = std::this_thread::get_id();
-        aResult = 1;
-      },
-      [&] {
-        bWorker = Peer::WorkerIndex(scheduler);
-        bResult = 2;
-      });
-  EXPECT_THAT(aRanOn, Eq(std::this_thread::get_id()));
-  EXPECT_THAT(bWorker, Ge(0)) << "b goes to the global queue and runs on a worker";
-  EXPECT_THAT(aResult + bResult, Eq(3));
-  EXPECT_THAT(Peer::LiveScopes(scheduler), Eq(0u));
+  struct Extra {
+    bool aRanOnCaller = false;
+    int bWorker = -1;
+    int aResult = 0;
+    int bResult = 0;
+  };
+  auto state = MakeCase<Extra>(TaskSchedulerOptions{.workerCount = 2});
+  const bool finished = RunGuarded(state, [](CaseState<Extra>& s) {
+    const std::thread::id caller = std::this_thread::get_id();
+    Join(
+        *s.scheduler,
+        [&] {
+          s.aRanOnCaller = std::this_thread::get_id() == caller;
+          s.aResult = 1;
+        },
+        [&] {
+          s.bWorker = Peer::WorkerIndex(*s.scheduler);
+          s.bResult = 2;
+        });
+  });
+  ASSERT_TRUE(finished) << kCreatorHung;
+  EXPECT_TRUE(state->aRanOnCaller) << "a runs on the thread that called Join";
+  EXPECT_THAT(state->bWorker, Ge(0)) << "b goes to the global queue and runs on a worker";
+  EXPECT_THAT(state->aResult + state->bResult, Eq(3));
+  EXPECT_THAT(Peer::LiveScopes(*state->scheduler), Eq(0u));
 }
 
 // Deterministic interleavings of a finisher's decrement and parker change with the creator's sleep.
@@ -485,20 +552,26 @@ INSTANTIATE_TEST_SUITE_P(Workers, PoolWorkerCounts, testing::Values(1, 2, 4),
 // A scheduler destroyed before a thread that holds one of its pooled parkers exits: the thread's
 // entry keeps the pool alive, and the thread's exit returns the slot and frees the pool.
 TEST_P(PoolWorkerCounts, ASchedulerDestroyedBeforeAThreadHoldingItsParkerExits) {
+  struct State {
+    std::size_t workers = 0;
+    std::size_t poolsAfterSchedulerGone = 0;
+  };
+  auto state = std::make_shared<State>();
+  state->workers = GetParam();
   const std::size_t poolsBefore = ParkerPool::LiveCountForTesting();
-  std::size_t poolsAfterSchedulerGone = 0;
-  std::thread thread([&] {
+  const bool finished = RunGuarded(state, [](State& s) {
     auto scheduler =
-        std::make_unique<TaskScheduler>(TaskSchedulerOptions{.workerCount = GetParam()});
+        std::make_unique<TaskScheduler>(TaskSchedulerOptions{.workerCount = s.workers});
     {
       TaskScope scope(*scheduler);
       scope.spawn([] {});
     }
     scheduler.reset();
-    poolsAfterSchedulerGone = ParkerPool::LiveCountForTesting();
+    s.poolsAfterSchedulerGone = ParkerPool::LiveCountForTesting();
   });
-  thread.join();
-  EXPECT_THAT(poolsAfterSchedulerGone, Eq(poolsBefore + 1)) << "the thread's entry holds the pool";
+  ASSERT_TRUE(finished) << kCreatorHung;
+  EXPECT_THAT(state->poolsAfterSchedulerGone, Eq(poolsBefore + 1))
+      << "the thread's entry holds the pool";
   EXPECT_THAT(ParkerPool::LiveCountForTesting(), Eq(poolsBefore)) << "thread exit frees it";
 }
 
@@ -506,24 +579,30 @@ TEST_P(PoolWorkerCounts, ASchedulerDestroyedBeforeAThreadHoldingItsParkerExits) 
 // pools of destroyed schedulers, so the thread never holds more than the current one.
 TEST_P(PoolWorkerCounts, OneThreadUsingManySchedulersInTurnHoldsOnlyTheCurrentPool) {
   constexpr int kSchedulers = 1000;
-  std::vector<std::size_t> poolsAfterRegistration;
-  std::size_t poolsAtEnd = 0;
-  std::size_t poolsBefore = 0;
-  std::thread thread([&] {
-    poolsBefore = ParkerPool::LiveCountForTesting();
+  struct State {
+    std::size_t workers = 0;
+    std::vector<std::size_t> poolsAfterRegistration;
+    std::size_t poolsAtEnd = 0;
+    std::size_t poolsBefore = 0;
+  };
+  auto state = std::make_shared<State>();
+  state->workers = GetParam();
+  const bool finished = RunGuarded(state, [](State& s) {
+    s.poolsBefore = ParkerPool::LiveCountForTesting();
     for (int i = 0; i < kSchedulers; ++i) {
-      TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = GetParam()});
+      TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = s.workers});
       TaskScope scope(scheduler);
-      poolsAfterRegistration.push_back(ParkerPool::LiveCountForTesting());
+      s.poolsAfterRegistration.push_back(ParkerPool::LiveCountForTesting());
       scope.spawn([] {});
     }
-    TaskScheduler fresh(TaskSchedulerOptions{.workerCount = GetParam()});
+    TaskScheduler fresh(TaskSchedulerOptions{.workerCount = s.workers});
     TaskScope scope(fresh);
-    poolsAtEnd = ParkerPool::LiveCountForTesting();
+    s.poolsAtEnd = ParkerPool::LiveCountForTesting();
   });
-  thread.join();
-  EXPECT_THAT(poolsAfterRegistration, Each(Le(poolsBefore + 2)));
-  EXPECT_THAT(poolsAtEnd, Eq(poolsBefore + 1)) << "only the fresh scheduler's pool is live";
+  ASSERT_TRUE(finished) << kCreatorHung;
+  EXPECT_THAT(state->poolsAfterRegistration, Each(Le(state->poolsBefore + 2)));
+  EXPECT_THAT(state->poolsAtEnd, Eq(state->poolsBefore + 1))
+      << "only the fresh scheduler's pool is live";
 }
 
 // Assertions on misuse.
@@ -595,24 +674,6 @@ INSTANTIATE_TEST_SUITE_P(Forms, TaskScopeStressTest,
                            return "Workers" + std::to_string(info.param.workers) +
                                   (info.param.delays ? "InjectedDelay" : "NoHooks");
                          });
-
-/// Runs \p body on a thread under the hang guard. @return False if it did not finish; the thread
-/// is then detached with \p state, which it keeps alive.
-template <typename State, typename Body>
-bool RunGuarded(const std::shared_ptr<State>& state, Body body) {
-  auto done = std::make_shared<Event>();
-  std::thread thread([state, done, body] {
-    body(*state);
-    done->set();
-  });
-  const bool finished = done->wait();
-  if (finished) {
-    thread.join();
-  } else {
-    thread.detach();
-  }
-  return finished;
-}
 
 // One task per scope, so every wait races the task's decrement and parker change.
 TEST_P(TaskScopeStressTest, EveryWaitReturnsOnceItsOnlyTaskFinished) {

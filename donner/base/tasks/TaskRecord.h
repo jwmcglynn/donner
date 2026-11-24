@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "donner/base/Utils.h"
+#include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/Parker.h"
 
 #if defined(__has_feature)
@@ -407,7 +408,7 @@ public:
 private:
   RecordStore store_;
   /// The return stack's head; on its own cache line, since every returner writes it.
-  alignas(128) std::atomic<TaskRecord*> returned_{nullptr};
+  alignas(kFalseSharingBytes) std::atomic<TaskRecord*> returned_{nullptr};
 };
 
 /**
