@@ -118,12 +118,12 @@ struct NoDequeHooks {
  * steal from the top. The owner takes the newest entry and thieves take the oldest. The owner may
  * change between threads only across a happens-before edge, such as a thread start or join.
  *
- * The top and bottom indices are signed 64-bit logical positions that are never wrapped or reset:
- * the top only grows, and the bottom grows on a push and shrinks on a take. An entry's slot is its
- * logical index modulo the capacity. The bottom is below the top only for a moment inside `take`,
- * which signed indices allow without underflow even on a new empty deque. Only the last entry is
- * contended between the owner and a thief, and it is claimed by a compare-and-swap on the top
- * index.
+ * The top and bottom indices are signed 64-bit logical positions that are never wrapped or reset;
+ * they would overflow only after 2^63 pushes. The top only grows, and the bottom grows on a push
+ * and shrinks on a take. An entry's slot is its logical index modulo the capacity. The bottom is
+ * below the top only for a moment inside `take`, which signed indices allow without underflow even
+ * on a new empty deque. Only the last entry is contended between the owner and a thief, and it is
+ * claimed by a compare-and-swap on the top index.
  *
  * The ring is allocated once and never resized, so no thief can read a retired array. A push that
  * would exceed the capacity fails and leaves the deque unchanged; the caller keeps the entry.
@@ -141,7 +141,8 @@ class WorkStealingDeque {
   static_assert(std::atomic<T>::is_always_lock_free, "Deque slots must be lock-free atomics");
 
 public:
-  /// Logical position of an entry; grows for the life of the deque and never wraps.
+  /// Logical position of an entry. It never wraps: a signed 64-bit index overflows only after 2^63
+  /// pushes.
   using Index = std::int64_t;
 
   /// The largest supported capacity.

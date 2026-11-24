@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <initializer_list>
 #include <latch>
 #include <mutex>
 #include <optional>
@@ -45,9 +46,10 @@ public:
   }
 };
 
-/// Whether a multi-thread case of this form runs in this build. ThreadSanitizer does not model
-/// standalone fences, so on the fenced form it reports races on entries the release fence
-/// publishes; the sequentially consistent form is the one checked there.
+/// Whether a stress case of this form is skipped in this build. ThreadSanitizer does not model
+/// standalone fences, so on the fenced form it reports races on the entry contents the release
+/// fence publishes; the sequentially consistent form is the one checked there. The interleaving
+/// cases publish nothing through the deque and run on both forms.
 template <typename FormT>
 bool SkippedUnderThreadSanitizer() {
 #if defined(DONNER_TASKS_DEQUE_TSAN)
@@ -319,6 +321,35 @@ struct InterleavingHooks {
   }
 };
 
+/**
+ * Releases both gates and joins a case's threads when the case ends by any path, including an
+ * assertion that returns early. A thread that never reaches its hook then fails one case instead
+ * of ending the test binary through a joinable `std::thread` being destroyed.
+ */
+class ReleaseAndJoin {
+public:
+  ReleaseAndJoin(Gate& takeGate, Gate& stealGate, std::initializer_list<std::thread*> threads)
+      : takeGate_(takeGate), stealGate_(stealGate), threads_(threads) {}
+
+  ReleaseAndJoin(const ReleaseAndJoin&) = delete;
+  ReleaseAndJoin& operator=(const ReleaseAndJoin&) = delete;
+
+  ~ReleaseAndJoin() {
+    takeGate_.release();
+    stealGate_.release();
+    for (std::thread* thread : threads_) {
+      if (thread->joinable()) {
+        thread->join();
+      }
+    }
+  }
+
+private:
+  Gate& takeGate_;
+  Gate& stealGate_;
+  std::vector<std::thread*> threads_;
+};
+
 template <typename FormT>
 class WorkStealingDequeInterleavingTest : public testing::Test {
 protected:
@@ -327,9 +358,6 @@ protected:
   void SetUp() override {
     InterleavingHooks::takeGate = &takeGate_;
     InterleavingHooks::stealGate = &stealGate_;
-    if (SkippedUnderThreadSanitizer<FormT>()) {
-      GTEST_SKIP() << kThreadSanitizerSkipReason;
-    }
   }
 
   void TearDown() override {
@@ -350,9 +378,12 @@ TYPED_TEST(WorkStealingDequeInterleavingTest, OwnerClaimsTheLastEntryBeforeAHeld
   typename TestFixture::Deque deque(4);
   ASSERT_TRUE(deque.push(42));
 
-  InterleavingHooks::holdNextStealClaim = true;
   StealResult<int> thiefResult;
-  std::thread thief([&] { thiefResult = deque.steal(); });
+  std::thread thief;
+  ReleaseAndJoin joinOnExit(this->takeGate_, this->stealGate_, {&thief});
+
+  InterleavingHooks::holdNextStealClaim = true;
+  thief = std::thread([&] { thiefResult = deque.steal(); });
   ASSERT_TRUE(this->stealGate_.waitForArrival());
 
   EXPECT_THAT(deque.take(), Optional(42));
@@ -373,14 +404,18 @@ TYPED_TEST(WorkStealingDequeInterleavingTest, HeldThiefClaimsTheLastEntryBeforeA
   typename TestFixture::Deque deque(4);
   ASSERT_TRUE(deque.push(42));
 
-  InterleavingHooks::holdNextStealClaim = true;
   StealResult<int> thiefResult;
-  std::thread thief([&] { thiefResult = deque.steal(); });
+  std::optional<int> ownerResult;
+  std::thread thief;
+  std::thread owner;
+  ReleaseAndJoin joinOnExit(this->takeGate_, this->stealGate_, {&thief, &owner});
+
+  InterleavingHooks::holdNextStealClaim = true;
+  thief = std::thread([&] { thiefResult = deque.steal(); });
   ASSERT_TRUE(this->stealGate_.waitForArrival());
 
   InterleavingHooks::holdNextTakeClaim = true;
-  std::optional<int> ownerResult;
-  std::thread owner([&] { ownerResult = deque.take(); });
+  owner = std::thread([&] { ownerResult = deque.take(); });
   ASSERT_TRUE(this->takeGate_.waitForArrival());
 
   this->stealGate_.release();
@@ -406,13 +441,17 @@ TYPED_TEST(WorkStealingDequeInterleavingTest, OnlyOneOfTwoThievesClaimsTheSameEn
   ASSERT_TRUE(deque.push(1));
   ASSERT_TRUE(deque.push(2));
 
-  InterleavingHooks::holdNextStealClaim = true;
   StealResult<int> heldResult;
-  std::thread heldThief([&] { heldResult = deque.steal(); });
+  StealResult<int> otherResult;
+  std::thread heldThief;
+  std::thread otherThief;
+  ReleaseAndJoin joinOnExit(this->takeGate_, this->stealGate_, {&heldThief, &otherThief});
+
+  InterleavingHooks::holdNextStealClaim = true;
+  heldThief = std::thread([&] { heldResult = deque.steal(); });
   ASSERT_TRUE(this->stealGate_.waitForArrival());
 
-  StealResult<int> otherResult;
-  std::thread otherThief([&] { otherResult = deque.steal(); });
+  otherThief = std::thread([&] { otherResult = deque.steal(); });
   otherThief.join();
   EXPECT_THAT(otherResult, Eq(Stolen(1)));
 

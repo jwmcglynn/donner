@@ -736,8 +736,9 @@ queue, and *started* once a thread begins running it.
   (Filament's deque uses sequentially consistent indices over a plain item array), because the
   repository's ThreadSanitizer does not model standalone fences: on the Le et al. form it reports a
   race on entry contents that the release fence publishes. So the sequentially consistent form is
-  the one checked under ThreadSanitizer, and the Le et al. form is checked natively on Linux
-  aarch64 and Apple silicon.
+  the one ThreadSanitizer checks, and the Le et al. form is checked by
+  `//donner/base/tasks:deque_tests` in the native CI lanes (see
+  [Testing and Validation](#testing-and-validation)).
 - **Global queue.** One intrusive first-in, first-out list linked through the task records (and,
   for coroutine resumptions, through the awaiter in the suspended frame), protected by a mutex, so
   pushing needs no allocation and there is no ABA or reclamation question: an entry is owned by
@@ -1503,16 +1504,30 @@ clients that size work from documents.
 ## Testing and Validation
 
 - **Deque stress** (`//donner/base/tasks:deque_tests`): one owner pushing and popping against
-  several thieves; every item is taken exactly once. Under ThreadSanitizer it checks the
-  sequentially consistent form, and the cases of the Le et al. form skip themselves; the Le et al.
-  form is checked natively on Linux aarch64 and Apple silicon.
-- **Deque orderings no available host distinguishes.** Weakening any of these leaves every deque
-  test green on Linux aarch64 and Apple silicon, so they are not tested: the acquire load of top
-  in `push` and the release half of the compare-and-swap in `steal` (both guard against load
-  buffering, which neither host shows); the sequentially consistent success ordering of the
-  compare-and-swap in `take`; and the sequentially consistent fence in `steal` (on Arm and x86-64
-  the acquire load of top already orders the later load of bottom). The other orderings each have
-  a mutant that the deque tests catch on at least one of those hosts or under ThreadSanitizer.
+  several thieves; every item is taken exactly once. CI runs it in the native lanes of the main
+  workflow whenever the affected-target selection includes it: trusted pull requests use the
+  self-hosted Linux arm64 lane, which normally also runs its macOS variant through remote execution,
+  and other runs use the hosted Linux x86-64 and macOS lanes. No CI lane runs ThreadSanitizer, so
+  until the variant of Milestone S4 exists the ThreadSanitizer run (`bazel test --config=tsan
+  //donner/base/tasks:deque_tests`) is manual; it checks the sequentially consistent form, and the
+  stress cases of the Le et al. form skip themselves there.
+- **Deque orderings no available host distinguishes.** The deque tests have run on Linux ARMv8 and
+  Apple silicon, not on x86-64 hardware. There, weakening each of these to relaxed leaves every
+  deque test green, so they are not tested: in the Le et al. form, the acquire loads of top in
+  `push` and in `steal` (in `steal` the fence that follows orders it), the release half of the
+  compare-and-swap in `steal` (with the acquire in `push`, these guard against load buffering, which
+  neither host shows), and the sequentially consistent success ordering of the compare-and-swap in
+  `take`. Removing the sequentially consistent fence in `steal` is also undetected: ARMv8 and x86-64
+  are multi-copy atomic, so there an acquire load of top followed by an acquire load of bottom
+  already gives the ordering, which the C++ model and POWER need the fence for. A sequentially
+  consistent fence weakened to release is indistinguishable on ARMv8, where both compile to the same
+  barrier. The mutants that the tests catch, on at least one of those hosts or under
+  ThreadSanitizer, are these. In the Le et al. form: the release fence in `push` removed or weakened
+  to acquire, the fence in `take` removed or weakened to acquire, the acquire load of bottom in
+  `steal` made relaxed, the compare-and-swap in `take` removed or replaced by a store, and the one
+  in `steal` replaced by a store. In the sequentially consistent form: the bottom stores in `push`
+  and `take` and the bottom load in `steal` made relaxed, the top load in `take` made acquire and
+  the top load in `steal` made relaxed. Its top load in `push` was not mutated.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
@@ -1544,8 +1559,9 @@ clients that size work from documents.
     and the scope and adoption lifetime assertions: `//donner/base/tasks:task_scheduler_tests`
     (the liveness, injected-delay, bound, fairness and death tests above, each observed red with
     its protocol step broken), and the same tests in the ThreadSanitizer variant of Milestone S4.
-  - Every item is taken exactly once from a deque: `//donner/base/tasks:deque_tests`, on both
-    deque forms natively and on the sequentially consistent form under ThreadSanitizer.
+  - Every item is taken exactly once from a deque: `//donner/base/tasks:deque_tests`, on both deque
+    forms in the native CI lanes, and on the sequentially consistent form under ThreadSanitizer, a
+    manual run until the variant of Milestone S4 exists.
   - Results equal sequential evaluation: `//donner/base/tasks:task_scheduler_fuzzer`.
   - The stack-floor check stops the process with a named failure: a death test in
     `//donner/base/tasks:task_scheduler_tests`. It is a release assertion, so it is enforced in
