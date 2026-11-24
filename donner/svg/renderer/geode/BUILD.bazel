@@ -967,10 +967,17 @@ donner_cc_test(
 donner_multi_transitioned_test(
     name = "geode_perf_tests",
     linux_hardware_gpu = True,
+    # The sibling-surface cases render canvas-sized masks, layers and clips up to 2048 px, which on
+    # a software Vulkan runner can take a large part of a `small` test's 60 s. Three shards put the
+    # heaviest scenes in separate processes, and `medium` makes each shard's timeout a hang guard
+    # well above its run time rather than a budget the suite has to meet. Each shard creates its
+    # own device.
+    size = "medium",
     testonly = 1,
     dep = ":geode_perf_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+    shard_count = 3,
 )
 
 # Corpus-wide steady-state counter gate: renders every SVG in the render
