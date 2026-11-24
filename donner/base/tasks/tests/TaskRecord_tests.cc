@@ -897,9 +897,12 @@ TYPED_TEST(CreatorRecordPoolStressTest, CrossThreadReturnsKeepEveryRecordAndRunE
   EXPECT_THAT(pool.createdCount(), Le(kBound));
 }
 
-// Several threads allocate and release from the external pool under its guard. The number of
-// records out at once never exceeds the bound, and with more threads than the bound some
-// allocations must find it reached.
+// Several threads allocate and release from the external pool under its guard. First the full
+// bound is held outstanding while another thread allocates, which must get the inline fallback;
+// that part does not depend on how the threads are scheduled. Then the threads contend freely, and
+// the number of records out at once never exceeds the bound. Whether the bound is reached during
+// the free contention depends on scheduling (on one CPU it may never be), so only the first part
+// asserts it.
 TEST(ExternalRecordPoolStressTest, TheBoundHoldsUnderContention) {
   constexpr int kThreads = 6;
   constexpr int kAllocationsPerThread = 20000;
@@ -908,8 +911,30 @@ TEST(ExternalRecordPoolStressTest, TheBoundHoldsUnderContention) {
   ExternalRecordPool pool(guard, kBound);
   std::atomic<std::int64_t> out{0};
   std::atomic<std::int64_t> mostOut{0};
-  std::atomic<std::int64_t> boundHits{0};
   std::atomic<std::int64_t> runs{0};
+
+  {
+    std::vector<TaskRecord*> held;
+    {
+      std::unique_lock lock(guard);
+      for (std::size_t i = 0; i < kBound; ++i) {
+        held.push_back(pool.tryAllocate(lock));
+      }
+    }
+    ASSERT_THAT(held, testing::Each(NotNull()));
+    TaskRecord* extra = held.front();
+    std::thread other([&] {
+      std::unique_lock lock(guard);
+      extra = pool.tryAllocate(lock);
+    });
+    other.join();
+    EXPECT_THAT(extra, IsNull())
+        << "with the whole bound outstanding, another thread must get the inline fallback";
+    std::unique_lock lock(guard);
+    for (TaskRecord* record : held) {
+      pool.release(record, lock);
+    }
+  }
 
   std::vector<std::thread> threads;
   for (int i = 0; i < kThreads; ++i) {
@@ -921,7 +946,6 @@ TEST(ExternalRecordPoolStressTest, TheBoundHoldsUnderContention) {
           record = pool.tryAllocate(lock);
         }
         if (record == nullptr) {
-          boundHits.fetch_add(1, std::memory_order_relaxed);
           runs.fetch_add(1, std::memory_order_relaxed);
           continue;
         }
@@ -942,7 +966,6 @@ TEST(ExternalRecordPoolStressTest, TheBoundHoldsUnderContention) {
   }
 
   EXPECT_THAT(mostOut.load(), Le(static_cast<std::int64_t>(kBound)));
-  EXPECT_THAT(boundHits.load(), Gt(0));
   EXPECT_THAT(runs.load(), Eq(kThreads * kAllocationsPerThread));
   std::unique_lock lock(guard);
   EXPECT_THAT(pool.liveCount(lock), Eq(0u));
