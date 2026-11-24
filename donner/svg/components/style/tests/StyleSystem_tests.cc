@@ -8,7 +8,10 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
+#include <cstdint>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -45,7 +48,10 @@ namespace {
 
 using ::testing::AllOf;
 using ::testing::ElementsAre;
+using ::testing::Eq;
 using ::testing::Field;
+using ::testing::Gt;
+using ::testing::Le;
 
 std::vector<bool> UserAgentMatchFlags(const SVGElement& element) {
   const std::vector<SVGMatchedStyleRule> matches = CollectMatchedStyleRules(element);
@@ -1541,6 +1547,132 @@ TEST_F(StyleSystemTest, ShadowTreeSelectorsMatchSiblingAndAttributeState) {
   EXPECT_EQ(circleStyle.properties->stroke.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 0xFF)))));
   EXPECT_DOUBLE_EQ(circleStyle.properties->opacity.get().value(), 0.5);
+}
+
+// --- Cascade counters and style time ---
+
+namespace {
+
+/// Cascade instrumentation of \p document, which a style pass has created.
+const StyleCascadeMetrics& CascadeMetricsOf(SVGDocument& document) {
+  return document.registry().ctx().get<StyleCascadeMetrics>();
+}
+
+/// Replace the document's style budget with one that has \p limits.
+void SetStyleLimits(SVGDocument& document, const StyleResourceBudget::Limits& limits) {
+  Registry& registry = document.registry();
+  if (registry.ctx().contains<StyleResourceBudget>()) {
+    registry.ctx().erase<StyleResourceBudget>();
+  }
+  registry.ctx().emplace<StyleResourceBudget>(limits);
+}
+
+}  // namespace
+
+TEST_F(StyleSystemTest, StyleTimeGrowsWithEachPassAndReleasesItsScope) {
+  auto document = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect width="50" height="50"/>
+    </svg>
+  )");
+  const StyleCascadeMetrics& metrics = CascadeMetricsOf(document);
+  EXPECT_THAT(metrics.activeTimedCalls, Eq(0));
+  const std::int64_t afterFirstPassNs = metrics.styleTime.count();
+  EXPECT_THAT(afterFirstPassNs, Gt(0));
+
+  SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
+                                                          .needsFullStyleRecompute = true,
+                                                          .hasBeenBuilt = true});
+  ParseWarningSink warningSink;
+  styleSystem.computeAllStyles(document.registry(), warningSink);
+
+  EXPECT_THAT(metrics.activeTimedCalls, Eq(0));
+  EXPECT_THAT(metrics.styleTime.count(), Gt(afterFirstPassNs));
+  EXPECT_THAT(metrics.counters.fullClears, Eq(1u));
+}
+
+TEST_F(StyleSystemTest, StyleTimeCountsNestedParentCascadesOnce) {
+  // Cascading the leaf of a deep chain computes every ancestor inside the leaf's own cascade, so
+  // timing each cascade separately would count the same interval once per ancestor.
+  constexpr int kDepth = 100;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">)";
+  for (int i = 0; i < kDepth; ++i) {
+    source += "<g>";
+  }
+  source += R"(<rect id="leaf" width="50" height="50"/>)";
+  for (int i = 0; i < kDepth; ++i) {
+    source += "</g>";
+  }
+  source += "</svg>";
+  auto document = ParseSVG(source);
+  const Entity leaf = document.querySelector("#leaf")->entityHandle().entity();
+  const auto* parsed = document.registry().ctx().find<StyleCascadeMetrics>();
+  const std::uint64_t cascadedBefore = parsed ? parsed->counters.elementsCascaded : 0;
+  const std::int64_t timeBeforeNs = parsed ? parsed->styleTime.count() : 0;
+
+  ParseWarningSink warningSink;
+  const auto start = std::chrono::steady_clock::now();
+  styleSystem.computeStylesFor(document.registry(), std::span<const Entity>(&leaf, 1), warningSink);
+  const auto wallNs =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
+          .count();
+
+  const StyleCascadeMetrics& metrics = CascadeMetricsOf(document);
+  // The groups, the leaf, the `<svg>` element and the document node above it.
+  EXPECT_THAT(metrics.counters.elementsCascaded - cascadedBefore,
+              Eq(static_cast<std::uint64_t>(kDepth + 3)));
+  EXPECT_THAT(metrics.activeTimedCalls, Eq(0));
+  // The timed interval lies inside the measured call; this is containment, not a time budget.
+  EXPECT_THAT(metrics.styleTime.count() - timeBeforeNs, AllOf(Gt(0), Le(wallNs)));
+}
+
+TEST_F(StyleSystemTest, DirtyOnlyPassCountsItsBudgetRejection) {
+  auto document = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <style>rect { fill: red; }</style>
+      <rect id="r" width="50" height="50"/>
+    </svg>
+  )");
+  auto rect = document.querySelector("#r")->entityHandle();
+  SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
+                                                          .needsFullStyleRecompute = false,
+                                                          .hasBeenBuilt = true});
+  StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 1;
+  SetStyleLimits(document, limits);
+  styleSystem.invalidateComputed(rect);
+  document.registry()
+      .emplace_or_replace<DirtyFlagsComponent>(rect.entity())
+      .mark(DirtyFlagsComponent::Style);
+  const StyleCascadeCounters before = CascadeMetricsOf(document).counters;
+
+  ParseWarningSink warningSink;
+  styleSystem.computeAllStyles(document.registry(), warningSink);
+
+  EXPECT_THAT(CascadeMetricsOf(document).counters - before,
+              AllOf(Field("elementsCascaded", &StyleCascadeCounters::elementsCascaded, 1u),
+                    Field("rulesTested", &StyleCascadeCounters::rulesTested, 1u),
+                    Field("fullClears", &StyleCascadeCounters::fullClears, 0u),
+                    Field("budgetRejections", &StyleCascadeCounters::budgetRejections, 1u)));
+}
+
+TEST_F(StyleSystemTest, DeclarationBudgetRefusalCountsOnlyAdmittedDeclarations) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <style>rect { fill: red; stroke: blue; stroke-width: 2; opacity: 0.5; }</style>
+      <rect width="50" height="50"/>
+    </svg>
+  )");
+  StyleResourceBudget::Limits limits;
+  limits.declarationApplications = 3;
+  SetStyleLimits(document, limits);
+
+  ParseWarningSink warningSink;
+  styleSystem.computeAllStyles(document.registry(), warningSink);
+
+  EXPECT_THAT(CascadeMetricsOf(document).counters,
+              AllOf(Field("declarationsApplied", &StyleCascadeCounters::declarationsApplied, 3u),
+                    Field("budgetRejections", &StyleCascadeCounters::budgetRejections, 1u)));
 }
 
 }  // namespace donner::svg::components

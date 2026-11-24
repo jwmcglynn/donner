@@ -1,7 +1,13 @@
 """Donner-level benchmarks comparing performance across backends."""
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
+load(
+    "//build_defs:rules.bzl",
+    "donner_cc_binary",
+    "donner_cc_library",
+    "donner_cc_test",
+    "donner_perf_cc_test",
+)
 
 package(default_visibility = ["//visibility:public"])
 
@@ -43,6 +49,55 @@ donner_cc_library(
     name = "css_parser_bench_inputs",
     hdrs = ["CssParserBenchInputs.h"],
     deps = ["//donner/css/parser"],
+)
+
+donner_cc_library(
+    name = "css_cascade_scenes",
+    srcs = ["CssCascadeScenes.cc"],
+    hdrs = ["CssCascadeScenes.h"],
+    # Its compile closure reaches the SheenBidi headers only in the text tiers.
+    variant_neutral = False,
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+        "//donner/svg/internal:rendering_diagnostics",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
+    ],
+)
+
+donner_cc_binary(
+    name = "css_cascade_perf_bench",
+    srcs = ["CssCascadePerfBench.cpp"],
+    data = [
+        "//:donner_splash.svg",
+        "//donner/svg/renderer/testdata",
+        "//third_party/bootstrap-icons:bootstrap-icons.svg",
+    ],
+    deps = [":css_cascade_scenes"],
+)
+
+# Style cascade work: the correctness half pins the exact counters of fixed documents and edits on
+# the PR gate; the wall-clock half records style time in the manual perf lane.
+donner_perf_cc_test(
+    name = "css_cascade_perf_tests",
+    # Each case cascades up to about a million rule tests; under ASan two such cases together can
+    # exceed the `size = "small"` limit, so each runs in its own shard.
+    correctness_shard_count = 33,
+    correctness_srcs = ["CssCascadePerfCorrectness_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+        "//donner/svg/renderer/testdata",
+        "//third_party/bootstrap-icons:bootstrap-icons.svg",
+    ],
+    wallclock_srcs = ["CssCascadePerfWallclock_tests.cc"],
+    deps = [
+        ":css_cascade_scenes",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_cc_binary(

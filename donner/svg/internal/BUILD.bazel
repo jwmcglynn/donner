@@ -5,6 +5,7 @@ donner_cc_library(
     srcs = ["RenderingDiagnostics.cc"],
     hdrs = ["RenderingDiagnostics.h"],
     visibility = [
+        "//donner/benchmarks:__pkg__",
         "//donner/svg/tests:__pkg__",
         "//tools/mcp-servers/editor-control:__pkg__",
     ],

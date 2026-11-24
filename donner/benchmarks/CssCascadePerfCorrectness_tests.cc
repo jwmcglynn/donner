@@ -1,0 +1,220 @@
+/// @file
+/// Exact style cascade work for fixed documents and edits, as reported through the rendering
+/// diagnostics. Counts are independent of the machine, so a change in work done fails here.
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <functional>
+#include <map>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include "donner/base/tests/RunfileGate.h"
+#include "donner/benchmarks/CssCascadeScenes.h"
+
+namespace donner::benchmarks {
+namespace {
+
+using svg::components::StyleCascadeCounters;
+using ::testing::AllOf;
+using ::testing::Field;
+using ::testing::Matcher;
+using ::testing::Optional;
+
+/// Documents the cases run against.
+enum class Document { Splash, Icons, Tiger, Synthetic, UseInstances, Descendant };
+
+/// Source of \p document, read or generated once per process.
+const std::string& SourceOf(Document document) {
+  static std::map<Document, std::string> sources;
+  if (const auto it = sources.find(document); it != sources.end()) {
+    return it->second;
+  }
+  const auto read = [](std::string_view path) {
+    tests::RequiredRunfile file = tests::ReadRequiredRunfile(path);
+    EXPECT_THAT(file.error, ::testing::IsEmpty());
+    return std::move(file.contents);
+  };
+  std::string source;
+  switch (document) {
+    case Document::Splash: source = read(kSplashPath); break;
+    case Document::Icons: source = read(kBootstrapIconsPath); break;
+    case Document::Tiger: source = read(kTigerPath); break;
+    case Document::Synthetic: source = MakeSyntheticDocument(); break;
+    case Document::UseInstances: source = MakeUseInstancesDocument(200, 20, 20); break;
+    case Document::Descendant:
+      source = MakeGroupedRectsDocument(1000, 100, CascadeRuleKind::Descendant);
+      break;
+  }
+  return sources.emplace(document, std::move(source)).first->second;
+}
+
+/// Matches every count of \p expected, naming each mismatched field.
+Matcher<StyleCascadeCounters> CountersAre(const StyleCascadeCounters& expected) {
+  return AllOf(
+      Field("elementsCascaded", &StyleCascadeCounters::elementsCascaded, expected.elementsCascaded),
+      Field("rulesTested", &StyleCascadeCounters::rulesTested, expected.rulesTested),
+      Field("rulesMatched", &StyleCascadeCounters::rulesMatched, expected.rulesMatched),
+      Field("declarationsApplied", &StyleCascadeCounters::declarationsApplied,
+            expected.declarationsApplied),
+      Field("fullClears", &StyleCascadeCounters::fullClears, expected.fullClears),
+      Field("budgetRejections", &StyleCascadeCounters::budgetRejections,
+            expected.budgetRejections));
+}
+
+/// Matches a measurement whose repetitions all did \p expected work.
+Matcher<std::optional<CascadeMeasurement>> StableWork(const StyleCascadeCounters& expected) {
+  return Optional(AllOf(Field("countersStable", &CascadeMeasurement::countersStable, true),
+                        Field("counters", &CascadeMeasurement::counters, CountersAre(expected))));
+}
+
+/// Two repetitions, so each case also checks that a repeated frame does the same work.
+constexpr CascadeRepetitions kRepetitions{.warmup = 0, .measured = 2};
+/// One repetition, for the generated scaling documents, each cascaded once per process.
+constexpr CascadeRepetitions kOneRepetition{.warmup = 0, .measured = 1};
+/// The frame after the appended rule, which the first repetition's restore leaves out.
+constexpr CascadeRepetitions kAppendFrame = OneDirection(kRepetitions, RecordedRepetitions::Odd);
+/// The frame after the forward keystroke, for a keystroke whose undo does different work.
+constexpr CascadeRepetitions kForwardKeystroke =
+    OneDirection(kRepetitions, RecordedRepetitions::Even);
+
+struct CascadeCase {
+  std::string name;
+  std::function<std::optional<CascadeMeasurement>()> measure;
+  StyleCascadeCounters expected;
+};
+
+std::ostream& operator<<(std::ostream& os, const CascadeCase& value) {
+  return os << value.name;
+}
+
+CascadeCase Load(std::string name, Document document, StyleCascadeCounters expected) {
+  return {std::move(name),
+          [document] { return MeasureCascadeLoad(SourceOf(document), kRepetitions, false); },
+          expected};
+}
+
+CascadeCase Generated(std::string name, int elements, int rules, CascadeRuleKind kind,
+                      StyleCascadeCounters expected) {
+  return {std::move(name),
+          [=] {
+            return MeasureCascadeLoad(MakeGroupedRectsDocument(elements, rules, kind),
+                                      kOneRepetition, false);
+          },
+          expected};
+}
+
+CascadeCase Edit(std::string name, Document document, CascadeEditTarget target, CascadeEdit edit,
+                 StyleCascadeCounters expected, CascadeRepetitions repetitions = kRepetitions) {
+  return {std::move(name),
+          [=] { return MeasureCascadeEdit(SourceOf(document), target, edit, repetitions, false); },
+          expected};
+}
+
+CascadeCase Keystroke(std::string name, CascadeKeystroke keystroke, StyleCascadeCounters expected,
+                      CascadeRepetitions repetitions = kRepetitions) {
+  return {std::move(name),
+          [=] {
+            return MeasureCascadeKeystroke(SourceOf(Document::Splash), keystroke, repetitions,
+                                           false);
+          },
+          expected};
+}
+
+class CssCascadeWorkTest : public ::testing::TestWithParam<CascadeCase> {};
+
+TEST_P(CssCascadeWorkTest, MatchesRecordedWork) {
+  EXPECT_THAT(GetParam().measure(), StableWork(GetParam().expected));
+}
+
+std::string CaseName(const ::testing::TestParamInfo<CascadeCase>& info) {
+  return info.param.name;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    FirstFrame, CssCascadeWorkTest,
+    ::testing::Values(
+        Load("Splash", Document::Splash, {622, 57838, 1382, 1386, 0, 0}),
+        Load("BootstrapIcons", Document::Icons, {5137, 20544, 9291, 9291, 0, 0}),
+        Load("Tiger", Document::Tiger, {484, 1928, 481, 481, 0, 0}),
+        Load("Synthetic2000x200", Document::Synthetic, {2003, 408608, 3254, 4506, 0, 0}),
+        Load("UseInstances", Document::UseInstances, {4425, 106196, 8846, 8846, 0, 0}),
+        Load("Descendant1000x100", Document::Descendant, {1003, 104308, 1010, 1018, 0, 0})),
+    CaseName);
+
+const CascadeEditTarget kSplashTarget = SplashEditTarget();
+const CascadeEditTarget kSyntheticTarget = SyntheticEditTarget();
+const CascadeEditTarget kIconsTarget = BootstrapIconsEditTarget();
+
+constexpr StyleCascadeCounters kSplashRestyle{1069, 99401, 2414, 2422, 2, 0};
+constexpr StyleCascadeCounters kIconsRestyle{10274, 41088, 18582, 18582, 2, 0};
+
+INSTANTIATE_TEST_SUITE_P(
+    EditFrame, CssCascadeWorkTest,
+    ::testing::Values(
+        Edit("SplashClass", Document::Splash, kSplashTarget, CascadeEdit::Class, kSplashRestyle),
+        Edit("SplashFill", Document::Splash, kSplashTarget, CascadeEdit::Fill, kSplashRestyle),
+        Edit("SplashStyle", Document::Splash, kSplashTarget, CascadeEdit::Style, kSplashRestyle),
+        // The appended rule is tested against every element once in each of the two passes.
+        Edit("SplashAppendRule", Document::Splash, kSplashTarget, CascadeEdit::AppendRule,
+             {1069, 100470, 2414, 2422, 2, 0}, kAppendFrame),
+        Edit("SyntheticClass", Document::Synthetic, kSyntheticTarget, CascadeEdit::Class,
+             {4006, 817216, 6510, 9016, 2, 0}),
+        Edit("SyntheticFill", Document::Synthetic, kSyntheticTarget, CascadeEdit::Fill,
+             {4006, 817216, 6508, 9012, 2, 0}),
+        Edit("SyntheticStyle", Document::Synthetic, kSyntheticTarget, CascadeEdit::Style,
+             {4006, 817216, 6508, 9012, 2, 0}),
+        Edit("SyntheticAppendRule", Document::Synthetic, kSyntheticTarget, CascadeEdit::AppendRule,
+             {4006, 821222, 6508, 9012, 2, 0}, kAppendFrame),
+        Edit("IconsClass", Document::Icons, kIconsTarget, CascadeEdit::Class, kIconsRestyle),
+        Edit("IconsFill", Document::Icons, kIconsTarget, CascadeEdit::Fill, kIconsRestyle),
+        Edit("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style, kIconsRestyle)),
+    CaseName);
+
+INSTANTIATE_TEST_SUITE_P(
+    KeystrokeFrame, CssCascadeWorkTest,
+    ::testing::Values(
+        Keystroke("DeclarationValue", CascadeKeystroke::DeclarationValue, kSplashRestyle),
+        Keystroke("SelectorLetterInserted", CascadeKeystroke::Selector,
+                  {1069, 99401, 2412, 2420, 2, 0}, kForwardKeystroke),
+        // The unclosed rule absorbs the rules after it, so far fewer rules are tested.
+        Keystroke("ClosingBraceDeleted", CascadeKeystroke::ClosingBrace,
+                  {1069, 7467, 2138, 2140, 2, 0}, kForwardKeystroke),
+        Keystroke("ClassLetterInserted", CascadeKeystroke::ClassAttribute,
+                  {1069, 99401, 2412, 2420, 2, 0}, kForwardKeystroke)),
+    CaseName);
+
+INSTANTIATE_TEST_SUITE_P(
+    Scaling, CssCascadeWorkTest,
+    ::testing::Values(
+        Generated("Mixed1000x0", 1000, 0, CascadeRuleKind::Mixed, {1002, 4004, 1000, 1000, 0, 0}),
+        Generated("Mixed1000x10", 1000, 10, CascadeRuleKind::Mixed,
+                  {1003, 14038, 1911, 2820, 0, 0}),
+        Generated("Mixed1000x100", 1000, 100, CascadeRuleKind::Mixed,
+                  {1003, 104308, 1646, 2290, 0, 0}),
+        Generated("Mixed1000x1000", 1000, 1000, CascadeRuleKind::Mixed,
+                  {1003, 1007008, 1638, 2274, 0, 0}),
+        Generated("Mixed4000x0", 4000, 0, CascadeRuleKind::Mixed, {4002, 16004, 4000, 4000, 0, 0}),
+        Generated("Mixed4000x10", 4000, 10, CascadeRuleKind::Mixed,
+                  {4003, 56038, 7638, 11274, 0, 0}),
+        Generated("Mixed4000x100", 4000, 100, CascadeRuleKind::Mixed,
+                  {4003, 416308, 6546, 9090, 0, 0}),
+        // The rule-element budget of 1,048,576 tests ends the pass before the last elements.
+        Generated("Mixed4000x1000BudgetExhausted", 4000, 1000, CascadeRuleKind::Mixed,
+                  {4003, 1048576, 1702, 2362, 0, 1}),
+        Generated("Class1000x1000", 1000, 1000, CascadeRuleKind::Class,
+                  {1003, 1007008, 1911, 2820, 0, 0}),
+        Generated("Descendant1000x1000", 1000, 1000, CascadeRuleKind::Descendant,
+                  {1003, 1007008, 1013, 1024, 0, 0}),
+        Generated("Type1000x1000", 1000, 1000, CascadeRuleKind::Type,
+                  {1003, 1007008, 2104, 3206, 0, 0}),
+        Generated("Attribute1000x1000", 1000, 1000, CascadeRuleKind::Attribute,
+                  {1003, 1007008, 1002, 1002, 0, 0})),
+    CaseName);
+
+}  // namespace
+}  // namespace donner::benchmarks

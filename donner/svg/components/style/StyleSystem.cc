@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <type_traits>
 
@@ -32,6 +33,7 @@
 #include "donner/svg/components/style/PaintAnimationStyle.h"
 #include "donner/svg/components/style/ScalarAnimationStyle.h"
 #include "donner/svg/components/style/SelectorContent.h"
+#include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleComponent.h"
 
 namespace donner::svg::components {
@@ -95,6 +97,56 @@ StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
   budget.setAggregateWorkBudget(occurrence ? occurrence->work.get() : nullptr);
   return budget;
 }
+
+StyleCascadeMetrics& GetStyleCascadeMetrics(Registry& registry) {
+  if (auto* metrics = registry.ctx().find<StyleCascadeMetrics>()) {
+    return *metrics;
+  }
+  return registry.ctx().emplace<StyleCascadeMetrics>();
+}
+
+/// Adds the duration of the outermost timed style call on a registry to its style time.
+class StyleTimeScope {
+public:
+  explicit StyleTimeScope(StyleCascadeMetrics& metrics)
+      : metrics_(metrics), outermost_(metrics.activeTimedCalls++ == 0) {
+    if (outermost_) {
+      start_ = std::chrono::steady_clock::now();
+    }
+  }
+  ~StyleTimeScope() {
+    --metrics_.activeTimedCalls;
+    if (outermost_) {
+      metrics_.styleTime += std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start_);
+    }
+  }
+  StyleTimeScope(const StyleTimeScope&) = delete;
+  StyleTimeScope& operator=(const StyleTimeScope&) = delete;
+
+private:
+  StyleCascadeMetrics& metrics_;
+  bool outermost_;
+  std::chrono::steady_clock::time_point start_;
+};
+
+/// Counts a style pass that ends, from any return path, with its budget refusing work.
+class PassRejectionCount {
+public:
+  PassRejectionCount(const StyleResourceBudget& budget, StyleCascadeCounters& counters)
+      : budget_(budget), counters_(counters) {}
+  ~PassRejectionCount() {
+    if (budget_.rejected()) {
+      ++counters_.budgetRejections;
+    }
+  }
+  PassRejectionCount(const PassRejectionCount&) = delete;
+  PassRejectionCount& operator=(const PassRejectionCount&) = delete;
+
+private:
+  const StyleResourceBudget& budget_;
+  StyleCascadeCounters& counters_;
+};
 
 bool InheritsExternalPaint(PropertyState state) {
   return state == PropertyState::NotSet || state == PropertyState::Inherit ||
@@ -547,12 +599,13 @@ bool LocalRangeContainsOffset(const SourceRange& range, std::size_t localOffset)
 
 void ApplyRuleDeclarations(const css::SelectorRule& rule, css::Specificity specificity,
                            PropertyRegistry& properties, StyleResourceBudget& styleBudget,
-                           ParseWarningSink& warningSink) {
+                           StyleCascadeCounters& counters, ParseWarningSink& warningSink) {
   for (const auto& declaration : rule.declarations) {
     if (!styleBudget.reserveDeclarationApplication(declaration.values.size(),
                                                    declaration.sourceByteSize)) {
       return;
     }
+    ++counters.declarationsApplied;
     if (auto error = properties.parseProperty(declaration, specificity)) {
       constexpr std::size_t kMaximumStyleDiagnosticBytes = 4096;
       if (error->reason.size() > kMaximumStyleDiagnosticBytes) {
@@ -666,6 +719,7 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
 void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                                        PropertyRegistry& properties,
                                        StyleResourceBudget& styleBudget,
+                                       StyleCascadeCounters& counters,
                                        ParseWarningSink& warningSink) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
   // Apply one sheet's rules; returns false once the style budget is exhausted.
@@ -674,15 +728,17 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
       if (!styleBudget.reserveRuleElementMatch()) {
         return false;
       }
+      ++counters.rulesTested;
       auto match = MatchSelectorRule(rule, adapter, &styleBudget.selectorTraversal());
       if (!match) {
         continue;
       }
+      ++counters.rulesMatched;
       css::Specificity specificity = match->specificity;
       if (isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
-      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, warningSink);
+      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, counters, warningSink);
     }
     return true;
   };
@@ -833,6 +889,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
   Registry& registry = *handle.registry();
   auto& styleBudget = GetStyleResourceBudget(registry);
+  StyleCascadeCounters& counters = GetStyleCascadeMetrics(registry).counters;
+  ++counters.elementsCascaded;
 
   const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
@@ -845,7 +903,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     properties = PropertyRegistry();
   }
 
-  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
+  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, counters,
+                       warningSink);
   ApplyAnimatedStyle(registry, dataEntity, properties);
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   const auto* occurrence = ExternalRootContext(registry, handle.entity());
@@ -1014,8 +1073,11 @@ std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
 }
 
 void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink) {
+  StyleCascadeMetrics& metrics = GetStyleCascadeMetrics(registry);
+  const StyleTimeScope timeScope(metrics);
   auto& styleBudget = GetStyleResourceBudget(registry);
   styleBudget.reset();
+  const PassRejectionCount rejectionCount(styleBudget, metrics.counters);
   const auto* renderState = registry.ctx().find<RenderTreeState>();
   const bool hasBeenBuilt = renderState != nullptr && renderState->hasBeenBuilt;
   const bool needsFullStyleRecompute =
@@ -1056,6 +1118,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
   }
 
   if (hasBeenBuilt && needsFullStyleRecompute) {
+    ++metrics.counters.fullClears;
     styleBudget.releaseAll();
     registry.clear<ComputedStyleComponent>();
   }
@@ -1087,6 +1150,7 @@ void StyleSystem::discardComputedStyles(Registry& registry) {
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
                                    ParseWarningSink& warningSink) {
+  const StyleTimeScope timeScope(GetStyleCascadeMetrics(registry));
   for (Entity entity : entities) {
     computeStyle(EntityHandle(registry, entity), warningSink);
   }

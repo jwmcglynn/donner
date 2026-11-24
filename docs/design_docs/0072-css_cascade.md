@@ -190,8 +190,6 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ## Next Steps
 
-- Land the cascade counters and the benchmark (Milestone A1), so every later step reports its
-  effect with the same instrument.
 - Land the single-cascade fix (Milestone A2): the smallest change with the largest measured effect
   on edits.
 - Land the base-library Bloom filter (Milestone A6), which has no dependency, in parallel.
@@ -203,15 +201,19 @@ including tests and review fixes. "After" names the milestones that must land fi
 
 ### Part A Milestones
 
-- [ ] Milestone A1: Cascade counters and benchmark (1.5 days)
-  - [ ] Add internal per-pass counters to `StyleSystem` (elements cascaded, rules tested, rules
-        matched, declarations applied, full clears, budget rejections, and later the filter and
-        cache counters), readable through the existing `RenderingDiagnostics` snapshot.
-  - [ ] Add `//donner/benchmarks:css_cascade_perf_bench` with the documents and edits in
+- [x] Milestone A1: Cascade counters and benchmark (1.5 days,
+      [#2699](https://github.com/jwmcglynn/donner/pull/2699))
+  - [x] Add internal counters to `StyleSystem` (elements cascaded, rules tested, rules matched,
+        declarations applied, full clears, budget rejections, and later the filter and cache
+        counters), readable through the existing `RenderingDiagnostics` snapshot. They are
+        `StyleCascadeCounters` in the document registry's context and only grow: the work of a
+        frame or edit is the difference between a capture taken after it and one taken before
+        it. The same capture carries the style time.
+  - [x] Add `//donner/benchmarks:css_cascade_perf_bench` with the documents and edits in
         [Reproducing the Baseline](#reproducing-the-baseline).
-  - [ ] Add a `donner_perf_cc_test` whose correctness target asserts the counter values for fixed
-        documents (CPU-invariant, PR-gated) and whose wall-clock target records times (manual,
-        `perf` tag).
+  - [x] Add `//donner/benchmarks:css_cascade_perf_tests`, a `donner_perf_cc_test` whose
+        correctness target asserts the counter values for fixed documents and edits
+        (CPU-invariant, PR-gated) and whose wall-clock target records times (manual, `perf` tag).
   - Done when: the counters reproduce this document's counter columns exactly for the splash,
     bootstrap-icons and synthetic documents.
 - [ ] Milestone A2: One cascade per full restyle (1 day). After A1.
@@ -576,19 +578,22 @@ prepared. The append case rewrites the `<style>` element's contents through
 | Splash, `class`                    |             1,069 |       99,401 | 23.33 (22.97-23.77)    | 18.79 (18.55-19.18)    |  81 percent | 144.96 (143.55-147.05) |
 | Splash, `fill` attribute           |             1,069 |       99,401 | 24.16 (22.92-25.09)    | 19.40 (18.60-19.88)    |  80 percent | 145.90 (144.49-155.43) |
 | Splash, `style` attribute          |             1,069 |       99,401 | 23.83 (23.19-24.37)    | 19.14 (18.71-19.60)    |  80 percent | 145.59 (143.05-150.76) |
-| Splash, append one rule            |             1,069 |       99,401 | 24.07 (23.56-26.48)    | 19.38 (18.88-21.03)    |  81 percent | 146.84 (144.48-154.04) |
+| Splash, append one rule            |             1,069 |      100,470 | 24.07 (23.56-26.48)    | 19.38 (18.88-21.03)    |  81 percent | 146.84 (144.48-154.04) |
 | Synthetic 2,000 x 200, `class`     |             4,006 |      817,216 | 167.32 (163.37-170.15) | 158.22 (155.10-161.47) |  95 percent | 173.48 (170.44-178.92) |
 | Synthetic 2,000 x 200, `fill`      |             4,006 |      817,216 | 166.62 (164.46-175.59) | 158.27 (156.14-166.41) |  95 percent | 170.72 (168.77-176.32) |
 | Synthetic 2,000 x 200, `style`     |             4,006 |      817,216 | 168.34 (164.78-170.10) | 159.26 (156.43-160.73) |  95 percent | 173.93 (170.43-180.98) |
-| Synthetic 2,000 x 200, append rule |             4,006 |      817,216 | 165.24 (163.46-169.22) | 156.81 (155.13-160.67) |  95 percent | 171.74 (169.67-175.51) |
+| Synthetic 2,000 x 200, append rule |             4,006 |      821,222 | 165.24 (163.46-169.22) | 156.81 (155.13-160.67) |  95 percent | 171.74 (169.67-175.51) |
 | Bootstrap icons, `class`           |            10,274 |       41,088 | 70.07 (68.58-72.81)    | 63.14 (62.05-65.25)    |  90 percent | 70.43 (69.00-73.58)    |
 | Bootstrap icons, `fill`            |            10,274 |       41,088 | 70.97 (69.42-72.98)    | 63.98 (62.29-65.41)    |  90 percent | 70.83 (68.95-74.23)    |
 | Bootstrap icons, `style`           |            10,274 |       41,088 | 70.50 (69.00-72.98)    | 63.41 (62.08-65.66)    |  90 percent | 69.87 (67.83-72.19)    |
 
 Every edit, including a `fill` write on one shape, restyles the whole document twice (2 full
-clears per frame in every row). The editor presents through its compositor and Geode rather than
-a full TinySkia frame, so its edit-to-frame cost lies between the two frame columns; style is 80
-to 95 percent of the frame preparation that precedes rasterization in every case measured.
+clears per frame in every row). The append rows give the work of the frame after the rule is
+appended; the frame that removes it again tests the original 99,401 and 817,216 rules. Their times
+are medians over both frames of the alternation. The editor presents through its compositor and
+Geode rather than a full TinySkia frame, so its edit-to-frame cost lies between the two frame
+columns; style is 80 to 95 percent of the frame preparation that precedes rasterization in every
+case measured.
 
 **Scaling.** Synthetic documents with groups of ten `<rect>` elements, each with one class, and
 `R` rules of one kind (first-frame style time, median of 9):
@@ -605,7 +610,7 @@ to 95 percent of the frame preparation that precedes rasterization in every case
 | 4,000 x 1,000    | mixed, budget exhausted  |    1,048,576 |   185.06 |   164.62 |
 | 1,000 x 1,000    | `.cN` only               |    1,007,008 |   161.49 |   155.70 |
 | 1,000 x 1,000    | `.gK .cN` only           |    1,007,008 |   161.30 |   155.78 |
-| 1,000 x 1,000    | `rect:nth-child(N)` only |    1,007,008 |   169.85 |   163.51 |
+| 1,000 x 1,000    | type and `:nth-child(N)` |    1,007,008 |   169.85 |   163.51 |
 | 1,000 x 1,000    | `[data-kN]` only         |    1,007,008 |   163.54 |   157.72 |
 
 "Mixed" is 70 percent class, 10 percent type, 15 percent descendant and 5 percent attribute
@@ -693,41 +698,45 @@ unbalanced brace sees today.
 
 ### Reproducing the Baseline
 
-The measurements used a local harness that Milestone A1 commits. Until then:
+`StyleSystem` keeps the counters and the style timer in the document registry's context, and
+`//donner/benchmarks:css_cascade_perf_bench` runs the load, edit, keystroke and scaling cases with
+the method above, one `RESULT` line per case:
 
-1. Add process-global counters and timers to `StyleSystem.cc`: increment counters in
-   `applyStylesheetRules` (per rule tested and matched), `ApplyRuleDeclarations` (per
-   declaration), `computePropertiesInto` (per element), and the full and selective branches of
-   `computeAllStyles`; accumulate `std::chrono::steady_clock` time over the outermost
-   `computeAllStyles` and `computeStylesFor` calls; optionally time `applyStylesheetRules` per
-   element; record `StyleResourceBudget::rejected()` when `computeAllStyles` returns.
-2. For the opportunity counters, also: count combinator steps in `ComplexSelector::matchChain`
-   (one increment where it pushes a frame); in `applyStylesheetRules`, decide per rule whether it
-   would be an index candidate (the key choice of [Rule Index](#rule-index)) and record whether
-   the match took a combinator step, failed, and how many `SelectorTraversalBudget` steps it
-   used; capture the matched rules right after `applyStylesheetRules` and, at the end of
-   `computePropertiesInto`, group the element by the key in
-   [Shared Computed Style Opportunity](#shared-computed-style-opportunity) and compare its final
-   properties with the group's. These counters copy registries and must be off for timing runs.
-3. Build a binary depending on `//donner/svg`, `//donner/svg/renderer`,
-   `//donner/svg/renderer:renderer_driver` and `//donner/svg/components/style:style_system` with
-   `bazel build -c opt`. For each document: parse with `SVGParser::ParseSVG`, reset the counters,
-   time `RendererDriver::draw` with a renderer whose methods do nothing, then time
-   `Renderer::draw` (TinySkia) on a second fresh parse. For edits: parse and draw once, then
-   alternate between two values of the attribute on one element and time the next draw. For
-   keystrokes: parse and draw once, then alternate two one-character `XMLEditIntent`s through
-   `SVGDocument::applySourceEdit` and time the call and the next draw.
-4. Documents: `donner_splash.svg`, `third_party/bootstrap-icons/bootstrap-icons.svg`,
+```sh
+bazel build -c opt //donner/benchmarks:css_cascade_perf_bench
+taskset -c 3 bazel-bin/donner/benchmarks/css_cascade_perf_bench \
+    --mode=all   # or load, edits, keystrokes, scaling; --no-renderer skips TinySkia frames
+```
+
+Run it from the repository root, or with `bazel run`, so it finds the three document files. An
+edit whose two directions do different work (appending and removing a rule, inserting and
+deleting a character, deleting and restoring a brace) prints one line per direction, from its
+alternate repetitions, and the run fails if the repetitions of any line differ in work.
+`//donner/benchmarks:css_cascade_perf_tests_correctness` asserts the counter columns above, and
+`//donner/benchmarks:css_cascade_perf_tests_wallclock` (manual, `perf`) records the splash
+first-frame, splash class-edit, bootstrap-icons and synthetic 2,000 x 200 style times.
+
+1. Documents: `donner_splash.svg`, `third_party/bootstrap-icons/bootstrap-icons.svg`,
    `donner/svg/renderer/testdata/Ghostscript_Tiger.svg`, and generated documents: groups
-   `<g class="gK">` of ten `<rect class="cN">` with no whitespace text nodes (the default
-   8,192-node parser cap applies), rules `.cN`, `.gK .cN`, `rect:nth-child(N)` and `[data-kN]`;
-   and a `<symbol>` of 20 `<rect class="cN">` used by 200 `<use>` elements.
-5. Edit targets: the first `.cls-71` path in the splash (class toggled to `cls-88`), element
+   `<g class="gK">` (`K` is the group index mod 97) of up to ten `<rect class="cN">` with no
+   whitespace text nodes between elements (the default 8,192-node parser cap applies), each rect's
+   class drawn from a fixed seed; rules of one kind, `.cN`, `.gK .cN` with `K = N mod 97`, a type
+   selector cycling through eight element names with `:nth-child(N)` from the ninth rule on, or
+   `[data-kN]`; and a `<symbol>` of 20 `<rect class="cN">` used by 200 `<use>` elements.
+2. Edit targets: the first `.cls-71` path in the splash (class toggled to `cls-88`), element
    `#e1000` of the synthetic document (class `c3` and `c7`), the first `symbol > path` of the
    sprite (classes `a` and `b`). Keystroke targets in the splash: the last hex digit of `#fffffc`
    in the `.cls-2` rule, a letter after the first `.cls-2` selector, that rule's closing brace,
    and a letter after the first `class="cls-71`.
-6. Pin the process to one core (`taskset`) and report medians with minimum and maximum.
+3. "Match" times and the opportunity tables need instrumentation the benchmark does not carry:
+   time `applyStylesheetRules` per element; count combinator steps in
+   `ComplexSelector::matchChain` (one increment where it pushes a frame); in
+   `applyStylesheetRules`, decide per rule whether it would be an index candidate (the key choice
+   of [Rule Index](#rule-index)) and record whether the match took a combinator step, failed, and
+   how many `SelectorTraversalBudget` steps it used; capture the matched rules right after
+   `applyStylesheetRules` and, at the end of `computePropertiesInto`, group the element by the key
+   in [Shared Computed Style Opportunity](#shared-computed-style-opportunity) and compare its final
+   properties with the group's. These counters copy registries and must be off for timing runs.
 
 ### Browser Techniques
 
