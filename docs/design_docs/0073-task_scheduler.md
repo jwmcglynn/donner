@@ -5,7 +5,7 @@
 **Drafted by:** Claude Opus 5.5
 **Requested by:** Jeff McGlynn
 **Created:** 2026-11-23
-**Tracking:** [#2660](https://github.com/jwmcglynn/donner/issues/2660) (first client)
+**Tracking:** [#2697](https://github.com/jwmcglynn/donner/issues/2697); [#2660](https://github.com/jwmcglynn/donner/issues/2660) (first client)
 
 ## Summary
 
