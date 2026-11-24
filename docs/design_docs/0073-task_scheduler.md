@@ -119,10 +119,15 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         adoptable slots exist the global queue is the only outside source.
   - [x] Steal rounds: every outside source from the rotating cursor, then every other worker
         once from a seeded offset (0.5 day).
-  - [ ] `TaskScope` and `Join` from threads that are not workers: scope records, spawns to the
-        global queue, and the creator's sleep on the scope's parker (0.5 day).
-  - [ ] `ParkerPool`: parker slots for threads that are not workers, shared by reference count,
-        with the per-thread sweep of closed pools (0.25 day).
+  - [x] `TaskScope` and `Join` from threads that are not workers: scope records, spawns to the
+        global queue, and the creator's sleep on the scope's parker (0.5 day):
+        `//donner/base/tasks:task_scheduler` and `//donner/base/tasks:task_scope_tests`. Until
+        waits on workers exist, a `TaskScope` created on a worker, and so `Join` called on one,
+        fails a release assertion. Cooperative cancellation (`requestStop()`) is not in this item.
+  - [x] `ParkerPool`: parker slots for threads that are not workers, shared by reference count,
+        with the per-thread sweep of closed pools (0.25 day): `//donner/base/tasks:parker_pool`,
+        `//donner/base/tasks:parker_pool_tests` and
+        `//donner/base/tasks:scope_main_thread_exit_test`.
   - [ ] `TaskScope` and `Join` on workers: watermarks, rules 1 to 3 and help within the margin
         (0.5 day).
   - [x] The parker: the word with the waiting bit and the epoch, its wait, and a notify only
@@ -844,7 +849,7 @@ queue, and *started* once a thread begins running it.
   client's resumption. Every task record carries what a finisher needs: the address of its scope's
   counter and the parker the scope recorded at construction, both copied into the record at spawn.
   The scheduler's own spawn and `trySpawn` are private, to be reached only by the scope types, so
-  that no client spawns a task that no scope accounts for; until those types exist, only tests reach
+  that no client spawns a task that no scope accounts for; besides `TaskScope`, only tests reach
   them, through a test peer. `trySpawn` declines, leaving the closure with the caller, when the
   spawning thread's record pool is at its bound or, on a worker, when its deque is full; the deque's
   owner-only `full()` decides that before the closure moves, since only the owner pushes and a thief
@@ -1368,6 +1373,9 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | Adoptable slot mask | `AdoptedThread` releases a slot | release `fetch_and` | publishes the drained slot to its next owner |
 | `ParkerPool` closed flag | scheduler destructor sets it | release store | after every worker is joined |
 | `ParkerPool` closed flag | a thread's sweep reads it | acquire load | a pool seen closed has no slot in use |
+| Scheduler generation counter | each scheduler takes its number | relaxed `fetch_add` | only uniqueness matters |
+| Live `TaskScope` count | a scope's construction and destruction; the scheduler destructor's check | relaxed RMW and load | an assertion; a correct program already orders a scope's destruction before its scheduler's |
+| Live `ParkerPool` count (tests only) | pool construction and destruction; a test's read | relaxed RMW and load | read once the threads that hold pools are joined |
 | Scope stop request | `requestStop()` and task checks | relaxed store and load | advisory; no data is published through it, and stopped tasks still decrement |
 | Shared-cursor `ParallelFor` cursor | chunk claims | relaxed `fetch_add` | chunk ownership only; results are published by the scope's join |
 | Default scheduler pointer | install, and every `DefaultTaskScheduler()` load | release store under the default-scheduler mutex; acquire load | readers see a fully constructed scheduler; configure and shutdown take the same mutex |
@@ -1698,6 +1706,41 @@ clients that size work from documents.
   is equivalent to a release store on x86-64 only because the locked decrement of the awake count
   sits between it and the read of the stop flag; moving or removing that decrement would make a
   weakened store a real store-buffering bug.
+- **Scopes from threads that are not workers** (`//donner/base/tasks:task_scope_tests`,
+  `//donner/base/tasks:parker_pool_tests`, `//donner/base/tasks:scope_main_thread_exit_test`): zero
+  workers (spawns run inline, `trySpawn` declines, `wait` returns at once, `Join` runs `a` then
+  `b`); a non-worker's tasks each run once on a worker, at 1 and 4 workers, and so do flat spawns
+  from the scope's tasks; closures that outlive the spawning statement have all run and been
+  destroyed, and every record is back in its pool, when the wait returns; a spawn declined at the
+  external bound or past a full deque runs inline and is not counted; a scope filled to the external
+  bound is not complete until every task ran; and `Join` from a non-worker runs `a` on the caller
+  and `b` on a worker. Deterministic interleavings through `SchedulerTestHooks` hold the creator
+  before its waiting bit while the last task finishes, so its re-check must see zero; hold it after
+  its re-check, so the finisher's change must end its wait; hold the finisher between its decrement
+  and its parker change while the creator returns and destroys the scope; hold a publisher between
+  its push and its read of `awake` while its task runs, so the count must already include the task;
+  and pass a parker slot to a new thread while a finisher of the old thread's scope still holds it,
+  which must be one spurious wake followed by another sleep. The `ParkerPool` cases cover distinct
+  slots at stable addresses, one parker per thread and scheduler, slots returned at thread exit, the
+  sweep, and, at 1, 2 and 4 workers, a scheduler destroyed before a thread holding its parker exits
+  and one thread using 1,000 schedulers in turn (at most 2 live pools after each registration, 1 at
+  the end); that last case is the slowest, at 0.6 s natively, 2.7 s under ThreadSanitizer and 2.0 s
+  under AddressSanitizer. Stress runs one task per scope, and several creators at once with flat
+  spawns, with no hooks and with delays injected at every step. Each step was observed red with it
+  broken: the creator's re-check after its waiting bit removed (the interleaving, and every
+  injected-delay stress case); the finisher's parker change removed; the change made before the
+  decrement; the count taken after the publish (the scope's below-zero assertion fires); the record
+  returned after the decrement; the wake word placed inside the scope (a heap use after free under
+  AddressSanitizer); `Join` running `b` inline; the three misuse assertions removed (their death
+  tests); and in the pool, the sweep, the close, the slot return at thread exit, the free-list
+  removal and the per-thread lookup each removed, and the thread's entry holding a non-owning
+  pointer (the pool's in-use assertion fires before any use after free). Under ThreadSanitizer, the
+  finisher's decrement made relaxed, or either of the creator's loads of the count made relaxed,
+  reports a race on a task's result. Two ordering mutants survive there: the decrement made release
+  only, because its acquire half is for the join handle of `AsyncTaskScope`, which does not exist
+  yet; and the closed flag made relaxed, because a thread that sees a pool closed only returns its
+  slot, under the pool's mutex, and drops its reference. Natively on Linux ARMv8 every ordering
+  mutant survives.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.
