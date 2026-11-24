@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <initializer_list>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -377,6 +379,52 @@ private:
     return point;
   }
 
+  /**
+   * Calls \p append to add a segment to the path, unless any of \p points is not finite.
+   *
+   * Each number is range-checked as it is parsed, but relative coordinates and reflected control
+   * points are computed from the current point and can still overflow to infinity. A segment with
+   * such a point is left out of the path, and \ref commandError reports it once the command ends.
+   *
+   * @param points Absolute points computed for the current command.
+   * @param append Adds the segment to \ref builder_.
+   */
+  template <typename Append>
+  void appendIfFinite(std::initializer_list<Vector2d> points, Append&& append) {
+    const bool allFinite = std::all_of(points.begin(), points.end(), [](const Vector2d& point) {
+      return std::isfinite(point.x) && std::isfinite(point.y);
+    });
+    if (!allFinite) {
+      hasNonFinitePoint_ = true;
+      return;
+    }
+
+    append();
+  }
+
+  /**
+   * Returns an error if the command just processed produced a non-finite point or ran past the
+   * path's capacity.
+   *
+   * @param commandStart Offset of the start of the current command, for the error range.
+   */
+  std::optional<ParseDiagnostic> commandError(size_t commandStart) {
+    ParseDiagnostic err;
+    if (hasNonFinitePoint_) {
+      err.reason = "Path coordinate out of range";
+      err.range = rangeFrom(commandStart);
+      return err;
+    }
+
+    if (builder_.exceededMaximumPoints()) {
+      err.reason = capacityError();
+      err.range = currentRange(0, 0);
+      return err;
+    }
+
+    return std::nullopt;
+  }
+
   std::optional<ParseDiagnostic> processCommand(TokenCommand command) {
     if (commandCount_ >= PathParser::kMaximumCommands) {
       ParseDiagnostic err;
@@ -386,6 +434,7 @@ private:
     }
     ++commandCount_;
     beginCapture(command);
+    const size_t commandStart = currentOffset().offset.value();
 
     if (command.token == Token::MoveTo) {
       // 9.3.3 "moveto": https://www.w3.org/TR/SVG/paths.html#PathDataMovetoCommands
@@ -395,7 +444,7 @@ private:
       }
 
       Vector2d point = makeAbsolute(command, coords);
-      builder_.moveTo(point);
+      appendIfFinite({point}, [&] { builder_.moveTo(point); });
       initialPoint_ = point;
       currentPoint_ = point;
     } else if (command.token == Token::ClosePath) {
@@ -412,7 +461,7 @@ private:
       }
 
       const Vector2d point = makeAbsolute(command, coords);
-      builder_.lineTo(point);
+      appendIfFinite({point}, [&] { builder_.lineTo(point); });
       currentPoint_ = point;
 
     } else if (command.token == Token::HorizontalLineTo) {
@@ -424,7 +473,7 @@ private:
 
       const Vector2d point(maybeX.result() + (command.relative ? currentPoint_.x : 0.0),
                            currentPoint_.y);
-      builder_.lineTo(point);
+      appendIfFinite({point}, [&] { builder_.lineTo(point); });
       currentPoint_ = point;
 
     } else if (command.token == Token::VerticalLineTo) {
@@ -436,7 +485,7 @@ private:
 
       const Vector2d point(currentPoint_.x,
                            maybeY.result() + (command.relative ? currentPoint_.y : 0.0));
-      builder_.lineTo(point);
+      appendIfFinite({point}, [&] { builder_.lineTo(point); });
       currentPoint_ = point;
 
     } else if (command.token == Token::CurveTo) {
@@ -452,7 +501,7 @@ private:
       const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<2, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<4, 2>());
 
-      builder_.curveTo(point1, point2, end);
+      appendIfFinite({point1, point2, end}, [&] { builder_.curveTo(point1, point2, end); });
 
       prevControlPoint_ = point2;
       currentPoint_ = end;
@@ -470,7 +519,7 @@ private:
       const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
-      builder_.curveTo(point1, point2, end);
+      appendIfFinite({point1, point2, end}, [&] { builder_.curveTo(point1, point2, end); });
 
       prevControlPoint_ = point2;
       currentPoint_ = end;
@@ -486,7 +535,7 @@ private:
       const Vector2d point1 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
-      quadCurveTo(point1, end);
+      appendIfFinite({point1, end}, [&] { quadCurveTo(point1, end); });
 
       prevControlPoint_ = point1;
       currentPoint_ = end;
@@ -501,7 +550,7 @@ private:
       const Vector2 point1 = lastCommandWasQuadCurveTo() ? reflectedControlPoint() : currentPoint_;
       const Vector2d end = makeAbsolute(command, coords);
 
-      quadCurveTo(point1, end);
+      appendIfFinite({point1, end}, [&] { quadCurveTo(point1, end); });
 
       prevControlPoint_ = point1;
       currentPoint_ = end;
@@ -535,7 +584,8 @@ private:
       const double rotationRadians = radiusAndRotation[2] * MathConstants<double>::kDegToRad;
       const Vector2d end = makeAbsolute(command, endCoords);
 
-      builder_.arcTo(radius, rotationRadians, largeArcFlag, sweepFlag, end);
+      appendIfFinite(
+          {end}, [&] { builder_.arcTo(radius, rotationRadians, largeArcFlag, sweepFlag, end); });
       currentPoint_ = end;
 
     } else {
@@ -545,11 +595,8 @@ private:
       return err;
     }
 
-    if (builder_.exceededMaximumPoints()) {
-      ParseDiagnostic err;
-      err.reason = capacityError();
-      err.range = currentRange(0, 0);
-      return err;
+    if (auto error = commandError(commandStart)) {
+      return error;
     }
 
     commitCapture();
@@ -574,6 +621,7 @@ private:
 
   Builder builder_;
   std::size_t commandCount_ = 0;
+  bool hasNonFinitePoint_ = false;  //!< Set when a command produced a point that is not finite.
 
   std::string_view d_;
   std::string_view remaining_;

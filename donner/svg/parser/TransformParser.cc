@@ -1,10 +1,28 @@
 #include "donner/svg/parser/TransformParser.h"
 
+#include <algorithm>
+#include <cmath>
+#include <optional>
+
 #include "donner/base/parser/details/ParserBase.h"
 
 namespace donner::svg::parser {
 
 namespace {
+
+/**
+ * Returns true if every component of \p destFromSource is finite.
+ *
+ * Each number is range-checked as it is parsed, but composing a list of transform functions can
+ * still overflow, for example `scale(1e200) scale(1e200)`, and a later zero scale turns that
+ * infinity into NaN.
+ *
+ * @param destFromSource Transform to check.
+ */
+bool IsFiniteTransform(const Transform2d& destFromSource) {
+  return std::all_of(std::begin(destFromSource.data), std::end(destFromSource.data),
+                     [](double value) { return std::isfinite(value); });
+}
 
 class TransformParserImpl : public donner::parser::ParserBase {
 public:
@@ -138,25 +156,48 @@ public:
         return err;
       }
 
-      // Whitespace before closing ')'
-      skipWhitespace();
-
-      if (remaining_.starts_with(')')) {
-        remaining_.remove_prefix(1);
-        skipWhitespace();
-        allowComma = true;
-      } else {
-        ParseDiagnostic err;
-        err.reason = "Expected ')'";
-        err.range = currentRange(0, 1);
-        return err;
+      if (auto error = finishFunction(transform, functionStart)) {
+        return std::move(error.value());
       }
+      allowComma = true;
     }
 
     return transform;
   }
 
 private:
+  /**
+   * Finishes a transform function: checks that the transform composed so far is finite, then
+   * consumes the ')' that ends the function, with the whitespace around it.
+   *
+   * @param destFromSource Transform composed up to and including this function.
+   * @param functionStart Offset of the start of this function, for the error range.
+   * @return An error if the transform is not finite or the next character is not ')'.
+   */
+  std::optional<ParseDiagnostic> finishFunction(const Transform2d& destFromSource,
+                                                const FileOffset& functionStart) {
+    if (!IsFiniteTransform(destFromSource)) {
+      ParseDiagnostic err;
+      err.reason = "Transform out of range";
+      err.range = rangeFrom(functionStart.offset.value());
+      return err;
+    }
+
+    // Whitespace before closing ')'
+    skipWhitespace();
+
+    if (!remaining_.starts_with(')')) {
+      ParseDiagnostic err;
+      err.reason = "Expected ')'";
+      err.range = currentRange(0, 1);
+      return err;
+    }
+
+    remaining_.remove_prefix(1);
+    skipWhitespace();
+    return std::nullopt;
+  }
+
   ParseResult<std::string_view> readFunction() {
     for (size_t i = 0; i < remaining_.size(); ++i) {
       if (remaining_[i] == '(') {

@@ -157,8 +157,18 @@ public:
 
   ParseResult<CssTransform> parse() {
     while (!parser_.isEOF()) {
+      const FileOffset functionStart = parser_.sourceOffset();
       if (auto error = parseFunction()) {
         return std::move(error.value());
+      }
+
+      // Token values can be infinite (for example `1e400`), and composing functions can overflow
+      // even when each value is finite, so check the transform after every function.
+      if (!transform_.isFinite()) {
+        ParseDiagnostic err;
+        err.reason = "Transform out of range";
+        err.range = {functionStart, parser_.sourceOffset()};
+        return err;
       }
 
       parser_.skipWhitespace();

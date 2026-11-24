@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdlib>
 #include <string>
 
@@ -30,7 +31,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     }
   } else {
     const auto result = PathParser::Parse(input);
-    (void)result;
+    // The parser rejects any command that would add a non-finite point, so the path it returns,
+    // even alongside an error, must be finite.
+    if (result.hasResult()) {
+      for (const Vector2d& point : result.result().points()) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+          std::abort();
+        }
+      }
+    }
     const auto commands = PathParser::ParseCommands(input);
     (void)commands;
   }

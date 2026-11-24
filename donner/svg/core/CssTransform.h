@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <algorithm>
+#include <cmath>
 #include <variant>
 #include <vector>
 
@@ -91,11 +93,13 @@ public:
     if (!elements_.empty()) {
       if (Simple* s = std::get_if<Simple>(&elements_.back())) {
         s->transform = s->transform * transform;
+        isFinite_ = isFinite_ && IsFinite(s->transform);
         return;
       }
     }
 
     elements_.emplace_back(Simple{transform});
+    isFinite_ = isFinite_ && IsFinite(transform);
   }
 
   /**
@@ -104,10 +108,29 @@ public:
    * @param x X offset.
    * @param y Y offset.
    */
-  void appendTranslate(Lengthd x, Lengthd y) { elements_.emplace_back(Translate{x, y}); }
+  void appendTranslate(Lengthd x, Lengthd y) {
+    elements_.emplace_back(Translate{x, y});
+    isFinite_ = isFinite_ && std::isfinite(x.value) && std::isfinite(y.value);
+  }
+
+  /**
+   * Returns true if every component of the stored transform chain is finite. Parsers use this to
+   * reject transforms whose values overflowed, so infinite or NaN values never reach layout.
+   *
+   * This is tracked as elements are appended, so checking it after every append stays linear in
+   * the length of the chain.
+   */
+  bool isFinite() const { return isFinite_; }
 
 private:
+  /// Returns true if every component of \p destFromSource is finite.
+  static bool IsFinite(const Transform2d& destFromSource) {
+    return std::all_of(std::begin(destFromSource.data), std::end(destFromSource.data),
+                       [](double value) { return std::isfinite(value); });
+  }
+
   std::vector<Element> elements_;
+  bool isFinite_ = true;  //!< True if every element appended so far is finite.
 };
 
 }  // namespace donner::svg
