@@ -3,8 +3,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <barrier>
 #include <cstddef>
 #include <limits>
+#include <thread>
 
 namespace donner::svg::components {
 namespace {
@@ -148,6 +150,35 @@ TEST(DocumentResourceFamilyBudgetTest, InvalidKindFailsClosedWithoutOutOfBoundsA
   EXPECT_EQ(budget.retainedBytes(DocumentResourceFamilyBudget::Kind::Count), 0u);
   budget.release(DocumentResourceFamilyBudget::Kind::Count, 1);
   EXPECT_EQ(budget.totalRetainedBytes(), 0u);
+}
+
+TEST(DocumentResourceFamilyBudgetTest, ConcurrentReleaseReserveAndStatsStayExact) {
+  using Kind = DocumentResourceFamilyBudget::Kind;
+  DocumentResourceFamilyBudget budget(MakeLimits(2, 2));
+
+  for (int iteration = 0; iteration < 1000; ++iteration) {
+    ASSERT_TRUE(budget.reserve(Kind::ComputedStyle, 1));
+    std::barrier start(2);
+    std::thread releaser([&] {
+      start.arrive_and_wait();
+      budget.release(Kind::ComputedStyle, 1);
+    });
+    start.arrive_and_wait();
+    const bool replacementAdmitted = budget.reserve(Kind::ComputedStyle, 1);
+    EXPECT_TRUE(replacementAdmitted);
+    const auto snapshot = budget.securityStats();
+    EXPECT_LE(snapshot.retainedBytes[static_cast<std::size_t>(Kind::ComputedStyle)], 2u);
+    EXPECT_LE(snapshot.totalRetainedBytes, 2u);
+    EXPECT_EQ(snapshot.totalRetainedBytes,
+              snapshot.retainedBytes[static_cast<std::size_t>(Kind::ComputedStyle)]);
+    releaser.join();
+    EXPECT_EQ(budget.retainedBytes(Kind::ComputedStyle), 1u);
+    EXPECT_EQ(budget.totalRetainedBytes(), 1u);
+    budget.release(Kind::ComputedStyle, 1);
+  }
+
+  EXPECT_EQ(budget.totalRetainedBytes(), 0u);
+  EXPECT_FALSE(budget.securityStats().rejected);
 }
 
 }  // namespace

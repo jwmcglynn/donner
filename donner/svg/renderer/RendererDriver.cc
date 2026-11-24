@@ -5422,22 +5422,12 @@ public:
                              child.storage<donner::components::TreeComponent>().size())) {
       return;
     }
-    const auto* context = child.ctx().find<components::DocumentResourceFamilyContext>();
-    auto family = context ? context->budget : nullptr;
-    // The occurrence shares the host's record; its dynamic bytes stay charged to the family while
-    // the occurrence can keep that record alive past a restyle of the host.
-    const std::size_t bytes = style.style->properties.complexPropertyBytes();
-    if (bytes > components::StyleResourceBudget::kMaximumComplexPropertyBytes ||
-        (family &&
-         !family->reserve(components::DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes))) {
-      return;
-    }
     if (auto overlay = hostFonts()) {
       hostFonts_.emplace(child, std::move(overlay));
     }
     child.ctx()
-        .emplace<components::ExternalUseStyleContext>(root, style.style, fill, stroke, family,
-                                                      bytes, std::move(work))
+        .emplace<components::ExternalUseStyleContext>(root, style.style, fill, stroke,
+                                                      std::move(work))
         .hostFontKey = hostFonts_ ? hostFonts_->key() : 0;
     retainPaintOwner(fill, resourceLeases_[0]);
     retainPaintOwner(stroke, resourceLeases_[1]);

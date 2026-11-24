@@ -1707,19 +1707,40 @@ donner_cc_test(
         "//third_party/bootstrap-icons:bootstrap-icons.svg",
         "//third_party/resvg-test-suite:tests",
     ],
-    # Two parses, two frames and every matched-rule list per document. Under ASan the whole icon
-    # sprite took about 23 s of the 60 s `size = "small"` limit, so it is compared in two halves of
-    # about 13 s each; with thirty-two shards the slowest shard took about 22 s.
+    # Three parses, first-frame indexed comparison, cache-on/off full and partial restyles, and
+    # every matched-rule list per document. The icon sprite stays split in halves so each shard
+    # remains bounded under ASan.
     shard_count = 32,
     deps = [
         ":computed_style_snapshot",
+        ":external_use_sprite_scene",
         ":svg_corpus",
         "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/components/style:style_system",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "//donner/svg/renderer:rendering_context",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "style_cache_prepared_differential_fuzzer",
+    testonly = True,
+    srcs = ["StyleCachePreparedDifferential_fuzzer.cc"],
+    corpus = "style_cache_prepared_differential_corpus",
+    deps = [
+        ":computed_style_snapshot",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:rendering_context",
+        "//donner/svg/resources:resource_loader_interface",
     ],
 )
 
@@ -2513,6 +2534,7 @@ donner_cc_library(
         "//donner/base/encoding:base64",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/resources:resource_loader_interface",

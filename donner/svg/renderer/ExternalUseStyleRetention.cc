@@ -34,41 +34,6 @@
 namespace donner::svg::components {
 namespace {
 
-/// Family-budget charge for a retained parent style snapshot, released on destruction.
-class RetainedStyleCharge {
-public:
-  RetainedStyleCharge(std::shared_ptr<DocumentResourceFamilyBudget> family, std::size_t bytes)
-      : family_(std::move(family)), bytes_(bytes) {}
-
-  ~RetainedStyleCharge() { release(); }
-
-  RetainedStyleCharge(RetainedStyleCharge&& other) noexcept
-      : family_(std::move(other.family_)), bytes_(other.bytes_) {}
-
-  RetainedStyleCharge& operator=(RetainedStyleCharge&& other) noexcept {
-    if (this != &other) {
-      release();
-      family_ = std::move(other.family_);
-      bytes_ = other.bytes_;
-    }
-    return *this;
-  }
-
-  RetainedStyleCharge(const RetainedStyleCharge&) = delete;
-  RetainedStyleCharge& operator=(const RetainedStyleCharge&) = delete;
-
-private:
-  void release() {
-    if (family_) {
-      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes_);
-      family_.reset();
-    }
-  }
-
-  std::shared_ptr<DocumentResourceFamilyBudget> family_;
-  std::size_t bytes_;
-};
-
 /// Whether \p paint carries no reference: none or a solid color. Only such occurrence paints are
 /// retained, so no retained state holds a handle into the host document.
 bool IsPlainPaint(const ResolvedPaintServer& paint) {
@@ -81,7 +46,6 @@ struct OccurrenceInputs {
   std::shared_ptr<const ComputedStyle> parent;
   ResolvedPaintServer fill;
   ResolvedPaintServer stroke;
-  RetainedStyleCharge charge;
   /// Whether restyling the subtree for these inputs refused an inherited host resource.
   bool unsupportedResource = false;
   /// Fonts the host lent; text laid out under other lent fonts must be laid out again.
@@ -204,25 +168,14 @@ bool Overlaps(const Registry& registry, Entity lhs, Entity rhs) {
   return IsAncestorOrSelf(registry, lhs, rhs) || IsAncestorOrSelf(registry, rhs, lhs);
 }
 
-/// Snapshot \p occurrence's inputs, charged to the document family; `std::nullopt` if the family
-/// refuses the charge, which leaves the subtree restyled on its next draw.
-std::optional<OccurrenceInputs> SnapshotInputs(Registry& registry,
-                                               const ExternalUseStyleContext& occurrence) {
+/// Snapshot \p occurrence's inputs, sharing the computed record and its existing lifetime charge.
+std::optional<OccurrenceInputs> SnapshotInputs(const ExternalUseStyleContext& occurrence) {
   if (!occurrence.parent.style) {
-    return std::nullopt;
-  }
-  // The snapshot keeps the host's record alive after the host's style is recomputed, so it stays
-  // charged for the record's dynamic bytes.
-  const std::size_t bytes = occurrence.parent.style->properties.complexPropertyBytes();
-  const auto* context = registry.ctx().find<DocumentResourceFamilyContext>();
-  std::shared_ptr<DocumentResourceFamilyBudget> family = context ? context->budget : nullptr;
-  if (family && !family->reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes)) {
     return std::nullopt;
   }
   return OccurrenceInputs{.parent = occurrence.parent.style,
                           .fill = occurrence.fill,
                           .stroke = occurrence.stroke,
-                          .charge = RetainedStyleCharge(std::move(family), bytes),
                           .hostFontKey = occurrence.hostFontKey};
 }
 
@@ -345,7 +298,7 @@ RetainedSubtree& RestyleForOccurrence(Registry& registry, ExternalUseRetainedSta
   }
   entry->inputs.reset();
   if (retain) {
-    entry->inputs = SnapshotInputs(registry, occurrence);
+    entry->inputs = SnapshotInputs(occurrence);
   }
   return *entry;
 }

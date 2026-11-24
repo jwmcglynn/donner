@@ -59,6 +59,7 @@ public:
   template <typename Factory>
     requires std::invocable<Factory> && std::same_as<std::invoke_result_t<Factory>, ParseDiagnostic>
   void add(Factory&& factory) {
+    ++warningAttempts_;
     if (enabled_ && !resourceLimitExceeded_) {
       if (warnings_.size() >= kMaximumWarnings) {
         resourceLimitExceeded_ = true;
@@ -70,6 +71,7 @@ public:
 
   /// Add a pre-constructed warning (for cases where the diagnostic is already built).
   void add(ParseDiagnostic&& warning) {
+    ++warningAttempts_;
     if (enabled_ && !resourceLimitExceeded_) {
       tryAdd(std::move(warning));
     }
@@ -80,6 +82,9 @@ public:
 
   /// Returns true if any warnings have been added.
   bool hasWarnings() const { return !warnings_.empty(); }
+
+  /// Number of submitted warnings, including those sent to a disabled or saturated sink.
+  std::size_t warningAttempts() const { return warningAttempts_; }
 
   /// Returns true if warnings were discarded to enforce a resource limit.
   bool resourceLimitExceeded() const { return resourceLimitExceeded_; }
@@ -115,12 +120,14 @@ public:
 
   /// Merge all warnings from another sink into this one.
   void merge(ParseWarningSink&& other) {
+    const std::size_t mergedWarningAttempts = warningAttempts_ + other.warningAttempts_;
     if (enabled_) {
       for (ParseDiagnostic& warning : other.warnings_) {
         add(std::move(warning));
       }
       resourceLimitExceeded_ |= other.resourceLimitExceeded_;
     }
+    warningAttempts_ = mergedWarningAttempts;
   }
 
   /**
@@ -133,6 +140,7 @@ public:
    * @param parentOffset The offset of the subparser's input within the parent input.
    */
   void mergeFromSubparser(ParseWarningSink&& other, FileOffset parentOffset) {
+    const std::size_t mergedWarningAttempts = warningAttempts_ + other.warningAttempts_;
     if (enabled_) {
       for (auto& warning : other.warnings_) {
         warning.range.start = warning.range.start.addParentOffset(parentOffset);
@@ -141,6 +149,7 @@ public:
       }
       resourceLimitExceeded_ |= other.resourceLimitExceeded_;
     }
+    warningAttempts_ = mergedWarningAttempts;
   }
 
 private:
@@ -158,6 +167,7 @@ private:
   std::size_t warningBytes_ = 0;
   bool enabled_ = true;
   bool resourceLimitExceeded_ = false;
+  std::size_t warningAttempts_ = 0;
 };
 
 }  // namespace donner

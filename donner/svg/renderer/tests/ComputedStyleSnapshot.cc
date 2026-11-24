@@ -40,6 +40,15 @@ void CollectPositionedEntities(const Registry& registry, Entity entity, const st
 
 }  // namespace
 
+bool PositionedStyle::operator==(const PositionedStyle& other) const {
+  if (position != other.position || properties.has_value() != other.properties.has_value() ||
+      resourceOpacities != other.resourceOpacities || externalFill != other.externalFill ||
+      externalStroke != other.externalStroke) {
+    return false;
+  }
+  return !properties || properties->exactlyEquals(*other.properties);
+}
+
 std::ostream& operator<<(std::ostream& os, const PositionedStyle& value) {
   os << value.position << ": ";
   if (value.properties) {

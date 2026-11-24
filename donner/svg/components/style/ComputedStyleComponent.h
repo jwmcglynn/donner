@@ -1,15 +1,74 @@
 #pragma once
 /// @file
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <type_traits>
 #include <utility>
 
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::svg::components {
+
+class StyleResourceBudget;
+
+/** Shared retained-byte account for immutable computed-style records in one document. */
+class RetainedStyleBytes {
+public:
+  /**
+   * Create an account with a document-local limit and optional document-family envelope.
+   * @param limit Maximum retained computed-style bytes in this document.
+   * @param family Optional shared envelope for this document family.
+   */
+  explicit RetainedStyleBytes(std::size_t limit,
+                              std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
+      : limit_(limit), family_(std::move(family)) {}
+
+  /** Return whether a reservation fits without changing counters or refusal state. */
+  [[nodiscard]] bool canReserve(std::size_t bytes) const {
+    const std::size_t current = retainedBytes_.load(std::memory_order_relaxed);
+    return current <= limit_ && bytes <= limit_ - current &&
+           (!family_ ||
+            family_->canReserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes));
+  }
+
+  /** Reserve bytes for one newly created record. */
+  [[nodiscard]] bool reserve(std::size_t bytes) {
+    std::size_t current = retainedBytes_.load(std::memory_order_relaxed);
+    do {
+      if (current > limit_ || bytes > limit_ - current) {
+        return false;
+      }
+    } while (
+        !retainedBytes_.compare_exchange_weak(current, current + bytes, std::memory_order_relaxed));
+    if (family_ && !family_->reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes)) {
+      retainedBytes_.fetch_sub(bytes, std::memory_order_relaxed);
+      return false;
+    }
+    return true;
+  }
+
+  /** Release bytes when the last reference to a charged record is destroyed. */
+  void release(std::size_t bytes) {
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes);
+    }
+    retainedBytes_.fetch_sub(bytes, std::memory_order_relaxed);
+  }
+
+  /// Current retained bytes.
+  [[nodiscard]] std::size_t retainedBytes() const {
+    return retainedBytes_.load(std::memory_order_relaxed);
+  }
+
+private:
+  std::atomic<std::size_t> retainedBytes_ = 0;
+  std::size_t limit_;
+  std::shared_ptr<DocumentResourceFamilyBudget> family_;
+};
 
 /// Final resource opacities for this style instance, including explicit parent inheritance.
 struct ComputedResourceOpacities {
@@ -37,10 +96,43 @@ struct ComputedStyle {
    */
   explicit ComputedStyle(const PropertyRegistry& local) : properties(local) {}
 
+  ~ComputedStyle() {
+    if (retainedStyleBytes_ && chargedBytes_ != 0) {
+      retainedStyleBytes_->release(chargedBytes_);
+    }
+  }
+
+  /** Copy style values without copying the source record's lifetime charge. */
+  ComputedStyle(const ComputedStyle& other)
+      : properties(other.properties), resourceOpacities(other.resourceOpacities) {}
+  ComputedStyle& operator=(const ComputedStyle&) = delete;
+  ComputedStyle(ComputedStyle&&) = delete;
+  ComputedStyle& operator=(ComputedStyle&&) = delete;
+
   /// The computed style properties.
   PropertyRegistry properties;
   /// Absent for manually constructed styles; the cascade always populates it.
   std::optional<ComputedResourceOpacities> resourceOpacities;
+
+private:
+  friend class StyleResourceBudget;
+
+  /** Attach this record's only lifetime charge to its document account. */
+  [[nodiscard]] bool retainBytes(const std::shared_ptr<RetainedStyleBytes>& account,
+                                 std::size_t bytes) {
+    if (retainedStyleBytes_) {
+      return false;
+    }
+    if (bytes != 0 && !account->reserve(bytes)) {
+      return false;
+    }
+    retainedStyleBytes_ = account;
+    chargedBytes_ = bytes;
+    return true;
+  }
+
+  std::shared_ptr<RetainedStyleBytes> retainedStyleBytes_;
+  std::size_t chargedBytes_ = 0;
 };
 
 /**

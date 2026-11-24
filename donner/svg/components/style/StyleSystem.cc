@@ -31,11 +31,14 @@
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
+#include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
+#include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/PaintAnimationStyle.h"
 #include "donner/svg/components/style/RuleIndex.h"
 #include "donner/svg/components/style/ScalarAnimationStyle.h"
@@ -128,6 +131,82 @@ StyleCascadeMetrics& GetStyleCascadeMetrics(Registry& registry) {
     return *metrics;
   }
   return registry.ctx().emplace<StyleCascadeMetrics>();
+}
+
+MatchedPropertiesCache& GetMatchedPropertiesCache(Registry& registry) {
+  if (auto* cache = registry.ctx().find<MatchedPropertiesCache>()) {
+    return *cache;
+  }
+  return registry.ctx().emplace<MatchedPropertiesCache>();
+}
+
+MatchedOpacityInput OpacityInput(const Property<double>& property) {
+  return MatchedOpacityInput{
+      .state = property.state,
+      .value = property.get(),
+      .specificity = property.specificity,
+  };
+}
+
+MatchedOpacityInput StopOpacityInput(const Registry& registry, Entity dataEntity) {
+  static const StopProperties defaults;
+  if (const auto* stop = registry.try_get<StopComponent>(dataEntity)) {
+    return OpacityInput(stop->properties.stopOpacity);
+  }
+  return OpacityInput(defaults.stopOpacity);
+}
+
+MatchedOpacityInput FloodOpacityInput(const Registry& registry, Entity dataEntity) {
+  static const FEFloodComponent defaults;
+  if (const auto* flood = registry.try_get<FEFloodComponent>(dataEntity)) {
+    return OpacityInput(flood->floodOpacity);
+  }
+  if (const auto* shadow = registry.try_get<FEDropShadowComponent>(dataEntity)) {
+    return OpacityInput(shadow->floodOpacity);
+  }
+  return OpacityInput(defaults.floodOpacity);
+}
+
+std::array<const css::Declaration*, 2> ResourceOpacityDeclarations(
+    const PropertyRegistry& properties) {
+  std::array<const css::Declaration*, 2> result{};
+  if (const auto stop = properties.unparsedProperties.find(RcString("stop-opacity"));
+      stop != properties.unparsedProperties.end()) {
+    result[0] = &stop->second.declaration;
+  }
+  if (const auto flood = properties.unparsedProperties.find(RcString("flood-opacity"));
+      flood != properties.unparsedProperties.end()) {
+    result[1] = &flood->second.declaration;
+  }
+  return result;
+}
+
+bool ChargeCachedResourceOpacityWork(const PropertyRegistry& properties,
+                                     StyleResourceBudget& budget, StyleCascadeCounters& counters) {
+  const auto declarations = ResourceOpacityDeclarations(properties);
+  std::size_t applications = 0;
+  std::size_t componentWork = 0;
+  std::size_t byteWork = 0;
+  for (const css::Declaration* declaration : declarations) {
+    if (declaration) {
+      ++applications;
+      componentWork += declaration->values.size();
+      byteWork += declaration->sourceByteSize;
+    }
+  }
+  if (!budget.canReserveDeclarationWork(applications, componentWork, byteWork)) {
+    return false;
+  }
+  for (const css::Declaration* declaration : declarations) {
+    if (!declaration) {
+      continue;
+    }
+    const bool admitted = budget.reserveDeclarationApplication(declaration->values.size(),
+                                                               declaration->sourceByteSize);
+    UTILS_RELEASE_ASSERT(admitted);
+    ++counters.declarationParsesSkipped;
+  }
+  return true;
 }
 
 /// Adds the duration of the outermost timed style call on a registry to its style time.
@@ -774,24 +853,207 @@ bool LocalRangeContainsOffset(const SourceRange& range, std::size_t localOffset)
   return start.has_value() && end.has_value() && *start <= localOffset && localOffset < *end;
 }
 
-void ApplyRuleDeclarations(const css::SelectorRule& rule, css::Specificity specificity,
-                           PropertyRegistry& properties, StyleResourceBudget& styleBudget,
-                           StyleCascadeCounters& counters, ParseWarningSink& warningSink) {
+template <typename Visitor>
+void AdmitRuleDeclarations(const css::SelectorRule& rule, css::Specificity specificity,
+                           StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
+                           Visitor&& visitor) {
   for (const auto& declaration : rule.declarations) {
     if (!styleBudget.reserveDeclarationApplication(declaration.values.size(),
                                                    declaration.sourceByteSize)) {
       return;
     }
     ++counters.declarationsApplied;
-    if (auto error = properties.parseProperty(declaration, specificity)) {
-      constexpr std::size_t kMaximumStyleDiagnosticBytes = 4096;
-      if (error->reason.size() > kMaximumStyleDiagnosticBytes) {
-        error->reason =
-            RcString(std::string_view(error->reason).substr(0, kMaximumStyleDiagnosticBytes));
-      }
-      warningSink.add(std::move(*error));
-    }
+    visitor(declaration, specificity);
   }
+}
+
+void ParseRuleDeclaration(const css::Declaration& declaration, css::Specificity specificity,
+                          PropertyRegistry& properties, ParseWarningSink& warningSink) {
+  if (auto error = properties.parseProperty(declaration, specificity)) {
+    constexpr std::size_t kMaximumStyleDiagnosticBytes = 4096;
+    if (error->reason.size() > kMaximumStyleDiagnosticBytes) {
+      error->reason =
+          RcString(std::string_view(error->reason).substr(0, kMaximumStyleDiagnosticBytes));
+    }
+    warningSink.add(std::move(*error));
+  }
+}
+
+const ComputedStyleComponent* FindRootStyle(Registry& registry,
+                                            const SVGDocumentContext* document) {
+  if (document && registry.valid(document->rootEntity)) {
+    return registry.try_get<ComputedStyleComponent>(document->rootEntity);
+  }
+  return nullptr;
+}
+
+const ComputedStyleComponent* FindParentStyle(Registry& registry,
+                                              const ExternalUseStyleContext* occurrence,
+                                              Entity parent) {
+  if (occurrence) {
+    return &occurrence->parent;
+  }
+  return parent == entt::null ? nullptr : registry.try_get<ComputedStyleComponent>(parent);
+}
+
+bool RootStyleReady(const MatchedPropertiesKey& key, const SVGDocumentContext* document,
+                    const Registry& registry, const ComputedStyleComponent* rootStyle) {
+  return key.documentRoot || !document || !registry.valid(document->rootEntity) ||
+         (rootStyle && rootStyle->style);
+}
+
+bool ParentStyleReady(const ExternalUseStyleContext* occurrence, Entity parent,
+                      const ComputedStyleComponent* parentStyle) {
+  return occurrence || parent == entt::null || (parentStyle && parentStyle->style);
+}
+
+const ComputedStyleComponent* EnsureParentStyle(StyleSystem& styleSystem, Registry& registry,
+                                                const ExternalUseStyleContext* occurrence,
+                                                Entity parent,
+                                                const ComputedStyleComponent* parentStyle,
+                                                ParseWarningSink& warningSink) {
+  if (!occurrence && parent != entt::null && (!parentStyle || !parentStyle->style)) {
+    return &styleSystem.computeStyle(EntityHandle(registry, parent), warningSink);
+  }
+  return parentStyle;
+}
+
+void PopulateMatchedPropertiesKey(Registry& registry, EntityHandle handle, Entity dataEntity,
+                                  Entity parent, const StyleComponent* local,
+                                  MatchedPropertiesKey& key) {
+  const auto* type = registry.try_get<ElementTypeComponent>(dataEntity);
+  key.localStyle = local;
+  key.elementType = type ? std::optional(type->type()) : std::nullopt;
+  key.noInheritPaint = parent != entt::null && registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  key.instanceSymbol =
+      type && type->type() == ElementType::Symbol && IsDirectUseInstanceRoot(handle);
+  key.stop = StopOpacityInput(registry, dataEntity);
+  key.flood = FloodOpacityInput(registry, dataEntity);
+  const auto* document = registry.ctx().find<SVGDocumentContext>();
+  key.documentRoot = document && document->rootEntity == handle.entity();
+}
+
+struct MatchedCacheState {
+  const SVGDocumentContext* document = nullptr;
+  const ComputedStyleComponent* rootStyle = nullptr;
+  const ComputedStyleComponent* parentStyle = nullptr;
+  bool parentReady = false;
+  bool rootReady = false;
+  bool cacheEnabled = false;
+  bool initiallyCacheable = false;
+  bool countedCacheMiss = false;
+};
+
+void SetMatchedKeyRecords(MatchedPropertiesKey& key, const MatchedCacheState& state) {
+  key.parent = state.parentStyle ? state.parentStyle->style : nullptr;
+  key.root = nullptr;
+  if (!key.documentRoot && state.rootStyle) {
+    key.root = state.rootStyle->style;
+  }
+}
+
+bool FindAndInstallMatchedStyle(Registry& registry, Entity parent, MatchedPropertiesKey& key,
+                                std::size_t matchedDeclarationParsesSkipped,
+                                StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
+                                ComputedStyleComponent& computed, MatchedCacheState& state) {
+  SetMatchedKeyRecords(key, state);
+  const MatchedPropertiesEntry* entry = GetMatchedPropertiesCache(registry).find(key);
+  if (!entry || !ChargeCachedResourceOpacityWork(entry->style->properties, styleBudget, counters)) {
+    return false;
+  }
+  const bool allowPaint =
+      parent == entt::null || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  computed.externalFill =
+      ExternalPaintOrigin(entry->fillState, false, state.parentStyle, false, allowPaint);
+  computed.externalStroke =
+      ExternalPaintOrigin(entry->strokeState, false, state.parentStyle, true, allowPaint);
+  computed.style = entry->style;
+  ++counters.matchedPropertiesCacheHits;
+  counters.declarationParsesSkipped += matchedDeclarationParsesSkipped;
+  return true;
+}
+
+MatchedCacheState PrepareMatchedCacheState(Registry& registry, Entity dataEntity, Entity parent,
+                                           const ExternalUseStyleContext* occurrence,
+                                           bool declarationsStreamed,
+                                           const MatchedPropertiesKey& key,
+                                           const StyleResourceBudget& styleBudget) {
+  MatchedCacheState state;
+  state.document = registry.ctx().find<SVGDocumentContext>();
+  state.rootStyle = FindRootStyle(registry, state.document);
+  state.parentStyle = FindParentStyle(registry, occurrence, parent);
+  state.rootReady = RootStyleReady(key, state.document, registry, state.rootStyle);
+  state.parentReady = ParentStyleReady(occurrence, parent, state.parentStyle);
+  state.cacheEnabled = !registry.ctx().contains<DisableMatchedPropertiesCacheForTesting>();
+  const bool intrinsicallyCacheable = !declarationsStreamed && !occurrence &&
+                                      !registry.all_of<AnimatedValuesComponent>(dataEntity) &&
+                                      !styleBudget.rejected() && key.cacheable();
+  state.initiallyCacheable = state.cacheEnabled && intrinsicallyCacheable;
+  return state;
+}
+
+bool TryInstallMatchedStyle(Registry& registry, Entity parent, MatchedPropertiesKey& key,
+                            std::size_t deferredDeclarations, StyleResourceBudget& styleBudget,
+                            StyleCascadeCounters& counters, ComputedStyleComponent& computed,
+                            MatchedCacheState& state) {
+  if (!state.initiallyCacheable || !state.parentReady || !state.rootReady) {
+    if (state.initiallyCacheable) {
+      ++counters.matchedPropertiesCacheMisses;
+      state.countedCacheMiss = true;
+    } else if (state.cacheEnabled) {
+      ++counters.matchedPropertiesCacheUncacheable;
+    }
+    return false;
+  }
+  if (!FindAndInstallMatchedStyle(registry, parent, key, deferredDeclarations, styleBudget,
+                                  counters, computed, state)) {
+    ++counters.matchedPropertiesCacheMisses;
+    state.countedCacheMiss = true;
+    return false;
+  }
+  return true;
+}
+
+bool TryInstallLateMatchedStyle(Registry& registry, Entity parent, MatchedPropertiesKey& key,
+                                bool warningBeforeParent, StyleResourceBudget& styleBudget,
+                                StyleCascadeCounters& counters, ComputedStyleComponent& computed,
+                                MatchedCacheState& state) {
+  if (!state.initiallyCacheable || warningBeforeParent || styleBudget.rejected()) {
+    return false;
+  }
+  state.rootStyle = FindRootStyle(registry, state.document);
+  state.rootReady = RootStyleReady(key, state.document, registry, state.rootStyle);
+  if (!state.rootReady || !FindAndInstallMatchedStyle(registry, parent, key, 0, styleBudget,
+                                                      counters, computed, state)) {
+    return false;
+  }
+  if (state.countedCacheMiss) {
+    --counters.matchedPropertiesCacheMisses;
+    state.countedCacheMiss = false;
+  }
+  return true;
+}
+
+void FinishMatchedCacheMiss(Registry& registry, MatchedPropertiesKey& key, PropertyState fillState,
+                            PropertyState strokeState, bool warningBeforeParent,
+                            std::size_t warningAttemptsAfterParent, ParseWarningSink& warningSink,
+                            StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
+                            ComputedStyleComponent& computed, MatchedCacheState& state) {
+  const bool warningAfterParent = warningSink.warningAttempts() != warningAttemptsAfterParent;
+  if (state.countedCacheMiss &&
+      (styleBudget.rejected() || warningBeforeParent || warningAfterParent)) {
+    --counters.matchedPropertiesCacheMisses;
+    ++counters.matchedPropertiesCacheUncacheable;
+    state.countedCacheMiss = false;
+  }
+  if (!state.initiallyCacheable || styleBudget.rejected() || warningBeforeParent ||
+      warningAfterParent) {
+    return;
+  }
+  state.rootStyle = FindRootStyle(registry, state.document);
+  SetMatchedKeyRecords(key, state);
+  GetMatchedPropertiesCache(registry).insert(
+      key, MatchedPropertiesEntry{computed.style, fillState, strokeState});
 }
 
 }  // namespace
@@ -897,11 +1159,54 @@ std::size_t StyleSystem::CandidateListCapacityForTesting() {
   return CandidateList().capacity();
 }
 
+/// Hold only references while a cache hit is possible. Once the list is full, replay its
+/// admitted prefix and parse later declarations directly into a heap-allocated record.
+struct StyleSystem::PendingStyleDeclarations {
+  struct Pending {
+    const css::Declaration* declaration;
+    css::Specificity specificity;
+  };
+
+  static std::shared_ptr<ComputedStyle> makeRecord(const StyleComponent* local) {
+    return local ? std::make_shared<ComputedStyle>(local->properties())
+                 : std::make_shared<ComputedStyle>();
+  }
+
+  std::shared_ptr<ComputedStyle> materialize(const StyleComponent* local, ParseWarningSink& sink) {
+    if (streamed) {
+      return std::move(streamed);
+    }
+    auto record = makeRecord(local);
+    for (const auto& pending : entries) {
+      ParseRuleDeclaration(*pending.declaration, pending.specificity, record->properties, sink);
+    }
+    return record;
+  }
+
+  void admit(const css::Declaration& declaration, css::Specificity specificity,
+             const StyleComponent* local, ParseWarningSink& sink) {
+    constexpr std::size_t kMaximumDeferredDeclarations = 4096;
+    if (!streamed && entries.size() == kMaximumDeferredDeclarations) {
+      streamed = materialize(local, sink);
+      entries.clear();
+    }
+    if (streamed) {
+      ParseRuleDeclaration(declaration, specificity, streamed->properties, sink);
+    } else {
+      entries.push_back({&declaration, specificity});
+    }
+  }
+
+  SmallVector<Pending, 4> entries;
+  std::shared_ptr<ComputedStyle> streamed;
+};
+
 void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
-                                       PropertyRegistry& properties,
                                        StyleResourceBudget& styleBudget,
                                        StyleCascadeCounters& counters,
-                                       ParseWarningSink& warningSink) {
+                                       MatchedPropertiesKey& cacheKey, const StyleComponent* local,
+                                       ParseWarningSink& warningSink,
+                                       PendingStyleDeclarations& declarations) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
   const RuleIndexElementView elementKeys(registry, treeEntity, dataEntity);
   const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
@@ -909,7 +1214,8 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
   std::vector<std::uint32_t>& candidates = candidateScope.list();
   // Apply one sheet's candidate rules in rule order; returns false once the style budget is
   // exhausted. Rules that cannot match are not candidates and cost nothing.
-  const auto applyRules = [&](const css::Stylesheet& sheet, const RuleIndex& index,
+  const auto applyRules = [&](Entity stylesheetEntity, std::size_t sheetOrdinal,
+                              const css::Stylesheet& sheet, const RuleIndex& index,
                               bool isUserAgentStylesheet) {
     const std::span<const css::SelectorRule> rules = sheet.rules();
     CollectCandidateRules(rules, index, elementKeys, unindexed, candidates);
@@ -928,7 +1234,12 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
       if (isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
-      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, counters, warningSink);
+      cacheKey.addRule(stylesheetEntity, sheetOrdinal, position, specificity);
+      AdmitRuleDeclarations(
+          rule, specificity, styleBudget, counters,
+          [&](const css::Declaration& declaration, css::Specificity declarationSpecificity) {
+            declarations.admit(declaration, declarationSpecificity, local, warningSink);
+          });
     }
     return true;
   };
@@ -942,13 +1253,13 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
     UTILS_RELEASE_ASSERT(stylesheet.importedRuleIndexes.size() ==
                          stylesheet.importedStylesheets.size());
     for (std::size_t i = 0; i < stylesheet.importedStylesheets.size(); ++i) {
-      if (!applyRules(stylesheet.importedStylesheets[i], stylesheet.importedRuleIndexes[i],
-                      stylesheet.isUserAgentStylesheet)) {
+      if (!applyRules(stylesheetEntity, i, stylesheet.importedStylesheets[i],
+                      stylesheet.importedRuleIndexes[i], stylesheet.isUserAgentStylesheet)) {
         return;
       }
     }
-    if (!applyRules(stylesheet.stylesheet, stylesheet.ruleIndex,
-                    stylesheet.isUserAgentStylesheet)) {
+    if (!applyRules(stylesheetEntity, stylesheet.importedStylesheets.size(), stylesheet.stylesheet,
+                    stylesheet.ruleIndex, stylesheet.isUserAgentStylesheet)) {
       return;
     }
   }
@@ -1071,44 +1382,65 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
   const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
+  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
+  const auto* occurrence = ExternalRootContext(registry, handle.entity());
+  const auto* styleComponent = registry.try_get<StyleComponent>(dataEntity);
+  const std::size_t warningAttemptsBefore = warningSink.warningAttempts();
+
+  MatchedPropertiesKey cacheKey;
+  PendingStyleDeclarations declarations;
+  applyStylesheetRules(registry, handle.entity(), dataEntity, styleBudget, counters, cacheKey,
+                       styleComponent, warningSink, declarations);
+
+  PopulateMatchedPropertiesKey(registry, handle, dataEntity, parent, styleComponent, cacheKey);
+  MatchedCacheState cacheState =
+      PrepareMatchedCacheState(registry, dataEntity, parent, occurrence,
+                               declarations.streamed != nullptr, cacheKey, styleBudget);
+  if (TryInstallMatchedStyle(registry, parent, cacheKey, declarations.entries.size(), styleBudget,
+                             counters, computedStyle, cacheState)) {
+    return;
+  }
 
   // Apply local style. The record is built in place and stored once it is final, after which it
   // is never modified.
-  const auto* styleComponent = registry.try_get<StyleComponent>(dataEntity);
-  std::shared_ptr<ComputedStyle> record =
-      styleComponent ? std::make_shared<ComputedStyle>(styleComponent->properties)
-                     : std::make_shared<ComputedStyle>();
+  auto record = declarations.materialize(styleComponent, warningSink);
   PropertyRegistry& properties = record->properties;
-
-  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, counters,
-                       warningSink);
   ApplyAnimatedStyle(registry, dataEntity, properties);
-  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
-  const auto* occurrence = ExternalRootContext(registry, handle.entity());
-  const ComputedStyleComponent* parentStyle =
-      occurrence             ? &occurrence->parent
-      : parent == entt::null ? nullptr
-                             : &computeStyle(EntityHandle(registry, parent), warningSink);
-  ApplyContextualFontSize(registry, dataEntity, parentStyle, properties);
-  const auto resourceOpacities = ApplyScalarAnimationStyles(registry, dataEntity, parentStyle,
-                                                            properties, styleBudget, warningSink);
+  const bool warningBeforeParent = warningSink.warningAttempts() != warningAttemptsBefore;
+  cacheState.parentStyle =
+      EnsureParentStyle(*this, registry, occurrence, parent, cacheState.parentStyle, warningSink);
+  const std::size_t warningAttemptsAfterParent = warningSink.warningAttempts();
+  if (TryInstallLateMatchedStyle(registry, parent, cacheKey, warningBeforeParent, styleBudget,
+                                 counters, computedStyle, cacheState)) {
+    return;
+  }
+  ApplyContextualFontSize(registry, dataEntity, cacheState.parentStyle, properties);
+  const auto resourceOpacities = ApplyScalarAnimationStyles(
+      registry, dataEntity, cacheState.parentStyle, properties, styleBudget, warningSink);
   ApplySymbolInstanceDisplay(handle, dataEntity, properties);
   properties.resolveElementColors(warningSink);
   const bool inheritPaint =
       occurrence || parent == entt::null || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
-  ApplyPaintAnimationStyles(registry, dataEntity, parentStyle, inheritPaint, properties);
+  ApplyPaintAnimationStyles(registry, dataEntity, cacheState.parentStyle, inheritPaint, properties);
+  const PropertyState fillState = properties.fill.state;
+  const PropertyState strokeState = properties.stroke.state;
 
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
   // Charging the parent's source value alone misses large locally parsed vectors and can also
   // differ from the actual value selected by the cascade.
   inheritComputedParent(handle, parent, properties, computedStyle, warningSink);
 
-  if (styleBudget.reserveComplexPropertyBytes(handle.entity(), properties.complexPropertyBytes())) {
+  const std::size_t retainedBytes = properties.complexPropertyBytes();
+  if (!styleBudget.canRetainComputedStyle(retainedBytes)) {
+    if (auto* existingCache = registry.ctx().find<MatchedPropertiesCache>()) {
+      existingCache->clear();
+    }
+  }
+  if (styleBudget.retainComputedStyle(*record, retainedBytes)) {
     record->resourceOpacities = resourceOpacities;
   } else {
     // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
     // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
-    styleBudget.release(handle.entity());
     computedStyle.externalFill = false;
     computedStyle.externalStroke = false;
     properties = PropertyRegistry();
@@ -1124,6 +1456,10 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   properties.resolveTextDecorationThickness(rootFontSizePx);
   properties.resolveInsetClipLengths(rootFontSizePx);
   computedStyle.style = std::move(record);
+
+  FinishMatchedCacheMiss(registry, cacheKey, fillState, strokeState, warningBeforeParent,
+                         warningAttemptsAfterParent, warningSink, styleBudget, counters,
+                         computedStyle, cacheState);
 }
 
 std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle handle) const {
@@ -1315,8 +1651,7 @@ void StyleSystem::computeMissingStyles(Registry& registry, ParseWarningSink& war
 }
 
 void StyleSystem::discardComputedStyles(Registry& registry) {
-  GetStyleResourceBudget(registry).releaseAll();
-  registry.clear<ComputedStyleComponent>();
+  MatchedPropertiesCache::discardComputedStyles(registry);
 }
 
 void StyleSystem::discardComputedStylesForFullRestyle(Registry& registry) {
@@ -1349,9 +1684,6 @@ bool StyleSystem::anyStylesheetUsesAttributeInSelector(Registry& registry,
 }
 
 void StyleSystem::invalidateComputed(EntityHandle handle) {
-  if (auto* budget = handle.registry()->ctx().find<StyleResourceBudget>()) {
-    budget->release(handle.entity());
-  }
   handle.remove<ComputedStyleComponent>();
 }
 

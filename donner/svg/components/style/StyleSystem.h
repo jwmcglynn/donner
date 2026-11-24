@@ -3,7 +3,6 @@
 
 #include <memory>
 #include <optional>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -18,9 +17,15 @@
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 
+namespace donner::css {
+struct Declaration;
+}
+
 namespace donner::svg::components {
 
 class AnimationContextualWorkBudget;
+struct MatchedPropertiesKey;
+struct StyleComponent;
 
 /**
  * Test-only switch: while a registry's context holds this, the cascade and
@@ -71,7 +76,8 @@ public:
    * @param family Optional shared document-family envelope for retained style bytes.
    */
   explicit StyleResourceBudget(std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
-      : family_(std::move(family)) {}
+      : retainedStyleBytes_(std::make_shared<RetainedStyleBytes>(kMaximumComplexPropertyBytes,
+                                                                 std::move(family))) {}
   /**
    * Construct a style budget with caller-supplied limits.
    * @param limits Cascade, traversal, and retained-property ceilings.
@@ -81,12 +87,8 @@ public:
                                std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
       : limits_(limits),
         selectorTraversal_(limits.selectorTraversalSteps),
-        family_(std::move(family)) {}
-  ~StyleResourceBudget() {
-    if (family_) {
-      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, complexPropertyBytes_);
-    }
-  }
+        retainedStyleBytes_(
+            std::make_shared<RetainedStyleBytes>(limits.complexPropertyBytes, std::move(family))) {}
 
   StyleResourceBudget(const StyleResourceBudget&) = delete;
   StyleResourceBudget& operator=(const StyleResourceBudget&) = delete;
@@ -110,11 +112,8 @@ public:
         declarationApplications_(other.declarationApplications_),
         declarationComponentWork_(other.declarationComponentWork_),
         declarationByteWork_(other.declarationByteWork_),
-        complexPropertyBytes_(other.complexPropertyBytes_),
         rejected_(other.rejected_),
-        family_(std::move(other.family_)),
-        reservations_(std::move(other.reservations_)) {
-    other.complexPropertyBytes_ = 0;
+        retainedStyleBytes_(std::move(other.retainedStyleBytes_)) {
     other.aggregateWork_ = nullptr;
     other.externalInstanceWork_ = 0;
     other.externalMeasureWork_ = 0;
@@ -310,61 +309,45 @@ public:
     return true;
   }
 
-  /**
-   * Set an entity's retained complex-property charge, releasing bytes on reductions.
-   * @param entity Entity whose property charge changes.
-   * @param byteCount New retained byte count for this entity.
-   * @return True for a reduction or an admitted increase; false for a refused increase.
-   */
-  [[nodiscard]] bool reserveComplexPropertyBytes(Entity entity, std::size_t byteCount) {
-    const std::size_t previous = reservations_[entity];
-    if (byteCount <= previous) {
-      const std::size_t released = previous - byteCount;
-      complexPropertyBytes_ -= released;
-      reservations_[entity] = byteCount;
-      if (family_) {
-        family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, released);
-      }
-      return true;
+  /** Test a declaration-work sequence without changing counters or refusal state. */
+  [[nodiscard]] bool canReserveDeclarationWork(std::size_t applications, std::size_t componentCount,
+                                               std::size_t sourceBytes) const {
+    if (rejected_ || selectorTraversal_.rejected() ||
+        declarationApplications_ > limits_.declarationApplications ||
+        declarationComponentWork_ > limits_.declarationComponentWork ||
+        declarationByteWork_ > limits_.declarationByteWork ||
+        applications > limits_.declarationApplications - declarationApplications_ ||
+        componentCount > limits_.declarationComponentWork - declarationComponentWork_ ||
+        sourceBytes > limits_.declarationByteWork - declarationByteWork_) {
+      return false;
     }
+    return !aggregateWork_ ||
+           aggregateWork_->canReserveDeclarationWork(applications, componentCount, sourceBytes);
+  }
 
-    const std::size_t additional = byteCount - previous;
-    if (rejected_ || complexPropertyBytes_ > limits_.complexPropertyBytes ||
-        additional > limits_.complexPropertyBytes - complexPropertyBytes_ ||
-        (family_ &&
-         !family_->reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, additional))) {
+  /** Charge one immutable computed-style record for exactly its lifetime. */
+  [[nodiscard]] bool retainComputedStyle(ComputedStyle& style, std::size_t byteCount) {
+    if (style.retainedStyleBytes_) {
+      return false;
+    }
+    if (byteCount != 0 && rejected_) {
+      return false;
+    }
+    if (!style.retainBytes(retainedStyleBytes_, byteCount)) {
       rejected_ = true;
       return false;
     }
-    complexPropertyBytes_ += additional;
-    reservations_[entity] = byteCount;
     return true;
   }
 
-  /**
-   * Release one entity's retained complex-property bytes, if it has a reservation.
-   * @param entity Entity whose reservation is removed.
-   */
-  void release(Entity entity) {
-    const auto it = reservations_.find(entity);
-    if (it == reservations_.end()) {
-      return;
-    }
-    const std::size_t bytes = it->second;
-    complexPropertyBytes_ -= bytes;
-    reservations_.erase(it);
-    if (family_) {
-      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes);
-    }
+  /// Return whether bytes fit without changing counters or refusal state.
+  [[nodiscard]] bool canRetainComputedStyle(std::size_t byteCount) const {
+    return byteCount == 0 || (!rejected_ && retainedStyleBytes_->canReserve(byteCount));
   }
 
-  /// Release all retained complex-property bytes without resetting other counters.
-  void releaseAll() {
-    if (family_) {
-      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, complexPropertyBytes_);
-    }
-    reservations_.clear();
-    complexPropertyBytes_ = 0;
+  /// Shared account held by every computed-style record created for this document.
+  [[nodiscard]] const std::shared_ptr<RetainedStyleBytes>& retainedStyleBytes() const {
+    return retainedStyleBytes_;
   }
 
   /// Return the mutable selector traversal budget for this computation pass.
@@ -384,7 +367,9 @@ public:
   /// Return aggregate declaration source bytes charged.
   [[nodiscard]] std::size_t declarationByteWork() const { return declarationByteWork_; }
   /// Return retained complex-property bytes charged to this budget.
-  [[nodiscard]] std::size_t complexPropertyBytes() const { return complexPropertyBytes_; }
+  [[nodiscard]] std::size_t complexPropertyBytes() const {
+    return retainedStyleBytes_->retainedBytes();
+  }
   /// Return whether this budget or its selector traversal budget refused work.
   [[nodiscard]] bool rejected() const {
     return rejected_ || selectorTraversal_.rejected() ||
@@ -413,10 +398,8 @@ private:
   std::size_t declarationApplications_ = 0;
   std::size_t declarationComponentWork_ = 0;
   std::size_t declarationByteWork_ = 0;
-  std::size_t complexPropertyBytes_ = 0;
   bool rejected_ = false;
-  std::shared_ptr<DocumentResourceFamilyBudget> family_;
-  std::unordered_map<Entity, std::size_t> reservations_;
+  std::shared_ptr<RetainedStyleBytes> retainedStyleBytes_;
 };
 
 /// Diagnostic record for one stylesheet rule that matched an element.
@@ -606,14 +589,17 @@ public:
   void invalidateAll(EntityHandle handle);
 
 private:
+  struct PendingStyleDeclarations;
+
   /// Compute the style of every entity flagged \ref DirtyFlagsComponent::Style whose computed
   /// style was removed.
   void computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink);
   /// Compute the style of every tree entity without a computed style.
   void computeMissingStyles(Registry& registry, ParseWarningSink& warningSink);
   void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
-                            PropertyRegistry& properties, StyleResourceBudget& styleBudget,
-                            StyleCascadeCounters& counters, ParseWarningSink& warningSink);
+                            StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
+                            MatchedPropertiesKey& cacheKey, const StyleComponent* local,
+                            ParseWarningSink& warningSink, PendingStyleDeclarations& declarations);
   void inheritComputedParent(EntityHandle handle, Entity parent, PropertyRegistry& properties,
                              ComputedStyleComponent& computed, ParseWarningSink& warningSink);
   static void resolveComputedParentFonts(EntityHandle handle, Entity parent,

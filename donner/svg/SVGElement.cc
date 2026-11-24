@@ -381,7 +381,7 @@ bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAcc
     return false;
   }
   auto* style = handle.try_get<components::StyleComponent>(access);
-  const Clear result = style ? style->properties.clearPresentationAttribute(name)
+  const Clear result = style ? style->clearPresentationAttribute(name)
                              : PropertyRegistry().clearPresentationAttribute(name);
   if (result == Clear::Cleared) {
     MarkPresentationAttributeDirty(handle, elementType, name, name);
@@ -1165,7 +1165,7 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
 const PropertyRegistry* SVGElement::specifiedStyle() const {
   DocumentReadAccess access = handle_.readAccess();
   const auto* style = access.registry().try_get<components::StyleComponent>(handle_.entity());
-  return style != nullptr ? &style->properties : nullptr;
+  return style != nullptr ? &style->properties() : nullptr;
 }
 
 const PropertyRegistry* SVGElement::computedStyleIfPresent() const {

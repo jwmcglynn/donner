@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
+#include <optional>
 /// @file
 
 #include "donner/base/EcsRegistry.h"
@@ -17,8 +19,30 @@ struct StyleComponent {
   /// Limit initial storage for this large component while retaining paged pointer stability.
   static constexpr std::size_t page_size = 64;
 
-  /// The properties of the element, which are parsed from the `style=""` attribute.
-  PropertyRegistry properties;
+  /// Parsed local declarations, including presentation attributes.
+  const PropertyRegistry& properties() const { return properties_; }
+
+  /// Hash of the exact local declaration key; oversize local keys bypass the cache.
+  std::optional<std::size_t> declarationHash() const { return declarationHash_; }
+
+  /// Whether the local declaration key is identical to an absent style component.
+  bool hasEmptyDeclarations() const { return empty_; }
+
+  /// Change typed declarations and update the lookup hash after the mutation.
+  template <typename F>
+  void editProperties(F&& edit) {
+    edit(properties_);
+    refreshDeclarationHash();
+  }
+
+  /// Remove one presentation declaration and update the lookup hash when it changes.
+  PropertyRegistry::PresentationAttributeClear clearPresentationAttribute(std::string_view name) {
+    const auto result = properties_.clearPresentationAttribute(name);
+    if (result == PropertyRegistry::PresentationAttributeClear::Cleared) {
+      refreshDeclarationHash();
+    }
+    return result;
+  }
   /// True when the most recent inline-style parse exceeded its resource budget.
   bool styleParseRejected = false;
 
@@ -38,13 +62,14 @@ struct StyleComponent {
    * @param style The value of the `style` attribute.
    */
   bool setStyle(std::string_view style) {
-    PropertyRegistry candidate = properties;
+    PropertyRegistry candidate = properties_;
     candidate.clearStyleAttributeProperties();
     if (!candidate.parseStyle(style)) {
       styleParseRejected = true;
       return false;
     }
-    properties = std::move(candidate);
+    properties_ = std::move(candidate);
+    refreshDeclarationHash();
     styleParseRejected = false;
     return true;
   }
@@ -57,7 +82,8 @@ struct StyleComponent {
    * @param style The update style to apply, as a CSS style string (e.g. "fill:red;").
    */
   bool updateStyle(std::string_view style) {
-    const bool accepted = properties.parseStyle(style);
+    const bool accepted = properties_.parseStyle(style);
+    refreshDeclarationHash();
     styleParseRejected = !accepted;
     return accepted;
   }
@@ -75,8 +101,21 @@ struct StyleComponent {
    */
   ParseResult<bool> trySetPresentationAttribute(EntityHandle handle, std::string_view name,
                                                 std::string_view value) {
-    return properties.parsePresentationAttribute(name, value, handle);
+    auto result = properties_.parsePresentationAttribute(name, value, handle);
+    refreshDeclarationHash();
+    return result;
   }
+
+private:
+  void refreshDeclarationHash() {
+    const auto key = properties_.localDeclarationKey();
+    empty_ = key && key->empty();
+    declarationHash_ = key ? std::optional(std::hash<std::string_view>{}(*key)) : std::nullopt;
+  }
+
+  PropertyRegistry properties_;
+  std::optional<std::size_t> declarationHash_{std::hash<std::string_view>{}("")};
+  bool empty_ = true;
 };
 
 }  // namespace donner::svg::components

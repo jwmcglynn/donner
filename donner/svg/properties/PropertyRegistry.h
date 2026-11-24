@@ -6,6 +6,7 @@
 #include <map>
 #include <ostream>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
@@ -591,6 +592,13 @@ public:
    */
   bool operator==(const PropertyRegistry& other) const;
 
+  /// Bounded process-local exact representation of local cascade inputs, or nullopt if oversize.
+  [[nodiscard]] std::optional<std::string> localDeclarationKey() const;
+
+  /// Compare stored values, source metadata and cascade priorities exactly, including large
+  /// declarations that exceed the lookup key budget. Used by differential cascade checks.
+  [[nodiscard]] bool exactlyEquals(const PropertyRegistry& other) const;
+
   /**
    * Return a tuple of all properties within the PropertyRegistry.
    *
@@ -860,6 +868,8 @@ public:
   friend std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry);
 
 private:
+  std::optional<std::string> encodeDeclarationKey(std::size_t maximumBytes) const;
+
   /// Retains both origins while an inline resource color overlays an attribute or stylesheet.
   struct InlineResourceColor {
     Property<css::Color> base;

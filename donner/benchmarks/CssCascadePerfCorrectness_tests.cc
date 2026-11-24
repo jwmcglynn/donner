@@ -23,6 +23,8 @@ namespace {
 using svg::components::StyleCascadeCounters;
 using ::testing::AllOf;
 using ::testing::Field;
+using ::testing::Gt;
+using ::testing::Lt;
 using ::testing::Matcher;
 using ::testing::Optional;
 
@@ -99,6 +101,12 @@ CascadeCase Load(std::string name, Document document, StyleCascadeCounters expec
           expected};
 }
 
+CascadeCase LoadUncached(std::string name, Document document, StyleCascadeCounters expected) {
+  return {std::move(name),
+          [document] { return MeasureCascadeLoad(SourceOf(document), kRepetitions, false, true); },
+          expected};
+}
+
 CascadeCase Generated(std::string name, int elements, int rules, CascadeRuleKind kind,
                       StyleCascadeCounters expected) {
   return {std::move(name),
@@ -109,10 +117,29 @@ CascadeCase Generated(std::string name, int elements, int rules, CascadeRuleKind
           expected};
 }
 
+CascadeCase GeneratedUncached(std::string name, int elements, int rules, CascadeRuleKind kind,
+                              StyleCascadeCounters expected) {
+  return {std::move(name),
+          [=] {
+            return MeasureCascadeLoad(MakeGroupedRectsDocument(elements, rules, kind),
+                                      kOneRepetition, false, true);
+          },
+          expected};
+}
+
 CascadeCase Edit(std::string name, Document document, CascadeEditTarget target, CascadeEdit edit,
                  StyleCascadeCounters expected, CascadeRepetitions repetitions = kRepetitions) {
   return {std::move(name),
           [=] { return MeasureCascadeEdit(SourceOf(document), target, edit, repetitions, false); },
+          expected};
+}
+
+CascadeCase EditUncached(std::string name, Document document, CascadeEditTarget target,
+                         CascadeEdit edit, StyleCascadeCounters expected) {
+  return {std::move(name),
+          [=] {
+            return MeasureCascadeEdit(SourceOf(document), target, edit, kRepetitions, false, true);
+          },
           expected};
 }
 
@@ -227,6 +254,57 @@ INSTANTIATE_TEST_SUITE_P(
                     {4, 2005, 2003, 2003, 0, 0}}),
     CaseName);
 
+struct CacheWork {
+  std::uint64_t hits;
+  std::uint64_t misses;
+  std::uint64_t uncacheable;
+};
+
+Matcher<std::optional<CascadeMeasurement>> StableCacheWork(CacheWork expected) {
+  return Optional(
+      AllOf(Field("countersStable", &CascadeMeasurement::countersStable, true),
+            Field("distinctComputedStyleRecords", &CascadeMeasurement::distinctComputedStyleRecords,
+                  expected.misses),
+            Field("counters", &CascadeMeasurement::counters,
+                  AllOf(Field("matchedPropertiesCacheHits",
+                              &StyleCascadeCounters::matchedPropertiesCacheHits, expected.hits),
+                        Field("matchedPropertiesCacheMisses",
+                              &StyleCascadeCounters::matchedPropertiesCacheMisses, expected.misses),
+                        Field("matchedPropertiesCacheUncacheable",
+                              &StyleCascadeCounters::matchedPropertiesCacheUncacheable,
+                              expected.uncacheable),
+                        Field("declarationParsesSkipped",
+                              &StyleCascadeCounters::declarationParsesSkipped, Gt(0u))))));
+}
+
+class CssCascadeCacheWorkTest : public ::testing::TestWithParam<CascadeCase> {};
+
+TEST_P(CssCascadeCacheWorkTest, ReusesExpectedComputedStyleRecords) {
+  EXPECT_THAT(GetParam().measure(),
+              StableCacheWork(CacheWork{GetParam().expected.matchedPropertiesCacheHits,
+                                        GetParam().expected.matchedPropertiesCacheMisses,
+                                        GetParam().expected.matchedPropertiesCacheUncacheable}));
+}
+
+constexpr StyleCascadeCounters CacheCounters(std::uint64_t hits, std::uint64_t misses,
+                                             std::uint64_t uncacheable = 0) {
+  return StyleCascadeCounters{.matchedPropertiesCacheHits = hits,
+                              .matchedPropertiesCacheMisses = misses,
+                              .matchedPropertiesCacheUncacheable = uncacheable};
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    CacheWork, CssCascadeCacheWorkTest,
+    // These are measured exact-key partitions. The splash includes stop/flood base values and
+    // cascade priority that the earlier approximate opportunity grouping did not distinguish.
+    ::testing::Values(Load("Splash", Document::Splash, CacheCounters(401, 221)),
+                      Load("BootstrapIcons", Document::Icons, CacheCounters(5129, 8)),
+                      Load("Tiger", Document::Tiger, CacheCounters(388, 96)),
+                      Load("Synthetic2000x200", Document::Synthetic, CacheCounters(1854, 149)),
+                      Load("UseInstances", Document::UseInstances, CacheCounters(4378, 47)),
+                      Load("Descendant1000x100", Document::Descendant, CacheCounters(991, 12))),
+    CaseName);
+
 /// Matches a measurement whose repetitions all made \p copies whole-registry copies.
 Matcher<std::optional<CascadeMeasurement>> StableRegistryCopies(std::uint64_t copies) {
   return Optional(
@@ -241,6 +319,16 @@ TEST_P(CssCascadeRegistryCopyTest, CopiesLocalDeclarationsOncePerElement) {
   EXPECT_THAT(GetParam().measure(), StableRegistryCopies(GetParam().expected.registryCopies));
 }
 
+class CssCascadeCachedRegistryCopyTest : public ::testing::TestWithParam<CascadeCase> {};
+
+TEST_P(CssCascadeCachedRegistryCopyTest, CacheHitsAvoidLocalDeclarationCopies) {
+  EXPECT_THAT(GetParam().measure(),
+              Optional(AllOf(Field("countersStable", &CascadeMeasurement::countersStable, true),
+                             Field("counters", &CascadeMeasurement::counters,
+                                   Field("registryCopies", &StyleCascadeCounters::registryCopies,
+                                         Lt(GetParam().expected.registryCopies))))));
+}
+
 /// Expected work with only the registry copies set; the other counts are checked above.
 constexpr StyleCascadeCounters RegistryCopies(std::uint64_t copies) {
   return StyleCascadeCounters{.registryCopies = copies};
@@ -251,16 +339,24 @@ constexpr StyleCascadeCounters RegistryCopies(std::uint64_t copies) {
 // declarations (presentation attributes or a `style` attribute) and none for the others.
 INSTANTIATE_TEST_SUITE_P(
     RegistryCopies, CssCascadeRegistryCopyTest,
+    ::testing::Values(LoadUncached("Splash", Document::Splash, RegistryCopies(520)),
+                      LoadUncached("BootstrapIcons", Document::Icons, RegistryCopies(3057)),
+                      LoadUncached("Tiger", Document::Tiger, RegistryCopies(481)),
+                      LoadUncached("UseInstances", Document::UseInstances, RegistryCopies(4021)),
+                      GeneratedUncached("Mixed1000x0", 1000, 0, CascadeRuleKind::Mixed,
+                                        RegistryCopies(910)),
+                      EditUncached("SplashClass", Document::Splash, kSplashTarget,
+                                   CascadeEdit::Class, RegistryCopies(520)),
+                      EditUncached("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style,
+                                   RegistryCopies(3057))),
+    CaseName);
+
+INSTANTIATE_TEST_SUITE_P(
+    RegistryCopySavings, CssCascadeCachedRegistryCopyTest,
     ::testing::Values(Load("Splash", Document::Splash, RegistryCopies(520)),
                       Load("BootstrapIcons", Document::Icons, RegistryCopies(3057)),
                       Load("Tiger", Document::Tiger, RegistryCopies(481)),
-                      Load("UseInstances", Document::UseInstances, RegistryCopies(4021)),
-                      Generated("Mixed1000x0", 1000, 0, CascadeRuleKind::Mixed,
-                                RegistryCopies(910)),
-                      Edit("SplashClass", Document::Splash, kSplashTarget, CascadeEdit::Class,
-                           RegistryCopies(520)),
-                      Edit("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style,
-                           RegistryCopies(3057))),
+                      Load("UseInstances", Document::UseInstances, RegistryCopies(4021))),
     CaseName);
 
 }  // namespace

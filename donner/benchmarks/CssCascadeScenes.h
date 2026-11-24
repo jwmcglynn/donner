@@ -123,6 +123,7 @@ std::optional<svg::SVGDocument> ParseCascadeDocument(std::string_view source);
 struct StyleCascadeSample {
   svg::components::StyleCascadeCounters counters;  ///< Exact work counts.
   std::chrono::nanoseconds styleTime{0};           ///< Time spent in style computation.
+  std::size_t distinctComputedStyleRecords = 0;    ///< Retained record identities after the frame.
 };
 
 /**
@@ -238,6 +239,8 @@ struct CascadeMeasurement {
   std::optional<TimingSummary> rendererFrame;
   /// Style work of the last measured null-renderer repetition.
   svg::components::StyleCascadeCounters counters;
+  /// Distinct retained computed-style records after the last measured frame.
+  std::size_t distinctComputedStyleRecords = 0;
   /// Whether every measured null-renderer repetition did the same style work.
   bool countersStable = true;
 };
@@ -288,10 +291,11 @@ constexpr CascadeRepetitions OneDirection(CascadeRepetitions repetitions,
  * @param source SVG source.
  * @param repetitions Repetition counts.
  * @param withRenderer Also time the default renderer's first frame.
+ * @param disableCache Disable matched-properties caching for a differential reference.
  */
 std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
                                                      CascadeRepetitions repetitions,
-                                                     bool withRenderer);
+                                                     bool withRenderer, bool disableCache = false);
 
 /**
  * Measure the frame after an edit: each repetition applies \p edit to a loaded document and draws
@@ -302,12 +306,13 @@ std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
  * @param edit Edit kind.
  * @param repetitions Repetition counts.
  * @param withRenderer Also time the default renderer's frame.
+ * @param disableCache Disable matched-properties caching for a differential reference.
  */
 std::optional<CascadeMeasurement> MeasureCascadeEdit(std::string_view source,
                                                      const CascadeEditTarget& target,
                                                      CascadeEdit edit,
                                                      CascadeRepetitions repetitions,
-                                                     bool withRenderer);
+                                                     bool withRenderer, bool disableCache = false);
 
 /**
  * Measure the frame after a source keystroke on the splash document, applied through

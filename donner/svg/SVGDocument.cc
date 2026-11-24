@@ -345,10 +345,7 @@ components::RenderTreeState& GetRenderTreeState(EntityHandle handle) {
 
 void MarkStylesheetChanged(EntityHandle handle) {
   Registry& registry = *handle.registry();
-  if (auto* budget = registry.ctx().find<components::StyleResourceBudget>()) {
-    budget->releaseAll();
-  }
-  registry.clear<components::ComputedStyleComponent>();
+  components::StyleSystem::discardComputedStyles(registry);
 
   components::RenderTreeState& renderState = GetRenderTreeState(handle);
   renderState.needsFullRebuild = true;
