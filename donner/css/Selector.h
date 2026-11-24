@@ -236,20 +236,20 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matchesNthFunction(
   }
   if (ident.equalsLowercase("nth-child")) {
     return anbValueIfAnb->evaluate(
-        getIndexInParent(*maybeParent, element, /*fromEnd*/ false, selector, options));
+        getIndexAmongSiblings(element, /*fromEnd*/ false, selector, options));
   }
   if (ident.equalsLowercase("nth-last-child")) {
     return anbValueIfAnb->evaluate(
-        getIndexInParent(*maybeParent, element, /*fromEnd*/ true, selector, options));
+        getIndexAmongSiblings(element, /*fromEnd*/ true, selector, options));
   }
   const auto matchingType = std::make_optional<TypeSelector>(element.tagName());
   if (ident.equalsLowercase("nth-of-type")) {
     return anbValueIfAnb->evaluate(
-        getIndexInParent(*maybeParent, element, /*fromEnd*/ false, matchingType, options));
+        getIndexAmongSiblings(element, /*fromEnd*/ false, matchingType, options));
   }
   if (ident.equalsLowercase("nth-last-of-type")) {
     return anbValueIfAnb->evaluate(
-        getIndexInParent(*maybeParent, element, /*fromEnd*/ true, matchingType, options));
+        getIndexAmongSiblings(element, /*fromEnd*/ true, matchingType, options));
   }
   return false;
 }

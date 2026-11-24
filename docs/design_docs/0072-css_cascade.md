@@ -1103,10 +1103,14 @@ restyles dirty entities with the shadow trees still attached. Selector matching 
 root as neither a child nor a sibling of the elements around it, and gives it no siblings of its
 own, so both paths match the same way: `:has()`, `:empty`, structural pseudo-classes and sibling
 combinators on document elements do not see instanced content, and inside a shadow tree they match
-among the clones as they do among the elements they clone.
-`RenderingContextTest.FullRestyleMatchesUseHostWithoutItsShadowTree`,
-`RetainedUpdateMatchesUseHostWithoutItsShadowTree` and
-`ShadowTreeSelectorsMatchWithinTheirOwnTree` pin this. Descendant and child combinators still
+among the clones as they do among the elements they clone. A shadow root is the only element child
+of its tree for selector purposes: index 1 of 1 and first and last of its type, for every
+`:nth-*` form (with or without `of S`) and every `:first-*`, `:last-*` and `:only-*` form, and a
+host's own children never count it. Every position is computed from the element's own sibling
+walks (`PseudoClassSelector::getIndexAmongSiblings`), never by enumerating the parent's children,
+so the forms agree. `RenderingContextTest.FullRestyleMatchesUseHostWithoutItsShadowTree`,
+`RetainedUpdateMatchesUseHostWithoutItsShadowTree`, `ShadowTreeSelectorsMatchWithinTheirOwnTree`
+and `ShadowTreeRootIsTheOnlyElementOfItsTree` pin this. Descendant and child combinators still
 reach a clone's ancestors through its host
 ([#2695](https://github.com/jwmcglynn/donner/issues/2695)).
 
