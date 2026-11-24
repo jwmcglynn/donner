@@ -97,9 +97,6 @@ struct StyleCascadeMetrics {
   std::chrono::nanoseconds styleTime{0};
   /// Style calls currently timed on this registry, so nested calls are not timed twice.
   int activeTimedCalls = 0;
-  /// Element cascades currently running on this registry, so the registry copies of a parent
-  /// cascaded on demand are counted once.
-  int activeCascades = 0;
 };
 
 }  // namespace donner::svg::components

@@ -1860,7 +1860,82 @@ TEST_F(StyleSystemTest, RegistryCopiesCountEachLocalDeclarationCopyOnce) {
                           Field("registryCopies", &StyleCascadeCounters::registryCopies,
                                 withLocalDeclarations)));
   EXPECT_THAT(withLocalDeclarations, Gt(static_cast<std::uint64_t>(kDepth / 2)));
-  EXPECT_THAT(CascadeMetricsOf(document).activeCascades, Eq(0));
+}
+
+TEST_F(StyleSystemTest, PreparedSiblingsCascadeConcurrentlyIntoOwnedSlots) {
+  auto doc = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>g > rect:empty { fill: red; stroke-dasharray: 2 3 5; }</style>
+      <g font-size="19"><rect id="a"/><rect id="b"/><rect id="c"/><rect id="d"/></g>
+    </svg>)");
+  Registry& registry = doc.registry();
+  std::array<Entity, 4> entities;
+  std::array<ComputedStyleComponent*, 4> slots;
+  std::array<std::shared_ptr<const ComputedStyle>, 4> serial;
+  constexpr std::array<std::string_view, 4> selectors{"#a", "#b", "#c", "#d"};
+  for (std::size_t i = 0; i < entities.size(); ++i) {
+    const auto element = doc.querySelector(selectors[i]);
+    ASSERT_TRUE(element);
+    entities[i] = element->entityHandle().entity();
+    slots[i] = &registry.get<ComputedStyleComponent>(entities[i]);
+    serial[i] = std::move(slots[i]->style);
+    ASSERT_TRUE(serial[i]);
+  }
+
+  const Registry& view = registry;
+  const auto& documentBudget = view.ctx().get<StyleResourceBudget>();
+  const auto before = view.ctx().get<StyleCascadeMetrics>().counters;
+  const auto retainedBefore = documentBudget.complexPropertyBytes();
+  std::array<StyleCascadeCounters, 2> counts;
+  std::array<std::size_t, 2> warningCounts{};
+  std::barrier start(2);
+  auto cascadePair = [&](std::size_t worker) {
+    auto share = documentBudget.limits();
+    share.complexPropertyBytes = 0;
+    StyleResourceBudget budget(documentBudget, share);
+    EXPECT_EQ(budget.limits().complexPropertyBytes, documentBudget.limits().complexPropertyBytes);
+    MatchedPropertiesCache cache;
+    StyleSystem::CascadePass pass{budget, counts[worker], cache};
+    ParseWarningSink warnings;
+    start.arrive_and_wait();
+    for (std::size_t i = worker; i < entities.size(); i += counts.size()) {
+      StyleSystem::computePreparedStyle(view, entities[i], *slots[i], pass, warnings);
+    }
+    EXPECT_EQ(pass.activeCascades, 0u);
+    warningCounts[worker] = warnings.warningAttempts();
+  };
+  std::thread other(cascadePair, 1);
+  cascadePair(0);
+  other.join();
+
+  EXPECT_EQ(before, view.ctx().get<StyleCascadeMetrics>().counters);
+  for (std::size_t worker = 0; worker < counts.size(); ++worker) {
+    EXPECT_EQ(counts[worker].elementsCascaded, 2u);
+    EXPECT_EQ(counts[worker].matchedPropertiesCacheMisses, 1u);
+    EXPECT_EQ(counts[worker].matchedPropertiesCacheHits, 1u);
+    EXPECT_EQ(warningCounts[worker], 0u);
+    EXPECT_EQ(slots[worker]->style, slots[worker + counts.size()]->style);
+  }
+  for (std::size_t i = 0; i < slots.size(); ++i) {
+    ASSERT_TRUE(slots[i]->style);
+    const auto& actual = *slots[i]->properties();
+    const auto& expected = serial[i]->properties;
+    EXPECT_EQ(actual.fill.get(), expected.fill.get());
+    ASSERT_TRUE(actual.strokeDasharray.get());
+    ASSERT_TRUE(expected.strokeDasharray.get());
+    EXPECT_THAT(*actual.strokeDasharray.get(),
+                testing::ElementsAreArray(*expected.strokeDasharray.get()));
+    EXPECT_EQ(actual.fontSize.get(), expected.fontSize.get());
+    EXPECT_EQ(slots[i]->style->resourceOpacities, serial[i]->resourceOpacities);
+  }
+  EXPECT_NE(slots[0]->style, slots[1]->style);
+  const auto bytes = slots[0]->properties()->complexPropertyBytes();
+  ASSERT_GT(bytes, 0u);
+  EXPECT_EQ(documentBudget.complexPropertyBytes(), retainedBefore + 2 * bytes);
+  for (auto* slot : slots) {
+    slot->style.reset();
+  }
+  EXPECT_EQ(documentBudget.complexPropertyBytes(), retainedBefore);
 }
 
 TEST_F(StyleSystemTest, LocalDeclarationsOutrankMoreSpecificInheritedDeclarations) {

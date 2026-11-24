@@ -24,6 +24,8 @@ struct Declaration;
 namespace donner::svg::components {
 
 class AnimationContextualWorkBudget;
+class AnimationResourceBudget;
+class MatchedPropertiesCache;
 struct MatchedPropertiesKey;
 struct StyleComponent;
 
@@ -89,6 +91,19 @@ public:
         selectorTraversal_(limits.selectorTraversalSteps),
         retainedStyleBytes_(
             std::make_shared<RetainedStyleBytes>(limits.complexPropertyBytes, std::move(family))) {}
+
+  /**
+   * Give a worker independent work counters while charging records to the document.
+   * @param document Budget that owns the retained-byte account.
+   * @param share Work limits assigned before dispatch. The document supplies the retained-byte
+   * limit.
+   */
+  StyleResourceBudget(const StyleResourceBudget& document, Limits share)
+      : limits_(share),
+        selectorTraversal_(share.selectorTraversalSteps),
+        retainedStyleBytes_(document.retainedStyleBytes_) {
+    limits_.complexPropertyBytes = document.limits_.complexPropertyBytes;
+  }
 
   StyleResourceBudget(const StyleResourceBudget&) = delete;
   StyleResourceBudget& operator=(const StyleResourceBudget&) = delete;
@@ -457,6 +472,27 @@ public:
    */
   const ComputedStyleComponent& computeStyle(EntityHandle handle, ParseWarningSink& warningSink);
 
+  /// Mutable state used exclusively by one worker or by a nested serial cascade.
+  struct CascadePass {
+    StyleResourceBudget& budget;     ///< Work allowance and shared record account.
+    StyleCascadeCounters& counters;  ///< Work attributed to this pass.
+    MatchedPropertiesCache& cache;   ///< Cache owned by this worker or the serial document.
+    unsigned activeCascades = 0;     ///< Nesting for whole-registry copy accounting.
+  };
+
+  /**
+   * Cascade a static element after its parent and the document root have been published.
+   * The caller holds document access and keeps all component pools stable until the join.
+   * @param registry Read-only document storage.
+   * @param entity Element whose slot the caller owns exclusively.
+   * @param output Previously emplaced computed-style slot for the element.
+   * @param pass Mutable work and cache state exclusive to this worker.
+   * @param warnings Worker-owned diagnostic sink.
+   */
+  static void computePreparedStyle(const Registry& registry, Entity entity,
+                                   ComputedStyleComponent& output, CascadePass& pass,
+                                   ParseWarningSink& warnings);
+
   /// What \ref computeAllStyles does with existing computed styles when the whole document needs
   /// restyling (\ref RenderTreeState::needsFullStyleRecompute on a built document).
   enum class FullRestyle {
@@ -590,26 +626,30 @@ public:
 
 private:
   struct PendingStyleDeclarations;
+  class SerialCascade;
 
   /// Compute the style of every entity flagged \ref DirtyFlagsComponent::Style whose computed
   /// style was removed.
   void computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink);
   /// Compute the style of every tree entity without a computed style.
   void computeMissingStyles(Registry& registry, ParseWarningSink& warningSink);
-  void applyStylesheetRules(const Registry& registry, Entity treeEntity, Entity dataEntity,
-                            StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
-                            MatchedPropertiesKey& cacheKey, const StyleComponent* local,
-                            ParseWarningSink& warningSink, PendingStyleDeclarations& declarations);
-  void inheritComputedParent(EntityHandle handle, Entity parent, PropertyRegistry& properties,
-                             ComputedStyleComponent& computed, ParseWarningSink& warningSink);
-  static void resolveComputedParentFonts(EntityHandle handle, Entity parent,
+  static void applyStylesheetRules(const Registry& registry, Entity treeEntity, Entity dataEntity,
+                                   StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
+                                   MatchedPropertiesKey& cacheKey, const StyleComponent* local,
+                                   ParseWarningSink& warningSink,
+                                   PendingStyleDeclarations& declarations);
+  static void inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
+                                    PropertyRegistry& properties, ComputedStyleComponent& computed,
+                                    ParseWarningSink& warningSink, bool* unsupportedResource);
+  static void resolveComputedParentFonts(const Registry& registry, Entity entity, Entity parent,
                                          PropertyRegistry& properties);
-  void inheritProperties(Registry& registry, Entity parent, PropertyRegistry& properties,
-                         ParseWarningSink& warningSink);
-  static void resolveRelativeFontProperties(Registry& registry, Entity parent,
+  static void inheritProperties(const Registry& registry, Entity parent,
+                                PropertyRegistry& properties);
+  static void resolveRelativeFontProperties(const Registry& registry, Entity parent,
                                             PropertyRegistry& properties);
-  void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                             ParseWarningSink& warningSink);
+  static void computePropertiesInto(const Registry& registry, Entity entity,
+                                    ComputedStyleComponent& computedStyle, CascadePass& pass,
+                                    ParseWarningSink& warningSink, SerialCascade* serial);
 };
 
 }  // namespace donner::svg::components

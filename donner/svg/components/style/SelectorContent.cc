@@ -4,8 +4,8 @@
 #include <string_view>
 
 #include "donner/base/xml/XMLNodeTypeComponent.h"
-#include "donner/base/xml/components/XMLValueComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/XMLValueComponent.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -59,8 +59,8 @@ bool RawNodeHasContent(const Registry& registry, Entity child, bool inspectText,
   if (kind->type() == xml::XMLNode::Type::Element) {
     return true;
   }
-  if (!inspectText || (kind->type() != xml::XMLNode::Type::Data &&
-                       kind->type() != xml::XMLNode::Type::CData)) {
+  if (!inspectText ||
+      (kind->type() != xml::XMLNode::Type::Data && kind->type() != xml::XMLNode::Type::CData)) {
     return false;
   }
   const auto* value = registry.try_get<xml::components::XMLValueComponent>(child);
@@ -158,7 +158,8 @@ void RecordDiscardedSelectorText(EntityHandle parent, const xml::XMLNode& node) 
   }
 }
 
-bool IsSelectorEmpty(const Registry& registry, Entity dataEntity, css::SelectorTraversalBudget* budget) {
+bool IsSelectorEmpty(const Registry& registry, Entity dataEntity,
+                     css::SelectorTraversalBudget* budget) {
   const entt::basic_handle<const Registry> data(registry, dataEntity);
   if (data.all_of<ProjectedNonWhitespaceTextTag>()) {
     return false;

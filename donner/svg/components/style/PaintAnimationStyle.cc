@@ -238,9 +238,9 @@ std::optional<std::string> SamplePaintStack(const ContextualLengthRecipe& recipe
 }
 
 template <typename P>
-void ApplyPaintProperty(Registry& registry, const AnimatedValuesComponent& values, P& property,
-                        const P& parent, const AnimationValueContext& context,
-                        PropertyRegistry& properties) {
+void ApplyPaintProperty(AnimationResourceBudget* animationBudget,
+                        const AnimatedValuesComponent& values, P& property, const P& parent,
+                        const AnimationValueContext& context, PropertyRegistry& properties) {
   if (property.specificity > css::Specificity::Animation()) {
     return;
   }
@@ -248,7 +248,8 @@ void ApplyPaintProperty(Registry& registry, const AnimatedValuesComponent& value
   if (found == values.contextualLengths.end()) {
     return;
   }
-  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  UTILS_RELEASE_ASSERT(animationBudget);
+  auto& budget = *animationBudget;
   if (!budget.reserveContextualWork(found->second->evaluationWork)) {
     return;
   }
@@ -275,7 +276,7 @@ void SeedResourceColor(Property<css::Color>& destination, const Property<css::Co
   }
 }
 
-void SeedResourceColors(Registry& registry, Entity source, PropertyRegistry& properties) {
+void SeedResourceColors(const Registry& registry, Entity source, PropertyRegistry& properties) {
   if (const auto* stop = registry.try_get<StopComponent>(source)) {
     SeedResourceColor(properties.stopColor, &stop->properties.stopColor);
   }
@@ -293,9 +294,9 @@ void SeedResourceColors(Registry& registry, Entity source, PropertyRegistry& pro
 
 }  // namespace
 
-void ApplyPaintAnimationStyles(Registry& registry, Entity source,
-                               const ComputedStyleComponent* parent, bool inheritPaint,
-                               PropertyRegistry& properties) {
+void ApplyPaintAnimationStyles(const Registry& registry, AnimationResourceBudget* animationBudget,
+                               Entity source, const ComputedStyleComponent* parent,
+                               bool inheritPaint, PropertyRegistry& properties) {
   const auto* enabled = registry.ctx().find<AnimationStyleContext>();
   const auto* values = registry.try_get<AnimatedValuesComponent>(source);
   if (!enabled || !enabled->enabled || !values) {
@@ -311,18 +312,21 @@ void ApplyPaintAnimationStyles(Registry& registry, Entity source,
   context.currentColor = inherited.color.get()
                              .value_or(css::Color(css::RGBA::RGB(0, 0, 0)))
                              .resolve(css::RGBA::RGB(0, 0, 0), 1);
-  ApplyPaintProperty(registry, *values, properties.color, inherited.color, context, properties);
+  ApplyPaintProperty(animationBudget, *values, properties.color, inherited.color, context,
+                     properties);
   context.currentColor = BaseValue(properties.color, inherited.color)
                              .value_or(css::Color(context.currentColor))
                              .resolve(context.currentColor, 1);
-  ApplyPaintProperty(registry, *values, properties.fill, paintParent.fill, context, properties);
-  ApplyPaintProperty(registry, *values, properties.stroke, paintParent.stroke, context, properties);
-  ApplyPaintProperty(registry, *values, properties.stopColor, inherited.stopColor, context,
+  ApplyPaintProperty(animationBudget, *values, properties.fill, paintParent.fill, context,
                      properties);
-  ApplyPaintProperty(registry, *values, properties.floodColor, inherited.floodColor, context,
+  ApplyPaintProperty(animationBudget, *values, properties.stroke, paintParent.stroke, context,
                      properties);
-  ApplyPaintProperty(registry, *values, properties.lightingColor, inherited.lightingColor, context,
+  ApplyPaintProperty(animationBudget, *values, properties.stopColor, inherited.stopColor, context,
                      properties);
+  ApplyPaintProperty(animationBudget, *values, properties.floodColor, inherited.floodColor, context,
+                     properties);
+  ApplyPaintProperty(animationBudget, *values, properties.lightingColor, inherited.lightingColor,
+                     context, properties);
 }
 
 }  // namespace donner::svg::components
