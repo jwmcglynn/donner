@@ -9,8 +9,8 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ostream>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -20,6 +20,7 @@
 #include "donner/base/tasks/ParkerPool.h"
 #include "donner/base/tasks/TaskRecord.h"
 #include "donner/base/tasks/WorkStealingDeque.h"
+#include "donner/base/tasks/WorkerStack.h"
 
 namespace donner::tasks {
 
@@ -39,6 +40,10 @@ struct TaskSchedulerOptions {
 
   /// Steal rounds an idle worker makes before it tries to sleep.
   std::size_t idleSpinRounds = 1;
+
+  /// Each worker's stack, rounded up to whole pages. At least the platform's minimum thread stack
+  /// and twice \ref kStackReserveBytes.
+  std::size_t workerStackBytes = 512 * 1024;
 };
 
 /// A worker's state word.
@@ -150,8 +155,8 @@ public:
   /// disagrees with the workers' state words.
   ~TaskScheduler();
 
-  /// The workers started: every one requested, since a thread that fails to start ends the
-  /// process (constructing a `std::thread` without exceptions terminates on failure).
+  /// The workers started: every one requested, since a worker thread that fails to start fails a
+  /// release assertion.
   [[nodiscard]] std::size_t workerCount() const { return workers_.size(); }
 
   /// True when the options asked for zero workers.
@@ -178,16 +183,19 @@ private:
 
   /// A worker's state: its deque, record pool and parker, its state word, and its thread.
   struct alignas(kFalseSharingBytes) Worker {
-    Worker(std::size_t index, const TaskSchedulerOptions& options);
+    Worker(TaskScheduler& scheduler, std::size_t index, const TaskSchedulerOptions& options);
 
+    TaskScheduler& scheduler;
     const std::size_t index;
     WorkStealingDeque<TaskRecord*> deque;
     CreatorRecordPool<> pool;
     Parker<> parker;
     alignas(kFalseSharingBytes) std::atomic<WorkerState> state{WorkerState::Awake};
-    std::thread thread;
+    pthread_t thread{};
 
     // Owner-only state.
+    StackBounds stack;                      //!< The configured part of the worker's stack,
+                                            //!< recorded when it starts.
     std::uint32_t stealRng;                 //!< Seeded generator for the steal round's offset.
     std::size_t localRunsSinceOutside = 0;  //!< Tasks run from the own deque since the last
                                             //!< outside take.
@@ -290,8 +298,16 @@ private:
     return (self + 1 + (offset + k) % others) % workers;
   }
 
-  /// Runs \p record and returns it to its pool.
+  /// Runs \p record and returns it to its pool. Fails a release assertion first if the worker has
+  /// less than \ref kStackReserveBytes of stack left.
   void runTask(Worker& worker, TaskRecord* record);
+
+  /// Bytes of stack left below the caller's frame on the calling worker, of any scheduler; empty on
+  /// a thread that is not a worker.
+  static std::optional<std::size_t> CurrentWorkerStackRemaining();
+
+  /// A worker thread's entry point; \p worker is its \ref Worker.
+  static void* WorkerEntry(void* worker);
 
   /// Sleep steps 1 to 5. @return False when the stop flag is set and the worker must exit.
   bool trySleep(Worker& worker);

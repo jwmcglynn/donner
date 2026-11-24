@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -92,6 +93,27 @@ public:
 
   static std::size_t LiveScopes(const TaskScheduler& scheduler) {
     return scheduler.liveScopes_.load(std::memory_order_relaxed);
+  }
+
+  /// Bytes of stack left on the calling worker, or empty off a worker.
+  static std::optional<std::size_t> StackRemaining() {
+    return TaskScheduler::CurrentWorkerStackRemaining();
+  }
+
+  /// The calling worker's recorded stack bounds. On a worker of \p scheduler only.
+  static StackBounds CurrentWorkerStack(const TaskScheduler& scheduler) {
+    return scheduler.currentWorker()->stack;
+  }
+
+  /// Runs \p work as a task on the calling worker of \p scheduler, through the path a worker runs
+  /// every task by, at the caller's stack depth. A stand-in for a worker that runs a task deep in
+  /// its stack, until waiting workers help.
+  template <typename F>
+  static void RunAsTaskHere(TaskScheduler& scheduler, F work) {
+    TaskScheduler::Worker* worker = scheduler.currentWorker();
+    TaskRecord* record = worker->pool.tryAllocate();
+    record->setClosure(std::move(work));
+    scheduler.runTask(*worker, record);
   }
 };
 

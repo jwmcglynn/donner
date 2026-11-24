@@ -44,6 +44,13 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "worker_stack",
+    srcs = ["WorkerStack.cc"],
+    hdrs = ["WorkerStack.h"],
+    deps = ["//donner/base"],
+)
+
+donner_cc_library(
     name = "task_scheduler",
     srcs = [
         "TaskScheduler.cc",
@@ -59,6 +66,7 @@ donner_cc_library(
         ":parker_pool",
         ":task_record",
         ":work_stealing_deque",
+        ":worker_stack",
         "//donner/base",
     ],
 )
@@ -115,6 +123,18 @@ donner_cc_test(
         ":task_scheduler",
         "//donner/base:gtest_timeout_main",
         "//donner/base:stall_guard",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "worker_stack_tests",
+    srcs = ["tests/WorkerStack_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        ":worker_stack",
+        "//donner/base:gtest_timeout_main",
         "@com_google_gtest//:gtest",
     ],
 )
