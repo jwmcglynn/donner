@@ -746,3 +746,37 @@ TEST(FillRectTest, ClearBlendMode) {
 }
 
 }  // namespace
+
+// ---- Empty destination tests (Donner addition) ----
+
+// A surface that could not be allocated is an empty pixmap. Rectangle, path, stroke and hairline
+// fills and pixmap draws into it must do nothing: its size has no valid clip rectangle to build.
+TEST(PainterEmptyDestinationTest, DrawsIntoAnEmptyPixmapDoNothing) {
+  Pixmap empty;
+  ASSERT_TRUE(empty.size().isEmpty());
+  auto dst = empty.mutableView();
+  Paint paint;
+  paint.setColor(Color::fromRgba8(255, 0, 0, 255));
+  const auto rect = Rect::fromLTRB(0.0f, 0.0f, 8.0f, 8.0f);
+  ASSERT_TRUE(rect.has_value());
+  const auto path = tiny_skia::Path::fromRect(*rect);
+
+  for (const bool antiAlias : {false, true}) {
+    paint.antiAlias = antiAlias;
+    tiny_skia::Painter::fillRect(dst, *rect, paint, Transform::identity());
+    tiny_skia::Painter::fillPath(dst, path, paint, FillRule::Winding, Transform::identity());
+    tiny_skia::Painter::strokePath(dst, path, paint, Stroke{}, Transform::identity());
+    Stroke wide;
+    wide.width = 3.0f;
+    tiny_skia::Painter::strokePath(dst, path, paint, wide, Transform::identity());
+  }
+
+  auto src = Pixmap::fromSize(4, 4);
+  ASSERT_TRUE(src.has_value());
+  src->fill(Color::fromRgba8(0, 0, 255, 255));
+  PixmapPaint ppaint;
+  tiny_skia::Painter::drawPixmap(dst, 0, 0, src->view(), ppaint, Transform::identity());
+  tiny_skia::Painter::drawPixmap(dst, 1, 1, src->view(), ppaint,
+                                 Transform::fromScale(2.0f, 2.0f));
+  EXPECT_TRUE(empty.size().isEmpty());
+}

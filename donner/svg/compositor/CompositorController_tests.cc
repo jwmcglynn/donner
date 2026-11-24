@@ -3500,6 +3500,34 @@ public:
 
 }  // namespace
 
+// When the frame's budget refuses the frame target, the compose has no surface to draw into. It
+// must draw neither the tiles nor any slot directly, and the frame does not stand in for them.
+TEST_F(CompositorControllerTest, ComposeDrawsNothingIntoARefusedFrameTarget) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="100" height="100" fill="white" />
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, ::testing::Optional(_));
+  auto state = std::make_shared<TextureFailureState>();
+  state->failTexture = false;
+  FrameTargetBudgetRenderer renderer;
+  ConfigureBudgetAwareOffscreens(renderer, state);
+  CompositorController compositor(document, renderer, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
+
+  renderer.frameTargetRefused = true;
+  EXPECT_CALL(renderer, drawTextureSnapshot(_, _, _, _)).Times(0);
+  EXPECT_CALL(renderer, drawImage(_, _)).Times(0);
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(0);
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(compositor.lastRenderFrameStats().mainComposeCount, Gt(0));
+  EXPECT_FALSE(compositor.composedFrameStandsInForTiles());
+}
+
 // Once every slot without a tile is one the budget refused twice on its own and the compose draws
 // directly, the composed frame is the whole document: the compositor reports that it stands in
 // for the incomplete tile set. A frame whose target the budget refuses holds no document and does
