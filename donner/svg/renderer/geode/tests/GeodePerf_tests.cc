@@ -434,6 +434,7 @@ TEST_F(GeodePerfTest, FeImageFragment_RasterIsNotReadBack) {
     const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
     printCounters("FeImageFragment", c);
     EXPECT_THAT(offscreenRenders, testing::Eq(1)) << "Premise: the frame renders the fragment";
+    EXPECT_THAT(c.submits, testing::Ge(1u)) << "the host frame submitted its filter output";
     EXPECT_THAT(device->consumeReadbackStats().count, testing::Eq(0))
         << "the fragment raster was read back to the CPU";
   }
