@@ -11,6 +11,7 @@ donner_cc_library(
 donner_cc_library(
     name = "parker",
     hdrs = ["Parker.h"],
+    deps = ["//donner/base"],
 )
 
 donner_cc_library(

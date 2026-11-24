@@ -5,6 +5,8 @@
 #include <atomic>
 #include <cstdint>
 
+#include "donner/base/Utils.h"
+
 namespace donner::tasks {
 
 /**
@@ -41,6 +43,9 @@ struct NoParkerHooks {
   /// Called by \ref Parker::parkUntil after its re-check found the condition false, before it
   /// waits.
   static void BeforeWait() {}
+
+  /// Called by \ref Parker::unpark after its change found the waiting bit set, before it notifies.
+  static void BetweenChangeAndNotify() {}
 };
 
 /**
@@ -102,10 +107,16 @@ public:
    * Sequentially consistent: it acquires a change ordered before it, and with the changes it is in
    * the one modification order that decides whether a waker notifies.
    *
+   * Fails a release assertion if the waiting bit was already set: a parker has one sleeper, and
+   * each `prepareWait` is followed by a \ref finishWait before the next.
+   *
    * @return The token to pass to \ref wait: the word before the call, with the waiting bit set.
    */
   [[nodiscard]] Word prepareWait() {
-    return word_.fetch_or(kWaitingBit, std::memory_order_seq_cst) | kWaitingBit;
+    const Word old = word_.fetch_or(kWaitingBit, std::memory_order_seq_cst);
+    UTILS_RELEASE_ASSERT_MSG((old & kWaitingBit) == 0,
+                             "A parker has one sleeper, and each prepareWait needs a finishWait");
+    return old | kWaitingBit;
   }
 
   /**
@@ -136,6 +147,7 @@ public:
     if ((replaced & kWaitingBit) == 0) {
       return false;
     }
+    Hooks::BetweenChangeAndNotify();
     Hooks::NotifyOne(word_);
     return true;
   }

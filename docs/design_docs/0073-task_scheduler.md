@@ -107,7 +107,7 @@ is not shaped by one user.
 Estimates are engineering days, including tests and review fixes. No milestone here depends on a
 milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
-- [ ] Milestone S1: Core scheduler (9.5 days)
+- [ ] Milestone S1: Core scheduler (9.75 days)
   - [x] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
         its linearization stress test (1.25 days): `//donner/base/tasks:work_stealing_deque`,
         which also has the sequentially consistent form, and `//donner/base/tasks:deque_tests`.
@@ -122,6 +122,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         `//donner/base/tasks:parker_tests`.
   - [ ] The sleep steps, the hand-off, the last-awake rule, the publish protocol in
         read-modify-write form, and drain before sleep (1.5 days).
+  - [ ] On Apple silicon, the 32-bit parker word's wait through libc++'s contention table measured
+        against an `std::int64_t` word on the native path, and the word changed there if the
+        table costs measurably (0.25 day).
   - [x] Per-creator record pools, cross-thread record return and their bounds (0.75 day):
         `//donner/base/tasks:task_record` and `//donner/base/tasks:task_record_tests`.
   - [ ] Adopted threads: slots, the adopted publish, the visibility reads of adopted deques and
@@ -236,7 +239,7 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 
 | Milestone | Days |
 | --------- | ---: |
-| S1 Core scheduler | 9.5 |
+| S1 Core scheduler | 9.75 |
 | S2 Parallel loops and determinism | 3.5 |
 | S3 Coroutines | 3 |
 | S4 ThreadSanitizer target and fuzzer | 3.25 |
@@ -244,10 +247,10 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
 | S6 Peer benchmarks | 6.25 |
 | S7 Configuration and threading switch | 2.25 |
 | S8 Renderer threading and the render worker | 11.5 |
-| **Committed total** | **43.25** |
+| **Committed total** | **43.5** |
 | S9 Geode browser module compiled out (follow-on) | 2.5 |
 
-Total committed estimate: 43.25 engineering days; 45.75 with S9. The Geode prepare fan-out
+Total committed estimate: 43.5 engineering days; 46 with S9. The Geode prepare fan-out
 (Candidate client 1) is estimated with its own design, not here. Part D of
 [0072-css_cascade](0072-css_cascade.md) needs S1 to S3, and S4 for its race coverage; its release
 with workers on needs the release gate.
@@ -1029,8 +1032,8 @@ queue, and *started* once a thread begins running it.
     the 32-bit parker word included, goes through its global contention table, whose entries
     unrelated addresses share, because its native waits on other sizes belong to a newer library
     ABI that the SDK marks unavailable. The parker tests pass on Apple silicon through the table;
-    S1 measures what the table costs against an `std::int64_t` word, which takes the native path,
-    and may use that word there. Every change is a release read-modify-write that
+    an S1 checklist item measures what the table costs against an `std::int64_t` word, which takes
+    the native path, and changes the word there if it costs measurably. Every change is a release read-modify-write that
     advances the epoch and returns the old word, and the sleeper's `fetch_or` in step 2 is a
     sequentially consistent read-modify-write on the same word, so both are in the word's single
     modification order. A
@@ -1293,7 +1296,7 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | Stop flag | destructor sets it | seq_cst exchange | half of the shutdown pairing |
 | Stop flag | worker reads it (step 4, idle loop) | seq_cst load | other half of the shutdown pairing |
 | Parker word | waker's change (advance epoch, return old word) | release RMW | publishes what the waker wrote first (a zero count, queued work) to a sleeper that reads the change |
-| Parker word | sleeper sets the waiting bit (step 2) | seq_cst `fetch_or` | acquires a change ordered before it; with the changes, one modification order decides notify |
+| Parker word | sleeper sets the waiting bit (step 2) | seq_cst `fetch_or` | acquires a change ordered before it; with the changes, one modification order decides notify; sequentially consistent, not acquire, so that a waker that loaded the word instead of changing it could not form an unfenced store-buffering pair |
 | Parker word | loads inside the wait (step 5) | seq_cst | acquire on waking |
 | Parker word | clearing the waiting bit after waking | relaxed `fetch_and` | an RMW keeps the epoch; a stale bit only causes a spurious notify |
 | Deque slot | owner's store, any load | relaxed | its contents are published by the index orderings below |
@@ -1583,17 +1586,24 @@ clients that size work from documents.
   the return stack's release compare-and-swap and acquire exchange made relaxed; each is a race on a
   payload or a record that only that ordering publishes. Natively those mutants survive on Apple
   silicon and x86-64; on Linux ARMv8 the relaxed `fetch_or` was caught in one run, as a lost wakeup
-  in the `parkUntil` ping-pong, and survived another, so natively it is caught only by chance. The waiting bit's `fetch_or` made acquire survives everywhere: the
-  parker needs only its acquire half, because a sleeper and a waker meet in the one word's
-  modification order, which any ordering of the read-modify-write provides. The protocol mutants
+  in the `parkUntil` ping-pong, and survived another, so natively it is caught only by chance. The
+  waiting bit's `fetch_or` made acquire survives everywhere: the handshake alone needs only its
+  acquire half, because the sleeper and every waker change the one word with a read-modify-write
+  and so meet in its modification order. It stays sequentially consistent in the code and in the
+  orderings table, because that argument holds only while no waker loads the word to decide
+  whether to change it: such a load against the `fetch_or` is a store-buffering pair that needs
+  sequentially consistent operations on both sides, and keeping the stronger ordering costs
+  nothing measurable on a path taken once per sleep. The protocol mutants
   are caught natively on all three: a notify skipped unconditionally (the blocked-sleeper
-  interleaving) or made unconditional (the no-waiter counter), the re-check after the waiting bit
+  interleaving), made unconditional (the no-waiter counter) or issued before the change (the
+  interleaving that holds the waker between its change and its notify), the re-check after the waiting bit
   removed (the interleaving where the wake lands before the bit), the bit cleared by a load and a
   store (a lost change under concurrent wakers), a change that does not advance the epoch, the
   return published by a plain store (two racing returns) or taken by a load and a store (lost
   records in the stress), a missing take at the bound, an off-by-one bound, a reused record not
-  cleared, and the external pool's lock check removed. With AddressSanitizer, removing the poison
-  of free records is caught.
+  cleared, the external pool's lock check removed, and the release assertions for a second sleeper
+  on one parker and for the double returns a release build detects removed (their death tests).
+  With AddressSanitizer, removing the poison of free records is caught.
 - **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
   (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
   assertions, each at 0, 1 and 4 workers and in seeded mode.

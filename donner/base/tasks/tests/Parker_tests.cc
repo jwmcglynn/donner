@@ -58,6 +58,7 @@ struct CountingHooks {
   static void BeforePrepareWait() {}
   static void AfterPrepareWait() {}
   static void BeforeWait() {}
+  static void BetweenChangeAndNotify() {}
 
   static void Reset() {
     notifies = 0;
@@ -144,6 +145,16 @@ TEST_F(ParkerModelTest, ParkUntilAConditionTrueOnTheRecheckClearsTheBitWithoutWa
   EXPECT_THAT(checks, Eq(2));
   EXPECT_THAT(Decode(parker.word()), Eq(DecodedWord{0, false}));
   EXPECT_THAT(CountingHooks::waits.load(), Eq(0));
+}
+
+TEST(ParkerDeathTest, ASecondPrepareWaitWithoutFinishWaitFailsAReleaseAssertion) {
+  EXPECT_DEATH(
+      {
+        Parker<> parker;
+        (void)parker.prepareWait();
+        (void)parker.prepareWait();
+      },
+      "A parker has one sleeper");
 }
 
 // Deterministic interleavings of a waker with a sleeper. The platform wait is replaced by a model
@@ -261,7 +272,7 @@ private:
 
 /// Hooks that use the model wait queue and hold the sleeper at a chosen step.
 struct ModelHooks {
-  enum class Hold { None, BeforePrepareWait, AfterPrepareWait, BeforeWait };
+  enum class Hold { None, BeforePrepareWait, AfterPrepareWait, BeforeWait, BetweenChangeAndNotify };
 
   static inline ModelWaitQueue* queue = nullptr;
   static inline Gate* gate = nullptr;
@@ -274,6 +285,7 @@ struct ModelHooks {
   static void BeforePrepareWait() { HoldAt(Hold::BeforePrepareWait); }
   static void AfterPrepareWait() { HoldAt(Hold::AfterPrepareWait); }
   static void BeforeWait() { HoldAt(Hold::BeforeWait); }
+  static void BetweenChangeAndNotify() { HoldAt(Hold::BetweenChangeAndNotify); }
 
 private:
   static void HoldAt(Hold step) {
@@ -405,6 +417,32 @@ TEST_F(ParkerInterleavingTest, AWakeAfterTheSleeperBlockedNotifiesIt) {
   EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, false}));
 }
 
+// The waker is held after its change and before its notify while the sleeper is blocked: the change
+// alone must not wake the sleeper, and the notify that follows must.
+TEST_F(ParkerInterleavingTest, AWakeHeldBetweenItsChangeAndItsNotifyStillWakesTheSleeper) {
+  bool notified = false;
+  std::thread waker;
+  ReleaseAndJoin joinOnExit(gate_, {&sleeper_, &waker});
+  startSleeper();
+  ASSERT_TRUE(queue_.waitUntilBlocked());
+
+  ModelHooks::hold = ModelHooks::Hold::BetweenChangeAndNotify;
+  waker = std::thread([&] { notified = wake(); });
+  ASSERT_TRUE(gate_.waitForArrival());
+  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, true}))
+      << "the change must land before the notify";
+  EXPECT_THAT(queue_.record(), Eq(FutexRecord{1, 0, false}))
+      << "nothing may notify the sleeper before the change, and the change alone must not wake it";
+
+  gate_.release();
+  waker.join();
+  sleeper_.join();
+  EXPECT_TRUE(notified);
+  EXPECT_THAT(queue_.record(), Eq(FutexRecord{1, 1, false}));
+  EXPECT_THAT(Decode(parker_.word()), Eq(DecodedWord{1, false}));
+  EXPECT_FALSE(gate_.heldPastHangGuard());
+}
+
 // A change while the condition is still false wakes the sleeper, which re-checks and blocks again.
 TEST_F(ParkerInterleavingTest, AChangeWithoutTheConditionIsASpuriousWake) {
   ReleaseAndJoin joinOnExit(gate_, {&sleeper_});
@@ -450,6 +488,7 @@ struct DelayedHooks {
   static void BeforePrepareWait() { Delay(); }
   static void AfterPrepareWait() { Delay(); }
   static void BeforeWait() { Delay(); }
+  static void BetweenChangeAndNotify() { Delay(); }
 
   static void Delay() {
     thread_local XorShift32 rng(

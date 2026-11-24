@@ -240,6 +240,7 @@ public:
 
   /// Puts one record back on the free list. It must hold no closure.
   void release(TaskRecord* record) {
+    UTILS_RELEASE_ASSERT_MSG(live_ > 0 && record != freeHead_, "A task record was returned twice");
     UTILS_RELEASE_ASSERT_MSG(!record->hasClosure(), "A task record was returned holding a closure");
     pushFree(record);
     --live_;
@@ -260,8 +261,9 @@ public:
       freeHead_ = head;
       head = next;
       ++count;
+      // A record returned twice can make the list longer than the live count.
+      UTILS_RELEASE_ASSERT_MSG(count <= live_, "More task records came back than were live");
     }
-    UTILS_RELEASE_ASSERT_MSG(count <= live_, "More task records came back than were live");
     live_ -= count;
     return count;
   }
@@ -367,6 +369,7 @@ public:
     record->poisonWhileFree();
     TaskRecord* head = returned_.load(std::memory_order_relaxed);
     while (true) {
+      UTILS_RELEASE_ASSERT_MSG(head != record, "A task record was returned twice");
       record->next_ = head;
       Hooks::BeforeReturnPublishes();
       // Release: the returner's last writes to the record happen before the creator reuses it.

@@ -308,6 +308,52 @@ TEST(CreatorRecordPoolDeathTest, MisuseFailsAReleaseAssertion) {
       "returned to another pool");
 }
 
+// In a release build the pools catch a creator re-releasing its current free head, any release at
+// a live count of zero, a return of the record at the head of the return stack, and any take whose
+// walk counts more records than are live; a double return while other records are still out can go
+// unreported. AddressSanitizer builds catch every double return: the second one touches a poisoned
+// record and fails there first.
+TEST(CreatorRecordPoolDeathTest, ARecordReturnedTwiceFails) {
+  constexpr const char* kReturnedTwice = "returned twice|use-after-poison";
+  EXPECT_DEATH(
+      {
+        CreatorRecordPool<> pool(2);
+        TaskRecord* record = pool.tryAllocate();
+        (void)pool.tryAllocate();
+        pool.releaseFromCreator(record);
+        pool.releaseFromCreator(record);
+      },
+      kReturnedTwice);
+  EXPECT_DEATH(
+      {
+        CreatorRecordPool<> pool(1);
+        TaskRecord* record = pool.tryAllocate();
+        pool.releaseFromCreator(record);
+        pool.releaseFromCreator(record);
+      },
+      kReturnedTwice);
+  EXPECT_DEATH(
+      {
+        CreatorRecordPool<> pool(2);
+        TaskRecord* record = pool.tryAllocate();
+        pool.returnFromOtherThread(record);
+        pool.returnFromOtherThread(record);
+      },
+      kReturnedTwice);
+  // With another return between the two, the stack holds a cycle that the creator's take stops at.
+  EXPECT_DEATH(
+      {
+        CreatorRecordPool<> pool(2);
+        TaskRecord* a = pool.tryAllocate();
+        TaskRecord* b = pool.tryAllocate();
+        pool.returnFromOtherThread(a);
+        pool.returnFromOtherThread(b);
+        pool.returnFromOtherThread(a);
+        (void)pool.reclaimReturned();
+      },
+      "came back than were live|use-after-poison");
+}
+
 // The external pool: shared by every thread that is not a creator, under the guard mutex.
 
 TEST(ExternalRecordPoolTest, AllocatesUpToTheBoundUnderTheGuard) {
