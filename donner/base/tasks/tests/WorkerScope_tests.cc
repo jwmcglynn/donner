@@ -650,7 +650,7 @@ TEST_P(TwoOrMoreWorkers, TheLastAwakeWorkerPastItsMarginHandsWorkToAShallowSleep
 // queue. Valid programs never leave an entry there when a wait sleeps (thieves take the oldest
 // entry first, and a scope's tasks leave only after everything older), so the root pushes an older
 // task and the test peer publishes the inner scope's task directly to the global queue.
-TEST(WorkerDrainTest, ASleepingWaiterDrainsTheEntriesBelowItsWatermark) {
+TEST(WorkerDrainTest, DrainingBelowTheWatermarkPreservesTheWorkerRecordBound) {
   WaitHooks hooks;
   Gate drained;
   std::atomic<TaskScope*> scopePtr{nullptr};
@@ -661,8 +661,12 @@ TEST(WorkerDrainTest, ASleepingWaiterDrainsTheEntriesBelowItsWatermark) {
   Event belowDone;
   std::atomic<bool> rootReturned{false};
   std::atomic<bool> belowRanAfterRoot{false};
+  bool extraRan = false;
+  constexpr std::size_t kBound = 1;
   auto scheduler = Peer::Make(
-      TaskSchedulerOptions{.workerCount = 1, .helpMarginBytes = kAlwaysPastMargin}, &hooks);
+      TaskSchedulerOptions{
+          .workerCount = 1, .maxTasksPerCreator = kBound, .helpMarginBytes = kAlwaysPastMargin},
+      &hooks);
   TaskScope roots(*scheduler);
   roots.spawn([&] {
     roots.spawn([&] {
@@ -677,6 +681,13 @@ TEST(WorkerDrainTest, ASleepingWaiterDrainsTheEntriesBelowItsWatermark) {
       go.wait(false);
       scope.wait();
     }
+    // The deque is empty, but the drained record still belongs to this worker's pool.
+    EXPECT_THAT(Peer::WorkerLiveRecords(*scheduler), Eq(kBound));
+    roots.spawn([&] {
+      EXPECT_THAT(Peer::WorkerLiveRecords(*scheduler), Eq(kBound));
+      extraRan = true;
+    });
+    EXPECT_TRUE(extraRan) << "the worker at its record bound must run the extra spawn inline";
     rootReturned.store(true);
     rootDone.set();
   });
@@ -705,34 +716,32 @@ TEST(WorkerDrainTest, ASleepingWaiterDrainsTheEntriesBelowItsWatermark) {
 // root's only task is held on the other worker, whose idle loop never sleeps, so every protocol
 // step counted below is the root's.
 
-/// The finisher cannot wake the creator until the creator has read the task's result. Relaxed
-/// flags order the test steps in time without publishing the result to the creator.
+/// The finisher cannot wake the creator until the creator has read the task's result.
+/// A relaxed read of the actual count lets the creator observe zero without acquiring the result.
 class FinishBeforeWorkerRecheck : public SchedulerTestHooks {
 public:
-  void at(SchedulerStep step, std::size_t /*worker*/) override {
-    if (step == SchedulerStep::AfterSleeperDecrement) {
-      mayFinish.store(true, std::memory_order_relaxed);
-      sawDecrement = PollUntil([&] { return decremented.load(std::memory_order_relaxed); });
+  void at(SchedulerStep step, std::size_t worker) override {
+    if (step == SchedulerStep::AfterSleeperDecrement && waiting[worker] != nullptr) {
+      stolen.release();
+      sawDecrement = PollUntil([&] { return ScopePeer::Count(*waiting[worker]) == 0; });
     } else if (step == SchedulerStep::ScopeFinisherAfterDecrement) {
-      decremented.store(true, std::memory_order_relaxed);
       beforeWake.arriveAndWait();
     }
   }
 
-  std::atomic<bool> mayFinish{false};
-  std::atomic<bool> decremented{false};
+  // Each slot is accessed only by its worker while that worker owns the scope.
+  std::array<const TaskScope*, 2> waiting{};
+  Gate stolen;
   bool sawDecrement = false;
   Gate beforeWake;
 };
 
 TEST(WorkerInterleavingTest, ZeroCountRecheckPublishesResultBeforeFinisherWakesCreator) {
   FinishBeforeWorkerRecheck hooks;
-  Event stolen;
   Event joined;
   int result = 0;
   int observed = 0;
   bool sawSteal = false;
-  bool sawSleep = false;
   auto scheduler =
       Peer::Make(TaskSchedulerOptions{.workerCount = 2, .idleSpinRounds = kNeverSleepIdle}, &hooks);
   bool completed;
@@ -742,12 +751,14 @@ TEST(WorkerInterleavingTest, ZeroCountRecheckPublishesResultBeforeFinisherWakesC
       {
         TaskScope scope(*scheduler);
         scope.spawn([&] {
-          stolen.set();
-          sawSleep = PollUntil([&] { return hooks.mayFinish.load(std::memory_order_relaxed); });
+          hooks.stolen.arriveAndWait();
           result = 41;
         });
-        sawSteal = stolen.wait();
+        sawSteal = hooks.stolen.waitForArrival();
+        const auto worker = static_cast<std::size_t>(Peer::WorkerIndex(*scheduler));
+        hooks.waiting[worker] = &scope;
         scope.wait();
+        hooks.waiting[worker] = nullptr;
         observed = result;
         hooks.beforeWake.release();
       }
@@ -755,12 +766,13 @@ TEST(WorkerInterleavingTest, ZeroCountRecheckPublishesResultBeforeFinisherWakesC
     });
 
     completed = joined.wait();
+    hooks.stolen.release();
     hooks.beforeWake.release();
   }
   scheduler.reset();
   EXPECT_TRUE(completed);
   EXPECT_TRUE(sawSteal);
-  EXPECT_TRUE(sawSleep);
+  EXPECT_FALSE(hooks.stolen.heldPastHangGuard());
   EXPECT_TRUE(hooks.sawDecrement);
   EXPECT_FALSE(hooks.beforeWake.heldPastHangGuard());
   EXPECT_THAT(observed, Eq(41));

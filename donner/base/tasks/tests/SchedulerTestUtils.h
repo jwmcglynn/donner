@@ -86,6 +86,11 @@ public:
     return scheduler.externalPool_.liveCount(lock);
   }
 
+  /// Live records allocated by the calling worker. Only its owner may read this counter.
+  static std::size_t WorkerLiveRecords(const TaskScheduler& scheduler) {
+    return scheduler.currentWorker()->pool.liveCount();
+  }
+
   /// The scheduler's parker pool.
   static std::shared_ptr<ParkerPool> Pool(const TaskScheduler& scheduler) {
     return scheduler.parkerPool_;
