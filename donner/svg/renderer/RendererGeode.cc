@@ -2229,7 +2229,8 @@ constexpr bool kEnableSceneBatching = true;
 struct RendererGeode::Impl : public geode::GeometryDebugSink,
                              public geode::GeometryAdmission,
                              public geode::FilterTextureAllocator,
-                             public geode::FrameCommandBufferSink {
+                             public geode::FrameCommandBufferSink,
+                             public geode::FilterImageTextureSource {
   bool verbose = false;
   bool antialias = true;
   std::function<void()> offscreenCreationHookForTesting;
@@ -2464,6 +2465,33 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       found = frameSnapshotImports.emplace(key, std::move(registered).result()).first;
     }
     return &found->second;
+  }
+
+  /// Samples a prepared `feImage` texture in this frame: keeps its backing alive until the frame
+  /// submits and registers it here when another context produced it. Filter preparation renders
+  /// on this renderer's own device, so the registration is reached only by a graph that carries
+  /// another context's texture (`FeImageTextureFromAnotherContextIsRegisteredBeforeSampling`).
+  /// @param primitive Primitive whose `imageTexture` is set.
+  const gpu::Texture* imageTexture(const components::filter_primitive::Image& primitive) override {
+    if (!device || primitive.imageTexture == nullptr ||
+        primitive.imageTexture->backend() != RendererTextureSnapshotBackend::Geode) {
+      return nullptr;
+    }
+    const auto& snapshot =
+        static_cast<const RendererGeodeTextureSnapshot&>(*primitive.imageTexture);
+    if (!snapshot.canSampleWith(*device)) {
+      return nullptr;
+    }
+    if (snapshot.backing_) {
+      frameSnapshotBackings.insert(snapshot.backing_);
+    }
+    const gpu::Texture* source = snapshot.runtimeTexture();
+    if (source->deviceId() == device->runtimeDevice().deviceId()) {
+      return source;
+    }
+    return snapshot.backing_
+               ? registerFrameSnapshot(snapshot.backing_.get(), snapshot.backing_->exported)
+               : nullptr;
   }
 
   /// The view of clip-mask texture \p texture, kept across frames (see \ref clipMaskViews). Views
@@ -4542,7 +4570,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     auto result =
         filterEngine->execute(pass.graphs.merge, frame.layerTexture, frame.layerDesc,
                               frame.filterRegion, bufferFromFilter, *this, nullptr, pass.mergePlan,
-                              this, &pass.projectedShadow, &pass.projectionDesc);
+                              this, &pass.projectedShadow, &pass.projectionDesc, nullptr, this);
     if (!restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after shadow merge");
       retainTextureWithoutCompletionProof(std::move(result.texture), result.desc);
@@ -4689,13 +4717,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                                          const SharpShadowPass* sharp) {
     if (!sharp) {
       return filterEngine->execute(frame.filterGraph, localTexture, localDesc, localFilterRegion,
-                                   localFromFilter, *this, nullptr, frame.localFilterPlan, this);
+                                   localFromFilter, *this, nullptr, frame.localFilterPlan, this,
+                                   nullptr, nullptr, nullptr, this);
     }
     // The source resample already uses the authored clip. An explicit drop shadow can work over
     // the padding so its blur crosses the authored region until the offset has moved it.
     return filterEngine->execute(sharp->graphs.shadow, localTexture, localDesc, sharp->shadowRegion,
                                  localFromFilter, *this, nullptr, sharp->localPlan, this, nullptr,
-                                 nullptr, &localFilterRegion);
+                                 nullptr, &localFilterRegion, this);
   }
 
   std::optional<geode::FilterExecutionResult> executeLocalRasterFilter(
@@ -4858,7 +4887,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       filtered = filterEngine->execute(
           frame.filterGraph, frame.layerTexture, frame.layerDesc, frame.filterRegion,
           bufferDeviceFromFilter, *this, nullptr, frame.fullFilterPlan, this,
-          frame.backdropTexture.isValid() ? &frame.backdropTexture : nullptr, &frame.backdropDesc);
+          frame.backdropTexture.isValid() ? &frame.backdropTexture : nullptr, &frame.backdropDesc,
+          nullptr, this);
     }
     if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");

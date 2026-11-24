@@ -1505,6 +1505,149 @@ TEST_F(RendererDriverTest, PreparedFragmentImageKeepsFamilyReservationWithShared
   EXPECT_EQ(retainedWithPixels, retainedWithoutPixels + pixelBytes);
 }
 
+/// A texture snapshot standing in for a GPU backend's, with a chosen extent and alpha type.
+class FakeTextureSnapshot final : public RendererTextureSnapshot {
+public:
+  /// @param dimensions Reported extent. @param alphaType Reported alpha interpretation.
+  FakeTextureSnapshot(Vector2i dimensions, AlphaType alphaType)
+      : dimensions_(dimensions), alphaType_(alphaType) {}
+
+  [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
+  [[nodiscard]] AlphaType alphaType() const override { return alphaType_; }
+
+private:
+  Vector2i dimensions_;
+  AlphaType alphaType_;
+};
+
+/// A 1x1 element filtered by an feImage of a 1x1 fragment, so the fragment's raster window is the
+/// single canvas pixel.
+constexpr std::string_view kOnePixelFragmentImageSvg = R"svg(
+    <defs>
+      <filter id="filter" x="0" y="0" width="1" height="1"><feImage href="#source"/></filter>
+      <rect id="source" width="1" height="1" fill="red"/>
+    </defs>
+    <rect width="1" height="1" filter="url(#filter)"/>
+  )svg";
+
+/// The feImage primitive of the single prepared graph \p graph, or null.
+const components::filter_primitive::Image* SingleImagePrimitive(
+    const components::FilterGraph& graph) {
+  return graph.nodes.size() == 1
+             ? std::get_if<components::filter_primitive::Image>(&graph.nodes[0].primitive)
+             : nullptr;
+}
+
+/// A host that composites texture snapshots keeps the fragment raster as the offscreen's texture,
+/// reads nothing back, and charges the texture's bytes to the frame's preparation budget and to the
+/// document's computed-filter budget for as long as the texture is held.
+TEST_F(RendererDriverTest, TextureCompositingHostKeepsTheFragmentRasterOnTheGpu) {
+  SVGDocument document = makeDocument(kOnePixelFragmentImageSvg, Vector2i(1, 1));
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>();
+  document.registry().ctx().emplace<components::ComputedFilterResourceBudget>(family);
+
+  ON_CALL(renderer, requiresTextureSnapshotPresentation()).WillByDefault(::testing::Return(true));
+  ASSERT_THAT(renderer.supportsTextureSnapshotCompositing(), testing::IsTrue())
+      << "Premise: the host composites texture snapshots";
+  const auto texture =
+      std::make_shared<const FakeTextureSnapshot>(Vector2i(1, 1), AlphaType::Premultiplied);
+  ON_CALL(renderer, createOffscreenInstance()).WillByDefault([&]() {
+    auto offscreen = std::make_unique<::testing::NiceMock<MockRendererInterface>>();
+    EXPECT_CALL(*offscreen, takeSnapshot()).Times(0);
+    EXPECT_CALL(*offscreen, takeSnapshotInterruptibly(_)).Times(0);
+    EXPECT_CALL(*offscreen, takeTextureSnapshot()).WillOnce(::testing::Return(texture));
+    return offscreen;
+  });
+
+  std::shared_ptr<const RendererTextureSnapshot> retainedTexture;
+  EXPECT_CALL(renderer, pushFilterLayer(_, _))
+      .WillOnce([&](const components::FilterGraph& graph, const std::optional<Box2d>&) {
+        const components::filter_primitive::Image* image = SingleImagePrimitive(graph);
+        ASSERT_THAT(image, testing::NotNull());
+        EXPECT_THAT(image->imageData, testing::IsNull());
+        EXPECT_THAT(image->imageTexture.get(), Eq(texture.get()));
+        EXPECT_THAT(
+            *image,
+            AllOf(Field("imageWidth", &components::filter_primitive::Image::imageWidth, 1),
+                  Field("imageHeight", &components::filter_primitive::Image::imageHeight, 1)));
+        retainedTexture = image->imageTexture;
+      });
+
+  RendererDriver::SecurityStats stats;
+  RendererDriver boundedDriver(renderer, /*verbose=*/false, &stats);
+  boundedDriver.draw(document);
+
+  ASSERT_THAT(retainedTexture, testing::NotNull());
+  constexpr std::size_t kTextureBytes = 4;
+  EXPECT_THAT(stats.preparedFilterImageBytes, Eq(kTextureBytes));
+  EXPECT_THAT(stats.preparedFilterMaterializationBytes, Eq(kTextureBytes * 2u));
+  const std::size_t retainedWithTexture =
+      family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::ComputedFilter);
+  retainedTexture.reset();
+  EXPECT_THAT(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::ComputedFilter),
+              Eq(retainedWithTexture - kTextureBytes))
+      << "the texture's charge must last exactly as long as the texture is held";
+}
+
+/// Retained computed-filter bytes of \p svg once drawn on a host that keeps no prepared image: the
+/// structure its filters charge, with no raster.
+std::size_t FilterStructureBytes(std::string_view svg) {
+  SVGDocument document = instantiateSubtree(svg, parser::SVGParser::Options(), Vector2i(1, 1));
+  ::testing::NiceMock<MockRendererInterface> host;
+  RendererDriver(host).draw(document);
+  return document.registry().ctx().get<components::ComputedFilterResourceBudget>().retainedBytes();
+}
+
+/// A capture a texture-compositing host cannot use leaves the image empty, so it paints
+/// transparent, and is never read back to the CPU instead.
+TEST_F(RendererDriverTest, TextureCompositingHostLeavesAnUnusableCaptureEmpty) {
+  constexpr std::size_t kUnlimited = components::ComputedFilterResourceBudget::kMaximumBytes;
+  // Admits the filter's structure and three bytes more, one short of the 1x1 raster.
+  const std::size_t oneByteShort = FilterStructureBytes(kOnePixelFragmentImageSvg) + 3;
+  struct Case {
+    std::string_view name;
+    std::shared_ptr<const RendererTextureSnapshot> texture;
+    std::size_t budgetBytes;
+  };
+  const std::array<Case, 4> cases = {{
+      {"failed_capture", nullptr, kUnlimited},
+      {"straight_alpha",
+       std::make_shared<const FakeTextureSnapshot>(Vector2i(1, 1), AlphaType::Unpremultiplied),
+       kUnlimited},
+      {"larger_than_reserved",
+       std::make_shared<const FakeTextureSnapshot>(Vector2i(2, 2), AlphaType::Premultiplied),
+       kUnlimited},
+      {"over_the_document_budget",
+       std::make_shared<const FakeTextureSnapshot>(Vector2i(1, 1), AlphaType::Premultiplied),
+       oneByteShort},
+  }};
+  for (const Case& test : cases) {
+    SCOPED_TRACE(test.name);
+    SVGDocument document = makeDocument(kOnePixelFragmentImageSvg, Vector2i(1, 1));
+    document.registry().ctx().emplace<components::ComputedFilterResourceBudget>(
+        nullptr,
+        components::ComputedFilterResourceBudget::Limits{.maximumBytes = test.budgetBytes});
+    ::testing::NiceMock<MockRendererInterface> host;
+    ON_CALL(host, requiresTextureSnapshotPresentation()).WillByDefault(::testing::Return(true));
+    ON_CALL(host, createOffscreenInstance()).WillByDefault([&]() {
+      auto offscreen = std::make_unique<::testing::NiceMock<MockRendererInterface>>();
+      EXPECT_CALL(*offscreen, takeSnapshot()).Times(0);
+      EXPECT_CALL(*offscreen, takeSnapshotInterruptibly(_)).Times(0);
+      EXPECT_CALL(*offscreen, takeTextureSnapshot()).WillOnce(::testing::Return(test.texture));
+      return offscreen;
+    });
+    EXPECT_CALL(host, pushFilterLayer(_, _))
+        .WillOnce([](const components::FilterGraph& graph, const std::optional<Box2d>&) {
+          const components::filter_primitive::Image* image = SingleImagePrimitive(graph);
+          ASSERT_THAT(image, testing::NotNull());
+          EXPECT_THAT(image->imageTexture, testing::IsNull());
+          EXPECT_THAT(image->imageData, testing::IsNull());
+        });
+    RendererDriver hostDriver(host);
+    hostDriver.draw(document);
+  }
+}
+
 TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGraph) {
   SVGDocument document = makeDocument(R"svg(
     <rect x="10" y="20" width="40" height="10" fill="red" />

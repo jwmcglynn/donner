@@ -125,8 +125,8 @@ public:
 
     const SharedImageKey key{sourceEntity, sourceRevision, nullptr, sourcePixels.size()};
     if (const auto existing = sharedImages_.find(key); existing != sharedImages_.end()) {
-      if (auto pixels = existing->second.pixels.lock()) {
-        return pixels;
+      if (std::shared_ptr<const void> pixels = existing->second.pixels.lock()) {
+        return std::static_pointer_cast<const std::vector<std::uint8_t>>(std::move(pixels));
       }
       sharedImageBytes_ -= existing->second.bytes;
       sharedImages_.erase(existing);
@@ -168,6 +168,28 @@ public:
     const SharedImageKey key{entt::null, 0, pixels->data(), pixels->size()};
     sharedImages_.insert_or_assign(key, SharedImageEntry{pixels, bytes});
     return pixels;
+  }
+
+  /**
+   * Admit a transient renderer-produced image that lives outside this budget, such as a GPU
+   * texture, under the same limits as \ref adoptImage.
+   *
+   * @param bytes Bytes the image occupies, charged until the returned token is released.
+   * @return Token that holds the charge, or null when admission fails.
+   */
+  std::shared_ptr<const void> admitExternalImage(std::size_t bytes) {
+    pruneExpiredSharedImages();
+    if (bytes == 0 || rejected_ || !canReserveLocal(bytes) ||
+        (family_ && !family_->reserve(DocumentResourceFamilyBudget::Kind::ComputedFilter, bytes))) {
+      rejected_ = true;
+      return nullptr;
+    }
+    std::shared_ptr<const void> token = std::make_shared<FamilyReservation>(family_, bytes);
+    const SharedImageKey key{entt::null, 0, static_cast<const std::uint8_t*>(token.get()), bytes};
+    sharedImages_.insert_or_assign(key, SharedImageEntry{token, bytes});
+    sharedImageBytes_ += bytes;
+    ++sharedImageMaterializations_;
+    return token;
   }
 
   /// Current structural bytes plus live shared image bytes retained by this budget.
@@ -218,7 +240,8 @@ private:
   };
 
   struct SharedImageEntry {
-    std::weak_ptr<const std::vector<std::uint8_t>> pixels;
+    /// Shared pixels, or the token of an external image; the charge ends when it expires.
+    std::weak_ptr<const void> pixels;
     std::size_t bytes = 0;
   };
 

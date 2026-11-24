@@ -88,8 +88,12 @@ FilterNode {
    Elements in `<defs>` get shadow rendering instances from
    `RenderingContext::createFeImageShadowTree`. A recursion guard (`feImageFragmentGuard_`)
    prevents infinite loops.
-2. The fragment is rendered at its natural document position (no surfaceFromCanvasTransform_ offset).
-3. The filter pipeline resolves the primitive subregion in user space and positions the content
+2. A renderer that composites texture snapshots (Geode) keeps the offscreen target as
+   `filter_primitive::Image::imageTexture`, already premultiplied, and the filter engine samples
+   it on the same device; any other renderer, including a snapshot recorder, reads it back into
+   `imageData` as straight-alpha pixels. Either form is charged as RGBA8 bytes.
+3. The fragment is rendered at its natural document position (no surfaceFromCanvasTransform_ offset).
+4. The filter pipeline resolves the primitive subregion in user space and positions the content
    at its unclipped origin. Omitted coordinates default individually to the filter region origin;
    primitive/filter clipping does not shift the content. Normal referenced geometry keeps its
    natural dimensions.

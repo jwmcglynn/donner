@@ -1566,9 +1566,11 @@ struct FilterGraphExecution {
                        svg::components::FilterExecutionBudget* executionBudget,
                        std::optional<FilterTilePlan> admittedPlan,
                        FrameCommandBufferSink* frameSink,
-                       std::optional<FilterTexture> backdropSource, const Box2d* outputClipRegion)
+                       std::optional<FilterTexture> backdropSource, const Box2d* outputClipRegion,
+                       FilterImageTextureSource* imageTextures)
       : engine(engine),
         graph(graph),
+        imageTextures(imageTextures),
         sourceGraphic(sourceGraphic),
         backdropSource(backdropSource),
         executionBudget(executionBudget),
@@ -1620,6 +1622,8 @@ struct FilterGraphExecution {
 
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
+  /// Resolves `feImage` rasters held as GPU textures, or null when the caller holds none.
+  FilterImageTextureSource* imageTextures;
   FilterTexture sourceGraphic;
   /// Unclipped BackgroundImage input for the current tile, when the caller supplied one.
   std::optional<FilterTexture> backdropSource;
@@ -2071,7 +2075,7 @@ FilterExecutionResult GeodeFilterEngine::execute(
     svg::components::FilterExecutionBudget* executionBudget,
     std::optional<FilterTilePlan> admittedPlan, FrameCommandBufferSink* frameSink,
     const gpu::Texture* backdrop, const gpu::TextureDescriptor* backdropDesc,
-    const Box2d* outputClipRegion) {
+    const Box2d* outputClipRegion, FilterImageTextureSource* imageTextures) {
   // Loss is terminal for this runtime. Refuse before the graph can allocate textures or record
   // another chunk, which also bounds backing retained by an earlier uncertain execution.
   if (device_.isDeviceLost()) {
@@ -2089,7 +2093,7 @@ FilterExecutionResult GeodeFilterEngine::execute(
   }
   FilterGraphExecution execution(*this, graph, source, filterRegion, deviceFromFilter,
                                  textureAllocator, executionBudget, admittedPlan, frameSink,
-                                 backdropSource, outputClipRegion);
+                                 backdropSource, outputClipRegion, imageTextures);
   const FilterTexture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
@@ -2602,7 +2606,8 @@ FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
   if (regionSample.animatedRegion) {
     outputLinear = false;
     return engine.applyImage(arena, primitive, input.width(), input.height(), execution.graph, node,
-                             coordinates.deviceFromFilter, *regionSample.animatedRegion);
+                             coordinates.deviceFromFilter, *regionSample.animatedRegion,
+                             execution.imageTextures);
   }
   const bool isOBB = coordinates.isObjectBoundingBox;
   const double bboxW = coordinates.boundingBoxWidth;
@@ -2623,7 +2628,8 @@ FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
                   : coordinates.filterRegion.height();
   outputLinear = false;
   return engine.applyImage(arena, primitive, input.width(), input.height(), execution.graph, node,
-                           coordinates.deviceFromFilter, Box2d::FromXYWH(x, y, width, height));
+                           coordinates.deviceFromFilter, Box2d::FromXYWH(x, y, width, height),
+                           execution.imageTextures);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Tile&) {
@@ -3800,31 +3806,40 @@ std::optional<ImageParams> CreateFilterImageParams(
 
 }  // namespace
 
-FilterTexture GeodeFilterEngine::applyImage(
-    FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
-    uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
-    const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
-    const Box2d& placementRegionUser) {
-  const std::optional<uint32_t> uploadRowPitch =
-      FilterImageUploadRowPitch(primitive, device_.maxTextureDimension2D());
-  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
-      "FilterImageOutput",
-      {width, height},
-      gpu::TextureFormat::RGBA32Float,
-      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (!output) {
+GeodeFilterEngine::ImageSource GeodeFilterEngine::residentImageSource(
+    const svg::components::filter_primitive::Image& primitive,
+    FilterImageTextureSource* imageTextures, std::optional<gpu::TextureDescriptor>& desc) {
+  const gpu::Texture* texture =
+      imageTextures != nullptr ? imageTextures->imageTexture(primitive) : nullptr;
+  if (texture == nullptr) {
     return {};
   }
-
-  // Empty, malformed, degenerate, or device-oversized sources remain transparent.
-  if (!uploadRowPitch) {
-    return renderTransparentImage(arena, output, {width, height});
+  gpu::Result<gpu::TextureDescriptor> described =
+      device_.runtimeDevice().textureDescriptor(*texture);
+  if (described.hasError()) {
+    return {};
   }
+  // The image pass addresses the whole texture, so its extent must be the raster's.
+  const gpu::TextureDescriptor& found = described.result();
+  const bool eightBitRgba = found.format == gpu::TextureFormat::RGBA8Unorm ||
+                            found.format == gpu::TextureFormat::BGRA8Unorm;
+  const bool rasterExtent = found.size.width == static_cast<uint32_t>(primitive.imageWidth) &&
+                            found.size.height == static_cast<uint32_t>(primitive.imageHeight);
+  if (!eightBitRgba || !rasterExtent ||
+      !gpu::HasAllFlags(found.usage, gpu::TextureUsage::Sampled)) {
+    return {};
+  }
+  desc = std::move(described).result();
+  return {FilterTexture{texture, &*desc}};
+}
 
-  const std::optional<ImageParams> params =
-      CreateFilterImageParams(primitive, graph, deviceFromFilter, placementRegionUser);
-  if (!params) {
-    return renderTransparentImage(arena, output, {width, height});
+GeodeFilterEngine::ImageSource GeodeFilterEngine::uploadImageSource(
+    FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive) {
+  // Empty, malformed, degenerate, or device-oversized sources remain transparent.
+  const std::optional<uint32_t> uploadRowPitch =
+      FilterImageUploadRowPitch(primitive, device_.maxTextureDimension2D());
+  if (!uploadRowPitch) {
+    return {};
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
@@ -3847,17 +3862,49 @@ FilterTexture GeodeFilterEngine::applyImage(
   const FilterTexture image = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
-  if (!image) {
-    return {};
-  }
-  if (device_.runtimeDevice()
+  if (!image ||
+      device_.runtimeDevice()
           .writeTexture(*image.texture, premultiplied, {0, *uploadRowPitch, imgH}, {imgW, imgH})
           .hasError()) {
+    return {FilterTexture{}, /*failed=*/true};
+  }
+  return {image};
+}
+
+FilterTexture GeodeFilterEngine::applyImage(
+    FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
+    uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
+    const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
+    const Box2d& placementRegionUser, FilterImageTextureSource* imageTextures) {
+  const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterImageOutput",
+      {width, height},
+      gpu::TextureFormat::RGBA32Float,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (!output) {
     return {};
   }
 
+  const std::optional<ImageParams> params =
+      CreateFilterImageParams(primitive, graph, deviceFromFilter, placementRegionUser);
+  if (!params) {
+    return renderTransparentImage(arena, output, {width, height});
+  }
+  // A raster rendered on the GPU is sampled where it was rendered: its texels are already
+  // premultiplied, which is what CPU pixels become on upload.
+  std::optional<gpu::TextureDescriptor> residentDesc;
+  const ImageSource source = primitive.imageTexture != nullptr
+                                 ? residentImageSource(primitive, imageTextures, residentDesc)
+                                 : uploadImageSource(arena, primitive);
+  if (source.failed) {
+    return {};
+  }
+  if (!source.texture) {
+    return renderTransparentImage(arena, output, {width, height});
+  }
+
   if (!dispatchRuntimeInputOutputParameters(
-          arena, imageProgram_, image, output, UniformBytes(*params),
+          arena, imageProgram_, source.texture, output, UniformBytes(*params),
           primitive.isFragmentReference ? "FilterImageFragRefPass" : "FilterImagePass", nullptr,
           gpu::Extent2d{width, height})) {
     return {};
