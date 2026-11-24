@@ -179,6 +179,7 @@ py_test(
     size = "small",
     srcs = ["sanitizer_variants_tests.py"],
     data = [
+        ":rules.bzl",
         ":sanitizer_variants.bzl",
         "//:.bazelrc",
     ],

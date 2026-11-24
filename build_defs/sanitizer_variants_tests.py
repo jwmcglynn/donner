@@ -1,10 +1,11 @@
-"""Checks that each sanitizer variant builds with the flags of its .bazelrc config.
+"""Checks sanitizer variant flags and package declarations.
 
 build_defs/sanitizer_variants.bzl lists, for each sanitizer variant, the compile options, link
 options and features its transition adds. They must be the ones `--config=asan` and `--config=tsan`
 apply, so a variant run in the native CI invocation and a local `--config` run build the same code.
 """
 
+import ast
 import os
 import re
 import shlex
@@ -77,6 +78,32 @@ def _config_env(flags):
     return env
 
 
+def _declared_tests(variants, source_rules):
+    """Run the package finalizer's declaration function against fixture rule metadata."""
+    path = _runfile("build_defs/rules.bzl")
+    tree = ast.parse(path.read_text(), filename=str(path))
+    declaration = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "_declare_sanitizer_variants")
+    declared = []
+
+    def fail(message):
+        raise ValueError(message)
+
+    scope = {
+        "SANITIZER_VARIANTS": variants,
+        "LINUX_ONLY_TAG": "ci-linux-only",
+        "native": types.SimpleNamespace(existing_rules=lambda: source_rules,
+                                        package_name=lambda: "fixture"),
+        "select": lambda choices: choices["//build_defs:no_sanitizer_config"],
+        "fail": fail,
+        "_donner_sanitizer_test": lambda **attrs: declared.append(attrs),
+    }
+    module = ast.Module(body=[declaration], type_ignores=[])
+    exec(compile(module, str(path), "exec"), scope)  # noqa: S102
+    scope["_declare_sanitizer_variants"](variants)
+    return declared
+
+
 class SanitizerVariantsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -118,6 +145,26 @@ class SanitizerVariantsTest(unittest.TestCase):
                 self.assertEqual(set(config) & difference["dropped"], difference["dropped"],
                                  "a listed drop is no longer in the config")
                 self.assertEqual(kept | difference["added"], variant.test_env)
+
+
+    def test_only_eligible_tests_get_variants(self):
+        rules = {
+            "plain": {"name": "plain", "kind": "cc_test", "tags": ["retained-tag"]},
+            "corpus": {"name": "corpus", "kind": "cc_test", "tags": ["fuzz_target"]},
+            "manual": {"name": "manual", "kind": "cc_test", "tags": ["manual", "perf"]},
+            "library": {"name": "library", "kind": "cc_library"},
+        }
+        tests = _declared_tests(self.variants, rules)
+        self.assertEqual([test["name"] for test in tests], ["ci_asan_plain", "ci_tsan_plain"])
+        for test in tests:
+            self.assertIn("retained-tag", test["tags"])
+
+    def test_routing_tags_are_rejected_with_the_source_label(self):
+        for tag in ("ci-linux-hardware-gpu-source", "perf", "local-gpu-isolated", "fuzz_soak"):
+            with self.subTest(tag=tag):
+                rules = {"example": {"name": "example", "kind": "cc_test", "tags": [tag]}}
+                with self.assertRaisesRegex(ValueError, r"//fixture:example.*" + re.escape(tag)):
+                    _declared_tests(self.variants, rules)
 
 
 if __name__ == "__main__":
