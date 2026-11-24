@@ -1,10 +1,27 @@
 #include "donner/svg/parser/TransformParser.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "donner/base/parser/details/ParserBase.h"
 
 namespace donner::svg::parser {
 
 namespace {
+
+/**
+ * Returns true if every component of \p transform is finite.
+ *
+ * Each number is range-checked as it is parsed, but composing a list of transform functions can
+ * still overflow, for example `scale(1e200) scale(1e200)`, and a later zero scale turns that
+ * infinity into NaN.
+ *
+ * @param transform Transform to check.
+ */
+bool IsFiniteTransform(const Transform2d& transform) {
+  return std::all_of(std::begin(transform.data), std::end(transform.data),
+                     [](double value) { return std::isfinite(value); });
+}
 
 class TransformParserImpl : public donner::parser::ParserBase {
 public:
@@ -134,6 +151,13 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = std::string("Unexpected function '").append(func) + "'";
+        err.range = rangeFrom(functionStart.offset.value());
+        return err;
+      }
+
+      if (!IsFiniteTransform(transform)) {
+        ParseDiagnostic err;
+        err.reason = "Transform out of range";
         err.range = rangeFrom(functionStart.offset.value());
         return err;
       }

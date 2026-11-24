@@ -15,8 +15,9 @@ static bool isWhitespace(char ch) {
 ParseResult<Number2dParser::Result> Number2dParser::Parse(std::string_view str) {
   using donner::parser::NumberParser;
 
-  NumberParser::Options options;
-  options.forbidOutOfRange = false;
+  // Out-of-range numbers are rejected rather than returned as infinity, so callers never receive
+  // a non-finite value.
+  const NumberParser::Options options;
 
   const auto maybeResultX = NumberParser::Parse(str, options);
   if (maybeResultX.hasError()) {

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <initializer_list>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -377,6 +379,30 @@ private:
     return point;
   }
 
+  /**
+   * Returns an error if any of \p points is not finite.
+   *
+   * Each number is range-checked as it is parsed, but relative coordinates and reflected control
+   * points are computed from the current point and can still overflow to infinity. Rejecting them
+   * here keeps non-finite values out of the path and leaves the path parsed so far intact.
+   *
+   * @param points Absolute points computed for the current command.
+   * @param commandStart Offset of the start of the current command, for the error range.
+   */
+  std::optional<ParseDiagnostic> rejectNonFinite(std::initializer_list<Vector2d> points,
+                                                 size_t commandStart) {
+    for (const Vector2d& point : points) {
+      if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        ParseDiagnostic err;
+        err.reason = "Path coordinate out of range";
+        err.range = rangeFrom(commandStart);
+        return err;
+      }
+    }
+
+    return std::nullopt;
+  }
+
   std::optional<ParseDiagnostic> processCommand(TokenCommand command) {
     if (commandCount_ >= PathParser::kMaximumCommands) {
       ParseDiagnostic err;
@@ -386,6 +412,7 @@ private:
     }
     ++commandCount_;
     beginCapture(command);
+    const size_t commandStart = currentOffset().offset.value();
 
     if (command.token == Token::MoveTo) {
       // 9.3.3 "moveto": https://www.w3.org/TR/SVG/paths.html#PathDataMovetoCommands
@@ -395,6 +422,9 @@ private:
       }
 
       Vector2d point = makeAbsolute(command, coords);
+      if (auto error = rejectNonFinite({point}, commandStart)) {
+        return error;
+      }
       builder_.moveTo(point);
       initialPoint_ = point;
       currentPoint_ = point;
@@ -412,6 +442,9 @@ private:
       }
 
       const Vector2d point = makeAbsolute(command, coords);
+      if (auto error = rejectNonFinite({point}, commandStart)) {
+        return error;
+      }
       builder_.lineTo(point);
       currentPoint_ = point;
 
@@ -424,6 +457,9 @@ private:
 
       const Vector2d point(maybeX.result() + (command.relative ? currentPoint_.x : 0.0),
                            currentPoint_.y);
+      if (auto error = rejectNonFinite({point}, commandStart)) {
+        return error;
+      }
       builder_.lineTo(point);
       currentPoint_ = point;
 
@@ -436,6 +472,9 @@ private:
 
       const Vector2d point(currentPoint_.x,
                            maybeY.result() + (command.relative ? currentPoint_.y : 0.0));
+      if (auto error = rejectNonFinite({point}, commandStart)) {
+        return error;
+      }
       builder_.lineTo(point);
       currentPoint_ = point;
 
@@ -452,6 +491,9 @@ private:
       const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<2, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<4, 2>());
 
+      if (auto error = rejectNonFinite({point1, point2, end}, commandStart)) {
+        return error;
+      }
       builder_.curveTo(point1, point2, end);
 
       prevControlPoint_ = point2;
@@ -470,6 +512,9 @@ private:
       const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
+      if (auto error = rejectNonFinite({point1, point2, end}, commandStart)) {
+        return error;
+      }
       builder_.curveTo(point1, point2, end);
 
       prevControlPoint_ = point2;
@@ -486,6 +531,9 @@ private:
       const Vector2d point1 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
+      if (auto error = rejectNonFinite({point1, end}, commandStart)) {
+        return error;
+      }
       quadCurveTo(point1, end);
 
       prevControlPoint_ = point1;
@@ -501,6 +549,9 @@ private:
       const Vector2 point1 = lastCommandWasQuadCurveTo() ? reflectedControlPoint() : currentPoint_;
       const Vector2d end = makeAbsolute(command, coords);
 
+      if (auto error = rejectNonFinite({point1, end}, commandStart)) {
+        return error;
+      }
       quadCurveTo(point1, end);
 
       prevControlPoint_ = point1;
@@ -535,6 +586,9 @@ private:
       const double rotationRadians = radiusAndRotation[2] * MathConstants<double>::kDegToRad;
       const Vector2d end = makeAbsolute(command, endCoords);
 
+      if (auto error = rejectNonFinite({end}, commandStart)) {
+        return error;
+      }
       builder_.arcTo(radius, rotationRadians, largeArcFlag, sweepFlag, end);
       currentPoint_ = end;
 
