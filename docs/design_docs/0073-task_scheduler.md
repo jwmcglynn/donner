@@ -111,8 +111,8 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] The Chase-Lev deque on a fixed-capacity ring with the memory orders of Le et al., and
         its linearization stress test (1.25 days).
   - [ ] Per-worker deques and the global queue: the mutex-protected FIFO, its `globalQueued`
-        count and the alternating fairness take (0.75 day).
-  - [ ] Steal rounds: the alternating first source, adopted deques, and every other worker
+        count and the periodic outside take on the rotating cursor (0.75 day).
+  - [ ] Steal rounds: every outside source from the rotating cursor, then every other worker
         once from a seeded offset (0.5 day).
   - [ ] `TaskScope`, `AsyncTaskScope` and `Join`: scope records, watermarks, rules 1 to 3 and
         help within the margin (1.5 days).
@@ -738,24 +738,37 @@ queue, and *started* once a thread begins running it.
   off the fast path: it receives spawns from non-workers, coroutine resumptions enqueued by
   non-workers and adopted threads, resumptions that find a full deque, and drains. There are no
   per-scope queues: a queue that belongs to a scope would expose the scope's memory to idle workers
-  looking for work while the scope's creator completes and destroys it. Fairness: entries leave in
-  push order, and a worker with work on its own deque still makes one outside take after every 61
-  tasks it runs from its deque. A per-worker counter alternates the source of that take: on one
-  check it takes one global-queue entry, on the next one steal attempt on each adopted deque, and
-  only if the chosen source is empty does it try the other. So neither source's traffic can keep
-  the other from being served. The check is made only where a worker may already take outside
-  work, in its idle loop and in rule 3 within its margin; it is not made while a worker runs
-  rule-1 entries of a scope it waits on, nor past its margin, so it never adds stack depth past
-  the margin or runs another client's task inside a wait where helping would not. The claim that
-  holds: a global-queue entry waits only behind the global entries ahead of it, and an
-  adopted-deque entry only behind the entries older than it on that deque (steals take the oldest
-  first); a worker that keeps making its checks serves each of the two sources at least once
-  every 122 tasks it runs from its own deque, whatever traffic the other source carries, and an
-  idle worker's steal rounds serve each source first on every second round (below). So both kinds
-  of entry wait behind a bounded number of tasks while some worker is in its idle loop or helping
-  within its margin. That is a bound in tasks, not in time, and it does not cover entries deep in
-  a worker's own deque: the owner pops newest first, so its oldest entries leave only when a
-  thief takes them, as in every work-stealing scheduler.
+  looking for work while the scope's creator completes and destroys it.
+
+  **Fairness.** The *outside sources* are the global queue and each adopted slot's deque, each
+  counted separately: `N = 1 + adoptableThreads` sources in a fixed cyclic order. Each worker
+  keeps one cursor into that order, used both by its periodic outside take and at the start of
+  each of its steal rounds. Either one scans the sources cyclically from the cursor, takes from
+  the first non-empty one (an adopted-deque steal that loses its compare-and-swap retries on that
+  source before moving on), and then sets the cursor to the source after the one it served; a
+  scan that finds every source empty leaves the cursor where it was. A worker with work on its own
+  deque makes one periodic outside take after every 61 tasks it runs from its deque. The check is
+  made only where a worker may already take outside work, in its idle loop and in rule 3 within
+  its margin; it is not made while a worker runs rule-1 entries of a scope it waits on, nor past
+  its margin, so it never adds stack depth past the margin or runs another client's task inside a
+  wait where helping would not.
+
+  The bound that follows: while a source stays non-empty, every scan from that worker stops at it
+  or at a source before it in cyclic order from the cursor, and every scan that serves another
+  source moves the cursor at least one step closer to it without passing it, so the source is
+  served within `N` consecutive scans by that worker. A worker that keeps making its periodic
+  checks therefore serves every outside source at least once every `61 * N` tasks it runs from
+  its own deque (122 with the default single adoptable slot), whatever traffic the other sources
+  carry, and its steal rounds serve every source within `N` consecutive rounds that find work. An
+  entry waits only behind the entries that leave its source before it: the global entries ahead
+  of it (first in, first out), or the entries older than it on its adopted deque (steals take the
+  oldest first). So an entry of any outside source is taken within a bounded number of tasks while
+  some worker keeps making its checks or its steal rounds. That is a bound in tasks, not in time.
+  It covers outside sources only. Entries on a worker's own deque have no bound under sustained
+  traffic: the owner pops newest first, thieves try every outside source before any worker
+  deque, and a thief picks among worker deques from a random offset, so an old entry deep in a
+  busy worker's deque leaves only when the owner reaches it or a thief happens to take it, as in
+  every work-stealing scheduler.
 - **Task storage and bounds.** A spawned closure is stored in a fixed-size slot (64 bytes inline,
   larger closures in a heap block owned by the slot) so small tasks never call `malloc`. Records
   come from a pool per *creator*: each worker and adoptable slot has its own pool of at most
@@ -806,10 +819,9 @@ queue, and *started* once a thread begins running it.
   deque, then makes steal rounds (the global queue and adopted deques, then other workers, as
   below), for `idleSpinRounds` rounds before it tries to sleep.
 
-  A steal round first tries the global queue and every adopted slot's deque in slot order, and a
-  per-worker round counter alternates which of the two it tries first, so a global queue that is
-  never empty cannot shadow the adopted deques (or the reverse). It then probes every other
-  worker exactly once, starting at an offset chosen by a per-worker
+  A steal round first scans every outside source from the worker's cursor (see Fairness above),
+  so no outside source, however busy, can shadow another. If none has work, it then probes every
+  other worker exactly once, starting at an offset chosen by a per-worker
   generator seeded from the worker index (a minimal-standard linear congruential or xorshift
   generator, never `std::random_device`, with a multiply-shift range reduction) and going round
   in index order. A round that finds nothing has looked at every queue once, so a worker woken
@@ -962,11 +974,10 @@ queue, and *started* once a thread begins running it.
   the argument above establishes.
 
   For an unbounded stream of work, such as the editor's, the first part holds only as far as the
-  fairness rule of the global queue reaches: a global-queue entry is taken within a bounded number
-  of tasks after the global entries ahead of it, and an adopted-deque entry within a bounded number
-  of tasks after the older entries on its deque, while some worker reaches its idle loop or rule
-  3, however busy the other source is; entries deep in a worker's own deque wait for a thief. No
-  bound in time is claimed.
+  fairness rule reaches: an entry of an outside source (the global queue or any adopted deque) is
+  taken within a bounded number of tasks after the entries ahead of it in that source, while some
+  worker keeps making its periodic checks or steal rounds, however busy the other outside sources
+  are. Entries on a worker's own deque have no such bound. No bound in time is claimed.
 - **Parkers and scope lifetime.** A scope lives in its creator's frame and is destroyed as soon as
   its creator sees it complete, so no thread may touch the scope after the change that lets the
   creator return. Every worker and adoptable slot has a parker for the scheduler's lifetime; each
@@ -1085,12 +1096,14 @@ queue, and *started* once a thread begins running it.
     counter never exceeds its bound. The same with an adopted creator and with a non-worker
     against `maxExternalTasks`.
   - The global queue is first in, first out, and a worker with endless local work in its idle
-    loop still takes a global entry within 122 tasks. With a non-worker producer keeping the
+    loop still takes a global entry within `61 * N` tasks. With a non-worker producer keeping the
     global queue non-empty the whole time and every worker kept busy with endless local work, an
     adopted thread spawns one task and blocks on a condition variable that only that task
     signals: the task runs and the thread wakes, under a hang guard and with no timing assertion.
-    Must be observed red with the alternation removed (global queue always first, in both the
-    periodic check and the steal round).
+    The same with two adopted slots, where the thread on slot 0 keeps its deque non-empty the
+    whole time and the thread on slot 1 spawns one task and blocks the same way. Both must be
+    observed red with the rotating cursor removed (outside sources always scanned from the global
+    queue in fixed order, in both the periodic take and the steal round).
   - One non-worker creating, using and destroying 1,000 schedulers in turn: after each registration
     the number of live `ParkerPool` objects (a test-only counter) is at most 2, and after the last
     scheduler is destroyed and the thread registers with a fresh one it is 1. Must be observed red
