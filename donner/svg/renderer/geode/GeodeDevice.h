@@ -613,13 +613,22 @@ public:
 
   /**
    * Install a `GeodeCounters` struct for this device. Non-owning; the
-   * caller must keep the struct alive for as long as the device might
-   * increment it. Pass `nullptr` to disable instrumentation.
+   * caller must keep the struct alive, including while suspended by a renderer,
+   * until this method replaces it. Pass `nullptr` to clear all counter bindings.
+   * @param counters Direct counter sink, or null.
    *
    * All Geode components that hold a `GeodeDevice&` route their per-frame
    * hot-path allocation and submission sites through this hook.
    */
-  void setCounters(GeodeCounters* counters) { counters_ = counters; }
+  void setCounters(GeodeCounters* counters);
+
+  /// Select this renderer's sink and suspend the previous one, if any.
+  /// @param counters Renderer-owned sink that lives until removed.
+  void activateCounters(GeodeCounters& counters);
+
+  /// Remove a renderer's sink, restoring the previous live sink if this one was active.
+  /// @param counters Sink whose renderer is being torn down.
+  void removeCounters(GeodeCounters& counters);
 
   /// Non-owning pointer to the installed counters, or null.
   GeodeCounters* counters() const { return counters_; }

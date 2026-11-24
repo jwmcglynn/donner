@@ -54,10 +54,15 @@ counter corpus checks:
 
 An unchanged frame still records its draws, render passes and submission. It renders every
 pattern tile again (one render pass plus the tile's resident content draws, none of which moves a
-gated counter), runs every filter pass (uploading and binding nothing new), and expands text
-strokes on the CPU again (`strokeOutlineFlattens`, which no gate checks). Snapshot readback is an
-explicit capture outside the frame: it allocates a buffer and a bind group, reported separately by
-`RendererGeode::consumeReadbackStats()`.
+gated counter), runs every filter pass, and expands text strokes on the CPU again
+(`strokeOutlineFlattens`, which no gate checks). An offscreen `feImage` renderer counts its raster
+separately. The host counts the filter dispatch and submission after that renderer releases the
+counter sink. Each of the two `feImage` corpus scenes creates one bind group for its freshly
+rasterized input on the second frame at corpus size and above natural size. Both reuse their
+path, texture and buffer storage on that frame.
+
+Snapshot readback is an explicit capture outside the frame. It allocates a buffer and a bind
+group, reported separately by `RendererGeode::consumeReadbackStats()`.
 
 "Unchanged" means the same renderer and device, the same target size and the same document with
 no edit in between. A document drawn by a renderer on another device builds its own state there.
