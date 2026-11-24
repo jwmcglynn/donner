@@ -14,6 +14,7 @@
 #include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/Parker.h"
 #include "donner/base/tasks/SchedulerWork.h"
+#include "donner/base/tasks/ScopeStop.h"
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -35,11 +36,10 @@ class AsyncTaskScope;
 /**
  * One spawned task: its closure, and what the thread that finishes it needs.
  *
- * Layout: an intrusive link and work kind, its allocating pool, its scope's completion metadata,
- * the closure's call function, and 64 bytes of
- * inline closure storage. A closure that does not fit, or needs more than `max_align_t`
- * alignment, is moved into a heap block that the record owns. The record is 128 bytes, two cache
- * lines.
+ * Layout: an intrusive link and work kind, its allocating pool, completion and stop metadata,
+ * the closure's call function, and 64 bytes of inline closure storage. A closure that does not fit,
+ * or needs more than `max_align_t` alignment, is moved into a heap block that the record owns. The
+ * record is 128 bytes, two cache lines.
  *
  * Records are recycled by their pool. While a record is free, everything after its intrusive link
  * is poisoned in AddressSanitizer builds, so a thread that touches a record after returning it
@@ -98,14 +98,16 @@ public:
 
   /**
    * Records what the finisher of this task touches: its scope's counter and the parker the scope
-   * recorded.
+   * recorded; and the scope's stop request, which the thread that takes the task checks first.
    *
    * @param scopeCounter The scope's counter word.
    * @param parker The parker to change when the counter reaches zero.
+   * @param stop The scope's stop request, or null for a scope without one.
    */
-  void setScope(std::atomic<std::uint64_t>* scopeCounter, Parker<>* parker) {
+  void setScope(std::atomic<std::uint64_t>* scopeCounter, Parker<>* parker, const ScopeStop* stop) {
     scopeCounter_ = scopeCounter;
     parker_ = parker;
+    stop_ = stop;
   }
 
   /// Records the asynchronous scope to notify after returning this record.
@@ -118,6 +120,9 @@ public:
 
   /// The parker set by \ref setScope, or null.
   [[nodiscard]] Parker<>* parker() const { return parker_; }
+
+  /// The scope's stop request set by \ref setScope, or null.
+  [[nodiscard]] const ScopeStop* stop() const { return stop_; }
 
   /// The intrusive link, owned by whichever list holds the record.
   [[nodiscard]] TaskRecord* next() const { return static_cast<TaskRecord*>(SchedulerWork::next); }
@@ -166,6 +171,7 @@ private:
     scopeCounter_ = nullptr;
     parker_ = nullptr;
     asyncScope_ = nullptr;
+    stop_ = nullptr;
   }
 
   /// Marks the record free: everything after the intrusive link becomes unaddressable under
@@ -190,6 +196,7 @@ private:
   std::atomic<std::uint64_t>* scopeCounter_ = nullptr;
   Parker<>* parker_ = nullptr;
   AsyncTaskScope* asyncScope_ = nullptr;
+  const ScopeStop* stop_ = nullptr;
   void (*call_)(TaskRecord&, Action) = nullptr;
   alignas(kInlineAlignment) std::byte storage_[kInlineBytes];
 };

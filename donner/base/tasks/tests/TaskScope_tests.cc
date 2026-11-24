@@ -606,21 +606,6 @@ TEST_P(PoolWorkerCounts, OneThreadUsingManySchedulersInTurnHoldsOnlyTheCurrentPo
 }
 
 // Assertions on misuse.
-TEST(TaskScopeDeathTest, AScopeCreatedOnAWorkerFails) {
-  GTEST_FLAG_SET(death_test_style, "threadsafe");
-  EXPECT_DEATH(
-      {
-        TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1});
-        Event done;
-        Peer::Spawn(scheduler, [&] {
-          TaskScope scope(scheduler);
-          done.set();
-        });
-        (void)done.wait();
-      },
-      "TaskScope created on a worker");
-}
-
 TEST(TaskScopeDeathTest, AWaitFromAnotherThreadFails) {
   GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_DEATH(

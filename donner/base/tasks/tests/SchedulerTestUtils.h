@@ -114,9 +114,35 @@ public:
     return scheduler.currentWorker()->stack;
   }
 
+  /// Tasks the last awake worker ran past its margin.
+  static std::uint64_t PastMarginRuns(const TaskScheduler& scheduler) {
+    return scheduler.pastMarginRuns_.load(std::memory_order_relaxed);
+  }
+
+  /// Whether a waiting worker with \p remaining bytes of stack left helps, for \p margin.
+  static bool HelpsWithin(std::size_t remaining, std::size_t margin) {
+    return TaskScheduler::HelpsWithin(remaining, margin);
+  }
+
+  /// The calling worker's deque bottom index. On a worker of \p scheduler only.
+  static std::int64_t DequeBottom(const TaskScheduler& scheduler) {
+    return scheduler.currentWorker()->deque.bottom();
+  }
+
+  /**
+   * Spawns \p work counted in the scope that \p link describes, from the calling thread: to the
+   * global queue from a thread that is not a worker. A test-only way to queue a task of a worker's
+   * scope on the global queue, which no public entry point does.
+   *
+   * @return False, with \p work untouched, when the scheduler declined.
+   */
+  template <typename F, typename Link>
+  static bool TrySpawnLinked(TaskScheduler& scheduler, F& work, const Link* link) {
+    return scheduler.trySpawn(std::move(work), link);
+  }
+
   /// Runs \p work as a task on the calling worker of \p scheduler, through the path a worker runs
-  /// every task by, at the caller's stack depth. A stand-in for a worker that runs a task deep in
-  /// its stack, until waiting workers help.
+  /// every task by, at the caller's stack depth.
   template <typename F>
   static void RunAsTaskHere(TaskScheduler& scheduler, F work) {
     TaskScheduler::Worker* worker = scheduler.currentWorker();

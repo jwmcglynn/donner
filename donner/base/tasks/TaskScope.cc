@@ -5,10 +5,14 @@
 namespace donner::tasks {
 
 TaskScope::TaskScope(TaskScheduler& scheduler)
-    : scheduler_(scheduler), creator_(std::this_thread::get_id()), link_{&count_, nullptr} {
-  UTILS_RELEASE_ASSERT_MSG(scheduler.currentWorker() == nullptr,
-                           "A TaskScope created on a worker is not supported yet");
-  if (scheduler.workerCount() != 0) {
+    : scheduler_(scheduler),
+      creator_(std::this_thread::get_id()),
+      worker_(scheduler.currentWorker()),
+      watermark_(worker_ != nullptr ? worker_->deque.bottom() : 0),
+      link_{.counter = &count_, .parker = nullptr, .stop = &stop_} {
+  if (worker_ != nullptr) {
+    link_.parker = &worker_->parker;
+  } else if (scheduler.workerCount() != 0) {
     link_.parker = ParkerPool::ParkerForThread(scheduler.generation_, scheduler.parkerPool_);
   }
   scheduler.liveScopes_.fetch_add(1, std::memory_order_relaxed);
@@ -22,6 +26,10 @@ TaskScope::~TaskScope() {
 void TaskScope::wait() {
   UTILS_RELEASE_ASSERT_MSG(std::this_thread::get_id() == creator_,
                            "A TaskScope is joined on the thread that created it");
+  if (worker_ != nullptr) {
+    scheduler_.waitOnScope(*worker_, count_, watermark_);
+    return;
+  }
   // Acquire: on zero, everything the scope's tasks wrote is visible.
   while (count_.load(std::memory_order_acquire) != 0) {
     scheduler_.hook(SchedulerStep::ScopeWaiterBeforePrepareWait, 0);

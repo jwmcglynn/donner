@@ -20,6 +20,7 @@
 #include "donner/base/tasks/Parker.h"
 #include "donner/base/tasks/ParkerPool.h"
 #include "donner/base/tasks/SchedulerWork.h"
+#include "donner/base/tasks/ScopeStop.h"
 #include "donner/base/tasks/TaskRecord.h"
 #include "donner/base/tasks/WorkStealingDeque.h"
 #include "donner/base/tasks/WorkerStack.h"
@@ -49,18 +50,16 @@ struct TaskSchedulerOptions {
 
   /// Bytes of freed coroutine-frame allocations to retain. 0 disables reuse.
   std::size_t retainedCoroutineFrameBytes = 64 * 1024;
+  /// Stack a worker waiting on a scope keeps free: it helps with other work only while it has more
+  /// than this left. A heuristic that decides which worker helps, not a bound on depth.
+  std::size_t helpMarginBytes = 128 * 1024;
 };
 
 /// A worker's state word.
 enum class WorkerState : std::uint8_t {
   Awake,          //!< Counted in the scheduler's awake count.
-  AsleepShallow,  //!< Asleep while within its stack margin, as in the idle loop.
-  /**
-   * Asleep past its stack margin. Not stored yet: only a worker waiting on a scope can be past its
-   * margin, and an idle worker sleeps shallow. The swap and a publisher's scan already accept it,
-   * so a deep sleeper is woken by the same code once one exists.
-   */
-  AsleepDeep,
+  AsleepShallow,  //!< Asleep in the idle loop, or waiting on a scope within its stack margin.
+  AsleepDeep,     //!< Asleep while waiting on a scope past its stack margin.
 };
 
 /// Ostream output operator for \ref WorkerState, for test diagnostics.
@@ -76,17 +75,20 @@ inline std::ostream& operator<<(std::ostream& os, WorkerState state) {
 /// A point in the sleep, publish and shutdown protocols where a test can hold or delay a thread.
 enum class SchedulerStep : std::uint8_t {
   AfterDrain,             //!< A sleeper drained its deque (step 1), before its waiting bit.
+  AfterWaitingBit,        //!< A sleeper set its waiting bit (step 2), before it stores asleep.
   AfterSleeperDecrement,  //!< A sleeper stored asleep and decremented (step 3), before
                           //!< its re-check.
   BeforeSleeperWaits,     //!< A sleeper's re-check found nothing (step 4), before its wait.
   BeforeSelfWakeSwap,     //!< A sleeper decided to wake itself, before its swap.
-  AfterPublishPush,       //!< A publisher queued work, before it reads the awake count.
+  BeforeHandOff,     //!< The last awake worker, waiting past its margin with work queued, found a
+                     //!< worker asleep shallow, before it wakes that worker.
+  AfterPublishPush,  //!< A publisher queued work, before it reads the awake count.
   BetweenWakeSwapAndParkerChange,  //!< A waker made its swap, before it changes the parker.
   AfterStopFlagSet,                //!< The destructor set the stop flag, before its wakes.
-  ScopeWaiterBeforePrepareWait,    //!< A scope's creator found tasks outstanding, before it sets
-                                   //!< its parker's waiting bit.
-  ScopeWaiterBeforeWait,  //!< A scope's creator set the waiting bit and its re-check found tasks
-                          //!< outstanding, before it waits.
+  ScopeWaiterBeforePrepareWait,    //!< A scope's creator that is not a worker found tasks
+                                   //!< outstanding, before it sets its parker's waiting bit.
+  ScopeWaiterBeforeWait,  //!< A scope's creator that is not a worker set the waiting bit and its
+                          //!< re-check found tasks outstanding, before it waits.
   ResumptionPublished,    //!< A coroutine resumption is visible; the publisher released the queue.
   AsyncJoinBeforeRegister,  //!< The awaiter loaded a nonzero count, before setting the join flag.
   AsyncJoinRegistered,      //!< The awaiter published its resumption, before returning.
@@ -115,9 +117,16 @@ public:
    * @param step The protocol step.
    * @param worker The worker the step concerns: the sleeper, the woken worker or the finisher;
    *   zero for \ref SchedulerStep::AfterPublishPush, \ref SchedulerStep::AfterStopFlagSet and the
-   *   steps of a scope's creator, which is not a worker.
+   *   steps of a scope's creator that is not a worker.
    */
   virtual void at(SchedulerStep step, std::size_t worker) = 0;
+
+  /**
+   * Whether the last-awake rule applies. Tests that must be observed failing without the rule
+   * return false; with it off, the last awake worker waiting past its margin sleeps even when work
+   * is queued.
+   */
+  [[nodiscard]] virtual bool lastAwakeRule() const { return true; }
 };
 
 class TaskSchedulerTestPeer;
@@ -129,6 +138,15 @@ class TaskScope;
 
 /**
  * A work-stealing task scheduler.
+ *
+ * A worker that waits on a \ref TaskScope it created applies three rules in order: it runs an
+ * entry of its own deque above the scope's watermark (the deque's bottom index when the scope was
+ * created), returns once the scope's count is zero, and otherwise, while it has more than
+ * \ref TaskSchedulerOptions::helpMarginBytes of stack left, helps by taking from the global queue
+ * or stealing. Past its margin, or when it finds nothing, it sleeps with the same steps as an idle
+ * worker, asleep deep when past its margin. The last awake worker does not sleep while work is
+ * queued: it hands the work to a worker asleep shallow if there is one, and otherwise runs it
+ * itself even past its margin.
  *
  * Each worker owns a fixed-capacity deque and a pool of task records. A task spawned on a worker
  * goes onto that worker's deque; a task spawned by any other thread goes into one global
@@ -187,11 +205,13 @@ private:
   friend class detail::TaskPromiseBase;
   friend class TaskScope;
 
-  /// What a task's finisher touches: its scope's counter and the parker the scope recorded.
+  /// What a task's finisher touches: its scope's counter and the parker the scope recorded; and
+  /// the scope's stop request, which the thread that takes the task checks before running it.
   struct ScopeLink {
     std::atomic<std::uint64_t>* counter;
     Parker<>* parker;
     AsyncTaskScope* asyncScope = nullptr;
+    const ScopeStop* stop = nullptr;
   };
 
   /**
@@ -276,16 +296,60 @@ private:
   static void prepareRecord(TaskRecord* record, F&& work, const ScopeLink* scope) {
     record->setClosure(std::forward<F>(work));
     if (scope != nullptr) {
-      record->setScope(scope->counter, scope->parker);
+      record->setScope(scope->counter, scope->parker, scope->stop);
       record->setAsyncScope(scope->asyncScope);
       // Relaxed: the push that publishes the task orders this before the task's decrement.
       scope->counter->fetch_add(1, std::memory_order_relaxed);
     }
   }
 
-  /// Decrements \p counter for a finished task and, on reaching zero, changes \p parker.
+  /// Decrements \p counter for a finished task and, on reaching zero, wakes the scope's creator
+  /// through \p parker: with the swap rule when the parker is a worker's, so a creator asleep in
+  /// its wait is counted awake before it runs.
   void finishScopeTask(std::atomic<std::uint64_t>* counter, Parker<>* parker,
                        std::size_t workerIndex);
+
+  /// The worker whose parker is \p parker, or null for a parker of the \ref ParkerPool.
+  Worker* workerOwning(const Parker<>* parker) const;
+
+  /**
+   * The wait of a scope's creator that is a worker: rules 1 to 3, and the sleep steps when they
+   * find nothing. Returns once \p count is zero.
+   *
+   * @param worker The calling worker, the scope's creator.
+   * @param count The scope's count.
+   * @param watermark The worker's deque bottom index when the scope was created.
+   */
+  void waitOnScope(Worker& worker, const std::atomic<std::uint64_t>& count,
+                   WorkStealingDeque<SchedulerWork*>::Index watermark);
+
+  /// Whether a waiting worker with \p remaining bytes of stack helps, for a margin of \p margin:
+  /// only with more than the margin left.
+  static constexpr bool HelpsWithin(std::size_t remaining, std::size_t margin) {
+    return remaining > margin;
+  }
+
+  /// What a waiting worker's sleep ended with.
+  enum class WaitSleep : std::uint8_t {
+    ScopeComplete,        //!< Its re-check saw the scope's count at zero.
+    Resume,               //!< Go back to the rules.
+    RunQueuedPastMargin,  //!< It is the last awake worker, past its margin, work is queued and no
+                          //!< worker is asleep shallow: take that work.
+  };
+
+  /**
+   * Sleep steps 1 to 5 for a worker waiting on a scope.
+   *
+   * @param worker The calling worker.
+   * @param count The scope's count, re-checked in step 4.
+   * @param pastMargin Whether the worker is past its margin: it then stores asleep deep, and the
+   *   last-awake rule applies to it.
+   */
+  WaitSleep sleepWhileWaiting(Worker& worker, const std::atomic<std::uint64_t>& count,
+                              bool pastMargin);
+
+  /// A worker asleep shallow other than \p self, or null.
+  Worker* findAsleepShallow(const Worker& self) const;
 
   /// The calling thread's worker of this scheduler, or null.
   Worker* currentWorker() const;
@@ -314,6 +378,9 @@ private:
   /// Takes from the outside sources from the worker's cursor. @return Null if all are empty.
   SchedulerWork* takeOutside(Worker& worker);
 
+  /// Tries outside sources first, then one round of steals.
+  SchedulerWork* findOtherWork(Worker& worker);
+
   /// The next task for an awake worker in its idle loop. @return Null if a steal round found none.
   SchedulerWork* findTask(Worker& worker);
 
@@ -333,7 +400,7 @@ private:
   /// Runs \p work after checking the worker stack reserve.
   void runTask(Worker& worker, SchedulerWork* work);
 
-  /// Runs a record, returns it to its pool, and notifies its scope.
+  /// Runs or discards the closure, returns it to its pool, and notifies its scope.
   void runRecord(Worker& worker, TaskRecord* record);
 
   /// Bytes of stack left below the caller's frame on the calling worker, of any scheduler; empty on
@@ -343,7 +410,15 @@ private:
   /// A worker thread's entry point; \p worker is its \ref Worker.
   static void* WorkerEntry(void* worker);
 
-  /// Sleep steps 1 to 5. @return False when the stop flag is set and the worker must exit.
+  struct SleepPreparation {
+    Parker<>::Word token;
+    std::int64_t awakeBefore;
+  };
+
+  /// Drains the deque, prepares the parker, and accounts for the sleeping worker.
+  SleepPreparation prepareSleep(Worker& worker, WorkerState state);
+
+  /// Sleeps an idle worker. @return False when the stop flag is set and the worker must exit.
   bool trySleep(Worker& worker);
 
   /// Whether queued work is visible to a sleeper's re-check.
@@ -381,6 +456,10 @@ private:
   /// Live \ref TaskScope objects. Relaxed: the destructor's check needs only the happens-before
   /// that a correct program already has between a scope's destruction and the scheduler's.
   std::atomic<std::size_t> liveScopes_{0};
+
+  /// Tasks the last awake worker ran past its margin, taken from queued work after no worker was
+  /// asleep shallow to hand it to. Relaxed: a count tests read at quiescence.
+  std::atomic<std::uint64_t> pastMarginRuns_{0};
 
   /// Protects the global queue's list and the external record pool. On its own cache line, away
   /// from the read-mostly options and hooks pointer, as the deque separates its indices.
