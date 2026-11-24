@@ -10,6 +10,7 @@ TaskScope::TaskScope(TaskScheduler& scheduler)
       worker_(scheduler.currentWorker()),
       watermark_(worker_ != nullptr ? worker_->deque.bottom() : 0),
       link_{.counter = &count_, .parker = nullptr, .stop = &stop_} {
+  scheduler.assertSeededOwner();
   if (worker_ != nullptr) {
     link_.parker = &worker_->parker;
   } else if (scheduler.workerCount() != 0) {
@@ -26,6 +27,10 @@ TaskScope::~TaskScope() {
 void TaskScope::wait() {
   UTILS_RELEASE_ASSERT_MSG(std::this_thread::get_id() == creator_,
                            "A TaskScope is joined on the thread that created it");
+  if (scheduler_.seeded_) {
+    scheduler_.drainSeededUntil(count_);
+    return;
+  }
   if (worker_ != nullptr) {
     scheduler_.waitOnScope(*worker_, count_, watermark_);
     return;

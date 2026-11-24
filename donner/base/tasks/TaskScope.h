@@ -37,8 +37,10 @@ class TaskScopeTestPeer;
  *
  * On a thread that is not a worker, the creator never runs tasks. Its spawns go to the scheduler's
  * global queue, and its wait re-checks the count and sleeps on its parker, from the scheduler's
- * \ref ParkerPool, until a finisher changes it. With zero workers, every spawn runs inline and a
- * wait returns at once.
+ * \ref ParkerPool, until a finisher changes it. Without a seed and with zero workers, every spawn
+ * runs inline and a wait returns at once.
+ *
+ * On a seeded scheduler the creator queues tasks in the replay pool and runs them during its wait.
  *
  * \ref requestStop asks the scope's queued tasks not to run: each is destroyed unrun when a thread
  * takes it, and still completes its scope's accounting, so the wait returns. Running tasks may
@@ -124,7 +126,7 @@ private:
   ScopeStop stop_;
 
   /// The counter, the creator's parker and the stop request, which every task record of the
-  /// scope carries. The parker is null with zero workers, when no task is ever queued.
+  /// scope carries. The parker is null when the creator runs inline or drains its own seeded queue.
   TaskScheduler::ScopeLink link_;
 };
 
@@ -144,7 +146,7 @@ private:
  */
 template <typename A, typename B>
 void Join(TaskScheduler& scheduler, A&& a, B&& b) {
-  if (scheduler.workerCount() == 0) {
+  if (detail::ParallelForAccess::Concurrency(scheduler) == 0) {
     a();
     b();
     return;

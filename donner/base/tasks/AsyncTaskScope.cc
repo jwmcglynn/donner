@@ -4,6 +4,7 @@ namespace donner::tasks {
 
 AsyncTaskScope::AsyncTaskScope(TaskScheduler& scheduler)
     : scheduler_(scheduler), link_{&count_, nullptr, this} {
+  scheduler_.assertSeededOwner();
   scheduler_.liveScopes_.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -25,6 +26,11 @@ bool AsyncTaskScope::JoinAwaitable::await_suspend(std::coroutine_handle<> handle
   UTILS_RELEASE_ASSERT_MSG(!scope_.joinStarted_.exchange(true, std::memory_order_relaxed),
                            "An AsyncTaskScope may be joined only once");
   TaskScheduler& scheduler = scope_.scheduler_;
+  if (scheduler.seeded_) {
+    // No worker can finish this join while the replay thread is suspended.
+    scheduler.drainSeededUntil(scope_.count_);
+    return false;
+  }
   SchedulerTestHooks* const hooks = scheduler.testHooks_;
   resumption_.handle = handle;
   scope_.waiting_ = &resumption_;
