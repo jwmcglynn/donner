@@ -410,7 +410,7 @@ Part C estimate: 13.5 engineering days.
 
 ### Part D Milestones
 
-- [ ] Milestone D0: Read-only cascade signatures (2 days). After A8.
+- [x] Milestone D0: Read-only cascade signatures (2 days). After A8.
   - [x] Selector matching, inheritance and record construction read a `const Registry&`.
         `StyleSystem::computePreparedStyle` takes one existing output slot and worker-owned work
         counters, cache and warning sink. The serial entry prepares the document contexts and
@@ -2005,8 +2005,8 @@ per-element cost and is calibrated in Milestone D3.
   component additions per created entity) and stays serial between the two `computeAllStyles`
   calls. Before workers start, the pass therefore: emplaces the placeholders (full pass) or, for
   the selective pass, emplaces slots for every dirty entity and any ancestor that lacks one (the
-  serial selective pass emplaces in its loop, and `computeStyle` and `inheritProperties` emplace a
-  missing parent on demand); creates every pool and context object the cascade touches
+  serial selective pass emplaces in its loop and recursively prepares missing parents before
+  inheritance reads their records); creates every pool and context object the cascade touches
   (`StyleResourceBudget`, the animation contextual-work context) and fixes EnTT's type ids
   (`ENTT_USE_ATOMIC`, or by touching every component type the pass reads up front); and, for the
   selective pass, finds the roots of the dirty subtrees, the dirty entities whose parent is clean.
