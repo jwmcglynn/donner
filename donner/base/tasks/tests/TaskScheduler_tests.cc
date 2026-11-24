@@ -26,6 +26,12 @@ namespace donner::tasks {
 /// tests observe completion through their own latches and counters.
 class TaskSchedulerTestPeer {
 public:
+  /// Constructs a scheduler with a test seam.
+  static std::unique_ptr<TaskScheduler> Make(TaskSchedulerOptions options,
+                                             SchedulerTestHooks* hooks) {
+    return std::unique_ptr<TaskScheduler>(new TaskScheduler(options, hooks));
+  }
+
   template <typename F>
   static bool TrySpawn(TaskScheduler& scheduler, F& work) {
     return scheduler.trySpawn(work);
@@ -403,6 +409,76 @@ TEST(TaskSchedulerTest, AWorkerSpawnPastItsDequeOrItsRecordBoundIsDeclined) {
   }
 }
 
+/// A closure that owns its state, so a closure moved out of it is visible: its value is gone, and
+/// running what is left counts 100 instead of 1.
+struct OwningClosure {
+  std::unique_ptr<int> value;
+  int* runs;
+
+  void operator()() const { *runs += value != nullptr ? *value : 100; }
+};
+
+// A declined trySpawn must leave the closure with the caller, at every bound; spawn then runs it.
+TEST(TaskSchedulerTest, ADeclinedTrySpawnLeavesTheClosureWithTheCaller) {
+  // Zero workers.
+  {
+    TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
+    int runs = 0;
+    OwningClosure closure{std::make_unique<int>(1), &runs};
+    EXPECT_FALSE(Peer::TrySpawn(scheduler, closure));
+    EXPECT_THAT(closure.value, testing::NotNull()) << "zero workers: the closure was taken";
+    Peer::Spawn(scheduler, closure);
+    EXPECT_THAT(runs, Eq(1));
+  }
+  // The external bound.
+  {
+    TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1, .maxExternalTasks = 1});
+    Gate busy;
+    Completion done;
+    Peer::Spawn(scheduler, [&] {
+      busy.arriveAndWait();
+      done.arrive();
+    });
+    ASSERT_TRUE(busy.waitForArrival());
+    int runs = 0;
+    OwningClosure closure{std::make_unique<int>(1), &runs};
+    EXPECT_FALSE(Peer::TrySpawn(scheduler, closure));
+    EXPECT_THAT(closure.value, testing::NotNull()) << "external bound: the closure was taken";
+    Peer::Spawn(scheduler, closure);
+    EXPECT_THAT(runs, Eq(1));
+    busy.release();
+    ASSERT_TRUE(done.waitFor(1));
+  }
+  // A worker's record bound, and a worker's full deque.
+  struct Case {
+    const char* name;
+    std::size_t dequeCapacity;
+    std::size_t maxTasksPerCreator;
+  };
+  for (const Case limits : {Case{"record bound", 64, 1}, Case{"full deque", 1, 64}}) {
+    TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1,
+                                                 .dequeCapacity = limits.dequeCapacity,
+                                                 .maxTasksPerCreator = limits.maxTasksPerCreator});
+    Completion done;
+    bool declined = false;
+    bool intactAfterDecline = false;
+    int runs = 0;
+    Peer::Spawn(scheduler, [&] {
+      auto first = [&] { done.arrive(); };
+      ASSERT_TRUE(Peer::TrySpawn(scheduler, first));
+      OwningClosure closure{std::make_unique<int>(1), &runs};
+      declined = !Peer::TrySpawn(scheduler, closure);
+      intactAfterDecline = closure.value != nullptr;
+      Peer::Spawn(scheduler, closure);
+      done.arrive();
+    });
+    ASSERT_TRUE(done.waitFor(2)) << limits.name;
+    EXPECT_TRUE(declined) << limits.name;
+    EXPECT_TRUE(intactAfterDecline) << limits.name << ": the closure was taken";
+    EXPECT_THAT(runs, Eq(1)) << limits.name;
+  }
+}
+
 // A worker with endless local work still takes a global entry: one outside take every 61 tasks
 // it runs from its own deque.
 TEST(TaskSchedulerTest, AWorkerWithEndlessLocalWorkStillTakesTheGlobalQueue) {
@@ -467,13 +543,13 @@ TEST(TaskSchedulerTest, AnIdleWorkerStealsFromABusyOne) {
 TEST(TaskSchedulerInterleavingTest, APublishBeforeTheSleepersDecrementIsSeenByItsRecheck) {
   Gate sleeper;
   HoldOnceHooks hooks(SchedulerStep::AfterDrain, &sleeper);
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1}, &hooks);
+  auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, &hooks);
   ASSERT_TRUE(sleeper.waitForArrival());
 
   Completion done;
-  Peer::Spawn(scheduler, [&] { done.arrive(); });
-  EXPECT_THAT(Peer::AwakeCount(scheduler), Eq(1)) << "the sleeper has not decremented yet";
-  EXPECT_THAT(Peer::State(scheduler, 0), Eq(WorkerState::Awake))
+  Peer::Spawn(*scheduler, [&] { done.arrive(); });
+  EXPECT_THAT(Peer::AwakeCount(*scheduler), Eq(1)) << "the sleeper has not decremented yet";
+  EXPECT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::Awake))
       << "the publisher saw the worker awake, so it must not have woken it";
 
   sleeper.release();
@@ -486,16 +562,16 @@ TEST(TaskSchedulerInterleavingTest, APublishBeforeTheSleepersDecrementIsSeenByIt
 TEST(TaskSchedulerInterleavingTest, APublishAfterTheSleepersRecheckWakesIt) {
   Gate sleeper;
   HoldOnceHooks hooks(SchedulerStep::BeforeSleeperWaits, &sleeper);
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1}, &hooks);
+  auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, &hooks);
   ASSERT_TRUE(sleeper.waitForArrival());
-  ASSERT_THAT(Peer::AwakeCount(scheduler), Eq(0));
-  ASSERT_THAT(Peer::State(scheduler, 0), Eq(WorkerState::AsleepShallow));
+  ASSERT_THAT(Peer::AwakeCount(*scheduler), Eq(0));
+  ASSERT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::AsleepShallow));
 
   Completion done;
-  Peer::Spawn(scheduler, [&] { done.arrive(); });
-  EXPECT_THAT(Peer::State(scheduler, 0), Eq(WorkerState::Awake))
+  Peer::Spawn(*scheduler, [&] { done.arrive(); });
+  EXPECT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::Awake))
       << "the publisher saw no worker awake, so it must swap one awake";
-  EXPECT_THAT(Peer::AwakeCount(scheduler), Eq(1));
+  EXPECT_THAT(Peer::AwakeCount(*scheduler), Eq(1));
 
   sleeper.release();
   ASSERT_TRUE(done.waitFor(1)) << "the publisher's parker change must end the sleeper's wait";
@@ -510,75 +586,90 @@ TEST(TaskSchedulerInterleavingTest, ASelfWakeRacingAPublishersWakeCountsTheWorke
   HoldOnceHooks holdDecrement(SchedulerStep::AfterSleeperDecrement, &decremented);
   HoldOnceHooks holdNextSleep(SchedulerStep::AfterDrain, &nextSleep, /*occurrence=*/2);
   HoldTwiceHooks hooks(&holdDecrement, &holdNextSleep);
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 1}, &hooks);
+  auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, &hooks);
   ASSERT_TRUE(decremented.waitForArrival());
 
   Completion done;
-  Peer::Spawn(scheduler, [&] { done.arrive(); });
-  ASSERT_THAT(Peer::State(scheduler, 0), Eq(WorkerState::Awake));
-  ASSERT_THAT(Peer::AwakeCount(scheduler), Eq(1));
+  Peer::Spawn(*scheduler, [&] { done.arrive(); });
+  ASSERT_THAT(Peer::State(*scheduler, 0), Eq(WorkerState::Awake));
+  ASSERT_THAT(Peer::AwakeCount(*scheduler), Eq(1));
 
   decremented.release();
   ASSERT_TRUE(done.waitFor(1));
   ASSERT_TRUE(nextSleep.waitForArrival());
-  EXPECT_THAT(Peer::AwakeCount(scheduler), Eq(Peer::AwakeStates(scheduler)))
+  EXPECT_THAT(Peer::AwakeCount(*scheduler), Eq(Peer::AwakeStates(*scheduler)))
       << "the failed self-wake swap must not count the worker a second time";
-  EXPECT_THAT(Peer::AwakeCount(scheduler), Eq(1));
+  EXPECT_THAT(Peer::AwakeCount(*scheduler), Eq(1));
   nextSleep.release();
 }
 
 // The shutdown pairing: the destructor's stop flag and its swap, against a sleeper's state store
 // and its re-check of the flag.
 
-// The destructor runs while an idle worker is between draining and setting its waiting bit: its
-// swap fails and its parker change lands before the waiting bit, so only the sleeper's re-check of
-// the stop flag lets it exit.
-TEST(TaskSchedulerInterleavingTest, ShutdownRacingAnIdleWorkersSleepJoins) {
-  Gate sleeper;
-  HoldOnceHooks hooks(SchedulerStep::AfterDrain, &sleeper);
-  auto scheduler = std::make_unique<TaskScheduler>(TaskSchedulerOptions{.workerCount = 1}, &hooks);
-  ASSERT_TRUE(sleeper.waitForArrival());
-  ParkerEpochWatch parkerEpoch(*scheduler, 0);
-
+/**
+ * Everything a scheduler destroyed on another thread refers to, owned jointly by the test and that
+ * thread, so a destroyer detached after a failed join touches nothing out of scope.
+ */
+struct ShutdownState {
+  Gate gate;
+  std::unique_ptr<HoldOnceHooks> hooks;
+  std::unique_ptr<TaskScheduler> scheduler;
   Event destroyed;
-  std::thread destroyer([&] {
-    scheduler.reset();
-    destroyed.set();
+};
+
+/**
+ * Destroys the state's scheduler on another thread, running \p whileDestroying meanwhile.
+ *
+ * @return True if the destructor returned within the hang guard. Otherwise the thread is detached
+ *   and keeps the state alive.
+ */
+bool DestroyOnAnotherThread(const std::shared_ptr<ShutdownState>& state,
+                            const std::function<void()>& whileDestroying) {
+  std::thread destroyer([state] {
+    state->scheduler.reset();
+    state->destroyed.set();
   });
-  // The destructor's swap fails, since the worker is still awake, and its parker change lands
-  // before the sleeper sets its waiting bit.
-  ASSERT_TRUE(PollUntil([&] { return parkerEpoch.load() == 1; }));
-  sleeper.release();
-  const bool joined = destroyed.wait();
-  EXPECT_TRUE(joined) << "the destructor's join never returned";
+  whileDestroying();
+  const bool joined = state->destroyed.wait();
   if (joined) {
     destroyer.join();
   } else {
     destroyer.detach();
   }
+  return joined;
+}
+
+// The destructor runs while an idle worker is between draining and setting its waiting bit: its
+// swap fails and its parker change lands before the waiting bit, so only the sleeper's re-check of
+// the stop flag lets it exit.
+TEST(TaskSchedulerInterleavingTest, ShutdownRacingAnIdleWorkersSleepJoins) {
+  auto state = std::make_shared<ShutdownState>();
+  state->hooks = std::make_unique<HoldOnceHooks>(SchedulerStep::AfterDrain, &state->gate);
+  state->scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, state->hooks.get());
+  ASSERT_TRUE(state->gate.waitForArrival());
+  ParkerEpochWatch parkerEpoch(*state->scheduler, 0);
+
+  bool changeLandedFirst = false;
+  const bool joined = DestroyOnAnotherThread(state, [&] {
+    // The destructor's swap fails, since the worker is still awake, and its parker change lands
+    // before the sleeper sets its waiting bit.
+    changeLandedFirst = PollUntil([&] { return parkerEpoch.load() == 1; });
+    state->gate.release();
+  });
+  EXPECT_TRUE(changeLandedFirst) << "the destructor never changed the worker's parker";
+  EXPECT_TRUE(joined) << "the destructor's join never returned";
 }
 
 // The destructor runs after the sleeper stored asleep: its swap succeeds and its parker change
 // ends the wait.
 TEST(TaskSchedulerInterleavingTest, ShutdownAfterTheSleeperStoredAsleepWakesIt) {
-  Gate sleeper;
-  HoldOnceHooks hooks(SchedulerStep::BeforeSleeperWaits, &sleeper);
-  auto scheduler = std::make_unique<TaskScheduler>(TaskSchedulerOptions{.workerCount = 1}, &hooks);
-  ASSERT_TRUE(sleeper.waitForArrival());
+  auto state = std::make_shared<ShutdownState>();
+  state->hooks = std::make_unique<HoldOnceHooks>(SchedulerStep::BeforeSleeperWaits, &state->gate);
+  state->scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, state->hooks.get());
+  ASSERT_TRUE(state->gate.waitForArrival());
 
-  Event destroyed;
-  std::thread destroyer([&] {
-    scheduler.reset();
-    destroyed.set();
-  });
-  sleeper.release();
-  const bool joined = destroyed.wait();
+  const bool joined = DestroyOnAnotherThread(state, [&] { state->gate.release(); });
   EXPECT_TRUE(joined) << "the destructor's join never returned";
-  if (joined) {
-    destroyer.join();
-  } else {
-    destroyer.detach();
-  }
 }
 
 // Stress: no queued task waits on a sleeping pool. Each case runs with no hooks and again with
@@ -628,10 +719,12 @@ std::ostream& operator<<(std::ostream& os, const StressForm& form) {
 
 class SchedulerStressTest : public testing::TestWithParam<StressForm> {
 protected:
-  SchedulerTestHooks* hooks() { return GetParam().delays ? &delays_ : nullptr; }
-
-private:
-  DelayHooks delays_;
+  /// The delay hooks have static storage, so a destroyer thread detached after a failed join
+  /// never refers to a destroyed fixture.
+  SchedulerTestHooks* hooks() {
+    static DelayHooks delays;
+    return GetParam().delays ? &delays : nullptr;
+  }
 };
 
 INSTANTIATE_TEST_SUITE_P(Forms, SchedulerStressTest,
@@ -646,10 +739,10 @@ INSTANTIATE_TEST_SUITE_P(Forms, SchedulerStressTest,
 // sleep between tasks, so every task is a publish racing a sleep. A lost wakeup leaves a task
 // queued with every worker asleep, and its wait fails at the hang guard.
 TEST_P(SchedulerStressTest, NoQueuedTaskWaitsOnASleepingPool) {
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = GetParam().workers}, hooks());
+  auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = GetParam().workers}, hooks());
   for (int round = 0; round < GetParam().rounds; ++round) {
     Event ran;
-    Peer::Spawn(scheduler, [&] { ran.set(); });
+    Peer::Spawn(*scheduler, [&] { ran.set(); });
     ASSERT_TRUE(ran.wait()) << "task " << round << " was never run";
   }
 }
@@ -658,7 +751,8 @@ TEST_P(SchedulerStressTest, NoQueuedTaskWaitsOnASleepingPool) {
 TEST_P(SchedulerStressTest, ConcurrentSubmittersAndWorkerSpawnsRunEveryTaskOnce) {
   constexpr int kSubmitters = 3;
   const int perSubmitter = GetParam().rounds / 2;
-  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = GetParam().workers}, hooks());
+  auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = GetParam().workers}, hooks());
+  TaskScheduler& schedulerRef = *scheduler;
   std::vector<std::atomic<int>> runs(static_cast<std::size_t>(kSubmitters * perSubmitter * 2));
   Completion done;
   std::vector<std::thread> submitters;
@@ -666,9 +760,9 @@ TEST_P(SchedulerStressTest, ConcurrentSubmittersAndWorkerSpawnsRunEveryTaskOnce)
     submitters.emplace_back([&, s] {
       for (int i = 0; i < perSubmitter; ++i) {
         const std::size_t id = static_cast<std::size_t>((s * perSubmitter + i) * 2);
-        Peer::Spawn(scheduler, [&, id] {
+        Peer::Spawn(schedulerRef, [&, id] {
           runs[id].fetch_add(1);
-          Peer::Spawn(scheduler, [&, id] {
+          Peer::Spawn(schedulerRef, [&, id] {
             runs[id + 1].fetch_add(1);
             done.arrive();
           });
@@ -691,24 +785,16 @@ TEST_P(SchedulerStressTest, ConcurrentSubmittersAndWorkerSpawnsRunEveryTaskOnce)
 TEST_P(SchedulerStressTest, ShutdownRacingIdleWorkersAlwaysJoins) {
   const int iterations = GetParam().rounds / 10;
   for (int i = 0; i < iterations; ++i) {
-    auto scheduler = std::make_unique<TaskScheduler>(
-        TaskSchedulerOptions{.workerCount = GetParam().workers}, hooks());
+    auto state = std::make_shared<ShutdownState>();
+    state->scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = GetParam().workers}, hooks());
     if (i % 2 == 0) {
       Event ran;
-      Peer::Spawn(*scheduler, [&] { ran.set(); });
+      Peer::Spawn(*state->scheduler, [&] { ran.set(); });
       ASSERT_TRUE(ran.wait());
     }
-    Event destroyed;
-    std::thread destroyer([&] {
-      scheduler.reset();
-      destroyed.set();
-    });
-    const bool joined = destroyed.wait();
-    if (!joined) {
-      destroyer.detach();
+    if (!DestroyOnAnotherThread(state, [] {})) {
       FAIL() << "iteration " << i << ": the destructor's join never returned";
     }
-    destroyer.join();
   }
 }
 

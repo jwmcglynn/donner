@@ -252,7 +252,9 @@ void TaskScheduler::wakeAsleepWorker() {
 }
 
 bool TaskScheduler::trySleep(Worker& worker) {
-  // 1. Drain the deque into the global queue, through the owner's take.
+  // 1. Drain the deque into the global queue, through the owner's take. An idle worker's deque is
+  // already empty here, since its own take just found nothing and only it pushes; a worker waiting
+  // on a scope reaches this with entries below its watermark.
   while (const std::optional<TaskRecord*> record = worker.deque.take()) {
     publishToGlobalQueue(*record);
   }

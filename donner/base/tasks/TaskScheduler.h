@@ -43,7 +43,12 @@ struct TaskSchedulerOptions {
 enum class WorkerState : std::uint8_t {
   Awake,          //!< Counted in the scheduler's awake count.
   AsleepShallow,  //!< Asleep while within its stack margin, as in the idle loop.
-  AsleepDeep,     //!< Asleep past its stack margin.
+  /**
+   * Asleep past its stack margin. Not stored yet: only a worker waiting on a scope can be past its
+   * margin, and an idle worker sleeps shallow. The swap and a publisher's scan already accept it,
+   * so a deep sleeper is woken by the same code once one exists.
+   */
+  AsleepDeep,
 };
 
 /// Ostream output operator for \ref WorkerState, for test diagnostics.
@@ -121,14 +126,6 @@ public:
    */
   explicit TaskScheduler(TaskSchedulerOptions options);
 
-  /**
-   * Starts the workers, with a test seam called at each protocol step.
-   *
-   * @param options The scheduler's options.
-   * @param testHooks Called at each \ref SchedulerStep; must outlive the scheduler.
-   */
-  TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* testHooks);
-
   TaskScheduler(const TaskScheduler&) = delete;
   TaskScheduler(TaskScheduler&&) = delete;
   TaskScheduler& operator=(const TaskScheduler&) = delete;
@@ -138,7 +135,8 @@ public:
   /// still queued, or if the awake count disagrees with the workers' state words.
   ~TaskScheduler();
 
-  /// The workers started.
+  /// The workers started: every one requested, since a thread that fails to start ends the
+  /// process (constructing a `std::thread` without exceptions terminates on failure).
   [[nodiscard]] std::size_t workerCount() const { return workers_.size(); }
 
   /// True when the options asked for zero workers.
@@ -146,6 +144,15 @@ public:
 
 private:
   friend class TaskSchedulerTestPeer;
+
+  /**
+   * Starts the workers, with a test seam called at each protocol step. Reached only through the
+   * test peer.
+   *
+   * @param options The scheduler's options.
+   * @param testHooks Called at each \ref SchedulerStep; must outlive the scheduler.
+   */
+  TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* testHooks);
 
   /// A worker's state: its deque, record pool and parker, its state word, and its thread.
   struct alignas(128) Worker {
@@ -271,8 +278,9 @@ private:
   const TaskSchedulerOptions options_;
   SchedulerTestHooks* const testHooks_;
 
-  /// Protects the global queue's list and the external record pool.
-  std::mutex globalMutex_;
+  /// Protects the global queue's list and the external record pool. On its own cache line, away
+  /// from the read-mostly options and hooks pointer, as the deque separates its indices.
+  alignas(128) std::mutex globalMutex_;
   TaskRecord* globalHead_ = nullptr;
   TaskRecord* globalTail_ = nullptr;
   ExternalRecordPool externalPool_;
