@@ -340,6 +340,16 @@ public:
            aggregateWork_->canReserveDeclarationWork(applications, componentCount, sourceBytes);
   }
 
+  /// Admit previously measured selector work if it fits; declining leaves all counters unchanged.
+  [[nodiscard]] bool tryReplaySelectorWork(std::size_t rules, std::size_t steps) {
+    if (aggregateWork_ || rejected_ || rules > limits_.ruleElementMatches - ruleElementMatches_ ||
+        !selectorTraversal_.tryConsumeMeasured(steps)) {
+      return false;
+    }
+    ruleElementMatches_ += rules;
+    return true;
+  }
+
   /** Charge one immutable computed-style record for exactly its lifetime. */
   [[nodiscard]] bool retainComputedStyle(ComputedStyle& style, std::size_t byteCount) {
     if (style.retainedStyleBytes_) {
@@ -525,6 +535,44 @@ public:
                                    ComputedStyleComponent& output, CascadePass& pass,
                                    ParseWarningSink& warnings);
 
+  /**
+   * Holds bounded selector traces for a static document while the caller owns its access.
+   * Input slots must already exist and be empty, and each input entity occurs once.
+   * After workers join, commit visits the original requests through the serial cache and budget.
+   */
+  class PreparedBatch {
+  public:
+    /// Above this bound the caller uses the existing serial path without allocating traces.
+    static constexpr std::size_t kMaximumElements = 32768;
+
+    /// @param registry Document under exclusive access until commit.
+    /// @param entities All new slots, including missing ancestors of selective requests.
+    PreparedBatch(Registry& registry, std::span<const Entity> entities);
+    ~PreparedBatch();
+    PreparedBatch(const PreparedBatch&) = delete;
+    PreparedBatch& operator=(const PreparedBatch&) = delete;
+
+    /// Compute one slot after its parent's publication, using a private worker pass.
+    /// @param entity Entity exclusively assigned to this task.
+    /// @param worker Worker state with bounded staging storage.
+    /// @param warnings Worker-private diagnostic sink.
+    /// @return True if the element produced a usable provisional result.
+    bool compute(Entity entity, CascadePass& worker, ParseWarningSink& warnings);
+
+    /// Discard provisional records, then replay requests with ordinary serial admission and
+    /// diagnostics.
+    /// @param requests Original serial storage order for this pass.
+    /// @param warnings Canonical document warning sink.
+    /// @param useTraces False after speculative resource pressure or incomplete execution.
+    /// @return Number of elements whose recorded selector work the owner accepted.
+    std::size_t commit(std::span<const Entity> requests, ParseWarningSink& warnings,
+                       bool useTraces);
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+  };
+
   /// What \ref computeAllStyles does with existing computed styles when the whole document needs
   /// restyling (\ref RenderTreeState::needsFullStyleRecompute on a built document).
   enum class FullRestyle {
@@ -658,6 +706,7 @@ public:
 
 private:
   struct PendingStyleDeclarations;
+  struct RuleTrace;
   class SerialCascade;
 
   /// Compute the style of every entity flagged \ref DirtyFlagsComponent::Style whose computed
@@ -669,7 +718,8 @@ private:
                                    StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
                                    MatchedPropertiesKey& cacheKey, const StyleComponent* local,
                                    ParseWarningSink& warningSink,
-                                   PendingStyleDeclarations& declarations);
+                                   PendingStyleDeclarations& declarations, RuleTrace* capture,
+                                   RuleTrace* replay);
   static void inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
                                     PropertyRegistry& properties, ComputedStyleComponent& computed,
                                     ParseWarningSink& warningSink, bool* unsupportedResource);
@@ -681,7 +731,8 @@ private:
                                             PropertyRegistry& properties);
   static void computePropertiesInto(const Registry& registry, Entity entity,
                                     ComputedStyleComponent& computedStyle, CascadePass& pass,
-                                    ParseWarningSink& warningSink, SerialCascade* serial);
+                                    ParseWarningSink& warningSink, SerialCascade* serial,
+                                    RuleTrace* capture = nullptr);
 };
 
 }  // namespace donner::svg::components

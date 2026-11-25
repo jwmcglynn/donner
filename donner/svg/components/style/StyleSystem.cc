@@ -10,6 +10,7 @@
 #include <span>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -1153,12 +1154,77 @@ StyleResourceBudget::ActiveRegistryScope::~ActiveRegistryScope() {
   budget_.activeRegistries_.erase(registry_);
 }
 
+/// A bounded match transcript borrows immutable rules until the pass owner rejoins.
+struct StyleSystem::RuleTrace {
+  struct Match {
+    std::uint64_t revision;
+    std::size_t ordinal;
+    std::uint32_t position;
+    const css::SelectorRule* rule;
+    css::Specificity specificity;
+  };
+
+  struct Work {
+    std::size_t rules, applications, components, bytes, traversal;
+
+    static Work read(const StyleResourceBudget& budget) {
+      return {budget.ruleElementMatches(), budget.declarationApplications(),
+              budget.declarationComponentWork(), budget.declarationByteWork(),
+              budget.selectorTraversal().steps()};
+    }
+    Work operator-(const Work& before) const {
+      return {rules - before.rules, applications - before.applications,
+              components - before.components, bytes - before.bytes, traversal - before.traversal};
+    }
+  };
+
+  struct Capture {
+    RuleTrace* trace;
+    const StyleResourceBudget& budget;
+    Work before;
+    Capture(RuleTrace* trace, const StyleResourceBudget& budget)
+        : trace(trace), budget(budget), before(trace ? Work::read(budget) : Work{}) {}
+    ~Capture() {
+      if (trace) {
+        trace->work = Work::read(budget) - before;
+        trace->complete = !budget.rejected() && trace->count <= trace->matches.size();
+      }
+    }
+  };
+
+  void append(Match match) {
+    if (count < matches.size()) {
+      matches[count++] = match;
+    } else {
+      count = matches.size() + 1;
+    }
+  }
+
+  bool tryCharge(StyleResourceBudget& budget) {
+    replayed = complete &&
+               budget.canReserveDeclarationWork(work.applications, work.components, work.bytes) &&
+               budget.tryReplaySelectorWork(work.rules, work.traversal);
+    return replayed;
+  }
+
+  std::array<Match, 4> matches{};
+  std::size_t count = 0;
+  Work work{};
+  ComputedStyleComponent* slot = nullptr;
+  ComputedStyleComponent original;
+  StyleCascadeCounters actualWork;
+  bool complete = false;
+  bool replayed = false;
+};
+
 /// Owns the serial-only operations for one synchronous cascade, including missing parents.
 class StyleSystem::SerialCascade {
 public:
-  SerialCascade(Registry& registry, ParseWarningSink& warnings)
+  SerialCascade(Registry& registry, ParseWarningSink& warnings,
+                std::unordered_map<Entity, RuleTrace>* traces = nullptr)
       : registry_(registry),
         warnings_(warnings),
+        traces_(traces),
         pass_{GetStyleResourceBudget(registry), GetStyleCascadeMetrics(registry).counters,
               GetMatchedPropertiesCache(registry)} {}
 
@@ -1166,6 +1232,14 @@ public:
     auto& slot = registry_.get_or_emplace<ComputedStyleComponent>(entity);
     computePropertiesInto(registry_, entity, slot, pass_, warnings_, this);
     return slot;
+  }
+
+  RuleTrace* trace(Entity entity) {
+    if (!traces_) {
+      return nullptr;
+    }
+    const auto it = traces_->find(entity);
+    return it == traces_->end() ? nullptr : &it->second;
   }
 
   AnimationResourceBudget* animationBudget() {
@@ -1180,8 +1254,82 @@ public:
 private:
   Registry& registry_;
   ParseWarningSink& warnings_;
+  std::unordered_map<Entity, RuleTrace>* traces_;
   CascadePass pass_;
 };
+
+struct StyleSystem::PreparedBatch::Impl {
+  Registry& registry;
+  std::unordered_map<Entity, RuleTrace> traces;
+  bool finished = false;
+
+  void restoreSlots() {
+    for (auto& [entity, trace] : traces) {
+      *trace.slot = trace.original;
+    }
+  }
+};
+
+StyleSystem::PreparedBatch::PreparedBatch(Registry& registry, std::span<const Entity> entities)
+    : impl_(std::make_unique<Impl>(Impl{registry, {}})) {
+  UTILS_RELEASE_ASSERT(entities.size() <= kMaximumElements);
+  UTILS_RELEASE_ASSERT(!registry.ctx().contains<ExternalUseStyleContext>());
+  UTILS_RELEASE_ASSERT(std::as_const(registry).view<const AnimatedValuesComponent>().empty());
+  impl_->traces.reserve(entities.size());
+  for (Entity entity : entities) {
+    auto& slot = registry.get<ComputedStyleComponent>(entity);
+    auto [it, inserted] = impl_->traces.try_emplace(entity);
+    UTILS_RELEASE_ASSERT(inserted && !slot.style);
+    it->second.slot = &slot;
+    it->second.original = slot;
+  }
+}
+
+StyleSystem::PreparedBatch::~PreparedBatch() {
+  if (!impl_->finished) {
+    impl_->restoreSlots();
+  }
+}
+
+bool StyleSystem::PreparedBatch::compute(Entity entity, CascadePass& worker,
+                                         ParseWarningSink& warnings) {
+  UTILS_RELEASE_ASSERT(worker.staging && !impl_->finished);
+  if (worker.budget.rejected() || worker.staging->declined()) {
+    return false;
+  }
+  auto& trace = impl_->traces.at(entity);
+  const StyleCascadeCounters before = worker.counters;
+  computePropertiesInto(std::as_const(impl_->registry), entity, *trace.slot, worker, warnings,
+                        nullptr, &trace);
+  trace.actualWork = worker.counters - before;
+  if (worker.budget.rejected() || worker.staging->declined()) {
+    *trace.slot = trace.original;
+    return false;
+  }
+  return true;
+}
+
+std::size_t StyleSystem::PreparedBatch::commit(std::span<const Entity> requests,
+                                               ParseWarningSink& warnings, bool useTraces) {
+  UTILS_RELEASE_ASSERT(!impl_->finished);
+  impl_->restoreSlots();
+  SerialCascade cascade(impl_->registry, warnings, useTraces ? &impl_->traces : nullptr);
+  for (Entity entity : requests) {
+    cascade.compute(entity);
+  }
+  impl_->finished = true;
+  auto& counters = GetStyleCascadeMetrics(impl_->registry).counters;
+  std::size_t acceptedTraces = 0;
+  for (const auto& [entity, trace] : impl_->traces) {
+    counters.registryCopies += trace.actualWork.registryCopies;
+    counters.matchedPropertiesCacheHits += trace.actualWork.matchedPropertiesCacheHits;
+    counters.matchedPropertiesCacheMisses += trace.actualWork.matchedPropertiesCacheMisses;
+    counters.declarationParsesSkipped += trace.actualWork.declarationParsesSkipped;
+    acceptedTraces += trace.replayed;
+  }
+  impl_->traces.clear();
+  return acceptedTraces;
+}
 
 // All slots share the storage's ownership block. A cache eviction cannot uncharge a record
 // still reachable from an element or from another worker's inherited cache key.
@@ -1352,7 +1500,24 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
                                        StyleCascadeCounters& counters,
                                        MatchedPropertiesKey& cacheKey, const StyleComponent* local,
                                        ParseWarningSink& warningSink,
-                                       PendingStyleDeclarations& declarations) {
+                                       PendingStyleDeclarations& declarations, RuleTrace* capture,
+                                       RuleTrace* replay) {
+  const auto admitMatch = [&](const RuleTrace::Match& match) {
+    ++counters.rulesMatched;
+    cacheKey.addRule(match.revision, match.ordinal, match.position, match.specificity);
+    AdmitRuleDeclarations(*match.rule, match.specificity, styleBudget, counters,
+                          [&](const css::Declaration& declaration, css::Specificity specificity) {
+                            declarations.admit(declaration, specificity, local, warningSink);
+                          });
+  };
+  if (replay && replay->tryCharge(styleBudget)) {
+    counters.rulesTested += replay->work.rules;
+    for (std::size_t i = 0; i < replay->count; ++i) {
+      admitMatch(replay->matches[i]);
+    }
+    return;
+  }
+  const RuleTrace::Capture recording(capture, styleBudget);
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
   const RuleIndexElementView elementKeys(registry, treeEntity, dataEntity);
   const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
@@ -1375,17 +1540,15 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
       if (!match) {
         continue;
       }
-      ++counters.rulesMatched;
       css::Specificity specificity = match->specificity;
       if (isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
-      cacheKey.addRule(sheetRevision, sheetOrdinal, position, specificity);
-      AdmitRuleDeclarations(
-          rule, specificity, styleBudget, counters,
-          [&](const css::Declaration& declaration, css::Specificity declarationSpecificity) {
-            declarations.admit(declaration, declarationSpecificity, local, warningSink);
-          });
+      const RuleTrace::Match matched{sheetRevision, sheetOrdinal, position, &rule, specificity};
+      if (capture) {
+        capture->append(matched);
+      }
+      admitMatch(matched);
     }
     return true;
   };
@@ -1515,7 +1678,8 @@ void StyleSystem::resolveRelativeFontProperties(const Registry& registry, Entity
 
 void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
                                         ComputedStyleComponent& computedStyle, CascadePass& pass,
-                                        ParseWarningSink& warningSink, SerialCascade* serial) {
+                                        ParseWarningSink& warningSink, SerialCascade* serial,
+                                        RuleTrace* capture) {
   if (computedStyle.style) {
     return;  // Already computed.
   }
@@ -1536,7 +1700,8 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   MatchedPropertiesKey cacheKey;
   PendingStyleDeclarations declarations;
   applyStylesheetRules(registry, handle.entity(), dataEntity, styleBudget, counters, cacheKey,
-                       styleComponent, warningSink, declarations);
+                       styleComponent, warningSink, declarations, capture,
+                       serial ? serial->trace(entity) : nullptr);
 
   PopulateMatchedPropertiesKey(registry, handle, dataEntity, parent, styleComponent, cacheKey);
   MatchedCacheState cacheState =

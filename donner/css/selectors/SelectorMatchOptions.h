@@ -28,6 +28,15 @@ public:
     return true;
   }
 
+  /// Admit a complete previously measured traversal or leave the budget unchanged.
+  [[nodiscard]] bool tryConsumeMeasured(std::size_t count) {
+    if (rejected_ || count > maximumSteps_ - steps_) {
+      return false;
+    }
+    steps_ += count;
+    return true;
+  }
+
   /// Work steps charged to this budget.
   [[nodiscard]] std::size_t steps() const { return steps_; }
   /// Whether a traversal exceeded the visit ceiling.

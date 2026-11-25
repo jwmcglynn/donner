@@ -2067,18 +2067,20 @@ per-element cost and is calibrated in Milestone D3.
   output slots as well as front entries: eviction alone need not free a record. A context that
   cannot bound a value's retained storage, or whose next record would exceed its allowance,
   abandons speculation before publishing that record. Thus provisional record storage is at most
-  the number of participating contexts times 1 MiB. Cache metadata, bounded diagnostic buffers
+  the number of participating contexts times 1 MiB, plus one shared-ownership control block per
+  context. Cache metadata, bounded diagnostic buffers
   and task scratch are accounted for separately. At owner commit every provisional reference
   is released or replaced by a canonical reference. The acceptance test uses repeated and
   distinct sibling keys, evicts front entries while slots still hold them, checks the high-water
   bound on every admission, and compares a subsequent budget-limited allocation with serial.
-- **Warnings.** Each task records an entity's diagnostics in two per-entity buffers: those from
-  before its parent is computed in the serial `computePropertiesInto` (rule application) and those
-  from after (animation, colors, inheritance, fonts). After the join the commit replays the serial
-  pass's order exactly: it walks entities in the same storage order the serial loop uses, and for
-  an entity not yet emitted sends its first buffer, then recursively emits its parent if the parent
-  is not yet emitted, then sends its second buffer. That is the order the serial on-demand parent
-  recursion produces.
+- **Warnings and owner commit.** The owner visits the original requests in storage order,
+  including the original on-demand parent recursion. A bounded transcript can supply matched
+  rules and their measured selector work when the complete sequence fits the remaining budgets.
+  Otherwise the owner evaluates the element normally with the unchanged budget. Both paths use
+  the serial declaration admission, cache, record construction and warning sink. Consequently
+  early and late warnings, disabled-sink attempts, truncation and the first refused element are
+  decided in the same order as a serial pass. Worker diagnostics remain private. Bound the
+  transcript to four matched rules per element and 32,768 candidate elements per batch.
 - **Ancestor filter and cache.** Each worker owns a `StyleAncestorFilter`; its chain
   synchronization already makes it independent of visit order. Each worker owns a matched
   properties cache; records are immutable and shared through atomic reference counts, so a hit
