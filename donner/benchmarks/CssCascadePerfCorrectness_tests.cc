@@ -94,16 +94,22 @@ TEST(CascadeRendererOptions, WorkerDrawFallsBackOnlyForItsOwnScheduler) {
   tasks::TaskScheduler caller({.workerCount = 2});
   tasks::TaskScheduler other({.workerCount = 2});
   tasks::TaskScope scope(caller);
+  const auto submitter = std::this_thread::get_id();
   for (auto* borrowed : {&caller, &other}) {
-    auto document = ParseCascadeDocument(WideRenderFixture());
-    ASSERT_TRUE(document);
+    std::optional<std::uint64_t> scheduledPasses;
     ASSERT_TRUE(scope.trySpawn([&] {
+      EXPECT_NE(std::this_thread::get_id(), submitter);
+      auto document = ParseCascadeDocument(WideRenderFixture());
+      ASSERT_TRUE(document);
       svg::Renderer renderer(svg::RendererOptions{.scheduler = borrowed});
       renderer.draw(*document);
+      const auto access = document->readAccess();
+      const auto& metrics = access.registry().ctx().get<svg::components::StyleCascadeMetrics>();
+      scheduledPasses = metrics.scheduledPasses;
     }));
     scope.wait();
-    const auto& metrics = document->registry().ctx().get<svg::components::StyleCascadeMetrics>();
-    EXPECT_EQ(metrics.scheduledPasses, borrowed == &caller ? 0u : 1u);
+    ASSERT_TRUE(scheduledPasses);
+    EXPECT_EQ(*scheduledPasses, borrowed == &caller ? 0u : 1u);
   }
 }
 
