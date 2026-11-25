@@ -150,7 +150,8 @@ TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal
     hooks.beforeNode = [&](Entity entity) {
       if (entity != offscreen && entity != leaf) {
         std::unique_lock lock(visitsMutex);
-        EXPECT_TRUE(mainVisits.insert(entity).second);
+        EXPECT_THAT(mainVisits, ::testing::Not(::testing::Contains(entity)));
+        mainVisits.insert(entity);
         if (std::this_thread::get_id() == owner) {
           ++ownerVisits;
           if (expectWorker && entity != root && !ownerWaitedForWorker) {
@@ -883,7 +884,8 @@ TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
       ASSERT_GT(shadow.mainBranch->shadowEntities.size(), 1u);
       const auto& child =
           registry.get<ComputedStyleComponent>(shadow.mainBranch->shadowEntities[1]);
-      EXPECT_EQ(child.properties()->fill.get(), PaintServer(PaintServer::Solid(css::Color(color))));
+      EXPECT_THAT(child.properties()->fill.get(),
+                  ::testing::Eq(PaintServer(PaintServer::Solid(css::Color(color)))));
     };
     expectFill("#u0", css::RGBA::RGB(0, 0, 0));
     expectFill("#u1", css::RGBA::RGB(255, 0, 0));
