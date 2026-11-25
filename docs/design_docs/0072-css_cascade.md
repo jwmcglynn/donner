@@ -1277,7 +1277,9 @@ imported CSS bytes, rules and component values before rebuilding the combined ca
 `setContents` follows the existing path described above. Both selector caches share the helpers in
 `SelectorWalk.h`. Building it visits each simple selector once, recursing into pseudo-class
 arguments no deeper than the CSS parser's 64-level nesting limit, and sorts at most one entry per
-named simple selector.
+named simple selector. Opposite directions in one composed dependency also include the subject
+because the selector can reach the edited element again. Edit routing includes the edited element
+itself. A sheet using `:has()` keeps the full-restyle path for the narrowed edit stage.
 
 **Routing.** `SVGElement::setClassName`, `setStyle`, `updateStyle` and the presentation
 attribute path in `MarkPresentationAttributeDirty` compute the affected set instead of setting

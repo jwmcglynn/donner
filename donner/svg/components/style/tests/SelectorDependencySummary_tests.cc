@@ -115,16 +115,16 @@ TEST(SelectorDependencySummary, NthFiltersWithSiblingSelectorsIncludeTheEditedEl
   EXPECT_EQ(ClassIn("g:nth-last-child(2 of .a + .b)", "a"), kSubject | kPreceding | kFollowing);
   EXPECT_EQ(ClassIn("g:nth-last-child(2 of :is(.a ~ .b))", "a"),
             kSubject | kPreceding | kFollowing);
-  EXPECT_EQ(ClassIn("g:nth-child(2 of :not(.a + .b))", "a"), kSubject | kFollowing);
+  EXPECT_EQ(ClassIn("g:nth-child(2 of :not(.a + .b))", "a"), kFollowing);
 }
 
 TEST(SelectorDependencySummary, NthFiltersLeftOfSiblingCombinatorsReachBothDirections) {
-  EXPECT_EQ(ClassIn(":nth-child(1 of .s) + .x", "s"), kFollowing | kPreceding);
-  EXPECT_EQ(ClassIn(":nth-last-child(1 of .s) ~ .x", "s"), kFollowing | kPreceding);
+  EXPECT_EQ(ClassIn(":nth-child(1 of .s) + .x", "s"), kSubject | kFollowing | kPreceding);
+  EXPECT_EQ(ClassIn(":nth-last-child(1 of .s) ~ .x", "s"), kSubject | kFollowing | kPreceding);
   // Also when the sibling combinator is outside an enclosing pseudo-class.
-  EXPECT_EQ(ClassIn(":is(:nth-last-child(1 of .s)) ~ .x", "s"), kFollowing | kPreceding);
+  EXPECT_EQ(ClassIn(":is(:nth-last-child(1 of .s)) ~ .x", "s"), kSubject | kFollowing | kPreceding);
   EXPECT_EQ(ClassIn(":is(:nth-child(1 of .s) + .y) .x", "s"),
-            kDescendants | kFollowing | kPreceding);
+            kDescendants | kSubject | kFollowing | kPreceding);
 }
 
 TEST(SelectorDependencySummary, HasReachesAncestorsAndIsFlagged) {

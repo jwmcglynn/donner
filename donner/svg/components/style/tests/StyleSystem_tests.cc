@@ -520,18 +520,62 @@ TEST_F(StyleSystemTest, InstallingResolvedImportsChangesStylesheetContentRevisio
   EXPECT_FALSE(stylesheet.dependencySummary.dependsOnTextContent());
 }
 
-TEST_F(StyleSystemTest, FilteredNthLastChildCanChangeTheEditedSiblingMatch) {
-  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg">
-    <g class="a"/><g id="middle" class="a b"/><g class="b"/>
-  </svg>)");
-  constexpr std::string_view kSelector = "g:nth-last-child(2 of .a + .b)";
-  ASSERT_THAT(document.querySelector(kSelector), testing::Optional(testing::_));
-  auto middle = document.querySelector("#middle");
-  ASSERT_THAT(middle, testing::Optional(testing::_));
-  EXPECT_EQ(document.querySelector(kSelector)->entityHandle().entity(),
-            middle->entityHandle().entity());
-  middle->setClassName("b");
-  EXPECT_THAT(document.querySelector(kSelector), Eq(std::nullopt));
+TEST_F(StyleSystemTest, FilteredNthDependenciesCoverChangedSiblingMatches) {
+  struct Fixture {
+    std::string_view selector;
+    std::string_view classes[3];
+    std::string_view removed;
+    std::string_view replacement;
+    std::string_view before;
+    std::string_view after;
+  };
+  const Fixture fixtures[] = {
+      {"g:nth-last-child(2 of .a + .b)", {"a", "a b", "b"}, "a", "b", "010", "000"},
+      {"g:nth-last-child(1 of .s) ~ .x", {"s", "s x", "x"}, "s", "x", "001", "011"},
+      {"g:is(:nth-last-child(2 of :is(.a + .b)))", {"a", "a b", "b"}, "a", "b", "010", "000"},
+      {"g:not(:nth-last-child(2 of :is(.a + .b)))", {"a", "a b", "b"}, "a", "b", "101", "111"},
+      {"g:nth-child(2 of :not(.a + .b))", {"a", "a b", "b"}, "a", "b", "000", "001"},
+  };
+  static constexpr std::uint8_t kRelative[] = {
+      SelectorDependency::PrecedingSiblings,
+      SelectorDependency::Subject,
+      SelectorDependency::FollowingSiblings,
+  };
+  for (const Fixture& fixture : fixtures) {
+    SCOPED_TRACE(fixture.selector);
+    std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg">)";
+    for (int i = 0; i < 3; ++i) {
+      source +=
+          "<g id='node" + std::to_string(i) + "' class='" + std::string(fixture.classes[i]) + "'/>";
+    }
+    auto document = ParseSVG(source + "</svg>");
+    const auto matches = [&] {
+      std::string result;
+      for (int i = 0; i < 3; ++i) {
+        const std::string selector =
+            "#node" + std::to_string(i) + ":is(" + std::string(fixture.selector) + ")";
+        result += document.querySelector(selector).has_value() ? '1' : '0';
+      }
+      return result;
+    };
+    const std::string before = matches();
+    ASSERT_EQ(before, fixture.before);
+    auto edited = document.querySelector("#node1");
+    ASSERT_THAT(edited, testing::Optional(testing::_));
+    edited->setClassName(fixture.replacement);
+    const std::string after = matches();
+    ASSERT_EQ(after, fixture.after);
+
+    StylesheetComponent stylesheet;
+    const std::string ruleText = std::string(fixture.selector) + " { fill: red }";
+    stylesheet.parseStylesheet(std::string_view(ruleText));
+    const auto relations = stylesheet.dependencySummary.classDependency(fixture.removed);
+    for (int i = 0; i < 3; ++i) {
+      if (before[i] != after[i]) {
+        EXPECT_NE(relations & kRelative[i], 0) << "affected sibling index " << i;
+      }
+    }
+  }
 }
 
 TEST_F(StyleSystemTest, CollectMatchedStyleRulesReportsSelectorBranchAndSourceRanges) {

@@ -12,6 +12,19 @@ namespace {
 using Bits = SelectorDependency::Bits;
 using Entry = SelectorDependencySummary::Entry;
 
+constexpr std::uint8_t kSiblingRelations = Bits::FollowingSiblings | Bits::PrecedingSiblings;
+constexpr std::uint8_t kVerticalRelations = Bits::Descendants | Bits::Ancestors;
+
+// Opposite directions can reach the edited element again. Keep this conservative even
+// when the particular selector would be unable to return along one of the paths.
+constexpr std::uint8_t IncludeSelfOnReturnPath(std::uint8_t relations) {
+  if ((relations & kSiblingRelations) == kSiblingRelations ||
+      (relations & kVerticalRelations) == kVerticalRelations) {
+    relations |= Bits::Subject;
+  }
+  return relations;
+}
+
 /// Pseudo-classes whose match depends on an element's position among its siblings or on its
 /// children.
 bool IsStructuralPseudoClass(const RcString& ident) {
@@ -69,27 +82,22 @@ public:
    * \p context's non-subject relations plus the combinator's. Recursion is bounded by the CSS
    * parser's nesting limit.
    */
-  void addSelector(const css::Selector& selector, std::uint8_t context, bool inNthFilter = false) {
+  void addSelector(const css::Selector& selector, std::uint8_t context) {
     for (const css::ComplexSelector& complex : selector.entries) {
       const std::size_t count = complex.entries.size();
       for (std::size_t i = 0; i < count; ++i) {
-        std::uint8_t relations = context;
-        if (i + 1 != count) {
-          const auto combinator = complex.entries[i + 1].combinator;
-          // A sibling's filter membership can change the current element's filtered rank.
-          if (!inNthFilter || !IsSiblingCombinator(combinator)) {
-            relations &= ~Bits::Subject;
-          }
-          relations |= RelationsLeftOf(combinator);
-        }
-        addCompound(complex.entries[i].compoundSelector, relations, inNthFilter);
+        const std::uint8_t relations =
+            i + 1 == count
+                ? context
+                : static_cast<std::uint8_t>((context & ~Bits::Subject) |
+                                            RelationsLeftOf(complex.entries[i + 1].combinator));
+        addCompound(complex.entries[i].compoundSelector, IncludeSelfOnReturnPath(relations));
       }
     }
   }
 
 private:
-  void addCompound(const css::CompoundSelector& compound, std::uint8_t relations,
-                   bool inNthFilter) {
+  void addCompound(const css::CompoundSelector& compound, std::uint8_t relations) {
     for (const css::CompoundSelector::Entry& simple : compound.entries) {
       if (const auto* id = std::get_if<css::IdSelector>(&simple)) {
         summary_.ids_.push_back(Entry{id->name, relations});
@@ -98,7 +106,7 @@ private:
       } else if (const auto* attribute = std::get_if<css::AttributeSelector>(&simple)) {
         addAttribute(attribute->name.name.name, relations);
       } else if (const auto* pseudoClass = std::get_if<css::PseudoClassSelector>(&simple)) {
-        addPseudoClass(*pseudoClass, relations, inNthFilter);
+        addPseudoClass(*pseudoClass, relations);
       }
     }
   }
@@ -116,27 +124,25 @@ private:
    * `:nth-last-child()` whose compound already reaches siblings, because it sits left of a sibling
    * combinator here or in an enclosing selector, reaches siblings in both directions.
    */
-  void addPseudoClass(const css::PseudoClassSelector& pseudoClass, std::uint8_t relations,
-                      bool inNthFilter) {
+  void addPseudoClass(const css::PseudoClassSelector& pseudoClass, std::uint8_t relations) {
     const RcString& ident = pseudoClass.ident;
     summary_.usesStructuralPseudoClass_ |= IsStructuralPseudoClass(ident);
     summary_.dependsOnTextContent_ |= ident.equalsLowercase("empty");
     if (!pseudoClass.selector) {
       return;
     }
-    constexpr std::uint8_t kSiblings = Bits::FollowingSiblings | Bits::PrecedingSiblings;
     std::uint8_t argument = relations;
     if (ident.equalsLowercase("has")) {
       summary_.usesHas_ = true;
       argument |= Bits::Ancestors | Bits::PrecedingSiblings;
     } else if (ident.equalsLowercase("nth-child")) {
-      inNthFilter = true;
-      argument |= (relations & kSiblings) != 0 ? kSiblings : Bits::FollowingSiblings;
+      argument |=
+          (relations & kSiblingRelations) != 0 ? kSiblingRelations : Bits::FollowingSiblings;
     } else if (ident.equalsLowercase("nth-last-child")) {
-      inNthFilter = true;
-      argument |= (relations & kSiblings) != 0 ? kSiblings : Bits::PrecedingSiblings;
+      argument |=
+          (relations & kSiblingRelations) != 0 ? kSiblingRelations : Bits::PrecedingSiblings;
     }
-    addSelector(*pseudoClass.selector, argument, inNthFilter);
+    addSelector(*pseudoClass.selector, argument);
   }
 
   SelectorDependencySummary& summary_;
