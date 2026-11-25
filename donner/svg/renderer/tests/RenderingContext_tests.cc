@@ -1282,6 +1282,225 @@ TEST_F(RenderingContextTest, FullRestyleMatchesUseHostWithoutItsShadowTree) {
               Optional(PaintServer(PaintServer::None())));
 }
 
+TEST_F(RenderingContextTest, RetainedUpdateMatchesUseHostWithoutItsShadowTree) {
+  // Selectors on document elements must not see a `<use>` shadow tree, which is attached under
+  // its host while a frame is built: not through `:has()`, structural pseudo-classes or sibling
+  // combinators (the `title` rules see the host's document child next to the attached shadow
+  // root). A retained update restyles with the shadow tree attached, so it must match exactly as
+  // the first frame and a full rebuild do.
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+      <style>
+        g:has(rect) { stroke: red }
+        g:has(> use > rect) { stroke-width: 3 }
+        use:has(rect) { fill: red }
+        use:empty { fill: green }
+        title:last-child { stroke: red }
+        title:only-child { stroke-width: 3 }
+        title:nth-last-child(1) { stroke-opacity: 0.5 }
+        title:has(~ rect) { fill: red }
+        title:has(+ *) { fill-opacity: 0.5 }
+      </style>
+      <defs><rect id="shape" width="8" height="8"/></defs>
+      <g id="group"><use id="instance" href="#shape"><title id="label">x</title></use></g>
+    </svg>
+  )svg";
+  auto document = ParseSVG(kSource);
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+  const auto& counters = document.registry().ctx().get<RenderTreeState>().counters;
+  const auto fullRebuilds = counters.fullRebuilds;
+  const auto retainedUpdates = counters.retainedUpdates;
+
+  // An opacity write restyles the group and its subtree, including the host and its document
+  // child, through the retained update.
+  document.querySelector("#group")->setAttribute("opacity", "0.5");
+  ctx.instantiateRenderTree(false, warningSink_);
+  ASSERT_EQ(counters.fullRebuilds, fullRebuilds);
+  ASSERT_GT(counters.retainedUpdates, retainedUpdates);
+
+  const auto none = PaintServer(PaintServer::None());
+  EXPECT_THAT(document.querySelector("#group")->getComputedStyle().stroke.get(), Optional(none));
+
+  // Every style is what the first frame of the document authored with the edit computes.
+  auto authored = ParseSVG(std::string(kSource).replace(std::string(kSource).find("id=\"group\""),
+                                                        10, "id=\"group\" opacity=\"0.5\""));
+  RenderingContext authoredCtx(authored.registry());
+  authoredCtx.instantiateRenderTree(false, warningSink_);
+  EXPECT_THAT(PositionedStyles(document), testing::ElementsAreArray(PositionedStyles(authored)));
+
+  // A class edit takes the full rebuild, which must agree.
+  document.querySelector("#group")->setClassName("edited");
+  ctx.instantiateRenderTree(false, warningSink_);
+  ASSERT_GT(counters.fullRebuilds, fullRebuilds);
+  EXPECT_THAT(PositionedStyles(document), testing::ElementsAreArray(PositionedStyles(authored)));
+}
+
+/// Matches a computed style whose properties set by the selectors of
+/// `ShadowTreeSelectorsMatchWithinTheirOwnTree` equal those of \p expected, naming each mismatch.
+testing::Matcher<const PropertyRegistry&> SelectorStyledLike(const PropertyRegistry& expected) {
+  using testing::AllOf;
+  using testing::ResultOf;
+  return AllOf(
+      ResultOf(
+          "fill", [](const PropertyRegistry& p) { return p.fill.get(); }, Eq(expected.fill.get())),
+      ResultOf(
+          "stroke", [](const PropertyRegistry& p) { return p.stroke.get(); },
+          Eq(expected.stroke.get())),
+      ResultOf(
+          "stroke-width", [](const PropertyRegistry& p) { return p.strokeWidth.get(); },
+          Eq(expected.strokeWidth.get())),
+      ResultOf(
+          "opacity", [](const PropertyRegistry& p) { return p.opacity.get(); },
+          Eq(expected.opacity.get())),
+      ResultOf(
+          "stroke-opacity", [](const PropertyRegistry& p) { return p.strokeOpacity.get(); },
+          Eq(expected.strokeOpacity.get())),
+      ResultOf(
+          "fill-opacity", [](const PropertyRegistry& p) { return p.fillOpacity.get(); },
+          Eq(expected.fillOpacity.get())));
+}
+
+TEST_F(RenderingContextTest, ShadowTreeSelectorsMatchWithinTheirOwnTree) {
+  // Inside a `<use>` shadow tree, structural pseudo-classes, sibling combinators and `:has()`
+  // match among the cloned elements as they do among the elements they clone, except the instance
+  // root, the clone of the referenced element, which is the only element of its tree: the host's
+  // own children are not its siblings. Here the referenced `<g>` is also an only child, so its
+  // clone matches as it does.
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+      <style>
+        rect:first-child { fill: green }
+        .a + .b { stroke: green }
+        rect:nth-child(2) { stroke-width: 3 }
+        g:has(> .b) { opacity: 0.5 }
+        g:only-child { stroke-opacity: 0.5 }
+        g:first-child { fill-opacity: 0.5 }
+      </style>
+      <defs><g id="template"><rect class="a" width="2" height="2"/><rect class="b" width="2" height="2"/></g></defs>
+      <use id="instance" href="#template"><title>x</title></use>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  // Each clone computes what the element it clones computes, apart from inheritance from the
+  // host, which these properties do not depend on.
+  Registry& registry = document.registry();
+  int clones = 0;
+  for (const auto& [entity, shadow] : registry.view<components::ShadowEntityComponent>().each()) {
+    const auto* cloneStyle = registry.try_get<components::ComputedStyleComponent>(entity);
+    const auto* lightStyle =
+        registry.try_get<components::ComputedStyleComponent>(shadow.lightEntity);
+    ASSERT_NE(cloneStyle, nullptr);
+    ASSERT_NE(lightStyle, nullptr);
+    EXPECT_THAT(*cloneStyle->properties(), SelectorStyledLike(*lightStyle->properties()))
+        << "clone of " << registry.get<donner::components::TreeComponent>(entity).tagName();
+    ++clones;
+  }
+  EXPECT_EQ(clones, 3);
+}
+
+TEST_F(RenderingContextTest, ShadowTreeRootIsTheOnlyElementOfItsTree) {
+  // A `<use>` instance root is the only element child of its tree for selector purposes: index 1
+  // of 1, first and last of its type, whatever its host's own children; and the host's children
+  // never count it. The same holds for a nested instance root and on every path.
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+      <style>
+        g:nth-child(1) { opacity: 0.5 }
+        g:nth-child(2) { opacity: 0.1 }
+        g:nth-last-child(1) { flood-color: green }
+        g:nth-last-child(2) { flood-color: red }
+        g:nth-of-type(1) { stop-color: green }
+        g:nth-of-type(2) { stop-color: red }
+        g:nth-last-of-type(1) { lighting-color: green }
+        g:nth-last-of-type(2) { lighting-color: red }
+        g:nth-child(1 of .t) { text-decoration-color: green }
+        g:nth-last-child(1 of .z) { text-decoration-color: red }
+        desc:nth-child(1) { stroke-width: 2 }
+        title:nth-child(2) { stroke-width: 3 }
+        title:nth-last-child(1) { stroke-opacity: 0.5 }
+        desc:nth-last-of-type(1) { fill-opacity: 0.5 }
+      </style>
+      <defs>
+        <rect id="unused" width="1" height="1"/>
+        <g id="inner" class="t"><rect width="1" height="1"/></g>
+        <g id="outer" class="t"><rect width="1" height="1"/><use href="#inner"/></g>
+      </defs>
+      <g id="parent"><use id="host" href="#outer"><desc id="d"/><title id="n"/></use></g>
+      <circle id="other" r="1"/>
+    </svg>
+  )svg";
+  auto document = ParseSVG(kSource);
+  Registry& registry = document.registry();
+  const Entity inner = document.querySelector("#inner")->entityHandle().entity();
+  const Entity outer = document.querySelector("#outer")->entityHandle().entity();
+
+  const auto expectRootRule = [&](std::string_view path) {
+    SCOPED_TRACE(path);
+    int roots = 0;
+    for (const auto& [entity, shadow] : registry.view<components::ShadowEntityComponent>().each()) {
+      if (!registry.all_of<components::ShadowTreeRootComponent>(entity) ||
+          (shadow.lightEntity != inner && shadow.lightEntity != outer)) {
+        continue;
+      }
+      ++roots;
+      const PropertyRegistry& root =
+          *registry.get<components::ComputedStyleComponent>(entity).properties();
+      // Non-inherited properties, so a match cannot come from the host's ancestors.
+      const css::Color green(css::RGBA(0, 0x80, 0, 0xFF));
+      EXPECT_THAT(root.opacity.get(), Optional(0.5));
+      EXPECT_THAT(root.floodColor.get(), Optional(green));
+      EXPECT_THAT(root.stopColor.get(), Optional(green));
+      EXPECT_THAT(root.lightingColor.get(), Optional(green));
+      EXPECT_THAT(root.textDecorationColor.get(), Optional(green));
+    }
+    // The main instance root (a clone of `#outer`) and the nested one (a clone of `#inner`).
+    EXPECT_EQ(roots, 2);
+
+    // The host's own children keep their places among themselves: `<desc>` first, `<title>`
+    // second and last.
+    const auto styleOf = [&](const char* id) -> const PropertyRegistry& {
+      const auto& tree = registry.get<donner::components::TreeComponent>(
+          document.querySelector("#host")->entityHandle().entity());
+      for (Entity child = tree.firstChild(); child != entt::null;
+           child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+        if (const auto* idComponent = registry.try_get<components::IdComponent>(child);
+            idComponent != nullptr && idComponent->id() == id) {
+          return *registry.get<components::ComputedStyleComponent>(child).properties();
+        }
+      }
+      ADD_FAILURE() << "no host child " << id;
+      static const PropertyRegistry kEmpty;
+      return kEmpty;
+    };
+    EXPECT_THAT(styleOf("d").strokeWidth.get(), Optional(Lengthd(2, Lengthd::Unit::None)));
+    EXPECT_THAT(styleOf("d").fillOpacity.get(), Optional(0.5));
+    EXPECT_THAT(styleOf("n").strokeWidth.get(), Optional(Lengthd(3, Lengthd::Unit::None)));
+    EXPECT_THAT(styleOf("n").strokeOpacity.get(), Optional(0.5));
+  };
+
+  RenderingContext ctx(registry);
+  ctx.instantiateRenderTree(false, warningSink_);
+  expectRootRule("first frame");
+
+  const auto& counters = registry.ctx().get<RenderTreeState>().counters;
+  const auto fullRebuilds = counters.fullRebuilds;
+  document.querySelector("#other")->setClassName("edited");
+  ctx.instantiateRenderTree(false, warningSink_);
+  ASSERT_GT(counters.fullRebuilds, fullRebuilds);
+  expectRootRule("full restyle");
+
+  const auto retainedUpdates = counters.retainedUpdates;
+  document.querySelector("#parent")->setAttribute("opacity", "0.5");
+  ctx.instantiateRenderTree(false, warningSink_);
+  ASSERT_GT(counters.retainedUpdates, retainedUpdates);
+  expectRootRule("retained update");
+}
+
 // --- context-fill / context-stroke resolution ---
 
 /// Matches a ResolvedPaintServer holding a solid color equal to @p expectedColor.

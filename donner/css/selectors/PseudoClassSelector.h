@@ -189,10 +189,25 @@ private:
   PseudoMatchResult matchesNthFunction(const T& element,
                                        const SelectorMatchOptions<T>& options) const;
 
+  /**
+   * The 1-based position of \p element among its siblings that match \p matchingType, counted
+   * from the first sibling, or from the last with \p fromEnd; -1 when \p element does not match
+   * \p matchingType.
+   *
+   * Counted through the element's own sibling walks, the same walks `:first-child` and
+   * `:last-child` use, so the structural pseudo-classes agree on the place of an element whose
+   * parent's child walks would not reach it: an element the tree adapter gives no siblings, such as
+   * a `<use>` instance root, is index 1 of 1, and an element whose adapter hides some siblings,
+   * such as an attached shadow root among its host's children, never counts them.
+   *
+   * Charges the element, then each sibling twice (the walk and the visit), and the walk's last
+   * step, so the element at position p costs 2p steps here (2p + 1 with its compound's own step),
+   * as the parent-order walk did. If the budget runs out the walk stops early and the partial index
+   * is discarded with the rejected match.
+   */
   template <ElementLike T, details::OptionalSelectorLike<T> SelectorType>
-  static int getIndexInParent(const T& parent, const T& element, bool fromEnd,
-                              const SelectorType& matchingType,
-                              const SelectorMatchOptions<T>& options) {
+  static int getIndexAmongSiblings(const T& element, bool fromEnd, const SelectorType& matchingType,
+                                   const SelectorMatchOptions<T>& options) {
     const auto matchesType = [&](const T& child) {
       if (!matchingType) {
         return true;
@@ -205,44 +220,27 @@ private:
         return matchingType->matches(child);
       }
     };
-    const SelectorTraversalNavigation<T> navigation(options.traversalBudget);
-    int childIndex = 1;
-    if (!fromEnd) {
-      for (std::optional<T> child = navigation.firstChild(parent); child;
-           child = navigation.nextSibling(*child)) {
-        if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
-          return -1;
-        }
-        if (!matchesType(child.value())) {
-          continue;
-        }
-
-        if (child.value() == element) {
-          return childIndex;
-        } else {
-          ++childIndex;
-        }
-      }
-    } else {
-      for (std::optional<T> child = navigation.lastChild(parent); child;
-           child = navigation.previousSibling(*child)) {
-        if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
-          return -1;
-        }
-        if (!matchesType(child.value())) {
-          continue;
-        }
-
-        if (child.value() == element) {
-          return childIndex;
-        } else {
-          ++childIndex;
-        }
-      }
+    const auto consume = [&] {
+      return options.traversalBudget == nullptr || options.traversalBudget->consume();
+    };
+    if (!consume() || !matchesType(element)) {
+      return -1;
     }
 
-    // A filter or exhausted navigation can finish before reaching this element.
-    return -1;
+    const SelectorTraversalNavigation<T> navigation(options.traversalBudget);
+    const auto step = [&](const T& from) {
+      return fromEnd ? navigation.nextSibling(from) : navigation.previousSibling(from);
+    };
+    int index = 1;
+    for (std::optional<T> sibling = step(element); sibling; sibling = step(*sibling)) {
+      if (!consume()) {
+        return -1;
+      }
+      if (matchesType(*sibling)) {
+        ++index;
+      }
+    }
+    return index;
   }
 
   template <ElementLike T>

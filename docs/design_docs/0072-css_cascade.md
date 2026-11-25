@@ -109,11 +109,9 @@ same harness, machine class and method. Each goal names the counter or timer tha
   tests and fuzzers (see [Testing and Validation](#testing-and-validation)). A document whose
   cascade ends budget-rejected today can style further, because the rule index and the ancestor
   filter skip work for rules that cannot match; that is the one intended behavior change (see
-  [Decisions](#decisions)). A full-restyle frame computes the first frame's styles, so a `:has()`
-  on an ancestor of a `<use>` element does not match the instanced content on either; a frame
-  that takes the retained update can still match it
-  ([#2715](https://github.com/jwmcglynn/donner/issues/2715); see
-  [Single Cascade per Full Restyle](#single-cascade-per-full-restyle)).
+  [Decisions](#decisions)). First frames, full-restyle frames and retained updates compute the
+  same styles: selector matching for document elements never reaches `<use>` instanced content
+  (see [Single Cascade per Full Restyle](#single-cascade-per-full-restyle)).
 - **Bounded memory.** The rule index costs at most 16 bytes per selector-list entry plus shared
   key strings. The ancestor filter costs 4 KiB per style traversal. Matched-style key metadata
   is bounded independently of the document and family accounts for retained record data.
@@ -1112,13 +1110,23 @@ parsed with the edit applied. Animated documents take the same path; their anima
 a second whole-document cascade and a second full clear on every rebuild.
 
 **Shadow trees and selectors.** The main shadow root of a `<use>` is attached under its host while
-the frame is built. A full rebuild styles the document tree before that, so on first frames and
-full-restyle frames selector matching for document elements does not see `<use>` shadow content:
-a `:has()` on an ancestor of a `<use>` does not match the instanced content.
-`RenderingContextTest.FullRestyleMatchesUseHostWithoutItsShadowTree` pins this. A retained update
-restyles dirty entities with the shadow trees still attached, so a `:has()` on a restyled ancestor
-can match the instanced content there
-([#2715](https://github.com/jwmcglynn/donner/issues/2715)).
+the frame is built. A full rebuild styles the document tree before that, and a retained update
+restyles dirty entities with the shadow trees still attached. Selector matching treats a shadow
+root as neither a child nor a sibling of the elements around it, and gives it no siblings of its
+own, so both paths match the same way: `:has()`, `:empty`, structural pseudo-classes and sibling
+combinators on document elements do not see instanced content, and inside a shadow tree they match
+among the clones as they do among the elements they clone, except the instance root, which is the
+only element of its tree. A `<use>` instance root is the only element child of its tree for
+selector purposes, whatever its position in the referenced tree: index 1 of 1 and first and last of
+its type, for every
+`:nth-*` form (with or without `of S`) and every `:first-*`, `:last-*` and `:only-*` form, and a
+host's own children never count it. Every position is computed from the element's own sibling
+walks (`PseudoClassSelector::getIndexAmongSiblings`), never by enumerating the parent's children,
+so the forms agree. `RenderingContextTest.FullRestyleMatchesUseHostWithoutItsShadowTree`,
+`RetainedUpdateMatchesUseHostWithoutItsShadowTree`, `ShadowTreeSelectorsMatchWithinTheirOwnTree`
+and `ShadowTreeRootIsTheOnlyElementOfItsTree` pin this. Descendant and child combinators still
+reach a clone's ancestors through its host
+([#2695](https://github.com/jwmcglynn/donner/issues/2695)).
 
 `//donner/svg/renderer/tests:full_restyle_corpus_tests` checks that an unedited full restyle leaves
 every computed style of every corpus document (the resvg suite, the renderer test data, the splash
