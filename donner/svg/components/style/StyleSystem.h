@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <unordered_set>
@@ -99,10 +100,39 @@ public:
    * limit.
    */
   StyleResourceBudget(const StyleResourceBudget& document, Limits share)
-      : limits_(share),
-        selectorTraversal_(share.selectorTraversalSteps),
-        retainedStyleBytes_(document.retainedStyleBytes_) {
-    limits_.complexPropertyBytes = document.limits_.complexPropertyBytes;
+      : externalMeasureGeometryExhausted_(document.externalMeasureGeometryExhausted_),
+        externalResourceWarning_(document.externalResourceWarning_),
+        limits_(document.remainingWorkLimits(share)),
+        selectorTraversal_(document.selectorTraversal().share(limits_.selectorTraversalSteps)),
+        rejected_(document.rejected()),
+        retainedStyleBytes_(document.retainedStyleBytes_) {}
+
+  /// Clamp a requested share to work still available locally and in the aggregate envelope.
+  [[nodiscard]] Limits remainingWorkLimits(Limits requested) const {
+    if (aggregateWork_) {
+      requested = aggregateWork_->remainingWorkLimits(requested);
+    }
+    requested.ruleElementMatches =
+        std::min({requested.ruleElementMatches, limits_.ruleElementMatches - ruleElementMatches_,
+                  limits_.ruleElementMatches - externalInstanceWork_});
+    requested.declarationApplications =
+        std::min(requested.declarationApplications,
+                 limits_.declarationApplications - declarationApplications_);
+    requested.declarationComponentWork =
+        std::min(requested.declarationComponentWork,
+                 limits_.declarationComponentWork - declarationComponentWork_);
+    requested.declarationByteWork =
+        std::min(requested.declarationByteWork, limits_.declarationByteWork - declarationByteWork_);
+    requested.selectorTraversalSteps =
+        std::min(requested.selectorTraversalSteps,
+                 selectorTraversal().maximumSteps() - selectorTraversal().steps());
+    requested.externalMeasureEntities = std::min(
+        requested.externalMeasureEntities, limits_.externalMeasureEntities - externalMeasureWork_);
+    requested.externalMeasureGeometryBytes =
+        std::min(requested.externalMeasureGeometryBytes,
+                 limits_.externalMeasureGeometryBytes - externalMeasureGeometryBytes_);
+    requested.complexPropertyBytes = limits_.complexPropertyBytes;
+    return requested;
   }
 
   StyleResourceBudget(const StyleResourceBudget&) = delete;

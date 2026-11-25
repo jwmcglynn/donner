@@ -1299,17 +1299,13 @@ struct StyleSystem::PreparedBatch::Impl {
       : registry(registry),
         logical(GetStyleResourceBudget(registry)),
         contexts(contexts),
-        share(logical.limits()) {
+        share(logical.remainingWorkLimits(logical.limits())) {
     UTILS_RELEASE_ASSERT(contexts > 0);
-    share.ruleElementMatches = (share.ruleElementMatches - logical.ruleElementMatches()) / contexts;
-    share.declarationApplications =
-        (share.declarationApplications - logical.declarationApplications()) / contexts;
-    share.declarationComponentWork =
-        (share.declarationComponentWork - logical.declarationComponentWork()) / contexts;
-    share.declarationByteWork =
-        (share.declarationByteWork - logical.declarationByteWork()) / contexts;
-    share.selectorTraversalSteps =
-        (share.selectorTraversalSteps - logical.selectorTraversal().steps()) / contexts;
+    share.ruleElementMatches /= contexts;
+    share.declarationApplications /= contexts;
+    share.declarationComponentWork /= contexts;
+    share.declarationByteWork /= contexts;
+    share.selectorTraversalSteps /= contexts;
   }
 
   Registry& registry;

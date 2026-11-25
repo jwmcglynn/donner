@@ -408,7 +408,7 @@ Part C estimate: 13.5 engineering days.
 
 ### Part D Milestones
 
-- [x] Milestone D0: Read-only cascade signatures (2 days). After A8.
+- [x] Milestone D0: Read-only cascade signatures (2 days). After A8. [#2751](https://github.com/jwmcglynn/donner/pull/2751).
   - [x] Selector matching, inheritance and record construction read a `const Registry&`.
         `StyleSystem::computePreparedStyle` takes one existing output slot and worker-owned work
         counters, cache and warning sink. The serial entry prepares the document contexts and

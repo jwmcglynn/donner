@@ -1937,6 +1937,122 @@ TEST_F(StyleSystemTest, PreparedSiblingsCascadeConcurrentlyIntoOwnedSlots) {
   EXPECT_EQ(documentBudget.complexPropertyBytes(), retainedBefore);
 }
 
+TEST(StyleResourceBudgetTest, WorkerClampsEveryWorkShareToItsRemainingAllowance) {
+  StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 3;
+  limits.declarationApplications = 3;
+  limits.declarationComponentWork = 12;
+  limits.declarationByteWork = 20;
+  limits.selectorTraversalSteps = 5;
+  StyleResourceBudget document(limits);
+  ASSERT_TRUE(document.reserveRuleElementMatch());
+  ASSERT_TRUE(document.reserveRuleElementMatch());
+  ASSERT_TRUE(document.reserveDeclarationApplication(7, 11));
+  ASSERT_TRUE(document.selectorTraversal().tryConsumeMeasured(3));
+
+  StyleResourceBudget worker(document, limits);
+  EXPECT_EQ(worker.limits().ruleElementMatches, 1u);
+  EXPECT_EQ(worker.limits().declarationApplications, 2u);
+  EXPECT_EQ(worker.limits().declarationComponentWork, 5u);
+  EXPECT_EQ(worker.limits().declarationByteWork, 9u);
+  EXPECT_EQ(worker.limits().selectorTraversalSteps, 2u);
+  EXPECT_TRUE(worker.reserveRuleElementMatch());
+  EXPECT_TRUE(worker.reserveDeclarationApplication(5, 9));
+  EXPECT_TRUE(worker.selectorTraversal().tryConsumeMeasured(2));
+  EXPECT_FALSE(worker.reserveRuleElementMatch());
+  EXPECT_TRUE(worker.rejected());
+  EXPECT_FALSE(document.rejected());
+  EXPECT_EQ(document.ruleElementMatches(), 2u);
+  EXPECT_EQ(document.declarationApplications(), 1u);
+  EXPECT_EQ(document.selectorTraversal().steps(), 3u);
+}
+
+TEST(StyleResourceBudgetTest, WorkerInheritsLatchedDocumentAndAggregateRefusal) {
+  StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 1;
+  limits.selectorTraversalSteps = 1;
+  StyleResourceBudget document(limits);
+  ASSERT_TRUE(document.reserveRuleElementMatch());
+  ASSERT_FALSE(document.reserveRuleElementMatch());
+  StyleResourceBudget afterRefusal(document, limits);
+  EXPECT_TRUE(afterRefusal.rejected());
+  EXPECT_FALSE(afterRefusal.reserveDeclarationApplication());
+
+  StyleResourceBudget outer(limits);
+  StyleResourceBudget nested(limits);
+  nested.setAggregateWorkBudget(&outer);
+  ASSERT_TRUE(outer.selectorTraversal().consume());
+  ASSERT_FALSE(outer.selectorTraversal().consume());
+  StyleResourceBudget aggregateShare(nested, limits);
+  EXPECT_TRUE(aggregateShare.rejected());
+  EXPECT_TRUE(aggregateShare.selectorTraversal().rejected());
+  EXPECT_FALSE(aggregateShare.reserveRuleElementMatch());
+}
+
+TEST_F(StyleSystemTest, PreparedElementRejectsAnExternalOccurrence) {
+  auto doc =
+      ParseAndComputeStyles(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)");
+  auto& registry = doc.registry();
+  auto item = doc.querySelector("#r")->entityHandle();
+  auto& output = item.get<ComputedStyleComponent>();
+  output = {};
+  auto& budget = registry.ctx().get<StyleResourceBudget>();
+  StyleCascadeCounters counts;
+  MatchedPropertiesCache front;
+  StyleSystem::CascadePass worker{budget, counts, front};
+  ParseWarningSink warnings;
+  registry.ctx().emplace<ExternalUseStyleContext>(
+      doc.svgElement().entityHandle().entity(), std::make_shared<const ComputedStyle>(),
+      ResolvedPaintServer(), ResolvedPaintServer(), nullptr);
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "ExternalUseStyleContext");
+}
+
+TEST_F(StyleSystemTest, PreparedElementRejectsAnimationElsewhereInTheDocument) {
+  auto doc =
+      ParseAndComputeStyles(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)");
+  auto& registry = doc.registry();
+  auto item = doc.querySelector("#r")->entityHandle();
+  auto& output = item.get<ComputedStyleComponent>();
+  output = {};
+  auto& budget = registry.ctx().get<StyleResourceBudget>();
+  StyleCascadeCounters counts;
+  MatchedPropertiesCache front;
+  StyleSystem::CascadePass worker{budget, counts, front};
+  ParseWarningSink warnings;
+  std::ignore =
+      registry.get_or_emplace<AnimatedValuesComponent>(doc.svgElement().entityHandle().entity());
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "AnimatedValuesComponent");
+}
+
+TEST_F(StyleSystemTest, PreparedElementRequiresBothParentAndRootPublication) {
+  auto doc = ParseAndComputeStyles(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="g"><rect id="r"/></g></svg>)");
+  auto& registry = doc.registry();
+  auto item = doc.querySelector("#r")->entityHandle();
+  auto& output = item.get<ComputedStyleComponent>();
+  output = {};
+  auto& parent = doc.querySelector("#g")->entityHandle().get<ComputedStyleComponent>();
+  auto& root = doc.svgElement().entityHandle().get<ComputedStyleComponent>();
+  auto& budget = registry.ctx().get<StyleResourceBudget>();
+  StyleCascadeCounters counts;
+  MatchedPropertiesCache front;
+  StyleSystem::CascadePass worker{budget, counts, front};
+  ParseWarningSink warnings;
+  const auto saved = std::move(parent.style);
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "cacheState.parentReady");
+  parent.style = saved;
+  root.style.reset();
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "cacheState.rootReady");
+}
+
 TEST_F(StyleSystemTest, SpeculativeSlotsKeepTheirBoundWhenFrontEntriesAreCleared) {
   constexpr std::size_t kLanes = 2;
   constexpr auto kPerLane = StyleSystem::StagedRecords::kMaximumRecords;
