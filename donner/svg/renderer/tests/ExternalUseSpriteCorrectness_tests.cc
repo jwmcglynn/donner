@@ -392,11 +392,16 @@ TEST(ExternalUseRetentionTest, RetainedOccurrenceKeepsTheHostStyleItWasStyledWit
       testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))))));
 
   useElement->setStyle("fill: blue");
-  ExpectFrames(host->document, renderer, 2,
-               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+  const RendererBitmap expected = RenderStandalone(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect width="8" height="8" fill="blue"/>
-      </svg>)svg",
-               "retained-host-style-change");
+      </svg>)svg");
+  for (int frame = 0; frame < 2; ++frame) {
+    renderer.draw(host->document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         "retained-host-style-change-" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
   EXPECT_THAT(
       retained->properties.fill.get(),
       testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))))));
