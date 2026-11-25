@@ -2241,6 +2241,26 @@ separate 32 KiB reporting reserve.
   measurement envelope. The ordinary serial caller retains its existing stack contract.
   `//donner/svg/components/style:style_parallel_tests` checks both sides of the CSS depth gate
   and compares the low-headroom rollback to the ordinary serial path.
+  The release qualification budget allows 12 KiB for fixed task-entry, range, preparation, and
+  style frames. It allows another 32 KiB for the selector branch or 24 KiB for declaration
+  parsing and component-value copies and destruction. The selector allowance includes five
+  live levels at four descents, with specificity, relative selection and nth-of filters.
+  Matching returns before declaration parsing, so use the larger branch allowance. With
+  another 16 KiB for native library calls and compiler and ABI variation, the budget totals
+  60 KiB. This is an admission envelope, not a runtime consumption limit.
+
+  Run the **release cascade frame check** with the normal native CI toolchain and runner
+  options. An affected emitted frame over 8 KiB fails compilation. The on-limit selector test
+  also requires real scheduled work on workers configured with a 128 KiB stack.
+
+  ```sh
+  units='(ParallelStylePass|StyleSystem|SelectorContent|PropertyRegistry|ComplexSelector|PseudoClassSelector|ComponentValue|TaskScheduler|RuleIndex|ColorParser)[.]cc'
+  bazel test -c opt --config=re --config=ci --config=ci-platforms \
+    --per_file_copt="$units@-Wframe-larger-than=8192,-Werror=frame-larger-than" \
+    //donner/svg/components/style:style_parallel_tests \
+    //donner/svg/components/style:ci_darwin_style_parallel_tests
+  ```
+
 - **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
   external-use registries, passes below the threshold, and builds or runtimes without workers run
   the serial path.
