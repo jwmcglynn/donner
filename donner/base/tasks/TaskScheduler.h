@@ -33,13 +33,13 @@ struct TaskSchedulerOptions {
   /// Workers to start in ordinary mode. Without a seed, zero runs every spawn inline.
   std::size_t workerCount = DefaultWorkerCount();
 
-  /// Entries per worker deque; a power of two.
+  /// Entries per worker or adopted deque; a power of two.
   std::size_t dequeCapacity = 4096;
 
-  /// Live task records per worker.
+  /// Live task records per worker or adopted slot.
   std::size_t maxTasksPerCreator = 4096;
 
-  /// Live task records for every thread that is not a worker, together.
+  /// Shared record bound for submitters that are neither workers nor adopted by this scheduler.
   std::size_t maxExternalTasks = 64 * 1024;
 
   /// Steal rounds an idle worker makes before it tries to sleep.
@@ -61,6 +61,9 @@ struct TaskSchedulerOptions {
 
   /// Requested class of each Apple worker, independent of its creator.
   WorkerQos workerQos = WorkerQos::kInteractive;
+
+  /// Number of reserved non-worker deques. Zero disables thread adoption.
+  std::size_t adoptableThreads = 1;
 };
 
 /// A worker's state word.
@@ -68,7 +71,13 @@ enum class WorkerState : std::uint8_t {
   Awake,          //!< Counted in the scheduler's awake count.
   AsleepShallow,  //!< Asleep in the idle loop, or waiting on a scope within its stack margin.
   AsleepDeep,     //!< Asleep while waiting on a scope past its stack margin.
+  AwakeReserved,  //!< Counted awake and holding the incoming search credit.
 };
+
+/// Whether a worker in this state counts toward the scheduler's awake total.
+constexpr bool IsWorkerAwake(WorkerState state) {
+  return state == WorkerState::Awake || state == WorkerState::AwakeReserved;
+}
 
 /// Ostream output operator for \ref WorkerState, for test diagnostics.
 inline std::ostream& operator<<(std::ostream& os, WorkerState state) {
@@ -76,6 +85,7 @@ inline std::ostream& operator<<(std::ostream& os, WorkerState state) {
     case WorkerState::Awake: return os << "Awake";
     case WorkerState::AsleepShallow: return os << "AsleepShallow";
     case WorkerState::AsleepDeep: return os << "AsleepDeep";
+    case WorkerState::AwakeReserved: return os << "AwakeReserved";
   }
   UTILS_UNREACHABLE();
 }
@@ -108,6 +118,10 @@ enum class SchedulerStep : std::uint8_t {
   ParallelForAfterClaim,        //!< A loop participant has claimed or exhausted the range.
   AfterSearchStart,  //!< A worker counted itself as searching before scanning outside its deque.
   WorkerBeforeStartupBarrier,  //!< A new worker is about to acquire the constructor's final roster.
+  BeforeSearchStart,           //!< Before the worker starts an ordinary or reserved search.
+  AfterEmptySearch,         //!< The retiring worker still counts as searching after its empty scan.
+  AfterAdoptedPush,         //!< A slot's deque push was published, before the awake-count check.
+  BeforeAdoptedStealClaim,  //!< A worker read an adopted entry, before claiming its top index.
 };
 
 /// Ostream output operator for \ref SchedulerStep, for test diagnostics.
@@ -126,13 +140,16 @@ public:
   /// Returns the platform create function to use for the zero-based startup \p attempt.
   virtual WorkerThreadCreate workerThreadCreate(std::size_t /*attempt*/) { return &pthread_create; }
 
+  /// Applies the worker's platform QoS hint, or injects a refusal in a test.
+  virtual int setWorkerQos(WorkerQos qos) { return detail::TrySetCurrentWorkerQos(qos); }
+
   /**
    * Called at \p step.
    *
    * @param step The protocol step.
    * @param worker The worker the step concerns: the sleeper, the woken worker or the finisher;
    *   zero for \ref SchedulerStep::AfterPublishPush, \ref SchedulerStep::AfterStopFlagSet and the
-   *   steps of a scope's creator that is not a worker.
+   *   scope steps on a non-worker. \ref SchedulerStep::AfterAdoptedPush reports the slot index.
    */
   virtual void at(SchedulerStep step, std::size_t worker) = 0;
 
@@ -145,6 +162,33 @@ public:
 
   /// Lets a test isolate the mandatory publish handshake when an optional wake hint is missed.
   [[nodiscard]] virtual bool allowParallelismWake() const { return true; }
+};
+
+class TaskScheduler;
+
+/// A thread-affine claim on one scheduler slot. Destroy it after its synchronous scopes.
+class AdoptedThread {
+public:
+  /// Constructs an empty guard.
+  AdoptedThread() = default;
+  AdoptedThread(const AdoptedThread&) = delete;
+  AdoptedThread& operator=(const AdoptedThread&) = delete;
+  AdoptedThread(AdoptedThread&&) = delete;
+  AdoptedThread& operator=(AdoptedThread&&) = delete;
+
+  /// Publishes any remaining asynchronous records and returns the slot to the scheduler.
+  ~AdoptedThread();
+
+  /// Whether the calling thread obtained a slot.
+  [[nodiscard]] explicit operator bool() const { return scheduler_ != nullptr; }
+
+private:
+  friend class TaskScheduler;
+  AdoptedThread(TaskScheduler& scheduler, std::size_t index)
+      : scheduler_(&scheduler), index_(index) {}
+
+  TaskScheduler* scheduler_ = nullptr;
+  std::size_t index_ = 0;
 };
 
 class TaskSchedulerTestPeer;
@@ -167,20 +211,18 @@ class TaskScope;
  * queued: it hands the work to a worker asleep shallow if there is one, and otherwise runs it
  * itself even past its margin.
  *
- * Each worker owns a fixed-capacity deque and a pool of task records. A task spawned on a worker
- * goes onto that worker's deque; a task spawned by any other thread goes into one global
- * first-in, first-out queue, protected by a mutex, with a count beside it that the sleep protocol
- * reads without the mutex. An idle worker runs its own deque, takes from the global queue at least
- * once every 61 tasks it runs from its deque, and otherwise makes steal rounds: the global queue,
- * then every other worker once, starting at an offset from a per-worker seeded generator.
+ * Workers and adopted slots each own a bounded deque and record pool. Unadopted submitters use a
+ * global FIFO. A worker scans the FIFO and the adopted deques as separate outside sources in
+ * rotating order before stealing from its peers, and visits outside sources at least once per
+ * 61 consecutive local takes.
  *
  * A worker that finds nothing for \ref TaskSchedulerOptions::idleSpinRounds rounds sleeps on its
  * parker: it drains its deque into the global queue, sets the parker's waiting bit, stores asleep
- * in its state word and decrements the awake count, then re-checks the stop flag and the global
- * count before it waits. A thread that pushes onto the global queue increments the count, then
- * reads the awake count and, if no worker is awake, wakes an asleep worker. Both sides use
- * sequentially consistent operations, so either the sleeper sees the work or the publisher sees no
- * worker awake: whenever a task is queued, at least one worker is awake.
+ * in its state word and decrements the awake count, then re-checks the stop flag, global queue
+ * and adopted deques before it waits. A thread that pushes onto the global queue increments the
+ * count, then reads the awake count and, if no worker is awake, wakes an asleep worker. Both sides
+ * use sequentially consistent operations, so either the sleeper sees the work or the publisher sees
+ * no worker awake: whenever a task is queued, at least one worker is awake.
  *
  * Work reaches the scheduler through a \ref TaskScope, which counts its outstanding tasks: the
  * thread that finishes a task decrements its scope's count and, on reaching zero, changes the
@@ -206,8 +248,8 @@ public:
   TaskScheduler& operator=(TaskScheduler&&) = delete;
 
   /// Sets the stop flag, wakes and joins every worker, then closes the parker pool. Fails a release
-  /// assertion if a \ref TaskScope is live, if any task is still queued, or if the awake count
-  /// disagrees with the workers' state words.
+  /// assertion if a \ref TaskScope or \ref AdoptedThread is live, if work remains, or if the awake
+  /// count disagrees with the workers' state words.
   ~TaskScheduler();
 
   /// Number of worker threads that successfully started. A seeded scheduler starts none.
@@ -227,19 +269,31 @@ public:
     return workerCount();
   }
 
+  /// Number of workers whose startup QoS hint the platform refused. These workers still run.
+  [[nodiscard]] std::size_t workerQosRefusals() const {
+    return workerQosRefusals_.load(std::memory_order_relaxed);
+  }
+
   /// True when the options asked for zero workers.
   [[nodiscard]] bool threadingDisabledByConfiguration() const { return options_.workerCount == 0; }
 
   /// Suspends and queues the caller on this scheduler unless it has zero workers.
   [[nodiscard]] ScheduleAwaitable schedule() noexcept;
 
+  /// Claims a slot for the calling non-worker, which must have no live synchronous scope.
+  /// Returns an empty guard in inline or seeded mode, or if all slots are already claimed.
+  [[nodiscard]] AdoptedThread adopt();
+
 private:
   friend class TaskSchedulerTestPeer;
+  friend class AdoptedThread;
   friend struct detail::ParallelForAccess;
   friend class AsyncTaskScope;
   friend class ScheduleAwaitable;
   friend class detail::TaskPromiseBase;
   friend class TaskScope;
+
+  struct AdoptedSlot;
 
   /// What a task's finisher touches: its scope's counter and the parker the scope recorded; and
   /// the scope's stop request, which the thread that takes the task checks before running it.
@@ -248,6 +302,8 @@ private:
     Parker<>* parker;
     AsyncTaskScope* asyncScope = nullptr;
     const ScopeStop* stop = nullptr;
+    std::uint64_t birthThread = 0;
+    std::uint64_t birthOrder = 0;
   };
 
   /**
@@ -281,6 +337,23 @@ private:
     std::size_t outsideCursor = 0;          //!< Rotating cursor into the outside sources.
   };
 
+  struct alignas(kFalseSharingBytes) AdoptedSlot {
+    AdoptedSlot(TaskScheduler& scheduler, std::size_t index, const TaskSchedulerOptions& options)
+        : scheduler(scheduler),
+          index(index),
+          deque(options.dequeCapacity),
+          pool(options.maxTasksPerCreator) {}
+
+    TaskScheduler& scheduler;
+    const std::size_t index;
+    WorkStealingDeque<TaskRecord*> deque;
+    CreatorRecordPool<> pool;
+    Parker<> parker;
+    // Owner-only state; transferred between owners through the slot mask.
+    StackBounds stack;
+    AdoptedSlot* previousOnThread = nullptr;
+  };
+
   /**
    * Spawns \p work as a task, or returns false and leaves \p work untouched: with zero workers,
    * when the spawning thread's record pool is at its bound, or when the spawning worker's deque is
@@ -294,6 +367,9 @@ private:
   template <typename F>
   [[nodiscard]] bool trySpawn(F&& work, const ScopeLink* scope = nullptr) {
     if (workers_.empty()) {
+      if (innermostOnAdoptedThread_ != nullptr) {
+        (void)adoptedSubmissionNeedsGlobal(scope);
+      }
       return seeded_ && trySpawnSeeded(std::forward<F>(work), scope);
     }
     if (Worker* worker = currentWorker()) {
@@ -311,12 +387,40 @@ private:
       wakeForParallelism();
       return true;
     }
+    if (adoptedOnThread_ != nullptr) {
+      const bool global = adoptedSubmissionNeedsGlobal(scope);
+      if (AdoptedSlot* slot = currentAdoptedSlot()) {
+        return trySpawnAdopted(*slot, global, std::forward<F>(work), scope);
+      }
+    }
     TaskRecord* record = allocateExternalRecord();
     if (record == nullptr) {
       return false;
     }
     prepareRecord(record, std::forward<F>(work), scope);
     publishToGlobalQueue(record);
+    return true;
+  }
+
+  template <typename F>
+  bool trySpawnAdopted(AdoptedSlot& slot, bool global, F&& work, const ScopeLink* scope) {
+    if (!global && slot.deque.full()) {
+      return false;
+    }
+    TaskRecord* record = slot.pool.tryAllocate();
+    if (record == nullptr) {
+      return false;
+    }
+    prepareRecord(record, std::forward<F>(work), scope);
+    if (global) {
+      publishToGlobalQueue(record);
+    } else {
+      const bool pushed = slot.deque.pushPublished(record);
+      UTILS_RELEASE_ASSERT_MSG(pushed, "A nonfull adopted deque rejected a push");
+      hook(SchedulerStep::AfterAdoptedPush, slot.index);
+      wakeAfterPublish();
+    }
+    wakeForParallelism();
     return true;
   }
 
@@ -388,6 +492,15 @@ private:
 
   /// A worker asleep shallow other than \p self, or null.
   Worker* findAsleepShallow(const Worker& self) const;
+
+  AdoptedSlot* currentAdoptedSlot() const;
+  static bool adoptedSubmissionNeedsGlobal(const ScopeLink* scope);
+  static void recordAdoptedBirth(ScopeLink& scope);
+  void initializeAdoptedSlots();
+  std::optional<std::size_t> claimAdoptedSlot();
+  void releaseAdoptedSlot(std::size_t index);
+  bool hasAdoptedThread() const;
+  TaskRecord* stealFromSlot(AdoptedSlot& slot, std::size_t workerIndex);
 
   /// The calling thread's worker of this scheduler, or null.
   Worker* currentWorker() const;
@@ -473,6 +586,7 @@ private:
   struct SleepPreparation {
     Parker<>::Word token;
     std::int64_t awakeBefore;
+    bool rescanPeers;
   };
 
   /// Drains the deque, prepares the parker, and accounts for the sleeping worker.
@@ -491,15 +605,28 @@ private:
   /// The swap rule for a thread waking another worker: the swap, then a parker change.
   void wakeWorker(Worker& worker);
 
-  /// Requests a replacement if workers are asleep and none is looking for work.
+  /// Finish the owner's park, consuming any credit reserved by its optional waker.
+  void finishSleep(Worker& worker);
+
+  /// A withdrawing shallow searcher checks peer work after publishing its sleep state.
+  bool runAfterFinalSearch(Worker& worker, const SleepPreparation& sleep);
+
+  /// A local publisher can initiate a recruitment chain only if nobody is already searching.
   void wakeForParallelism() {
-    // A missed hint can leave work with its owner, which is already awake.
     if (awake_.load(std::memory_order_relaxed) < static_cast<std::int64_t>(workers_.size()) &&
-        searching_.load(std::memory_order_relaxed) == 0 &&
-        (testHooks_ == nullptr || testHooks_->allowParallelismWake())) {
-      wakeAsleepWorker();
+        searching_.load(std::memory_order_relaxed) == 0) {
+      std::size_t expected = 0;
+      if (searching_.compare_exchange_strong(expected, 1, std::memory_order_relaxed)) {
+        passSearchCredit();
+      }
     }
   }
+
+  /// Pass one counted credit to a shallow sleeper, or return it if nobody can use it.
+  void passSearchCredit();
+
+  /// Retain the last search credit until its successor is selected.
+  void finishSearchWithWork(Worker& worker);
 
   /// Adds the owner to the search count once, even across consecutive idle probes.
   void startSearching(Worker& worker);
@@ -533,6 +660,8 @@ private:
   /// that a correct program already has between a scope's destruction and the scheduler's.
   std::atomic<std::size_t> liveScopes_{0};
 
+  std::atomic<std::size_t> workerQosRefusals_{0};
+
   /// Tasks the last awake worker ran past its margin, taken from queued work after no worker was
   /// asleep shallow to hand it to. Relaxed: a count tests read at quiescence.
   std::atomic<std::uint64_t> pastMarginRuns_{0};
@@ -548,8 +677,16 @@ private:
 
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> globalQueued_{0};
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> awake_{0};
+  /// Counts owner-enrolled searchers plus any credit being passed to an incoming searcher.
   alignas(kFalseSharingBytes) std::atomic<std::size_t> searching_{0};
   alignas(kFalseSharingBytes) std::atomic<bool> stop_{false};
+
+  static thread_local AdoptedSlot* adoptedOnThread_;
+  static thread_local const ScopeLink* innermostOnAdoptedThread_;
+  /// Non-worker synchronous scopes live on the calling thread, across schedulers.
+  static thread_local std::size_t threadScopeCount_;
+  std::vector<std::unique_ptr<AdoptedSlot>> adoptedSlots_;
+  std::unique_ptr<std::atomic<std::uint64_t>[]> claimedSlots_;
 
   std::unique_ptr<SeededState> seeded_;
   std::vector<std::unique_ptr<Worker>> workers_;

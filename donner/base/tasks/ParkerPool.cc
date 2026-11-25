@@ -124,7 +124,9 @@ Parker<>* ParkerPool::ParkerForThread(std::uint64_t generation,
 }
 
 std::uint64_t ParkerPool::NextGeneration() {
-  return gLastGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+  const auto generation = gLastGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+  UTILS_RELEASE_ASSERT_MSG(generation != 0, "Scheduler generation numbers exhausted");
+  return generation;
 }
 
 std::size_t ParkerPool::LiveCountForTesting() {

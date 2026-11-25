@@ -5,6 +5,9 @@ namespace donner::tasks {
 AsyncTaskScope::AsyncTaskScope(TaskScheduler& scheduler)
     : scheduler_(scheduler), link_{&count_, nullptr, this} {
   scheduler_.assertSeededOwner();
+  if (TaskScheduler::adoptedOnThread_ != nullptr) {
+    TaskScheduler::recordAdoptedBirth(link_);
+  }
   scheduler_.liveScopes_.fetch_add(1, std::memory_order_relaxed);
 }
 

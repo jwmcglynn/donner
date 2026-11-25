@@ -47,6 +47,14 @@ public:
     return scheduler.awake_.load(std::memory_order_seq_cst);
   }
 
+  static void StartCurrentSearch(TaskScheduler& scheduler) {
+    scheduler.startSearching(*scheduler.currentWorker());
+  }
+
+  static bool StopCurrentSearch(TaskScheduler& scheduler) {
+    return scheduler.stopSearching(*scheduler.currentWorker());
+  }
+
   static std::size_t SearchingCount(const TaskScheduler& scheduler) {
     return scheduler.searching_.load(std::memory_order_relaxed);
   }
@@ -54,7 +62,7 @@ public:
   static std::int64_t AwakeStates(const TaskScheduler& scheduler) {
     std::int64_t count = 0;
     for (const auto& worker : scheduler.workers_) {
-      if (worker->state.load(std::memory_order_seq_cst) == WorkerState::Awake) {
+      if (IsWorkerAwake(worker->state.load(std::memory_order_seq_cst))) {
         ++count;
       }
     }
@@ -93,6 +101,21 @@ public:
   /// Live records allocated by the calling worker. Only its owner may read this counter.
   static std::size_t WorkerLiveRecords(const TaskScheduler& scheduler) {
     return scheduler.currentWorker()->pool.liveCount();
+  }
+
+  /// Bounds recorded when the calling thread adopted its current slot.
+  static StackBounds CurrentAdoptedStack(const TaskScheduler& scheduler) {
+    return scheduler.currentAdoptedSlot()->stack;
+  }
+
+  /// Overrides the calling slot's floor to exercise its dispatch assertion on the real stack.
+  static void SetAdoptedStackFloor(const TaskScheduler& scheduler, std::uintptr_t floor) {
+    scheduler.currentAdoptedSlot()->stack.floor = floor;
+  }
+
+  /// Live records of the slot owned by the calling thread.
+  static std::size_t AdoptedLiveRecords(const TaskScheduler& scheduler) {
+    return scheduler.currentAdoptedSlot()->pool.liveCount();
   }
 
   /// The scheduler's parker pool.

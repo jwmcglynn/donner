@@ -13,7 +13,10 @@
 namespace donner::tasks {
 
 /// A scope created, joined once, and destroyed by a coroutine. Its scheduler must outlive it.
-/// Keep the coroutine frame alive until its join resumes.
+/// Keep the coroutine frame alive until its join resumes. On an adopted thread, a submission to an
+/// asynchronous scope older than the innermost live synchronous scope fails a release assertion.
+/// A younger asynchronous scope may submit. When the target has a slot owned by this caller, its
+/// queued work goes to the global queue while the synchronous scope is live.
 class AsyncTaskScope {
 public:
   /// @param scheduler Runs the scope's tasks and queues its continuation.
@@ -73,7 +76,7 @@ private:
 
   TaskScheduler& scheduler_;
   std::atomic<std::uint64_t> count_{0};
-  const TaskScheduler::ScopeLink link_;
+  TaskScheduler::ScopeLink link_;
   std::atomic<bool> joinStarted_{false};
   bool joinCompleted_ = false;  //!< Set by the creating coroutine when join returns.
   CoroutineResumption* waiting_ = nullptr;
