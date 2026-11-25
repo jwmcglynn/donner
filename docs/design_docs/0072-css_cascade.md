@@ -2113,7 +2113,8 @@ scheduler's separate **32 KiB reporting reserve**. Worker bounds honor the confi
 stack. The owner measures once after sizing the pass and reuses those bounds for the ranges
 it executes. Unavailable bounds, insufficient configured worker space, or too little live
 headroom decline scheduling. The owner applies the original serial cascade after discarding
-any tentative work. Other builds retain their existing scheduling and stack contracts.
+any tentative work. Platforms outside native Linux and Apple, including Emscripten, retain
+their existing scheduling and stack contracts.
 
 The release qualification budget allows 12 KiB for fixed task-entry, range, preparation and
 style frames. It allows another 32 KiB for the selector branch or 24 KiB for declaration
@@ -2121,10 +2122,11 @@ parsing and component-value copies and destruction. The selector allowance inclu
 live levels at four descents, with specificity, relative selection and nth-of filters.
 Matching returns before declaration parsing, so use the larger branch allowance. With
 another 16 KiB for native library calls and compiler and ABI variation, the budget totals
-60 KiB. Qualification covers the registered Linux Arm and x86-64 LLVM/libc++ release
-builds and the Apple arm64 SDK libc++ release build. Debug and sanitizer tests exercise
-admission and rollback with their own frame layouts. The ordinary serial caller retains
-its existing stack contract.
+60 KiB. Qualification covers the registered Linux arm64 and x86-64 LLVM/libc++ release
+builds and the Apple arm64 SDK libc++ release build. Other native Linux and Apple ABIs
+apply the same admission threshold. Debug and sanitizer tests exercise admission and
+rollback with their own frame layouts. The ordinary serial caller retains its existing
+stack contract.
 
 Run the **release cascade frame check** with the normal native CI toolchain and runner
 options. It catches individual emitted frames above 8 KiB in the selected translation
