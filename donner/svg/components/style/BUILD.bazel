@@ -138,6 +138,8 @@ donner_cc_fuzzer(
         ":style_system",
         "//donner/base",
         "//donner/base/xml",
+        "//donner/svg",
+        "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/parser",
     ],
 )
