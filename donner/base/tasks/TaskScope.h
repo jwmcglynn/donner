@@ -146,7 +146,7 @@ private:
  */
 template <typename A, typename B>
 void Join(TaskScheduler& scheduler, A&& a, B&& b) {
-  if (detail::ParallelForAccess::Concurrency(scheduler) == 0) {
+  if (scheduler.schedulingWidth() == 0) {
     a();
     b();
     return;

@@ -220,7 +220,7 @@ TEST(AsyncTaskScopeTest, WorkerCanResumeAndDestroyScopeWhileAwaitSuspendIsStillR
   auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 1}, &hooks);
   int checked = 0;
   Event done;
-  TaskScheduler frameScheduler(TaskSchedulerOptions{});
+  TaskScheduler frameScheduler(TaskSchedulerOptions{.workerCount = 0});
   auto root = WaitForTask(SpawnDescendant(frameScheduler, *scheduler, work, checked));
   std::thread creator([&] { root.start(done); });
   const bool registered = registration.waitForArrival();
@@ -298,7 +298,7 @@ Task<void> EmptyAndInline(TaskScheduler& scheduler, int& called, bool& queued) {
 
 TEST(AsyncTaskScopeTest, ZeroWorkersDeclineTrySpawnAndCompleteJoinInline) {
   StepHooks hooks;
-  auto scheduler = Peer::Make(TaskSchedulerOptions{}, &hooks);
+  auto scheduler = Peer::Make(TaskSchedulerOptions{.workerCount = 0}, &hooks);
   Event done;
   int called = 0;
   bool queued = true;
@@ -314,7 +314,7 @@ TEST(AsyncTaskScopeTest, ZeroWorkersDeclineTrySpawnAndCompleteJoinInline) {
 TEST(AsyncTaskScopeDeathTest, RejectsDestroyingAnUnjoinedScope) {
   EXPECT_DEATH(
       {
-        TaskScheduler scheduler(TaskSchedulerOptions{});
+        TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
         const AsyncTaskScope scope(scheduler);
       },
       "must be joined before destruction");
@@ -323,7 +323,7 @@ TEST(AsyncTaskScopeDeathTest, RejectsDestroyingAnUnjoinedScope) {
 TEST(AsyncTaskScopeDeathTest, RejectsDestroyingAnEmptyScopeBeforeJoinCompletes) {
   EXPECT_DEATH(
       {
-        TaskScheduler scheduler(TaskSchedulerOptions{});
+        TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
         AsyncTaskScope scope(scheduler);
         // Model an in-progress join without creating a coroutine or enqueueing a handle.
         AsyncTaskScopeTestPeer::MarkJoinStarted(scope);
@@ -340,7 +340,7 @@ Task<void> JoinTwice(TaskScheduler& scheduler) {
 TEST(AsyncTaskScopeDeathTest, RejectsASecondJoin) {
   EXPECT_DEATH(
       {
-        TaskScheduler scheduler(TaskSchedulerOptions{});
+        TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
         Event done;
         auto root = WaitForTask(JoinTwice(scheduler));
         root.start(done);
@@ -357,7 +357,7 @@ Task<void> Reopen(TaskScheduler& scheduler) {
 TEST(AsyncTaskScopeDeathTest, RejectsReopeningAfterJoin) {
   EXPECT_DEATH(
       {
-        TaskScheduler scheduler(TaskSchedulerOptions{});
+        TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
         Event done;
         auto root = WaitForTask(Reopen(scheduler));
         root.start(done);

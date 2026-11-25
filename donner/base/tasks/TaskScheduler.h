@@ -23,6 +23,7 @@
 #include "donner/base/tasks/ScopeStop.h"
 #include "donner/base/tasks/TaskRecord.h"
 #include "donner/base/tasks/WorkStealingDeque.h"
+#include "donner/base/tasks/WorkerPolicy.h"
 #include "donner/base/tasks/WorkerStack.h"
 
 namespace donner::tasks {
@@ -30,7 +31,7 @@ namespace donner::tasks {
 /// Options for a \ref TaskScheduler.
 struct TaskSchedulerOptions {
   /// Workers to start in ordinary mode. Without a seed, zero runs every spawn inline.
-  std::size_t workerCount = 0;
+  std::size_t workerCount = DefaultWorkerCount();
 
   /// Entries per worker deque; a power of two.
   std::size_t dequeCapacity = 4096;
@@ -57,6 +58,9 @@ struct TaskSchedulerOptions {
   /// Run tasks of each joined scope in reproducible order on the constructing thread, without
   /// workers.
   std::optional<std::uint64_t> seed = std::nullopt;
+
+  /// Requested class of each Apple worker, independent of its creator.
+  WorkerQos workerQos = WorkerQos::kInteractive;
 };
 
 /// A worker's state word.
@@ -103,6 +107,7 @@ enum class SchedulerStep : std::uint8_t {
   ParallelForBeforeClaim,       //!< A loop participant is about to claim a range.
   ParallelForAfterClaim,        //!< A loop participant has claimed or exhausted the range.
   AfterSearchStart,  //!< A worker counted itself as searching before scanning outside its deque.
+  WorkerBeforeStartupBarrier,  //!< A new worker is about to acquire the constructor's final roster.
 };
 
 /// Ostream output operator for \ref SchedulerStep, for test diagnostics.
@@ -117,6 +122,9 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step);
 class SchedulerTestHooks {
 public:
   virtual ~SchedulerTestHooks() = default;
+
+  /// Returns the platform create function to use for the zero-based startup \p attempt.
+  virtual WorkerThreadCreate workerThreadCreate(std::size_t /*attempt*/) { return &pthread_create; }
 
   /**
    * Called at \p step.
@@ -202,8 +210,22 @@ public:
   /// disagrees with the workers' state words.
   ~TaskScheduler();
 
-  /// The number of worker threads started. A seeded scheduler starts none.
+  /// Number of worker threads that successfully started. A seeded scheduler starts none.
   [[nodiscard]] std::size_t workerCount() const { return workers_.size(); }
+
+  /**
+   * Logical width for clients deciding whether to use scoped scheduling. Zero means work runs
+   * inline, including when no requested worker started. In ordinary mode this is the number of
+   * live workers. Seeded replay queues work on its constructing thread with a fixed width of four.
+   * A logical piece does not identify a worker or index per-thread storage.
+   */
+  [[nodiscard]] std::size_t schedulingWidth() const {
+    if (seeded_) {
+      assertSeededOwner();
+      return 4;
+    }
+    return workerCount();
+  }
 
   /// True when the options asked for zero workers.
   [[nodiscard]] bool threadingDisabledByConfiguration() const { return options_.workerCount == 0; }
@@ -535,18 +557,8 @@ private:
 
 namespace detail {
 
-/// Logical width available to fork/join operations, including single-thread schedule replay.
+/// Internal access to the optional loop instrumentation.
 struct ParallelForAccess {
-  /// Number of lanes a loop can expose to the scheduler.
-  static std::size_t Concurrency(const TaskScheduler& scheduler) {
-    if (scheduler.seeded_) {
-      scheduler.assertSeededOwner();
-      // Replay exposes the same set of ranges regardless of the requested hardware width.
-      return 4;
-    }
-    return scheduler.workerCount();
-  }
-
   /// Reports a loop claim step with its worker's index, or zero on the caller.
   static void Notify(TaskScheduler& scheduler, SchedulerStep step) {
     if (scheduler.testHooks_ != nullptr) {

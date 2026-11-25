@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "donner/base/Utils.h"
+#include "donner/base/tasks/FalseSharing.h"
 #include "donner/base/tasks/TaskScope.h"
 
 namespace donner::tasks {
@@ -52,17 +53,22 @@ constexpr std::size_t ParallelForGrain(std::size_t length, std::size_t requested
 
 enum class ParallelForStrategy { Adaptive, SharedCursor };
 
+/// Keep contended claims off the cache line containing read-mostly loop state.
+struct alignas(kFalseSharingBytes) ParallelChunkCursor {
+  std::atomic<std::size_t> next{0};
+};
+
 /// Claim bounded chunk ordinals so speculative claims after the last chunk cannot wrap an index.
 template <typename F>
 void SharedCursorLoop(TaskScheduler& scheduler, std::size_t begin, std::size_t end,
                       std::size_t grain, std::size_t pieces, const F& body) {
   const std::size_t length = end - begin;
   const std::size_t chunks = length / grain + (length % grain != 0);
-  std::atomic<std::size_t> next{0};
+  ParallelChunkCursor cursor;
   const auto consume = [&] {
     for (;;) {
       ParallelForAccess::Notify(scheduler, SchedulerStep::ParallelForBeforeClaim);
-      const std::size_t ordinal = next.fetch_add(1, std::memory_order_relaxed);
+      const std::size_t ordinal = cursor.next.fetch_add(1, std::memory_order_relaxed);
       ParallelForAccess::Notify(scheduler, SchedulerStep::ParallelForAfterClaim);
       if (ordinal >= chunks) {
         return;
@@ -97,7 +103,7 @@ void ParallelForWithStrategy(ParallelForStrategy strategy, TaskScheduler& schedu
   }
   const std::size_t length = end - begin;
   const std::size_t effectiveGrain = ParallelForGrain(length, grain);
-  const std::size_t pieces = ParallelForAccess::Concurrency(scheduler);
+  const std::size_t pieces = scheduler.schedulingWidth();
   if (pieces == 0 || length / 2 < effectiveGrain) {
     std::invoke(body, std::size_t(begin), std::size_t(end));
     return;
@@ -120,6 +126,12 @@ void ParallelForWithStrategy(ParallelForStrategy strategy, TaskScheduler& schedu
  * Invokes one shared, const-callable body on disjoint subranges and joins them before returning.
  * An empty range returns immediately. Reversed bounds fail a release assertion. With zero workers
  * in ordinary mode, a nonempty range is passed to the body once on the calling thread.
+ *
+ * Worker count and steal timing can change subrange boundaries and visitation order. Deterministic
+ * per-index computations that write disjoint outputs give the same results across schedules.
+ * A reduction grouped by callback boundaries can produce different results. Seeded adaptive
+ * execution uses a fixed four-piece split budget on one thread. The grain, range and capacity
+ * bounds still apply, and the seed can change visitation order.
  *
  * @param scheduler The scheduler used to run the work.
  * @param begin The first index in the half-open range.

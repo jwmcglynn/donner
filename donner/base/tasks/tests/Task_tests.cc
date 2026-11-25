@@ -76,7 +76,7 @@ struct MemberFactory {
 };
 
 TEST(TaskTest, MemberCoroutinesUseTheFirstExplicitSchedulerParameter) {
-  TaskScheduler scheduler(TaskSchedulerOptions{});
+  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
   const MemberFactory factory;
   auto task = factory.value(scheduler, 15);
   Event done;
@@ -89,7 +89,7 @@ TEST(TaskTest, MemberCoroutinesUseTheFirstExplicitSchedulerParameter) {
 }
 
 TEST(TaskTest, FreesAnUnstartedTaskWithoutRunningItsBody) {
-  TaskScheduler scheduler(TaskSchedulerOptions{});
+  TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
   int calls = 0;
   {
     auto task = Nested(scheduler, calls, 0);
@@ -102,7 +102,8 @@ TEST(TaskTest, BoundsOnlyFreeFrameBytesAndReusesExactSizes) {
   constexpr std::size_t kBytes = 129;
   for (std::size_t limit : {0u, 512u}) {
     SCOPED_TRACE(limit);
-    TaskScheduler scheduler(TaskSchedulerOptions{.retainedCoroutineFrameBytes = limit});
+    TaskScheduler scheduler(
+        TaskSchedulerOptions{.workerCount = 0, .retainedCoroutineFrameBytes = limit});
     std::array<void*, 8> frames;
     for (void*& frame : frames) {
       frame = Peer::AllocateCoroutineFrame(scheduler, kBytes);
@@ -127,8 +128,8 @@ TEST(TaskTest, BoundsOnlyFreeFrameBytesAndReusesExactSizes) {
 }
 
 TEST(TaskTest, AllocationsAreAlignedAndReturnToTheAllocatingScheduler) {
-  TaskScheduler allocating(TaskSchedulerOptions{});
-  TaskScheduler other(TaskSchedulerOptions{});
+  TaskScheduler allocating(TaskSchedulerOptions{.workerCount = 0});
+  TaskScheduler other(TaskSchedulerOptions{.workerCount = 0});
   constexpr std::size_t kBytes = 129;
   void* const frame = Peer::AllocateCoroutineFrame(allocating, kBytes);
   EXPECT_THAT(reinterpret_cast<std::uintptr_t>(frame) % 128, Eq(0u));
@@ -325,7 +326,7 @@ TEST(TaskTest, SymmetricTransferKeepsWorkerStackDepthBounded) {
 TEST(TaskDeathTest, RejectsDestroyingAnOwnerBeforeItsAwaitCompletes) {
   EXPECT_DEATH(
       {
-        TaskScheduler scheduler(TaskSchedulerOptions{});
+        TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
         auto task = Suspend(scheduler);
         auto root = WaitForTask(task);
         Event done;
@@ -338,7 +339,7 @@ TEST(TaskDeathTest, RejectsDestroyingAnOwnerBeforeItsAwaitCompletes) {
 TEST(TaskDeathTest, RejectsDestroyingTheSchedulerWithASuspendedFrame) {
   EXPECT_DEATH(
       {
-        auto scheduler = std::make_unique<TaskScheduler>(TaskSchedulerOptions{});
+        auto scheduler = std::make_unique<TaskScheduler>(TaskSchedulerOptions{.workerCount = 0});
         auto task = Suspend(*scheduler);
         auto root = WaitForTask(task);
         Event done;
@@ -373,7 +374,7 @@ CoroutineTestRoot WaitTwice(Task<void>& task) {
 TEST(TaskDeathTest, RejectsASecondAwait) {
   EXPECT_DEATH(
       {
-        TaskScheduler scheduler(TaskSchedulerOptions{});
+        TaskScheduler scheduler(TaskSchedulerOptions{.workerCount = 0});
         auto task = Complete(scheduler);
         auto root = WaitTwice(task);
         Event done;

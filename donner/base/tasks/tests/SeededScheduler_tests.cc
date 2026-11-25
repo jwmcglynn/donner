@@ -59,14 +59,43 @@ TEST(SeededSchedulerTest, ReplaysChoicesAcrossRequestedWorkerCountsAndUsesTheWho
   EXPECT_THAT(sorted, Eq(expected));
 }
 
+TEST(SeededSchedulerTest, JoinQueuesTheSecondBranchEvenWithNoPhysicalWorkers) {
+  TaskScheduler scheduler(
+      TaskSchedulerOptions{.workerCount = 3, .maxTasksPerCreator = 1, .seed = 7});
+  EXPECT_THAT(scheduler.workerCount(), Eq(0u));
+  EXPECT_FALSE(scheduler.threadingDisabledByConfiguration());
+  EXPECT_THAT(scheduler.schedulingWidth(), Eq(4u));
+  std::vector<int> order;
+  Join(
+      scheduler,
+      [&] {
+        order.push_back(1);
+        TaskScope probe(scheduler);
+        // The deferred second branch occupies the replay pool's only live record.
+        EXPECT_FALSE(probe.trySpawn([] {}));
+      },
+      [&] { order.push_back(2); });
+  EXPECT_THAT(order, ElementsAre(1, 2));
+  TaskScope after(scheduler);
+  EXPECT_TRUE(after.trySpawn([] {}));
+}
+
 TEST(SeededSchedulerTest, ARunningRecordCountsAtTheBoundAndDeclinesKeepTheCallable) {
   TaskScheduler scheduler(TaskSchedulerOptions{.maxTasksPerCreator = 1, .seed = 41});
   TaskScope scope(scheduler);
   std::vector<int> trace;
   EXPECT_TRUE(scope.trySpawn([&] {
-    auto work = [&, value = std::make_unique<int>(1)] { trace.push_back(*value); };
-    EXPECT_FALSE(scope.trySpawn(std::move(work)));
-    work();
+    auto work = [&, value = std::make_unique<int>(1)] {
+      EXPECT_NE(value, nullptr);
+      if (value) {
+        trace.push_back(*value);
+      }
+    };
+    const bool admitted = scope.trySpawn(std::move(work));
+    EXPECT_FALSE(admitted);
+    if (!admitted) {
+      work();
+    }
     scope.spawn([&] { trace.push_back(2); });
     trace.push_back(3);
   }));
