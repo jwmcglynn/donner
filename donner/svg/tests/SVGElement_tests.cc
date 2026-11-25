@@ -1478,6 +1478,7 @@ TEST_F(SVGElementTests, QuerySelector) {
 
 TEST_F(SVGElementTests, TraversalSkipsShadowRootsBetweenAuthoredChildren) {
   auto host = create();
+  // Give these synthetic shadow roots an element type to exercise the defensive checks.
   auto firstShadow = createWithId("shadow-first");
   auto middleShadow = createWithId("shadow-middle");
   auto lastShadow = createWithId("shadow-last");
