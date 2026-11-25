@@ -268,10 +268,12 @@ public:
         publishLeaves_(ObservesProvisionalSlots(hooks)),
         grain_(hooks ? std::max<std::size_t>(1, hooks->grain) : kGrain) {}
 
-  void start(std::size_t workers) {
+  void start(std::size_t workers, StylePassSelection selection) {
     const Range initial{forest_.mainRoots, kEnd};
     if (workers == 0) {
       launch(initial, true);
+    } else if (selection == StylePassSelection::Missing && planMainFrontier(initial, workers)) {
+      runMainFrontier(workers);
     } else {
       // The document owner can execute its own ready ranges before joining the other workers.
       run(initial, true, forest_.nodes.size() / (workers + 1));
@@ -284,6 +286,97 @@ public:
   bool completed() const { return !aborted_.load(std::memory_order_relaxed); }
 
 private:
+  static constexpr std::size_t kMaximumWorkerChunks = 12;
+
+  bool planMainFrontier(Range initial, std::size_t workers) {
+    if (initial.first == kEnd) {
+      return false;
+    }
+    const Node& root = forest_.nodes[initial.first];
+    Index first = initial.first;
+    if (root.next == initial.end) {
+      frontierParent_ = initial.first;
+      first = root.child;
+    }
+    // Share ready main roots or the children of a single root after it is published.
+    // Keep every small subtree local to its claimant and bound the descriptor count.
+    constexpr std::size_t kMaximumChunks = 128;
+    std::size_t work = 0;
+    for (Index i = first; i != kEnd; i = forest_.nodes[i].next) {
+      const Node& child = forest_.nodes[i];
+      if (child.size > grain_ || frontier_.size() == kMaximumChunks) {
+        return false;
+      }
+      work += child.size;
+      if (work >= grain_ || child.next == kEnd) {
+        frontier_.push_back({first, child.next});
+        first = child.next;
+        work = 0;
+      }
+    }
+    return frontier_.size() / 2 > workers &&
+           (frontier_.size() - 1) / kMaximumWorkerChunks <= workers;
+  }
+
+  bool publishFrontierParent(Batch::Worker& worker) {
+    if (frontierParent_ == kEnd) {
+      return true;
+    }
+    const Node& parent = forest_.nodes[frontierParent_];
+    return visit(frontierParent_, parent, worker) && childAdmissionAllowed(parent);
+  }
+
+  void runMainFrontier(std::size_t workers) {
+    auto* worker = hasRangeStack() ? batch_.bindWorker() : nullptr;
+    if (!worker || !publishFrontierParent(*worker)) {
+      aborted_.store(true, std::memory_order_relaxed);
+      finishMain(worker);
+      return;
+    }
+    // A descriptor is immutable after enqueue. Reserve one range for the owner, then let
+    // every participant claim the remaining ready ranges from the same cursor. Cap each
+    // worker's claims so a single scheduler callback cannot drain the whole frontier.
+    const auto claimLimit =
+        std::min(kMaximumWorkerChunks, 2 * ((frontier_.size() + workers) / (workers + 1)));
+    for (std::size_t i = 0; i < workers; ++i) {
+      outstandingMain_.fetch_add(1, std::memory_order_relaxed);
+      if (scope_.trySpawn([this, claimLimit] { runFrontierDrainer(claimLimit); })) {
+        admitted_.fetch_add(1, std::memory_order_relaxed);
+      } else {
+        declined_.fetch_add(1, std::memory_order_relaxed);
+        outstandingMain_.fetch_sub(1, std::memory_order_relaxed);
+      }
+    }
+    walkFrontierChunk(0, *worker);
+    drainFrontier(*worker, frontier_.size());
+    finishMain(worker);
+  }
+
+  void runFrontierDrainer(std::size_t claimLimit) {
+    auto* worker = hasRangeStack() ? batch_.bindWorker() : nullptr;
+    if (worker) {
+      drainFrontier(*worker, claimLimit);
+    } else {
+      aborted_.store(true, std::memory_order_relaxed);
+    }
+    finishMain(worker);
+  }
+
+  void drainFrontier(Batch::Worker& worker, std::size_t claimLimit) {
+    for (std::size_t count = 0; count < claimLimit && completed(); ++count) {
+      const auto chunk = nextChunk_.fetch_add(1, std::memory_order_relaxed);
+      if (chunk >= frontier_.size()) {
+        break;
+      }
+      walkFrontierChunk(chunk, worker);
+    }
+  }
+
+  void walkFrontierChunk(std::size_t chunk, Batch::Worker& worker) {
+    // This prevents a claimed subtree from enqueueing outside the shared frontier.
+    walk(frontier_[chunk], true, worker, std::numeric_limits<std::size_t>::max());
+  }
+
   bool enqueue(Range range, bool main) {
     if (scope_.trySpawn([this, range, main] { run(range, main); })) {
       admitted_.fetch_add(1, std::memory_order_relaxed);
@@ -349,8 +442,14 @@ private:
     } else {
       aborted_.store(true, std::memory_order_relaxed);
     }
+    if (main) {
+      finishMain(worker);
+    }
+  }
+
+  void finishMain(Batch::Worker* worker) {
     // The last main task publishes all completed main-tree records before offscreen roots start.
-    if (main && outstandingMain_.fetch_sub(1, std::memory_order_acq_rel) == 1 && completed() &&
+    if (outstandingMain_.fetch_sub(1, std::memory_order_acq_rel) == 1 && completed() &&
         forest_.offscreenRoots != kEnd) {
       if (hooks_ && hooks_->beforeOffscreen) {
         hooks_->beforeOffscreen();
@@ -364,7 +463,10 @@ private:
     }
   }
 
-  bool publish(Index index, const Node& node, Batch::Worker& worker) {
+  bool visit(Index index, const Node& node, Batch::Worker& worker) {
+    if (hooks_ && hooks_->beforeNode) {
+      hooks_->beforeNode(node.entity);
+    }
     if (!batch_.computeAt(index, node.entity, worker, publishLeaves_ || node.hasDependent)) {
       return false;
     }
@@ -374,11 +476,15 @@ private:
     return true;
   }
 
+  bool childAdmissionAllowed(const Node& node) const {
+    return !hooks_ || !hooks_->allowChildAdmission || hooks_->allowChildAdmission(node.entity);
+  }
+
   bool children(const Node& node, bool main, RangeStack& local, std::size_t& ownerWork) {
     if (node.child == kEnd) {
       return true;
     }
-    if (hooks_ && hooks_->allowChildAdmission && !hooks_->allowChildAdmission(node.entity)) {
+    if (!childAdmissionAllowed(node)) {
       return false;
     }
     split({node.child, kEnd}, main, local, ownerWork);
@@ -393,10 +499,7 @@ private:
       local.pop_back();
       for (Index i = current.first; i != current.end; i = forest_.nodes[i].next) {
         const auto& node = forest_.nodes[i];
-        if (hooks_ && hooks_->beforeNode) {
-          hooks_->beforeNode(node.entity);
-        }
-        if (!publish(i, node, worker) || !children(node, main, local, ownerWork)) {
+        if (!visit(i, node, worker) || !children(node, main, local, ownerWork)) {
           aborted_.store(true, std::memory_order_relaxed);
           return;
         }
@@ -413,6 +516,9 @@ private:
   const std::size_t requiredStackHeadroom_;
   const bool publishLeaves_;
   const std::size_t grain_;
+  RangeStack frontier_;
+  Index frontierParent_ = kEnd;
+  std::atomic<std::size_t> nextChunk_{1};
   std::atomic<std::size_t> outstandingMain_{1};
   std::atomic<bool> aborted_{false};
   std::atomic<std::size_t> admitted_{0};
@@ -484,13 +590,13 @@ std::optional<tasks::StackBounds> PrepareForest(Forest& forest, const Registry& 
 
 bool RunTraversal(tasks::TaskScheduler& scheduler, const Forest& forest, Batch& batch,
                   StyleCascadeMetrics& metrics, const StylePassPhasesForTesting* hooks,
-                  tasks::StackBounds ownerStack) {
+                  tasks::StackBounds ownerStack, StylePassSelection selection) {
   if (hooks && hooks->beforeRegion) {
     hooks->beforeRegion();
   }
   tasks::TaskScope scope(scheduler);
   Traversal traversal(scope, forest, batch, hooks, ownerStack);
-  traversal.start(scheduler.workerCount());
+  traversal.start(scheduler.workerCount(), selection);
   scope.wait();
   ++metrics.scheduledPasses;
   metrics.admittedStyleTasks += traversal.admitted();
@@ -521,8 +627,9 @@ bool TryParallelStylePass(Registry& registry, ParseWarningSink& warnings,
 #ifndef NDEBUG
   const auto sizes = PoolSizes(registry);
 #endif
-  const bool completed = batch.prepareDocumentRoot() && FrontierParentsReady(forest, registry) &&
-                         RunTraversal(*scheduler, forest, batch, metrics, hooks, *ownerStack);
+  const bool completed =
+      batch.prepareDocumentRoot() && FrontierParentsReady(forest, registry) &&
+      RunTraversal(*scheduler, forest, batch, metrics, hooks, *ownerStack, selection);
 #ifndef NDEBUG
   assert(sizes == PoolSizes(registry));
 #endif

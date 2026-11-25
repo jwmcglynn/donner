@@ -10,9 +10,11 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/tasks/TaskScheduler.h"
+#include "donner/base/tasks/TaskScope.h"
 #include "donner/base/tests/StallGuard.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -107,6 +109,148 @@ TEST(StyleParallel, WideSiblingsMatchSerialAtEachWidth) {
     EXPECT_GT(result.traces, 1000u);
     ExpectSame(serial, result);
   }
+}
+
+TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>.leaf:is(:is(:is(:is(.leaf)))) { fill: red }</style>)";
+  for (std::size_t i = 0; i < 560; ++i) {
+    source += "<g><rect class='leaf'/></g>";
+  }
+  source += "<g id='offscreen'><rect id='leaf'/></g></svg>";
+  const auto run = [&](std::size_t workers, std::size_t externalCapacity, bool retainRoot) {
+    ParseWarningSink warnings;
+    auto parse = parser::SVGParser::ParseSVG(source, warnings);
+    EXPECT_FALSE(parse.hasError());
+    auto doc = std::move(parse).result();
+    auto& registry = doc.registry();
+    const Entity root = doc.svgElement().entityHandle().entity();
+    const Entity offscreen = doc.querySelector("#offscreen")->entityHandle().entity();
+    const Entity leaf = doc.querySelector("#leaf")->entityHandle().entity();
+    registry.get_or_emplace<ComputedShadowTreeComponent>(root).branches.push_back(
+        {.branchType = ShadowBranchType::OffscreenMask,
+         .lightTarget = offscreen,
+         .shadowEntities = {offscreen}});
+    if (retainRoot) {
+      const std::array roots{root};
+      StyleSystem().computeStylesFor(registry, roots, warnings);
+    }
+    const bool forceRefusal = externalCapacity == 1;
+    const bool expectWorker = workers != 0 && !forceRefusal;
+    // Main visits the unresolved SVG root, the style element, and 560 group/rect pairs.
+    const std::size_t expectedMainVisits = retainRoot ? 1121 : 1122;
+    const auto owner = std::this_thread::get_id();
+    std::mutex visitsMutex;
+    std::condition_variable workerChanged;
+    bool workerPublishedRect = false;
+    bool ownerWaitedForWorker = false;
+    std::unordered_set<Entity> mainVisits;
+    std::size_t ownerVisits = 0;
+    auto& hooks = registry.ctx().emplace<StylePassPhasesForTesting>();
+    hooks.beforeNode = [&](Entity entity) {
+      if (entity != offscreen && entity != leaf) {
+        std::unique_lock lock(visitsMutex);
+        EXPECT_TRUE(mainVisits.insert(entity).second);
+        if (std::this_thread::get_id() == owner) {
+          ++ownerVisits;
+          if (expectWorker && entity != root && !ownerWaitedForWorker) {
+            ownerWaitedForWorker = true;
+            EXPECT_TRUE(workerChanged.wait_for(lock, donner::tests::kHangGuard,
+                                               [&] { return workerPublishedRect; }));
+          }
+        }
+      }
+    };
+    hooks.published = [&](Entity entity) {
+      const auto& view = std::as_const(registry);
+      const auto* type = view.try_get<ElementTypeComponent>(entity);
+      if (std::this_thread::get_id() != owner && type && type->type() == ElementType::Rect) {
+        const std::lock_guard lock(visitsMutex);
+        workerPublishedRect = true;
+        workerChanged.notify_all();
+      }
+    };
+    hooks.beforeOffscreen = [&] {
+      EXPECT_EQ(mainVisits.size(), expectedMainVisits);
+      EXPECT_FALSE(registry.get<ComputedStyleComponent>(offscreen).style);
+    };
+    tasks::TaskSchedulerOptions options{.workerCount = workers,
+                                        .maxExternalTasks = externalCapacity};
+    if constexpr (kNativeStyleStackAdmission) {
+      options.workerStackBytes = 128 * 1024;
+    }
+    tasks::TaskScheduler scheduler(options);
+    std::mutex recordMutex;
+    std::condition_variable recordChanged;
+    bool releaseRecord = false;
+    tasks::TaskScope occupied(scheduler);
+    if (forceRefusal) {
+      // Keep the only external record live in an unrelated scope through style dispatch.
+      EXPECT_TRUE(occupied.trySpawn([&] {
+        if (std::this_thread::get_id() == owner) {
+          ADD_FAILURE() << "style owner executed an unrelated task";
+          return;
+        }
+        std::unique_lock lock(recordMutex);
+        EXPECT_TRUE(
+            recordChanged.wait_for(lock, donner::tests::kHangGuard, [&] { return releaseRecord; }));
+      }));
+    }
+    StyleSystem().computeAllStyles(registry, warnings, StyleSystem::FullRestyle::ComputeMissing,
+                                   &scheduler);
+    {
+      const std::lock_guard lock(recordMutex);
+      releaseRecord = true;
+    }
+    recordChanged.notify_all();
+    occupied.wait();
+    const auto& metrics = registry.ctx().get<StyleCascadeMetrics>();
+    if (workers != 0) {
+      EXPECT_EQ(metrics.scheduledPasses, 1u);
+      EXPECT_EQ(metrics.abandonedStylePasses, 0u);
+      EXPECT_GT(ownerVisits, 1u);
+      EXPECT_EQ(mainVisits.size(), expectedMainVisits);
+      if (forceRefusal) {
+        EXPECT_EQ(metrics.admittedStyleTasks, 0u);
+        EXPECT_EQ(metrics.declinedStyleTasks, workers + 1);
+        EXPECT_EQ(ownerVisits, expectedMainVisits);
+      } else {
+        EXPECT_TRUE(workerPublishedRect);
+        EXPECT_GE(metrics.admittedStyleTasks, workers);
+        EXPECT_LE(metrics.admittedStyleTasks, workers + 1);
+      }
+    }
+    registry.ctx().erase<StylePassPhasesForTesting>();
+    return Frame{std::move(doc),
+                 metrics.counters,
+                 metrics.scheduledPasses,
+                 metrics.replayedSelectorTraces,
+                 metrics.admittedStyleTasks,
+                 metrics.declinedStyleTasks,
+                 warnings.warnings()};
+  };
+  for (bool retainRoot : {false, true}) {
+    const Frame serial = run(0, 1024, retainRoot);
+    ExpectSame(serial, run(4, 1024, retainRoot));
+    ExpectSame(serial, run(4, 1, retainRoot));
+  }
+}
+
+TEST(StyleParallel, ReadyFrontierAboveTheWorkerChunkEnvelopeUsesOrdinaryRanges) {
+  constexpr std::size_t workers = 2;
+  constexpr std::size_t frontierLimit = 12 * (workers + 1) * 64;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg">)";
+  for (std::size_t i = 0; i < frontierLimit; ++i) {
+    source += "<rect/>";
+  }
+  const auto atLimit = FirstFrame(source + "</svg>", {.workerCount = workers});
+  EXPECT_EQ(atLimit.scheduled, 1u);
+  EXPECT_EQ(atLimit.admitted, workers);
+  source += "<rect/></svg>";
+  const auto aboveLimit = FirstFrame(source, {.workerCount = workers});
+  EXPECT_EQ(aboveLimit.scheduled, 1u);
+  EXPECT_GT(aboveLimit.admitted, workers);
+  ExpectSame(FirstFrame(source, {.workerCount = 0}), aboveLimit);
 }
 
 TEST(StyleParallel, RetainedSharingKeepsLaterFamilyAdmissionIdenticalAcrossWidths) {
