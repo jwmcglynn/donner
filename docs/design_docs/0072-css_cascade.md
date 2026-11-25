@@ -410,8 +410,8 @@ Part C estimate: 13.5 engineering days.
 
 - [x] Milestone D0: Read-only cascade signatures (2 days). After A8. [#2751](https://github.com/jwmcglynn/donner/pull/2751).
   - [x] Selector matching, inheritance and record construction read a `const Registry&`.
-        `StyleSystem::computePreparedStyle` takes one existing output slot and worker-owned work
-        counters, cache and warning sink. The serial entry prepares the document contexts and
+        `StyleSystem::computePreparedStyle` takes one existing output slot and a worker-owned budget
+        share, counters, cache and warning sink. The serial entry prepares the document contexts and
         supplies missing parents, contextual animation work and external-use diagnostics.
   - Verification: `//donner/svg/components/style:style_system_tests` compares concurrently styled
     siblings with their serial records and verifies cache hits and shared retained-byte charges.
@@ -2061,6 +2061,11 @@ per-element cost and is calibrated in Milestone D3.
   duplicate cannot change which element is refused. A speculative refusal leaves the document
   and family counters and their sticky rejection flags untouched. If the pass cannot prove the
   serial outcome, the owner discards its tentative state and the serial path decides admission.
+
+  The ordinary family reserve permanently records a refusal. Releasing records refunds bytes,
+  but does not clear that flag or its diagnostic count. The owner therefore performs ordinary
+  family admission only in canonical order. A separate, non-latching allowance for temporary
+  memory can decline speculation without consuming logical headroom or recording a refusal.
 
   The proposed staging limit is 1 MiB per executing context for retained provisional style
   records, including fixed record storage and owned dynamic payload. It covers references in
