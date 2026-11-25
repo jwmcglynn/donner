@@ -281,9 +281,9 @@ including tests and review fixes. "After" names the milestones that must land fi
 - [ ] Milestone A5: Narrowed invalidation for single-element edits (9.5 days). After A2.
   - [x] Compute a `SelectorDependencySummary` per stylesheet at parse time, including the
         directional dependencies of filtered `:nth-child` and `:nth-last-child` selectors.
-  - [ ] Route class, `id`, `style` and presentation-attribute writes in `SVGElement` through it,
-        marking the affected entities dirty for the existing selective style pass instead of
-        setting `RenderTreeState::needsFullStyleRecompute`.
+  - [ ] Route class, `style`/`updateStyle` and eligible presentation-attribute writes through
+        the summary and mark affected entities for the existing selective style pass. Preserve
+        full invalidation for id and reference changes.
   - [ ] Restyle the `<use>` shadow instances of a written element.
   - [ ] Make a style-only change eligible for the retained update (`FlagsAreRetainable` in
         `RetainedRenderTreeUpdate.cc`) and recompute the style-derived components of the
