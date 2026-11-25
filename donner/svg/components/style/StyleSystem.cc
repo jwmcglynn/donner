@@ -1568,12 +1568,12 @@ struct StyleSystem::RuleTrace {
       return false;
     }
     work = witness->work;
-    matches = witness->matches;
+    borrowedMatches = witness->recordedMatches();
     count = witness->count;
     complete = true;
     counters.rulesTested += work.rules;
     for (std::size_t i = 0; i < count; ++i) {
-      accept(matches[i]);
+      accept(recordedMatches()[i]);
     }
     return true;
   }
@@ -1619,16 +1619,29 @@ struct StyleSystem::RuleTrace {
     }
     counters.rulesTested += work.rules;
     for (std::size_t i = 0; i < count; ++i) {
-      accept(matches[i]);
+      accept(recordedMatches()[i]);
     }
     return true;
   }
 
   std::array<Match, 4> matches{};
+  // Both traces stay in this batch until owner replay finishes.
+  const Match* borrowedMatches = nullptr;
+
+  const Match* recordedMatches() const {
+    return borrowedMatches ? borrowedMatches : matches.data();
+  }
   std::size_t count = 0;
   Work work{};
   ComputedStyleComponent* slot = nullptr;
-  ComputedStyleComponent original;
+  bool originalExternalFill = false;
+  bool originalExternalStroke = false;
+
+  void restoreOriginalSlot() const {
+    slot->style.reset();
+    slot->externalFill = originalExternalFill;
+    slot->externalStroke = originalExternalStroke;
+  }
   bool complete = false;
   bool replayed = false;
   bool priorHitReused = false;
@@ -1675,16 +1688,9 @@ struct StyleSystem::RuleTraces {
     return true;
   }
 
-  std::size_t finish(StyleCascadeMetrics& metrics) {
-    std::size_t accepted = 0;
-    for (const auto& trace : entries) {
-      accepted += trace.replayed;
-      metrics.preparedWarningPhases += trace.reusedWarningPhases;
-      metrics.reusedCanonicalHits += trace.priorHitReused;
-    }
+  void clear() {
     entries.clear();
     ownedIndex.clear();
-    return accepted;
   }
 
   RuleTrace* find(Entity entity) {
@@ -1722,12 +1728,23 @@ public:
   const ComputedStyleComponent& compute(Entity entity) {
     auto* trace = traces_ ? traces_->find(entity) : nullptr;
     auto& slot = trace ? *trace->slot : registry_.get_or_emplace<ComputedStyleComponent>(entity);
-    if (trace && !slot.style &&
-        (trace->usePriorHit(pass_, entity) || usePriorHitsWithParent(*trace, entity))) {
+    if (slot.style) {
       return slot;
     }
-    computePropertiesInto(registry_, entity, slot, pass_, warnings_, this, nullptr, nullptr, trace);
+    if (!trace || !(trace->usePriorHit(pass_, entity) || usePriorHitsWithParent(*trace, entity))) {
+      computePropertiesInto(registry_, entity, slot, pass_, warnings_, this, nullptr, nullptr,
+                            trace);
+    }
+    if (trace) {
+      countTrace(*trace);
+    }
     return slot;
+  }
+
+  std::size_t countRecordedWork(StyleCascadeMetrics& metrics) const {
+    metrics.preparedWarningPhases += reusedWarningPhases_;
+    metrics.reusedCanonicalHits += reusedCanonicalHits_;
+    return acceptedTraces_;
   }
 
   static void publishMissingParent(SerialCascade* serial, Entity parent, MatchedCacheState& state) {
@@ -1744,6 +1761,12 @@ public:
   void rejectExternalResource() { StyleSystem::rejectExternalHostResource(registry_); }
 
 private:
+  void countTrace(const RuleTrace& trace) {
+    acceptedTraces_ += trace.replayed;
+    reusedWarningPhases_ += trace.reusedWarningPhases;
+    reusedCanonicalHits_ += trace.priorHitReused;
+  }
+
   bool usePriorHitsWithParent(RuleTrace& child, Entity entity) {
     if (!child.hit || !child.hit->installed || !child.parentSlot || child.parentSlot->style) {
       return false;
@@ -1759,6 +1782,7 @@ private:
     child.replayAncestorWork(pass_.ancestorFilter, entity, pass_.counters);
     parent->replayAncestorWork(pass_.ancestorFilter, child.parentEntity, pass_.counters);
     parent->installPriorHit(pass_.counters);
+    countTrace(*parent);
     child.installPriorHit(pass_.counters);
     return true;
   }
@@ -1769,6 +1793,9 @@ private:
   CascadePass pass_;
   PassAncestorFilter ancestorFilter_;
   std::unique_ptr<CascadeAncestorFilter> testFilter_;
+  std::size_t acceptedTraces_ = 0;
+  std::size_t reusedWarningPhases_ = 0;
+  std::size_t reusedCanonicalHits_ = 0;
 };
 
 class StyleSystem::PreparationLease {
@@ -1791,12 +1818,18 @@ struct ShadowStyleWitness {
   const ComputedStyle* parent = nullptr;
   bool noInheritPaint = false;
 };
+struct ShadowParentWitness {
+  Entity entity = entt::null;
+  const ComputedStyleComponent* style = nullptr;
+  bool noInheritPaint = false;
+};
+
 constexpr std::size_t kShadowStyleWitnesses = 64;
 }  // namespace
 
 std::size_t StyleSystem::PreparedBatch::workerReservationBytes() {
   return StagedRecords::kMaximumBytes + MatchedPropertiesCache::workerMetadataBytes() +
-         sizeof(WarningPage) +
+         sizeof(WarningPage) + sizeof(ShadowParentWitness) +
          kShadowStyleWitnesses * (sizeof(ShadowStyleWitness) + 2 * sizeof(void*));
 }
 
@@ -1931,7 +1964,7 @@ private:
     trace.needsRoot = previous.needsRoot;
     trace.needsParent = true;
     trace.work = work;
-    trace.matches = previous.matches;
+    trace.borrowedMatches = previous.recordedMatches();
     trace.count = previous.count;
     trace.complete = true;
     if (trace.publishSlot) {
@@ -1948,20 +1981,33 @@ private:
     return true;
   }
 
+  ShadowParentWitness lastParent_;
+
+  const ShadowParentWitness* readyShadowParent(const Registry& registry, Entity entity) {
+    if (lastParent_.style && lastParent_.entity == entity) {
+      return &lastParent_;
+    }
+    const auto* style = registry.try_get<ComputedStyleComponent>(entity);
+    if (!style || !style->style || style->externalFill || style->externalStroke) {
+      return nullptr;
+    }
+    lastParent_ = {entity, style, registry.all_of<DoNotInheritFillOrStrokeTag>(entity)};
+    return &lastParent_;
+  }
+
   bool reuseShadowStyle(const Registry& registry, Entity entity, Entity data, RuleTrace& trace) {
     if (!recordMemoEnabled_ || registry.all_of<ShadowTreeRootComponent>(entity)) {
       return false;
     }
     const auto& tree = registry.get<donner::components::TreeComponent>(entity);
-    const Entity parent = tree.parent();
-    const auto* style = registry.try_get<ComputedStyleComponent>(parent);
-    if (!style || !style->style || style->externalFill || style->externalStroke) {
+    const auto* parent = readyShadowParent(registry, tree.parent());
+    if (!parent) {
       return false;
     }
     trace.subjectOnly = true;
-    return installShadowStyle({data, &tree.tagName(), style->style.get(),
-                               registry.all_of<DoNotInheritFillOrStrokeTag>(parent)},
-                              parent, *style, trace);
+    return installShadowStyle(
+        {data, &tree.tagName(), parent->style->style.get(), parent->noInheritPaint}, parent->entity,
+        *parent->style, trace);
   }
 
   void rememberShadowStyle(const Registry& registry, Entity entity, Entity data,
@@ -1976,6 +2022,23 @@ private:
     entry = {{data, &tree.tagName(), trace.parentSlot->style.get(),
               registry.all_of<DoNotInheritFillOrStrokeTag>(tree.parent())},
              &trace};
+  }
+
+  bool hasAdmittedShadowInput(Entity data) const {
+    const auto& memo = shadowStyles_[static_cast<std::uint32_t>(data) % shadowStyles_.size()];
+    // This entry was recorded after local preflight. The light entity and its declaration
+    // component are immutable for this batch, so its local proof applies to another clone.
+    return memo.trace && memo.key.data == data;
+  }
+
+  const StyleComponent* localStyleForPreflight(const Registry& registry, Entity entity,
+                                               const ShadowEntityComponent* shadow) const {
+    if (!shadow) {
+      return registry.try_get<StyleComponent>(entity);
+    }
+    const Entity data = shadow->lightEntity;
+    // If reuse fails, ordinary style computation resolves its own local component.
+    return hasAdmittedShadowInput(data) ? nullptr : registry.try_get<StyleComponent>(data);
   }
 
   bool tryReuseStyle(const Registry& registry, Entity entity, const ShadowEntityComponent* shadow,
@@ -2095,7 +2158,7 @@ struct StyleSystem::PreparedBatch::Impl {
         trace.hit = &hits[index];
       }
       if (style) {
-        *trace.slot = trace.original;
+        trace.restoreOriginalSlot();
       }
     }
   }
@@ -2152,7 +2215,8 @@ StyleSystem::PreparedBatch::PreparedBatch(Registry& registry, std::span<const En
     }
     auto& trace = traces.entries.emplace_back();
     trace.slot = &slot;
-    trace.original = slot;
+    trace.originalExternalFill = slot.externalFill;
+    trace.originalExternalStroke = slot.externalStroke;
   }
 }
 
@@ -2230,7 +2294,7 @@ bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Wor
   }
   const Registry& registry = impl_->registry;
   const auto* shadow = registry.try_get<ShadowEntityComponent>(entity);
-  const auto* local = registry.try_get<StyleComponent>(shadow ? shadow->lightEntity : entity);
+  const auto* local = worker.localStyleForPreflight(registry, entity, shadow);
   if (!HasShallowLocalStyle(local)) {
     // Decline before copying a deep local CSS tree.
     impl_->abandoned.store(true, std::memory_order_relaxed);
@@ -2255,7 +2319,7 @@ bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Wor
                         nullptr, &trace, &late);
   if (worker.budget_.rejected() || worker.records_.declined() ||
       !worker.keepWarnings(trace, firstWarning, early, late)) {
-    *trace.slot = trace.original;
+    trace.restoreOriginalSlot();
     impl_->abandoned.store(true, std::memory_order_relaxed);
     return false;
   }
@@ -2293,7 +2357,8 @@ std::size_t StyleSystem::PreparedBatch::commit(std::span<const Entity> requests,
     cascade.compute(entity);
   }
   impl_->finished = true;
-  return impl_->traces.finish(GetStyleCascadeMetrics(impl_->registry));
+  impl_->traces.clear();
+  return cascade.countRecordedWork(GetStyleCascadeMetrics(impl_->registry));
 }
 
 // All slots share the storage's ownership block. A cache eviction cannot uncharge a record
