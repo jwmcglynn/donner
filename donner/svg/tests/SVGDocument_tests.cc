@@ -477,7 +477,7 @@ TEST(SVGDocument, UseTraversalFollowsAuthoredEditsAfterRendering) {
 }
 
 TEST(SVGDocument, TitledGradientInheritsStopsAndExposesItsOwnTitle) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
       <defs>
         <linearGradient id="swatch">
@@ -486,9 +486,10 @@ TEST(SVGDocument, TitledGradientInheritsStopsAndExposesItsOwnTitle) {
         </linearGradient>
         <linearGradient id="paint" href="#swatch"><title id="label">Paint</title></linearGradient>
       </defs>
-      <rect width="20" height="20" fill="url(#paint)" /
-                           > </ svg>) ");
-      auto gradient = document.querySelector("#paint");
+      <rect width="20" height="20" fill="url(#paint)"/>
+    </svg>
+  )svg");
+  auto gradient = document.querySelector("#paint");
   ASSERT_THAT(gradient, Optional(ElementIdEq("paint")));
   Renderer renderer;
   renderer.draw(document);
