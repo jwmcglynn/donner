@@ -55,11 +55,11 @@ counter corpus checks:
 An unchanged frame still records its draws, render passes and submission. It renders every
 pattern tile again (one render pass plus the tile's resident content draws, none of which moves a
 gated counter), runs every filter pass, and expands text strokes on the CPU again
-(`strokeOutlineFlattens`, which no gate checks). An offscreen `feImage` renderer counts its raster
-separately. The host counts the filter dispatch and submission after that renderer releases the
-counter sink. Each of the two `feImage` corpus scenes creates one bind group for its freshly
-rasterized input on the second frame at corpus size and above natural size. Both reuse their
-path, texture and buffer storage on that frame.
+(`strokeOutlineFlattens`, which no gate checks). The owning frame's counters include completed
+offscreen passes, and the device restores the prior sink when the offscreen frame ends. Both
+`feImage` corpus scenes reuse paths, buffers and host textures on frame two. Each creates one
+offscreen raster target and one bind group for the resulting input at corpus size and above
+natural size.
 
 Snapshot readback is an explicit capture outside the frame. It allocates a buffer and a bind
 group, reported separately by `RendererGeode::consumeReadbackStats()`.
@@ -90,9 +90,9 @@ state. The target selects the Geode backend itself, so it needs no `--config`.
   `[counter-corpus]` line per scene with its second-frame `pathEncodes`, `textureCreates`,
   `bufferWrites`, `bindgroupCreates` and `drawCalls`, the first frame's `drawCalls` and the visible
   pixel count.
-- **The ledger.** `kKnownViolations` lists the scenes allowed to miss the steady state, and it is
-  empty: every corpus scene meets it. The gate fails in both directions. A scene not listed fails
-  on any counter above `kSteadyState`. A listed scene must still break every counter in its
+- **The ledger.** `kKnownViolations` records one offscreen texture creation for each of the two
+  `feImage` scenes. The gate fails in both directions. A scene outside the ledger fails on any
+  counter above `kSteadyState`. A listed scene must still break every counter in its
   `violated` mask, so fixing a counter fails the suite until the entry drops it, and may not exceed
   the measured `ceiling` recorded for it. `KnownViolationsAreWellFormed` rejects an entry for a
   scene not in the corpus, an empty mask, a missing reason or tracking note, and a ceiling that
@@ -105,7 +105,7 @@ state. The target selects the Geode backend itself, so it needs no `--config`.
   (2048) pixels, aspect kept (`aboveNaturalCanvasSize`), so a scene wider than 1024 pixels is
   measured at 2048, which for an oversized scene is below its natural size. Each scene starts from
   an empty texture pool at its starting budget, so its counters depend on no earlier scene. The
-  pass has its own ledger, `kKnownViolationsAboveNaturalSize`, with the same rules, also empty, and
+  ledger `kKnownViolationsAboveNaturalSize` contains the same two measured entries.
   `kDeliberatelyInert` names the pass a blank scene is blank in. Run with `--test_output=all`, the
   pass prints one `[counter-corpus-above-natural WxH]` line per scene. Neither pass may run a
   filter on a [reduced raster](#GeodePerformanceDevice).
@@ -800,11 +800,10 @@ group every frame:
   creates one new texture view and one new bind group for it on every such draw. This repeats
   because the flag that marks a referenced subtree as changed is consumed by the render-tree
   update before the driver prepares filters, and nothing persistent records it for a cached raster
-  to key on ([#2710](https://github.com/jwmcglynn/donner/issues/2710)). The host renderer's frame
-  counters do not yet show this cost: the offscreen pass clears the device's counter sink, so the
-  host's later work in that frame goes uncounted
-  ([#2718](https://github.com/jwmcglynn/donner/issues/2718)). A snapshot recorder, which a
-  concurrent-DOM draw uses, still reads the raster back to CPU pixels.
+  to key on ([#2710](https://github.com/jwmcglynn/donner/issues/2710)). The owning frame includes
+  the offscreen work in its counters, and the counter corpus caps warm texture creation at one
+  for each affected scene. A snapshot recorder, which a concurrent-DOM draw uses, reads the
+  raster back to CPU pixels.
 - **Noise is anchored at the filter raster's origin.** `feTurbulence` evaluates the noise at each
   pixel through the linear part of the filter transform only, so the pattern follows the raster's
   corner rather than the filter's user space, and moves under a pan or a view box offset
@@ -863,5 +862,5 @@ live on a device, and `GeodeDocumentGeometryBudget::cacheBytes()`, `residentByte
   `retireImage`) and guard reuse with the device's frame stamps (`frameStampClaimed`,
   `oldestOpenFrameGeneration`).
 - Ordinary rendering stays GPU resident: no CPU readback or re-upload in a frame.
-- A new draw class gets a `geode_perf_tests` case that fails before it is resident, and the corpus
-  stays at an empty `kKnownViolations`.
+- A new draw class gets a `geode_perf_tests` case that fails before it is resident. The counter
+  corpus enforces each scene's steady-state limits, including the existing `feImage` ceilings.
