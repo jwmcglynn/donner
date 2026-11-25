@@ -14,6 +14,7 @@ public:
   explicit TraversalElement(EntityHandle handle) : SVGElement(handle) {}
 };
 
+/// The shadow-root check is defense in depth: real shadow entities have no element type.
 bool PushTraversalChildrenReverse(EntityHandle element, SmallVector<Entity, 16>& stack,
                                   css::SelectorTraversalBudget& traversalBudget) {
   const auto& tree = element.get<donner::components::TreeComponent>();

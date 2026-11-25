@@ -35,6 +35,7 @@
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
+#include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -421,6 +422,88 @@ TEST(SVGDocument, UseTraversalFindsAuthoredChildrenBeforeAndAfterRendering) {
     SCOPED_TRACE("after rendering");
     expectAuthoredChildren();
   }
+}
+
+TEST(SVGDocument, UseTraversalFollowsAuthoredEditsAfterRendering) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+      <defs>
+        <rect id="original" width="8" height="8"/>
+        <circle id="replacement" cx="4" cy="4" r="4"/>
+      </defs>
+      <use id="host" href="#original"><title id="label">Label</title></use>
+    </svg>
+  )");
+  auto host = document.querySelector("#host");
+  ASSERT_THAT(host, Optional(ElementIdEq("host")));
+  auto use = host->cast<SVGUseElement>();
+  Renderer renderer;
+  renderer.draw(document);
+
+  const auto label = use.firstChild();
+  ASSERT_THAT(label, Optional(ElementIdEq("label")));
+  EXPECT_THAT(label->parentElement(), Optional(ElementIdEq("host")));
+
+  auto appended = SVGDescElement::Create(document);
+  appended.setId("appended");
+  use.appendChild(appended);
+  EXPECT_THAT(use.lastChild(), Optional(ElementIdEq("appended")));
+  EXPECT_THAT(appended.parentElement(), Optional(ElementIdEq("host")));
+
+  auto inserted = SVGTitleElement::Create(document);
+  inserted.setId("inserted");
+  use.insertBefore(inserted, label);
+  EXPECT_THAT(use.firstChild(), Optional(ElementIdEq("inserted")));
+  EXPECT_THAT(inserted.nextSibling(), Optional(ElementIdEq("label")));
+  EXPECT_THAT(label->previousSibling(), Optional(ElementIdEq("inserted")));
+
+  use.removeChild(appended);
+  EXPECT_THAT(QueriedId(appended.parentElement()), Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(use.querySelector("#appended")), Eq(std::nullopt));
+  EXPECT_THAT(use.lastChild(), Optional(ElementIdEq("label")));
+
+  use.setHref("#replacement");
+  renderer.draw(document);
+  EXPECT_THAT(use.href(), Eq("#replacement"));
+  EXPECT_THAT(use.querySelector(":scope > title"), Optional(ElementIdEq("inserted")));
+  EXPECT_THAT(QueriedId(use.querySelector(":scope > circle")), Eq(std::nullopt));
+
+  use.removeAttribute("href");
+  renderer.draw(document);
+  EXPECT_THAT(use.href(), Eq(""));
+  EXPECT_THAT(use.firstChild(), Optional(ElementIdEq("inserted")));
+  EXPECT_THAT(use.lastChild(), Optional(ElementIdEq("label")));
+  EXPECT_THAT(inserted.parentElement(), Optional(ElementIdEq("host")));
+}
+
+TEST(SVGDocument, TitledGradientInheritsStopsAndExposesItsOwnTitle) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+      <defs>
+        <linearGradient id="swatch">
+          <stop offset="0" stop-color="red"/>
+          <stop offset="1" stop-color="blue"/>
+        </linearGradient>
+        <linearGradient id="paint" href="#swatch"><title id="label">Paint</title></linearGradient>
+      </defs>
+      <rect width="20" height="20" fill="url(#paint)"/>
+    </svg>
+  )svg");
+  auto gradient = document.querySelector("#paint");
+  ASSERT_THAT(gradient, Optional(ElementIdEq("paint")));
+  Renderer renderer;
+  renderer.draw(document);
+
+  EXPECT_THAT(gradient->firstChild(), Optional(ElementIdEq("label")));
+  EXPECT_THAT(gradient->lastChild(), Optional(ElementIdEq("label")));
+  EXPECT_THAT(gradient->querySelector(":scope > title"), Optional(ElementIdEq("label")));
+  EXPECT_THAT(QueriedId(gradient->querySelector(":scope > stop")), Eq(std::nullopt));
+  const auto* computed = gradient->entityHandle().try_get<components::ComputedGradientComponent>();
+  ASSERT_THAT(computed, testing::NotNull());
+  EXPECT_THAT(computed->stops,
+              testing::ElementsAre(
+                  testing::Field(&GradientStop::color, css::Color(css::RGBA(255, 0, 0, 255))),
+                  testing::Field(&GradientStop::color, css::Color(css::RGBA(0, 0, 255, 255)))));
 }
 
 TEST(SVGDocument, SourceLessApplySourceEditReportsDiagnostic) {

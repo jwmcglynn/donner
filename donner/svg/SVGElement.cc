@@ -412,6 +412,7 @@ void RemovePresentationAttribute(SVGElement& element, const ElementAnchor& handl
   markNeedsFullStyleRecompute(handle);
 }
 
+/// The shadow-root check is defense in depth: real shadow entities have no element type.
 std::optional<EntityHandle> AuthoredElementHandle(Registry& registry, Entity entity) {
   if (entity == entt::null) {
     return std::nullopt;
