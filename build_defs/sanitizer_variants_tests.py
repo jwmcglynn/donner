@@ -78,7 +78,7 @@ def _config_env(flags):
     return env
 
 
-def _declared_tests(variants, source_rules, sanitizers=None, test_names=None):
+def _declared_tests(variants, source_rules, sanitizers=None, test_names=None, shard_count=None):
     """Run the package finalizer's declaration function against fixture rule metadata."""
     path = _runfile("build_defs/rules.bzl")
     tree = ast.parse(path.read_text(), filename=str(path))
@@ -101,7 +101,7 @@ def _declared_tests(variants, source_rules, sanitizers=None, test_names=None):
     module = ast.Module(body=[declaration], type_ignores=[])
     exec(compile(module, str(path), "exec"), scope)  # noqa: S102
     enabled = variants if sanitizers is None else sanitizers
-    scope["_declare_sanitizer_variants"](enabled, test_names)
+    scope["_declare_sanitizer_variants"](enabled, test_names, shard_count)
     return declared
 
 
@@ -152,7 +152,12 @@ class SanitizerVariantsTest(unittest.TestCase):
 
     def test_only_eligible_tests_get_variants(self):
         rules = {
-            "plain": {"name": "plain", "kind": "cc_test", "tags": ["retained-tag"]},
+            "plain": {
+                "name": "plain",
+                "kind": "cc_test",
+                "tags": ["retained-tag"],
+                "shard_count": 2,
+            },
             "corpus": {"name": "corpus", "kind": "cc_test", "tags": ["fuzz_target"]},
             "manual": {"name": "manual", "kind": "cc_test", "tags": ["manual", "perf"]},
             "library": {"name": "library", "kind": "cc_library"},
@@ -161,19 +166,22 @@ class SanitizerVariantsTest(unittest.TestCase):
         self.assertEqual([test["name"] for test in tests], ["ci_asan_plain", "ci_tsan_plain"])
         for test in tests:
             self.assertIn("retained-tag", test["tags"])
+            self.assertEqual(test["shard_count"], 2)
 
     def test_parallel_style_uses_only_the_native_thread_sanitizer(self):
         scheduler = self.packages["donner/base/tasks"]
         self.assertEqual(scheduler.sanitizers, ("asan", "tsan"))
         self.assertIsNone(scheduler.test_names)
+        self.assertIsNone(scheduler.shard_count)
 
         style = self.packages["donner/svg/components/style"]
         rules = {
             name: {"name": name, "kind": "cc_test", "tags": []}
             for name in ("style_parallel_tests", "style_system_tests")
         }
-        rules["style_parallel_tests"]["shard_count"] = 4
-        tests = _declared_tests(self.variants, rules, style.sanitizers, style.test_names)
+        tests = _declared_tests(
+            self.variants, rules, style.sanitizers, style.test_names, style.shard_count
+        )
         self.assertEqual([test["name"] for test in tests], ["ci_tsan_style_parallel_tests"])
         self.assertEqual(tests[0]["dep"], ":style_parallel_tests")
         self.assertEqual(tests[0]["shard_count"], 4)

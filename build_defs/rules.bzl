@@ -505,7 +505,7 @@ _donner_sanitizer_test = rule(
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
-def _declare_sanitizer_variants(sanitizers, test_names = None):
+def _declare_sanitizer_variants(sanitizers, test_names = None, shard_count = None):
     """Adds sanitizer variants of eligible tests in the package.
 
     The native CI package finalizer calls it for the packages of SANITIZER_VARIANT_PACKAGES, after
@@ -519,6 +519,7 @@ def _declare_sanitizer_variants(sanitizers, test_names = None):
     Args:
       sanitizers: The SANITIZER_VARIANTS keys to emit.
       test_names: Optional source-test names to include. None selects all eligible tests.
+      shard_count: Optional shard count for these variants. None retains the source count.
     """
     for rule in native.existing_rules().values():
         if rule["kind"] != "cc_test" or (test_names != None and rule["name"] not in test_names):
@@ -534,8 +535,9 @@ def _declare_sanitizer_variants(sanitizers, test_names = None):
         # Only the attributes a test set: a view has no entry for one left at its default, and an
         # unset shard count reads as -1.
         timing = {key: rule[key] for key in ("size", "timeout", "flaky") if key in rule}
-        if rule.get("shard_count", -1) >= 0:
-            timing["shard_count"] = rule["shard_count"]
+        variant_shards = shard_count if shard_count != None else rule.get("shard_count", -1)
+        if variant_shards >= 0:
+            timing["shard_count"] = variant_shards
         for sanitizer in sanitizers:
             _donner_sanitizer_test(
                 name = "ci_{}_{}".format(sanitizer, rule["name"]),
@@ -1607,7 +1609,11 @@ def wasm_ci_test(actual, profile, required_outputs = [], payload_budget = False)
 def _finalize_ci_package(name, visibility):
     sanitizer_policy = SANITIZER_VARIANT_PACKAGES.get(native.package_name())
     if sanitizer_policy:
-        _declare_sanitizer_variants(sanitizer_policy.sanitizers, sanitizer_policy.test_names)
+        _declare_sanitizer_variants(
+            sanitizer_policy.sanitizers,
+            sanitizer_policy.test_names,
+            sanitizer_policy.shard_count,
+        )
     declare_darwin_variants(struct(build = ci_platform_build, test = ci_platform_test))
 
 # Consumer builds also support Bazel 7. Only the root CI workspace needs finalizers.

@@ -49,9 +49,12 @@ SANITIZER_VARIANT_PACKAGES = {
     "donner/base/tasks": struct(
         sanitizers = ("asan", "tsan"),
         test_names = None,
+        shard_count = None,
     ),
     "donner/svg/components/style": struct(
         sanitizers = ("tsan",),
         test_names = ("style_parallel_tests",),
+        # Keep the sanitizer runs within the existing TestRunner deadline.
+        shard_count = 4,
     ),
 }
