@@ -739,7 +739,8 @@ TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
       ASSERT_GT(shadow.mainBranch->shadowEntities.size(), 1u);
       const auto& child =
           registry.get<ComputedStyleComponent>(shadow.mainBranch->shadowEntities[1]);
-      EXPECT_EQ(child.properties()->fill.get(), PaintServer(PaintServer::Solid(css::Color(color))));
+      EXPECT_THAT(child.properties()->fill.get(),
+                  ::testing::Eq(PaintServer(PaintServer::Solid(css::Color(color)))));
     };
     expectFill("#u0", css::RGBA::RGB(0, 0, 0));
     expectFill("#u1", css::RGBA::RGB(255, 0, 0));
