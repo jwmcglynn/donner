@@ -27,16 +27,16 @@ struct StyleCascadeCounters {
   /// Refusals while computing an entity list or a single entity's style are not counted.
   std::uint64_t budgetRejections = 0;
   /// Whole \ref PropertyRegistry copies and moves made while cascading elements, each of which
-  /// writes every property. Building an element's computed style copies its local declarations
-  /// once.
+  /// writes every property. This physical count depends on worker cache placement. Building an
+  /// element's computed style copies its local declarations once.
   std::uint64_t registryCopies = 0;
-  /// Computed styles reused from the matched-properties cache.
+  /// Actual cache hits; stealing can change this count.
   std::uint64_t matchedPropertiesCacheHits = 0;
-  /// Cacheable computed styles not found in the matched-properties cache.
+  /// Actual cache misses; stealing can change this count.
   std::uint64_t matchedPropertiesCacheMisses = 0;
   /// Element cascades excluded from matched-properties caching.
   std::uint64_t matchedPropertiesCacheUncacheable = 0;
-  /// Declaration parses avoided by matched-properties cache hits.
+  /// Actual parses avoided by cache hits; stealing can change this count.
   std::uint64_t declarationParsesSkipped = 0;
 
   /// Equality operator.

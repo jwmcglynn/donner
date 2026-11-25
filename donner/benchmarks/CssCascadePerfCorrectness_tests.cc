@@ -295,7 +295,9 @@ constexpr StyleCascadeCounters CacheCounters(std::uint64_t hits, std::uint64_t m
 
 INSTANTIATE_TEST_SUITE_P(
     CacheWork, CssCascadeCacheWorkTest,
-    // These are measured exact-key partitions. The splash includes stop/flood base values and
+    // These counts describe the serial cache. With stealing, hits, misses, copies and parses
+    // skipped reflect actual worker-local reuse. A fixed seed must reproduce them.
+    // The splash includes stop/flood base values and
     // cascade priority that the earlier approximate opportunity grouping did not distinguish.
     ::testing::Values(Load("Splash", Document::Splash, CacheCounters(401, 221)),
                       Load("BootstrapIcons", Document::Icons, CacheCounters(5129, 8)),

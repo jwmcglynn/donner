@@ -2054,6 +2054,440 @@ TEST_F(StyleSystemTest, PreparedSiblingsCascadeConcurrentlyIntoOwnedSlots) {
   EXPECT_EQ(documentBudget.complexPropertyBytes(), retainedBefore);
 }
 
+TEST(StyleResourceBudgetTest, WorkerClampsEveryWorkShareToItsRemainingAllowance) {
+  StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 3;
+  limits.declarationApplications = 3;
+  limits.declarationComponentWork = 12;
+  limits.declarationByteWork = 20;
+  limits.selectorTraversalSteps = 5;
+  StyleResourceBudget document(limits);
+  ASSERT_TRUE(document.reserveRuleElementMatch());
+  ASSERT_TRUE(document.reserveRuleElementMatch());
+  ASSERT_TRUE(document.reserveDeclarationApplication(7, 11));
+  ASSERT_TRUE(document.selectorTraversal().tryConsumeMeasured(3));
+
+  StyleResourceBudget worker(document, limits);
+  EXPECT_EQ(worker.limits().ruleElementMatches, 1u);
+  EXPECT_EQ(worker.limits().declarationApplications, 2u);
+  EXPECT_EQ(worker.limits().declarationComponentWork, 5u);
+  EXPECT_EQ(worker.limits().declarationByteWork, 9u);
+  EXPECT_EQ(worker.limits().selectorTraversalSteps, 2u);
+  EXPECT_TRUE(worker.reserveRuleElementMatch());
+  EXPECT_TRUE(worker.reserveDeclarationApplication(5, 9));
+  EXPECT_TRUE(worker.selectorTraversal().tryConsumeMeasured(2));
+  EXPECT_FALSE(worker.reserveRuleElementMatch());
+  EXPECT_TRUE(worker.rejected());
+  EXPECT_FALSE(document.rejected());
+  EXPECT_EQ(document.ruleElementMatches(), 2u);
+  EXPECT_EQ(document.declarationApplications(), 1u);
+  EXPECT_EQ(document.selectorTraversal().steps(), 3u);
+}
+
+TEST(StyleResourceBudgetTest, WorkerInheritsLatchedDocumentAndAggregateRefusal) {
+  StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 1;
+  limits.selectorTraversalSteps = 1;
+  StyleResourceBudget document(limits);
+  ASSERT_TRUE(document.reserveRuleElementMatch());
+  ASSERT_FALSE(document.reserveRuleElementMatch());
+  StyleResourceBudget afterRefusal(document, limits);
+  EXPECT_TRUE(afterRefusal.rejected());
+  EXPECT_FALSE(afterRefusal.reserveDeclarationApplication());
+
+  StyleResourceBudget outer(limits);
+  StyleResourceBudget nested(limits);
+  nested.setAggregateWorkBudget(&outer);
+  ASSERT_TRUE(outer.reserveRuleElementMatch());
+  ASSERT_TRUE(outer.selectorTraversal().consume());
+  ASSERT_FALSE(nested.rejected());
+  StyleResourceBudget remainingAggregate(nested, limits);
+  EXPECT_FALSE(remainingAggregate.rejected());
+  EXPECT_EQ(remainingAggregate.limits().ruleElementMatches, 0u);
+  EXPECT_EQ(remainingAggregate.limits().selectorTraversalSteps, 0u);
+  EXPECT_FALSE(remainingAggregate.reserveRuleElementMatch());
+  EXPECT_FALSE(outer.rejected());
+  ASSERT_FALSE(outer.selectorTraversal().consume());
+  StyleResourceBudget aggregateShare(nested, limits);
+  EXPECT_TRUE(aggregateShare.rejected());
+  EXPECT_TRUE(aggregateShare.selectorTraversal().rejected());
+  EXPECT_FALSE(aggregateShare.reserveRuleElementMatch());
+}
+
+TEST_F(StyleSystemTest, PreparedElementRejectsAnExternalOccurrence) {
+  auto doc =
+      ParseAndComputeStyles(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)");
+  auto& registry = doc.registry();
+  auto item = doc.querySelector("#r")->entityHandle();
+  auto& output = item.get<ComputedStyleComponent>();
+  output = {};
+  auto& budget = registry.ctx().get<StyleResourceBudget>();
+  StyleCascadeCounters counts;
+  MatchedPropertiesCache front;
+  StyleSystem::CascadePass worker{budget, counts, front};
+  ParseWarningSink warnings;
+  registry.ctx().emplace<ExternalUseStyleContext>(
+      doc.svgElement().entityHandle().entity(), std::make_shared<const ComputedStyle>(),
+      ResolvedPaintServer(), ResolvedPaintServer(), nullptr);
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "ExternalUseStyleContext");
+}
+
+TEST_F(StyleSystemTest, PreparedElementRejectsAnimationElsewhereInTheDocument) {
+  auto doc =
+      ParseAndComputeStyles(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)");
+  auto& registry = doc.registry();
+  auto item = doc.querySelector("#r")->entityHandle();
+  auto& output = item.get<ComputedStyleComponent>();
+  output = {};
+  auto& budget = registry.ctx().get<StyleResourceBudget>();
+  StyleCascadeCounters counts;
+  MatchedPropertiesCache front;
+  StyleSystem::CascadePass worker{budget, counts, front};
+  ParseWarningSink warnings;
+  std::ignore =
+      registry.get_or_emplace<AnimatedValuesComponent>(doc.svgElement().entityHandle().entity());
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "AnimatedValuesComponent");
+}
+
+TEST_F(StyleSystemTest, PreparedElementRequiresBothParentAndRootPublication) {
+  auto doc = ParseAndComputeStyles(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="g"><rect id="r"/></g></svg>)");
+  auto& registry = doc.registry();
+  auto item = doc.querySelector("#r")->entityHandle();
+  auto& output = item.get<ComputedStyleComponent>();
+  output = {};
+  auto& parent = doc.querySelector("#g")->entityHandle().get<ComputedStyleComponent>();
+  auto& root = doc.svgElement().entityHandle().get<ComputedStyleComponent>();
+  auto& budget = registry.ctx().get<StyleResourceBudget>();
+  StyleCascadeCounters counts;
+  MatchedPropertiesCache front;
+  StyleSystem::CascadePass worker{budget, counts, front};
+  ParseWarningSink warnings;
+  const auto saved = std::move(parent.style);
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "cacheState.parentReady");
+  parent.style = saved;
+  root.style.reset();
+  EXPECT_DEATH_IF_SUPPORTED(
+      StyleSystem::computePreparedStyle(registry, item.entity(), output, worker, warnings),
+      "cacheState.rootReady");
+}
+
+TEST_F(StyleSystemTest, SpeculativeSlotsKeepTheirBoundWhenFrontEntriesAreCleared) {
+  constexpr std::size_t kLanes = 2;
+  constexpr auto kPerLane = StyleSystem::StagedRecords::kMaximumRecords;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="group">)";
+  for (std::size_t i = 0; i < kLanes * (kPerLane + 1); ++i) {
+    source += "<rect id='r" + std::to_string(i) + "' stroke-dasharray='2 3 5'/>";
+  }
+  source += "</g></svg>";
+  auto doc = ParseSVG(source);
+  auto& registry = doc.registry();
+  ParseWarningSink warnings;
+  styleSystem.computeStyle(doc.querySelector("#group")->entityHandle(), warnings);
+  auto& logical = registry.ctx().get<StyleResourceBudget>();
+  const std::size_t before = logical.complexPropertyBytes();
+  std::vector<Entity> entities;
+  for (std::size_t i = 0; i < kLanes * (kPerLane + 1); ++i) {
+    const auto entity = doc.querySelector("#r" + std::to_string(i))->entityHandle().entity();
+    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
+    entities.push_back(entity);
+  }
+
+  std::weak_ptr<const ComputedStyle> tentative;
+  {
+    std::array<StyleSystem::StagedRecords, kLanes> records;
+    for (std::size_t lane = 0; lane < kLanes; ++lane) {
+      MatchedPropertiesCache front;
+      StyleResourceBudget budget(logical, logical.limits());
+      StyleCascadeCounters counters;
+      StyleSystem::CascadePass pass{budget, counters, front, 0, &records[lane]};
+      for (std::size_t i = lane; i < entities.size(); i += kLanes) {
+        auto& slot = registry.get<ComputedStyleComponent>(entities[i]);
+        front.clear();
+        StyleSystem::computePreparedStyle(registry, entities[i], slot, pass, warnings);
+        EXPECT_LE(records[lane].retainedBytes(), StyleSystem::StagedRecords::kMaximumBytes);
+        EXPECT_EQ(logical.complexPropertyBytes(), before);
+        if (i / kLanes < kPerLane) {
+          ASSERT_TRUE(slot.style);
+          tentative = slot.style;
+        } else {
+          EXPECT_FALSE(slot.style);
+          EXPECT_TRUE(records[lane].declined());
+        }
+      }
+    }
+    for (Entity entity : entities) {
+      registry.get<ComputedStyleComponent>(entity) = {};
+    }
+  }
+  EXPECT_TRUE(tentative.expired());
+  styleSystem.computeStylesFor(registry, entities, warnings);
+  const auto& first = registry.get<ComputedStyleComponent>(entities.front());
+  ASSERT_TRUE(first.style);
+  const auto bytes = first.properties()->complexPropertyBytes();
+  ASSERT_GT(bytes, 0u);
+  EXPECT_EQ(logical.complexPropertyBytes(), before + bytes);
+  for (Entity entity : entities) {
+    EXPECT_EQ(registry.get<ComputedStyleComponent>(entity).style, first.style);
+  }
+}
+
+TEST_F(StyleSystemTest, OversizeWorkerPayloadFallsBackWithoutRefusingTheFamily) {
+  constexpr std::size_t kValues = 2048;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="group">)";
+  for (std::size_t i = 0; i < StyleSystem::StagedRecords::kMaximumRecords; ++i) {
+    source += "<rect id='r" + std::to_string(i) + "'/>";
+  }
+  source += "</g></svg>";
+  auto doc = ParseSVG(source);
+  auto& registry = doc.registry();
+  auto family = std::make_shared<DocumentResourceFamilyBudget>();
+  auto& logical = registry.ctx().emplace<StyleResourceBudget>(family);
+  ParseWarningSink warnings;
+  const auto parent = doc.querySelector("#group")->entityHandle();
+  styleSystem.computeStyle(parent, warnings);
+  std::vector<Entity> entities;
+  for (std::size_t i = 0; i < StyleSystem::StagedRecords::kMaximumRecords; ++i) {
+    auto handle = doc.querySelector("#r" + std::to_string(i))->entityHandle();
+    handle.get_or_emplace<StyleComponent>().editProperties([&](PropertyRegistry& local) {
+      local.strokeDasharray.set(StrokeDasharray(kValues, Lengthd(i + 1)), {});
+    });
+    std::ignore = handle.get_or_emplace<ComputedStyleComponent>();
+    entities.push_back(handle.entity());
+  }
+
+  const auto before = family->securityStats();
+  {
+    StyleSystem::StagedRecords records;
+    StyleResourceBudget worker(logical, logical.limits());
+    StyleCascadeCounters counters;
+    MatchedPropertiesCache front;
+    StyleSystem::CascadePass pass{worker, counters, front, 0, &records};
+    std::size_t accepted = 0;
+    for (Entity entity : entities) {
+      auto& slot = registry.get<ComputedStyleComponent>(entity);
+      const auto previous = records.retainedBytes();
+      StyleSystem::computePreparedStyle(registry, entity, slot, pass, warnings);
+      EXPECT_LE(records.retainedBytes(), StyleSystem::StagedRecords::kMaximumBytes);
+      if (records.declined()) {
+        EXPECT_FALSE(slot.style);
+        EXPECT_EQ(records.retainedBytes(), previous);
+        break;
+      }
+      ASSERT_TRUE(slot.style);
+      ++accepted;
+    }
+    EXPECT_GT(accepted, 0u);
+    EXPECT_LT(accepted, StyleSystem::StagedRecords::kMaximumRecords);
+    EXPECT_TRUE(records.declined());
+    for (Entity entity : entities) {
+      registry.get<ComputedStyleComponent>(entity) = {};
+    }
+  }
+  auto after = family->securityStats();
+  EXPECT_EQ(after.totalRetainedBytes, before.totalRetainedBytes);
+  EXPECT_EQ(after.rejectedReservations, before.rejectedReservations);
+  EXPECT_EQ(after.rejected, before.rejected);
+  styleSystem.computeStylesFor(registry, entities, warnings);
+  EXPECT_FALSE(logical.rejected());
+  EXPECT_GT(family->securityStats().totalRetainedBytes, before.totalRetainedBytes);
+}
+
+TEST_F(StyleSystemTest, UnsupportedWorkerPayloadLeavesTheSerialSlotAvailable) {
+  auto doc = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg" id="root">
+    <rect id="item" style="cursor:url(#pointer),auto"/>
+  </svg>)svg");
+  auto& registry = doc.registry();
+  ParseWarningSink warnings;
+  styleSystem.computeStyle(doc.svgElement().entityHandle(), warnings);
+  const auto handle = doc.querySelector("#item")->entityHandle();
+  auto& slot = handle.get_or_emplace<ComputedStyleComponent>();
+  auto& logical = registry.ctx().get<StyleResourceBudget>();
+  StyleSystem::StagedRecords records;
+  StyleResourceBudget worker(logical, logical.limits());
+  StyleCascadeCounters counters;
+  MatchedPropertiesCache front;
+  StyleSystem::CascadePass pass{worker, counters, front, 0, &records};
+  StyleSystem::computePreparedStyle(registry, handle.entity(), slot, pass, warnings);
+  EXPECT_TRUE(records.declined());
+  EXPECT_EQ(records.retainedBytes(), 0u);
+  EXPECT_FALSE(slot.style);
+  const auto* properties = styleSystem.computeStyle(handle, warnings).properties();
+  ASSERT_NE(properties, nullptr);
+  ASSERT_TRUE(properties->cursor.value);
+  EXPECT_EQ(properties->cursor.value->images.size(), 1u);
+}
+
+TEST_F(StyleSystemTest, OwnerCommitPreservesLaterAdmissionAtTheExactSerialBoundary) {
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>.x {stroke-dasharray: 2 3 5} .y {stroke-dasharray: 7 11 13}</style>
+    <g id="group"><rect class="x" id="a"/><rect class="x" id="b"/>
+      <rect class="x" id="c"/><rect class="x" id="d"/><rect class="y" id="later"/></g>
+  </svg>)svg";
+  struct Result {
+    std::array<std::shared_ptr<const ComputedStyle>, 5> styles;
+    std::vector<ParseDiagnostic> warnings;
+    std::size_t firstBytes = 0;
+    std::size_t finalBytes = 0;
+    std::size_t refusals = 0;
+    bool rejected = false;
+    std::size_t replayed = 0;
+  };
+  const auto run = [&](std::size_t limit, bool parallel) {
+    Result result;
+    auto doc = ParseSVG(source);
+    auto& registry = doc.registry();
+    DocumentResourceFamilyBudget::Limits limits;
+    limits.computedStyleBytes = limit;
+    auto family = std::make_shared<DocumentResourceFamilyBudget>(limits);
+    auto& logical = registry.ctx().emplace<StyleResourceBudget>(family);
+    ParseWarningSink warnings;
+    styleSystem.computeStyle(doc.querySelector("#group")->entityHandle(), warnings);
+    std::array<Entity, 4> entities;
+    constexpr std::array ids{"#a", "#b", "#c", "#d"};
+    for (std::size_t i = 0; i < entities.size(); ++i) {
+      entities[i] = doc.querySelector(ids[i])->entityHandle().entity();
+      std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entities[i]);
+    }
+
+    if (parallel) {
+      StyleSystem::PreparedBatch batch(registry, entities, 2);
+      const auto before = logical.complexPropertyBytes();
+      std::barrier start(2);
+      const auto computePair = [&](std::size_t lane) {
+        auto* worker = batch.bindWorker();
+        start.arrive_and_wait();
+        EXPECT_NE(worker, nullptr);
+        if (worker) {
+          for (std::size_t i = lane; i < entities.size(); i += 2) {
+            EXPECT_TRUE(batch.compute(entities[i], *worker));
+          }
+        }
+      };
+      std::thread other(computePair, 1);
+      computePair(0);
+      other.join();
+      std::weak_ptr<const ComputedStyle> provisional =
+          registry.get<ComputedStyleComponent>(entities.back()).style;
+      EXPECT_FALSE(provisional.expired());
+      EXPECT_EQ(logical.complexPropertyBytes(), before);
+      EXPECT_EQ(family->securityStats().rejectedReservations, 0u);
+      result.replayed = batch.commit(entities, warnings, true);
+      EXPECT_TRUE(provisional.expired());
+    } else {
+      styleSystem.computeStylesFor(registry, entities, warnings);
+    }
+    result.firstBytes = logical.complexPropertyBytes();
+    for (std::size_t i = 0; i < entities.size(); ++i) {
+      result.styles[i] = registry.get<ComputedStyleComponent>(entities[i]).style;
+    }
+    result.styles.back() =
+        styleSystem.computeStyle(doc.querySelector("#later")->entityHandle(), warnings).style;
+    result.finalBytes = logical.complexPropertyBytes();
+    result.refusals = family->securityStats().rejectedReservations;
+    result.rejected = logical.rejected();
+    result.warnings = warnings.warnings();
+    return result;
+  };
+  const auto reference = run(1024 * 1024, false);
+  ASSERT_GT(reference.firstBytes, 0u);
+  ASSERT_GT(reference.finalBytes, reference.firstBytes);
+  for (auto limit : {reference.finalBytes - 1, reference.finalBytes}) {
+    const Result serial = run(limit, false);
+    const Result staged = run(limit, true);
+    EXPECT_EQ(staged.replayed, 4u);
+    EXPECT_EQ(serial.rejected, limit < reference.finalBytes);
+    EXPECT_EQ(staged.rejected, serial.rejected);
+    EXPECT_EQ(staged.refusals, serial.refusals);
+    EXPECT_EQ(staged.firstBytes, serial.firstBytes);
+    EXPECT_EQ(staged.finalBytes, serial.finalBytes);
+    EXPECT_EQ(staged.warnings, serial.warnings);
+    for (std::size_t i = 0; i < staged.styles.size(); ++i) {
+      ASSERT_TRUE(staged.styles[i]);
+      ASSERT_TRUE(serial.styles[i]);
+      EXPECT_TRUE(staged.styles[i]->properties.exactlyEquals(serial.styles[i]->properties));
+    }
+  }
+}
+
+TEST_F(StyleSystemTest, OwnerRematchesOverlongAndUnaffordableTraces) {
+  struct Result {
+    std::size_t replayed = 0;
+    StyleCascadeCounters work;
+    std::size_t steps = 0;
+    bool rejected = false;
+    std::vector<ParseDiagnostic> warnings;
+    std::shared_ptr<const ComputedStyle> record;
+  };
+  const auto run = [&](bool prepare, bool overlong) {
+    std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)";
+    const int ruleCount = overlong ? 7 : 1;
+    for (int i = 0; i < ruleCount; ++i) {
+      source += "g > rect { fill: invalid-paint; stroke-width: 3 }";
+    }
+    source += "</style><g id='g'><rect id='r'/></g></svg>";
+    auto doc = ParseSVG(source);
+    auto& registry = doc.registry();
+    StyleResourceBudget::Limits limits;
+    limits.selectorTraversalSteps = 64;
+    auto& logical = registry.ctx().emplace<StyleResourceBudget>(limits);
+    ParseWarningSink warnings;
+    styleSystem.computeStyle(doc.querySelector("#g")->entityHandle(), warnings);
+    logical.reset();
+    auto element = doc.querySelector("#r")->entityHandle();
+    std::ignore = element.get_or_emplace<ComputedStyleComponent>();
+    const std::array requests{element.entity()};
+    const auto before = registry.ctx().get<StyleCascadeMetrics>().counters;
+    Result result;
+    const auto reservePriorTraversal = [&] {
+      if (!overlong) {
+        EXPECT_TRUE(logical.selectorTraversal().tryConsumeMeasured(limits.selectorTraversalSteps));
+      }
+    };
+    if (prepare) {
+      StyleSystem::PreparedBatch batch(registry, requests, 1);
+      auto* worker = batch.bindWorker();
+      EXPECT_NE(worker, nullptr);
+      if (worker) {
+        EXPECT_TRUE(batch.compute(requests.front(), *worker));
+      }
+      reservePriorTraversal();
+      result.replayed = batch.commit(requests, warnings, true);
+    } else {
+      reservePriorTraversal();
+      styleSystem.computeStylesFor(registry, requests, warnings);
+    }
+    result.work = registry.ctx().get<StyleCascadeMetrics>().counters - before;
+    result.steps = logical.selectorTraversal().steps();
+    result.rejected = logical.rejected();
+    result.warnings = warnings.warnings();
+    result.record = element.get<ComputedStyleComponent>().style;
+    return result;
+  };
+  for (bool overlong : {false, true}) {
+    const auto serial = run(false, overlong);
+    const auto staged = run(true, overlong);
+    EXPECT_EQ(staged.replayed, 0u);
+    EXPECT_EQ(staged.work.elementsCascaded, serial.work.elementsCascaded);
+    EXPECT_EQ(staged.work.rulesTested, serial.work.rulesTested);
+    EXPECT_EQ(staged.work.rulesMatched, serial.work.rulesMatched);
+    EXPECT_EQ(staged.work.declarationsApplied, serial.work.declarationsApplied);
+    EXPECT_EQ(staged.steps, serial.steps);
+    EXPECT_EQ(staged.rejected, !overlong);
+    EXPECT_EQ(staged.rejected, serial.rejected);
+    EXPECT_EQ(staged.warnings, serial.warnings);
+    ASSERT_TRUE(staged.record);
+    ASSERT_TRUE(serial.record);
+    EXPECT_TRUE(staged.record->properties.exactlyEquals(serial.record->properties));
+  }
+}
+
 TEST_F(StyleSystemTest, LocalDeclarationsOutrankMoreSpecificInheritedDeclarations) {
   // The group's `style` declarations are more specific than the rectangle's presentation
   // attributes, yet the rectangle's own values win: inheritance only supplies what it does not

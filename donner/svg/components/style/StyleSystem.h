@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <unordered_set>
@@ -99,10 +100,39 @@ public:
    * limit.
    */
   StyleResourceBudget(const StyleResourceBudget& document, Limits share)
-      : limits_(share),
-        selectorTraversal_(share.selectorTraversalSteps),
-        retainedStyleBytes_(document.retainedStyleBytes_) {
-    limits_.complexPropertyBytes = document.limits_.complexPropertyBytes;
+      : externalMeasureGeometryExhausted_(document.externalMeasureGeometryExhausted_),
+        externalResourceWarning_(document.externalResourceWarning_),
+        limits_(document.remainingWorkLimits(share)),
+        selectorTraversal_(document.selectorTraversal().share(limits_.selectorTraversalSteps)),
+        rejected_(document.rejected()),
+        retainedStyleBytes_(document.retainedStyleBytes_) {}
+
+  /// Clamp a requested share to work still available locally and in the aggregate envelope.
+  [[nodiscard]] Limits remainingWorkLimits(Limits requested) const {
+    if (aggregateWork_) {
+      requested = aggregateWork_->remainingWorkLimits(requested);
+    }
+    requested.ruleElementMatches =
+        std::min({requested.ruleElementMatches, limits_.ruleElementMatches - ruleElementMatches_,
+                  limits_.ruleElementMatches - externalInstanceWork_});
+    requested.declarationApplications =
+        std::min(requested.declarationApplications,
+                 limits_.declarationApplications - declarationApplications_);
+    requested.declarationComponentWork =
+        std::min(requested.declarationComponentWork,
+                 limits_.declarationComponentWork - declarationComponentWork_);
+    requested.declarationByteWork =
+        std::min(requested.declarationByteWork, limits_.declarationByteWork - declarationByteWork_);
+    requested.selectorTraversalSteps =
+        std::min(requested.selectorTraversalSteps,
+                 selectorTraversal().maximumSteps() - selectorTraversal().steps());
+    requested.externalMeasureEntities = std::min(
+        requested.externalMeasureEntities, limits_.externalMeasureEntities - externalMeasureWork_);
+    requested.externalMeasureGeometryBytes =
+        std::min(requested.externalMeasureGeometryBytes,
+                 limits_.externalMeasureGeometryBytes - externalMeasureGeometryBytes_);
+    requested.complexPropertyBytes = limits_.complexPropertyBytes;
+    return requested;
   }
 
   StyleResourceBudget(const StyleResourceBudget&) = delete;
@@ -340,6 +370,16 @@ public:
            aggregateWork_->canReserveDeclarationWork(applications, componentCount, sourceBytes);
   }
 
+  /// Admit previously measured selector work if it fits; declining leaves all counters unchanged.
+  [[nodiscard]] bool tryReplaySelectorWork(std::size_t rules, std::size_t steps) {
+    if (aggregateWork_ || rejected_ || rules > limits_.ruleElementMatches - ruleElementMatches_ ||
+        !selectorTraversal_.tryConsumeMeasured(steps)) {
+      return false;
+    }
+    ruleElementMatches_ += rules;
+    return true;
+  }
+
   /** Charge one immutable computed-style record for exactly its lifetime. */
   [[nodiscard]] bool retainComputedStyle(ComputedStyle& style, std::size_t byteCount) {
     if (style.retainedStyleBytes_) {
@@ -472,13 +512,42 @@ public:
    */
   const ComputedStyleComponent& computeStyle(EntityHandle handle, ParseWarningSink& warningSink);
 
+  /**
+   * Exclusive provisional storage for one executing cascade context. A full front or an
+   * unbounded payload declines speculation, leaving admission to the serial document owner.
+   */
+  class StagedRecords {
+  public:
+    /// Maximum fixed record storage plus owned dynamic payload retained by this context.
+    static constexpr std::size_t kMaximumBytes = 1024 * 1024;
+    /// Maximum provisional records, including those evicted from the worker cache.
+    static constexpr std::size_t kMaximumRecords = 64;
+
+    StagedRecords() = default;
+    StagedRecords(const StagedRecords&) = delete;
+    StagedRecords& operator=(const StagedRecords&) = delete;
+
+    /// Whether a candidate required a serial replay.
+    bool declined() const { return declined_; }
+    /// Fixed record storage and dynamic payload held until the pass's last reference.
+    std::size_t retainedBytes() const;
+
+  private:
+    friend class StyleSystem;
+    struct Storage;
+    std::shared_ptr<const ComputedStyle> retain(ComputedStyle& record);
+    std::shared_ptr<Storage> storage_;
+    bool declined_ = false;
+  };
+
   /// Mutable state used exclusively by one worker or by a nested serial cascade.
   struct CascadePass {
     StyleResourceBudget& budget;     ///< Work allowance and shared record account.
     StyleCascadeCounters& counters;  ///< Work attributed to this pass.
     MatchedPropertiesCache&
         cache;  ///< Cache exclusive to this worker and this stylesheet generation.
-    unsigned activeCascades = 0;  ///< Nesting for whole-registry copy accounting.
+    unsigned activeCascades = 0;       ///< Nesting for whole-registry copy accounting.
+    StagedRecords* staging = nullptr;  ///< Optional worker-private tentative output.
   };
 
   /**
@@ -495,6 +564,48 @@ public:
   static void computePreparedStyle(const Registry& registry, Entity entity,
                                    ComputedStyleComponent& output, CascadePass& pass,
                                    ParseWarningSink& warnings);
+
+  /**
+   * Holds bounded selector traces for a static document while the caller owns its access.
+   * Input slots must already exist and be empty, and each input entity occurs once.
+   * After workers join, commit visits the original requests through the serial cache and budget.
+   */
+  class PreparedBatch {
+  public:
+    /// Above this bound the caller uses the existing serial path without allocating traces.
+    static constexpr std::size_t kMaximumElements = 32768;
+
+    /// @param registry Document under exclusive access until commit.
+    /// @param entities All new slots, including missing ancestors of selective requests.
+    /// @param contexts Maximum executing contexts, including caller fallback.
+    PreparedBatch(Registry& registry, std::span<const Entity> entities, std::size_t contexts);
+
+    class Worker;
+    /// Bind a context to the executing thread. A new context over the bound requests serial replay.
+    Worker* bindWorker();
+    ~PreparedBatch();
+    PreparedBatch(const PreparedBatch&) = delete;
+    PreparedBatch& operator=(const PreparedBatch&) = delete;
+
+    /// Compute one slot after its parent's publication, using a private worker pass.
+    /// @param entity Entity exclusively assigned to this task.
+    /// @param worker Context returned by this batch on the executing thread.
+    /// @return True if the element produced a usable provisional result.
+    bool compute(Entity entity, Worker& worker);
+
+    /// Discard provisional records, then replay requests with ordinary serial admission and
+    /// diagnostics.
+    /// @param requests Original serial storage order for this pass.
+    /// @param warnings Canonical document warning sink.
+    /// @param useTraces False after speculative resource pressure or incomplete execution.
+    /// @return Number of elements whose recorded selector work the owner accepted.
+    std::size_t commit(std::span<const Entity> requests, ParseWarningSink& warnings,
+                       bool useTraces);
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+  };
 
   /// What \ref computeAllStyles does with existing computed styles when the whole document needs
   /// restyling (\ref RenderTreeState::needsFullStyleRecompute on a built document).
@@ -629,6 +740,7 @@ public:
 
 private:
   struct PendingStyleDeclarations;
+  struct RuleTrace;
   class SerialCascade;
 
   /// Compute the style of every entity flagged \ref DirtyFlagsComponent::Style whose computed
@@ -640,10 +752,11 @@ private:
                                    StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
                                    MatchedPropertiesKey& cacheKey, const StyleComponent* local,
                                    ParseWarningSink& warningSink,
-                                   PendingStyleDeclarations& declarations);
+                                   PendingStyleDeclarations& declarations, RuleTrace* capture,
+                                   RuleTrace* replay);
   static void inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
                                     PropertyRegistry& properties, ComputedStyleComponent& computed,
-                                    ParseWarningSink& warningSink, bool* unsupportedResource);
+                                    ParseWarningSink& warningSink, SerialCascade* serial);
   static void resolveComputedParentFonts(const Registry& registry, Entity entity, Entity parent,
                                          PropertyRegistry& properties);
   static void inheritProperties(const Registry& registry, Entity parent,
@@ -652,7 +765,8 @@ private:
                                             PropertyRegistry& properties);
   static void computePropertiesInto(const Registry& registry, Entity entity,
                                     ComputedStyleComponent& computedStyle, CascadePass& pass,
-                                    ParseWarningSink& warningSink, SerialCascade* serial);
+                                    ParseWarningSink& warningSink, SerialCascade* serial,
+                                    RuleTrace* capture = nullptr);
 };
 
 }  // namespace donner::svg::components

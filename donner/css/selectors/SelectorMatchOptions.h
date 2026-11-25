@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <cstddef>
 
 #include "donner/base/element/ElementLike.h"
@@ -26,6 +27,22 @@ public:
     }
     ++steps_;
     return true;
+  }
+
+  /// Admit a complete previously measured traversal or leave the budget unchanged.
+  [[nodiscard]] bool tryConsumeMeasured(std::size_t count) {
+    if (rejected_ || count > maximumSteps_ - steps_) {
+      return false;
+    }
+    steps_ += count;
+    return true;
+  }
+
+  /// Create an independent traversal share of the remaining allowance, preserving refusal.
+  [[nodiscard]] SelectorTraversalBudget share(std::size_t requested) const {
+    SelectorTraversalBudget child(std::min(requested, maximumSteps_ - steps_));
+    child.rejected_ = rejected_;
+    return child;
   }
 
   /// Work steps charged to this budget.

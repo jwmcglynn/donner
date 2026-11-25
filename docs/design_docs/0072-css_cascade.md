@@ -408,10 +408,10 @@ Part C estimate: 13.5 engineering days.
 
 ### Part D Milestones
 
-- [x] Milestone D0: Read-only cascade signatures (2 days). After A8.
+- [x] Milestone D0: Read-only cascade signatures (2 days). After A8. [#2751](https://github.com/jwmcglynn/donner/pull/2751).
   - [x] Selector matching, inheritance and record construction read a `const Registry&`.
-        `StyleSystem::computePreparedStyle` takes one existing output slot and worker-owned work
-        counters, cache and warning sink. The serial entry prepares the document contexts and
+        `StyleSystem::computePreparedStyle` takes one existing output slot and a worker-owned budget
+        share, counters, cache and warning sink. The serial entry prepares the document contexts and
         supplies missing parents, contextual animation work and external-use diagnostics.
   - Verification: `//donner/svg/components/style:style_system_tests` compares concurrently styled
     siblings with their serial records and verifies cache hits and shared retained-byte charges.
@@ -2062,35 +2062,47 @@ per-element cost and is calibrated in Milestone D3.
   same per element in both paths, because the ancestor filter's decisions are a function of each
   element's chain (Part A clears and disables it on saturation rather than keeping stuck counters),
   and each element pays the same logical declaration cost as in the serial pass regardless of
-  which worker finds a cache hit. Retained computed-style bytes go through the
-  shared `RetainedStyleBytes` account of Part A, whose reserve is a compare-exchange loop that never
-  overshoots the limit. With per-worker caches a parallel pass can create a different number of
-  distinct records than the serial pass, so the retained total differs by schedule and cannot decide
-  a refusal by itself. Each worker therefore also sums, for every element it styles, the bytes of
-  the record that element ends up holding, which is what a per-entity charge would be; every
-  distinct-record total, serial or parallel, is at most that sum. Both comparisons are against the
-  allowance remaining when the pass starts, since records held by entities outside a selective pass
-  already occupy the account. The parallel pass is abandoned whenever any work share runs out, any
-  reserve on the account is refused, or the per-entity sum reaches the remaining retained-byte
-  allowance. Abandoning drops every computed style the pass wrote, the per-worker caches and the
-  per-worker warning buffers (so their record references and charges go), restores the work counters
-  to their values at the start of the pass, and reruns the pass serially. Below the abandon point
-  neither path can refuse anything, because every quantity the parallel pass checks bounds the
-  serial pass's from above, so their outcomes match; at or above it the serial rerun decides which
-  element is refused, so a budget-limited document gets exactly the serial result and only documents
-  near their limits pay twice.
-- **Warnings.** Each task records an entity's diagnostics in two per-entity buffers: those from
-  before its parent is computed in the serial `computePropertiesInto` (rule application) and those
-  from after (animation, colors, inheritance, fonts). After the join the commit replays the serial
-  pass's order exactly: it walks entities in the same storage order the serial loop uses, and for
-  an entity not yet emitted sends its first buffer, then recursively emits its parent if the parent
-  is not yet emitted, then sends its second buffer. That is the order the serial on-demand parent
-  recursion produces.
+  which worker finds a cache hit. Admission is a serial-order operation: for each element the
+  owner charges the record a serial cache miss would retain, and reuses the canonical record on
+  a serial hit. The resulting slots, cache entries, clock state and lifetime charges carry
+  forward into selective passes and subsequent document-family allocations. A worker-front
+  duplicate cannot change which element is refused. A speculative refusal leaves the document
+  and family counters and their sticky rejection flags untouched. If the pass cannot prove the
+  serial outcome, the owner discards its tentative state and the serial path decides admission.
+
+  The ordinary family reserve permanently records a refusal. Releasing records refunds bytes,
+  but does not clear that flag or its diagnostic count. The owner therefore performs ordinary
+  family admission only in canonical order. A separate, non-latching allowance for temporary
+  memory can decline speculation without consuming logical headroom or recording a refusal.
+
+  The proposed staging limit is 1 MiB per executing context for retained provisional style
+  records, including fixed record storage and owned dynamic payload. It covers references in
+  output slots as well as front entries: eviction alone need not free a record. A context that
+  cannot bound a value's retained storage, or whose next record would exceed its allowance,
+  abandons speculation before publishing that record. Thus provisional record storage is at most
+  the number of participating contexts times 1 MiB, plus one shared-ownership control block per
+  context. Cache metadata, bounded diagnostic buffers
+  and task scratch are accounted for separately. At owner commit every provisional reference
+  is released or replaced by a canonical reference. The acceptance test uses repeated and
+  distinct sibling keys, evicts front entries while slots still hold them, checks the high-water
+  bound on every admission, and compares a subsequent budget-limited allocation with serial in
+  `//donner/svg/components/style:style_system_tests`.
+- **Warnings and owner commit.** The owner visits the original requests in storage order,
+  including the original on-demand parent recursion. A bounded transcript can supply matched
+  rules and their measured selector work when the complete sequence fits the remaining budgets.
+  Otherwise the owner evaluates the element normally with the unchanged budget. Both paths use
+  the serial declaration admission, cache, record construction and warning sink. Consequently
+  early and late warnings, disabled-sink attempts, truncation and the first refused element are
+  decided in the same order as a serial pass. Worker diagnostics remain private. Bound the
+  transcript to four matched rules per element and 32,768 candidate elements per batch.
 - **Ancestor filter and cache.** Each worker owns a `StyleAncestorFilter`; its chain
   synchronization already makes it independent of visit order. Each worker owns a matched
   properties cache; records are immutable and shared through atomic reference counts, so a hit
-  on any worker returns a correct style, and only the number of distinct records can vary with
-  scheduling. The memory goal of Part A is measured at zero workers.
+  on any worker returns a correct style. Actual cache hits, misses, declaration parses skipped
+  by hits and whole-registry copies can vary with stealing. Preserve their measured totals and
+  exclude them from cross-schedule equality. A repeated seeded schedule must reproduce them
+  too. Styles, matched rules, ordered warnings, logical budget outcomes and schedule-independent
+  work counters must agree at every width. The memory goal of Part A is measured at zero workers.
 - **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
   external-use registries, passes below the threshold, and builds or runtimes without workers run
   the serial path.
