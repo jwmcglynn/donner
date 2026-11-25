@@ -547,17 +547,21 @@ public:
 
     /// @param registry Document under exclusive access until commit.
     /// @param entities All new slots, including missing ancestors of selective requests.
-    PreparedBatch(Registry& registry, std::span<const Entity> entities);
+    /// @param contexts Maximum executing contexts, including caller fallback.
+    PreparedBatch(Registry& registry, std::span<const Entity> entities, std::size_t contexts);
+
+    class Worker;
+    /// Bind a context to the executing thread. A new context over the bound requests serial replay.
+    Worker* bindWorker();
     ~PreparedBatch();
     PreparedBatch(const PreparedBatch&) = delete;
     PreparedBatch& operator=(const PreparedBatch&) = delete;
 
     /// Compute one slot after its parent's publication, using a private worker pass.
     /// @param entity Entity exclusively assigned to this task.
-    /// @param worker Worker state with bounded staging storage.
-    /// @param warnings Worker-private diagnostic sink.
+    /// @param worker Context returned by this batch on the executing thread.
     /// @return True if the element produced a usable provisional result.
-    bool compute(Entity entity, CascadePass& worker, ParseWarningSink& warnings);
+    bool compute(Entity entity, Worker& worker);
 
     /// Discard provisional records, then replay requests with ordinary serial admission and
     /// diagnostics.
@@ -722,7 +726,7 @@ private:
                                    RuleTrace* replay);
   static void inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
                                     PropertyRegistry& properties, ComputedStyleComponent& computed,
-                                    ParseWarningSink& warningSink, bool* unsupportedResource);
+                                    ParseWarningSink& warningSink, SerialCascade* serial);
   static void resolveComputedParentFonts(const Registry& registry, Entity entity, Entity parent,
                                          PropertyRegistry& properties);
   static void inheritProperties(const Registry& registry, Entity parent,

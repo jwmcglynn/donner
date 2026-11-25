@@ -2072,7 +2072,8 @@ per-element cost and is calibrated in Milestone D3.
   and task scratch are accounted for separately. At owner commit every provisional reference
   is released or replaced by a canonical reference. The acceptance test uses repeated and
   distinct sibling keys, evicts front entries while slots still hold them, checks the high-water
-  bound on every admission, and compares a subsequent budget-limited allocation with serial.
+  bound on every admission, and compares a subsequent budget-limited allocation with serial in
+  `//donner/svg/components/style:style_system_tests`.
 - **Warnings and owner commit.** The owner visits the original requests in storage order,
   including the original on-demand parent recursion. A bounded transcript can supply matched
   rules and their measured selector work when the complete sequence fits the remaining budgets.

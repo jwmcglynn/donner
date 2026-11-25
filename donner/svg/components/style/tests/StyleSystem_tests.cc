@@ -2116,21 +2116,25 @@ TEST_F(StyleSystemTest, OwnerCommitPreservesLaterAdmissionAtTheExactSerialBounda
     }
 
     if (parallel) {
-      StyleSystem::PreparedBatch batch(registry, entities);
-      std::weak_ptr<const ComputedStyle> provisional;
+      StyleSystem::PreparedBatch batch(registry, entities, 2);
       const auto before = logical.complexPropertyBytes();
-      for (std::size_t lane = 0; lane < 2; ++lane) {
-        StyleSystem::StagedRecords records;
-        StyleResourceBudget worker(logical, logical.limits());
-        StyleCascadeCounters counters;
-        MatchedPropertiesCache front;
-        StyleSystem::CascadePass pass{worker, counters, front, 0, &records};
-        ParseWarningSink localWarnings;
-        for (std::size_t i = lane; i < entities.size(); i += 2) {
-          EXPECT_TRUE(batch.compute(entities[i], pass, localWarnings));
-          provisional = registry.get<ComputedStyleComponent>(entities[i]).style;
+      std::barrier start(2);
+      const auto computePair = [&](std::size_t lane) {
+        auto* worker = batch.bindWorker();
+        start.arrive_and_wait();
+        EXPECT_NE(worker, nullptr);
+        if (worker) {
+          for (std::size_t i = lane; i < entities.size(); i += 2) {
+            EXPECT_TRUE(batch.compute(entities[i], *worker));
+          }
         }
-      }
+      };
+      std::thread other(computePair, 1);
+      computePair(0);
+      other.join();
+      std::weak_ptr<const ComputedStyle> provisional =
+          registry.get<ComputedStyleComponent>(entities.back()).style;
+      EXPECT_FALSE(provisional.expired());
       EXPECT_EQ(logical.complexPropertyBytes(), before);
       EXPECT_EQ(family->securityStats().rejectedReservations, 0u);
       result.replayed = batch.commit(entities, warnings, true);
@@ -2168,6 +2172,78 @@ TEST_F(StyleSystemTest, OwnerCommitPreservesLaterAdmissionAtTheExactSerialBounda
       ASSERT_TRUE(serial.styles[i]);
       EXPECT_TRUE(staged.styles[i]->properties.exactlyEquals(serial.styles[i]->properties));
     }
+  }
+}
+
+TEST_F(StyleSystemTest, OwnerRematchesOverlongAndUnaffordableTraces) {
+  struct Result {
+    std::size_t replayed = 0;
+    StyleCascadeCounters work;
+    std::size_t steps = 0;
+    bool rejected = false;
+    std::vector<ParseDiagnostic> warnings;
+    std::shared_ptr<const ComputedStyle> record;
+  };
+  const auto run = [&](bool prepare, bool overlong) {
+    std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)";
+    const int ruleCount = overlong ? 7 : 1;
+    for (int i = 0; i < ruleCount; ++i) {
+      source += "g > rect { fill: invalid-paint; stroke-width: 3 }";
+    }
+    source += "</style><g id='g'><rect id='r'/></g></svg>";
+    auto doc = ParseSVG(source);
+    auto& registry = doc.registry();
+    StyleResourceBudget::Limits limits;
+    limits.selectorTraversalSteps = 64;
+    auto& logical = registry.ctx().emplace<StyleResourceBudget>(limits);
+    ParseWarningSink warnings;
+    styleSystem.computeStyle(doc.querySelector("#g")->entityHandle(), warnings);
+    logical.reset();
+    auto element = doc.querySelector("#r")->entityHandle();
+    std::ignore = element.get_or_emplace<ComputedStyleComponent>();
+    const std::array requests{element.entity()};
+    const auto before = registry.ctx().get<StyleCascadeMetrics>().counters;
+    Result result;
+    const auto reservePriorTraversal = [&] {
+      if (!overlong) {
+        EXPECT_TRUE(logical.selectorTraversal().tryConsumeMeasured(limits.selectorTraversalSteps));
+      }
+    };
+    if (prepare) {
+      StyleSystem::PreparedBatch batch(registry, requests, 1);
+      auto* worker = batch.bindWorker();
+      EXPECT_NE(worker, nullptr);
+      if (worker) {
+        EXPECT_TRUE(batch.compute(requests.front(), *worker));
+      }
+      reservePriorTraversal();
+      result.replayed = batch.commit(requests, warnings, true);
+    } else {
+      reservePriorTraversal();
+      styleSystem.computeStylesFor(registry, requests, warnings);
+    }
+    result.work = registry.ctx().get<StyleCascadeMetrics>().counters - before;
+    result.steps = logical.selectorTraversal().steps();
+    result.rejected = logical.rejected();
+    result.warnings = warnings.warnings();
+    result.record = element.get<ComputedStyleComponent>().style;
+    return result;
+  };
+  for (bool overlong : {false, true}) {
+    const auto serial = run(false, overlong);
+    const auto staged = run(true, overlong);
+    EXPECT_EQ(staged.replayed, 0u);
+    EXPECT_EQ(staged.work.elementsCascaded, serial.work.elementsCascaded);
+    EXPECT_EQ(staged.work.rulesTested, serial.work.rulesTested);
+    EXPECT_EQ(staged.work.rulesMatched, serial.work.rulesMatched);
+    EXPECT_EQ(staged.work.declarationsApplied, serial.work.declarationsApplied);
+    EXPECT_EQ(staged.steps, serial.steps);
+    EXPECT_EQ(staged.rejected, !overlong);
+    EXPECT_EQ(staged.rejected, serial.rejected);
+    EXPECT_EQ(staged.warnings, serial.warnings);
+    ASSERT_TRUE(staged.record);
+    ASSERT_TRUE(serial.record);
+    EXPECT_TRUE(staged.record->properties.exactlyEquals(serial.record->properties));
   }
 }
 

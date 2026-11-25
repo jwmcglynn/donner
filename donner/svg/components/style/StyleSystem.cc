@@ -6,8 +6,10 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <span>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
@@ -1184,6 +1186,11 @@ struct StyleSystem::RuleTrace {
     Work before;
     Capture(RuleTrace* trace, const StyleResourceBudget& budget)
         : trace(trace), budget(budget), before(trace ? Work::read(budget) : Work{}) {}
+    void append(Match match) const {
+      if (trace) {
+        trace->append(match);
+      }
+    }
     ~Capture() {
       if (trace) {
         trace->work = Work::read(budget) - before;
@@ -1207,12 +1214,23 @@ struct StyleSystem::RuleTrace {
     return replayed;
   }
 
+  template <typename Accept>
+  bool replayMatches(StyleResourceBudget& budget, StyleCascadeCounters& counters, Accept&& accept) {
+    if (!tryCharge(budget)) {
+      return false;
+    }
+    counters.rulesTested += work.rules;
+    for (std::size_t i = 0; i < count; ++i) {
+      accept(matches[i]);
+    }
+    return true;
+  }
+
   std::array<Match, 4> matches{};
   std::size_t count = 0;
   Work work{};
   ComputedStyleComponent* slot = nullptr;
   ComputedStyleComponent original;
-  StyleCascadeCounters actualWork;
   bool complete = false;
   bool replayed = false;
 };
@@ -1234,22 +1252,19 @@ public:
     return slot;
   }
 
-  RuleTrace* trace(Entity entity) {
-    if (!traces_) {
+  static RuleTrace* findTrace(SerialCascade* serial, Entity entity) {
+    if (!serial || !serial->traces_) {
       return nullptr;
     }
-    const auto it = traces_->find(entity);
-    return it == traces_->end() ? nullptr : &it->second;
+    const auto it = serial->traces_->find(entity);
+    return it == serial->traces_->end() ? nullptr : &it->second;
   }
 
   AnimationResourceBudget* animationBudget() {
     return registry_.ctx().find<AnimationResourceBudget>();
   }
 
-  bool* externalResourceRejection() {
-    auto* context = registry_.ctx().find<ExternalUseStyleContext>();
-    return context ? &context->unsupportedResource : nullptr;
-  }
+  void rejectExternalResource() { StyleSystem::rejectExternalHostResource(registry_); }
 
 private:
   Registry& registry_;
@@ -1258,8 +1273,48 @@ private:
   CascadePass pass_;
 };
 
+class StyleSystem::PreparedBatch::Worker {
+public:
+  friend class PreparedBatch;
+  Worker(const PreparedBatch* owner, const StyleResourceBudget& logical,
+         StyleResourceBudget::Limits share)
+      : owner_(owner), budget_(logical, share), pass_{budget_, counters_, cache_, 0, &records_} {}
+
+private:
+  const PreparedBatch* owner_;
+  StyleResourceBudget budget_;
+  StyleCascadeCounters counters_;
+  MatchedPropertiesCache cache_;
+  StagedRecords records_;
+  CascadePass pass_;
+  ParseWarningSink warnings_ = ParseWarningSink::Disabled();
+};
+
 struct StyleSystem::PreparedBatch::Impl {
+  Impl(Registry& registry, std::size_t contexts)
+      : registry(registry),
+        logical(GetStyleResourceBudget(registry)),
+        contexts(contexts),
+        share(logical.limits()) {
+    UTILS_RELEASE_ASSERT(contexts > 0);
+    share.ruleElementMatches = (share.ruleElementMatches - logical.ruleElementMatches()) / contexts;
+    share.declarationApplications =
+        (share.declarationApplications - logical.declarationApplications()) / contexts;
+    share.declarationComponentWork =
+        (share.declarationComponentWork - logical.declarationComponentWork()) / contexts;
+    share.declarationByteWork =
+        (share.declarationByteWork - logical.declarationByteWork()) / contexts;
+    share.selectorTraversalSteps =
+        (share.selectorTraversalSteps - logical.selectorTraversal().steps()) / contexts;
+  }
+
   Registry& registry;
+  const StyleResourceBudget& logical;
+  const std::size_t contexts;
+  StyleResourceBudget::Limits share;
+  std::mutex workerMutex;
+  std::unordered_map<std::thread::id, std::unique_ptr<Worker>> workers;
+  std::atomic<bool> abandoned = false;
   std::unordered_map<Entity, RuleTrace> traces;
   bool finished = false;
 
@@ -1270,8 +1325,9 @@ struct StyleSystem::PreparedBatch::Impl {
   }
 };
 
-StyleSystem::PreparedBatch::PreparedBatch(Registry& registry, std::span<const Entity> entities)
-    : impl_(std::make_unique<Impl>(Impl{registry, {}})) {
+StyleSystem::PreparedBatch::PreparedBatch(Registry& registry, std::span<const Entity> entities,
+                                          std::size_t contexts)
+    : impl_(std::make_unique<Impl>(registry, contexts)) {
   UTILS_RELEASE_ASSERT(entities.size() <= kMaximumElements);
   UTILS_RELEASE_ASSERT(!registry.ctx().contains<ExternalUseStyleContext>());
   UTILS_RELEASE_ASSERT(std::as_const(registry).view<const AnimatedValuesComponent>().empty());
@@ -1291,19 +1347,32 @@ StyleSystem::PreparedBatch::~PreparedBatch() {
   }
 }
 
-bool StyleSystem::PreparedBatch::compute(Entity entity, CascadePass& worker,
-                                         ParseWarningSink& warnings) {
-  UTILS_RELEASE_ASSERT(worker.staging && !impl_->finished);
-  if (worker.budget.rejected() || worker.staging->declined()) {
+StyleSystem::PreparedBatch::Worker* StyleSystem::PreparedBatch::bindWorker() {
+  const std::lock_guard lock(impl_->workerMutex);
+  const auto id = std::this_thread::get_id();
+  const auto it = impl_->workers.find(id);
+  if (it != impl_->workers.end()) {
+    return it->second.get();
+  }
+  if (impl_->workers.size() == impl_->contexts) {
+    impl_->abandoned.store(true, std::memory_order_relaxed);
+    return nullptr;
+  }
+  auto worker = std::make_unique<Worker>(this, impl_->logical, impl_->share);
+  return impl_->workers.emplace(id, std::move(worker)).first->second.get();
+}
+
+bool StyleSystem::PreparedBatch::compute(Entity entity, Worker& worker) {
+  UTILS_RELEASE_ASSERT(!impl_->finished && worker.owner_ == this);
+  if (impl_->abandoned.load(std::memory_order_relaxed)) {
     return false;
   }
   auto& trace = impl_->traces.at(entity);
-  const StyleCascadeCounters before = worker.counters;
-  computePropertiesInto(std::as_const(impl_->registry), entity, *trace.slot, worker, warnings,
-                        nullptr, &trace);
-  trace.actualWork = worker.counters - before;
-  if (worker.budget.rejected() || worker.staging->declined()) {
+  computePropertiesInto(std::as_const(impl_->registry), entity, *trace.slot, worker.pass_,
+                        worker.warnings_, nullptr, &trace);
+  if (worker.budget_.rejected() || worker.records_.declined()) {
     *trace.slot = trace.original;
+    impl_->abandoned.store(true, std::memory_order_relaxed);
     return false;
   }
   return true;
@@ -1313,20 +1382,23 @@ std::size_t StyleSystem::PreparedBatch::commit(std::span<const Entity> requests,
                                                ParseWarningSink& warnings, bool useTraces) {
   UTILS_RELEASE_ASSERT(!impl_->finished);
   impl_->restoreSlots();
-  SerialCascade cascade(impl_->registry, warnings, useTraces ? &impl_->traces : nullptr);
+  auto& counters = GetStyleCascadeMetrics(impl_->registry).counters;
+  for (const auto& [id, worker] : impl_->workers) {
+    counters.registryCopies += worker->counters_.registryCopies;
+    counters.matchedPropertiesCacheHits += worker->counters_.matchedPropertiesCacheHits;
+    counters.matchedPropertiesCacheMisses += worker->counters_.matchedPropertiesCacheMisses;
+    counters.declarationParsesSkipped += worker->counters_.declarationParsesSkipped;
+  }
+  impl_->workers.clear();
+  const bool replay = useTraces && !impl_->abandoned.load(std::memory_order_relaxed);
+  SerialCascade cascade(impl_->registry, warnings, replay ? &impl_->traces : nullptr);
   for (Entity entity : requests) {
     cascade.compute(entity);
   }
   impl_->finished = true;
-  auto& counters = GetStyleCascadeMetrics(impl_->registry).counters;
-  std::size_t acceptedTraces = 0;
-  for (const auto& [entity, trace] : impl_->traces) {
-    counters.registryCopies += trace.actualWork.registryCopies;
-    counters.matchedPropertiesCacheHits += trace.actualWork.matchedPropertiesCacheHits;
-    counters.matchedPropertiesCacheMisses += trace.actualWork.matchedPropertiesCacheMisses;
-    counters.declarationParsesSkipped += trace.actualWork.declarationParsesSkipped;
-    acceptedTraces += trace.replayed;
-  }
+  const auto acceptedTraces =
+      std::count_if(impl_->traces.begin(), impl_->traces.end(),
+                    [](const auto& entry) { return entry.second.replayed; });
   impl_->traces.clear();
   return acceptedTraces;
 }
@@ -1411,8 +1483,14 @@ void StyleSystem::computePreparedStyle(const Registry& registry, Entity entity,
   assert(registry.try_get<ComputedStyleComponent>(entity) == &output);
   UTILS_RELEASE_ASSERT(!registry.ctx().contains<ExternalUseStyleContext>());
   UTILS_RELEASE_ASSERT(registry.view<const AnimatedValuesComponent>().empty());
-  if (!pass.staging || !pass.staging->declined()) {
-    computePropertiesInto(registry, entity, output, pass, warnings, nullptr);
+  if (pass.staging && (pass.staging->declined() || pass.budget.rejected())) {
+    pass.staging->declined_ = true;
+    return;
+  }
+  computePropertiesInto(registry, entity, output, pass, warnings, nullptr);
+  if (pass.staging && pass.budget.rejected()) {
+    pass.staging->declined_ = true;
+    output = {};
   }
 }
 
@@ -1510,11 +1588,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
                             declarations.admit(declaration, specificity, local, warningSink);
                           });
   };
-  if (replay && replay->tryCharge(styleBudget)) {
-    counters.rulesTested += replay->work.rules;
-    for (std::size_t i = 0; i < replay->count; ++i) {
-      admitMatch(replay->matches[i]);
-    }
+  if (replay && replay->replayMatches(styleBudget, counters, admitMatch)) {
     return;
   }
   const RuleTrace::Capture recording(capture, styleBudget);
@@ -1545,9 +1619,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
         specificity = specificity.toUserAgentSpecificity();
       }
       const RuleTrace::Match matched{sheetRevision, sheetOrdinal, position, &rule, specificity};
-      if (capture) {
-        capture->append(matched);
-      }
+      recording.append(matched);
       admitMatch(matched);
     }
     return true;
@@ -1600,7 +1672,7 @@ std::optional<PaintServer> StyleSystem::localPaintForInstantiation(
 void StyleSystem::inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
                                         PropertyRegistry& properties,
                                         ComputedStyleComponent& computed,
-                                        ParseWarningSink& warningSink, bool* unsupportedResource) {
+                                        ParseWarningSink& warningSink, SerialCascade* serial) {
   const auto* occurrence = ExternalRootContext(registry, entity);
   const PropertyState fillState = properties.fill.state;
   const PropertyState strokeState = properties.stroke.state;
@@ -1608,8 +1680,8 @@ void StyleSystem::inheritComputedParent(const Registry& registry, Entity entity,
     const LocalResourceStates local(properties);
     inheritExternalParent(properties, *occurrence->parent.properties());
     if (BlockExternalResources(properties, local)) {
-      UTILS_RELEASE_ASSERT(unsupportedResource);
-      *unsupportedResource = true;
+      UTILS_RELEASE_ASSERT(serial);
+      serial->rejectExternalResource();
       warningSink.add(ParseDiagnostic::Error("External-use inherited URL resources are unsupported",
                                              FileOffset::Offset(0)));
     }
@@ -1701,7 +1773,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   PendingStyleDeclarations declarations;
   applyStylesheetRules(registry, handle.entity(), dataEntity, styleBudget, counters, cacheKey,
                        styleComponent, warningSink, declarations, capture,
-                       serial ? serial->trace(entity) : nullptr);
+                       SerialCascade::findTrace(serial, entity));
 
   PopulateMatchedPropertiesKey(registry, handle, dataEntity, parent, styleComponent, cacheKey);
   MatchedCacheState cacheState =
@@ -1747,8 +1819,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
   // Charging the parent's source value alone misses large locally parsed vectors and can also
   // differ from the actual value selected by the cascade.
-  inheritComputedParent(registry, entity, parent, properties, computedStyle, warningSink,
-                        occurrence && serial ? serial->externalResourceRejection() : nullptr);
+  inheritComputedParent(registry, entity, parent, properties, computedStyle, warningSink, serial);
 
   RetainComputedRecord(pass, *record, computedStyle, resourceOpacities);
 
