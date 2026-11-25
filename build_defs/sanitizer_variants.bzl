@@ -43,9 +43,15 @@ SANITIZER_VARIANTS = {
     ),
 }
 
-# Packages whose eligible cc_tests get sanitizer variants, and which sanitizers. The native CI
-# finalizer emits them after the package's own rules. Manual and fuzzer corpus tests are excluded.
-# The task scheduler's races and lifetime faults are often visible only to a sanitizer.
+# Native CI emits sanitizer variants after the package's own rules. A None test list includes
+# every eligible test in that package. Manual and fuzzer corpus tests have separate scheduling.
 SANITIZER_VARIANT_PACKAGES = {
-    "donner/base/tasks": ("asan", "tsan"),
+    "donner/base/tasks": struct(
+        sanitizers = ("asan", "tsan"),
+        test_names = None,
+    ),
+    "donner/svg/components/style": struct(
+        sanitizers = ("tsan",),
+        test_names = ("style_parallel_tests",),
+    ),
 }

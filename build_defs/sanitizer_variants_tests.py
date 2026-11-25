@@ -35,11 +35,11 @@ def _values(flags, option):
     return [flag[len(prefix):] for flag in flags if flag.startswith(prefix)]
 
 
-def _variants(bzl_text):
-    """SANITIZER_VARIANTS from the .bzl file, which is also valid Python with `struct` defined."""
+def _sanitizer_policy(bzl_text):
+    """Load the shared variant flags and package policies with a Python `struct` fixture."""
     scope = {"struct": lambda **fields: types.SimpleNamespace(**fields)}
     exec(compile(bzl_text, "sanitizer_variants.bzl", "exec"), scope)  # noqa: S102
-    return scope["SANITIZER_VARIANTS"]
+    return scope["SANITIZER_VARIANTS"], scope["SANITIZER_VARIANT_PACKAGES"]
 
 
 # Every kind of flag the asan and tsan configs may use. A flag of another kind fails the test, so a
@@ -78,7 +78,7 @@ def _config_env(flags):
     return env
 
 
-def _declared_tests(variants, source_rules):
+def _declared_tests(variants, source_rules, sanitizers=None, test_names=None):
     """Run the package finalizer's declaration function against fixture rule metadata."""
     path = _runfile("build_defs/rules.bzl")
     tree = ast.parse(path.read_text(), filename=str(path))
@@ -100,7 +100,8 @@ def _declared_tests(variants, source_rules):
     }
     module = ast.Module(body=[declaration], type_ignores=[])
     exec(compile(module, str(path), "exec"), scope)  # noqa: S102
-    scope["_declare_sanitizer_variants"](variants)
+    enabled = variants if sanitizers is None else sanitizers
+    scope["_declare_sanitizer_variants"](enabled, test_names)
     return declared
 
 
@@ -108,7 +109,9 @@ class SanitizerVariantsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.flags = _config_flags(_runfile(".bazelrc").read_text())
-        cls.variants = _variants(_runfile("build_defs/sanitizer_variants.bzl").read_text())
+        cls.variants, cls.packages = _sanitizer_policy(
+            _runfile("build_defs/sanitizer_variants.bzl").read_text()
+        )
 
     def test_every_variant_has_its_config(self):
         self.assertEqual(sorted(self.variants), sorted(self.flags))
@@ -158,6 +161,22 @@ class SanitizerVariantsTest(unittest.TestCase):
         self.assertEqual([test["name"] for test in tests], ["ci_asan_plain", "ci_tsan_plain"])
         for test in tests:
             self.assertIn("retained-tag", test["tags"])
+
+    def test_parallel_style_uses_only_the_native_thread_sanitizer(self):
+        scheduler = self.packages["donner/base/tasks"]
+        self.assertEqual(scheduler.sanitizers, ("asan", "tsan"))
+        self.assertIsNone(scheduler.test_names)
+
+        style = self.packages["donner/svg/components/style"]
+        rules = {
+            name: {"name": name, "kind": "cc_test", "tags": []}
+            for name in ("style_parallel_tests", "style_system_tests")
+        }
+        tests = _declared_tests(self.variants, rules, style.sanitizers, style.test_names)
+        self.assertEqual([test["name"] for test in tests], ["ci_tsan_style_parallel_tests"])
+        self.assertEqual(tests[0]["dep"], ":style_parallel_tests")
+        self.assertEqual(tests[0]["tags"], ["sanitizer_tsan", "ci-linux-only"])
+        self.assertEqual(tests[0]["target_compatible_with"], ["@platforms//os:linux"])
 
     def test_routing_tags_are_rejected_with_the_source_label(self):
         for tag in ("ci-linux-hardware-gpu-source", "perf", "local-gpu-isolated", "fuzz_soak"):

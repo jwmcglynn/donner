@@ -505,7 +505,7 @@ _donner_sanitizer_test = rule(
     } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
-def _declare_sanitizer_variants(sanitizers):
+def _declare_sanitizer_variants(sanitizers, test_names = None):
     """Adds sanitizer variants of eligible tests in the package.
 
     The native CI package finalizer calls it for the packages of SANITIZER_VARIANT_PACKAGES, after
@@ -518,9 +518,10 @@ def _declare_sanitizer_variants(sanitizers):
 
     Args:
       sanitizers: The SANITIZER_VARIANTS keys to emit.
+      test_names: Optional source-test names to include. None selects all eligible tests.
     """
     for rule in native.existing_rules().values():
-        if rule["kind"] != "cc_test":
+        if rule["kind"] != "cc_test" or (test_names != None and rule["name"] not in test_names):
             continue
         tags = rule["tags"]
         if "manual" in tags or "fuzz_target" in tags:
@@ -1604,9 +1605,9 @@ def wasm_ci_test(actual, profile, required_outputs = [], payload_budget = False)
         )
 
 def _finalize_ci_package(name, visibility):
-    sanitizers = SANITIZER_VARIANT_PACKAGES.get(native.package_name())
-    if sanitizers:
-        _declare_sanitizer_variants(sanitizers)
+    sanitizer_policy = SANITIZER_VARIANT_PACKAGES.get(native.package_name())
+    if sanitizer_policy:
+        _declare_sanitizer_variants(sanitizer_policy.sanitizers, sanitizer_policy.test_names)
     declare_darwin_variants(struct(build = ci_platform_build, test = ci_platform_test))
 
 # Consumer builds also support Bazel 7. Only the root CI workspace needs finalizers.

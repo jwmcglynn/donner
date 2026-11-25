@@ -345,9 +345,9 @@ with workers on needs the release gate.
   toolchain the repository builds with, including libc++, libstdc++ host builds and Emscripten.
 - **Errors.** `.bazelrc` passes `-fno-exceptions` to every build; errors are explicit values
   (`ParseResult`, diagnostics).
-- **Sanitizers.** `.bazelrc` defines `--config=tsan`. In CI, ThreadSanitizer runs only on the
-  scheduler package's tests: their `ci_tsan_` and `ci_asan_` variants run in the native CI
-  invocation on Linux, built through a configuration transition (the AddressSanitizer variants with
+- **Sanitizers.** `.bazelrc` defines `--config=tsan`. The scheduler package's `ci_tsan_` and
+  `ci_asan_` variants and the parallel style pass's `ci_tsan_style_parallel_tests` run in the
+  native CI invocation on Linux, built through configuration transitions (the AddressSanitizer variants with
   leak detection off on both Linux lanes: the self-hosted lane's remote test sandbox blocks the
   ptrace that LeakSanitizer needs, and the hosted lane shares the same variant definition; an
   invocation that sets a sanitizer config of its own skips the variants and runs the plain tests
