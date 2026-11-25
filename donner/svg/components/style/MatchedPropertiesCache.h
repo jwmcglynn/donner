@@ -28,7 +28,7 @@ struct MatchedOpacityInput {
 /// Inputs to a computed record. The local component is borrowed only during lookup or insertion.
 struct MatchedPropertiesKey {
   /// Record one matched rule, in application order, after origin adjustment.
-  void addRule(Entity sheet, std::size_t ordinal, std::uint32_t index,
+  void addRule(std::uint64_t sheetRevision, std::size_t ordinal, std::uint32_t index,
                css::Specificity specificity);
   /// Oversize keys use the ordinary cascade.
   [[nodiscard]] bool cacheable() const;
@@ -47,7 +47,7 @@ private:
   friend class MatchedPropertiesCache;
   friend struct MatchedPropertiesCacheTestPeer;
   struct Rule {
-    Entity sheet;
+    std::uint64_t sheetRevision;
     std::size_t ordinal;
     std::uint32_t index;
     css::Specificity specificity;

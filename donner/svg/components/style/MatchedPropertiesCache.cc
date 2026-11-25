@@ -43,14 +43,14 @@ bool MatchedOpacityInput::operator==(const MatchedOpacityInput& other) const {
           std::bit_cast<std::uint64_t>(*value) == std::bit_cast<std::uint64_t>(*other.value));
 }
 
-void MatchedPropertiesKey::addRule(Entity sheet, std::size_t ordinal, std::uint32_t index,
-                                   css::Specificity specificity) {
+void MatchedPropertiesKey::addRule(std::uint64_t sheetRevision, std::size_t ordinal,
+                                   std::uint32_t index, css::Specificity specificity) {
   if (rules_.size() >= kMaximumRules) {
     tooManyRules_ = true;
     return;
   }
-  rules_.push_back({sheet, ordinal, index, specificity});
-  Combine(ruleHash_, static_cast<std::size_t>(sheet));
+  rules_.push_back({sheetRevision, ordinal, index, specificity});
+  Combine(ruleHash_, std::hash<std::uint64_t>{}(sheetRevision));
   Combine(ruleHash_, ordinal);
   Combine(ruleHash_, index);
   HashSpecificity(ruleHash_, specificity);

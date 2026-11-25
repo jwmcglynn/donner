@@ -367,15 +367,19 @@ TEST(ExternalUseRetentionTest, RetainedOccurrenceKeepsTheHostStyleItWasStyledWit
       </svg>)svg",
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
         <rect id="a" width="8" height="8"/>
-      </svg>)svg");
+      </svg>)svg",
+      /*disableStyleCache=*/true);
   ASSERT_THAT(host, testing::Optional(testing::_));
   Renderer renderer;
   renderer.draw(host->document);
   renderer.draw(host->document);
-  EntityHandle use = host->document.querySelector("#tile-use")->entityHandle();
+  auto useElement = host->document.querySelector("#tile-use");
+  ASSERT_THAT(useElement, testing::Optional(testing::_));
+  EntityHandle use = useElement->entityHandle();
   const auto* useStyle = use.try_get<components::ComputedStyleComponent>();
   ASSERT_THAT(useStyle, testing::NotNull());
   const std::weak_ptr<const components::ComputedStyle> hostStyle = useStyle->style;
+  // The cache is disabled so it cannot keep the host record alive for the occurrence.
 
   // A restyle of the host drops its computed style; the retained occurrence was styled under that
   // record and must keep it, with the values it had, until the occurrence is styled again.
@@ -383,6 +387,21 @@ TEST(ExternalUseRetentionTest, RetainedOccurrenceKeepsTheHostStyleItWasStyledWit
   const std::shared_ptr<const components::ComputedStyle> retained = hostStyle.lock();
   ASSERT_THAT(retained, testing::NotNull())
       << "the retained occurrence does not own the host style";
+  EXPECT_THAT(
+      retained->properties.fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))))));
+
+  useElement->setStyle("fill: blue");
+  const RendererBitmap expected = RenderStandalone(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="blue"/>
+      </svg>)svg");
+  for (int frame = 0; frame < 2; ++frame) {
+    renderer.draw(host->document);
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         "retained-host-style-change-" + std::to_string(frame),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
   EXPECT_THAT(
       retained->properties.fill.get(),
       testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))))));

@@ -1501,7 +1501,7 @@ own references.
 **Cache key.** The cache maps a key to a `std::shared_ptr<const ComputedStyle>`. The key holds
 everything a computed style depends on in `computePropertiesInto`:
 
-- The matched rules, in order, with the specificity each was applied at: the stylesheet entity,
+- The matched rules, in order, with the specificity each was applied at: the stylesheet content revision,
   sheet ordinal, rule index and specificity of each rule, hashed incrementally while
   `applyStylesheetRules` runs.
 - The local declarations: a hash of `StyleComponent::properties`, computed and stored on the
@@ -1546,12 +1546,14 @@ serial order. A hit consumes the same declaration count, component work and sour
 including resource-opacity declarations. Either setting reaches a declaration-work limit at the
 same declaration and element. A separate counter records declaration parsing saved by hits.
 
-**Lifetime and invalidation.** The cache belongs to the document's style context. It is cleared
-whenever computed styles are discarded as a whole (`MarkStylesheetChanged`,
-`StyleSystem::discardComputedStyles`, a full restyle), because rule identities and parent records
-change. Entries hold strong references, so a cached record outlives the elements that used it
-until the next clear or eviction. Narrowed invalidation needs no cache change: a recomputed
-element builds a new key, and a new parent record changes its children's keys.
+**Lifetime and invalidation.** The cache belongs to the document's style context. Every
+stylesheet parse and import installation assigns a fresh content revision. Matched rules use
+that revision with their import ordinal, position and applied specificity. Replacing a
+stylesheet or reusing its entity cannot give changed declarations an old key. Type changes
+affect which sheets contribute rules. The built-in sheet uses the same revision path, and
+presentation inputs are part of each element's key. Whole-document style discards clear the
+cache. Entries retain their immutable records until a clear or eviction. A narrowed restyle
+builds a new key, and a new parent record changes its children's keys.
 
 **Eviction.** There are 512 lazily populated buckets of eight slots, for at most 4,096 entries.
 Each bucket has its own clock hand. A hit sets the entry's reference bit. For a full bucket an

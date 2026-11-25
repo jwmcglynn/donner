@@ -97,7 +97,7 @@ bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
 
 bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent& stylesheet,
                             Entity stylesheetEntity, Entity dataEntity) {
-  if (!HasSvgNamespace(registry, stylesheetEntity)) {
+  if (!HasSvgNamespace(registry, stylesheetEntity) || !stylesheet.isCssType()) {
     return false;
   }
   if (!stylesheet.isUserAgentStylesheet) {
@@ -1288,7 +1288,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
   std::vector<std::uint32_t>& candidates = candidateScope.list();
   // Apply one sheet's candidate rules in rule order; returns false once the style budget is
   // exhausted. Rules that cannot match are not candidates and cost nothing.
-  const auto applyRules = [&](Entity stylesheetEntity, std::size_t sheetOrdinal,
+  const auto applyRules = [&](std::uint64_t sheetRevision, std::size_t sheetOrdinal,
                               const css::Stylesheet& sheet, const RuleIndex& index,
                               bool isUserAgentStylesheet) {
     const std::span<const css::SelectorRule> rules = sheet.rules();
@@ -1308,7 +1308,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
       if (isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
-      cacheKey.addRule(stylesheetEntity, sheetOrdinal, position, specificity);
+      cacheKey.addRule(sheetRevision, sheetOrdinal, position, specificity);
       AdmitRuleDeclarations(
           rule, specificity, styleBudget, counters,
           [&](const css::Declaration& declaration, css::Specificity declarationSpecificity) {
@@ -1327,13 +1327,14 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
     UTILS_RELEASE_ASSERT(stylesheet.importedRuleIndexes.size() ==
                          stylesheet.importedStylesheets.size());
     for (std::size_t i = 0; i < stylesheet.importedStylesheets.size(); ++i) {
-      if (!applyRules(stylesheetEntity, i, stylesheet.importedStylesheets[i],
+      if (!applyRules(stylesheet.contentRevision(), i, stylesheet.importedStylesheets[i],
                       stylesheet.importedRuleIndexes[i], stylesheet.isUserAgentStylesheet)) {
         return;
       }
     }
-    if (!applyRules(stylesheetEntity, stylesheet.importedStylesheets.size(), stylesheet.stylesheet,
-                    stylesheet.ruleIndex, stylesheet.isUserAgentStylesheet)) {
+    if (!applyRules(stylesheet.contentRevision(), stylesheet.importedStylesheets.size(),
+                    stylesheet.stylesheet, stylesheet.ruleIndex,
+                    stylesheet.isUserAgentStylesheet)) {
       return;
     }
   }
