@@ -52,6 +52,18 @@ struct StyleCascadeCounters {
   /// exceeded the count or input-byte limit.
   std::uint64_t ancestorFilterKeyLimits = 0;
 
+  /// Compare work that is independent of physical cache placement and stealing.
+  bool sameLogicalWork(const StyleCascadeCounters& other) const {
+    return elementsCascaded == other.elementsCascaded && rulesTested == other.rulesTested &&
+           rulesMatched == other.rulesMatched && declarationsApplied == other.declarationsApplied &&
+           fullClears == other.fullClears && budgetRejections == other.budgetRejections &&
+           matchedPropertiesCacheUncacheable == other.matchedPropertiesCacheUncacheable &&
+           ancestorFilterRejections == other.ancestorFilterRejections &&
+           ancestorFilterFalsePositives == other.ancestorFilterFalsePositives &&
+           ancestorFilterSaturations == other.ancestorFilterSaturations &&
+           ancestorFilterKeyLimits == other.ancestorFilterKeyLimits;
+  }
+
   /// Equality operator.
   bool operator==(const StyleCascadeCounters&) const = default;
 
@@ -113,6 +125,20 @@ struct StyleCascadeCounters {
  * Style cascade instrumentation kept in a document registry's context by the style system.
  */
 struct StyleCascadeMetrics {
+  /// Large static passes dispatched to a scheduler.
+  std::uint64_t scheduledPasses = 0;
+  /// Tasks admitted to the flat style scope.
+  std::uint64_t admittedStyleTasks = 0;
+  /// Ready ranges processed inline after the scheduler declined a spawn.
+  std::uint64_t declinedStyleTasks = 0;
+  /// Attempted preparations whose owner fell back to serial matching.
+  std::uint64_t abandonedStylePasses = 0;
+  /// Canonical hits served by an unchanged, already-referenced clock entry.
+  std::uint64_t reusedCanonicalHits = 0;
+  /// Nonempty per-element warning phases emitted from matching worker buffers.
+  std::uint64_t preparedWarningPhases = 0;
+  /// Accepted worker selector traces over scheduled passes.
+  std::uint64_t replayedSelectorTraces = 0;
   /// Exact work counts.
   StyleCascadeCounters counters;
   /// Wall-clock time inside the outermost whole-document and entity-list style calls. Unlike

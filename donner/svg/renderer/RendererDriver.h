@@ -17,6 +17,7 @@
 #include "donner/svg/components/shape/BoundsGeometry.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StylePassScheduler.h"
 #include "donner/svg/core/MarkerOrient.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/renderer/RenderSnapshot.h"
@@ -112,6 +113,8 @@ public:
    * @param externalUseStyleWork Optional shared owner-frame work admission context. Current-frame
    * callers share one fresh context for every backend beginFrame/endFrame pair; persistent drivers
    * must establish an OwnerScope on that context or be reconstructed for the next frame.
+   * @param scheduler Optional scheduler borrowed for document preparation. It must outlive the
+   * driver.
    * @param warningSink Optional destination for warnings found while preparing and drawing
    *   documents. When null, warnings are printed to stderr in verbose mode and discarded
    *   otherwise; \ref drawDocumentIntoCurrentFrame always discards them. Must outlive the driver.
@@ -119,7 +122,7 @@ public:
   explicit RendererDriver(
       RendererInterface& renderer, bool verbose = false, SecurityStats* securityStats = nullptr,
       std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork = nullptr,
-      ParseWarningSink* warningSink = nullptr);
+      ParseWarningSink* warningSink = nullptr, StylePassScheduler scheduler = {});
 
   ~RendererDriver();
 
@@ -749,6 +752,7 @@ private:
   SecurityStats* securityStats_ = nullptr;
   /// Host destination for render warnings, or null to print them only in verbose mode.
   ParseWarningSink* warningSink_ = nullptr;
+  StylePassScheduler scheduler_ = {};
 
   void syncFilterPreparationStats();
 

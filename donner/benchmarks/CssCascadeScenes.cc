@@ -103,7 +103,8 @@ struct Repetition {
 /// Collects repetitions after the warmup and summarizes them.
 class RepetitionLog {
 public:
-  explicit RepetitionLog(CascadeRepetitions repetitions) : repetitions_(repetitions) {}
+  explicit RepetitionLog(CascadeRepetitions repetitions, bool allowPhysicalVariation = false)
+      : repetitions_(repetitions), allowPhysicalVariation_(allowPhysicalVariation) {}
 
   [[nodiscard]] int total() const { return repetitions_.warmup + repetitions_.measured; }
 
@@ -111,8 +112,10 @@ public:
     if (!recorded(repetition)) {
       return;
     }
-    if (!setupMs_.empty() && (sample.counters != counters_ || sample.distinctComputedStyleRecords !=
-                                                                  distinctComputedStyleRecords_)) {
+    const bool stableWork = allowPhysicalVariation_ ? sample.counters.sameLogicalWork(counters_)
+                                                    : sample.counters == counters_;
+    if (!setupMs_.empty() &&
+        (!stableWork || sample.distinctComputedStyleRecords != distinctComputedStyleRecords_)) {
       stable_ = false;
     }
     counters_ = sample.counters;
@@ -156,6 +159,7 @@ private:
   }
 
   CascadeRepetitions repetitions_;
+  bool allowPhysicalVariation_;
   std::vector<double> setupMs_;
   std::vector<double> frameMs_;
   std::vector<double> styleMs_;
@@ -323,11 +327,12 @@ std::string MakeUseInstancesDocument(int instanceCount, int symbolChildren, int 
 }
 
 void NullRenderer::draw(svg::SVGDocument& document) {
-  svg::RendererDriver(*this).draw(document);
+  svg::RendererDriver(*this, false, nullptr, nullptr, nullptr, scheduler_).draw(document);
 }
 
 void NullRenderer::draw(svg::SVGDocument& document, ParseWarningSink& warningSink) {
-  svg::RendererDriver(*this, /*verbose=*/false, nullptr, nullptr, &warningSink).draw(document);
+  svg::RendererDriver(*this, /*verbose=*/false, nullptr, nullptr, &warningSink, scheduler_)
+      .draw(document);
 }
 
 std::optional<SVGDocument> ParseCascadeDocument(std::string_view source) {
@@ -434,8 +439,10 @@ TimingSummary SummarizeTimings(std::vector<double> samplesMs) {
 
 std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
                                                      CascadeRepetitions repetitions,
-                                                     bool withRenderer, bool disableCache) {
-  RepetitionLog log(repetitions);
+                                                     bool withRenderer, bool disableCache,
+                                                     tasks::TaskScheduler* scheduler) {
+  CascadeMeasurement::ScheduledWork scheduled;
+  RepetitionLog log(repetitions, scheduler != nullptr);
   for (int repetition = 0; repetition < log.total(); ++repetition) {
     const auto parseStart = Clock::now();
     std::optional<SVGDocument> document = ParseCascadeDocument(source);
@@ -446,10 +453,17 @@ std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
     if (disableCache) {
       svg::internal::DisableMatchedPropertiesCacheForTesting(*document);
     }
-    NullRenderer renderer;
+    NullRenderer renderer(scheduler);
     Repetition sample = TimeStepAndFrame(*document, renderer, [] {});
     sample.setupMs = ElapsedMs(parseEnd - parseStart);
     log.record(repetition, sample);
+    if (scheduler) {
+      const auto access = document->readAccess();
+      const auto& metrics = access.registry().ctx().get<svg::components::StyleCascadeMetrics>();
+      scheduled = {metrics.scheduledPasses, metrics.admittedStyleTasks,
+                   metrics.abandonedStylePasses, metrics.replayedSelectorTraces,
+                   metrics.reusedCanonicalHits};
+    }
     if (withRenderer) {
       std::optional<SVGDocument> rendered = ParseCascadeDocument(source);
       if (!rendered) {
@@ -463,7 +477,9 @@ std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
                               TimeStepAndFrame(*rendered, defaultRenderer, [] {}).frameMs);
     }
   }
-  return log.summarize();
+  auto result = log.summarize();
+  result.scheduled = scheduled;
+  return result;
 }
 
 std::optional<CascadeMeasurement> MeasureCascadeEdit(std::string_view source,

@@ -5,7 +5,8 @@
 /// Usage:
 /// ```
 /// bazel run -c opt //donner/benchmarks:css_cascade_perf_bench -- \
-///     [--mode=all|load|edits|keystrokes|scaling] [--no-renderer]
+///     [--mode=all|load|edits|keystrokes|scaling] [--no-renderer] [--workers=0..32 with --mode=load
+///     --no-renderer]
 /// ```
 ///
 /// Load cases parse the document afresh for each of 9 repetitions; edit cases apply the edit 19
@@ -15,19 +16,23 @@
 /// Each line has the median, minimum and maximum of every timing and the exact style work counted
 /// by the style system for one repetition; the run fails if repetitions of a line differ in work.
 /// "style" is the time inside the outermost style computation calls of the null-renderer frame.
-/// For stable timings pin the process to one core, for example with `taskset -c 3`.
+/// For serial-only timings, pin to one idle core. A four-worker run needs at least four available
+/// cores.
 
 #include <algorithm>
+#include <charconv>
 #include <cinttypes>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "donner/base/tasks/TaskScheduler.h"
 #include "donner/benchmarks/CssCascadeScenes.h"
 
 namespace {
@@ -79,6 +84,11 @@ bool PrintResult(std::string_view kind, std::string_view name,
   if (measurement->rendererFrame) {
     PrintTiming("renderer_frame", *measurement->rendererFrame);
   }
+  const auto& scheduled = measurement->scheduled;
+  std::printf(" scheduled_passes=%" PRIu64 " admitted_tasks=%" PRIu64 " abandoned_passes=%" PRIu64
+              " replayed_traces=%" PRIu64 " canonical_hit_reuses=%" PRIu64,
+              scheduled.passes, scheduled.admittedTasks, scheduled.abandoned, scheduled.replayed,
+              scheduled.priorHits);
   std::printf(" elements_cascaded=%" PRIu64 " rules_tested=%" PRIu64 " rules_matched=%" PRIu64
               " declarations_applied=%" PRIu64 " full_clears=%" PRIu64 " budget_rejections=%" PRIu64
               " registry_copies=%" PRIu64 " matched_properties_cache_hits=%" PRIu64
@@ -116,7 +126,17 @@ struct Documents {
 struct Options {
   std::string mode = "all";
   bool withRenderer = true;
+  std::optional<std::size_t> workers;
 };
+
+std::optional<std::size_t> ParseWorkerCount(std::string_view value) {
+  std::size_t width = 0;
+  const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), width);
+  if (error != std::errc{} || end != value.data() + value.size() || width > 32) {
+    return std::nullopt;
+  }
+  return width;
+}
 
 std::optional<Options> ParseOptions(int argc, char* argv[]) {
   Options options;
@@ -128,11 +148,19 @@ std::optional<Options> ParseOptions(int argc, char* argv[]) {
       if (std::find(std::begin(kModes), std::end(kModes), options.mode) == std::end(kModes)) {
         return std::nullopt;
       }
+    } else if (arg.starts_with("--workers=")) {
+      options.workers = ParseWorkerCount(arg.substr(10));
+      if (!options.workers) {
+        return std::nullopt;
+      }
     } else if (arg == "--no-renderer") {
       options.withRenderer = false;
     } else {
       return std::nullopt;
     }
+  }
+  if (options.workers && (options.mode != "load" || options.withRenderer)) {
+    return std::nullopt;
   }
   return options;
 }
@@ -161,7 +189,8 @@ std::optional<Documents> LoadDocuments() {
                             donner::benchmarks::MakeSyntheticDocument()}};
 }
 
-bool RunLoadCases(const Documents& documents, bool withRenderer) {
+bool RunLoadCases(const Documents& documents, bool withRenderer,
+                  donner::tasks::TaskScheduler* scheduler) {
   const Document generated[] = {
       {"synthetic 200 use x 20 symbol rects, 20 rules", MakeUseInstancesDocument(200, 20, 20)},
       {"synthetic 1000 elements x 100 descendant rules",
@@ -170,9 +199,10 @@ bool RunLoadCases(const Documents& documents, bool withRenderer) {
   bool ok = true;
   for (const Document* document : {&documents.splash, &documents.icons, &documents.tiger,
                                    &documents.synthetic, &generated[0], &generated[1]}) {
-    ok &=
-        PrintResult("load", document->name,
-                    MeasureCascadeLoad(document->source, kLoadRepetitions, withRenderer), "parse");
+    ok &= PrintResult(
+        "load", document->name,
+        MeasureCascadeLoad(document->source, kLoadRepetitions, withRenderer, false, scheduler),
+        "parse");
   }
   return ok;
 }
@@ -288,7 +318,7 @@ int main(int argc, char* argv[]) {
   if (!options) {
     std::fprintf(stderr,
                  "usage: css_cascade_perf_bench [--mode=all|load|edits|keystrokes|scaling] "
-                 "[--no-renderer]\n");
+                 "[--no-renderer] [--workers=0..32 with --mode=load --no-renderer]\n");
     return 2;
   }
   const std::optional<Documents> documents = LoadDocuments();
@@ -300,7 +330,12 @@ int main(int argc, char* argv[]) {
   };
   bool ok = true;
   if (runs("load")) {
-    ok &= RunLoadCases(*documents, options->withRenderer);
+    std::unique_ptr<donner::tasks::TaskScheduler> scheduler;
+    if (options->workers) {
+      scheduler = std::make_unique<donner::tasks::TaskScheduler>(
+          donner::tasks::TaskSchedulerOptions{.workerCount = *options->workers});
+    }
+    ok &= RunLoadCases(*documents, options->withRenderer, scheduler.get());
   }
   if (runs("edits")) {
     ok &= RunEditCases(*documents, options->withRenderer);

@@ -9,6 +9,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
+#include "donner/svg/components/style/StylePassScheduler.h"
 
 namespace donner::svg::components {
 
@@ -54,7 +55,7 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry);
  * @param warningSink Sink to collect warnings.
  */
 void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
-                         ParseWarningSink& warningSink);
+                         ParseWarningSink& warningSink, StylePassScheduler scheduler = {});
 
 /**
  * Give an external `<use>` the document its reference names, as an \ref ExternalUseComponent.

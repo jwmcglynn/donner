@@ -1,21 +1,28 @@
 /// @file
 /// Exact style cascade work for fixed documents and edits, as reported through the rendering
-/// diagnostics. Counts are independent of the machine, so a change in work done fails here.
+/// diagnostics. Serial counts are exact. Across worker schedules only logical work is invariant.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <map>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
+#include "donner/base/tasks/TaskScheduler.h"
+#include "donner/base/tasks/TaskScope.h"
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/base/tests/StallGuard.h"
 #include "donner/benchmarks/CssCascadeScenes.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::benchmarks {
 namespace {
@@ -54,6 +61,109 @@ const std::string& SourceOf(Document document) {
       break;
   }
   return sources.emplace(document, std::move(source)).first->second;
+}
+
+std::string WideRenderFixture() {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>";
+  for (int i = 0; i < 1050; ++i) {
+    source += "<rect width='1' height='1'/>";
+  }
+  return source + "</svg>";
+}
+
+TEST(CascadeRendererOptions, SchedulingIsSelectedByTheCaller) {
+  const auto source = WideRenderFixture();
+  auto serial = ParseCascadeDocument(source);
+  auto scheduled = ParseCascadeDocument(source);
+  ASSERT_TRUE(serial && scheduled);
+  svg::Renderer serialRenderer;
+  serialRenderer.draw(*serial);
+  tasks::TaskScheduler scheduler({.workerCount = 2});
+  svg::Renderer parallelRenderer(svg::RendererOptions{.scheduler = &scheduler});
+  parallelRenderer.draw(*scheduled);
+  const auto& reference = serial->registry().ctx().get<svg::components::StyleCascadeMetrics>();
+  const auto& actual = scheduled->registry().ctx().get<svg::components::StyleCascadeMetrics>();
+  EXPECT_EQ(reference.scheduledPasses, 0u);
+  EXPECT_GT(actual.scheduledPasses, 0u);
+  EXPECT_GT(actual.replayedSelectorTraces, 1000u);
+  // Stealing may change physical hits, misses, skipped parses and registry copies.
+  EXPECT_TRUE(actual.counters.sameLogicalWork(reference.counters));
+}
+
+TEST(CascadeRendererOptions, WorkerDrawFallsBackOnlyForItsOwnScheduler) {
+  tasks::TaskScheduler caller({.workerCount = 2});
+  tasks::TaskScheduler other({.workerCount = 2});
+  tasks::TaskScope scope(caller);
+  const auto submitter = std::this_thread::get_id();
+  for (auto* borrowed : {&caller, &other}) {
+    std::optional<std::uint64_t> scheduledPasses;
+    ASSERT_TRUE(scope.trySpawn([&] {
+      EXPECT_NE(std::this_thread::get_id(), submitter);
+      auto document = ParseCascadeDocument(WideRenderFixture());
+      ASSERT_TRUE(document);
+      svg::Renderer renderer(svg::RendererOptions{.scheduler = borrowed});
+      renderer.draw(*document);
+      const auto access = document->readAccess();
+      const auto& metrics = access.registry().ctx().get<svg::components::StyleCascadeMetrics>();
+      scheduledPasses = metrics.scheduledPasses;
+    }));
+    scope.wait();
+    ASSERT_TRUE(scheduledPasses);
+    EXPECT_EQ(*scheduledPasses, borrowed == &caller ? 0u : 1u);
+  }
+}
+
+TEST(CascadeRendererOptions, SeededDrawLeavesOtherScopeQueued) {
+  tasks::TaskScheduler scheduler({.workerCount = 0, .seed = 7123});
+  auto document = ParseCascadeDocument(WideRenderFixture());
+  ASSERT_TRUE(document);
+  bool earlierRan = false;
+  tasks::TaskScope earlier(scheduler);
+  ASSERT_TRUE(earlier.trySpawn([&] { earlierRan = true; }));
+  svg::Renderer renderer(svg::RendererOptions{.scheduler = &scheduler});
+  renderer.draw(*document);
+  EXPECT_FALSE(earlierRan);
+  const auto& metrics = document->registry().ctx().get<svg::components::StyleCascadeMetrics>();
+  EXPECT_EQ(metrics.scheduledPasses, 1u);
+  earlier.wait();
+  EXPECT_TRUE(earlierRan);
+}
+
+TEST(CascadeRendererOptions, AdoptedDrawLeavesOlderDequeWorkQueued) {
+  tasks::TaskScheduler scheduler({.workerCount = 1});
+  auto document = ParseCascadeDocument(WideRenderFixture());
+  ASSERT_TRUE(document);
+  std::promise<void> occupied;
+  std::promise<void> release;
+  auto entered = occupied.get_future();
+  auto done = release.get_future();
+  std::thread blocker([&] {
+    tasks::TaskScope scope(scheduler);
+    scope.spawn([&] {
+      occupied.set_value();
+      EXPECT_EQ(done.wait_for(tests::kHangGuard), std::future_status::ready);
+    });
+  });
+  if (entered.wait_for(tests::kHangGuard) == std::future_status::ready) {
+    auto adopted = scheduler.adopt();
+    EXPECT_TRUE(adopted);
+    if (adopted) {
+      std::atomic<bool> earlierRan = false;
+      tasks::TaskScope earlier(scheduler);
+      EXPECT_TRUE(earlier.trySpawn([&] { earlierRan = true; }));
+      svg::Renderer renderer(svg::RendererOptions{.scheduler = &scheduler});
+      renderer.draw(*document);
+      EXPECT_FALSE(earlierRan.load());
+      const auto& metrics = document->registry().ctx().get<svg::components::StyleCascadeMetrics>();
+      EXPECT_EQ(metrics.scheduledPasses, 1u);
+      earlier.wait();
+      EXPECT_TRUE(earlierRan.load());
+    }
+  } else {
+    ADD_FAILURE() << "The scheduler worker did not enter the blocking fixture";
+  }
+  release.set_value();
+  blocker.join();
 }
 
 /// Matches every count of \p expected, naming each mismatched field.

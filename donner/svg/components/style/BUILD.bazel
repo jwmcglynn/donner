@@ -8,6 +8,13 @@ load(
 )
 
 cc_library(
+    name = "style_pass_scheduler",
+    hdrs = ["StylePassScheduler.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = ["//donner/base"],
+)
+
+cc_library(
     name = "components",
     hdrs = [
         "ComputedStyleComponent.h",
@@ -75,6 +82,7 @@ cc_library(
     ],
     deps = [
         ":components",
+        ":style_pass_scheduler",
         "//donner/base",
         "//donner/css",
         "//donner/svg/components:components_core",
@@ -97,12 +105,14 @@ donner_perf_sensitive_cc_library(
     name = "style_system",
     srcs = [
         "PaintAnimationStyle.cc",
+        "ParallelStylePass.cc",
         "ScalarAnimationStyle.cc",
         "SelectorContent.cc",
         "StyleSystem.cc",
     ],
     hdrs = [
         "PaintAnimationStyle.h",
+        "ParallelStylePass.h",
         "ScalarAnimationStyle.h",
     ],
     visibility = [
@@ -115,9 +125,11 @@ donner_perf_sensitive_cc_library(
         ":matched_properties_cache",
         ":rule_index",
         ":style_ancestor_filter",
+        ":style_pass_scheduler",
         ":style_system_headers",
         "//donner/base",
         "//donner/base/parser",
+        "//donner/base/tasks:task_scheduler",
         "//donner/base/xml",
         "//donner/css",
         "//donner/svg/components:components_core",
@@ -161,6 +173,7 @@ donner_cc_fuzzer(
     deps = [
         ":style_system",
         "//donner/base",
+        "//donner/base/tasks:task_scheduler",
         "//donner/base/xml",
         "//donner/svg",
         "//donner/svg/components",
@@ -221,6 +234,19 @@ donner_cc_test(
         "//donner/svg/components/animation:components",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "style_parallel_tests",
+    srcs = ["tests/StyleParallel_tests.cc"],
+    deps = [
+        ":style_system",
+        "//donner/base:stall_guard",
+        "//donner/base/tasks:task_scheduler",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

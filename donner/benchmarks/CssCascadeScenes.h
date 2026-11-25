@@ -16,6 +16,10 @@
 #include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
+namespace donner::tasks {
+class TaskScheduler;
+}
+
 namespace donner::benchmarks {
 
 /// Workspace-relative path of the splash document.
@@ -78,6 +82,8 @@ std::string MakeRepeatedClassTokensDocument(int ruleCount, int tokenCount);
 /// Renderer that records nothing, so a frame costs only document preparation.
 class NullRenderer final : public svg::RendererInterface {
 public:
+  /// @param scheduler Optional scheduler borrowed by each frame.
+  explicit NullRenderer(tasks::TaskScheduler* scheduler = nullptr) : scheduler_(scheduler) {}
   void draw(svg::SVGDocument& document) override;
   void draw(svg::SVGDocument& document, ParseWarningSink& warningSink) override;
   [[nodiscard]] int width() const override { return 0; }
@@ -107,8 +113,11 @@ public:
                 const svg::TextParams&) override {}
   [[nodiscard]] svg::RendererBitmap takeSnapshot() const override { return {}; }
   [[nodiscard]] std::unique_ptr<svg::RendererInterface> createOffscreenInstance() const override {
-    return std::make_unique<NullRenderer>();
+    return std::make_unique<NullRenderer>(scheduler_);
   }
+
+private:
+  tasks::TaskScheduler* scheduler_;
 };
 
 /**
@@ -231,6 +240,12 @@ TimingSummary SummarizeTimings(std::vector<double> samplesMs);
 
 /// Frame timings and style work for one measured case.
 struct CascadeMeasurement {
+  struct ScheduledWork {
+    std::uint64_t passes = 0, admittedTasks = 0, abandoned = 0, replayed = 0, priorHits = 0;
+  };
+  /// Scheduled work in the last measured load. Physical task and hit counts can vary.
+  ScheduledWork scheduled;
+
   /// Parse time for load cases, or the edit or source-edit call for edit and keystroke cases.
   TimingSummary setup;
   TimingSummary nullFrame;  ///< Frame drawn with \ref NullRenderer.
@@ -292,10 +307,12 @@ constexpr CascadeRepetitions OneDirection(CascadeRepetitions repetitions,
  * @param repetitions Repetition counts.
  * @param withRenderer Also time the default renderer's first frame.
  * @param disableCache Disable matched-properties caching for a differential reference.
+ * @param scheduler Optional scheduler for the measured null-renderer frames.
  */
 std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
                                                      CascadeRepetitions repetitions,
-                                                     bool withRenderer, bool disableCache = false);
+                                                     bool withRenderer, bool disableCache = false,
+                                                     tasks::TaskScheduler* scheduler = nullptr);
 
 /**
  * Measure the frame after an edit: each repetition applies \p edit to a loaded document and draws

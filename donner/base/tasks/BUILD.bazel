@@ -74,6 +74,7 @@ donner_cc_library(
     ],
     visibility = [
         "//donner/base/tasks:__subpackages__",
+        "//donner/benchmarks:__pkg__",
         "//donner/svg/components/style:__pkg__",
     ],
     deps = [

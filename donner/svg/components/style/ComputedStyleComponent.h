@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <type_traits>
@@ -64,6 +65,35 @@ public:
         !retainedBytes_.compare_exchange_weak(current, current - bytes, std::memory_order_relaxed));
   }
 
+  /// Non-latching admission for one worker's maximum temporary memory footprint.
+  [[nodiscard]] bool tryReservePreparation(std::size_t bytes) {
+    constexpr auto limit = DocumentResourceFamilyBudget::kMaximumStylePreparationBytes;
+    auto current = preparationBytes_.load(std::memory_order_relaxed);
+    do {
+      if (bytes > limit - current) {
+        return false;
+      }
+    } while (!preparationBytes_.compare_exchange_weak(current, current + bytes,
+                                                      std::memory_order_relaxed));
+    if (family_ && !family_->tryReserveStylePreparation(bytes)) {
+      preparationBytes_.fetch_sub(bytes, std::memory_order_relaxed);
+      return false;
+    }
+    return true;
+  }
+
+  /// Release a worker's temporary memory reservation independently of logical record charges.
+  void releasePreparation(std::size_t bytes) {
+    auto current = preparationBytes_.load(std::memory_order_relaxed);
+    do {
+      UTILS_RELEASE_ASSERT(bytes <= current);
+    } while (!preparationBytes_.compare_exchange_weak(current, current - bytes,
+                                                      std::memory_order_relaxed));
+    if (family_) {
+      family_->releaseStylePreparation(bytes);
+    }
+  }
+
   /// Current retained bytes.
   [[nodiscard]] std::size_t retainedBytes() const {
     return retainedBytes_.load(std::memory_order_relaxed);
@@ -71,6 +101,7 @@ public:
 
 private:
   std::atomic<std::size_t> retainedBytes_ = 0;
+  std::atomic<std::size_t> preparationBytes_ = 0;
   std::size_t limit_;
   std::shared_ptr<DocumentResourceFamilyBudget> family_;
 };
@@ -116,6 +147,9 @@ struct ComputedStyle {
 
   /// The computed style properties.
   PropertyRegistry properties;
+  /// Document-local origin for a canonical record, or its dense index while speculative.
+  /// Worker caches ignore this field when choosing a bucket.
+  std::uint32_t cachePlacement = 0;
   /// Absent for manually constructed styles; the cascade always populates it.
   std::optional<ComputedResourceOpacities> resourceOpacities;
 

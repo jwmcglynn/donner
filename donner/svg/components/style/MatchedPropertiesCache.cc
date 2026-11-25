@@ -54,17 +54,21 @@ void MatchedPropertiesKey::addRule(std::uint64_t sheetRevision, std::size_t ordi
   Combine(ruleHash_, ordinal);
   Combine(ruleHash_, index);
   HashSpecificity(ruleHash_, specificity);
+  Combine(placementRuleHash_, ordinal);
+  Combine(placementRuleHash_, index);
+  HashSpecificity(placementRuleHash_, specificity);
 }
 
 bool MatchedPropertiesKey::cacheable() const {
   return !tooManyRules_ && (!localStyle || localStyle->declarationHash().has_value());
 }
 
-std::size_t MatchedPropertiesKey::hash() const {
-  auto hash = ruleHash_;
-  Combine(hash, std::hash<const ComputedStyle*>{}(parent.get()));
-  Combine(hash, std::hash<const ComputedStyle*>{}(root.get()));
-  Combine(hash, std::hash<std::optional<ElementType>>{}(elementType));
+std::size_t MatchedPropertiesKey::hash(const ComputedStyle* parentRecord,
+                                       const ComputedStyle* rootRecord) const {
+  auto hash = placementRuleHash_;
+  Combine(hash, parentRecord ? parentRecord->cachePlacement : 0);
+  Combine(hash, rootRecord ? rootRecord->cachePlacement : 0);
+  Combine(hash, elementType ? 1 + static_cast<std::size_t>(*elementType) : 0);
   Combine(hash, noInheritPaint);
   Combine(hash, instanceSymbol);
   Combine(hash, documentRoot);
@@ -74,24 +78,38 @@ std::size_t MatchedPropertiesKey::hash() const {
   return hash;
 }
 
-bool MatchedPropertiesKey::sameContextAndRules(const MatchedPropertiesKey& other) const {
-  return parent == other.parent && root == other.root && elementType == other.elementType &&
-         noInheritPaint == other.noInheritPaint && instanceSymbol == other.instanceSymbol &&
-         documentRoot == other.documentRoot && stop == other.stop && flood == other.flood &&
-         ruleHash_ == other.ruleHash_ && std::ranges::equal(rules_, other.rules_);
+bool MatchedPropertiesKey::sameContextAndRules(const MatchedPropertiesKey& other,
+                                               const ComputedStyle* parentRecord,
+                                               const ComputedStyle* rootRecord) const {
+  return parent.get() == parentRecord && root.get() == rootRecord &&
+         elementType == other.elementType && noInheritPaint == other.noInheritPaint &&
+         instanceSymbol == other.instanceSymbol && documentRoot == other.documentRoot &&
+         stop == other.stop && flood == other.flood && ruleHash_ == other.ruleHash_ &&
+         std::ranges::equal(rules_, other.rules_);
 }
 
-const MatchedPropertiesEntry* MatchedPropertiesCache::find(const MatchedPropertiesKey& key) {
-  if (!key.cacheable()) {
+bool MatchedPropertiesCache::accepts(const MatchedPropertiesKey& key) const {
+  return key.cacheable() && (bucketCount_ == kBuckets || key.rules_.size() <= kWorkerRuleCapacity);
+}
+
+const MatchedPropertiesEntry* MatchedPropertiesCache::find(const MatchedPropertiesKey& key,
+                                                           const ComputedStyle* parentRecord,
+                                                           const ComputedStyle* rootRecord) {
+  if (!accepts(key)) {
     return nullptr;
   }
-  auto& bucket = buckets_[key.hash() % kBuckets];
+  const bool worker = bucketCount_ == kWorkerBuckets;
+  const auto hash = worker ? key.hash(nullptr, nullptr) : key.hash(parentRecord, rootRecord);
+  auto& bucket = buckets_[hash % bucketCount_];
   if (!bucket) {
     return nullptr;
   }
   const auto local = LocalKey(key.localStyle);
+  if (!local || (worker && local->capacity() > kWorkerLocalCapacity)) {
+    return nullptr;
+  }
   for (auto& slot : bucket->slots) {
-    if (slot.key.sameContextAndRules(key) && slot.localKey == local) {
+    if (slot.key.sameContextAndRules(key, parentRecord, rootRecord) && slot.localKey == local) {
       slot.referenced = true;
       return &slot.entry;
     }
@@ -112,23 +130,32 @@ MatchedPropertiesCache::Slot& MatchedPropertiesCache::Bucket::nextVictim() {
   return slots[hand];
 }
 
-void MatchedPropertiesCache::insert(const MatchedPropertiesKey& key, MatchedPropertiesEntry entry) {
-  if (!key.cacheable()) {
-    return;
+MatchedPropertiesCache::Slot* MatchedPropertiesCache::findVictim(Bucket* bucket) {
+  if (!bucket || bucket->slots.size() != kSlotsPerBucket) {
+    return nullptr;
+  }
+  ++evictionEpoch_;
+  return &bucket->nextVictim();
+}
+
+bool MatchedPropertiesCache::insert(const MatchedPropertiesKey& key, MatchedPropertiesEntry entry) {
+  const bool worker = bucketCount_ == kWorkerBuckets;
+  if (!accepts(key)) {
+    return false;
   }
   auto local = LocalKey(key.localStyle);
-  if (!local || local->capacity() > kMaximumStringCapacity) {
-    return;
+  if (!local || local->capacity() > (worker ? kWorkerLocalCapacity : kMaximumStringCapacity)) {
+    return false;
   }
-  auto& bucket = buckets_[key.hash() % kBuckets];
+  const auto hash = worker ? key.hash(nullptr, nullptr) : key.hash();
+  auto& bucket = buckets_[hash % bucketCount_];
   Slot incoming{key, std::move(*local), std::move(entry)};
   incoming.key.localStyle = nullptr;
-  Slot* victim =
-      bucket && bucket->slots.size() == kSlotsPerBucket ? &bucket->nextVictim() : nullptr;
+  Slot* victim = findVictim(bucket.get());
   const std::size_t keptBytes = retainedKeyPayloadBytes_ - (victim ? victim->keyPayloadBytes() : 0);
   const std::size_t incomingBytes = incoming.keyPayloadBytes();
   if (incomingBytes > kMaximumKeyPayloadBytes - keptBytes) {
-    return;
+    return false;
   }
   retainedKeyPayloadBytes_ = keptBytes + incomingBytes;
 
@@ -143,11 +170,13 @@ void MatchedPropertiesCache::insert(const MatchedPropertiesKey& key, MatchedProp
     }
     bucket->slots.emplace_back(std::move(incoming));
   }
+  return true;
 }
 
 void MatchedPropertiesCache::clear() {
-  for (auto& bucket : buckets_) {
-    bucket.reset();
+  ++evictionEpoch_;
+  for (std::size_t i = 0; i < bucketCount_; ++i) {
+    buckets_[i].reset();
   }
   retainedKeyPayloadBytes_ = 0;
 }

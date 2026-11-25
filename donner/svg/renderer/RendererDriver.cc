@@ -2751,7 +2751,7 @@ void RendererDriver::syncFilterPreparationStats() {
 RendererDriver::RendererDriver(
     RendererInterface& renderer, bool verbose, SecurityStats* securityStats,
     std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork,
-    ParseWarningSink* warningSink)
+    ParseWarningSink* warningSink, StylePassScheduler scheduler)
     : renderer_(renderer),
       verbose_(verbose),
       textFrameCache_(std::make_unique<RendererDriverTextFrameCache>()),
@@ -2759,7 +2759,8 @@ RendererDriver::RendererDriver(
                                 ? std::move(externalUseStyleWork)
                                 : std::make_shared<components::StyleResourceBudget>()),
       securityStats_(securityStats),
-      warningSink_(warningSink) {
+      warningSink_(warningSink),
+      scheduler_(scheduler ? scheduler : renderer.preparationScheduler()) {
   if (RendererFilterPreparationBudget* shared = renderer_.filterPreparationBudget()) {
     filterPreparationBudget_ = shared;
   }
@@ -3026,7 +3027,7 @@ void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
   // Atlas tiles never print: without a host sink their warnings are discarded even when verbose.
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(
-      document, verbose_, warningSink_ != nullptr ? *warningSink_ : disabledSink);
+      document, verbose_, warningSink_ != nullptr ? *warningSink_ : disabledSink, scheduler_);
 
   const std::vector<Entity> mainEntities = CollectMainEntities(document.registry());
 
@@ -5265,23 +5266,23 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
     }
   };
   ParseWarningSink warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings, scheduler_);
   deliver(warnings);
   if (components::ExternalUseStyleRetention::RestoreOtherSubtreesIfReadingOutside(registry)) {
     ParseWarningSink restoredWarnings;
-    RendererUtils::prepareDocumentForRendering(document, verbose_, restoredWarnings);
+    RendererUtils::prepareDocumentForRendering(document, verbose_, restoredWarnings, scheduler_);
     deliver(restoredWarnings);
   }
 }
 
 void RendererDriver::prepareDocument(SVGDocument& document) {
   if (warningSink_ != nullptr) {
-    RendererUtils::prepareDocumentForRendering(document, verbose_, *warningSink_);
+    RendererUtils::prepareDocumentForRendering(document, verbose_, *warningSink_, scheduler_);
     return;
   }
   // Without a host sink, only verbose mode pays for formatting warnings.
   ParseWarningSink warnings = verbose_ ? ParseWarningSink() : ParseWarningSink::Disabled();
-  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings, scheduler_);
   for (const ParseDiagnostic& warning : warnings.warnings()) {
     std::cerr << warning << '\n';
   }

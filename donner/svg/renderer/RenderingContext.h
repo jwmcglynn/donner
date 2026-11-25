@@ -13,6 +13,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/style/StylePassScheduler.h"
 #include "donner/svg/core/HitTestMode.h"
 #include "donner/svg/renderer/AnimationPresentation.h"
 
@@ -88,7 +89,8 @@ public:
    * @param verbose If true, enable verbose logging.
    * @param warningSink Sink to collect warnings.
    */
-  void instantiateRenderTree(bool verbose, ParseWarningSink& warningSink);
+  void instantiateRenderTree(bool verbose, ParseWarningSink& warningSink,
+                             StylePassScheduler scheduler = {});
 
   /**
    * Create all computed components needed for text/layout/style queries without instantiating
@@ -96,7 +98,7 @@ public:
    *
    * @param warningSink Sink to collect warnings.
    */
-  void ensureComputedComponents(ParseWarningSink& warningSink);
+  void ensureComputedComponents(ParseWarningSink& warningSink, StylePassScheduler scheduler = {});
 
   /**
    * Find the first entity that intersects the given point, using spatial acceleration
@@ -204,14 +206,14 @@ private:
    * @param warningSink Sink to collect warnings.
    * @return True if the update was applied, false if the frame needs the full rebuild.
    */
-  bool tryRetainedUpdate(ParseWarningSink& warningSink);
+  bool tryRetainedUpdate(ParseWarningSink& warningSink, StylePassScheduler scheduler = {});
 
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.
    *
    * @param warningSink Sink to collect warnings.
    */
-  void createComputedComponents(ParseWarningSink& warningSink);
+  void createComputedComponents(ParseWarningSink& warningSink, StylePassScheduler scheduler);
 
   /**
    * Creates all rendering instances for the document, the final step before it can be rendered.

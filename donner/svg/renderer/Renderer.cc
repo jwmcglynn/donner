@@ -422,7 +422,12 @@ RendererImage RenderElementSubtreeToImage(RendererInterface& offscreenRenderer, 
 
 }  // namespace
 
-Renderer::Renderer(bool verbose) : impl_(CreateRendererImplementation(verbose)) {}
+Renderer::Renderer(bool verbose) : Renderer(RendererOptions{.verbose = verbose}) {}
+
+Renderer::Renderer(RendererOptions options) : impl_(CreateRendererImplementation(options.verbose)) {
+  preparationScheduler_ = options.scheduler;
+  impl_->preparationScheduler_ = options.scheduler;
+}
 
 Renderer::Renderer(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
     : impl_(CreateRendererImplementation(std::move(device), verbose)) {}
