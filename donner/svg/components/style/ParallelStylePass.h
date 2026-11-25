@@ -25,6 +25,8 @@ struct StylePassPhasesForTesting {
   /// Lower the production threshold and grain to exercise scheduling on bounded fixtures.
   std::size_t minimumElements = 1000;
   std::size_t grain = 64;
+  /// Raise the range admission requirement to test rollback without using a small real stack.
+  std::size_t rangeStackHeadroom = 0;
 };
 
 /// Try a scheduled cascade of the missing slots in this selection under the caller's document

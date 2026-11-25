@@ -31,9 +31,10 @@ constexpr std::size_t kGrain = 64;
 constexpr std::size_t kCascadeStackBytes = 64 * 1024;
 constexpr std::size_t kCascadeHeadroom = kCascadeStackBytes + tasks::kStackReserveBytes;
 
-bool HasCascadeStackHeadroom(const tasks::StackBounds& bounds) {
+bool HasCascadeStackHeadroom(const tasks::StackBounds& bounds,
+                             std::size_t required = kCascadeHeadroom) {
   const auto remaining = tasks::StackRemaining(tasks::CurrentStackPosition(), bounds);
-  return remaining >= kCascadeHeadroom && remaining <= bounds.size;
+  return remaining >= required && remaining <= bounds.size;
 }
 using Index = std::uint32_t;
 constexpr Index kEnd = std::numeric_limits<Index>::max();
@@ -255,6 +256,8 @@ public:
         hooks_(hooks),
         ownerThread_(std::this_thread::get_id()),
         ownerStack_(ownerStack),
+        requiredStackHeadroom_(hooks ? std::max(kCascadeHeadroom, hooks->rangeStackHeadroom)
+                                     : kCascadeHeadroom),
         grain_(hooks ? std::max<std::size_t>(1, hooks->grain) : kGrain) {}
 
   void start(std::size_t workers) {
@@ -322,10 +325,10 @@ private:
 
   bool hasRangeStack() const {
     if (std::this_thread::get_id() == ownerThread_) {
-      return HasCascadeStackHeadroom(ownerStack_);
+      return HasCascadeStackHeadroom(ownerStack_, requiredStackHeadroom_);
     }
     const auto stack = tasks::TaskScheduler::TryCurrentThreadUsableStack();
-    return stack && HasCascadeStackHeadroom(*stack);
+    return stack && HasCascadeStackHeadroom(*stack, requiredStackHeadroom_);
   }
 
   void run(Range range, bool main, std::size_t ownerWork = 0) {
@@ -396,6 +399,7 @@ private:
   const StylePassPhasesForTesting* hooks_;
   const std::thread::id ownerThread_;
   const tasks::StackBounds ownerStack_;
+  const std::size_t requiredStackHeadroom_;
   const std::size_t grain_;
   std::atomic<std::size_t> outstandingMain_{1};
   std::atomic<bool> aborted_{false};

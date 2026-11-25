@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -48,13 +49,18 @@ struct Frame {
 };
 
 Frame FirstFrame(const std::string& source, tasks::TaskSchedulerOptions options,
-                 bool useAncestorFilter = true) {
+                 bool useAncestorFilter = true, std::size_t rangeStackHeadroom = 0) {
   ParseWarningSink warnings;
   auto parse = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_FALSE(parse.hasError());
   auto doc = std::move(parse).result();
   tasks::TaskScheduler scheduler(options);
   auto& registry = doc.registry();
+  if (rangeStackHeadroom != 0) {
+    auto& hooks = registry.ctx().emplace<StylePassPhasesForTesting>();
+    hooks.minimumElements = 1;
+    hooks.rangeStackHeadroom = rangeStackHeadroom;
+  }
   if (!useAncestorFilter) {
     registry.ctx().emplace<UnfilteredCascadeForTesting>();
   }
@@ -815,11 +821,13 @@ TEST(StyleParallel, AncestorFilterScratchIsReservedBeforeConstruction) {
   EXPECT_TRUE(child.get<ComputedStyleComponent>().style);
 }
 
-TEST(StyleParallel, InsufficientWorkerStackDeclinesBeforePreparingThePass) {
-  const auto source = SiblingScene(1050);
+TEST(StyleParallel, InsufficientRangeHeadroomDiscardsPreparationAndReplaysSerially) {
+  const auto source = SiblingScene(12);
   const auto serial = FirstFrame(source, {.workerCount = 0});
-  const auto candidate = FirstFrame(source, {.workerCount = 2, .workerStackBytes = 64 * 1024});
-  EXPECT_EQ(candidate.scheduled, 0u);
+  const auto candidate =
+      FirstFrame(source, {.workerCount = 2}, true, std::numeric_limits<std::size_t>::max());
+  EXPECT_EQ(candidate.scheduled, 1u);
+  EXPECT_EQ(candidate.doc.registry().ctx().get<StyleCascadeMetrics>().abandonedStylePasses, 1u);
   EXPECT_EQ(candidate.traces, 0u);
   ExpectSame(serial, candidate);
 }

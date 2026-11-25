@@ -2240,7 +2240,7 @@ separate 32 KiB reporting reserve.
   admission and rollback behavior, and their instrumented frames are outside the release
   measurement envelope. The ordinary serial caller retains its existing stack contract.
   `//donner/svg/components/style:style_parallel_tests` checks both sides of the CSS depth gate
-  and compares the small-stack fallback to the ordinary serial path.
+  and compares the low-headroom rollback to the ordinary serial path.
 - **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
   external-use registries, passes below the threshold, and builds or runtimes without workers run
   the serial path.
