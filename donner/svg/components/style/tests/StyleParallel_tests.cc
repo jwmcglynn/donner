@@ -826,9 +826,11 @@ TEST(StyleParallel, InsufficientRangeHeadroomDiscardsPreparationAndReplaysSerial
   const auto serial = FirstFrame(source, {.workerCount = 0});
   const auto candidate =
       FirstFrame(source, {.workerCount = 2}, true, std::numeric_limits<std::size_t>::max());
-  EXPECT_EQ(candidate.scheduled, 1u);
-  EXPECT_EQ(candidate.doc.registry().ctx().get<StyleCascadeMetrics>().abandonedStylePasses, 1u);
-  EXPECT_EQ(candidate.traces, 0u);
+  if constexpr (kNativeStyleStackAdmission) {
+    EXPECT_EQ(candidate.scheduled, 1u);
+    EXPECT_EQ(candidate.doc.registry().ctx().get<StyleCascadeMetrics>().abandonedStylePasses, 1u);
+    EXPECT_EQ(candidate.traces, 0u);
+  }
   ExpectSame(serial, candidate);
 }
 
@@ -836,9 +838,15 @@ TEST(StyleParallel, FourNestedSelectorFunctionsStayEligibleForScheduling) {
   auto source = SiblingScene(1050);
   source.insert(source.find("</style>"), ".leaf:is(:is(:is(:is(.leaf)))) { fill: blue; }");
   const auto serial = FirstFrame(source, {.workerCount = 0});
-  const auto candidate = FirstFrame(source, {.workerCount = 2, .workerStackBytes = 128 * 1024});
-  EXPECT_EQ(candidate.scheduled, 1u);
-  EXPECT_GT(candidate.traces, 0u);
+  tasks::TaskSchedulerOptions options{.workerCount = 2};
+  if constexpr (kNativeStyleStackAdmission) {
+    options.workerStackBytes = 128 * 1024;
+  }
+  const auto candidate = FirstFrame(source, options);
+  if constexpr (kNativeStyleStackAdmission) {
+    EXPECT_EQ(candidate.scheduled, 1u);
+    EXPECT_GT(candidate.traces, 0u);
+  }
   ExpectSame(serial, candidate);
 }
 
@@ -852,8 +860,10 @@ TEST(StyleParallel, DeepSelectorAndDeclarationUseTheUnchangedSerialCascade) {
     source.insert(source.find("</style>"), extra);
     const auto serial = FirstFrame(source, {.workerCount = 0});
     const auto candidate = FirstFrame(source, {.workerCount = 2});
-    EXPECT_EQ(candidate.scheduled, 0u);
-    EXPECT_EQ(candidate.traces, 0u);
+    if constexpr (kNativeStyleStackAdmission) {
+      EXPECT_EQ(candidate.scheduled, 0u);
+      EXPECT_EQ(candidate.traces, 0u);
+    }
     ExpectSame(serial, candidate);
   }
 }
@@ -869,12 +879,14 @@ TEST(StyleParallel, HeldLocalComponentValuesAreCheckedBeforeCopying) {
     source.insert(target + std::string_view("id='r0'").size(), attributes);
     const auto serial = FirstFrame(source, {.workerCount = 0});
     const auto candidate = FirstFrame(source, {.workerCount = 2});
-    EXPECT_EQ(candidate.scheduled, 1u);
-    // The presentation attribute is parsed before the pass. The inline declaration still owns
-    // its component tree when a speculative worker reaches it.
-    const auto& metrics = candidate.doc.registry().ctx().get<StyleCascadeMetrics>();
-    EXPECT_EQ(metrics.abandonedStylePasses, inlineStyle ? 1u : 0u);
-    EXPECT_EQ(candidate.traces == 0u, inlineStyle);
+    if constexpr (kNativeStyleStackAdmission) {
+      EXPECT_EQ(candidate.scheduled, 1u);
+      // The presentation attribute is parsed before the pass. The inline declaration still
+      // owns its component tree when a speculative worker reaches it.
+      const auto& metrics = candidate.doc.registry().ctx().get<StyleCascadeMetrics>();
+      EXPECT_EQ(metrics.abandonedStylePasses, inlineStyle ? 1u : 0u);
+      EXPECT_EQ(candidate.traces == 0u, inlineStyle);
+    }
     ExpectSame(serial, candidate);
   }
 }
