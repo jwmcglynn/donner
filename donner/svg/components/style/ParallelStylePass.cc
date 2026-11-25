@@ -341,7 +341,12 @@ private:
       if (hooks_ && hooks_->beforeOffscreen) {
         hooks_->beforeOffscreen();
       }
-      launch({forest_.offscreenRoots, kEnd}, false);
+      const Range offscreen{forest_.offscreenRoots, kEnd};
+      if (!enqueue(offscreen, false)) {
+        // The main walk has returned. Reuse this context without nesting another range frame.
+        UTILS_RELEASE_ASSERT(worker);
+        walk(offscreen, false, *worker, 0);
+      }
     }
   }
 

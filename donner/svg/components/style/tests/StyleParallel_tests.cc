@@ -501,9 +501,14 @@ TEST(StyleParallel, OffscreenChildrenFollowMainAndDetachedNodesReachOwnerCommit)
   };
   tasks::TaskSchedulerOptions options;
   options.seed = 9;
+  // The main task still owns the only record when it offers the offscreen phase.
+  options.maxTasksPerCreator = 1;
   tasks::TaskScheduler scheduler(options);
   StyleSystem().computeAllStyles(registry, warnings, StyleSystem::FullRestyle::DiscardAndRecompute,
                                  &scheduler);
+  const auto& metrics = registry.ctx().get<StyleCascadeMetrics>();
+  EXPECT_EQ(metrics.admittedStyleTasks, 1u);
+  EXPECT_GT(metrics.declinedStyleTasks, 0u);
   EXPECT_TRUE(startedOffscreen);
   EXPECT_TRUE(committing);
   EXPECT_TRUE(registry.get<ComputedStyleComponent>(unreachable).style);

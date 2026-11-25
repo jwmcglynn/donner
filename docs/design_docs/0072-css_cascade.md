@@ -2223,7 +2223,9 @@ separate 32 KiB reporting reserve.
   family admission and filter accounting are checked by
   `//donner/svg/components/style:style_parallel_tests` and by the cascade differential fuzzer.
 - **Scheduler stack admission.** Linux and Apple style tasks never join a scope. They walk
-  subtrees and selector combinators with explicit stacks. A stylesheet revision is eligible
+  subtrees and selector combinators with explicit stacks. If the last main range cannot enqueue
+  the offscreen phase, it reuses its context after the main walk returns, without another range
+  frame on the stack. A stylesheet revision is eligible
   only when its selector arguments and declaration component values are at most four levels
   deep. The active revision's rule index records this once, including imported sheets. A provisional
   element with unparsed local values is declined before their component trees are copied.
