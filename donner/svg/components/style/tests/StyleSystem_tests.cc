@@ -26,6 +26,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
@@ -464,6 +465,53 @@ TEST_F(StyleSystemTest, StylesheetQueryIncludesUserAgentRulesOnlyWhenRequested) 
   EXPECT_GT(userAgentCount, 0u);
 }
 
+TEST_F(StyleSystemTest, NonCssStyleRulesAreHiddenFromQueries) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style id="sheet">rect:first-child[data-k] { fill: red; }</style>
+      <rect/>
+    </svg>
+  )");
+  const auto element = document.querySelector("#sheet");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  auto style = element->cast<SVGStyleElement>();
+  const std::size_t offset = std::string_view(document.source()).find("rect:first-child");
+  ASSERT_NE(offset, std::string_view::npos);
+
+  style.setType("text/plain");
+  EXPECT_THAT(CollectStylesheetRules(document), testing::IsEmpty());
+  EXPECT_THAT(FindStyleRuleAtSourceOffset(document, offset), Eq(std::nullopt));
+  EXPECT_THAT(AuthorStyleDependsOnTreePosition(document), testing::IsFalse());
+  EXPECT_THAT(styleSystem.anyStylesheetUsesAttributeInSelector(document.registry(), "data-k"),
+              testing::IsFalse());
+
+  style.setType("TEXT/CSS");
+  EXPECT_THAT(CollectStylesheetRules(document), testing::SizeIs(1));
+  EXPECT_THAT(FindStyleRuleAtSourceOffset(document, offset), testing::Optional(testing::_));
+  EXPECT_THAT(AuthorStyleDependsOnTreePosition(document), testing::IsTrue());
+  EXPECT_THAT(styleSystem.anyStylesheetUsesAttributeInSelector(document.registry(), "data-k"),
+              testing::IsTrue());
+}
+
+TEST_F(StyleSystemTest, InstallingResolvedImportsChangesStylesheetContentRevision) {
+  StylesheetComponent stylesheet;
+  stylesheet.parseStylesheet("rect { fill: red; }");
+  const auto parsedRevision = stylesheet.contentRevision();
+
+  std::vector<css::Stylesheet> imports;
+  StylesheetComponent imported;
+  imported.parseStylesheet("rect { stroke: blue; }");
+  imports.push_back(std::move(imported.stylesheet));
+  stylesheet.setImportedStylesheets(std::move(imports), 1);
+  EXPECT_NE(stylesheet.contentRevision(), parsedRevision);
+  EXPECT_THAT(stylesheet.importedStylesheets, testing::SizeIs(1));
+
+  const auto installedRevision = stylesheet.contentRevision();
+  stylesheet.setImportedStylesheets({}, 2);
+  EXPECT_NE(stylesheet.contentRevision(), installedRevision);
+  EXPECT_THAT(stylesheet.importedStylesheets, testing::IsEmpty());
+}
+
 TEST_F(StyleSystemTest, CollectMatchedStyleRulesReportsSelectorBranchAndSourceRanges) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
@@ -772,6 +820,28 @@ TEST_F(StyleSystemTest, ComputeAllStylesFullRecomputeClearsAndRebuildsStyles) {
                 ->fill.get()
                 .value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
+}
+
+TEST_F(StyleSystemTest, NonCssSheetDoesNotRegisterFontFaces) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style id="sheet">@font-face { font-family: Unused; src: local(Unused); }</style>
+      <rect/>
+    </svg>
+  )");
+  const auto element = document.querySelector("#sheet");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  auto style = element->cast<SVGStyleElement>();
+  style.setType("text/plain");
+  ParseWarningSink warnings;
+  Registry& registry = document.registry();
+  styleSystem.computeAllStyles(registry, warnings);
+  const auto& resources = registry.ctx().get<ResourceManagerContext>();
+  EXPECT_THAT(resources.fontFaces(), testing::IsEmpty());
+
+  style.setType("text/css");
+  styleSystem.computeAllStyles(registry, warnings);
+  EXPECT_THAT(resources.fontFaces(), testing::SizeIs(1));
 }
 
 TEST_F(StyleSystemTest, ComputeAllStylesRegistersFontFacesDuringIncrementalPass) {
@@ -1273,6 +1343,53 @@ TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {
   }
 
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
+}
+
+TEST_F(StyleSystemTest, SiblingCacheKeepsRecordChargedUnderFamilyPressure) {
+  constexpr std::string_view source = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" stroke-dasharray="1 2 3 4"/>
+    </svg>
+  )";
+  auto first = ParseSVG(source);
+  auto sibling = ParseSVG(source);
+  const auto firstElement = first.querySelector("#target");
+  const auto siblingElement = sibling.querySelector("#target");
+  ASSERT_THAT(firstElement, testing::Optional(testing::_));
+  ASSERT_THAT(siblingElement, testing::Optional(testing::_));
+  const EntityHandle target = firstElement->entityHandle();
+  const EntityHandle siblingTarget = siblingElement->entityHandle();
+
+  const PropertyRegistry local = target.get<StyleComponent>().properties();
+  const std::size_t recordBytes = local.complexPropertyBytes();
+  ASSERT_GT(recordBytes, 0u);
+  using Kind = DocumentResourceFamilyBudget::Kind;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(
+      DocumentResourceFamilyBudget::Limits{.computedStyleBytes = recordBytes});
+  first.registry().ctx().emplace<StyleResourceBudget>(family);
+  sibling.registry().ctx().emplace<StyleResourceBudget>(family);
+
+  ParseWarningSink warnings;
+  const auto& result = styleSystem.computeStyle(target, warnings);
+  ASSERT_THAT(result.properties()->strokeDasharray.get(), testing::Optional(testing::SizeIs(4)));
+  EXPECT_EQ(family->retainedBytes(Kind::ComputedStyle), recordBytes);
+  styleSystem.invalidateComputed(target);
+  EXPECT_EQ(family->retainedBytes(Kind::ComputedStyle), recordBytes);
+
+  const auto& refused = styleSystem.computeStyle(siblingTarget, warnings);
+  EXPECT_THAT(refused.properties()->strokeDasharray.get(), Eq(std::nullopt));
+  EXPECT_THAT(family->securityStats().rejected, testing::IsTrue());
+  EXPECT_EQ(family->retainedBytes(Kind::ComputedStyle), recordBytes);
+
+  first.registry().ctx().get<MatchedPropertiesCache>().clear();
+  EXPECT_EQ(family->retainedBytes(Kind::ComputedStyle), 0u);
+}
+
+TEST(StyleResourceBudgetTest, ReleasingMoreThanReservedFailsWithUnderflowDiagnostic) {
+  RetainedStyleBytes account(10);
+  ASSERT_THAT(account.reserve(4), testing::IsTrue());
+  EXPECT_DEATH_IF_SUPPORTED(account.release(5), "Retained style byte underflow");
+  EXPECT_EQ(account.retainedBytes(), 4u);
 }
 
 TEST(StyleResourceBudgetTest, SpareVectorCapacityReachesExactCapThenRejectsPlusOne) {
