@@ -172,9 +172,11 @@ class SanitizerVariantsTest(unittest.TestCase):
             name: {"name": name, "kind": "cc_test", "tags": []}
             for name in ("style_parallel_tests", "style_system_tests")
         }
+        rules["style_parallel_tests"]["shard_count"] = 4
         tests = _declared_tests(self.variants, rules, style.sanitizers, style.test_names)
         self.assertEqual([test["name"] for test in tests], ["ci_tsan_style_parallel_tests"])
         self.assertEqual(tests[0]["dep"], ":style_parallel_tests")
+        self.assertEqual(tests[0]["shard_count"], 4)
         self.assertEqual(tests[0]["tags"], ["sanitizer_tsan", "ci-linux-only"])
         self.assertEqual(tests[0]["target_compatible_with"], ["@platforms//os:linux"])
 

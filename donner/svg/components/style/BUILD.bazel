@@ -241,6 +241,8 @@ donner_cc_test(
 donner_cc_test(
     name = "style_parallel_tests",
     srcs = ["tests/StyleParallel_tests.cc"],
+    # Keep each shard within the normal native TSan test window.
+    shard_count = 4,
     deps = [
         ":style_system",
         "//donner/base:stall_guard",
