@@ -229,6 +229,73 @@ TEST(MatchedPropertiesCache, ResourceOpacityPriorityIsPartOfTheKey) {
   EXPECT_NE(ruleFlood.style, attrFlood.style);
 }
 
+void ExpectRewrittenStylesheet(bool afterFrame) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+      <style>.a { fill: red }</style>
+      <rect id="first" class="a" width="10" height="10"/>
+      <rect id="second" class="a" width="10" height="10"/>
+    </svg>)svg";
+  const PaintServer red(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))));
+  const PaintServer blue(PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255))));
+
+  for (bool disableCache : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "cache disabled: " << disableCache);
+    SVGDocument document = ParseSource(kSource);
+    if (disableCache) {
+      document.registry().ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
+    }
+    if (afterFrame) {
+      PrepareFrame(document);
+    }
+    auto first = document.querySelector("#first");
+    auto second = document.querySelector("#second");
+    auto stylesheet = document.querySelector("style");
+    ASSERT_THAT(first, testing::Optional(testing::_));
+    ASSERT_THAT(second, testing::Optional(testing::_));
+    ASSERT_THAT(stylesheet, testing::Optional(testing::_));
+    ASSERT_THAT(first->getComputedStyle().fill.get(), testing::Optional(red));
+
+    stylesheet->cast<SVGStyleElement>().setContents(".a { fill: blue }");
+    if (afterFrame) {
+      second->setStyle("");
+    }
+    EXPECT_THAT(second->getComputedStyle().fill.get(), testing::Optional(blue));
+    PrepareFrame(document);
+    EXPECT_THAT(second->getComputedStyle().fill.get(), testing::Optional(blue));
+  }
+}
+
+TEST(MatchedPropertiesCache, SetContentsBeforeFirstFrameUsesNewRules) {
+  ExpectRewrittenStylesheet(/*afterFrame=*/false);
+}
+
+TEST(MatchedPropertiesCache, SetContentsBeforeLocalRestyleUsesNewRules) {
+  ExpectRewrittenStylesheet(/*afterFrame=*/true);
+}
+
+TEST(MatchedPropertiesCache, SiblingFloodOpacitiesStayDistinct) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <filter><feFlood id="low" flood-opacity=".2"/><feFlood id="high" flood-opacity=".8"/></filter>
+    </svg>)svg";
+  for (bool disableCache : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "cache disabled: " << disableCache);
+    SVGDocument document = ParseSource(kSource);
+    if (disableCache) {
+      document.registry().ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
+    }
+    PrepareFrame(document);
+    const auto opacityOf = [&](std::string_view selector) {
+      const auto element = document.querySelector(selector);
+      const auto& style = element->unsafeEntityHandle().get<ComputedStyleComponent>();
+      return style.resourceOpacities()->floodOpacity;
+    };
+    EXPECT_THAT(opacityOf("#low"), testing::DoubleEq(0.2));
+    EXPECT_THAT(opacityOf("#high"), testing::DoubleEq(0.8));
+  }
+}
+
 TEST(MatchedPropertiesCache, ExternalUseOccurrencesKeepTheirHostPaintOrigins) {
   constexpr std::string_view kHost =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
@@ -881,6 +948,19 @@ TEST(StyleIndexDifferential, StylesheetEditsRebuildTheIndex) {
   ExpectSameCascade(indexed, unindexed);
   ExpectSameCascade(indexed, cacheDisabled);
   EXPECT_THAT(fillOf(indexed), ::testing::Optional(solid(0, 0x80, 0)));
+
+  // Keep the matching rule positions and specificity while changing a declaration.
+  for (SVGDocument* document : {&indexed, &unindexed, &cacheDisabled}) {
+    document->querySelector("style")->cast<SVGStyleElement>().setTextContent(
+        "#q { fill: blue } rect { fill: red } [id] { opacity: 0.5 }");
+    auto rect = document->querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    rect->setStyle("");
+    EXPECT_THAT(fillOf(*document), testing::Optional(solid(0xFF, 0, 0)));
+    PrepareFrame(*document);
+  }
+  ExpectSameCascade(indexed, unindexed);
+  ExpectSameCascade(indexed, cacheDisabled);
 }
 
 }  // namespace
