@@ -196,6 +196,12 @@ public:
     return gatherHits(hits, candidates);
   }
 
+  /// Whether a declaration's component tree stays within the scheduled style depth limit.
+  static bool IsDeclarationShallowForParallelCascade(const css::Declaration& declaration);
+
+  /// Whether every rule stays within the recursive CSS depth supported by scheduled style tasks.
+  bool shallowForParallelCascade() const { return shallowForParallelCascade_; }
+
   /// Number of rules the index was built from.
   std::size_t ruleCount() const { return ruleCount_; }
 
@@ -262,6 +268,7 @@ private:
   std::size_t ruleCount_ = 0;         //!< Rules the index was built from.
   std::size_t retainedBytes_ = 0;     //!< See \ref retainedBytes.
   std::size_t compactHitsAt_ = 0;     //!< Hit count past which \ref addHit removes repeats.
+  bool shallowForParallelCascade_ = true;
 
 public:
   /// Most bytes one selector-list entry adds to \ref retainedBytes besides key text and vector

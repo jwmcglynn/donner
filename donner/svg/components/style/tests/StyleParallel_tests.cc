@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -48,13 +49,18 @@ struct Frame {
 };
 
 Frame FirstFrame(const std::string& source, tasks::TaskSchedulerOptions options,
-                 bool useAncestorFilter = true) {
+                 bool useAncestorFilter = true, std::size_t rangeStackHeadroom = 0) {
   ParseWarningSink warnings;
   auto parse = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_FALSE(parse.hasError());
   auto doc = std::move(parse).result();
   tasks::TaskScheduler scheduler(options);
   auto& registry = doc.registry();
+  if (rangeStackHeadroom != 0) {
+    auto& hooks = registry.ctx().emplace<StylePassPhasesForTesting>();
+    hooks.minimumElements = 1;
+    hooks.rangeStackHeadroom = rangeStackHeadroom;
+  }
   if (!useAncestorFilter) {
     registry.ctx().emplace<UnfilteredCascadeForTesting>();
   }
@@ -501,9 +507,14 @@ TEST(StyleParallel, OffscreenChildrenFollowMainAndDetachedNodesReachOwnerCommit)
   };
   tasks::TaskSchedulerOptions options;
   options.seed = 9;
+  // The main task still owns the only record when it offers the offscreen phase.
+  options.maxTasksPerCreator = 1;
   tasks::TaskScheduler scheduler(options);
   StyleSystem().computeAllStyles(registry, warnings, StyleSystem::FullRestyle::DiscardAndRecompute,
                                  &scheduler);
+  const auto& metrics = registry.ctx().get<StyleCascadeMetrics>();
+  EXPECT_EQ(metrics.admittedStyleTasks, 1u);
+  EXPECT_GT(metrics.declinedStyleTasks, 0u);
   EXPECT_TRUE(startedOffscreen);
   EXPECT_TRUE(committing);
   EXPECT_TRUE(registry.get<ComputedStyleComponent>(unreachable).style);
@@ -808,6 +819,76 @@ TEST(StyleParallel, AncestorFilterScratchIsReservedBeforeConstruction) {
   EXPECT_EQ(batch.commit(requests, warnings, false), 0u);
   EXPECT_EQ(factories, 1u);
   EXPECT_TRUE(child.get<ComputedStyleComponent>().style);
+}
+
+TEST(StyleParallel, InsufficientRangeHeadroomDiscardsPreparationAndReplaysSerially) {
+  const auto source = SiblingScene(12);
+  const auto serial = FirstFrame(source, {.workerCount = 0});
+  const auto candidate =
+      FirstFrame(source, {.workerCount = 2}, true, std::numeric_limits<std::size_t>::max());
+  if constexpr (kNativeStyleStackAdmission) {
+    EXPECT_EQ(candidate.scheduled, 1u);
+    EXPECT_EQ(candidate.doc.registry().ctx().get<StyleCascadeMetrics>().abandonedStylePasses, 1u);
+    EXPECT_EQ(candidate.traces, 0u);
+  }
+  ExpectSame(serial, candidate);
+}
+
+TEST(StyleParallel, FourNestedSelectorFunctionsStayEligibleForScheduling) {
+  auto source = SiblingScene(1050);
+  source.insert(source.find("</style>"), ".leaf:is(:is(:is(:is(.leaf)))) { fill: blue; }");
+  const auto serial = FirstFrame(source, {.workerCount = 0});
+  tasks::TaskSchedulerOptions options{.workerCount = 2};
+  if constexpr (kNativeStyleStackAdmission) {
+    options.workerStackBytes = 128 * 1024;
+  }
+  const auto candidate = FirstFrame(source, options);
+  if constexpr (kNativeStyleStackAdmission) {
+    EXPECT_EQ(candidate.scheduled, 1u);
+    EXPECT_GT(candidate.traces, 0u);
+  }
+  ExpectSame(serial, candidate);
+}
+
+TEST(StyleParallel, DeepSelectorAndDeclarationUseTheUnchangedSerialCascade) {
+  for (const std::string_view extra : {
+           ".leaf:is(:is(:is(:is(:is(.leaf))))) { fill: blue; }",
+           ".leaf { fill: f(f(f(f(f(blue))))); }",
+       }) {
+    SCOPED_TRACE(extra);
+    std::string source = SiblingScene(1050);
+    source.insert(source.find("</style>"), extra);
+    const auto serial = FirstFrame(source, {.workerCount = 0});
+    const auto candidate = FirstFrame(source, {.workerCount = 2});
+    if constexpr (kNativeStyleStackAdmission) {
+      EXPECT_EQ(candidate.scheduled, 0u);
+      EXPECT_EQ(candidate.traces, 0u);
+    }
+    ExpectSame(serial, candidate);
+  }
+}
+
+TEST(StyleParallel, HeldLocalComponentValuesAreCheckedBeforeCopying) {
+  for (const bool inlineStyle : {true, false}) {
+    const std::string_view attributes = inlineStyle ? " style='stop-color:f(f(f(f(f(blue)))));'"
+                                                    : " stop-color='f(f(f(f(f(blue)))))'";
+    SCOPED_TRACE(attributes);
+    auto source = SiblingScene(1050);
+    const auto target = source.find("id='r0'");
+    ASSERT_NE(target, std::string::npos);
+    source.insert(target + std::string_view("id='r0'").size(), attributes);
+    const auto serial = FirstFrame(source, {.workerCount = 0});
+    const auto candidate = FirstFrame(source, {.workerCount = 2});
+    if constexpr (kNativeStyleStackAdmission) {
+      EXPECT_EQ(candidate.scheduled, 1u);
+      // The presentation attribute is parsed before the pass. The inline declaration still
+      // owns its component tree when a speculative worker reaches it.
+      const auto& metrics = candidate.doc.registry().ctx().get<StyleCascadeMetrics>();
+      EXPECT_EQ(metrics.abandonedStylePasses, inlineStyle ? 1u : 0u);
+      EXPECT_EQ(candidate.traces == 0u, inlineStyle);
+    }
+    ExpectSame(serial, candidate);
+  }
 }
 
 TEST(StyleParallel, SmallPassStaysSerial) {

@@ -13,6 +13,13 @@ namespace svg {
 namespace components {
 class StyleSystem;
 
+/// Platforms with the qualified native client stack admission contract.
+#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+inline constexpr bool kNativeStyleStackAdmission = true;
+#else
+inline constexpr bool kNativeStyleStackAdmission = false;
+#endif
+
 /// Which serial visitation order the scheduled pass commits.
 enum class StylePassSelection { Missing, Dirty };
 }  // namespace components

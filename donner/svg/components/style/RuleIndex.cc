@@ -85,7 +85,52 @@ std::vector<FiledEntry> FileEntries(std::span<const css::SelectorRule> rules) {
   return filed;
 }
 
+// These caps bound recursive matcher, specificity, and CSS component-value copy frames
+// on a scheduler task. The eligibility walk itself also stops at the cap.
+constexpr unsigned kMaximumParallelCssNesting = 4;
+
+bool HasShallowSelectors(const css::Selector& selector, unsigned remaining) {
+  for (const auto& compoundChain : selector.entries) {
+    for (const auto& compound : compoundChain.entries) {
+      for (const auto& entry : compound.compoundSelector.entries) {
+        const auto* pseudo = std::get_if<css::PseudoClassSelector>(&entry);
+        if (pseudo && pseudo->selector &&
+            (remaining == 0 || !HasShallowSelectors(*pseudo->selector, remaining - 1))) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+bool HasShallowValues(std::span<const css::ComponentValue> values, unsigned remaining) {
+  for (const auto& value : values) {
+    std::span<const css::ComponentValue> children;
+    if (const auto* fn = std::get_if<css::Function>(&value.value)) {
+      children = fn->values;
+    } else if (const auto* block = std::get_if<css::SimpleBlock>(&value.value)) {
+      children = block->values;
+    } else {
+      continue;
+    }
+    if (remaining == 0 || !HasShallowValues(children, remaining - 1)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool HasShallowRule(const css::SelectorRule& rule) {
+  return HasShallowSelectors(rule.selector, kMaximumParallelCssNesting) &&
+         std::ranges::all_of(rule.declarations, &RuleIndex::IsDeclarationShallowForParallelCascade);
+}
+
 }  // namespace
+
+bool RuleIndex::IsDeclarationShallowForParallelCascade(const css::Declaration& declaration) {
+  return HasShallowValues(declaration.values, kMaximumParallelCssNesting);
+}
 
 std::ostream& operator<<(std::ostream& os, const RuleIndexKey& key) {
   switch (key.kind) {
@@ -176,6 +221,7 @@ void RuleIndex::addAncestorHashes(std::span<const css::SelectorRule> rules) {
 }
 
 RuleIndex::RuleIndex(std::span<const css::SelectorRule> rules) : ruleCount_(rules.size()) {
+  shallowForParallelCascade_ = std::ranges::all_of(rules, HasShallowRule);
   const std::vector<FiledEntry> filed = FileEntries(rules);
   entries_.reserve(filed.size());
   std::size_t keyBytes = 0;

@@ -32,6 +32,9 @@ struct StackBounds {
  */
 StackBounds CurrentThreadStackBounds();
 
+/// Try to measure the calling thread's stack without asserting on a platform query failure.
+[[nodiscard]] std::optional<StackBounds> TryCurrentThreadStackBounds();
+
 /**
  * The calling frame's position on the real stack. Under AddressSanitizer with its fake stack, the
  * addresses of locals can lie on the heap; the frame address never does.

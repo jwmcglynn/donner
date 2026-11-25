@@ -4,6 +4,8 @@
 #include <atomic>
 #include <limits>
 #include <numeric>
+#include <optional>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -11,7 +13,9 @@
 #include "donner/base/tasks/TaskScope.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -23,6 +27,15 @@ using donner::components::TreeComponent;
 using Batch = StyleSystem::PreparedBatch;
 constexpr std::size_t kThreshold = 1000;
 constexpr std::size_t kGrain = 64;
+// Client working space above the scheduler's reporting reserve.
+constexpr std::size_t kCascadeStackBytes = 64 * 1024;
+constexpr std::size_t kCascadeHeadroom = kCascadeStackBytes + tasks::kStackReserveBytes;
+
+bool HasCascadeStackHeadroom(const tasks::StackBounds& bounds,
+                             std::size_t required = kCascadeHeadroom) {
+  const auto remaining = tasks::StackRemaining(tasks::CurrentStackPosition(), bounds);
+  return remaining >= required && remaining <= bounds.size;
+}
 using Index = std::uint32_t;
 constexpr Index kEnd = std::numeric_limits<Index>::max();
 
@@ -236,11 +249,15 @@ using RangeStack = SmallVector<Range, 16>;
 class Traversal {
 public:
   Traversal(tasks::TaskScope& scope, const Forest& forest, Batch& batch,
-            const StylePassPhasesForTesting* hooks)
+            const StylePassPhasesForTesting* hooks, tasks::StackBounds ownerStack)
       : scope_(scope),
         forest_(forest),
         batch_(batch),
         hooks_(hooks),
+        ownerThread_(std::this_thread::get_id()),
+        ownerStack_(ownerStack),
+        requiredStackHeadroom_(hooks ? std::max(kCascadeHeadroom, hooks->rangeStackHeadroom)
+                                     : kCascadeHeadroom),
         grain_(hooks ? std::max<std::size_t>(1, hooks->grain) : kGrain) {}
 
   void start(std::size_t workers) {
@@ -306,8 +323,19 @@ private:
     local.push_back({group, range.end});
   }
 
+  bool hasRangeStack() const {
+    if constexpr (!kNativeStyleStackAdmission) {
+      return true;
+    }
+    if (std::this_thread::get_id() == ownerThread_) {
+      return HasCascadeStackHeadroom(ownerStack_, requiredStackHeadroom_);
+    }
+    const auto stack = tasks::TaskScheduler::TryCurrentThreadUsableStack();
+    return stack && HasCascadeStackHeadroom(*stack, requiredStackHeadroom_);
+  }
+
   void run(Range range, bool main, std::size_t ownerWork = 0) {
-    auto* worker = batch_.bindWorker();
+    auto* worker = hasRangeStack() ? batch_.bindWorker() : nullptr;
     if (worker) {
       walk(range, main, *worker, ownerWork);
     } else {
@@ -319,7 +347,12 @@ private:
       if (hooks_ && hooks_->beforeOffscreen) {
         hooks_->beforeOffscreen();
       }
-      launch({forest_.offscreenRoots, kEnd}, false);
+      const Range offscreen{forest_.offscreenRoots, kEnd};
+      if (!enqueue(offscreen, false)) {
+        // The main walk has returned. Reuse this context without nesting another range frame.
+        UTILS_RELEASE_ASSERT(worker);
+        walk(offscreen, false, *worker, 0);
+      }
     }
   }
 
@@ -367,6 +400,9 @@ private:
   const Forest& forest_;
   Batch& batch_;
   const StylePassPhasesForTesting* hooks_;
+  const std::thread::id ownerThread_;
+  const tasks::StackBounds ownerStack_;
+  const std::size_t requiredStackHeadroom_;
   const std::size_t grain_;
   std::atomic<std::size_t> outstandingMain_{1};
   std::atomic<bool> aborted_{false};
@@ -377,7 +413,24 @@ private:
 bool CanEnterStyleScope(const tasks::TaskScheduler* scheduler) {
   // The owner holds document access, which an unrelated task could need.
   return scheduler && scheduler->canJoinWithoutRunningUnrelatedTasks() &&
-         scheduler->schedulingWidth() != 0;
+         scheduler->schedulingWidth() != 0 &&
+         (!kNativeStyleStackAdmission || scheduler->workerCount() == 0 ||
+          scheduler->workerStackBytes() >= kCascadeHeadroom);
+}
+
+bool HasShallowStylesheets(const Registry& registry) {
+  const auto sheets = registry.view<const StylesheetComponent>();
+  for (Entity entity : sheets) {
+    const auto& sheet = sheets.get<const StylesheetComponent>(entity);
+    if (!HasSvgNamespace(registry, entity) || !sheet.isCssType()) {
+      continue;
+    }
+    if (!sheet.ruleIndex.shallowForParallelCascade() ||
+        !std::ranges::all_of(sheet.importedRuleIndexes, &RuleIndex::shallowForParallelCascade)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool Eligible(const Registry& registry, std::size_t threshold) {
@@ -387,7 +440,8 @@ bool Eligible(const Registry& registry, std::size_t threshold) {
     return false;
   }
   const auto* budget = registry.ctx().find<StyleResourceBudget>();
-  return !budget || (!budget->rejected() && budget->retainedStyleBytes()->canReserve(0));
+  return (!budget || (!budget->rejected() && budget->retainedStyleBytes()->canReserve(0))) &&
+         (!kNativeStyleStackAdmission || HasShallowStylesheets(registry));
 }
 
 bool FrontierParentsReady(const Forest& forest, const Registry& registry) {
@@ -406,13 +460,27 @@ bool FrontierParentsReady(const Forest& forest, const Registry& registry) {
   return true;
 }
 
+std::optional<tasks::StackBounds> PrepareForest(Forest& forest, const Registry& registry,
+                                                StylePassSelection selection,
+                                                std::size_t threshold) {
+  if (!forest.collect(registry, selection, threshold) || !forest.connect(registry, threshold)) {
+    return std::nullopt;
+  }
+  if constexpr (!kNativeStyleStackAdmission) {
+    return tasks::StackBounds();
+  }
+  const auto stack = tasks::TaskScheduler::TryCurrentThreadUsableStack();
+  return stack && HasCascadeStackHeadroom(*stack) ? stack : std::nullopt;
+}
+
 bool RunTraversal(tasks::TaskScheduler& scheduler, const Forest& forest, Batch& batch,
-                  StyleCascadeMetrics& metrics, const StylePassPhasesForTesting* hooks) {
+                  StyleCascadeMetrics& metrics, const StylePassPhasesForTesting* hooks,
+                  tasks::StackBounds ownerStack) {
   if (hooks && hooks->beforeRegion) {
     hooks->beforeRegion();
   }
   tasks::TaskScope scope(scheduler);
-  Traversal traversal(scope, forest, batch, hooks);
+  Traversal traversal(scope, forest, batch, hooks, ownerStack);
   traversal.start(scheduler.workerCount());
   scope.wait();
   ++metrics.scheduledPasses;
@@ -433,7 +501,8 @@ bool TryParallelStylePass(Registry& registry, ParseWarningSink& warnings,
     return false;
   }
   Forest forest;
-  if (!forest.collect(registry, selection, threshold) || !forest.connect(registry, threshold)) {
+  const auto ownerStack = PrepareForest(forest, registry, selection, threshold);
+  if (!ownerStack) {
     return false;
   }
   for (Entity entity : forest.entities) {
@@ -445,7 +514,7 @@ bool TryParallelStylePass(Registry& registry, ParseWarningSink& warnings,
   const auto sizes = PoolSizes(registry);
 #endif
   const bool completed = batch.prepareDocumentRoot() && FrontierParentsReady(forest, registry) &&
-                         RunTraversal(*scheduler, forest, batch, metrics, hooks);
+                         RunTraversal(*scheduler, forest, batch, metrics, hooks, *ownerStack);
 #ifndef NDEBUG
   assert(sizes == PoolSizes(registry));
 #endif

@@ -1925,6 +1925,17 @@ bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Wor
   if (impl_->abandoned.load(std::memory_order_relaxed)) {
     return false;
   }
+  if constexpr (kNativeStyleStackAdmission) {
+    const Registry& registry = impl_->registry;
+    const auto* local = registry.try_get<StyleComponent>(StyleDataEntity(registry, entity));
+    if (local && !std::ranges::all_of(local->properties().unparsedProperties, [](const auto& item) {
+          return RuleIndex::IsDeclarationShallowForParallelCascade(item.second.declaration);
+        })) {
+      // Decline before copying a deep local CSS tree.
+      impl_->abandoned.store(true, std::memory_order_relaxed);
+      return false;
+    }
+  }
   UTILS_RELEASE_ASSERT(index < impl_->traces.entries.size());
   auto& trace = impl_->traces.entries[index];
   UTILS_RELEASE_ASSERT(std::as_const(impl_->registry).try_get<ComputedStyleComponent>(entity) ==

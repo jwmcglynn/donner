@@ -8,23 +8,35 @@
 
 namespace donner::tasks {
 
-StackBounds CurrentThreadStackBounds() {
+std::optional<StackBounds> TryCurrentThreadStackBounds() {
 #if defined(__APPLE__)
   // The address is the top of the stack, its highest address.
   const auto top = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
   const std::size_t size = pthread_get_stacksize_np(pthread_self());
+  if (size == 0 || top <= size) {
+    return std::nullopt;
+  }
   return StackBounds{top - size, size};
 #else
   pthread_attr_t attributes;
-  UTILS_RELEASE_ASSERT_MSG(pthread_getattr_np(pthread_self(), &attributes) == 0,
-                           "Could not read the thread's stack attributes");
+  if (pthread_getattr_np(pthread_self(), &attributes) != 0) {
+    return std::nullopt;
+  }
   void* floor = nullptr;
   std::size_t size = 0;
   const int result = pthread_attr_getstack(&attributes, &floor, &size);
   pthread_attr_destroy(&attributes);
-  UTILS_RELEASE_ASSERT_MSG(result == 0, "Could not read the thread's stack bounds");
+  if (result != 0 || floor == nullptr || size == 0) {
+    return std::nullopt;
+  }
   return StackBounds{reinterpret_cast<std::uintptr_t>(floor), size};
 #endif
+}
+
+StackBounds CurrentThreadStackBounds() {
+  const auto bounds = TryCurrentThreadStackBounds();
+  UTILS_RELEASE_ASSERT_MSG(bounds.has_value(), "Could not read the thread's stack bounds");
+  return *bounds;
 }
 
 std::size_t WorkerStackSize(std::size_t bytes) {
