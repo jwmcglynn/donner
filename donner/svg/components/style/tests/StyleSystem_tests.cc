@@ -1981,7 +1981,15 @@ TEST(StyleResourceBudgetTest, WorkerInheritsLatchedDocumentAndAggregateRefusal) 
   StyleResourceBudget outer(limits);
   StyleResourceBudget nested(limits);
   nested.setAggregateWorkBudget(&outer);
+  ASSERT_TRUE(outer.reserveRuleElementMatch());
   ASSERT_TRUE(outer.selectorTraversal().consume());
+  ASSERT_FALSE(nested.rejected());
+  StyleResourceBudget remainingAggregate(nested, limits);
+  EXPECT_FALSE(remainingAggregate.rejected());
+  EXPECT_EQ(remainingAggregate.limits().ruleElementMatches, 0u);
+  EXPECT_EQ(remainingAggregate.limits().selectorTraversalSteps, 0u);
+  EXPECT_FALSE(remainingAggregate.reserveRuleElementMatch());
+  EXPECT_FALSE(outer.rejected());
   ASSERT_FALSE(outer.selectorTraversal().consume());
   StyleResourceBudget aggregateShare(nested, limits);
   EXPECT_TRUE(aggregateShare.rejected());
