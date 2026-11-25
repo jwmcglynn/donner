@@ -5,6 +5,7 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -49,6 +50,7 @@ struct Node {
   Index next = kEnd;
   Index size = 1;
   Phase phase = Phase::Unknown;
+  bool hasDependent = false;
 };
 
 bool HasRecord(const Registry& registry, Entity entity) {
@@ -58,7 +60,6 @@ bool HasRecord(const Registry& registry, Entity entity) {
 
 struct Forest {
   std::vector<Entity> requests;
-  std::vector<Entity> entities;
   std::vector<Node> nodes;
   entt::sparse_set indices;
 
@@ -84,7 +85,6 @@ struct Forest {
       std::ignore = indices.push(entity);
       const Entity parent = registry.get<TreeComponent>(entity).parent();
       nodes.push_back({entity, parent});
-      entities.push_back(entity);
       entity = parent;
     } while (entity != entt::null && !HasRecord(registry, entity));
     return true;
@@ -97,7 +97,6 @@ struct Forest {
     const auto capacity = std::min<std::size_t>(size, Batch::kMaximumElements);
     nodes.reserve(capacity);
     requests.reserve(capacity);
-    entities.reserve(capacity);
     indices.reserve(capacity);
     if (selection == StylePassSelection::Dirty) {
       const auto view = registry.view<const DirtyFlagsComponent>();
@@ -185,6 +184,9 @@ struct Forest {
       }
       ++scheduled;
       const Index parent = indexOf(node.parentEntity);
+      if (parent != kEnd) {
+        nodes[parent].hasDependent = true;
+      }
       if (parent != kEnd && nodes[parent].phase == node.phase) {
         node.parent = parent;
       }
@@ -246,6 +248,11 @@ struct Range {
 
 using RangeStack = SmallVector<Range, 16>;
 
+bool ObservesProvisionalSlots(const StylePassPhasesForTesting* hooks) {
+  return hooks && (hooks->beforeRegion || hooks->beforeOffscreen || hooks->beforeCommit ||
+                   hooks->beforeNode || hooks->published || hooks->allowChildAdmission);
+}
+
 class Traversal {
 public:
   Traversal(tasks::TaskScope& scope, const Forest& forest, Batch& batch,
@@ -258,6 +265,7 @@ public:
         ownerStack_(ownerStack),
         requiredStackHeadroom_(hooks ? std::max(kCascadeHeadroom, hooks->rangeStackHeadroom)
                                      : kCascadeHeadroom),
+        publishLeaves_(ObservesProvisionalSlots(hooks)),
         grain_(hooks ? std::max<std::size_t>(1, hooks->grain) : kGrain) {}
 
   void start(std::size_t workers) {
@@ -357,7 +365,7 @@ private:
   }
 
   bool publish(Index index, const Node& node, Batch::Worker& worker) {
-    if (!batch_.computeAt(index, node.entity, worker)) {
+    if (!batch_.computeAt(index, node.entity, worker, publishLeaves_ || node.hasDependent)) {
       return false;
     }
     if (hooks_ && hooks_->published) {
@@ -403,6 +411,7 @@ private:
   const std::thread::id ownerThread_;
   const tasks::StackBounds ownerStack_;
   const std::size_t requiredStackHeadroom_;
+  const bool publishLeaves_;
   const std::size_t grain_;
   std::atomic<std::size_t> outstandingMain_{1};
   std::atomic<bool> aborted_{false};
@@ -505,10 +514,9 @@ bool TryParallelStylePass(Registry& registry, ParseWarningSink& warnings,
   if (!ownerStack) {
     return false;
   }
-  for (Entity entity : forest.entities) {
-    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
-  }
-  Batch batch(registry, forest.entities, scheduler->workerCount() + 1, warnings.isEnabled(), true);
+  const auto entities = std::span(forest.indices.data(), forest.indices.size());
+  Batch batch(registry, entities, scheduler->workerCount() + 1, warnings.isEnabled(), true,
+              &forest.indices);
   auto& metrics = registry.ctx().get<StyleCascadeMetrics>();
 #ifndef NDEBUG
   const auto sizes = PoolSizes(registry);

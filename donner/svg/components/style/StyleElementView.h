@@ -51,11 +51,13 @@ public:
    * @param treeEntity The element's tree entity.
    * @param dataEntity Its data entity, see \ref StyleDataEntity.
    */
-  RuleIndexElementView(const Registry& registry, Entity treeEntity, Entity dataEntity)
-      : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity) {}
+  RuleIndexElementView(const Registry& registry, Entity treeEntity, Entity dataEntity,
+                       bool* tagOnly = nullptr)
+      : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity), tagOnly_(tagOnly) {}
 
   /// The element's id, or empty.
   std::string_view id() const {
+    observeOtherKey();
     const auto* component = registry_.try_get<IdComponent>(dataEntity_);
     return component != nullptr ? std::string_view(component->id()) : std::string_view();
   }
@@ -80,6 +82,7 @@ public:
   /// Calls \p visit with each token of the `class` list.
   template <typename Visitor>
   void forEachClassName(Visitor&& visit) const {
+    observeOtherKey();
     if (const auto* component = registry_.try_get<ClassComponent>(dataEntity_)) {
       for (std::string_view name : StringUtils::SplitAsciiWhitespace(component->className)) {
         visit(name);
@@ -90,6 +93,7 @@ public:
   /// Calls \p visit with the local name of each attribute, whatever its namespace.
   template <typename Visitor>
   void forEachAttributeLocalName(Visitor&& visit) const {
+    observeOtherKey();
     if (const auto* component =
             registry_.try_get<donner::components::AttributesComponent>(dataEntity_)) {
       component->forEachAttributeName(
@@ -98,9 +102,15 @@ public:
   }
 
 private:
+  void observeOtherKey() const {
+    if (tagOnly_) {
+      *tagOnly_ = false;
+    }
+  }
   const Registry& registry_;
   Entity treeEntity_;
   Entity dataEntity_;
+  bool* tagOnly_;
 };
 
 }  // namespace donner::svg::components

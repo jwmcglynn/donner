@@ -16,6 +16,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
@@ -665,6 +666,97 @@ TEST(StyleParallel, UseShadowTreesStayStableAcrossTheWorkerRegion) {
   EXPECT_GT(parallel.admitted, 1u);
   EXPECT_GT(parallel.traces, 1000u);
   ExpectSame(serial, parallel);
+}
+
+TEST(StyleParallel, RootPrefixIsNotARecordWitnessForPublishedRootFont) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>g { text-decoration-thickness: 1rem }</style>
+    <defs><g id="prefix"><svg id="root" font-size="36"/></g><g id="later"/></defs>
+  </svg>)",
+                                            warnings);
+  ASSERT_FALSE(parsed.hasError());
+  auto document = std::move(parsed).result();
+  const Entity prefix = document.querySelector("#prefix")->entityHandle().entity();
+  const Entity root = document.querySelector("#root")->entityHandle().entity();
+  const Entity later = document.querySelector("#later")->entityHandle().entity();
+  auto& registry = document.registry();
+  // A nested document root makes the first <g> a prepared ancestor of the root. The
+  // later <g> has the same tag and parent, but can use the now-published root font.
+  registry.ctx().get<SVGDocumentContext>().rootEntity = root;
+  std::vector<Entity> entities;
+  const auto tree = registry.view<donner::components::TreeComponent>();
+  for (Entity entity : tree) {
+    entities.push_back(entity);
+    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
+  }
+
+  StyleSystem::PreparedBatch batch(registry, entities, 1);
+  ASSERT_TRUE(batch.prepareDocumentRoot());
+  auto* worker = batch.bindWorker();
+  ASSERT_NE(worker, nullptr);
+  ASSERT_TRUE(batch.compute(later, *worker));
+  const auto& before = registry.get<ComputedStyleComponent>(prefix);
+  const auto& after = registry.get<ComputedStyleComponent>(later);
+  ASSERT_TRUE(before.style && after.style);
+  EXPECT_DOUBLE_EQ(before.properties()->textDecorationThickness.get()->value.value,
+                   FontMetrics().rootFontSize);
+  EXPECT_DOUBLE_EQ(after.properties()->textDecorationThickness.get()->value.value, 36);
+}
+
+TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>:not(.warm) > * > rect { fill: red }</style><defs><symbol id="tile">)";
+  for (int i = 0; i < 16; ++i) {
+    source += "<rect width='1' height='1'/>";
+  }
+  source += "</symbol></defs>";
+  for (int i = 0; i < 96; ++i) {
+    source +=
+        "<use href='#tile' id='u" + std::to_string(i) + (i % 2 == 0 ? "' class='warm'/>" : "'/>");
+  }
+  source += "</svg>";
+
+  const auto run = [&](std::size_t width, bool disableCache) {
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    EXPECT_FALSE(parsed.hasError());
+    auto document = std::move(parsed).result();
+    auto& registry = document.registry();
+    if (disableCache) {
+      registry.ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
+    }
+    tasks::TaskScheduler scheduler({.workerCount = width});
+    RendererUtils::prepareDocumentForRendering(document, false, warnings, &scheduler);
+    const auto& metrics = registry.ctx().get<StyleCascadeMetrics>();
+    auto expectFill = [&](std::string_view selector, css::RGBA color) {
+      const auto host = document.querySelector(selector);
+      ASSERT_TRUE(host);
+      const auto& shadow = host->entityHandle().get<ComputedShadowTreeComponent>();
+      ASSERT_TRUE(shadow.mainBranch);
+      ASSERT_GT(shadow.mainBranch->shadowEntities.size(), 1u);
+      const auto& child =
+          registry.get<ComputedStyleComponent>(shadow.mainBranch->shadowEntities[1]);
+      EXPECT_EQ(child.properties()->fill.get(), PaintServer(PaintServer::Solid(css::Color(color))));
+    };
+    expectFill("#u0", css::RGBA::RGB(0, 0, 0));
+    expectFill("#u1", css::RGBA::RGB(255, 0, 0));
+    return Frame{std::move(document),        metrics.counters,
+                 metrics.scheduledPasses,    metrics.replayedSelectorTraces,
+                 metrics.admittedStyleTasks, metrics.declinedStyleTasks,
+                 warnings.warnings()};
+  };
+  for (bool disableCache : {false, true}) {
+    const auto serial = run(0, disableCache);
+    const auto parallel = run(4, disableCache);
+    EXPECT_GT(parallel.scheduled, 0u);
+    if (disableCache) {
+      EXPECT_EQ(parallel.counters.matchedPropertiesCacheHits, 0u);
+    } else {
+      EXPECT_GT(parallel.traces, 1000u);
+    }
+    ExpectSame(serial, parallel);
+  }
 }
 
 TEST(StyleParallel, DelayedParentPublishesBeforeChildAdmission) {

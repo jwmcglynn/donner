@@ -632,8 +632,10 @@ public:
     /// @param entities All new slots, including missing ancestors of selective requests.
     /// @param contexts Maximum executing contexts, including caller fallback.
     /// @param collectWarnings Whether the caller collects diagnostics.
+    /// @param preparedIndex Optional immutable forest index whose packed span is \p entities.
     PreparedBatch(Registry& registry, std::span<const Entity> entities, std::size_t contexts,
-                  bool collectWarnings = true, bool enableFilter = false);
+                  bool collectWarnings = true, bool enableFilter = false,
+                  const entt::sparse_set* preparedIndex = nullptr);
 
     class Worker;
     /// Bind a context to the executing thread. A new context over the bound requests serial replay.
@@ -650,7 +652,8 @@ public:
     /// @return True if the element produced a usable provisional result.
     bool compute(Entity entity, Worker& worker);
     /// Process an input by its position in the immutable entity span.
-    bool computeAt(std::size_t index, Entity entity, Worker& worker);
+    /// A caller may defer publication on a leaf that no other worker will read.
+    bool computeAt(std::size_t index, Entity entity, Worker& worker, bool publishSlot = true);
 
     /// Discard provisional records, then replay requests with ordinary serial admission and
     /// diagnostics.
