@@ -427,7 +427,7 @@ TEST_F(GeodePerfTest, FeImageFragment_RasterIsNotReadBack) {
   int offscreenRenders = 0;
   renderer.setOffscreenCreationHookForTesting([&] { ++offscreenRenders; });
   (void)device->consumeReadbackStats();
-  for (int frame = 1; frame <= 2; ++frame) {
+  for (int frame = 1; frame <= 3; ++frame) {
     SCOPED_TRACE(testing::Message() << "frame " << frame);
     offscreenRenders = 0;
     renderer.draw(document);
@@ -435,10 +435,36 @@ TEST_F(GeodePerfTest, FeImageFragment_RasterIsNotReadBack) {
     printCounters("FeImageFragment", c);
     EXPECT_THAT(offscreenRenders, testing::Eq(1)) << "Premise: the frame renders the fragment";
     EXPECT_THAT(c.submits, testing::Ge(1u)) << "the host frame submitted its filter output";
+    if (frame > 1) {
+      EXPECT_THAT(c.textureCreates, testing::Eq(1u))
+          << "the only warm allocation is the offscreen fragment target";
+      EXPECT_THAT(c.submits, testing::Eq(2u)) << "one submission each for the fragment and host";
+    }
     EXPECT_THAT(device->consumeReadbackStats().count, testing::Eq(0))
         << "the fragment raster was read back to the CPU";
   }
   EXPECT_THAT(test::CountNonTransparentPixels(renderer.takeSnapshot()), testing::Gt(0u));
+}
+
+TEST_F(GeodePerfTest, OffscreenCountersReturnToOwnerAtEndFrame) {
+  auto device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull());
+
+  RendererGeode host(device);
+  host.beginFrame(RenderViewport{.size = Vector2d(64, 64)});
+  const geode::GeodeCounters* hostCounters = device->counters();
+  ASSERT_THAT(hostCounters, testing::NotNull());
+
+  auto offscreen = host.createOffscreenInstance();
+  ASSERT_THAT(offscreen, testing::NotNull());
+  offscreen->beginFrame(RenderViewport{.size = Vector2d(8, 8)});
+  offscreen->endFrame();
+  EXPECT_THAT(device->counters(), testing::Eq(hostCounters));
+  EXPECT_THAT(hostCounters->textureCreates, testing::Eq(2u))
+      << "the owning frame counts its own target and the offscreen target";
+  offscreen.reset();
+  host.endFrame();
+  EXPECT_THAT(host.lastFrameTimings().counters.textureCreates, testing::Eq(2u));
 }
 
 TEST_F(GeodePerfTest, OffscreenCountersRestoreTheLastLiveSink) {
