@@ -194,13 +194,27 @@ struct KnownViolation {
   std::string_view tracking;
 };
 
-// Every corpus scene meets the steady state, so the list is empty. A scene that falls off it is
-// listed as `std::to_array<KnownViolation>({...})`, whose size is deduced from its entries.
-constexpr std::array<KnownViolation, 0> kKnownViolations = {};
+constexpr auto kKnownViolations = std::to_array<KnownViolation>({
+    {
+        .scene = "feimage_external_svg",
+        .violated = kTextureCreates,
+        .ceiling =
+            {.pathEncodes = 0, .textureCreates = 1, .bufferWrites = 0, .bindgroupCreates = 1},
+        .reason = "the offscreen external SVG pass creates a fresh raster target",
+        .tracking = "Reuse the offscreen SVG raster on unchanged frames (#2710).",
+    },
+    {
+        .scene = "feimage_fragment_idempotency",
+        .violated = kTextureCreates,
+        .ceiling =
+            {.pathEncodes = 0, .textureCreates = 1, .bufferWrites = 0, .bindgroupCreates = 1},
+        .reason = "the offscreen fragment pass creates a fresh raster target",
+        .tracking = "Reuse the offscreen SVG raster on unchanged frames (#2710).",
+    },
+});
 
-/// The ledger of the above-natural-size pass, measured at `aboveNaturalCanvasSize` from an empty
-/// texture pool.
-constexpr std::array<KnownViolation, 0> kKnownViolationsAboveNaturalSize = {};
+// Both scenes have the same measured frame-two counters at aboveNaturalCanvasSize.
+constexpr auto kKnownViolationsAboveNaturalSize = kKnownViolations;
 
 const KnownViolation* findKnownViolation(std::span<const KnownViolation> ledger,
                                          std::string_view scene) {

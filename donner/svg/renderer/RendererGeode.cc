@@ -2255,6 +2255,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // Per-frame perf counters. Reset at `beginFrame`, read via
   // `lastFrameTimings()`; `GeodePerf_tests.cc` pins their ceilings.
   geode::GeodeCounters counters;
+
+  struct CounterOwner {
+    Impl& renderer;
+  };
+  std::shared_ptr<CounterOwner> counterOwnerToken;
+  std::weak_ptr<CounterOwner> offscreenCounterOwner;
+  uint64_t counterOwnerFrame = 0;
+  bool offscreen = false;
+
   std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget =
       std::make_shared<components::FilterExecutionBudget>();
   bool ownsFilterExecutionBudget = true;
@@ -3148,6 +3157,33 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// has not closed. Frames are closed at `endFrame`, at the next `beginFrame`
   /// (a caller that abandons a frame), and at teardown.
   bool frameGenerationOpen = false;
+
+  void inheritCounterOwner(Impl& owner) {
+    if (!owner.counterOwnerToken) {
+      owner.counterOwnerToken = std::make_shared<CounterOwner>(CounterOwner{owner});
+    }
+    offscreenCounterOwner = owner.counterOwnerToken;
+    offscreen = true;
+  }
+
+  void captureOffscreenCounterOwner() {
+    const auto owner = offscreenCounterOwner.lock();
+    counterOwnerFrame =
+        owner && owner->renderer.frameGenerationOpen ? owner->renderer.currentFrameIndex : 0;
+  }
+
+  void finishOffscreenFrameCounters(bool hadOpenFrame) {
+    if (!offscreen || !hadOpenFrame) {
+      return;
+    }
+    // A retained child can outlive its owner or finish after the owning frame has closed.
+    if (const auto owner = offscreenCounterOwner.lock();
+        owner && owner->renderer.frameGenerationOpen &&
+        owner->renderer.currentFrameIndex == counterOwnerFrame) {
+      owner->renderer.counters.add(counters);
+    }
+    device->removeCounters(counters);
+  }
 
   /// Close this renderer's open frame generation, if any.
   void closeFrameGeneration() {
@@ -8990,6 +9026,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   ~Impl() {
+    counterOwnerToken.reset();
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
@@ -9480,6 +9517,7 @@ int RendererGeode::height() const {
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->resetForBeginFrame(viewport);
+  impl_->captureOffscreenCounterOwner();
   if (impl_->device) {
     impl_->device->drainFencedTextureBackings();
     if (impl_->device->pendingFencedTextureBackings() != 0) {
@@ -9493,6 +9531,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
 }
 
 void RendererGeode::endFrame() {
+  const bool hadOpenFrame = impl_->frameGenerationOpen;
   // Flush any pending `<use>`-batch before closing out
   // the frame. Without this, the last run of batchable draws in the
   // frame would never emit.
@@ -9569,6 +9608,7 @@ void RendererGeode::endFrame() {
 
   impl_->deviceFromLocalTransform = Transform2d();
   impl_->deviceFromLocalTransformStack.clear();
+  impl_->finishOffscreenFrameCounters(hadOpenFrame);
 }
 
 void RendererGeode::setTransform(const Transform2d& transform) {
@@ -11257,6 +11297,7 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   }
   auto renderer = std::unique_ptr<RendererGeode>(
       new RendererGeode(impl_->device, impl_->verbose, impl_->offscreenCreationHookForTesting));
+  renderer->impl_->inheritCounterOwner(*impl_);
   renderer->impl_->filterExecutionBudget = impl_->filterExecutionBudget;
   renderer->impl_->ownsFilterExecutionBudget = false;
   renderer->impl_->filterPreparationBudget = impl_->filterPreparationBudget;
