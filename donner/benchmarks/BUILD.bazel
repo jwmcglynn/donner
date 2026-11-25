@@ -76,7 +76,7 @@ donner_cc_binary(
         "//donner/svg/renderer/testdata",
         "//third_party/bootstrap-icons:bootstrap-icons.svg",
     ],
-    deps = [":css_cascade_scenes"],
+    deps = [":css_cascade_scenes", "//donner/base/tasks:task_scheduler"],
 )
 
 # Style cascade work: the correctness half pins the exact counters of fixed documents and edits on
@@ -96,6 +96,9 @@ donner_perf_cc_test(
     deps = [
         ":css_cascade_scenes",
         "//donner/base:base_test_utils",
+        "//donner/base:stall_guard",
+        "//donner/base/tasks:task_scheduler",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -80,6 +80,14 @@ public:
   /// \ref kMaxKeysPerAncestor keys or too many key bytes.
   std::uint64_t keyLimitDisables() const { return keyLimitDisables_; }
 
+  /// Conservative reservation for one worker's filter and its bounded scratch.
+  static constexpr std::size_t maximumRetainedBytes() {
+    return sizeof(StyleAncestorFilter) +
+           2 * kMaxAncestorDepth *
+               (sizeof(Frame) + sizeof(Entity) + kMaxKeysPerAncestor * sizeof(BloomHash)) +
+           2 * kMaxKeyBytesPerAncestor + 1;
+  }
+
 private:
   /// One ancestor and the hashes of its keys, `hashes_[firstHash, firstHash + hashCount)`.
   struct Frame {

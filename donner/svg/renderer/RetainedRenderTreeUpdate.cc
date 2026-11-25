@@ -163,11 +163,12 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
 }
 
 void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
-                         ParseWarningSink& warningSink) {
+                         ParseWarningSink& warningSink, StylePassScheduler scheduler) {
   // With the render tree built and no whole-tree restyle requested, this is the selective pass:
   // it restyles only the entities flagged Style.
   if (plan.restyle) {
-    StyleSystem().computeAllStyles(registry, warningSink);
+    StyleSystem().computeAllStyles(registry, warningSink,
+                                   StyleSystem::FullRestyle::DiscardAndRecompute, scheduler);
   }
   for (const Entity entity : plan.layoutEntities) {
     LayoutSystem().recomputeInvalidatedLayout(EntityHandle(registry, entity), warningSink);

@@ -345,6 +345,10 @@ TaskScheduler::Worker* TaskScheduler::currentWorker() const {
   return tCurrentScheduler == this ? static_cast<Worker*>(tCurrentWorker) : nullptr;
 }
 
+bool TaskScheduler::canJoinWithoutRunningUnrelatedTasks() const {
+  return seeded_ ? seeded_->owner == std::this_thread::get_id() : currentWorker() == nullptr;
+}
+
 void TaskScheduler::checkSeededOwner() const {
   UTILS_RELEASE_ASSERT_MSG(seeded_->owner == std::this_thread::get_id(),
                            "A seeded scheduler runs only on its constructing thread");

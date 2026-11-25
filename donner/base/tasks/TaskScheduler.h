@@ -269,6 +269,13 @@ public:
     return workerCount();
   }
 
+  /**
+   * Whether the caller can join a synchronous scope without running tasks from other scopes.
+   * Ordinary external and adopted callers qualify. A worker of this scheduler can help
+   * unrelated work during a join. A seeded scope is usable only on its constructing thread.
+   */
+  [[nodiscard]] bool canJoinWithoutRunningUnrelatedTasks() const;
+
   /// Number of workers whose startup QoS hint the platform refused. These workers still run.
   [[nodiscard]] std::size_t workerQosRefusals() const {
     return workerQosRefusals_.load(std::memory_order_relaxed);

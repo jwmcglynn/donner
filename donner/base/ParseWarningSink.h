@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <type_traits>
@@ -44,6 +45,35 @@ public:
     return sink;
   }
 
+  /// Construct an enabled sink with a smaller count and reason-byte allowance.
+  static ParseWarningSink Bounded(std::size_t count, std::size_t bytes) {
+    ParseWarningSink sink;
+    sink.countLimit_ = std::min(count, kMaximumWarnings);
+    sink.byteLimit_ = std::min(bytes, kMaximumWarningBytes);
+    return sink;
+  }
+
+  /// Deliver each admitted diagnostic to a synchronous consumer instead of retaining a vector.
+  /// The consumer borrows its argument for this call and returns false if its own allowance is
+  /// full.
+  static ParseWarningSink Streaming(std::size_t count, std::size_t bytes, void* context,
+                                    bool (*consume)(void*, const ParseDiagnostic&)) {
+    ParseWarningSink sink = Bounded(count, bytes);
+    sink.context_ = context;
+    sink.consume_ = consume;
+    return sink;
+  }
+
+  /// A fresh buffer restricted to what this destination can still retain.
+  ParseWarningSink remainingAllowance() const {
+    return !enabled_ || resourceLimitExceeded_
+               ? Disabled()
+               : Bounded(countLimit_ - retainedCount(), byteLimit_ - warningBytes_);
+  }
+
+  /// Number of diagnostics retained in the vector or delivered to a streaming consumer.
+  std::size_t retainedCount() const { return consume_ ? delivered_ : warnings_.size(); }
+
   /// Returns true if the sink is enabled (will store warnings).
   bool isEnabled() const { return enabled_; }
 
@@ -61,7 +91,7 @@ public:
   void add(Factory&& factory) {
     ++warningAttempts_;
     if (enabled_ && !resourceLimitExceeded_) {
-      if (warnings_.size() >= kMaximumWarnings) {
+      if (retainedCount() >= countLimit_) {
         resourceLimitExceeded_ = true;
         return;
       }
@@ -77,11 +107,11 @@ public:
     }
   }
 
-  /// Access the collected warnings.
+  /// Access warnings collected in this sink. A streaming sink delivers them to its consumer.
   const std::vector<ParseDiagnostic>& warnings() const { return warnings_; }
 
   /// Returns true if any warnings have been added.
-  bool hasWarnings() const { return !warnings_.empty(); }
+  bool hasWarnings() const { return retainedCount() != 0; }
 
   /// Number of submitted warnings, including those sent to a disabled or saturated sink.
   std::size_t warningAttempts() const { return warningAttempts_; }
@@ -118,16 +148,24 @@ public:
     }
   }
 
-  /// Merge all warnings from another sink into this one.
-  void merge(ParseWarningSink&& other) {
-    const std::size_t mergedWarningAttempts = warningAttempts_ + other.warningAttempts_;
+  /// Append recorded diagnostics in order, preserving attempts even when the destination drops
+  /// them.
+  template <typename Read>
+  void mergeRecorded(std::size_t count, std::size_t attempts, bool exceeded, Read&& read) {
+    const auto total = warningAttempts_ + attempts;
     if (enabled_) {
-      for (ParseDiagnostic& warning : other.warnings_) {
-        add(std::move(warning));
+      for (std::size_t i = 0; i < count && !resourceLimitExceeded_; ++i) {
+        add([&] { return read(i); });
       }
-      resourceLimitExceeded_ |= other.resourceLimitExceeded_;
+      resourceLimitExceeded_ |= exceeded;
     }
-    warningAttempts_ = mergedWarningAttempts;
+    warningAttempts_ = total;
+  }
+
+  /// Merge all warnings from another collecting sink into this one.
+  void merge(ParseWarningSink&& other) {
+    mergeRecorded(other.warnings_.size(), other.warningAttempts_, other.resourceLimitExceeded_,
+                  [&](std::size_t i) { return std::move(other.warnings_[i]); });
   }
 
   /**
@@ -154,16 +192,29 @@ public:
 
 private:
   void tryAdd(ParseDiagnostic&& warning) {
-    if (warnings_.size() >= kMaximumWarnings ||
-        warning.reason.size() > kMaximumWarningBytes - warningBytes_) {
+    if (retainedCount() >= countLimit_ || warning.reason.size() > byteLimit_ - warningBytes_) {
       resourceLimitExceeded_ = true;
       return;
     }
-    warningBytes_ += warning.reason.size();
-    warnings_.push_back(std::move(warning));
+    const auto bytes = warning.reason.size();
+    if (consume_) {
+      if (!consume_(context_, warning)) {
+        resourceLimitExceeded_ = true;
+        return;
+      }
+      ++delivered_;
+    } else {
+      warnings_.push_back(std::move(warning));
+    }
+    warningBytes_ += bytes;
   }
 
   std::vector<ParseDiagnostic> warnings_;
+  void* context_ = nullptr;
+  bool (*consume_)(void*, const ParseDiagnostic&) = nullptr;
+  std::size_t delivered_ = 0;
+  std::size_t countLimit_ = kMaximumWarnings;
+  std::size_t byteLimit_ = kMaximumWarningBytes;
   std::size_t warningBytes_ = 0;
   bool enabled_ = true;
   bool resourceLimitExceeded_ = false;

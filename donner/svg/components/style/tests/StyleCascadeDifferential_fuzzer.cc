@@ -20,15 +20,18 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tasks/TaskScheduler.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
@@ -39,6 +42,7 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
+#include "donner/svg/components/style/ParallelStylePass.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -253,6 +257,10 @@ struct FilterPass {
   bool budgetRejected = false;
   std::uint64_t fullRebuilds = 0;
   std::uint64_t retainedUpdates = 0;
+  std::size_t warningAttempts = 0;
+  std::size_t retainedBytes = 0;
+  std::size_t traversalSteps = 0;
+  bool warningLimit = false;
 };
 
 /// Run \p pass on \p document with a fresh warning sink and record what it did.
@@ -271,18 +279,25 @@ FilterPass RecordPass(SVGDocument& document, const Pass& pass) {
   const auto* budget = registry.ctx().find<components::StyleResourceBudget>();
   const components::RenderTreeState::Counters renderAfter =
       registry.ctx().get<components::RenderTreeState>().counters;
-  return FilterPass{CountersOf(document) - before, warnings.warnings(),
+  return FilterPass{CountersOf(document) - before,
+                    warnings.warnings(),
                     budget && budget->rejected(),
                     renderAfter.fullRebuilds - renderBefore.fullRebuilds,
-                    renderAfter.retainedUpdates - renderBefore.retainedUpdates};
+                    renderAfter.retainedUpdates - renderBefore.retainedUpdates,
+                    warnings.warningAttempts(),
+                    budget ? budget->complexPropertyBytes() : 0,
+                    budget ? budget->selectorTraversal().steps() : 0,
+                    warnings.resourceLimitExceeded()};
 }
 
-void PrepareFrame(SVGDocument& document, ParseWarningSink& warnings) {
+void PrepareFrame(SVGDocument& document, ParseWarningSink& warnings,
+                  tasks::TaskScheduler* scheduler = nullptr) {
   Registry& registry = document.registry();
   if (!registry.ctx().contains<components::RenderingContext>()) {
     registry.ctx().emplace<components::RenderingContext>(registry);
   }
-  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(false, warnings);
+  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(false, warnings,
+                                                                           scheduler);
 }
 
 /// The innermost last element of \p document, which an edit can address.
@@ -296,10 +311,11 @@ SVGElement LastLeafElement(SVGDocument& document) {
 
 /// Write `opacity` on the last leaf element and prepare the next frame, through the retained
 /// update or, without it, a render-tree rebuild that restyles only dirty elements.
-void EditAndPrepareFrame(SVGDocument& document, ParseWarningSink& warnings, bool retained) {
+void EditAndPrepareFrame(SVGDocument& document, ParseWarningSink& warnings, bool retained,
+                         tasks::TaskScheduler* scheduler = nullptr) {
   document.registry().ctx().get<components::RenderTreeState>().retainedUpdatesEnabled = retained;
   LastLeafElement(document).setAttribute("opacity", retained ? "0.5" : "0.25");
-  PrepareFrame(document, warnings);
+  PrepareFrame(document, warnings, scheduler);
 }
 
 void FullRestyle(SVGDocument& document) {
@@ -429,6 +445,92 @@ void FuzzAncestorFilter(const std::string& svg) {
   });
 }
 
+void RequireSameRecordSharing(const Registry& left, const Registry& right) {
+  using Style = components::ComputedStyle;
+  using Slot = components::ComputedStyleComponent;
+  std::unordered_map<const Style*, const Style*> forward;
+  std::unordered_map<const Style*, const Style*> reverse;
+  for (const auto [entity, slot] : left.view<const Slot>().each()) {
+    const auto* corresponding = right.try_get<Slot>(entity);
+    Require(corresponding != nullptr);
+    const auto* first = slot.style.get();
+    const auto* second = corresponding->style.get();
+    Require(forward.try_emplace(first, second).first->second == second);
+    Require(reverse.try_emplace(second, first).first->second == first);
+  }
+}
+
+tasks::TaskScheduler& FuzzScheduler(std::uint8_t choice) {
+  constexpr std::array<std::size_t, 5> widths = {1, 2, 4, 8, 0};
+  static std::array<std::unique_ptr<tasks::TaskScheduler>, widths.size()> schedulers;
+  const auto index = choice % widths.size();
+  auto& scheduler = schedulers[index];
+  if (!scheduler) {
+    tasks::TaskSchedulerOptions options{.workerCount = widths[index]};
+    if (widths[index] == 0) {
+      options.seed = 7123;
+      options.maxTasksPerCreator = 2;
+    }
+    scheduler = std::make_unique<tasks::TaskScheduler>(options);
+  }
+  return *scheduler;
+}
+
+void FuzzScheduledCascade(const std::string& svg, std::uint8_t choice) {
+  auto serial = Parse(svg);
+  auto scheduled = Parse(svg);
+  Require(serial.has_value() == scheduled.has_value());
+  if (!serial) {
+    return;
+  }
+  for (auto* document : {&*serial, &*scheduled}) {
+    if (choice & 0x80) {
+      components::StyleResourceBudget::Limits limits;
+      limits.selectorTraversalSteps = 4 + (choice & 0x3f);
+      document->registry().ctx().emplace<components::StyleResourceBudget>(limits);
+    }
+    if (choice & 0x40) {
+      document->registry().ctx().emplace<components::UnfilteredCascadeForTesting>();
+    }
+  }
+  auto& hooks = scheduled->registry().ctx().emplace<components::StylePassPhasesForTesting>();
+  hooks.minimumElements = 1;
+  hooks.grain = 2;
+  auto& scheduler = FuzzScheduler(choice);
+  const auto compare = [&](const auto& pass) {
+    const auto baseline = RecordPass(*serial, [&](SVGDocument& doc, ParseWarningSink& warnings) {
+      pass(doc, warnings, nullptr);
+    });
+    const auto actual = RecordPass(*scheduled, [&](SVGDocument& doc, ParseWarningSink& warnings) {
+      pass(doc, warnings, &scheduler);
+    });
+    Require(baseline.work.sameLogicalWork(actual.work));
+    Require(baseline.warnings == actual.warnings);
+    Require(baseline.warningAttempts == actual.warningAttempts);
+    Require(baseline.warningLimit == actual.warningLimit);
+    Require(baseline.budgetRejected == actual.budgetRejected);
+    Require(baseline.retainedBytes == actual.retainedBytes);
+    Require(baseline.traversalSteps == actual.traversalSteps);
+    Require(baseline.fullRebuilds == actual.fullRebuilds);
+    Require(baseline.retainedUpdates == actual.retainedUpdates);
+    RequireSameStylesAndRules(*serial, *scheduled);
+    RequireSameRecordSharing(serial->registry(), scheduled->registry());
+  };
+  compare(PrepareFrame);
+  compare([](SVGDocument& document, ParseWarningSink& warnings, tasks::TaskScheduler* scheduler) {
+    components::StyleSystem::discardComputedStylesForFullRestyle(document.registry());
+    components::StyleSystem().computeAllStyles(document.registry(), warnings,
+                                               components::StyleSystem::FullRestyle::ComputeMissing,
+                                               scheduler);
+  });
+  for (bool retained : {true, false}) {
+    compare([retained](SVGDocument& document, ParseWarningSink& warnings,
+                       tasks::TaskScheduler* scheduler) {
+      EditAndPrepareFrame(document, warnings, retained, scheduler);
+    });
+  }
+}
+
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
@@ -497,6 +599,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   ExerciseStylesheetEdits(*cached, *uncached, css);
   FuzzAncestorFilter(svg);
+  FuzzScheduledCascade(svg, tree.empty() ? 0 : static_cast<std::uint8_t>(tree.front()));
   return 0;
 }
 

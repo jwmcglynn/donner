@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -17,6 +18,9 @@ class DocumentResourceFamilyBudget {
 public:
   /// Default maximum aggregate retained bytes across all resource kinds.
   static constexpr std::size_t kDefaultMaximumTotalRetainedBytes = 128 * 1024 * 1024;
+
+  /// Separate ceiling for provisional style records, diagnostics and worker-front metadata.
+  static constexpr std::size_t kMaximumStylePreparationBytes = 16 * 1024 * 1024;
 
   /// Categories charged against the shared document-family envelope.
   enum class Kind : std::size_t {
@@ -44,6 +48,8 @@ public:
     std::size_t decodedImageBytes = 64 * 1024 * 1024;
     /// Maximum cumulative text-path measurement work across the document family.
     std::size_t textPathMeasurementWorkUnits = 32 * 1024 * 1024;
+    /// Temporary style memory may exceed the logical retained-byte charge up to this ceiling.
+    std::size_t stylePreparationBytes = kMaximumStylePreparationBytes;
   };
 
   /// Current charges and sticky refusal state for diagnostics.
@@ -89,6 +95,34 @@ public:
     }
     return std::min(maximumFor(kind) - retainedBytesUnlocked(kind),
                     limits_.maximumTotalRetainedBytes - stats_.totalRetainedBytes);
+  }
+
+  /// Reserve temporary style memory without consuming logical headroom or latching a refusal.
+  [[nodiscard]] bool tryReserveStylePreparation(std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    if (stats_.rejected ||
+        bytes > std::min(limits_.stylePreparationBytes, kMaximumStylePreparationBytes) -
+                    preparationBytes_) {
+      return false;
+    }
+    preparationBytes_ += bytes;
+    return true;
+  }
+
+  /// Release the caller's exact temporary reservation.
+  void releaseStylePreparation(std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    if (bytes > preparationBytes_) {
+      assert(false && "invalid preparation refund");
+      return;
+    }
+    preparationBytes_ -= bytes;
+  }
+
+  /// Bytes reserved by live provisional style contexts across this document family.
+  [[nodiscard]] std::size_t stylePreparationBytes() const {
+    const std::lock_guard lock(mutex_);
+    return preparationBytes_;
   }
 
   /**
@@ -209,6 +243,7 @@ public:
   }
 
 private:
+  std::size_t preparationBytes_ = 0;
   friend class SubDocumentAdmission;
   std::shared_ptr<SubDocumentAdmissionState> subDocumentAdmission_;
 

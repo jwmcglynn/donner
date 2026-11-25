@@ -2106,39 +2106,57 @@ per-element cost and is calibrated in Milestone D3.
   and family counters and their sticky rejection flags untouched. If the pass cannot prove the
   serial outcome, the owner discards its tentative state and the serial path decides admission.
 
-  The ordinary family reserve permanently records a refusal. Releasing records refunds bytes,
-  but does not clear that flag or its diagnostic count. The owner therefore performs ordinary
-  family admission only in canonical order. A separate, non-latching allowance for temporary
-  memory can decline speculation without consuming logical headroom or recording a refusal.
+  The ordinary family reservation sets a permanent rejection flag and increments the refusal
+  count on failure. Releasing records does not reverse either effect. Temporary style memory
+  has its own non-latching document and family allowance (at most 16 MiB). Reserving it does
+  not change ordinary admission headroom. Refusal abandons the attempt before serial admission.
 
-  The proposed staging limit is 1 MiB per executing context for retained provisional style
-  records, including fixed record storage and owned dynamic payload. It covers references in
-  output slots as well as front entries: eviction alone need not free a record. A context that
-  cannot bound a value's retained storage, or whose next record would exceed its allowance,
-  abandons speculation before publishing that record. Thus provisional record storage is at most
-  the number of participating contexts times 1 MiB, plus one shared-ownership control block per
-  context. Cache metadata, bounded diagnostic buffers
-  and task scratch are accounted for separately. At owner commit every provisional reference
-  is released or replaced by a canonical reference. The acceptance test uses repeated and
-  distinct sibling keys, evicts front entries while slots still hold them, checks the high-water
-  bound on every admission, and compares a subsequent budget-limited allocation with serial in
-  `//donner/svg/components/style:style_system_tests`.
-- **Warnings and owner commit.** The owner visits the original requests in storage order,
-  including the original on-demand parent recursion. A bounded transcript can supply matched
-  rules and their measured selector work when the complete sequence fits the remaining budgets.
-  Otherwise the owner evaluates the element normally with the unchanged budget. Both paths use
-  the serial declaration admission, cache, record construction and warning sink. Consequently
-  early and late warnings, disabled-sink attempts, truncation and the first refused element are
-  decided in the same order as a serial pass. Worker diagnostics remain private. Bound the
-  transcript to four matched rules per element and 32,768 candidate elements per batch.
-- **Ancestor filter and cache.** Each worker owns a `StyleAncestorFilter`; its chain
-  synchronization already makes it independent of visit order. Each worker owns a matched
-  properties cache; records are immutable and shared through atomic reference counts, so a hit
-  on any worker returns a correct style. Actual cache hits, misses, declaration parses skipped
-  by hits and whole-registry copies can vary with stealing. Preserve their measured totals and
-  exclude them from cross-schedule equality. A repeated seeded schedule must reproduce them
-  too. Styles, matched rules, ordered warnings, logical budget outcomes and schedule-independent
-  work counters must agree at every width. The memory goal of Part A is measured at zero workers.
+  Each executing context reserves at most 1 MiB for fixed provisional record storage and owned
+  dynamic payload, plus one ownership control block. Eviction cannot refund storage still held
+  by an output slot. The worker front uses 16 clock buckets of eight entries, four inline rules per key and
+  at most 512 bytes of local key capacity. Its scratch
+  reservation includes the entire front object and the worst-case storage for all slots and local keys. The owner discards all fronts at join.
+  A worker that cannot bound a payload or obtain scratch credit asks for serial replay.
+  `//donner/svg/components/style:style_system_tests` checks record and byte exhaustion, scratch
+  admission and release, and the next ordinary family allocation on either side of its limit.
+- **Warnings and owner commit.** Workers keep diagnostics for each element in two phases,
+  before and after parent publication in the original serial recursion. Each phase captures at
+  most 64 warnings and 32 KiB of reason text per active element. Each context has one fixed page:
+  64 KiB of copied reason text, 256 diagnostic descriptors and 32 per-element phase pairs.
+  The complete page is at most 256 KiB plus one ownership control block. A streaming sink copies
+  reason bytes into this page and abandons the attempt on truncation or pressure. The owner visits
+  original requests in storage order. It emits the
+  early buffer before recursively entering a missing parent and the late buffer afterwards.
+  Serial admission validates each buffer; a different canonical outcome supplies its own
+  diagnostics. The destination sink retains its own attempt count, enablement and truncation
+  behavior. A four-rule transcript is reused only if the entire measured work fits, otherwise
+  the owner runs the ordinary matcher. A batch contains at most 32,768 candidate elements.
+- **Ancestor filter and cache.** Full and dirty passes use the bounded built-in ancestor filter in
+  each executing context. A test can disable it or supply an isolated filter. Single-element
+  queries stay unfiltered. Accepted worker traces retain per-element rejections and false positives.
+  In serial order the owner advances its filter on the elements where the matcher synchronized
+  it, preserving the number of transitions into saturation or key-limit fallback.
+  The 16 MiB family preparation allowance covers retained worker records, cache fronts,
+  warning pages and filter scratch. The forest and rule transcripts are separately count-bounded
+  to 32,768 elements, with up to four recorded rules per element. Canonical cache witnesses use one
+  bounded dense slot per possible provisional record, at most 128 per executing context.
+  Worker cache hits, misses, declaration parses skipped by hits and whole-registry copies can
+  vary with stealing. A repeated seeded run reproduces these physical counters. Styles,
+  matched rules, ordered warnings, logical budget outcomes and the canonical work counters agree
+  across widths. The memory goal of Part A is measured at zero workers.
+- **Canonical eviction policy.** The serial and scheduled paths share the same document clock.
+  Bucket placement uses position and specificity of each matched rule, the document-local
+  origin of each canonical parent and root record, and remaining element and declaration inputs.
+  Stylesheet revisions, exact parent/root record identities and complete declarations still have
+  to compare equal for a hit. Worker fronts omit the provisional parent and root IDs from their
+  bucket placement so seeded scheduling reproduces it across independent parses. The owner
+  can reuse an installed cache hit while the same clock epoch proves the reference bit is
+  unchanged. A child and its missing parent can reuse two such hits together only when their
+  contexts match and both charges fit. The owner debits their work and publishes the parent
+  first. An unproven trace follows ordinary serial admission. Cache key and eviction behavior
+  are checked by `//donner/svg/components/style:matched_properties_cache_tests`; cross-width
+  family admission and filter accounting are checked by
+  `//donner/svg/components/style:style_parallel_tests` and by the cascade differential fuzzer.
 - **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
   external-use registries, passes below the threshold, and builds or runtimes without workers run
   the serial path.

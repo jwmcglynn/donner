@@ -27,6 +27,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/components/style/StylePassScheduler.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/ColorInterpolation.h"
 #include "donner/svg/core/Direction.h"
@@ -1242,6 +1243,9 @@ struct TextParams {
  */
 class RendererInterface {
 public:
+  /// Scheduler borrowed by document preparation, when supplied by the renderer owner.
+  StylePassScheduler preparationScheduler() const { return preparationScheduler_; }
+
   virtual ~RendererInterface() = default;
 
   /**
@@ -1652,6 +1656,10 @@ public:
    *   discard them.
    */
   virtual void draw(SVGDocument& document, ParseWarningSink& warningSink) = 0;
+
+private:
+  friend class Renderer;
+  StylePassScheduler preparationScheduler_ = {};
 };
 
 }  // namespace donner::svg

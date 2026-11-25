@@ -1768,7 +1768,8 @@ void RenderingContext::clearInitialContextPaint() {
   getRenderTreeState(registry_).needsInstanceRebuild = true;
 }
 
-void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& warningSink) {
+void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& warningSink,
+                                             StylePassScheduler scheduler) {
   if (!registry_.ctx().contains<ExternalUseStyleContext>()) {
     ExternalUseStyleRetention::RestoreStandalone(registry_);
   }
@@ -1783,7 +1784,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& war
     return;
   }
 
-  ensureComputedComponents(warningSink);
+  ensureComputedComponents(warningSink, scheduler);
   instantiateRenderTreeWithPrecomputedTree(verbose);
 
   renderState.needsFullRebuild = false;
@@ -1792,7 +1793,8 @@ void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& war
   renderState.hasBeenBuilt = true;
 }
 
-void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
+void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink,
+                                                StylePassScheduler scheduler) {
   InvalidateReferenceDependents(registry_);
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
@@ -1801,7 +1803,7 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
     return;
   }
 
-  if (tryRetainedUpdate(warningSink)) {
+  if (tryRetainedUpdate(warningSink, scheduler)) {
     return;
   }
 
@@ -1839,7 +1841,7 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
     renderState.needsFullStyleRecompute = true;
   }
 
-  createComputedComponents(warningSink);
+  createComputedComponents(warningSink, scheduler);
 
   registry_.clear<DirtyFlagsComponent>();
   renderState.needsFullRebuild = false;
@@ -1847,7 +1849,8 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   renderState.hasBeenBuilt = true;
 }
 
-bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink) {
+bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink,
+                                         StylePassScheduler scheduler) {
   auto& renderState = getRenderTreeState(registry_);
   if (!renderState.retainedUpdatesEnabled || !renderState.hasBeenBuilt ||
       renderState.needsFullRebuild || renderState.needsFullStyleRecompute) {
@@ -1860,7 +1863,7 @@ bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink) {
 
   ++renderState.counters.retainedUpdates;
   renderState.counters.retargetedUses += plan->retargetedUses.size();
-  ApplyRetainedUpdate(registry_, *plan, warningSink);
+  ApplyRetainedUpdate(registry_, *plan, warningSink, scheduler);
   registry_.clear<DirtyFlagsComponent>();
   // The instances still describe the previous frame; the next instantiation rebuilds them.
   renderState.needsInstanceRebuild = true;
@@ -2256,7 +2259,8 @@ void ForgetMissingFallbackFontReport(Registry& registry) {
   registry.ctx().erase<MissingFallbackFontReported>();
 }
 
-void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
+void RenderingContext::createComputedComponents(ParseWarningSink& warningSink,
+                                                StylePassScheduler scheduler) {
   RestoreAnimationPresentation(registry_);
 
   if (!registry_.ctx().contains<AnimationStyleContext>()) {
@@ -2281,7 +2285,8 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   } else if (importsReloaded) {
     StyleSystem::discardComputedStyles(registry_);
   }
-  StyleSystem().computeAllStyles(registry_, warningSink, StyleSystem::FullRestyle::ComputeMissing);
+  StyleSystem().computeAllStyles(registry_, warningSink, StyleSystem::FullRestyle::ComputeMissing,
+                                 scheduler);
 
   // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,
   // before layout and shape computation.
@@ -2289,7 +2294,8 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   // Expand references from this sample, sharing the original rebuild's resource limits.
   PaintSystem().createShadowTrees(registry_, warningSink);
   InstantiateMainShadowTrees(registry_, warningSink);
-  StyleSystem().computeAllStyles(registry_, warningSink, StyleSystem::FullRestyle::ComputeMissing);
+  StyleSystem().computeAllStyles(registry_, warningSink, StyleSystem::FullRestyle::ComputeMissing,
+                                 scheduler);
 
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(warningSink);

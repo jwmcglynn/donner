@@ -64,6 +64,15 @@ struct AtlasDocumentPlacement {
     RendererInterface& renderer, std::span<const AtlasDocumentPlacement> placements,
     Vector2i atlasSizePx);
 
+/// Options for frame preparation and rendering.
+struct RendererOptions {
+  bool verbose = false;  ///< Enable verbose rendering diagnostics.
+  /// Optional scheduler for frame preparation. It must outlive the renderer. Its other tasks
+  /// must leave capacity for frame preparation without waiting on the drawing thread or
+  /// acquiring its document guard. Drawing on this scheduler's worker uses serial style.
+  StylePassScheduler scheduler = {};
+};
+
 /**
  * Backend-agnostic renderer that resolves to the active build backend (tiny-skia by default, or
  * Geode).
@@ -87,6 +96,9 @@ public:
    * @param verbose If true, enables backend-specific verbose logging.
    */
   explicit Renderer(bool verbose = false);
+  /// Construct the configured backend with explicit frame preparation options.
+  /// @param options Options retained by this renderer; a null scheduler uses serial preparation.
+  explicit Renderer(RendererOptions options);
 
   /**
    * Creates a renderer for the active backend using an externally-owned

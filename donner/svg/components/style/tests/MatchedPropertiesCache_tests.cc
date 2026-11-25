@@ -16,6 +16,21 @@ struct MatchedPropertiesCacheTestPeer {
     return key.hash() % MatchedPropertiesCache::kBuckets;
   }
 
+  static std::size_t workerBucket(const MatchedPropertiesKey& key) {
+    return key.hash(nullptr, nullptr) % MatchedPropertiesCache::kWorkerBuckets;
+  }
+
+  static std::pair<std::size_t, std::size_t> occupied(const MatchedPropertiesCache& cache) {
+    std::size_t buckets = 0, slots = 0;
+    for (const auto& bucket : cache.buckets_) {
+      if (bucket) {
+        ++buckets;
+        slots += bucket->slots.size();
+      }
+    }
+    return {buckets, slots};
+  }
+
   static void collide(MatchedPropertiesCache& cache, const MatchedPropertiesKey& original,
                       MatchedPropertiesKey& probe) {
     probe.ruleHash_ = original.ruleHash_;
@@ -176,6 +191,51 @@ TEST(MatchedPropertiesCacheTests, LargeKeysStopFillingBucketsAtTheDocumentByteLi
                 << ")";
 }
 
+TEST(MatchedPropertiesCacheTests, PlacementIgnoresAllocationButLookupRequiresExactIdentity) {
+  MatchedPropertiesKey first;
+  first.parent = std::make_shared<const ComputedStyle>();
+  first.root = std::make_shared<const ComputedStyle>();
+  first.addRule(17, 1, 4, css::Specificity::FromABC(0, 1, 0));
+  MatchedPropertiesKey other;
+  other.parent = std::make_shared<const ComputedStyle>();
+  other.root = std::make_shared<const ComputedStyle>();
+  other.addRule(793, 1, 4, css::Specificity::FromABC(0, 1, 0));
+  EXPECT_EQ(MatchedPropertiesCacheTestPeer::bucket(first),
+            MatchedPropertiesCacheTestPeer::bucket(other));
+  MatchedPropertiesCache document;
+  document.insert(first, {.style = std::make_shared<const ComputedStyle>()});
+  EXPECT_THAT(document.find(first), NotNull());
+  EXPECT_THAT(document.find(other), IsNull());
+  EXPECT_EQ(MatchedPropertiesCacheTestPeer::workerBucket(first),
+            MatchedPropertiesCacheTestPeer::workerBucket(other));
+  MatchedPropertiesCache front(MatchedPropertiesCache::Scope::Worker);
+  front.insert(first, {.style = std::make_shared<const ComputedStyle>()});
+  EXPECT_THAT(front.find(first), NotNull());
+  EXPECT_THAT(front.find(other), IsNull());
+  other.parent = first.parent;
+  other.root = first.root;
+  EXPECT_THAT(front.find(other), IsNull());
+}
+
+TEST(MatchedPropertiesCacheTests, WorkerFrontChurnStaysWithinItsReservedMetadata) {
+  MatchedPropertiesCache front(MatchedPropertiesCache::Scope::Worker);
+  const auto record = std::make_shared<const ComputedStyle>();
+  for (std::uint32_t i = 0; i < 1024; ++i) {
+    MatchedPropertiesKey key;
+    key.addRule(1, 0, i, {});
+    front.insert(key, {.style = record});
+    const auto [buckets, slots] = MatchedPropertiesCacheTestPeer::occupied(front);
+    ASSERT_LE(buckets, 16u);
+    ASSERT_LE(slots, 128u);
+  }
+  const auto [buckets, slots] = MatchedPropertiesCacheTestPeer::occupied(front);
+  EXPECT_EQ(buckets, 16u);
+  EXPECT_EQ(slots, 128u);
+  EXPECT_LE(MatchedPropertiesCache::workerMetadataBytes(), 512u * 1024u);
+  front.clear();
+  EXPECT_EQ(MatchedPropertiesCacheTestPeer::occupied(front).second, 0u);
+}
+
 TEST(MatchedPropertiesCacheTests, FullBucketGivesAccessedRecordASecondChance) {
   std::vector<MatchedPropertiesKey> keys;
   for (std::uint32_t i = 0; keys.size() < 10; ++i) {
@@ -189,15 +249,21 @@ TEST(MatchedPropertiesCacheTests, FullBucketGivesAccessedRecordASecondChance) {
 
   MatchedPropertiesCache cache;
   const auto record = std::make_shared<const ComputedStyle>();
-  for (std::size_t i = 0; i < 9; ++i) {
+  const auto emptyEpoch = cache.evictionEpoch();
+  for (std::size_t i = 0; i < 8; ++i) {
     cache.insert(keys[i], {.style = record});
   }
+  EXPECT_EQ(cache.evictionEpoch(), emptyEpoch);
+  cache.insert(keys[8], {.style = record});
+  EXPECT_NE(cache.evictionEpoch(), emptyEpoch);
   EXPECT_THAT(cache.find(keys[0]), IsNull());
   ASSERT_THAT(cache.find(keys[1]), NotNull());
   cache.insert(keys[9], {.style = record});
   EXPECT_THAT(cache.find(keys[1]), NotNull());
   EXPECT_THAT(cache.find(keys[2]), IsNull());
+  const auto beforeClear = cache.evictionEpoch();
   cache.clear();
+  EXPECT_NE(cache.evictionEpoch(), beforeClear);
   EXPECT_THAT(cache.find(keys[1]), IsNull());
 }
 

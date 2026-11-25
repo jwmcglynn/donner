@@ -2,6 +2,7 @@
 /// @file
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <unordered_set>
@@ -17,12 +18,34 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
+#include "donner/svg/components/style/StylePassScheduler.h"
 
 namespace donner::css {
 struct Declaration;
 }
 
 namespace donner::svg::components {
+
+class RuleIndex;
+
+/// Optional pass-local ancestor test. The owning pass keeps the document stable while it runs.
+class CascadeAncestorFilter {
+public:
+  virtual ~CascadeAncestorFilter() = default;
+  /// Return true only when an ancestor predicate proves this candidate cannot match.
+  virtual bool rejects(Entity treeEntity, const RuleIndex& index, std::uint32_t position) = 0;
+};
+
+/// A document may install a provider to create an independent filter for each executing context.
+/// An absent provider, or a null result, selects ordinary matching. Creation must be safe across
+/// independent document preparations. Each filter runs on its bound thread and can be destroyed
+/// on the pass owner after the join.
+struct CascadeAncestorFilters {
+  /// Conservative size of one filter's object and retained scratch. Charged before construction.
+  std::size_t maximumBytesPerWorker = 0;
+  std::function<std::unique_ptr<CascadeAncestorFilter>(const Registry&, StyleCascadeCounters&)>
+      create;
+};
 
 class AnimationContextualWorkBudget;
 class AnimationResourceBudget;
@@ -384,6 +407,20 @@ public:
     return true;
   }
 
+  /// Debit a complete cache-hit sequence. A declined shortcut leaves ordinary serial admission
+  /// intact.
+  bool tryReplayCacheHit(std::size_t rules, std::size_t applications, std::size_t components,
+                         std::size_t bytes, std::size_t traversal) {
+    if (!canReserveDeclarationWork(applications, components, bytes) ||
+        !tryReplaySelectorWork(rules, traversal)) {
+      return false;
+    }
+    declarationApplications_ += applications;
+    declarationComponentWork_ += components;
+    declarationByteWork_ += bytes;
+    return true;
+  }
+
   /** Charge one immutable computed-style record for exactly its lifetime. */
   [[nodiscard]] bool retainComputedStyle(ComputedStyle& style, std::size_t byteCount) {
     if (style.retainedStyleBytes_) {
@@ -516,6 +553,8 @@ public:
    */
   const ComputedStyleComponent& computeStyle(EntityHandle handle, ParseWarningSink& warningSink);
 
+  class PreparationLease;
+
   /**
    * Exclusive provisional storage for one executing cascade context. A full front or an
    * unbounded payload declines speculation, leaving admission to the serial document owner.
@@ -525,9 +564,13 @@ public:
     /// Maximum fixed record storage plus owned dynamic payload retained by this context.
     static constexpr std::size_t kMaximumBytes = 1024 * 1024;
     /// Maximum provisional records, including those evicted from the worker cache.
-    static constexpr std::size_t kMaximumRecords = 64;
+    static constexpr std::size_t kMaximumRecords = 128;
 
     StagedRecords() = default;
+    /// Keep the worker reservation attached to any surviving provisional reference.
+    explicit StagedRecords(std::shared_ptr<const PreparationLease> lease,
+                           std::uint32_t firstRecord = 0)
+        : lease_(std::move(lease)), firstRecord_(firstRecord) {}
     StagedRecords(const StagedRecords&) = delete;
     StagedRecords& operator=(const StagedRecords&) = delete;
 
@@ -540,7 +583,9 @@ public:
     friend class StyleSystem;
     struct Storage;
     std::shared_ptr<const ComputedStyle> retain(ComputedStyle& record);
+    std::shared_ptr<const PreparationLease> lease_;
     std::shared_ptr<Storage> storage_;
+    std::uint32_t firstRecord_ = 0;
     bool declined_ = false;
   };
 
@@ -553,6 +598,7 @@ public:
     unsigned activeCascades = 0;                    ///< Nesting for whole-registry copy accounting.
     StagedRecords* staging = nullptr;               ///< Optional worker-private tentative output.
     StyleAncestorFilter* ancestorFilter = nullptr;  ///< Optional pass-owned ancestor filter.
+    CascadeAncestorFilter* testFilter = nullptr;    ///< Optional test provider owned by the pass.
   };
 
   /**
@@ -579,15 +625,21 @@ public:
   public:
     /// Above this bound the caller uses the existing serial path without allocating traces.
     static constexpr std::size_t kMaximumElements = 32768;
+    /// Per-context bytes reserved against the separate document and family preparation limits.
+    static std::size_t workerReservationBytes();
 
     /// @param registry Document under exclusive access until commit.
     /// @param entities All new slots, including missing ancestors of selective requests.
     /// @param contexts Maximum executing contexts, including caller fallback.
-    PreparedBatch(Registry& registry, std::span<const Entity> entities, std::size_t contexts);
+    /// @param collectWarnings Whether the caller collects diagnostics.
+    PreparedBatch(Registry& registry, std::span<const Entity> entities, std::size_t contexts,
+                  bool collectWarnings = true, bool enableFilter = false);
 
     class Worker;
     /// Bind a context to the executing thread. A new context over the bound requests serial replay.
     Worker* bindWorker();
+    /// Publish a missing document root and its ancestor chain before admitting concurrent tasks.
+    bool prepareDocumentRoot();
     ~PreparedBatch();
     PreparedBatch(const PreparedBatch&) = delete;
     PreparedBatch& operator=(const PreparedBatch&) = delete;
@@ -597,6 +649,8 @@ public:
     /// @param worker Context returned by this batch on the executing thread.
     /// @return True if the element produced a usable provisional result.
     bool compute(Entity entity, Worker& worker);
+    /// Process an input by its position in the immutable entity span.
+    bool computeAt(std::size_t index, Entity entity, Worker& worker);
 
     /// Discard provisional records, then replay requests with ordinary serial admission and
     /// diagnostics.
@@ -629,9 +683,11 @@ public:
    * @param registry Registry to compute the styles, used to query for all entities in the tree.
    * @param warningSink Containing any warnings found
    * @param fullRestyle What a whole-document restyle does with existing computed styles.
+   * @param scheduler Optional scheduler borrowed for this invocation.
    */
   void computeAllStyles(Registry& registry, ParseWarningSink& warningSink,
-                        FullRestyle fullRestyle = FullRestyle::DiscardAndRecompute);
+                        FullRestyle fullRestyle = FullRestyle::DiscardAndRecompute,
+                        StylePassScheduler scheduler = {});
 
   /**
    * Computes the style for the given entities in the registry.
@@ -746,19 +802,23 @@ public:
 private:
   struct PendingStyleDeclarations;
   struct RuleTrace;
+  struct RuleTraces;
   class SerialCascade;
 
   /// Compute the style of every entity flagged \ref DirtyFlagsComponent::Style whose computed
   /// style was removed.
-  void computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink);
+  void computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink,
+                          StylePassScheduler scheduler);
   /// Compute the style of every tree entity without a computed style.
-  void computeMissingStyles(Registry& registry, ParseWarningSink& warningSink);
+  void computeMissingStyles(Registry& registry, ParseWarningSink& warningSink,
+                            StylePassScheduler scheduler);
   static void applyStylesheetRules(const Registry& registry, Entity treeEntity, Entity dataEntity,
                                    StyleResourceBudget& styleBudget, StyleCascadeCounters& counters,
                                    MatchedPropertiesKey& cacheKey, const StyleComponent* local,
                                    ParseWarningSink& warningSink,
                                    PendingStyleDeclarations& declarations, RuleTrace* capture,
-                                   RuleTrace* replay, StyleAncestorFilter* ancestorFilter);
+                                   RuleTrace* replay, StyleAncestorFilter* ancestorFilter,
+                                   CascadeAncestorFilter* testFilter);
   static void inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
                                     PropertyRegistry& properties, ComputedStyleComponent& computed,
                                     ParseWarningSink& warningSink, SerialCascade* serial);
@@ -771,7 +831,9 @@ private:
   static void computePropertiesInto(const Registry& registry, Entity entity,
                                     ComputedStyleComponent& computedStyle, CascadePass& pass,
                                     ParseWarningSink& warningSink, SerialCascade* serial,
-                                    RuleTrace* capture = nullptr);
+                                    RuleTrace* capture = nullptr,
+                                    ParseWarningSink* workerAfter = nullptr,
+                                    RuleTrace* replay = nullptr);
 };
 
 }  // namespace donner::svg::components

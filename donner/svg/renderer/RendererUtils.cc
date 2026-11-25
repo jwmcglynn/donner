@@ -7,13 +7,15 @@
 namespace donner::svg {
 
 void RendererUtils::prepareDocumentForRendering(SVGDocument& document, bool verbose,
-                                                ParseWarningSink& warningSink) {
+                                                ParseWarningSink& warningSink,
+                                                StylePassScheduler scheduler) {
   Registry& registry = document.registry();
   if (!registry.ctx().contains<components::RenderingContext>()) {
     registry.ctx().emplace<components::RenderingContext>(registry);
   }
 
-  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(verbose, warningSink);
+  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(verbose, warningSink,
+                                                                           scheduler);
 }
 
 }  // namespace donner::svg
