@@ -38,6 +38,19 @@ struct StyleCascadeCounters {
   std::uint64_t matchedPropertiesCacheUncacheable = 0;
   /// Actual parses avoided by cache hits; stealing can change this count.
   std::uint64_t declarationParsesSkipped = 0;
+  /// Tested rules skipped without matching because, for every selector-list entry, the ancestor
+  /// filter showed that no ancestor of the element has a key the entry needs.
+  std::uint64_t ancestorFilterRejections = 0;
+  /// Tested rules with ancestor keys that the enabled ancestor filter let through and that then
+  /// did not match. A match can also fail in the subject compound, so this is an upper bound on
+  /// the filter's false positives.
+  std::uint64_t ancestorFilterFalsePositives = 0;
+  /// Times a style pass's ancestor filter was disabled below an ancestor because inserting its
+  /// keys saturated a counter.
+  std::uint64_t ancestorFilterSaturations = 0;
+  /// Times a style pass's ancestor filter was disabled below an ancestor because its keys
+  /// exceeded the count or input-byte limit.
+  std::uint64_t ancestorFilterKeyLimits = 0;
 
   /// Equality operator.
   bool operator==(const StyleCascadeCounters&) const = default;
@@ -65,6 +78,13 @@ struct StyleCascadeCounters {
             after.matchedPropertiesCacheUncacheable - before.matchedPropertiesCacheUncacheable,
         .declarationParsesSkipped =
             after.declarationParsesSkipped - before.declarationParsesSkipped,
+        .ancestorFilterRejections =
+            after.ancestorFilterRejections - before.ancestorFilterRejections,
+        .ancestorFilterFalsePositives =
+            after.ancestorFilterFalsePositives - before.ancestorFilterFalsePositives,
+        .ancestorFilterSaturations =
+            after.ancestorFilterSaturations - before.ancestorFilterSaturations,
+        .ancestorFilterKeyLimits = after.ancestorFilterKeyLimits - before.ancestorFilterKeyLimits,
     };
   }
 
@@ -81,7 +101,11 @@ struct StyleCascadeCounters {
               << ", matchedPropertiesCacheMisses=" << counters.matchedPropertiesCacheMisses
               << ", matchedPropertiesCacheUncacheable="
               << counters.matchedPropertiesCacheUncacheable
-              << ", declarationParsesSkipped=" << counters.declarationParsesSkipped << "}";
+              << ", declarationParsesSkipped=" << counters.declarationParsesSkipped
+              << ", ancestorFilterRejections=" << counters.ancestorFilterRejections
+              << ", ancestorFilterFalsePositives=" << counters.ancestorFilterFalsePositives
+              << ", ancestorFilterSaturations=" << counters.ancestorFilterSaturations
+              << ", ancestorFilterKeyLimits=" << counters.ancestorFilterKeyLimits << "}";
   }
 };
 

@@ -151,8 +151,9 @@ donner_cc_test(
     ],
 )
 
-# The cascade over the rule index's candidates must equal the cascade over every rule, for a
-# stylesheet and an element tree built from the input.
+# The cascade over the rule index's candidates must equal the cascade over every rule, and the
+# cascade with the ancestor filter the cascade without it, for a stylesheet and an element tree
+# built from the input.
 donner_cc_fuzzer(
     name = "style_cascade_differential_fuzzer",
     srcs = ["tests/StyleCascadeDifferential_fuzzer.cc"],
@@ -162,8 +163,10 @@ donner_cc_fuzzer(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/components",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/parser",
+        "//donner/svg/renderer:rendering_context",
     ],
 )
 
@@ -211,6 +214,7 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":style_ancestor_filter",
         ":style_system",
         "//donner/base:base_test_utils",
         "//donner/svg/components/animation:animation_system",

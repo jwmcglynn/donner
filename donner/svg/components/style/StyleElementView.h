@@ -65,6 +65,18 @@ public:
     return registry_.get<donner::components::TreeComponent>(treeEntity_).tagName().name;
   }
 
+  /// Raw class text, for callers that must bound tokenization before starting.
+  std::string_view className() const {
+    const auto* component = registry_.try_get<ClassComponent>(dataEntity_);
+    return component ? std::string_view(component->className) : std::string_view();
+  }
+
+  /// Number of attributes, without visiting their names.
+  std::size_t attributeCount() const {
+    const auto* component = registry_.try_get<donner::components::AttributesComponent>(dataEntity_);
+    return component ? component->attributeCount() : 0;
+  }
+
   /// Calls \p visit with each token of the `class` list.
   template <typename Visitor>
   void forEachClassName(Visitor&& visit) const {

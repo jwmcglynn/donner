@@ -16,6 +16,8 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -61,6 +63,49 @@ bool RejectsNothing(const StyleAncestorFilter& filter) {
     }
   }
   return true;
+}
+
+TEST(StyleAncestorFilter, DeepDomChainsFailOpenAndTheNextShallowChainRecovers) {
+  // A source-free document can construct a chain beyond the source parser's depth limit.
+  SVGDocument document;
+  auto branch = SVGGElement::Create(document);
+  branch.setAttribute("class", "nearto");
+  auto shallow = SVGRectElement::Create(document);
+  document.svgElement().appendChild(branch);
+  branch.appendChild(shallow);
+  SVGElement parent = document.svgElement();
+  for (std::size_t i = 0; i <= StyleAncestorFilter::kMaxAncestorDepth; ++i) {
+    auto child = SVGGElement::Create(document);
+    parent.appendChild(child);
+    const auto attached = parent.lastChild();
+    ASSERT_TRUE(attached.has_value());
+    ASSERT_EQ(attached->entityHandle().entity(), child.entityHandle().entity());
+    parent = child;
+  }
+
+  StyleAncestorFilter filter(document.registry());
+  filter.synchronizeTo(shallow.entityHandle().entity());
+  ASSERT_TRUE(filter.enabled());
+  filter.synchronizeTo(parent.entityHandle().entity());
+  EXPECT_FALSE(filter.enabled());
+  EXPECT_TRUE(RejectsNothing(filter));
+  filter.synchronizeTo(shallow.entityHandle().entity());
+  EXPECT_TRUE(filter.enabled());
+  EXPECT_TRUE(Has(filter, Kind::Class, "nearto"));
+  EXPECT_FALSE(Has(filter, Kind::Class, "unseen"));
+}
+
+TEST(StyleAncestorFilter, OversizeClassTextDisablesFilteringEvenWithFewTokens) {
+  SVGDocument document = Parse(R"(<g id="parent"><rect id="target"/></g>)");
+  auto parent = document.querySelector("#parent");
+  ASSERT_TRUE(parent.has_value());
+  parent->setAttribute("class", std::string(StyleAncestorFilter::kMaxKeyBytesPerAncestor + 1, 'x'));
+
+  StyleAncestorFilter filter(document.registry());
+  filter.synchronizeTo(Find(document, "target"));
+  EXPECT_FALSE(filter.enabled());
+  EXPECT_TRUE(RejectsNothing(filter));
+  EXPECT_EQ(filter.keyLimitDisables(), 1u);
 }
 
 TEST(StyleAncestorFilter, HoldsEveryAncestorsKeysAndNotTheElementsOwn) {
@@ -226,6 +271,7 @@ TEST(StyleAncestorFilter, SaturationDisablesBelowTheSaturatingAncestorUntilItIsP
   filter.synchronizeTo(Find(document, "deep"));
   EXPECT_FALSE(filter.enabled());
   EXPECT_TRUE(RejectsNothing(filter));
+  EXPECT_EQ(filter.saturationDisables(), 1u);
 
   // Popping the fifth ancestor rebuilds the filter from every remaining one, the outermost
   // included.
@@ -240,12 +286,15 @@ TEST(StyleAncestorFilter, SaturationDisablesBelowTheSaturatingAncestorUntilItIsP
   EXPECT_TRUE(Has(filter, Kind::Attribute, "class"));
   EXPECT_FALSE(Has(filter, Kind::Id, "absent"));
 
-  // Back out of the saturated chain, nothing is left of `a`.
+  // Back out of the saturated chain, nothing is left of `a`. Each push of the fifth ancestor
+  // disables the filter again, and is counted.
   filter.synchronizeTo(Find(document, "deep"));
   filter.synchronizeTo(Find(document, "shallow"));
   EXPECT_TRUE(filter.enabled());
   EXPECT_TRUE(Has(filter, Kind::Class, "b"));
   EXPECT_FALSE(Has(filter, Kind::Class, "a"));
+  EXPECT_EQ(filter.saturationDisables(), 2u);
+  EXPECT_EQ(filter.keyLimitDisables(), 0u);
 }
 
 TEST(StyleAncestorFilter, AnAncestorWithTooManyKeysDisablesTheFilterBelowIt) {
@@ -263,6 +312,8 @@ TEST(StyleAncestorFilter, AnAncestorWithTooManyKeysDisablesTheFilterBelowIt) {
   EXPECT_TRUE(filter.enabled());
   EXPECT_FALSE(Has(filter, Kind::Attribute, "data-0"));
   EXPECT_TRUE(Has(filter, Kind::Class, "b"));
+  EXPECT_EQ(filter.keyLimitDisables(), 1u);
+  EXPECT_EQ(filter.saturationDisables(), 0u);
 }
 
 }  // namespace

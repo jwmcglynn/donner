@@ -84,13 +84,17 @@ bool PrintResult(std::string_view kind, std::string_view name,
               " registry_copies=%" PRIu64 " matched_properties_cache_hits=%" PRIu64
               " matched_properties_cache_misses=%" PRIu64
               " matched_properties_cache_uncacheable=%" PRIu64
-              " declaration_parses_skipped=%" PRIu64
+              " declaration_parses_skipped=%" PRIu64 " ancestor_filter_rejections=%" PRIu64
+              " ancestor_filter_false_positives=%" PRIu64 " ancestor_filter_saturations=%" PRIu64
+              " ancestor_filter_key_limits=%" PRIu64
               " distinct_computed_style_records=%zu counters_stable=%s\n",
               counters.elementsCascaded, counters.rulesTested, counters.rulesMatched,
               counters.declarationsApplied, counters.fullClears, counters.budgetRejections,
               counters.registryCopies, counters.matchedPropertiesCacheHits,
               counters.matchedPropertiesCacheMisses, counters.matchedPropertiesCacheUncacheable,
-              counters.declarationParsesSkipped, measurement->distinctComputedStyleRecords,
+              counters.declarationParsesSkipped, counters.ancestorFilterRejections,
+              counters.ancestorFilterFalsePositives, counters.ancestorFilterSaturations,
+              counters.ancestorFilterKeyLimits, measurement->distinctComputedStyleRecords,
               measurement->countersStable ? "yes" : "no");
   std::fflush(stdout);
   return measurement->countersStable;

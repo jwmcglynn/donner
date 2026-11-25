@@ -361,5 +361,60 @@ INSTANTIATE_TEST_SUITE_P(
                       Load("UseInstances", Document::UseInstances, RegistryCopies(4021))),
     CaseName);
 
+/// Matches a measurement whose repetitions all did the ancestor-filter work of \p expected.
+Matcher<std::optional<CascadeMeasurement>> StableAncestorFilterWork(
+    const StyleCascadeCounters& expected) {
+  return Optional(AllOf(
+      Field("countersStable", &CascadeMeasurement::countersStable, true),
+      Field(
+          "counters", &CascadeMeasurement::counters,
+          AllOf(Field("ancestorFilterRejections", &StyleCascadeCounters::ancestorFilterRejections,
+                      expected.ancestorFilterRejections),
+                Field("ancestorFilterFalsePositives",
+                      &StyleCascadeCounters::ancestorFilterFalsePositives,
+                      expected.ancestorFilterFalsePositives),
+                Field("ancestorFilterSaturations", &StyleCascadeCounters::ancestorFilterSaturations,
+                      expected.ancestorFilterSaturations),
+                Field("ancestorFilterKeyLimits", &StyleCascadeCounters::ancestorFilterKeyLimits,
+                      expected.ancestorFilterKeyLimits)))));
+}
+
+class CssCascadeAncestorFilterWorkTest : public ::testing::TestWithParam<CascadeCase> {};
+
+TEST_P(CssCascadeAncestorFilterWorkTest, RejectsExpectedCandidates) {
+  EXPECT_THAT(GetParam().measure(), StableAncestorFilterWork(GetParam().expected));
+}
+
+/// Expected work with only the filter's rejections and false positives set; it is never disabled
+/// on these documents.
+constexpr StyleCascadeCounters FilterWork(std::uint64_t rejections,
+                                          std::uint64_t falsePositives = 0) {
+  return StyleCascadeCounters{.ancestorFilterRejections = rejections,
+                              .ancestorFilterFalsePositives = falsePositives};
+}
+
+// Only `.gK .cN` rules store ancestor keys (the class `gK`), so only they can be rejected; a
+// candidate fails when its rect's group is another `gK`, and no such class collides with the keys
+// of the rect's ancestors in the filter. The real documents have no rule with ancestor keys: the
+// user agent rule `*:not(svg), *:not(foreignObject) > svg` has a first entry without one, so it is
+// never rejected, and the root `<svg>` failing it is the one failed ancestor walk left.
+INSTANTIATE_TEST_SUITE_P(
+    AncestorFilterWork, CssCascadeAncestorFilterWorkTest,
+    ::testing::Values(
+        Load("Splash", Document::Splash, FilterWork(0)),
+        Load("BootstrapIcons", Document::Icons, FilterWork(0)),
+        Load("Tiger", Document::Tiger, FilterWork(0)),
+        Load("UseInstances", Document::UseInstances, FilterWork(0)),
+        Load("Synthetic2000x200", Document::Synthetic, FilterWork(287)),
+        // 901 of the 902 candidates that fail after an ancestor walk without the filter.
+        Load("Descendant1000x100", Document::Descendant, FilterWork(901)),
+        Generated("Descendant1000x1000", 1000, 1000, CascadeRuleKind::Descendant, FilterWork(898)),
+        Generated("Mixed4000x1000", 4000, 1000, CascadeRuleKind::Mixed, FilterWork(545)),
+        Edit("SyntheticClass", Document::Synthetic, kSyntheticTarget, CascadeEdit::Class,
+             FilterWork(287)),
+        Edit("SyntheticFill", Document::Synthetic, kSyntheticTarget, CascadeEdit::Fill,
+             FilterWork(287))),
+    CaseName);
+
 }  // namespace
 }  // namespace donner::benchmarks

@@ -28,6 +28,7 @@ class AnimationContextualWorkBudget;
 class AnimationResourceBudget;
 class MatchedPropertiesCache;
 struct MatchedPropertiesKey;
+class StyleAncestorFilter;
 struct StyleComponent;
 
 /**
@@ -37,6 +38,9 @@ struct StyleComponent;
  * the two; nothing else changes, so any difference is a rule the index wrongly skipped.
  */
 struct UnindexedCascadeForTesting {};
+
+/// Runs the ordinary cascade without its ancestor filter for differential comparisons.
+struct UnfilteredCascadeForTesting {};
 
 /** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
 class StyleResourceBudget {
@@ -546,8 +550,9 @@ public:
     StyleCascadeCounters& counters;  ///< Work attributed to this pass.
     MatchedPropertiesCache&
         cache;  ///< Cache exclusive to this worker and this stylesheet generation.
-    unsigned activeCascades = 0;       ///< Nesting for whole-registry copy accounting.
-    StagedRecords* staging = nullptr;  ///< Optional worker-private tentative output.
+    unsigned activeCascades = 0;                    ///< Nesting for whole-registry copy accounting.
+    StagedRecords* staging = nullptr;               ///< Optional worker-private tentative output.
+    StyleAncestorFilter* ancestorFilter = nullptr;  ///< Optional pass-owned ancestor filter.
   };
 
   /**
@@ -753,7 +758,7 @@ private:
                                    MatchedPropertiesKey& cacheKey, const StyleComponent* local,
                                    ParseWarningSink& warningSink,
                                    PendingStyleDeclarations& declarations, RuleTrace* capture,
-                                   RuleTrace* replay);
+                                   RuleTrace* replay, StyleAncestorFilter* ancestorFilter);
   static void inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
                                     PropertyRegistry& properties, ComputedStyleComponent& computed,
                                     ParseWarningSink& warningSink, SerialCascade* serial);

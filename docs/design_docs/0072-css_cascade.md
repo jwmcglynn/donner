@@ -84,15 +84,14 @@ same harness, machine class and method. Each goal names the counter or timer tha
   takes the retained update instead of the full rebuild. On the splash document the style time of
   the next frame falls from 18.8 ms to at most 1 ms, and on the bootstrap-icons sprite from 63 ms to
   at most 1 ms.
-- **Ancestor filter.** On the synthetic descendant-only document (1,000 elements, 100 rules), the
-  new counter of candidates rejected by the filter reaches at least 857 of the 902 candidates that
-  today fail after an ancestor walk (95 percent), with no false negative (enforced by the
-  differential tests). Target, not yet measured: style time on the real documents does not
-  regress by more than 2 percent, checked by quiet-machine runs of the perf benchmark (the
-  baseline was taken under load, so a 2 percent bound needs a quieter measurement than this
-  document's). On the real documents only one candidate per document fails in an ancestor walk,
-  so no time gain is expected there (see
-  [Ancestor Filter Opportunity](#ancestor-filter-opportunity)).
+- **Ancestor filter.** For the synthetic descendant-only document (1,000 elements, 100 rules),
+  the target is to skip at least 857 of 902 failing ancestor walks. The benchmark correctness
+  suite records 901 rejections. The remaining candidate is a user-agent rule with a selector-list
+  entry that has no ancestor key. Style differentials compare the complete results with the
+  filter disabled. On the splash, icon sprite and tiger documents, style time may regress by at
+  most 2 percent, checked with alternating optimized runs on a quiet machine. These scenes have
+  few failing ancestor walks and measure the cost of the filter when it rarely rejects a rule.
+  See [Ancestor Filter Opportunity](#ancestor-filter-opportunity).
 - **Shared computed styles.** With the matched properties cache, the share of elements whose
   computed style is reused reaches at least 60 percent on the splash document (opportunity
   measured at 66 percent) and at least 99 percent on bootstrap-icons (measured at 99.8 percent).
@@ -304,12 +303,12 @@ including tests and review fixes. "After" names the milestones that must land fi
         unit tests in `//donner/base:base_tests` and `//donner/base:bloom_filter_fuzzer`.
   - Done when: the no-false-negative property test, the counting-removal and saturation tests,
     the deterministic false-positive-rate test and the fuzzer are green.
-- [ ] Milestone A7: Ancestor filter in the cascade (3 days). After A3 and A6.
+- [x] Milestone A7: Ancestor filter in the cascade (3 days). After A3 and A6.
   - [x] Store up to four ancestor hashes per selector-list entry in `RuleIndex`, and add
         `StyleAncestorFilter` with its chain synchronization.
-  - [ ] Maintain the filter with `StyleAncestorFilter` in every traversal mode and check it
-        before `MatchSelectorRule`; count filter rejections.
-  - [ ] Run the differential test and fuzzer with the filter on and off, including the
+  - [x] Check the pass's `StyleAncestorFilter` before `MatchSelectorRule` in serial style
+        passes and count filter rejections.
+  - [x] Run the differential test and fuzzer with the filter on and off, including the
         low-traversal-limit case.
   - Done when: the ancestor-filter goal is met and the differential targets are green.
 - [x] Milestone A8: Per-element cost and shared computed-style storage (4 days,
@@ -1451,14 +1450,24 @@ steps (`ComplexSelector::matchesCandidate` and `SelectorTraversalNavigation` cha
 once that budget rejects, `StyleResourceBudget::reserveRuleElementMatch` refuses every later
 rule. So for a document whose filter-off pass ends traversal-rejected, the filter-on pass can
 apply rules the filter-off pass refused. This is permitted, with the same scope as the rule
-index's change: a skipped walk only ever fails, so the filter-on pass consumes no more of any
-budget than the filter-off pass, and every document whose filter-off pass completes within its
-budgets completes with the filter on and produces identical results. Charging the saved steps is
-not done, because only the walk itself knows how many steps it would have taken. Serial and
-parallel passes (Part D) both run with the filter and make the same filter decisions, so their
-traversal charges agree and Part D's parity is unaffected. Two counters
-record filter rejections and filter passes that then failed in an ancestor walk (false
-positives).
+index's change: a skipped walk only ever fails, so any work that the unfiltered pass admitted
+remains admissible when the filter is on. A completing unfiltered pass yields identical styles,
+diagnostics and logical cascade counters, apart from the filter's own counters. When the unfiltered
+pass exhausts selector traversal, the filtered pass can reach later rules and declarations and
+charge work for them. Filtered and unfiltered passes each charge every candidate they reach before
+matching. Speculative parallel passes continue to use ordinary matching.
+
+The check runs in `applyStylesheetRules`, the cascade's only matching loop.
+`StyleSystem::collectMatchedStyleRules`, the editor's per-element query, runs no pass and matches
+every candidate unfiltered. Four counters record the filter's work:
+
+- `ancestorFilterRejections`: candidates skipped.
+- `ancestorFilterFalsePositives`: candidates with ancestor hashes that the enabled filter let
+  through and that then did not match. `MatchSelectorRule` does not report where a match failed,
+  so this also counts failures in the subject compound and is an upper bound on the filter's false
+  positives.
+- `ancestorFilterSaturations` and `ancestorFilterKeyLimits`: times a pass's filter was disabled
+  below an ancestor, by cause (see below).
 
 **Keeping the ancestor set correct.** Before matching element E, the filter is synchronized to
 E's ancestor chain, which is the chain `ShadowedElementAdapter::parentElement()` produces (shadow
@@ -1470,17 +1479,16 @@ when an insertion would saturate a counter, the filter is cleared and disabled (
 answers "may contain") until synchronization pops back above the ancestor whose insertion
 saturated it, and then rebuilt from the chain. Saturation needs 255 live probe contributions to
 one counter. An insertion contributes two when its probes coincide. The filter is disabled the
-same way below an ancestor with more than `StyleAncestorFilter::kMaxKeysPerAncestor` (64) keys,
-which bounds the work one ancestor costs. With those rules, whether the
-filter is enabled and what it contains are functions of E's ancestor chain alone, so the filter
-is correct in every traversal mode and makes the same decisions in the serial and parallel passes:
+same way below an ancestor that exceeds the key count or input-byte limit, which bounds key
+collection and hashing. With those rules, whether the filter is enabled and what it contains
+are functions of E's ancestor chain alone, so traversal order cannot change its answers:
 
 - Full pass in storage order: consecutive elements usually share most of their chain, so the
   cost is the difference between two chains. A later change may visit in tree order to make it
   one push and one pop per element; correctness does not depend on order.
 - On-demand parent computation: `computePropertiesInto` computes a missing parent before
-  inheriting from it, which synchronizes the filter to the parent's chain; the child's match
-  happened earlier, before that call, and any later match synchronizes again first.
+  inheriting from it, with the same filter, which synchronizes it to the parent's chain; the
+  child's match happened earlier, before that call, and any later match synchronizes again first.
 - Selective pass: dirty entities arrive in arbitrary order and each is synchronized.
 - Shadow trees and `computeStylesFor`: the adapter's chain is used. A main-branch shadow root
   is appended as a child of its `<use>` element (`ShadowTreeSystem::createShadowEntity`), so a
@@ -1489,26 +1497,25 @@ is correct in every traversal mode and makes the same decisions in the serial an
   so their chains stop at the root. The filter follows whatever chain the adapter produces.
 - External-use documents: each registry's traversal owns its own filter.
 
-The filter belongs to one style pass object, created when `computeAllStyles` or
-`computeStylesFor` starts and destroyed when it returns. A pass abandoned by a budget rejection
-destroys its filter with it, so no later pass can see a half-maintained set. Chain
-synchronization is not charged to `SelectorTraversalBudget` or any other style budget, so it adds
-nothing to any budget outcome; the only budget difference the filter makes is the skipped walks
-above. Its cost per element, in key operations: a synchronization walks the new chain, pops and
-pushes at most the old and new chains, each ancestor costing at most 64 key insertions or removals
-(an ancestor with more keys has only 65 of them hashed, which disables the filter), and rebuilds at
-most once. Each key insertion or removal updates two counters, and a clear or rebuild also writes
-all 4,096 counters. The chain's length is not bounded by the XML parser's nesting limit of 256: a
-`<use>` clone's chain runs through its host and can reach up to 256 levels further
-(`ShadowTreeResourceBudget::kMaximumTraversalDepth`), and trees built through the DOM have no
-depth limit. So the cascade that consults the filter has to cap the depth it synchronizes to, or
-charge synchronization to the style budget, to bound this work whatever the document.
+The filter belongs to one serial style pass. The full and dirty halves of `computeAllStyles`
+and the explicit entity-list pass `computeStylesFor` each keep a filter for the duration of the
+pass, including on-demand parents. Single-element queries and speculative worker passes use
+ordinary matching. A candidate with ancestor keys triggers at most one synchronization for
+its element. The test-only `UnfilteredCascadeForTesting` runs those same passes without a filter.
+An element probes at most 256 selector-list groups, up to four hashes each, across all of its
+candidate rules. A rule whose groups do not fit the remaining allowance uses ordinary matching.
 
-**Expected effect.** See [Ancestor Filter Opportunity](#ancestor-filter-opportunity): no
-measurable time on the real documents, and up to 902 of 1,913 candidates on the descendant-only
-synthetic document. The cost is one synchronization per element (a few hashes per ancestor
-changed) and up to four probes per candidate. The goal guards against a regression on the real
-documents and measures the effect by counter.
+Synchronization checks up to 256 ancestors. Deeper chains fail open, including DOM-built trees
+and shadow chains that extend beyond the parser's nesting limit. Within the limit it pops and
+pushes at most the old and new chains, with at most 64 keys and 4 KiB of class text and
+key-name bytes per ancestor, and at most one rebuild. The filter is discarded when the pass
+returns, including on budget rejection.
+
+**Expected effect.** See [Ancestor Filter Opportunity](#ancestor-filter-opportunity): no measurable
+time on the real documents, and up to 902 of 1,913 candidates on the descendant-only synthetic
+document. The cost is one synchronization per element that has a candidate with ancestor hashes (a
+few hashes per ancestor changed) and up to four probes per selector-list group. The goal guards against a
+regression on the real documents and measures the effect by counter.
 
 ### Shared Computed Styles and the Matched Properties Cache
 
@@ -2207,35 +2214,44 @@ Stylesheets and documents are untrusted input.
 
 - **Differential cascade test** (`//donner/svg/renderer/tests:style_index_differential_tests`). For
   every SVG in the repository's test corpora (the resvg suite, renderer test data, the splash and
-  icon files; the icon sprite, which has no stylesheet, in two halves of its symbols to bound the
+  icon files; the icon sprite, which has no stylesheet, in four parts of its symbols to bound the
   case under ASan), prepare a frame with the index and with the candidate list replaced by every
   rule, then compare every entity's computed style, document and shadow-tree entities alike, plus
   the `collectMatchedStyleRules` lists and the matched-rule and declaration counters; a further case
-  edits the stylesheet through a source keystroke and through the DOM after the index was built,
-  and small documents built around how the index reads keys cover attribute and type names in
-  mixed case in both directions (including `linearGradient`, `clipPath`, `foreignObject` and an
-  unknown element), class lists separated by tab, line feed, carriage return and form feed with
-  leading, trailing and repeated separators, a `<use>` shadow tree, and an imported sheet. It
-  lives with the renderer tests because preparing a frame instantiates the shadow trees. The "every
-  rule" candidate source is the test-only `UnindexedCascadeForTesting` context flag; the matcher,
-  cascade and inheritance code are shared, so the oracle differs from production only in skipping no
-  rule. The same corpus compares cached and uncached first frames, full restyles and partial updates,
-  including ordered diagnostics and logical work. The ancestor filter adds its own switch. Documents whose unindexed or filter-off pass ends budget-rejected are reported
-  separately and must not produce fewer matched rules with the index or the filter. A
-  low-traversal-limit case runs the corpus again with
-  `StyleResourceBudget::Limits::selectorTraversalSteps` lowered until some documents end
-  traversal-rejected with the filter off, and asserts that every document that completes with the
-  filter off is identical with it on, and that every rejected one matches, with the filter on, at
-  least the rules the filter-off pass matched.
+  edits the stylesheet through a source keystroke and through the DOM after the index was built, and
+  small documents built around how the index reads keys cover attribute and type names in mixed case
+  in both directions (including `linearGradient`, `clipPath`, `foreignObject` and an unknown
+  element), class lists separated by tab, line feed, carriage return and form feed with leading,
+  trailing and repeated separators, a `<use>` shadow tree, and an imported sheet. It lives with the
+  renderer tests because preparing a frame instantiates the shadow trees. The "every rule" candidate
+  source is the test-only `UnindexedCascadeForTesting` context flag, set together with
+  `UnfilteredCascadeForTesting`; the matcher, cascade and inheritance code are shared, so the oracle
+  differs from production only in skipping no rule. The same corpus compares cached and uncached
+  first frames, full restyles and partial updates, including ordered diagnostics and logical work. A
+  fourth parse runs with `UnfilteredCascadeForTesting` and is compared with the filtered one on the
+  first frame, a full restyle, a single-entity `computeStylesFor` pass, a retained update and a
+  partial rebuild after an `opacity` edit on the last leaf element: every computed style,
+  matched-rule list, ordered warning, render-tree path and counter but the filter's own. Small
+  documents built around how the filter reads keys cover `<use>` shadow chains, attribute, id, class
+  and type ancestors in mixed case, pseudo-class arguments, sibling and child combinators, selector
+  lists and multi-key entries, each with its expected rejection and false-positive counts. Documents
+  whose unindexed or filter-off pass ends budget-rejected are reported separately and must not
+  produce fewer matched rules with the index or the filter. A low-traversal-limit case runs the
+  corpus again with `StyleResourceBudget::Limits::selectorTraversalSteps` lowered to 64, where 11 of
+  the 1,826 corpus documents end their first frame traversal-rejected with the filter off, and
+  asserts that every document that completes with the filter off is identical with it on, and that
+  every rejected one matches, with the filter on, at least the rules the filter-off pass matched.
 - **Differential fuzzer** (`//donner/svg/components/style:style_cascade_differential_fuzzer`).
   Takes stylesheet text and a small element tree from the fuzzer input and asserts identical
-  computed styles, matched-rule lists and logical counters with the index and cache switches.
+  computed styles, matched-rule lists and logical counters with the index and cache switches, and
+  with the filter switch on prepared first frames, full restyles, single-entity passes, retained
+  updates and partial rebuilds, comparing warnings and every counter but the filter's own as well.
   The renderer-level `style_cache_prepared_differential_fuzzer` prepares actual use occurrences and
-  animations. The filter adds its own switch. Tags, ids, classes and up to two attributes per element come
-  from short tables: mixed-case, namespaced, unknown and foreign tags, class lists with repeated
-  tokens and every whitespace separator, and attribute names that differ only in case. Shadow trees
-  and imported sheets stay out, because both need the document prepared for rendering; the
-  differential test covers them. Run under `--config=asan-fuzzer`.
+  animations. Tags, ids, classes and up to two attributes per element come from short tables:
+  mixed-case, namespaced, unknown and foreign tags, class lists with repeated tokens and every
+  whitespace separator, and attribute names that differ only in case. `<use>` elements have no
+  target and imported sheets stay out; the differential test covers both. Run under
+  `--config=asan-fuzzer`.
 - **Differential edit test** (`//donner/svg/components/style:style_invalidation_differential_tests`,
   new). For each corpus document and each edit kind (class add, remove and replace; `id`;
   `style`; every presentation attribute the document uses), apply the edit, prepare a frame with

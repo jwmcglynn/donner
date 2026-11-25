@@ -43,6 +43,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
+#include "donner/svg/components/style/StyleAncestorFilter.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -2689,6 +2690,262 @@ TEST(RuleIndexCandidates, LargePassesDoNotLeaveTheirCandidateListAllocated) {
                     Field("budgetRejections", &StyleCascadeCounters::budgetRejections, 0u)));
   EXPECT_THAT(StyleSystem::CandidateListCapacityForTesting(),
               Le(StyleSystem::kRetainedCandidateCapacity));
+}
+
+// --- Ancestor filter in the cascade ---
+
+namespace {
+
+/// Solid \p color as a paint.
+PaintServer Solid(css::RGBA color) {
+  return PaintServer(PaintServer::Solid(css::Color(color)));
+}
+
+/// Work counted by \p document's counters since \p before.
+StyleCascadeCounters WorkSince(SVGDocument& document, const StyleCascadeCounters& before) {
+  return CascadeMetricsOf(document).counters - before;
+}
+
+/// Matches the four ancestor-filter counters.
+auto FilterWorkIs(std::uint64_t rejections, std::uint64_t falsePositives,
+                  std::uint64_t saturations = 0, std::uint64_t keyLimits = 0) {
+  return AllOf(
+      Field("ancestorFilterRejections", &StyleCascadeCounters::ancestorFilterRejections,
+            rejections),
+      Field("ancestorFilterFalsePositives", &StyleCascadeCounters::ancestorFilterFalsePositives,
+            falsePositives),
+      Field("ancestorFilterSaturations", &StyleCascadeCounters::ancestorFilterSaturations,
+            saturations),
+      Field("ancestorFilterKeyLimits", &StyleCascadeCounters::ancestorFilterKeyLimits, keyLimits));
+}
+
+/// A rect inside `g.x` and one inside `g.y`, with a rule for each.
+constexpr std::string_view kTwoGroups = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.x rect { fill: red } .y rect { stroke: blue }</style>
+      <g class="x"><rect id="a" width="1" height="1"/></g>
+      <g class="y"><rect id="b" width="1" height="1"/></g>
+    </svg>)";
+
+}  // namespace
+
+TEST_F(StyleSystemTest, AncestorFilterSkipsRulesWhoseAncestorKeysAreAbsent) {
+  // Each rect is a candidate of both rules and fails the other group's after a walk; the filter
+  // rejects that one without walking. Skipped candidates are still tested and charged.
+  SVGDocument filtered = ParseAndComputeStyles(kTwoGroups);
+  SVGDocument unfiltered = ParseSVG(kTwoGroups);
+  unfiltered.registry().ctx().emplace<UnfilteredCascadeForTesting>();
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  styleSystem.computeAllStyles(unfiltered.registry(), warnings);
+
+  EXPECT_THAT(CascadeMetricsOf(filtered).counters, FilterWorkIs(2, 0));
+  EXPECT_THAT(CascadeMetricsOf(unfiltered).counters, FilterWorkIs(0, 0));
+  EXPECT_EQ(CascadeMetricsOf(filtered).counters.rulesTested,
+            CascadeMetricsOf(unfiltered).counters.rulesTested);
+  EXPECT_EQ(CascadeMetricsOf(filtered).counters.rulesMatched,
+            CascadeMetricsOf(unfiltered).counters.rulesMatched);
+  for (SVGDocument* document : {&filtered, &unfiltered}) {
+    const auto a = document->querySelector("#a")->getComputedStyle();
+    const auto b = document->querySelector("#b")->getComputedStyle();
+    EXPECT_EQ(a.fill.get(), Solid(css::RGBA::RGB(255, 0, 0)));
+    EXPECT_EQ(a.stroke.get(), PaintServer(PaintServer::None()));
+    EXPECT_EQ(b.fill.get(), Solid(css::RGBA::RGB(0, 0, 0)));
+    EXPECT_EQ(b.stroke.get(), Solid(css::RGBA::RGB(0, 0, 255)));
+  }
+}
+
+TEST_F(StyleSystemTest, AncestorFilterResynchronizesForEachElementOfAnEntityList) {
+  // One computeStylesFor pass over rects in different groups: each must be matched against its
+  // own ancestors, or `#b` would lose `.y rect` to the chain of `#a`.
+  SVGDocument document = ParseAndComputeStyles(kTwoGroups);
+  const auto a = document.querySelector("#a")->entityHandle();
+  const auto b = document.querySelector("#b")->entityHandle();
+  styleSystem.invalidateComputed(a);
+  styleSystem.invalidateComputed(b);
+  const StyleCascadeCounters before = CascadeMetricsOf(document).counters;
+  const std::array<Entity, 2> entities = {a.entity(), b.entity()};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  styleSystem.computeStylesFor(document.registry(), entities, warnings);
+
+  EXPECT_THAT(WorkSince(document, before), FilterWorkIs(2, 0));
+  EXPECT_EQ(a.get<ComputedStyleComponent>().properties()->fill.get(),
+            Solid(css::RGBA::RGB(255, 0, 0)));
+  EXPECT_EQ(b.get<ComputedStyleComponent>().properties()->stroke.get(),
+            Solid(css::RGBA::RGB(0, 0, 255)));
+}
+
+TEST_F(StyleSystemTest, AncestorFilterCoversParentsCascadedOnDemand) {
+  // Restyling the rect alone cascades its missing parent on demand within the same pass, which
+  // consults the filter too: `.y g` is rejected for the inner group.
+  SVGDocument document = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.y g { opacity: 0.5 }</style>
+      <g class="x"><g id="inner"><rect id="r" width="1" height="1"/></g></g>
+    </svg>)");
+  const auto inner = document.querySelector("#inner")->entityHandle();
+  const auto rect = document.querySelector("#r")->entityHandle();
+  styleSystem.invalidateComputed(inner);
+  styleSystem.invalidateComputed(rect);
+  const StyleCascadeCounters before = CascadeMetricsOf(document).counters;
+  const Entity entity = rect.entity();
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  styleSystem.computeStylesFor(document.registry(), std::span<const Entity>(&entity, 1), warnings);
+
+  const StyleCascadeCounters work = WorkSince(document, before);
+  EXPECT_EQ(work.elementsCascaded, 2u);
+  EXPECT_THAT(work, FilterWorkIs(1, 0));
+  EXPECT_DOUBLE_EQ(inner.get<ComputedStyleComponent>().properties()->opacity.get().value(), 1.0);
+}
+
+TEST_F(StyleSystemTest, SingleEntityComputeStyleIsUnfiltered) {
+  // A single entity's style creates no pass, so no filter: it matches the rule a one-entity
+  // computeStylesFor pass rejects, and both test the same candidates.
+  SVGDocument document = ParseAndComputeStyles(kTwoGroups);
+  const auto b = document.querySelector("#b")->entityHandle();
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  styleSystem.invalidateComputed(b);
+  const StyleCascadeCounters beforeSingle = CascadeMetricsOf(document).counters;
+  const ComputedStyleComponent& style = styleSystem.computeStyle(b, warnings);
+  const StyleCascadeCounters single = WorkSince(document, beforeSingle);
+  EXPECT_EQ(style.properties()->stroke.get(), Solid(css::RGBA::RGB(0, 0, 255)));
+
+  styleSystem.invalidateComputed(b);
+  const StyleCascadeCounters beforePass = CascadeMetricsOf(document).counters;
+  const Entity entity = b.entity();
+  styleSystem.computeStylesFor(document.registry(), std::span<const Entity>(&entity, 1), warnings);
+  const StyleCascadeCounters pass = WorkSince(document, beforePass);
+
+  EXPECT_THAT(single, FilterWorkIs(0, 0));
+  EXPECT_THAT(pass, FilterWorkIs(1, 0));
+  EXPECT_EQ(single.rulesTested, pass.rulesTested);
+  EXPECT_EQ(single.rulesMatched, pass.rulesMatched);
+}
+
+TEST_F(StyleSystemTest, AncestorFilterCountsPassedCandidatesThatFailAsFalsePositives) {
+  // `.x` is an ancestor, so the filter lets the rule through; it then fails in the subject.
+  SVGDocument document = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.x rect:first-child { fill: red }</style>
+      <g class="x"><circle r="1"/><rect id="r" width="1" height="1"/></g>
+    </svg>)");
+  EXPECT_THAT(CascadeMetricsOf(document).counters, FilterWorkIs(0, 1));
+  EXPECT_EQ(document.querySelector("#r")->getComputedStyle().fill.get(),
+            Solid(css::RGBA::RGB(0, 0, 0)));
+}
+
+TEST_F(StyleSystemTest, DisabledAncestorFilterRejectsNothingAndCountsTheDisable) {
+  // An ancestor with more keys than the filter takes disables it for its descendants: neither
+  // rule is rejected, the failing one is not counted as a false positive, and the matching one
+  // still applies.
+  std::string attributes;
+  for (std::size_t i = 0; i <= StyleAncestorFilter::kMaxKeysPerAncestor; ++i) {
+    attributes += " data-" + std::to_string(i) + "=\"1\"";
+  }
+  SVGDocument document =
+      ParseAndComputeStyles(R"(<svg xmlns="http://www.w3.org/2000/svg">)"
+                            R"(<style>.x rect { fill: red } .y rect { stroke: blue }</style>)"
+                            R"(<g class="x")" +
+                            attributes + R"(><rect id="r" width="1" height="1"/></g></svg>)");
+  EXPECT_THAT(CascadeMetricsOf(document).counters, FilterWorkIs(0, 0, 0, 1));
+  const auto style = document.querySelector("#r")->getComputedStyle();
+  EXPECT_EQ(style.fill.get(), Solid(css::RGBA::RGB(255, 0, 0)));
+  EXPECT_EQ(style.stroke.get(), PaintServer(PaintServer::None()));
+}
+
+TEST_F(StyleSystemTest, SaturatedAncestorFilterRejectsNothingAndCountsTheDisable) {
+  // Five ancestors naming `a` 60 times each insert it 300 times, saturating its counters in the
+  // fifth, which disables the filter for the rect below it.
+  std::string tokens;
+  for (int i = 0; i < 60; ++i) {
+    tokens += "a ";
+  }
+  std::string body = R"(<style>.a rect { fill: red } .y rect { stroke: blue }</style>)";
+  for (int level = 0; level < 5; ++level) {
+    body += "<g class=\"" + tokens + "\">";
+  }
+  body += R"(<rect id="r" width="1" height="1"/>)";
+  for (int level = 0; level < 5; ++level) {
+    body += "</g>";
+  }
+  SVGDocument document =
+      ParseAndComputeStyles(R"(<svg xmlns="http://www.w3.org/2000/svg">)" + body + "</svg>");
+  EXPECT_THAT(CascadeMetricsOf(document).counters, FilterWorkIs(0, 0, 1, 0));
+  const auto style = document.querySelector("#r")->getComputedStyle();
+  EXPECT_EQ(style.fill.get(), Solid(css::RGBA::RGB(255, 0, 0)));
+  EXPECT_EQ(style.stroke.get(), PaintServer(PaintServer::None()));
+}
+
+TEST_F(StyleSystemTest, AncestorFilterBypassesOversizeSelectorLists) {
+  std::string selectors;
+  for (int i = 0; i < 257; ++i) {
+    if (!selectors.empty()) {
+      selectors += ", ";
+    }
+    selectors += ".missing-" + std::to_string(i) + " rect";
+  }
+  SVGDocument document =
+      ParseAndComputeStyles(R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)" + selectors +
+                            R"( { fill: red } .also-missing rect { stroke: red } rect { fill: blue }
+          </style><g><rect id="target"/></g></svg>)");
+  // The oversized rule is matched normally; there is still room to filter the next rule.
+  EXPECT_THAT(CascadeMetricsOf(document).counters, FilterWorkIs(1, 0, 0, 0));
+  EXPECT_EQ(document.querySelector("#target")->getComputedStyle().fill.get(),
+            Solid(css::RGBA::RGB(0, 0, 255)));
+}
+
+TEST_F(StyleSystemTest, AncestorFilterProbeAllowanceResetsForEachElement) {
+  std::string rules;
+  for (int i = 0; i < 257; ++i) {
+    rules += ".missing rect { fill: red; }\n";
+  }
+  auto document = ParseAndComputeStyles(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)" + rules +
+      R"(rect { fill: blue; }</style><g><rect id="first"/><rect id="second"/></g></svg>)");
+  // Each rect is allowed to filter 256 rules. The last missing rule uses ordinary matching.
+  EXPECT_THAT(CascadeMetricsOf(document).counters, FilterWorkIs(2u * 256u, 0, 0, 0));
+  for (const std::string_view selector : {"#first", "#second"}) {
+    SCOPED_TRACE(selector);
+    const auto element = document.querySelector(selector);
+    ASSERT_TRUE(element.has_value());
+    EXPECT_EQ(element->getComputedStyle().fill.get(), Solid(css::RGBA::RGB(0, 0, 255)));
+  }
+}
+
+TEST_F(StyleSystemTest, AncestorFilterSavesTraversalBudgetForLaterRules) {
+  // 200 failing `.nope rect` walks exhaust a 100-step traversal budget before the last rule
+  // without the filter; with it they are skipped, so the last rule applies. Each skipped
+  // candidate is still charged to the rule-element budget, so both passes test the same rules
+  // until the unfiltered one is refused.
+  std::string rules;
+  for (int i = 0; i < 200; ++i) {
+    rules += ".nope rect { stroke: blue } ";
+  }
+  const std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)" + rules +
+                             R"(rect { fill: red }</style>)"
+                             R"(<g><rect id="r" width="1" height="1"/></g></svg>)";
+  StyleResourceBudget::Limits limits;
+  limits.selectorTraversalSteps = 100;
+  const auto cascade = [&](bool filtered) {
+    SVGDocument document = ParseSVG(source);
+    SetStyleLimits(document, limits);
+    if (!filtered) {
+      document.registry().ctx().emplace<UnfilteredCascadeForTesting>();
+    }
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    styleSystem.computeAllStyles(document.registry(), warnings);
+    return document;
+  };
+  SVGDocument filtered = cascade(true);
+  SVGDocument unfiltered = cascade(false);
+
+  EXPECT_EQ(CascadeMetricsOf(unfiltered).counters.budgetRejections, 1u);
+  EXPECT_EQ(unfiltered.querySelector("#r")->getComputedStyle().fill.get(),
+            Solid(css::RGBA::RGB(0, 0, 0)));
+  EXPECT_THAT(CascadeMetricsOf(filtered).counters,
+              AllOf(Field("budgetRejections", &StyleCascadeCounters::budgetRejections, 0u),
+                    FilterWorkIs(200, 0)));
+  EXPECT_EQ(filtered.querySelector("#r")->getComputedStyle().fill.get(),
+            Solid(css::RGBA::RGB(255, 0, 0)));
 }
 
 }  // namespace donner::svg::components
