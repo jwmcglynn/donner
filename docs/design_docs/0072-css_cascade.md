@@ -84,21 +84,14 @@ same harness, machine class and method. Each goal names the counter or timer tha
   takes the retained update instead of the full rebuild. On the splash document the style time of
   the next frame falls from 18.8 ms to at most 1 ms, and on the bootstrap-icons sprite from 63 ms to
   at most 1 ms.
-- **Ancestor filter.** On the synthetic descendant-only document (1,000 elements, 100 rules), the
-  new counter of candidates rejected by the filter reaches at least 857 of the 902 candidates that
-  today fail after an ancestor walk (95 percent), with no false negative (enforced by the
-  differential tests). Target, not yet measured: style time on the real documents does not regress
-  by more than 2 percent, checked by quiet-machine runs of the perf benchmark (the baseline was
-  taken under load, so a 2 percent bound needs a quieter measurement than this document's). On the
-  real documents only one candidate per document fails in an ancestor walk, so no time gain is
-  expected there (see [Ancestor Filter Opportunity](#ancestor-filter-opportunity)). Met by counter:
-  the filter rejects 901 of the 902 (the remaining one is the root `<svg>`'s user agent candidate,
-  whose first entry has no ancestor key), with no false positive. On a 64-bit Arm Linux server under
-  load (load averages 33 to 49 on 128 cores), five alternating runs pinned to one core put the
-  medians of the per-run style-time medians within 0.2 percent of the previous stage on the splash,
-  icon and tiger documents, 14 and 22 percent lower on the two descendant-only documents, and up to
-  2.9 percent higher on synthetic documents whose rules store no ancestor keys; the quiet-machine
-  check remains a target.
+- **Ancestor filter.** For the synthetic descendant-only document (1,000 elements, 100 rules),
+  the target is to skip at least 857 of 902 failing ancestor walks. The benchmark correctness
+  suite records 901 rejections. The remaining candidate is a user-agent rule with a selector-list
+  entry that has no ancestor key. Style differentials compare the complete results with the
+  filter disabled. On the splash, icon sprite and tiger documents, style time may regress by at
+  most 2 percent, checked with alternating optimized runs on a quiet machine. These scenes have
+  few failing ancestor walks and measure the cost of the filter when it rarely rejects a rule.
+  See [Ancestor Filter Opportunity](#ancestor-filter-opportunity).
 - **Shared computed styles.** With the matched properties cache, the share of elements whose
   computed style is reused reaches at least 60 percent on the splash document (opportunity
   measured at 66 percent) and at least 99 percent on bootstrap-icons (measured at 99.8 percent).
