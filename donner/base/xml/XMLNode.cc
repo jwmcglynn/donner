@@ -9,6 +9,7 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLEscape.h"
+#include "donner/base/xml/XMLNodeTypeComponent.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
@@ -22,20 +23,11 @@ namespace donner::xml {
 
 using components::XMLDocumentContext;
 using components::XMLNamespaceContext;
+using components::XMLNodeTypeComponent;
 using donner::components::AttributesComponent;
 using donner::components::TreeComponent;
 
 namespace {
-
-// TODO: Move to its own header
-struct XMLNodeTypeComponent {
-  explicit XMLNodeTypeComponent(XMLNode::Type type) : type_(type) {}
-
-  XMLNode::Type type() const { return type_; }
-
-private:
-  XMLNode::Type type_;
-};
 
 // TODO: Move to its own header
 struct SourceOffsetComponent {

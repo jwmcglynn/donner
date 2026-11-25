@@ -3,8 +3,9 @@
 #include <optional>
 #include <string_view>
 
-#include "donner/base/xml/XMLNode.h"
+#include "donner/base/xml/XMLNodeTypeComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/XMLValueComponent.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -31,7 +32,7 @@ bool IsIgnorableText(const RcString& value, css::SelectorTraversalBudget* budget
   return true;
 }
 
-std::optional<RcString> RetainedText(EntityHandle element) {
+std::optional<RcString> RetainedText(entt::basic_handle<const Registry> element) {
   if (const auto* text = element.try_get<TextComponent>()) {
     return text->text;
   }
@@ -49,19 +50,24 @@ bool IsTextNode(const xml::XMLNode& node) {
   return node.type() == xml::XMLNode::Type::Data || node.type() == xml::XMLNode::Type::CData;
 }
 
-bool RawNodeHasContent(EntityHandle child, bool inspectText, css::SelectorTraversalBudget* budget) {
-  const auto node = xml::XMLNode::TryCast(child);
-  if (!node) {
+bool RawNodeHasContent(const Registry& registry, Entity child, bool inspectText,
+                       css::SelectorTraversalBudget* budget) {
+  const auto* kind = registry.try_get<xml::components::XMLNodeTypeComponent>(child);
+  if (!kind) {
     return false;
   }
-  if (node->type() == xml::XMLNode::Type::Element) {
+  if (kind->type() == xml::XMLNode::Type::Element) {
     return true;
   }
-  return inspectText && IsTextNode(*node) &&
-         !IsIgnorableText(node->value().value_or(RcString("")), budget);
+  if (!inspectText ||
+      (kind->type() != xml::XMLNode::Type::Data && kind->type() != xml::XMLNode::Type::CData)) {
+    return false;
+  }
+  const auto* value = registry.try_get<xml::components::XMLValueComponent>(child);
+  return value && !IsIgnorableText(value->value, budget);
 }
 
-bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, bool inspectText,
+bool ChildrenAreEmpty(const Registry& registry, Entity treeEntity, bool inspectText,
                       css::SelectorTraversalBudget* budget) {
   if (treeEntity == entt::null) {
     return true;
@@ -76,7 +82,7 @@ bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, bool inspectText,
       continue;
     }
     if (registry.all_of<ElementTypeComponent>(child) ||
-        RawNodeHasContent(EntityHandle(registry, child), inspectText, budget)) {
+        RawNodeHasContent(registry, child, inspectText, budget)) {
       return false;
     }
   }
@@ -152,8 +158,9 @@ void RecordDiscardedSelectorText(EntityHandle parent, const xml::XMLNode& node) 
   }
 }
 
-bool IsSelectorEmpty(Registry& registry, Entity dataEntity, css::SelectorTraversalBudget* budget) {
-  const EntityHandle data(registry, dataEntity);
+bool IsSelectorEmpty(const Registry& registry, Entity dataEntity,
+                     css::SelectorTraversalBudget* budget) {
+  const entt::basic_handle<const Registry> data(registry, dataEntity);
   if (data.all_of<ProjectedNonWhitespaceTextTag>()) {
     return false;
   }

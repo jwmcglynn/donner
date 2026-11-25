@@ -30,6 +30,7 @@ donner_cc_library(
         "XMLEscape.h",
         "XMLIncrementalParser.h",
         "XMLNode.h",
+        "XMLNodeTypeComponent.h",
         "XMLParser.h",
         "XMLSourceStore.h",
         "XMLTokenType.h",
