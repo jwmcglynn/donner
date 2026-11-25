@@ -810,6 +810,41 @@ TEST(StyleParallel, AncestorFilterScratchIsReservedBeforeConstruction) {
   EXPECT_TRUE(child.get<ComputedStyleComponent>().style);
 }
 
+TEST(StyleParallel, InsufficientWorkerStackDeclinesBeforePreparingThePass) {
+  const auto source = SiblingScene(1050);
+  const auto serial = FirstFrame(source, {.workerCount = 0});
+  const auto candidate = FirstFrame(source, {.workerCount = 2, .workerStackBytes = 64 * 1024});
+  EXPECT_EQ(candidate.scheduled, 0u);
+  EXPECT_EQ(candidate.traces, 0u);
+  ExpectSame(serial, candidate);
+}
+
+TEST(StyleParallel, FourNestedSelectorFunctionsStayEligibleForScheduling) {
+  auto source = SiblingScene(1050);
+  source.insert(source.find("</style>"), ".leaf:is(:is(:is(:is(.leaf)))) { fill: blue; }");
+  const auto serial = FirstFrame(source, {.workerCount = 0});
+  const auto candidate = FirstFrame(source, {.workerCount = 2, .workerStackBytes = 128 * 1024});
+  EXPECT_EQ(candidate.scheduled, 1u);
+  EXPECT_GT(candidate.traces, 0u);
+  ExpectSame(serial, candidate);
+}
+
+TEST(StyleParallel, DeepSelectorAndDeclarationUseTheUnchangedSerialCascade) {
+  for (const std::string_view extra : {
+           ".leaf:is(:is(:is(:is(:is(.leaf))))) { fill: blue; }",
+           ".leaf { fill: f(f(f(f(f(blue))))); }",
+       }) {
+    SCOPED_TRACE(extra);
+    std::string source = SiblingScene(1050);
+    source.insert(source.find("</style>"), extra);
+    const auto serial = FirstFrame(source, {.workerCount = 0});
+    const auto candidate = FirstFrame(source, {.workerCount = 2});
+    EXPECT_EQ(candidate.scheduled, 0u);
+    EXPECT_EQ(candidate.traces, 0u);
+    ExpectSame(serial, candidate);
+  }
+}
+
 TEST(StyleParallel, SmallPassStaysSerial) {
   const auto source = SiblingScene(12);
   const auto frame = FirstFrame(source, {.workerCount = 4});

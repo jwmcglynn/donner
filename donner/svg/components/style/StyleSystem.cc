@@ -1925,6 +1925,13 @@ bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Wor
   if (impl_->abandoned.load(std::memory_order_relaxed)) {
     return false;
   }
+  const Registry& registry = impl_->registry;
+  const auto* local = registry.try_get<StyleComponent>(StyleDataEntity(registry, entity));
+  if (local && !local->properties().unparsedProperties.empty()) {
+    // Provisional records cannot retain these values. Decline before copying their CSS trees.
+    impl_->abandoned.store(true, std::memory_order_relaxed);
+    return false;
+  }
   UTILS_RELEASE_ASSERT(index < impl_->traces.entries.size());
   auto& trace = impl_->traces.entries[index];
   UTILS_RELEASE_ASSERT(std::as_const(impl_->registry).try_get<ComputedStyleComponent>(entity) ==

@@ -281,6 +281,13 @@ public:
     return workerQosRefusals_.load(std::memory_order_relaxed);
   }
 
+  /// Requested stack bytes per worker, before platform page rounding.
+  [[nodiscard]] std::size_t workerStackBytes() const { return options_.workerStackBytes; }
+
+  /// Calling thread's usable stack, if measurable. Workers use their configured stack bounds.
+  /// Compare against the current frame on this thread only.
+  [[nodiscard]] static std::optional<StackBounds> TryCurrentThreadUsableStack();
+
   /// True when the options asked for zero workers.
   [[nodiscard]] bool threadingDisabledByConfiguration() const { return options_.workerCount == 0; }
 

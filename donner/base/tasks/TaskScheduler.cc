@@ -843,6 +843,16 @@ bool TaskScheduler::trySleep(Worker& worker) {
   return !stop_.load(std::memory_order_seq_cst);
 }
 
+std::optional<StackBounds> TaskScheduler::TryCurrentThreadUsableStack() {
+  if (const auto* worker = static_cast<const Worker*>(tCurrentWorker)) {
+    return worker->stack;
+  }
+  if (adoptedOnThread_ != nullptr) {
+    return adoptedOnThread_->stack;
+  }
+  return TryCurrentThreadStackBounds();
+}
+
 std::optional<std::size_t> TaskScheduler::CurrentWorkerStackRemaining() {
   const Worker* worker = static_cast<const Worker*>(tCurrentWorker);
   if (worker == nullptr) {

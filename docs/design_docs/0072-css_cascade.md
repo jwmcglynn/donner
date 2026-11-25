@@ -2222,6 +2222,22 @@ separate 32 KiB reporting reserve.
   are checked by `//donner/svg/components/style:matched_properties_cache_tests`; cross-width
   family admission and filter accounting are checked by
   `//donner/svg/components/style:style_parallel_tests` and by the cascade differential fuzzer.
+- **Scheduler stack admission.** Linux and Apple style tasks never join a scope. They walk
+  subtrees and selector combinators with explicit stacks. A stylesheet revision is eligible
+  only when its selector arguments and declaration component values are at most four levels
+  deep. The active revision's rule index records this once, including imported sheets. A provisional
+  element with unparsed local values is declined before their component trees are copied.
+  The caller and each executing range must have 64 KiB of client headroom above the scheduler's
+  separate 32 KiB reporting reserve. Worker bounds honor the configured usable stack, and
+  scheduling declines when the configured worker size cannot meet the admission requirement.
+  The owner measures its stack once after sizing the pass, then reuses those bounds for ranges
+  it executes. Unavailable bounds cause the optional pass to decline. Other build platforms
+  use the serial path. The serial owner applies the original cascade if admission fails,
+  including after discarding tentative work. The rule is a conservative native release qualification envelope. Samples
+  check it without defining a universal stack maximum. The ordinary serial caller retains
+  its existing stack contract.
+  `//donner/svg/components/style:style_parallel_tests` checks both sides of the CSS depth gate
+  and compares the small-stack fallback to the ordinary serial path.
 - **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
   external-use registries, passes below the threshold, and builds or runtimes without workers run
   the serial path.
