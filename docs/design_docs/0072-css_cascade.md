@@ -155,16 +155,14 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ### Part D: Parallel Style Traversal
 
-- **Speedup where it pays.** Target, not yet measured: with four scheduler workers and the
-  shared computed-style storage of Milestone A8, first-frame style time on the bootstrap-icons
-  sprite (5,137 elements) and the synthetic `<use>` document (4,425 elements) is at most half of
-  the same build's serial style time. Without A8 the serial placeholder step caps the speedup near
-  2.3x (see [What Must Hold](#what-must-hold-for-parallel-cascading)), which is why Part D depends
-  on A8.
-- **No cost where it does not.** Passes below the serial threshold (an initial target of 1,000
-  elements to cascade, calibrated in Milestone D3) run the serial path. Target, not yet measured:
-  style time on the splash and tiger documents does not regress by more than 2 percent with a
-  scheduler present, in quiet-machine perf runs.
+- **Speedup where it pays.** With four scheduler workers and shared computed styles, the target
+  for first-frame style time on the bootstrap-icons sprite (5,137 elements) and the synthetic
+  `<use>` document (4,425 elements) is at most half of the same build's serial time. See
+  [Native Calibration](#native-calibration) for the measured Arm shortfall.
+- **No cost where it does not.** Passes below the 1,000-node threshold run serially. The splash
+  and tiger should stay within 2 percent with a scheduler present in quiet-machine perf runs.
+  The Arm splash sample exceeds the guard. The Apple small-scene guard still needs a quiet
+  measurement. See [Native Calibration](#native-calibration).
 - **Bit-identical.** Computed styles, matched-rule lists, warnings and budget outcomes are the
   same at 0, 1, 2, 4 and 8 workers and under the scheduler's seeded-schedule mode, enforced by the
   differential tests.
@@ -438,9 +436,10 @@ Part C estimate: 13.5 engineering days.
         Match styles, ordered diagnostics, logical work, budget outcomes and record sharing.
         Repeat the fixed seed to check physical work counters.
 - [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
-  - Done when: the threshold and subtree grain are set from a measured curve recorded here, the
-    deepest stack use of a cascade task is measured and declared as this client's stack bound to
-    the scheduler, and the Part D speedup goal is met.
+  - [x] Compare admission cutoffs and sample a warmed native task on Arm Linux and Apple arm64.
+        Retain the current cutoff and grain. See [Native Calibration](#native-calibration).
+  - [ ] Establish the client stack bound for supported native builds and meet the remaining
+        speedup and small-document timing goals.
 
 Part D estimate: 9 engineering days.
 
@@ -2018,12 +2017,10 @@ workers and the serial work around the parallel region (setup, warning commit, f
 synchronization). [0073-task_scheduler](0073-task_scheduler.md) measures the wake latency. With
 four workers, a pass of 1,000 elements at 5 microseconds (5 ms serial) can finish in roughly a
 quarter of that plus the wake latency; a pass of 200 elements (1 ms) cannot repay a wake that costs
-a meaningful fraction of a millisecond. The initial threshold is therefore 1,000 elements to
-cascade, below which the serial path runs unchanged; Milestone D3 replaces it with a measured
-curve. On the measured documents the splash (622) and tiger (484) stay serial and the sprite
-(5,137) and `<use>` document (4,425) go parallel. Most single illustrations are below the
-threshold; documents with thousands of elements, `<use>`-heavy documents and full restyles of
-large documents are what this part serves.
+a meaningful fraction of a millisecond. The threshold stays at 1,000 schedulable nodes.
+The splash (622 styled elements) and tiger (484) stay serial. The sprite (5,137) and synthetic
+`<use>` document (4,425) enter the parallel pass. The relevant count can be smaller than the
+number of elements cascaded across a full frame. See [Native Calibration](#native-calibration).
 
 Stylo, the engine that ships parallel style, does the same kind of chunking: "The traversal starts
 in sequential mode, and optionally parallelizes as it discovers work"
@@ -2035,8 +2032,75 @@ holding its Bloom filter and sharing cache
 [context.rs](https://github.com/servo/stylo/blob/main/style/context.rs)). Firefox's defaults are 16
 nodes per work unit and a local queue of 32 on the main thread
 ([StaticPrefList.yaml](https://github.com/mozilla-firefox/firefox/blob/main/modules/libpref/init/StaticPrefList.yaml)),
-for a browser's per-node cost; Donner's initial grain of 64 elements reflects its higher measured
-per-element cost and is calibrated in Milestone D3.
+for a browser's per-node cost. Donner uses a grain of 64. Each schedulable node contributes
+one unit to its subtree's weight. The traversal splits sibling ranges when their combined
+subtree weights reach the grain. The owner's local-work quota is the planned node count divided by `(workers + 1)`.
+
+### Native Calibration
+
+Same-binary checks of the default path compare four workers with serial. On Arm Linux the
+sprite goes from 8.233 to 5.768 ms (0.701×) and synthetic use from 5.402 to 4.920 ms (0.911×),
+both above 0.50×. On Apple arm64 the sprite goes from 2.548 to 1.016 ms (0.399×) and use
+from 1.722 to 0.843 ms (0.490×), both meeting the target. Splash and tiger each dispatch zero
+tasks. In the same-binary Arm check splash changes from 1.746 to 1.789 ms (+2.46%) and tiger
+from 0.901 to 0.877 ms (−2.66%). The Arm splash exceeds the 2% guard. The Apple splash measures
+1.076× serial under load with zero dispatch, so Apple's quiet small-scene guard remains open.
+A quiet comparison against unmodified main also remains open.
+See [D1b qualification](https://github.com/jwmcglynn/donner/pull/2765).
+
+The cutoff curve compares 4,096 with 1,000 using the median paired change in first-frame style
+time. Each optimized native diagnostic binary runs the same inputs with four workers. A duplicate
+run at 1,000 supplies an A/A timing control. Arm Linux uses Clang 18 and four retained groups
+with at most 1% unrelated CPU use before each group and 3% during each run on the affinity set.
+Physical Apple arm64 uses Apple Clang 21, five groups with 78–88% aggregate CPU idle before each
+group, and the same A/A control.
+
+| Fixture (elements cascaded) | Arm Linux | Apple arm64 |
+| --- | ---: | ---: |
+| Class (3,003) | −41.0% | −24.3% |
+| Class (4,083) | −30.1% | −19.8% |
+| Descendant (3,003) | −10.9% | +96.6% |
+| Descendant (4,083) | +2.6% | +103.0% |
+| Use (2,995) | +0.9% | +118.4% |
+| Use (4,205) | +9.3% | +136.0% |
+
+At 4,096, the smaller class fixtures avoid work that can roll back on Arm and consistently
+rolls back on Apple. The same cutoff bypasses completed descendant and use passes on Apple.
+The 4,205-element use fixture replays 3,990 traces at the lower cutoff and stays serial at
+4,096. When both cutoffs complete a pass, task and replay counts and logical cascade work agree.
+The 4,113-element descendant fixture starts 49 tasks and replays 4,113 traces at either cutoff
+on both hosts. Timing still varies above the cutoff with equal work. On Arm, the 4,337-element use
+fixture takes 14.0% longer at 4,096, with a 10.5% median A/A difference. An earlier Arm grain sweep at 16, 32, 64 and 128
+showed no shared improvement over 64 across sprite and use. Keep 1,000 and 64. Measure the
+causes of speculative rollback before tuning admission by workload.
+
+Build the [cascade benchmark](../../donner/benchmarks/CssCascadePerfBench.cpp) with
+`bazel build -c opt //donner/benchmarks:css_cascade_perf_bench`. Run the same binary with
+`--mode=load --no-renderer --workers=0` and `--workers=4` from the repository root. For a
+cutoff curve, use the [scene helpers](../../donner/benchmarks/CssCascadeScenes.h) with
+`MakeGroupedRectsDocument` at 3,000, 4,080, 4,110 and 5,000 rectangles, 100 rules, and class or
+descendant rules. For use, call `MakeUseInstancesDocument` at 135, 190, 196 and 230 instances
+with 20 rectangles and 20 rules. Measure with `MeasureCascadeLoad` and its nine-sample load
+settings. In a local diagnostic build, vary only the admission threshold selected by
+[`TryParallelStylePass`](../../donner/svg/components/style/ParallelStylePass.cc). Alternate
+measurement order, discard a warmup group, and record dispatch, rollback, replay and logical work
+with the timings.
+
+The warmed stack fixture publishes the styles of four 224-level ancestor chains before
+invalidating their 1,088 terminal rectangles. A child selector traverses all 224 levels and
+uses 16 nested `:is()` tests at the terminal subject. On each native toolchain, the diagnostic
+samples 12 real worker tasks and verifies the expected fill on every rectangle, all 1,088
+replayed traces and zero rollbacks. The largest observed frame delta is **19,632 bytes** on
+Arm Linux and **23,040 bytes** on Apple arm64. At those samples 104,528 and 107,856 bytes
+remain respectively on configured 128 KiB stacks, and both samples run without nesting.
+The scheduler's [real frame-address probe](../../donner/base/tasks/WorkerStack.h) defines the
+measurement. In the diagnostic, post-inlining function-entry hooks in the task, cascade,
+selector and declaration code sample the low frame relative to the scheduler's TaskRecord
+entry. The samples cover those instrumented paths and optimized toolchains. Instrumentation
+can change frame layout, and other paths can go deeper. A client bound for the scheduler
+owner still needs coverage of the supported native paths and a justified margin. See
+[0073-task_scheduler](0073-task_scheduler.md) for the non-waiting task contract and the
+separate 32 KiB reporting reserve.
 
 ### What Must Hold for Parallel Cascading
 
@@ -2084,12 +2148,10 @@ per-element cost and is calibrated in Milestone D3.
   `trySpawn`. A spawn from a running task goes onto that worker's own deque, so subtrees spread
   by ordinary work stealing between workers, as the scheduler intends for small work. If
   `trySpawn` meets the queue bound it returns false and the task pushes that subtree onto its own
-  heap stack instead of running it as a nested call. Tasks never wait, so a task's native stack use
-  is one task frame whatever the tree depth, and only the pass owner waits, once. The pass owner
-  is usually the render worker, which is not a scheduler worker: its root spawns go to the
-  scheduler's global queue and it sleeps on its parker until the pass's counter reaches zero,
-  running no tasks itself. A child never
-  starts before its parent's record is published, which the spawn order guarantees.
+  explicit stack instead of running it as a nested call. Scheduler tasks never wait, so running
+  a task adds one task's native stack use regardless of tree depth. The pass owner runs reserved
+  ready ranges itself and joins the same scope once. A child starts only after its parent's
+  record is published, which the spawn order guarantees.
   The on-demand parent computation in `computePropertiesInto` stays for the serial path and is an
   assertion failure in the parallel path. Offscreen shadow trees are separate roots, started after
   the main tree; entities that no root reaches are cascaded by a serial sweep afterwards, as the
@@ -2485,9 +2547,9 @@ questions.
   needs every candidate declaration per property kept through the cascade instead of one winning
   slot. Recommendation: keep them out of Part B and take them up with `@property` in a later design,
   since both change how the cascade stores candidates.
-- **Part D: parallel threshold.** The initial 1,000-element threshold keeps most single
-  illustrations serial. Recommendation: keep it until Milestone D3 measures the curve, and do not
-  lower it to make small documents parallel unless the measured wake cost allows.
+- **Part D: parallel threshold.** Keep the 1,000-node cutoff and grain of 64. The
+  [measured curve](#native-calibration) shows that a higher cutoff trades less abandoned
+  preparation for lost completed passes. A useful admission rule needs workload evidence.
 
 ## Future Work
 
