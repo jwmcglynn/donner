@@ -118,15 +118,28 @@ TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal
     source += "<g><rect class='leaf'/></g>";
   }
   source += "<g id='offscreen'><rect id='leaf'/></g></svg>";
-  const auto run = [&](std::size_t workers, std::size_t externalCapacity, bool retainRoot) {
+  const auto run = [&](std::size_t workers, std::size_t externalCapacity,
+                       bool retainRoot) -> std::optional<Frame> {
+    SCOPED_TRACE(::testing::Message() << "workers=" << workers << ", external capacity="
+                                      << externalCapacity << ", retained root=" << retainRoot);
     ParseWarningSink warnings;
     auto parse = parser::SVGParser::ParseSVG(source, warnings);
-    EXPECT_FALSE(parse.hasError());
+    if (parse.hasError()) {
+      ADD_FAILURE() << parse.error();
+      return std::nullopt;
+    }
     auto doc = std::move(parse).result();
     auto& registry = doc.registry();
     const Entity root = doc.svgElement().entityHandle().entity();
-    const Entity offscreen = doc.querySelector("#offscreen")->entityHandle().entity();
-    const Entity leaf = doc.querySelector("#leaf")->entityHandle().entity();
+    const auto offscreenElement = doc.querySelector("#offscreen");
+    const auto leafElement = doc.querySelector("#leaf");
+    EXPECT_THAT(offscreenElement, ::testing::Optional(::testing::_)) << "missing #offscreen";
+    EXPECT_THAT(leafElement, ::testing::Optional(::testing::_)) << "missing #leaf";
+    if (!offscreenElement || !leafElement) {
+      return std::nullopt;
+    }
+    const Entity offscreen = offscreenElement->entityHandle().entity();
+    const Entity leaf = leafElement->entityHandle().entity();
     registry.get_or_emplace<ComputedShadowTreeComponent>(root).branches.push_back(
         {.branchType = ShadowBranchType::OffscreenMask,
          .lightTarget = offscreen,
@@ -156,8 +169,10 @@ TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal
           ++ownerVisits;
           if (expectWorker && entity != root && !ownerWaitedForWorker) {
             ownerWaitedForWorker = true;
-            EXPECT_TRUE(workerChanged.wait_for(lock, donner::tests::kHangGuard,
-                                               [&] { return workerPublishedRect; }));
+            if (!workerChanged.wait_for(lock, donner::tests::kHangGuard,
+                                        [&] { return workerPublishedRect; })) {
+              ADD_FAILURE() << "worker did not publish a rectangle before the owner resumed";
+            }
           }
         }
       }
@@ -173,7 +188,8 @@ TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal
     };
     hooks.beforeOffscreen = [&] {
       EXPECT_EQ(mainVisits.size(), expectedMainVisits);
-      EXPECT_FALSE(registry.get<ComputedStyleComponent>(offscreen).style);
+      EXPECT_THAT(registry.get<ComputedStyleComponent>(offscreen).style, ::testing::IsNull())
+          << "offscreen style already published at the main-phase handoff";
     };
     tasks::TaskSchedulerOptions options{.workerCount = workers,
                                         .maxExternalTasks = externalCapacity};
@@ -187,15 +203,21 @@ TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal
     tasks::TaskScope occupied(scheduler);
     if (forceRefusal) {
       // Keep the only external record live in an unrelated scope through style dispatch.
-      EXPECT_TRUE(occupied.trySpawn([&] {
+      const bool occupiedExternalRecord = occupied.trySpawn([&] {
         if (std::this_thread::get_id() == owner) {
           ADD_FAILURE() << "style owner executed an unrelated task";
           return;
         }
         std::unique_lock lock(recordMutex);
-        EXPECT_TRUE(
-            recordChanged.wait_for(lock, donner::tests::kHangGuard, [&] { return releaseRecord; }));
-      }));
+        if (!recordChanged.wait_for(lock, donner::tests::kHangGuard,
+                                    [&] { return releaseRecord; })) {
+          ADD_FAILURE() << "style pass did not release the occupied external task record";
+        }
+      });
+      EXPECT_TRUE(occupiedExternalRecord) << "could not occupy the only external task record";
+      if (!occupiedExternalRecord) {
+        return std::nullopt;
+      }
     }
     StyleSystem().computeAllStyles(registry, warnings, StyleSystem::FullRestyle::ComputeMissing,
                                    &scheduler);
@@ -216,7 +238,7 @@ TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal
         EXPECT_EQ(metrics.declinedStyleTasks, workers + 1);
         EXPECT_EQ(ownerVisits, expectedMainVisits);
       } else {
-        EXPECT_TRUE(workerPublishedRect);
+        EXPECT_TRUE(workerPublishedRect) << "no worker published a rectangle";
         EXPECT_GE(metrics.admittedStyleTasks, workers);
         EXPECT_LE(metrics.admittedStyleTasks, workers + 1);
       }
@@ -231,9 +253,15 @@ TEST(StyleParallel, BroadRootFrontierSharesReadyRangesWithOwnerAndHandlesRefusal
                  warnings.warnings()};
   };
   for (bool retainRoot : {false, true}) {
-    const Frame serial = run(0, 1024, retainRoot);
-    ExpectSame(serial, run(4, 1024, retainRoot));
-    ExpectSame(serial, run(4, 1, retainRoot));
+    SCOPED_TRACE(::testing::Message() << "retained root=" << retainRoot);
+    const auto serial = run(0, 1024, retainRoot);
+    ASSERT_THAT(serial, ::testing::Optional(::testing::_)) << "serial style pass";
+    for (std::size_t externalCapacity : {1024u, 1u}) {
+      SCOPED_TRACE(::testing::Message() << "external capacity=" << externalCapacity);
+      const auto candidate = run(4, externalCapacity, retainRoot);
+      ASSERT_THAT(candidate, ::testing::Optional(::testing::_)) << "scheduled style pass";
+      ExpectSame(*serial, *candidate);
+    }
   }
 }
 
