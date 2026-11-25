@@ -418,22 +418,25 @@ Part C estimate: 13.5 engineering days.
   - Verification: `//donner/svg/components/style:style_system_tests` compares concurrently styled
     siblings with their serial records and verifies cache hits and shared retained-byte charges.
     `//donner/svg/renderer/tests:style_index_differential_tests` covers the serial corpus.
-- [ ] Milestone D1: Parallel style pass (4 days). After D0, A7, A9 and scheduler milestones S1 to
-      S3.
-  - [ ] Pre-region step: create every pool and context object, pre-emplace computed-style slots
-        for dirty entities and their missing ancestors, find the roots of dirty subtrees.
-  - [ ] Decompose the full and selective passes into subtree tasks on the scheduler, with a
-        `const Registry&` view for workers, per-worker budget shares, warning buffers, ancestor
-        filters and caches, a serial commit of warnings, the serial fallback on budget pressure,
-        and a debug guard that pool sizes are unchanged across the region.
-  - Done when: the differential tests are green at every worker count and the serial threshold
-    keeps the splash and tiger documents on the serial path.
-- [ ] Milestone D2: Race and determinism coverage (2 days). After D1.
-  - [ ] Add `//donner/svg/components/style:style_parallel_tests` to the scheduler's ThreadSanitizer
-        lane, run the differential corpus under the seeded-schedule mode, and add an
-        injected-delay test that is red with a deliberately broken commit order.
-  - Done when: the lane is green, and the injected-delay test was observed red with the broken
-    order and green with the real one.
+- [x] Milestone D1: Parallel style pass (4 days). After D0, A7, A9 and scheduler milestones S1 to
+      S3. Implementation [#2765](https://github.com/jwmcglynn/donner/pull/2765).
+  - [x] Prepare the registry and pass context, pre-emplace computed-style slots for dirty
+        entities and missing ancestors, and identify the scheduled subtree roots.
+  - [x] Schedule eligible full and selective passes as subtree tasks with a `const Registry&`
+        view, per-worker budget shares, warning buffers, ancestor filters and caches. The owner
+        commits in serial order and falls back to the serial pass on budget pressure. A debug
+        guard checks pool sizes across the worker region.
+  - Verification: `//donner/svg/components/style:style_parallel_tests` compares styles across
+    worker counts and checks the serial path for small passes.
+- [x] Milestone D2: Race and determinism coverage (2 days). After D1.
+  - [x] Register `//donner/svg/components/style:ci_tsan_style_parallel_tests` in the normal
+        Linux native test graph. `//build_defs:sanitizer_variants_tests` checks the registration.
+  - [x] Hold a parent at publication and check that its children are admitted only after it
+        publishes. `DelayedParentPublishesBeforeChildAdmission` passes with normal ordering and
+        rejects a deliberately inverted admission in the isolated negative check.
+  - [x] Compare the corpus across serial, fixed-seed, and 1-, 2-, 4-, and 8-worker schedules.
+        Match styles, ordered diagnostics, logical work, budget outcomes and record sharing.
+        Repeat the fixed seed to check physical work counters.
 - [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
   - Done when: the threshold and subtree grain are set from a measured curve recorded here, the
     deepest stack use of a cascade task is measured and declared as this client's stack bound to

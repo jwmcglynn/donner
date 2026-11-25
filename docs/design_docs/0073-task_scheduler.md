@@ -217,10 +217,10 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [x] ThreadSanitizer and AddressSanitizer variants of the scheduler package's tests, reachable
         from `//...` through a configuration transition, so the native CI invocation and its
         affected-target selection run them on Linux (0.75 day): `SANITIZER_VARIANT_PACKAGES` in
-        `build_defs/sanitizer_variants.bzl`, whose packages get a `ci_tsan_<test>` and a
-        `ci_asan_<test>` of every test from the native CI package finalizer
-        (`build_defs/rules.bzl`).
-  - [ ] The same variants for each client's parallel tests as that client lands (0.75 day).
+        `build_defs/sanitizer_variants.bzl` requests both variants for every eligible scheduler
+        test.
+  - [ ] Register each client's parallel tests as it lands (0.75 day). The style pass uses the
+        per-test policy to run `//donner/svg/components/style:ci_tsan_style_parallel_tests`.
   - [ ] `//donner/base/tasks:task_scheduler_fuzzer` (1.5 days).
   - [ ] `//donner/base/tasks:deque_tests` in the variant (`ci_tsan_deque_tests` exists), which
         checks the deque's sequentially consistent form, and a red run there on a deliberately
@@ -345,9 +345,9 @@ with workers on needs the release gate.
   toolchain the repository builds with, including libc++, libstdc++ host builds and Emscripten.
 - **Errors.** `.bazelrc` passes `-fno-exceptions` to every build; errors are explicit values
   (`ParseResult`, diagnostics).
-- **Sanitizers.** `.bazelrc` defines `--config=tsan`. In CI, ThreadSanitizer runs only on the
-  scheduler package's tests: their `ci_tsan_` and `ci_asan_` variants run in the native CI
-  invocation on Linux, built through a configuration transition (the AddressSanitizer variants with
+- **Sanitizers.** `.bazelrc` defines `--config=tsan`. The scheduler package's `ci_tsan_` and
+  `ci_asan_` variants and the parallel style pass's `ci_tsan_style_parallel_tests` run in the
+  native CI invocation on Linux, built through configuration transitions (the AddressSanitizer variants with
   leak detection off on both Linux lanes: the self-hosted lane's remote test sandbox blocks the
   ptrace that LeakSanitizer needs, and the hosted lane shares the same variant definition; an
   invocation that sets a sanitizer config of its own skips the variants and runs the plain tests
@@ -1969,15 +1969,14 @@ clients that size work from documents.
   (spawns, joins, loops, awaits, stops) and checks that its result equals sequential evaluation,
   in seeded mode and with real workers.
 - **ThreadSanitizer variant** reachable from `//...` through a configuration transition, covering
-  the scheduler tests, the deque tests on the sequentially consistent form, and each client's
-  parallel tests as that client lands (the first planned is 0072's
-  `//donner/svg/components/style:style_parallel_tests`; the variant does not wait for it). The
-  scheduler package's part exists: the native CI package finalizer (`build_defs/rules.bzl`) gives
-  every test of a package listed in `SANITIZER_VARIANT_PACKAGES`, today `//donner/base/tasks`, a
-  `ci_tsan_` and a `ci_asan_` variant, built through a configuration transition with the flags of
-  `--config=tsan` and `--config=asan` (`build_defs/sanitizer_variants.bzl`, checked against
-  `.bazelrc` by `//build_defs:sanitizer_variants_tests`), which the native CI invocation and its
-  affected-target selection run on Linux.
+  the scheduler tests, the deque tests on the sequentially consistent form, and the parallel style
+  pass. The native CI package finalizer (`build_defs/rules.bzl`) reads
+  `SANITIZER_VARIANT_PACKAGES` in `build_defs/sanitizer_variants.bzl`. Every eligible test in
+  `//donner/base/tasks` receives `ci_tsan_` and `ci_asan_` variants. The style package opts in
+  only `//donner/svg/components/style:ci_tsan_style_parallel_tests`. The variants use the matching
+  sanitizer flags through a configuration transition and enter the native CI invocation through
+  ordinary Linux affected-target selection. `//build_defs:sanitizer_variants_tests` checks the
+  configuration flags against `.bazelrc` and verifies the style target's selection policy.
 - **Both modes.** The default build runs threaded. The compiled-out variant
   ([Configuration](#configuration)) runs the scheduler tests, the renderer's tests and every
   client's tests with threading compiled out, and the symbol check over Donner's object files of
