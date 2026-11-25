@@ -2113,7 +2113,7 @@ scheduler's separate **32 KiB reporting reserve**. Worker bounds honor the confi
 stack. The owner measures once after sizing the pass and reuses those bounds for the ranges
 it executes. Unavailable bounds, insufficient configured worker space, or too little live
 headroom decline scheduling. The owner applies the original serial cascade after discarding
-any tentative work. Other build platforms use the serial path.
+any tentative work. Other builds retain their existing scheduling and stack contracts.
 
 The release qualification budget allows 12 KiB for fixed task-entry, range, preparation and
 style frames. It allows another 32 KiB for the selector branch or 24 KiB for declaration

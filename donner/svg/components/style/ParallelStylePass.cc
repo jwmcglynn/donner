@@ -324,6 +324,9 @@ private:
   }
 
   bool hasRangeStack() const {
+    if constexpr (!kNativeStyleStackAdmission) {
+      return true;
+    }
     if (std::this_thread::get_id() == ownerThread_) {
       return HasCascadeStackHeadroom(ownerStack_, requiredStackHeadroom_);
     }
@@ -409,14 +412,10 @@ private:
 
 bool CanEnterStyleScope(const tasks::TaskScheduler* scheduler) {
   // The owner holds document access, which an unrelated task could need.
-#if defined(__APPLE__) || defined(__linux__)
   return scheduler && scheduler->canJoinWithoutRunningUnrelatedTasks() &&
          scheduler->schedulingWidth() != 0 &&
-         (scheduler->workerCount() == 0 || scheduler->workerStackBytes() >= kCascadeHeadroom);
-#else
-  (void)scheduler;
-  return false;
-#endif
+         (!kNativeStyleStackAdmission || scheduler->workerCount() == 0 ||
+          scheduler->workerStackBytes() >= kCascadeHeadroom);
 }
 
 bool HasShallowStylesheets(const Registry& registry) {
@@ -442,7 +441,7 @@ bool Eligible(const Registry& registry, std::size_t threshold) {
   }
   const auto* budget = registry.ctx().find<StyleResourceBudget>();
   return (!budget || (!budget->rejected() && budget->retainedStyleBytes()->canReserve(0))) &&
-         HasShallowStylesheets(registry);
+         (!kNativeStyleStackAdmission || HasShallowStylesheets(registry));
 }
 
 bool FrontierParentsReady(const Forest& forest, const Registry& registry) {
@@ -466,6 +465,9 @@ std::optional<tasks::StackBounds> PrepareForest(Forest& forest, const Registry& 
                                                 std::size_t threshold) {
   if (!forest.collect(registry, selection, threshold) || !forest.connect(registry, threshold)) {
     return std::nullopt;
+  }
+  if constexpr (!kNativeStyleStackAdmission) {
+    return tasks::StackBounds();
   }
   const auto stack = tasks::TaskScheduler::TryCurrentThreadUsableStack();
   return stack && HasCascadeStackHeadroom(*stack) ? stack : std::nullopt;
