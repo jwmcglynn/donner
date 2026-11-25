@@ -2234,8 +2234,9 @@ separate 32 KiB reporting reserve.
   it executes. Unavailable bounds cause the optional pass to decline. Other build platforms
   use the serial path. The serial owner applies the original cascade if admission fails,
   including after discarding tentative work. The rule is a conservative native release qualification envelope. Samples
-  check it without defining a universal stack maximum. The ordinary serial caller retains
-  its existing stack contract.
+  check it without defining a universal stack maximum. Debug and sanitizer tests exercise the
+  admission and rollback behavior, and their instrumented frames are outside the release
+  measurement envelope. The ordinary serial caller retains its existing stack contract.
   `//donner/svg/components/style:style_parallel_tests` checks both sides of the CSS depth gate
   and compares the small-stack fallback to the ordinary serial path.
 - **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
