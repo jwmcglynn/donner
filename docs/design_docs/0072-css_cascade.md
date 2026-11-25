@@ -2104,8 +2104,9 @@ context after the main walk returns, without another range frame on the stack.
 
 An active stylesheet revision is eligible only when its selector arguments and declaration
 component values are at most four levels deep. Its rule index records this once, including
-imported sheets. A provisional element with unparsed local values declines before copying
-their component trees.
+imported sheets. A provisional element checks unparsed local declaration depth before
+copying its component trees. Already parsed presentation values contain no CSS component tree
+to check. Shallow declarations still take the ordinary speculative warning path.
 
 The owner and every executing range check for **64 KiB of client headroom** above the
 scheduler's separate **32 KiB reporting reserve**. Worker bounds honor the configured usable

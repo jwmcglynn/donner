@@ -165,12 +165,14 @@ bool HasShallowValues(std::span<const css::ComponentValue> values, unsigned rema
 
 bool HasShallowRule(const css::SelectorRule& rule) {
   return HasShallowSelectors(rule.selector, kMaximumParallelCssNesting) &&
-         std::ranges::all_of(rule.declarations, [](const css::Declaration& declaration) {
-           return HasShallowValues(declaration.values, kMaximumParallelCssNesting);
-         });
+         std::ranges::all_of(rule.declarations, &RuleIndex::IsDeclarationShallowForParallelCascade);
 }
 
 }  // namespace
+
+bool RuleIndex::IsDeclarationShallowForParallelCascade(const css::Declaration& declaration) {
+  return HasShallowValues(declaration.values, kMaximumParallelCssNesting);
+}
 
 std::ostream& operator<<(std::ostream& os, const RuleIndexKey& key) {
   switch (key.kind) {

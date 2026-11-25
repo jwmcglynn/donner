@@ -858,6 +858,27 @@ TEST(StyleParallel, DeepSelectorAndDeclarationUseTheUnchangedSerialCascade) {
   }
 }
 
+TEST(StyleParallel, HeldLocalComponentValuesAreCheckedBeforeCopying) {
+  for (const bool inlineStyle : {true, false}) {
+    const std::string_view attributes = inlineStyle ? " style='stop-color:f(f(f(f(f(blue)))));'"
+                                                    : " stop-color='f(f(f(f(f(blue)))))'";
+    SCOPED_TRACE(attributes);
+    auto source = SiblingScene(1050);
+    const auto target = source.find("id='r0'");
+    ASSERT_NE(target, std::string::npos);
+    source.insert(target + std::string_view("id='r0'").size(), attributes);
+    const auto serial = FirstFrame(source, {.workerCount = 0});
+    const auto candidate = FirstFrame(source, {.workerCount = 2});
+    EXPECT_EQ(candidate.scheduled, 1u);
+    // The presentation attribute is parsed before the pass. The inline declaration still owns
+    // its component tree when a speculative worker reaches it.
+    const auto& metrics = candidate.doc.registry().ctx().get<StyleCascadeMetrics>();
+    EXPECT_EQ(metrics.abandonedStylePasses, inlineStyle ? 1u : 0u);
+    EXPECT_EQ(candidate.traces == 0u, inlineStyle);
+    ExpectSame(serial, candidate);
+  }
+}
+
 TEST(StyleParallel, SmallPassStaysSerial) {
   const auto source = SiblingScene(12);
   const auto frame = FirstFrame(source, {.workerCount = 4});

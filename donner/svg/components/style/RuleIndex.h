@@ -196,6 +196,9 @@ public:
     return gatherHits(hits, candidates);
   }
 
+  /// Whether a declaration's component tree stays within the scheduled style depth limit.
+  static bool IsDeclarationShallowForParallelCascade(const css::Declaration& declaration);
+
   /// Whether every rule stays within the recursive CSS depth supported by scheduled style tasks.
   bool shallowForParallelCascade() const { return shallowForParallelCascade_; }
 

@@ -1927,8 +1927,10 @@ bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Wor
   }
   const Registry& registry = impl_->registry;
   const auto* local = registry.try_get<StyleComponent>(StyleDataEntity(registry, entity));
-  if (local && !local->properties().unparsedProperties.empty()) {
-    // Provisional records cannot retain these values. Decline before copying their CSS trees.
+  if (local && !std::ranges::all_of(local->properties().unparsedProperties, [](const auto& item) {
+        return RuleIndex::IsDeclarationShallowForParallelCascade(item.second.declaration);
+      })) {
+    // Decline before copying a deep local CSS tree.
     impl_->abandoned.store(true, std::memory_order_relaxed);
     return false;
   }
