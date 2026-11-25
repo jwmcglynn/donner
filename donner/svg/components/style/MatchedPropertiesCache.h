@@ -90,25 +90,29 @@ private:
     std::string localKey;
     MatchedPropertiesEntry entry;
     bool referenced = true;
+
+    std::size_t keyPayloadBytes() const;
   };
 
   struct Bucket {
     SmallVector<Slot, 1> slots;
     std::size_t hand = 0;
+
+    Slot& nextVictim();
   };
 
   static constexpr std::size_t kSlotsPerBucket = 8;
   static constexpr std::size_t kBuckets = 4096 / kSlotsPerBucket;
-  // Bound retained key storage, including container capacity, separately from the records.
-  // The embedded slot in each bucket is counted even while that bucket uses its heap buffer.
   static constexpr std::size_t kMaximumStringCapacity = 4096;
+  static constexpr std::size_t kMaximumKeyPayloadBytes = 1024 * 1024;
+  // A bucket can retain its inline slot and an eight-slot heap allocation at the same time.
   static constexpr std::size_t kMaximumMetadataBytes =
-      kBuckets * (sizeof(std::unique_ptr<Bucket>) + sizeof(Bucket) +
-                  kSlotsPerBucket *
-                      (sizeof(Slot) + kMaximumStringCapacity + 1 +
-                       MatchedPropertiesKey::kMaximumRules * sizeof(MatchedPropertiesKey::Rule)));
-  static_assert(kMaximumMetadataBytes <= 40 * 1024 * 1024);
+      kBuckets *
+          (sizeof(std::unique_ptr<Bucket>) + sizeof(Bucket) + kSlotsPerBucket * sizeof(Slot)) +
+      kMaximumKeyPayloadBytes;
+  static_assert(kMaximumMetadataBytes <= 3 * 1024 * 1024);
   std::array<std::unique_ptr<Bucket>, kBuckets> buckets_{};
+  std::size_t retainedKeyPayloadBytes_ = 0;
 };
 
 }  // namespace donner::svg::components

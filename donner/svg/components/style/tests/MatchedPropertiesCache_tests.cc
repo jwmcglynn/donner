@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <memory>
+#include <set>
 
 namespace donner::svg::components {
 
@@ -147,6 +148,32 @@ TEST(MatchedPropertiesCacheTests, OversizeRuleOrDeclarationKeysSkipInsertion) {
   EXPECT_THAT(longLocal.cacheable(), Eq(false));
   cache.insert(longLocal, {.style = record});
   EXPECT_THAT(cache.find(longLocal), IsNull());
+}
+
+TEST(MatchedPropertiesCacheTests, LargeKeysStopFillingBucketsAtTheDocumentByteLimit) {
+  MatchedPropertiesCache cache;
+  const auto record = std::make_shared<const ComputedStyle>();
+  std::set<std::size_t> seenBuckets;
+  for (std::uint32_t index = 0; index < 4096; ++index) {
+    MatchedPropertiesKey key;
+    for (std::uint32_t rule = 0; rule < 127; ++rule) {
+      key.addRule(1, 0, rule, {});
+    }
+    key.addRule(1, 0, index, {});
+    if (!seenBuckets.insert(MatchedPropertiesCacheTestPeer::bucket(key)).second) {
+      continue;
+    }
+    cache.insert(key, {.style = record});
+    if (!cache.find(key)) {
+      EXPECT_THAT(seenBuckets.size(), testing::Lt(384u));
+      cache.clear();
+      cache.insert(key, {.style = record});
+      EXPECT_THAT(cache.find(key), NotNull());
+      return;
+    }
+  }
+  ADD_FAILURE() << "Admitted a maximum-size rule key in every probed bucket (" << seenBuckets.size()
+                << ")";
 }
 
 TEST(MatchedPropertiesCacheTests, FullBucketGivesAccessedRecordASecondChance) {

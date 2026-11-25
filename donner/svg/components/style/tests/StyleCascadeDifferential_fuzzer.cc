@@ -9,9 +9,8 @@
 ///
 /// The vocabulary covers how the index reads keys: mixed-case and namespaced tags, unknown and
 /// foreign elements, class lists with repeated tokens and every whitespace separator, and
-/// attribute names that differ only in case. Shadow trees and imported stylesheets are left out:
-/// both need the document prepared for rendering, which loads resources and instantiates `<use>`
-/// targets, and the deterministic differential tests cover them instead.
+/// attribute names that differ only in case. The harness instantiates local `<use>` targets and
+/// compares both cached paths after stylesheet rewrites, type changes and element replacement.
 
 #include <algorithm>
 #include <array>
@@ -29,7 +28,11 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/ClassComponent.h"
+#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
@@ -71,17 +74,28 @@ void Require(bool condition, std::source_location where = std::source_location::
   }
 }
 
+void AppendUseFixtures(std::string& svg, std::string_view tree) {
+  const std::uint8_t choice = tree.empty() ? 0 : static_cast<std::uint8_t>(tree.front());
+  const std::string_view resourceTag = choice & 1 ? "symbol" : "g";
+  svg += "<" + std::string(resourceTag) + R"( id="fuzz-resource"><rect class="cache-probe"/>)";
+  svg += "</" + std::string(resourceTag) + R"(></defs><use id="fuzz-use" href="#fuzz-resource"/>)";
+  if (choice & 2) {
+    svg += R"(<use id="fuzz-use-2" href="#fuzz-resource" fill="blue"/>)";
+  }
+}
+
 std::string MakeDocument(std::string_view css, std::string_view tree) {
   std::string svg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" )"
-      R"(xmlns:x="urn:example:x"><style><![CDATA[)";
+      R"(xmlns:x="urn:example:x"><style id="fuzz-sheet"><![CDATA[.cache-probe { opacity: .25; })";
   for (std::size_t i = 0; i < css.size(); ++i) {
     // Keep the CDATA section closed only by its own terminator.
     if (css.substr(i, 3) != "]]>") {
       svg.push_back(css[i]);
     }
   }
-  svg += "]]></style>";
+  svg += R"(]]></style><rect id="fuzz-probe" class="cache-probe"/><defs>)";
+  AppendUseFixtures(svg, tree);
   std::vector<std::string_view> open;
   for (std::size_t i = 0; i + kElementBytes <= tree.size() && i / kElementBytes < kMaximumElements;
        i += kElementBytes) {
@@ -114,6 +128,24 @@ std::string MakeDocument(std::string_view css, std::string_view tree) {
   return svg + "</svg>";
 }
 
+void PopulateUses(SVGDocument& document, ParseWarningSink& warnings) {
+  Registry& registry = document.registry();
+  for (const std::string_view selector : {"#fuzz-use", "#fuzz-use-2"}) {
+    const std::optional<SVGElement> element = document.querySelector(selector);
+    if (!element) {
+      continue;
+    }
+    const EntityHandle use = element->entityHandle();
+    const auto target = use.get<components::ShadowTreeComponent>().mainTargetEntity(registry);
+    Require(target.has_value());
+    auto& tree = registry.emplace<components::ComputedShadowTreeComponent>(use.entity());
+    components::ShadowTreeSystem().populateInstance(use, tree, components::ShadowBranchType::Main,
+                                                    target->handle.entity(),
+                                                    RcString("#fuzz-resource"), warnings);
+    Require(tree.mainBranch && !tree.mainBranch->shadowEntities.empty());
+  }
+}
+
 std::optional<SVGDocument> Cascade(const std::string& svg, bool unindexed, bool cacheDisabled) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(svg, warnings);
@@ -133,6 +165,7 @@ std::optional<SVGDocument> Cascade(const std::string& svg, bool unindexed, bool 
   if (cacheDisabled) {
     document.registry().ctx().emplace<components::DisableMatchedPropertiesCacheForTesting>();
   }
+  PopulateUses(document, warnings);
   components::StyleSystem().computeAllStyles(document.registry(), warnings);
   return document;
 }
@@ -214,6 +247,51 @@ void RestyleLastEntity(SVGDocument& document) {
   styleSystem.computeStylesFor(registry, std::span<const Entity>(&entity, 1), warnings);
 }
 
+void RestyleStylesheetProbe(SVGDocument& document) {
+  auto probe = document.querySelector("#fuzz-probe");
+  Require(probe.has_value());
+  probe->setStyle("");
+  (void)probe->getComputedStyle();
+
+  const auto use = document.querySelector("#fuzz-use");
+  Require(use.has_value());
+  const auto* tree = use->entityHandle().try_get<components::ComputedShadowTreeComponent>();
+  if (tree && tree->mainBranch && !tree->mainBranch->shadowEntities.empty()) {
+    Registry& registry = document.registry();
+    const Entity clone = tree->mainBranch->shadowEntities.back();
+    components::StyleSystem styles;
+    styles.invalidateComputed(EntityHandle(registry, clone));
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    styles.computeStylesFor(registry, std::span<const Entity>(&clone, 1), warnings);
+  }
+}
+
+void ExerciseStylesheetEdits(SVGDocument& cached, SVGDocument& uncached, std::string_view css) {
+  const auto editAndCheck = [&](const auto& edit) {
+    for (SVGDocument* document : {&cached, &uncached}) {
+      edit(*document);
+      RestyleStylesheetProbe(*document);
+    }
+    RequireSameStylesAndRules(cached, uncached);
+  };
+  const std::string rewritten = ".cache-probe { opacity: .75; }" + std::string(css);
+  editAndCheck([&](SVGDocument& document) {
+    document.querySelector("#fuzz-sheet")->cast<SVGStyleElement>().setContents(rewritten);
+  });
+  for (const std::string_view type : {"text/plain", "text/css"}) {
+    editAndCheck([type](SVGDocument& document) {
+      document.querySelector("#fuzz-sheet")->cast<SVGStyleElement>().setType(type);
+    });
+  }
+  editAndCheck([](SVGDocument& document) {
+    auto root = document.svgElement();
+    root.removeChild(*document.querySelector("#fuzz-sheet"));
+    auto replacement = SVGStyleElement::Create(document);
+    replacement.setContents(".cache-probe { opacity: .5; }");
+    root.appendChild(replacement);
+  });
+}
+
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
@@ -279,6 +357,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       cachedRegistry.ctx().get<components::StyleCascadeMetrics>().counters - cachedBeforePartial,
       uncachedRegistry.ctx().get<components::StyleCascadeMetrics>().counters -
           uncachedBeforePartial);
+
+  ExerciseStylesheetEdits(*cached, *uncached, css);
   return 0;
 }
 

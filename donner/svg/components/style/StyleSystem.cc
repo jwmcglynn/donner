@@ -91,8 +91,8 @@ void SynchronizeAllStylesheetFonts(Registry& registry) {
 
 bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
                               const StylesheetComponent& stylesheet) {
-  return HasSvgNamespace(registry, entity) && !stylesheet.isUserAgentStylesheet &&
-         !stylesheet.sourceMap.empty();
+  return HasSvgNamespace(registry, entity) && stylesheet.isCssType() &&
+         !stylesheet.isUserAgentStylesheet && !stylesheet.sourceMap.empty();
 }
 
 bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent& stylesheet,

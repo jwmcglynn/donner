@@ -162,8 +162,11 @@ struct StylesheetComponent {
   /// the imports of the current \ref stylesheet have not been resolved yet.
   std::optional<std::uint64_t> importGeneration;
 
-  /// Font faces this stylesheet contributes to the document, including imported ones.
+  /// Font faces contributed by this active CSS sheet, including imported ones.
   std::span<const css::FontFace> cascadeFontFaces() const UTILS_LIFETIME_BOUND {
+    if (!isCssType()) {
+      return {};
+    }
     return combinedFontFaces.empty() ? stylesheet.fontFaces()
                                      : std::span<const css::FontFace>(combinedFontFaces);
   }
@@ -195,6 +198,9 @@ struct StylesheetComponent {
    * @param localName Attribute local name, compared case-insensitively to over-approximate.
    */
   bool usesAttributeInSelector(std::string_view localName) const {
+    if (!isCssType()) {
+      return false;
+    }
     if (attributeSelectorMatchesAnyName) {
       return true;
     }

@@ -227,7 +227,8 @@ void TreeMutation::SetValue(EntityHandle node, const RcStringOrRef& value) {
 void TreeMutation::InvalidateTextContentStyles(EntityHandle element) {
   const auto stylesheets = element.registry()->view<StylesheetComponent>();
   if (std::none_of(stylesheets.begin(), stylesheets.end(), [&stylesheets](Entity entity) {
-        return stylesheets.get<StylesheetComponent>(entity).selectorsDependOnTextContent;
+        const auto& stylesheet = stylesheets.get<StylesheetComponent>(entity);
+        return stylesheet.isCssType() && stylesheet.selectorsDependOnTextContent;
       })) {
     return;
   }
