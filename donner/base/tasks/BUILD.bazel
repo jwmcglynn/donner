@@ -65,9 +65,14 @@ donner_cc_library(
     hdrs = [
         "AsyncTaskScope.h",
         "CoroutineFramePool.h",
+        "ParallelFor.h",
         "Task.h",
         "TaskScheduler.h",
         "TaskScope.h",
+    ],
+    visibility = [
+        "//donner/base/tasks:__subpackages__",
+        "//donner/svg/components/style:__pkg__",
     ],
     deps = [
         ":false_sharing",
@@ -122,6 +127,28 @@ donner_cc_test(
         ":task_scheduler",
         "//donner/base:gtest_timeout_main",
         "//donner/base:stall_guard",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "parallel_for_tests",
+    srcs = ["tests/ParallelFor_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "seeded_scheduler_tests",
+    srcs = ["tests/SeededScheduler_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
         "@com_google_gtest//:gtest",
     ],
 )
@@ -225,4 +252,18 @@ donner_cc_binary(
     testonly = 1,
     srcs = ["tests/ParkerWaitBench.cc"],
     tags = ["manual"],
+)
+
+donner_cc_binary(
+    name = "parallel_for_scaling_bench",
+    testonly = 1,
+    srcs = ["tests/ParallelForScalingBench.cc"],
+    tags = [
+        "manual",
+        "perf",
+    ],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+    ],
 )

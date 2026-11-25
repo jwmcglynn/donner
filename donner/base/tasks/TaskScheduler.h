@@ -29,7 +29,7 @@ namespace donner::tasks {
 
 /// Options for a \ref TaskScheduler.
 struct TaskSchedulerOptions {
-  /// Workers to start. 0 runs every spawn inline on the spawning thread.
+  /// Workers to start in ordinary mode. Without a seed, zero runs every spawn inline.
   std::size_t workerCount = 0;
 
   /// Entries per worker deque; a power of two.
@@ -53,6 +53,10 @@ struct TaskSchedulerOptions {
   /// Stack a worker waiting on a scope keeps free: it helps with other work only while it has more
   /// than this left. A heuristic that decides which worker helps, not a bound on depth.
   std::size_t helpMarginBytes = 128 * 1024;
+
+  /// Run tasks of each joined scope in reproducible order on the constructing thread, without
+  /// workers.
+  std::optional<std::uint64_t> seed = std::nullopt;
 };
 
 /// A worker's state word.
@@ -96,6 +100,8 @@ enum class SchedulerStep : std::uint8_t {
   AsyncJoinBeforeEnqueue,       //!< The last finisher copied the resumption, before enqueueing it.
   ScopeFinisherAfterDecrement,  //!< A finisher's decrement brought its scope's count to zero,
                                 //!< before it changes the recorded parker.
+  ParallelForBeforeClaim,       //!< A loop participant is about to claim a range.
+  ParallelForAfterClaim,        //!< A loop participant has claimed or exhausted the range.
 };
 
 /// Ostream output operator for \ref SchedulerStep, for test diagnostics.
@@ -132,8 +138,9 @@ public:
 class TaskSchedulerTestPeer;
 class ScheduleAwaitable;
 namespace detail {
+struct ParallelForAccess;
 class TaskPromiseBase;
-}
+}  // namespace detail
 class TaskScope;
 
 /**
@@ -167,7 +174,10 @@ class TaskScope;
  * thread that finishes a task decrements its scope's count and, on reaching zero, changes the
  * parker the scope recorded, waking the scope's creator.
  *
- * With zero workers every spawn runs inline on the spawning thread.
+ * With a seed, submissions and joins take place on the constructing thread. A join runs queued
+ * tasks of the joined scope in seeded order; a nested wait therefore cannot recursively run its
+ * parent's siblings. Even seed zero selects this mode. Without a seed and with zero workers
+ * every spawn runs inline on the spawning thread.
  */
 class TaskScheduler {
 public:
@@ -188,8 +198,7 @@ public:
   /// disagrees with the workers' state words.
   ~TaskScheduler();
 
-  /// The workers started: every one requested, since a worker thread that fails to start fails a
-  /// release assertion.
+  /// The number of worker threads started. A seeded scheduler starts none.
   [[nodiscard]] std::size_t workerCount() const { return workers_.size(); }
 
   /// True when the options asked for zero workers.
@@ -200,6 +209,7 @@ public:
 
 private:
   friend class TaskSchedulerTestPeer;
+  friend struct detail::ParallelForAccess;
   friend class AsyncTaskScope;
   friend class ScheduleAwaitable;
   friend class detail::TaskPromiseBase;
@@ -257,7 +267,7 @@ private:
   template <typename F>
   [[nodiscard]] bool trySpawn(F&& work, const ScopeLink* scope = nullptr) {
     if (workers_.empty()) {
-      return false;
+      return seeded_ && trySpawnSeeded(std::forward<F>(work), scope);
     }
     if (Worker* worker = currentWorker()) {
       TaskRecord* record = worker->pool.tryAllocate();
@@ -354,6 +364,28 @@ private:
   /// The calling thread's worker of this scheduler, or null.
   Worker* currentWorker() const;
 
+  template <typename F>
+  bool trySpawnSeeded(F&& work, const ScopeLink* scope) {
+    TaskRecord* record = allocateSeededRecord();
+    if (record == nullptr) {
+      return false;
+    }
+    prepareRecord(record, std::forward<F>(work), scope);
+    enqueueSeededRecord(record);
+    return true;
+  }
+
+  struct SeededState;
+  void checkSeededOwner() const;
+  void assertSeededOwner() const {
+    if (seeded_) {
+      checkSeededOwner();
+    }
+  }
+  TaskRecord* allocateSeededRecord();
+  void enqueueSeededRecord(TaskRecord* record);
+  void drainSeededUntil(const std::atomic<std::uint64_t>& count);
+
   /// Allocates a record from the external pool. @return Null at its bound.
   TaskRecord* allocateExternalRecord();
 
@@ -401,7 +433,7 @@ private:
   void runTask(Worker& worker, SchedulerWork* work);
 
   /// Runs or discards the closure, returns it to its pool, and notifies its scope.
-  void runRecord(Worker& worker, TaskRecord* record);
+  void runRecord(CreatorRecordPool<>& localPool, std::size_t workerIndex, TaskRecord* record);
 
   /// Bytes of stack left below the caller's frame on the calling worker, of any scheduler; empty on
   /// a thread that is not a worker.
@@ -474,8 +506,34 @@ private:
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> awake_{0};
   alignas(kFalseSharingBytes) std::atomic<bool> stop_{false};
 
+  std::unique_ptr<SeededState> seeded_;
   std::vector<std::unique_ptr<Worker>> workers_;
 };
+
+namespace detail {
+
+/// Logical width available to fork/join operations, including single-thread schedule replay.
+struct ParallelForAccess {
+  /// Number of lanes a loop can expose to the scheduler.
+  static std::size_t Concurrency(const TaskScheduler& scheduler) {
+    if (scheduler.seeded_) {
+      scheduler.assertSeededOwner();
+      // Replay exposes the same set of ranges regardless of the requested hardware width.
+      return 4;
+    }
+    return scheduler.workerCount();
+  }
+
+  /// Reports a loop claim step with its worker's index, or zero on the caller.
+  static void Notify(TaskScheduler& scheduler, SchedulerStep step) {
+    if (scheduler.testHooks_ != nullptr) {
+      const auto* worker = scheduler.currentWorker();
+      scheduler.hook(step, worker == nullptr ? 0 : worker->index);
+    }
+  }
+};
+
+}  // namespace detail
 
 /// Stores its queue entry in the suspended caller's frame.
 class ScheduleAwaitable {
@@ -483,7 +541,10 @@ public:
   ScheduleAwaitable(const ScheduleAwaitable&) = delete;
   ScheduleAwaitable& operator=(const ScheduleAwaitable&) = delete;
 
-  [[nodiscard]] bool await_ready() const noexcept { return scheduler_.workerCount() == 0; }
+  [[nodiscard]] bool await_ready() const noexcept {
+    scheduler_.assertSeededOwner();
+    return scheduler_.workerCount() == 0;
+  }
   void await_suspend(std::coroutine_handle<> handle) noexcept;
   void await_resume() const noexcept {}
 

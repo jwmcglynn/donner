@@ -165,14 +165,17 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
     liveness tests listed under [Internals](#internals), and the lost-wakeup injected-delay test
     (red with the protocol broken) are green. For the queued-work liveness case, disabling the
     last-awake rule through a test hook must leave work pending with every worker asleep.
-- [ ] Milestone S2: Parallel loops and determinism (3.5 days). After S1.
-  - [ ] `ParallelFor` with grain and adaptive splitting, its const-body check and chunk cap
-        (1.5 days).
-  - [ ] The shared-cursor variant behind the same API, for S6 to decide between (0.5 day).
-  - [ ] Seeded deterministic mode (1 day).
-  - [ ] Test hooks for injected delays and counters (0.5 day).
-  - Done when: the inline-below-grain counter test, the seeded-mode replay test and the scaling
-    benchmark target exist and pass.
+- [x] Milestone S2: Parallel loops and determinism (3.5 days). Requires S1 worker scopes and joins.
+  Scaling a fork from an otherwise sleeping pool also needs S1's parallelism wake.
+  - [x] `ParallelFor` with grain, adaptive splitting, a const-invocable shared body and a
+        4096-chunk cap (1.5 days): `//donner/base/tasks:parallel_for_tests`.
+  - [x] Shared-cursor comparison behind the same range contract (0.5 day):
+        `//donner/base/tasks:parallel_for_scaling_bench`. S6 compares both on W2 and W4.
+  - [x] Seeded deterministic execution (1 day): `//donner/base/tasks:seeded_scheduler_tests`.
+  - [x] Delay hooks and claim counters (0.5 day): `//donner/base/tasks:parallel_for_tests`.
+  - Done when: the inline-below-grain counter test, seeded replay test and scaling benchmark
+    target exist and pass. The benchmark checks each output against the serial computation and
+    reports speedup independently of correctness.
 - [ ] Milestone S3: Coroutines (3.25 days). After S1.
   - [ ] `AsyncTaskScope` cooperative stop through the worker-scope stop check (0.25 day).
     The scope supports spawns, one join, and the destructor assertion.
@@ -199,8 +202,8 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
       full or the publisher is external. The global wake handshake finishes before unlocking the
       FIFO. The publisher does not access the scheduler or frame once a consumer can take it.
       The scheduler used for a resumption stays alive until the continuation resumes.
-    - Seeded readiness and adopted-thread resumptions depend on the seeded mode and adoption
-      milestones. Worker waits implement deep sleep and hand-off. The coroutine ThreadSanitizer
+    - A seeded schedule is ready on the replay thread. Adopted-thread resumptions depend on
+      adoption. Worker waits implement deep sleep and hand-off. The coroutine ThreadSanitizer
       cases cover 0, 1 and 4 workers.
   - Done when: coroutine tests at 0, 1 and 4 workers, including resumption from a non-worker
     thread, registration racing completion, and nested awaits, pass under ThreadSanitizer. The
@@ -483,8 +486,7 @@ target, so code that never schedules work does not link it).
 enum class WorkerQos { kInteractive, kUserInitiated, kDefault };  // Apple QoS; ignored elsewhere.
 
 struct TaskSchedulerOptions {
-  std::size_t workerCount = DefaultWorkerCount(); // 0: run everything inline on the caller.
-  std::optional<std::uint64_t> seed;         // Seeded deterministic mode (tests).
+  std::size_t workerCount = DefaultWorkerCount(); // Without a seed, 0 runs work inline on the caller.
   std::size_t dequeCapacity = 4096;          // Entries per deque; a power of two.
   std::size_t maxTasksPerCreator = 4096;     // Live task records per worker or adopted slot.
   std::size_t maxExternalTasks = 64 * 1024;  // Live task records for all other threads together.
@@ -493,6 +495,7 @@ struct TaskSchedulerOptions {
   std::size_t workerStackBytes = 512 * 1024; // Each worker's stack, in whole pages.
   std::size_t idleSpinRounds = 1;            // Steal rounds before sleeping; set from S6's W5.
   WorkerQos workerQos = WorkerQos::kInteractive;
+  std::optional<std::uint64_t> seed;         // Seeded deterministic mode (tests).
 };
 
 // Hardware threads available to the process (the affinity mask on Linux, the active processor
@@ -567,20 +570,25 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
   stolen, the caller waits as a scope's creator does (below). On any other thread, `Join` spawns
   `b` through the global queue, runs `a`, and then waits for `b` as a non-worker scope wait does;
   it cannot take `b` back.
-- **ParallelFor** never creates a task for a range below `grain`. Above it, it splits in halves
-  only while the split half is likely to be stolen: a range is split again when it was stolen
-  (adaptive splitting), so on an idle pool work spreads quickly and on a busy pool it stays in
-  large pieces. The body is one shared instance invoked concurrently, so `ParallelFor`
-  static_asserts that it is invocable as `const F&` (Filament's `parallel_for` enforces the same).
-  The effective grain is at least `ceil((end - begin) / 4096)`, so a small grain over a large range
-  cannot create millions of tasks. Milestone S2 also implements Filament's shared-cursor scheme
-  (one root, at most `workerCount()` helpers, each claiming `grain`-sized chunks by a relaxed
-  `fetch_add`) behind the same API; Milestone S6 keeps whichever wins workloads W2 and W4, and the
-  other is deleted, not kept as an option.
+- **ParallelFor.** Both partitioners use the half-open interval `[begin, end)`. Reversed bounds
+  fail a release assertion before any unsigned subtraction. An empty range returns normally
+  without calling the body. Zero grain becomes one before the 4096-chunk cap applies: the
+  effective grain is the larger of that normalized value and `ceil((end - begin) / 4096)`.
+  The body is one shared, const-invocable instance. A nonempty range too small for two full grains
+  runs inline without allocating a task.
+  - The adaptive partitioner offers the right half to a flat scope and continues iteratively on
+    the left. The initial split budget is sized to the worker count. Each half inherits part of
+    the budget, and a half taken by another thread can split afresh. A declined submission leaves
+    the entire remaining interval with the submitter.
+  - The comparison partitioner submits a root and bounded helpers. Each claims a chunk ordinal
+    with a relaxed atomic increment. Only an in-range ordinal is converted to a start index,
+    so exhausted runners cannot wrap the cursor back into the range. A final partial chunk ends
+    at `end`. The scope join publishes the results for both partitioners. S6 compares them on
+    W2 and W4 before choosing which implementation to keep.
 - **Zero workers.** `spawn` runs the work inline. `trySpawn` returns false without running it, so a
   client with its own explicit work stack (0072 Part D) keeps its native stack flat at zero workers
   as it does at a bound, instead of recursing once per spawned level. `Join` runs `a` then `b`;
-  `ParallelFor` runs one `body(begin, end)`. This holds whether zero workers came from the runtime
+  `ParallelFor` runs one `body(begin, end)` for a nonempty range. This holds whether zero workers came from the runtime
   option, from workers that failed to start, or from threading compiled out. Seeded mode is not
   zero-worker mode: its tasks are queued and run on the calling thread in seeded order, so
   `trySpawn` there returns true until the calling thread's `maxTasksPerCreator` records are live,
@@ -1361,11 +1369,15 @@ queue, and *started* once a thread begins running it.
   saving is too small to matter, adoption is removed and the creator's thread takes part only
   through the non-worker wait path, at the cost of one worker wake per fork; that is recorded
   under Open Questions.
-- **Seeded mode.** With `seed` set, the scheduler runs on the calling thread only and, whenever
-  more than one task is runnable, picks the next one with a seeded generator. It reproduces task
-  orders, not steals: the deque's compare-and-swap race and real interleavings never happen in
-  this mode, and are covered by the stress tests at real worker counts and by ThreadSanitizer. Its
-  queue is bounded by the calling thread's `maxTasksPerCreator`.
+- **Seeded mode.** Setting `TaskSchedulerOptions::seed`, including to zero, starts no workers.
+  The constructing thread submits and runs the work. One PRNG chooses among ready records of the
+  scope being joined. Inner waits only run their scope's records, so a backlog of sibling tasks
+  does not become nested calls. All scopes share the caller's `maxTasksPerCreator` live-record
+  bound, including running records. A declined `trySpawn` leaves the callable with its owner.
+  A seeded loop uses four logical pieces regardless of the requested physical worker count.
+  The same seed and submissions therefore replay the same range order. A seeded coroutine's
+  `schedule()` is ready immediately. Its asynchronous join drains the eligible work on the caller
+  and continues once the count is zero. Real-steal and synchronization tests use physical workers.
 - **Shutdown.** The destructor asserts no scope and no `AdoptedThread` is live
   (`UTILS_RELEASE_ASSERT`), sets the stop flag with a sequentially consistent exchange, then wakes
   every worker with the same swap rule (the swap, then the parker change, whether or not the swap
@@ -1448,7 +1460,7 @@ scheduler's configuration and shutdown) and gets its happens-before edges from t
 | Live `TaskScope` count | a scope's construction and destruction; the scheduler destructor's check | relaxed RMW and load | an assertion; a correct program already orders a scope's destruction before its scheduler's |
 | Live `ParkerPool` count (tests only) | pool construction and destruction; a test's read | relaxed RMW and load | read once the threads that hold pools are joined |
 | Scope stop request | `requestStop()` and task checks | relaxed store and load | advisory; no data is published through it, and stopped tasks still decrement |
-| Shared-cursor `ParallelFor` cursor | chunk claims | relaxed `fetch_add` | chunk ownership only; results are published by the scope's join |
+| Shared-cursor `ParallelFor` cursor | claim the next chunk ordinal | relaxed `fetch_add` | gives each runner a distinct chunk. The scope join publishes the results. |
 | Default scheduler pointer | install, and every `DefaultTaskScheduler()` load | release store under the default-scheduler mutex; acquire load | readers see a fully constructed scheduler; configure and shutdown take the same mutex |
 
 The design has exactly two store-buffering pairs, and both are sequentially consistent on both
@@ -1882,9 +1894,18 @@ clients that size work from documents.
   deriving an alignment from the frame size. The pool charges the requested bytes, including
   the trailer and its padding. Any additional heap space needed by the allocator to honor the
   alignment is allocator-dependent and outside that budget.
-- **Scheduler tests** (`//donner/base/tasks:task_scheduler_tests`): scopes, `Join`, `ParallelFor`
-  (including the inline-below-grain counter), cancellation, nested scopes, coroutines, shutdown
-  assertions, each at 0, 1 and 4 workers and in seeded mode.
+- **Parallel loops** (`//donner/base/tasks:parallel_for_tests`): the public entry point covers
+  inline, queued, worker-origin and bounded-admission paths. Empty ranges make no calls, reversed
+  bounds fail a release assertion, and zero grain uses one before applying the chunk cap.
+  Guarded interleavings force repeated steals down to the grain floor, delay the root until the
+  scope joins, and bring two shared-cursor workers to a claim together. Linux CI also runs the
+  ASan and TSan variants. The scaling benchmark checks a million independent outputs against the
+  inline result and reports the four-worker median for each partitioner from an idle pool.
+- **Seeded replay** (`//donner/base/tasks:seeded_scheduler_tests`): repeat the same submissions
+  with the same seed, compare distinct seeds, fill the caller's record pool, and exercise nested
+  synchronous and coroutine joins. A flat backlog with nested joins checks that independent
+  sibling bodies run at depth one. `parallel_for_tests` compares the adaptive range trace
+  across requested hardware counts and checks output coverage in both strategies.
 - **Injected-delay race tests.** Test hooks delay a worker at chosen points (between the sleep
   decision and the sleep, between steal and run, before a scope's final decrement, between a
   creator's re-check and its parker wait, between a global-queue push and the publisher's read of

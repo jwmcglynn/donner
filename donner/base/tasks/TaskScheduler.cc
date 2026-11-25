@@ -1,6 +1,9 @@
 #include "donner/base/tasks/TaskScheduler.h"
 
 #include <optional>
+#include <random>
+#include <thread>
+#include <unordered_map>
 
 #include "donner/base/tasks/AsyncTaskScope.h"
 
@@ -57,6 +60,8 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
       return os << "AsyncJoinFinisherAfterDecrement";
     case SchedulerStep::AsyncJoinBeforeEnqueue: return os << "AsyncJoinBeforeEnqueue";
     case SchedulerStep::ScopeFinisherAfterDecrement: return os << "ScopeFinisherAfterDecrement";
+    case SchedulerStep::ParallelForBeforeClaim: return os << "ParallelForBeforeClaim";
+    case SchedulerStep::ParallelForAfterClaim: return os << "ParallelForAfterClaim";
   }
   UTILS_UNREACHABLE();
 }
@@ -68,6 +73,31 @@ TaskScheduler::Worker::Worker(TaskScheduler& scheduler, std::size_t index,
       deque(options.dequeCapacity),
       pool(options.maxTasksPerCreator),
       stealRng(StealSeed(index)) {}
+
+struct TaskScheduler::SeededState {
+  SeededState(std::uint64_t seed, std::size_t capacity) : random(seed), pool(capacity) {}
+
+  TaskRecord* take(const std::atomic<std::uint64_t>& count) {
+    const auto queue = readyByScope.find(&count);
+    UTILS_RELEASE_ASSERT_MSG(queue != readyByScope.end(),
+                             "A seeded scope is waiting with no runnable task");
+    auto& ready = queue->second;
+    const std::size_t index =
+        ready.size() == 1 ? 0 : static_cast<std::size_t>(random() % ready.size());
+    TaskRecord* const result = ready[index];
+    ready[index] = ready.back();
+    ready.pop_back();
+    if (ready.empty()) {
+      readyByScope.erase(queue);
+    }
+    return result;
+  }
+
+  const std::thread::id owner = std::this_thread::get_id();
+  std::mt19937_64 random;
+  CreatorRecordPool<> pool;
+  std::unordered_map<const std::atomic<std::uint64_t>*, std::vector<TaskRecord*>> readyByScope;
+};
 
 TaskScheduler::TaskScheduler(TaskSchedulerOptions options) : TaskScheduler(options, nullptr) {}
 
@@ -81,6 +111,12 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
   // A scope's count is at most the live-record bound, workers times records per worker plus the
   // external records; keep it clear of the counter's top bits.
   constexpr std::uint64_t kCountLimit = std::uint64_t{1} << 62;
+  if (options_.seed.has_value()) {
+    UTILS_RELEASE_ASSERT_MSG(options_.maxTasksPerCreator < kCountLimit,
+                             "A task scheduler's live-record bound must be below 2^62");
+    seeded_ = std::make_unique<SeededState>(*options_.seed, options_.maxTasksPerCreator);
+    return;
+  }
   const std::uint64_t external = options_.maxExternalTasks;
   bool boundFits = external < kCountLimit;
   if (boundFits && options_.workerCount != 0) {
@@ -156,6 +192,27 @@ void TaskScheduler::enqueueResumption(CoroutineResumption& resumption) {
 
 TaskScheduler::Worker* TaskScheduler::currentWorker() const {
   return tCurrentScheduler == this ? static_cast<Worker*>(tCurrentWorker) : nullptr;
+}
+
+void TaskScheduler::checkSeededOwner() const {
+  UTILS_RELEASE_ASSERT_MSG(seeded_->owner == std::this_thread::get_id(),
+                           "A seeded scheduler runs only on its constructing thread");
+}
+
+TaskRecord* TaskScheduler::allocateSeededRecord() {
+  assertSeededOwner();
+  return seeded_->pool.tryAllocate();
+}
+
+void TaskScheduler::enqueueSeededRecord(TaskRecord* record) {
+  seeded_->readyByScope[record->scopeCounter()].push_back(record);
+}
+
+void TaskScheduler::drainSeededUntil(const std::atomic<std::uint64_t>& count) {
+  assertSeededOwner();
+  while (count.load(std::memory_order_acquire) != 0) {
+    runRecord(seeded_->pool, 0, seeded_->take(count));
+  }
 }
 
 TaskRecord* TaskScheduler::allocateExternalRecord() {
@@ -286,10 +343,11 @@ void TaskScheduler::runTask(Worker& worker, SchedulerWork* work) {
     handle.resume();
     return;
   }
-  runRecord(worker, static_cast<TaskRecord*>(work));
+  runRecord(worker.pool, worker.index, static_cast<TaskRecord*>(work));
 }
 
-void TaskScheduler::runRecord(Worker& worker, TaskRecord* record) {
+void TaskScheduler::runRecord(CreatorRecordPool<>& localPool, std::size_t workerIndex,
+                              TaskRecord* record) {
   // Read before the record is returned: the record may be reused at once.
   std::atomic<std::uint64_t>* const counter = record->scopeCounter();
   Parker<>* const parker = record->parker();
@@ -299,8 +357,8 @@ void TaskScheduler::runRecord(Worker& worker, TaskRecord* record) {
   } else {
     record->run();
   }
-  if (record->pool() == &worker.pool) {
-    worker.pool.releaseFromCreator(record);
+  if (record->pool() == &localPool) {
+    localPool.releaseFromCreator(record);
   } else if (record->pool() == &externalPool_) {
     std::unique_lock lock(globalMutex_);
     externalPool_.release(record, lock);
@@ -312,9 +370,9 @@ void TaskScheduler::runRecord(Worker& worker, TaskRecord* record) {
   // Last, so that a creator that sees its scope complete finds the task's closure destroyed and
   // its record returned.
   if (asyncScope != nullptr) {
-    asyncScope->finish(worker.index);
+    asyncScope->finish(workerIndex);
   } else if (counter != nullptr) {
-    finishScopeTask(counter, parker, worker.index);
+    finishScopeTask(counter, parker, workerIndex);
   }
 }
 
@@ -327,6 +385,9 @@ void TaskScheduler::finishScopeTask(std::atomic<std::uint64_t>* counter, Parker<
   UTILS_RELEASE_ASSERT_MSG(before != 0, "A scope's task count went below zero");
   if (before == 1) {
     hook(SchedulerStep::ScopeFinisherAfterDecrement, workerIndex);
+    if (parker == nullptr) {
+      return;  // The seeded caller runs this record itself.
+    }
     // The parker is the scheduler's (a worker's, or in its pool), not the scope's, so it outlives
     // the scope.
     if (Worker* creator = workerOwning(parker)) {
