@@ -428,15 +428,15 @@ Part C estimate: 13.5 engineering days.
         and a debug guard that pool sizes are unchanged across the region.
   - Done when: the differential tests are green at every worker count and the serial threshold
     keeps the splash and tiger documents on the serial path.
-- [ ] Milestone D2: Race and determinism coverage (2 days). After D1.
+- [x] Milestone D2: Race and determinism coverage (2 days). After D1.
   - [x] Register `//donner/svg/components/style:ci_tsan_style_parallel_tests` in the normal
         Linux native test graph. `//build_defs:sanitizer_variants_tests` checks the registration.
   - [x] Hold a parent at publication and check that its children are admitted only after it
         publishes. `DelayedParentPublishesBeforeChildAdmission` passes with normal ordering and
         rejects a deliberately inverted admission in the isolated negative check.
-  - [ ] Rebind the seeded differential corpus to the current scheduler and cascade.
-  - Done when: the native TSan target and the seeded differential corpus are green, including
-    the recorded positive and negative admission-order check.
+  - [x] Compare the corpus across serial, fixed-seed, and 1-, 2-, 4-, and 8-worker schedules.
+        Match styles, ordered diagnostics, logical work, budget outcomes and record sharing.
+        Repeat the fixed seed to check physical work counters.
 - [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
   - Done when: the threshold and subtree grain are set from a measured curve recorded here, the
     deepest stack use of a cascade task is measured and declared as this client's stack bound to
