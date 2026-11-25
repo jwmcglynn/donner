@@ -1,6 +1,6 @@
 /// @file
 /// Prepared-frame differential fuzzer for matched-properties caching. Bounded input choices drive
-/// animation sampling, retained style edits, shadow trees, and external-use host paint.
+/// animation sampling, stylesheet and local style edits, shadow trees, and external-use paint.
 
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +14,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
@@ -122,12 +123,52 @@ std::string AnimatedSource(std::uint8_t choice) {
   const std::string color = choice & 1 ? "red" : "blue";
   const std::string opacity = choice & 2 ? ".25" : ".75";
   return R"svg(<svg xmlns="http://www.w3.org/2000/svg">
-    <style>.shared { fill: )svg" +
+    <style id="fuzz-sheet">.shared { fill: )svg" +
          color + "; stop-opacity: " + opacity + R"svg( }</style>
-    <defs><rect id="shape" class="shared" width="8" height="8"/></defs>
-    <use id="first" href="#shape"/><use href="#shape" x="10"/>
-    <animate href="#first" attributeName="opacity" values=".2;.8" dur="2s"/>
+    <defs>
+      <rect id="shape" class="shared" width="8" height="8"/>
+      <symbol id="symbol" viewBox="0 0 8 8"><rect class="shared" width="8" height="8"/></symbol>
+    </defs>
+    <use id="first" href="#shape"/><use href=")svg" +
+         (choice & 8 ? "#symbol" : "#shape") + R"svg(" x="10" width="8" height="8"/>)svg" +
+         (choice & 16 ? R"svg(<use href="#shape" x="20" opacity=".75"/>)svg" : "") +
+         R"svg(<animate href="#first" attributeName="opacity" values=".2;.8" dur="2s"/>
   </svg>)svg";
+}
+
+void ExerciseStylesheetEdits(SVGDocument& cached, SVGDocument& uncached, bool alternate) {
+  const auto editAndCheck = [&](const auto& edit) {
+    for (SVGDocument* document : {&cached, &uncached}) {
+      edit(*document);
+      auto shape = document->querySelector("#shape");
+      Require(shape.has_value());
+      shape->setStyle("");
+    }
+    const auto cachedShape = cached.querySelector("#shape");
+    const auto uncachedShape = uncached.querySelector("#shape");
+    Require(cachedShape->getComputedStyle().exactlyEquals(uncachedShape->getComputedStyle()));
+
+    PrepareFrame(cached);
+    PrepareFrame(uncached);
+    RequireSameStyles(cached, uncached);
+  };
+  const std::string_view rewritten = alternate ? ".shared { fill: green; opacity: .25; }"
+                                               : ".shared { fill: purple; opacity: .75; }";
+  editAndCheck([rewritten](SVGDocument& document) {
+    document.querySelector("#fuzz-sheet")->cast<SVGStyleElement>().setTextContent(rewritten);
+  });
+  for (const std::string_view type : {"text/plain", "text/css"}) {
+    editAndCheck([type](SVGDocument& document) {
+      document.querySelector("#fuzz-sheet")->cast<SVGStyleElement>().setType(type);
+    });
+  }
+  editAndCheck([](SVGDocument& document) {
+    auto root = document.svgElement();
+    root.removeChild(*document.querySelector("#fuzz-sheet"));
+    auto replacement = SVGStyleElement::Create(document);
+    replacement.setContents(".shared { fill: orange; opacity: .5; }");
+    root.appendChild(replacement);
+  });
 }
 
 void FuzzAnimatedAndRetained(const std::uint8_t* data, std::size_t size) {
@@ -152,6 +193,7 @@ void FuzzAnimatedAndRetained(const std::uint8_t* data, std::size_t size) {
   PrepareFrame(*cached);
   PrepareFrame(*uncached);
   RequireSameStyles(*cached, *uncached);
+  ExerciseStylesheetEdits(*cached, *uncached, choice & 32);
 }
 
 void FuzzExternalUse(const std::uint8_t* data, std::size_t size) {

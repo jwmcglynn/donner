@@ -1555,6 +1555,10 @@ presentation inputs are part of each element's key. Whole-document style discard
 cache. Entries retain their immutable records until a clear or eviction. A narrowed restyle
 builds a new key, and a new parent record changes its children's keys.
 
+CSS-type eligibility also controls rule queries, selector invalidation and font-face
+registration. The resource manager keeps deduplicated font faces it already registered for the
+document lifetime, including faces registered when a sheet had an eligible type.
+
 **Eviction.** There are 512 lazily populated buckets of eight slots, for at most 4,096 entries.
 Each bucket has its own clock hand. A hit sets the entry's reference bit. For a full bucket an
 insertion clears reference bits as the hand advances, then replaces the first unreferenced entry.
@@ -1567,18 +1571,22 @@ property bytes of each distinct immutable record, including records produced on 
 elements. Its default limit is 64 MiB. Record creation reserves once and the final holder's release
 refunds once, even if the record outlives the document or its cache. The optional family envelope
 synchronizes reserves, releases and observations across all resource kinds. Work-counter resets
-preserve these charges. Before refusing a new record, the serial path drops cache-only references
-and retries admission. A record requiring zero dynamic bytes can still preserve its scalar values
-after a work refusal.
+preserve these charges. At pressure, the serial path clears the current document's cache and retries
+admission. Cached records in sibling documents stay charged until their last holder releases them.
+They can exhaust the shared allowance and cause the current document to use bounded initial
+styles. A record requiring zero dynamic bytes can preserve its scalar values after a work refusal.
 
-Key metadata has a separate fixed per-document bound. Each slot holds up to 128 matched rule tuples
-and 2,048 bytes of exact local declaration data. The implementation bounds the retained string
-capacity, rule and slot storage and bucket table to 40 MiB in total, excluding allocator overhead.
-Larger keys use the ordinary cascade. Each element retains a hash and empty-key flag; the cache
-holds the key data. Shared record pointers in the keys keep their ordinary record charges alive.
-`//donner/svg/components/style:style_system_tests` checks last-holder accounting and pressure
-eviction. The retained-byte differential in `style_index_differential_tests` checks the first
-refused element for distinct local dash arrays.
+Each slot holds up to 128 matched rule tuples and 2,048 bytes of exact local declaration data.
+Across the cache, string and rule capacities have a 1 MiB per-document budget. Including slot and
+bucket storage, metadata is bounded by 3 MiB per document, excluding allocator overhead. This
+separate bound applies to each document in the family. Oversize keys and keys exceeding the
+metadata budget use the ordinary cascade. Each element retains a hash and empty-key flag. Shared
+record pointers in keys keep their ordinary record charges alive.
+
+`//donner/svg/components/style:matched_properties_cache_tests` checks the key capacity limit.
+`//donner/svg/components/style:style_system_tests` checks last-holder accounting, pressure in a
+single cache and pressure across sibling caches. The retained-byte differential in
+`style_index_differential_tests` checks the first refused element for distinct local dash arrays.
 
 ### Interaction with Existing Incremental Paths
 
