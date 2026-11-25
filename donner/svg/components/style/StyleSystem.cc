@@ -98,6 +98,10 @@ bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
          !stylesheet.sourceMap.empty();
 }
 
+css::Specificity CascadeSpecificity(css::Specificity specificity, bool userAgent) {
+  return userAgent ? specificity.toUserAgentSpecificity() : specificity;
+}
+
 bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent& stylesheet,
                             Entity stylesheetEntity, Entity dataEntity) {
   if (!HasSvgNamespace(registry, stylesheetEntity) || !stylesheet.isCssType()) {
@@ -1614,10 +1618,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
       if (!match) {
         continue;
       }
-      css::Specificity specificity = match->specificity;
-      if (isUserAgentStylesheet) {
-        specificity = specificity.toUserAgentSpecificity();
-      }
+      const auto specificity = CascadeSpecificity(match->specificity, isUserAgentStylesheet);
       const RuleTrace::Match matched{sheetRevision, sheetOrdinal, position, &rule, specificity};
       recording.append(matched);
       admitMatch(matched);
@@ -1873,10 +1874,8 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
         continue;
       }
 
-      css::Specificity specificity = match->specificity;
-      if (stylesheet.isUserAgentStylesheet) {
-        specificity = specificity.toUserAgentSpecificity();
-      }
+      const auto specificity =
+          CascadeSpecificity(match->specificity, stylesheet.isUserAgentStylesheet);
 
       MatchedStyleRule matchedRule;
       matchedRule.stylesheetEntity = stylesheetEntity;
