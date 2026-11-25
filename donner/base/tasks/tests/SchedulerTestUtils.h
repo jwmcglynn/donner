@@ -47,6 +47,10 @@ public:
     return scheduler.awake_.load(std::memory_order_seq_cst);
   }
 
+  static std::size_t SearchingCount(const TaskScheduler& scheduler) {
+    return scheduler.searching_.load(std::memory_order_relaxed);
+  }
+
   static std::int64_t AwakeStates(const TaskScheduler& scheduler) {
     std::int64_t count = 0;
     for (const auto& worker : scheduler.workers_) {

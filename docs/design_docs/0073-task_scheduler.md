@@ -98,7 +98,7 @@ is not shaped by one user.
 
 ## Next Steps
 
-- Finish Milestone S1's adopted threads, parallelism wake, worker QoS and thread-start handling.
+- Finish Milestone S1's adopted threads, worker QoS and thread-start handling.
   The scheduler package already runs in the native CI graph under ThreadSanitizer and
   AddressSanitizer on Linux.
 - Land S7's build setting early, so the compiled-out lane runs from the first client onward.
@@ -151,7 +151,8 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
   - [ ] Adopted threads: slots, the adopted publish, the visibility reads of adopted deques, the
         lifetime assertions, and the fairness tests of the rotating cursor across more than one
         outside source (1.75 days).
-  - [ ] The parallelism wake with per-worker `searching` flags (0.5 day).
+  - [x] The parallelism wake with per-worker `searching` flags (0.5 day):
+        `//donner/base/tasks:parallelism_wake_tests`.
   - [x] Worker stacks: workers created with an explicit stack size (`workerStackBytes`), each
         worker's stack bounds recorded when it starts, the remaining-stack accessor the waits use,
         and the stack-floor assertion (0.25 day): `//donner/base/tasks:worker_stack` and
@@ -1042,7 +1043,11 @@ queue, and *started* once a thread begins running it.
   the tests assert. After a local push the worker reads `awake` and `searching` with relaxed
   loads, and if some worker is asleep and none is searching it wakes one asleep worker with the
   swap rule. A searcher that starts a task and was the only searcher does the same, so a fork
-  spreads one worker at a time without every push paying a wake. These reads are unfenced, so a
+  spreads one worker at a time without every push paying a wake. Worker-local coroutine
+  resumptions make the same check after publication. Finishing an empty search or exiting a
+  worker clears its enrollment without waking a replacement. The focused
+  `//donner/base/tasks:parallelism_wake_tests` holds workers at search and park transitions to
+  distinguish these cases. These reads are unfenced, so a
   wake can be missed; that costs parallelism only. Adopted pushes take the same parallelism check
   after their publish. Filament checks its sleeping count on every `put`, Rayon wakes sleepers when
   work is posted, and Taskflow keeps one thief awake while any worker is busy, for the same reason:
@@ -1828,8 +1833,7 @@ clients that size work from documents.
 - **Scopes on workers** (`//donner/base/tasks:worker_scope_tests`): nested scopes and joins at
   1, 2 and 4 workers, the saved deque bottom, stealing and helping, cooperative stop, and
   destruction of a skipped closure before completion. Tests that require a thief keep idle
-  workers searching or hold them at a sleep hook until publication. The parallelism wake remains
-  a separate item. The Linux ARMv8 native build measures 1008 bytes per nested synchronous
+  workers searching or hold them at a sleep hook until publication. The Linux ARMv8 native build measures 1008 bytes per nested synchronous
   scope and 880 bytes per help level. The test prints both measurements for each configuration.
   - A worker creator first pushes its synchronous scope's task locally or runs it inline. A thief must take every
     older entry before stealing that task, including entries below the creation watermark. Until

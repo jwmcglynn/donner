@@ -189,6 +189,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "parallelism_wake_tests",
+    srcs = ["tests/ParallelismWake_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
     name = "worker_scope_tests",
     srcs = [
         "tests/WorkerScopeLiveness_tests.cc",

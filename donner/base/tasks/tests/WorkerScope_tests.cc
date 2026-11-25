@@ -116,6 +116,10 @@ public:
 
   void setLastAwakeRule(bool on) { lastAwakeRule_.store(on); }
 
+  [[nodiscard]] bool allowParallelismWake() const override { return allowParallelismWake_.load(); }
+
+  void missParallelismWakes() { allowParallelismWake_.store(false); }
+
   [[nodiscard]] int count(SchedulerStep step) const {
     return counts_[static_cast<std::size_t>(step)].load();
   }
@@ -130,6 +134,7 @@ private:
   std::array<std::atomic<int>, 32> counts_{};
   std::array<Hold, 4> holds_;
   std::atomic<bool> lastAwakeRule_{true};
+  std::atomic<bool> allowParallelismWake_{true};
 };
 
 /// Polls until every worker of \p scheduler is asleep and the awake count agrees with the state
@@ -635,6 +640,8 @@ TEST_P(WorkerCounts, WithoutTheLastAwakeRuleQueuedWorkWaitsOnASleepingPool) {
 // asleep shallow instead of running the work on its deep stack, and the shallow worker runs it.
 TEST_P(TwoOrMoreWorkers, TheLastAwakeWorkerPastItsMarginHandsWorkToAShallowSleeper) {
   QueuedScopes state(GetParam(), 1);
+  // Keep the shallow worker asleep until the deep root hands off to it.
+  state.hooks.missParallelismWakes();
   ASSERT_TRUE(state.initialWorkersParked());
   ASSERT_TRUE(state.start());
   state.queueAndGo();
@@ -842,6 +849,8 @@ TEST(WorkerInterleavingTest, AHandOffRacingTheShallowWorkersWakeCountsItOnce) {
   Gate runningTask;
   Event extraRan;
   QueuedScopes state(2, 1);
+  // Only the publisher and the hand-off should wake workers during this race.
+  state.hooks.missParallelismWakes();
   ASSERT_TRUE(state.initialWorkersParked());
   ASSERT_TRUE(state.start());
   int rootWorker = -1;
@@ -1114,8 +1123,8 @@ TEST(WorkerStopTest, AStopAfterwardsOrInAnotherScopeChangesNothingElse) {
  * A help ping-pong between two workers. At each level the worker forks with `Join`; `a` waits
  * until the other worker has stolen `b` and has itself forked the next level, so when `a` returns,
  * the other worker's next `b` is queued and this worker's wait helps by stealing it. Each worker's
- * stack then grows by one help per two levels. Without that handshake a wait that finds nothing
- * sleeps, and a worker's push onto its own deque wakes no sleeper.
+ * stack then grows by one help per two levels. The handshake keeps the next entry available
+ * when the preceding worker looks for work.
  */
 struct HelpPingPong {
   HelpPingPong(TaskScheduler& scheduler, std::size_t frameBytes, int levels)

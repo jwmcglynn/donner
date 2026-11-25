@@ -41,6 +41,7 @@ std::size_t ReduceRange(std::uint32_t value, std::size_t bound) {
 
 std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
   switch (step) {
+    case SchedulerStep::AfterSearchStart: return os << "AfterSearchStart";
     case SchedulerStep::AfterDrain: return os << "AfterDrain";
     case SchedulerStep::AfterWaitingBit: return os << "AfterWaitingBit";
     case SchedulerStep::AfterSleeperDecrement: return os << "AfterSleeperDecrement";
@@ -154,6 +155,8 @@ TaskScheduler::~TaskScheduler() {
                              "A task scheduler worker thread could not be joined");
   }
 
+  UTILS_RELEASE_ASSERT_MSG(searching_.load(std::memory_order_relaxed) == 0,
+                           "A stopped scheduler still has searching workers");
   std::int64_t awakeStates = 0;
   for (const std::unique_ptr<Worker>& worker : workers_) {
     if (worker->state.load(std::memory_order_relaxed) == WorkerState::Awake) {
@@ -185,6 +188,7 @@ void TaskScheduler::enqueueResumption(CoroutineResumption& resumption) {
   UTILS_RELEASE_ASSERT_MSG(!stop_.load(std::memory_order_seq_cst),
                            "A coroutine tried to suspend while its scheduler was shutting down");
   if (Worker* worker = currentWorker(); worker != nullptr && worker->deque.push(&resumption)) {
+    wakeForParallelism();
     return;
   }
   publishResumption(resumption);
@@ -326,6 +330,7 @@ SchedulerWork* TaskScheduler::findTask(Worker& worker) {
 }
 
 SchedulerWork* TaskScheduler::findOtherWork(Worker& worker) {
+  startSearching(worker);
   if (SchedulerWork* work = takeOutside(worker)) {
     return work;
   }
@@ -333,6 +338,9 @@ SchedulerWork* TaskScheduler::findOtherWork(Worker& worker) {
 }
 
 void TaskScheduler::runTask(Worker& worker, SchedulerWork* work) {
+  if (stopSearching(worker)) {
+    wakeForParallelism();
+  }
   UTILS_RELEASE_ASSERT_MSG(
       StackRemaining(CurrentStackPosition(), worker.stack) >= kStackReserveBytes,
       "A task scheduler worker is out of stack: less than the reserve is "
@@ -536,6 +544,22 @@ void TaskScheduler::wakeWorker(Worker& worker) {
   worker.parker.unpark();
 }
 
+void TaskScheduler::startSearching(Worker& worker) {
+  if (!worker.searching) {
+    worker.searching = true;
+    searching_.fetch_add(1, std::memory_order_relaxed);
+    hook(SchedulerStep::AfterSearchStart, worker.index);
+  }
+}
+
+bool TaskScheduler::stopSearching(Worker& worker) {
+  if (!worker.searching) {
+    return false;
+  }
+  worker.searching = false;
+  return searching_.fetch_sub(1, std::memory_order_relaxed) == 1;
+}
+
 void TaskScheduler::wakeAsleepWorker() {
   for (const WorkerState asleep : {WorkerState::AsleepShallow, WorkerState::AsleepDeep}) {
     for (const std::unique_ptr<Worker>& worker : workers_) {
@@ -548,6 +572,7 @@ void TaskScheduler::wakeAsleepWorker() {
 }
 
 TaskScheduler::SleepPreparation TaskScheduler::prepareSleep(Worker& worker, WorkerState state) {
+  stopSearching(worker);
   while (const std::optional<SchedulerWork*> work = worker.deque.take()) {
     publishToGlobalQueue(*work);
   }
@@ -621,6 +646,7 @@ void TaskScheduler::workerMain(Worker& worker) {
       break;
     }
   }
+  stopSearching(worker);
   tCurrentScheduler = nullptr;
   tCurrentWorker = nullptr;
 }
