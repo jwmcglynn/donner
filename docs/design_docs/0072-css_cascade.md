@@ -2121,9 +2121,10 @@ parsing and component-value copies and destruction. The selector allowance inclu
 live levels at four descents, with specificity, relative selection and nth-of filters.
 Matching returns before declaration parsing, so use the larger branch allowance. With
 another 16 KiB for native library calls and compiler and ABI variation, the budget totals
-60 KiB. The budget qualifies native release admission. Debug and sanitizer tests exercise
-admission and rollback with their own frame layouts. The ordinary serial caller retains its
-existing stack contract.
+60 KiB. Qualification covers the registered Linux Arm and x86-64 LLVM/libc++ release
+builds and the Apple arm64 SDK libc++ release build. Debug and sanitizer tests exercise
+admission and rollback with their own frame layouts. The ordinary serial caller retains
+its existing stack contract.
 
 Run the **release cascade frame check** with the normal native CI toolchain and runner
 options. It catches individual emitted frames above 8 KiB in the selected translation
