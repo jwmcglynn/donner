@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -264,11 +265,16 @@ TEST(ParallelForTest, SeededAdaptiveRangeTraceIsIndependentOfRequestedWorkers) {
     return starts;
   };
   const auto original = trace(0, 0);
-  EXPECT_GT(original.size(), 2u);
+  auto boundaries = original;
+  std::sort(boundaries.begin(), boundaries.end());
+  EXPECT_THAT(boundaries, testing::ElementsAre(0u, 16u, 32u, 48u));
   EXPECT_THAT(trace(0, 4), Eq(original));
   bool sawDifferentOrder = false;
   for (std::uint64_t seed = 1; seed <= 16; ++seed) {
-    sawDifferentOrder |= trace(seed, 4) != original;
+    auto starts = trace(seed, 4);
+    sawDifferentOrder |= starts != original;
+    std::sort(starts.begin(), starts.end());
+    EXPECT_THAT(starts, Eq(boundaries));
   }
   EXPECT_TRUE(sawDifferentOrder);
 }

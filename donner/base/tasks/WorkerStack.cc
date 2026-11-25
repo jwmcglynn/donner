@@ -36,17 +36,26 @@ std::size_t WorkerStackSize(std::size_t bytes) {
   return (bytes + page - 1) / page * page;
 }
 
-pthread_t StartThreadWithStack(std::size_t bytes, void* (*entry)(void*), void* argument) {
+std::optional<pthread_t> TryStartThreadWithStack(std::size_t bytes, void* (*entry)(void*),
+                                                 void* argument, WorkerThreadCreate create) {
   pthread_attr_t attributes;
   UTILS_RELEASE_ASSERT_MSG(pthread_attr_init(&attributes) == 0,
                            "Could not initialize a worker thread's attributes");
   UTILS_RELEASE_ASSERT_MSG(pthread_attr_setstacksize(&attributes, WorkerStackSize(bytes)) == 0,
                            "The platform rejected a worker's stack size");
   pthread_t thread;
-  const int result = pthread_create(&thread, &attributes, entry, argument);
+  const int result = create(&thread, &attributes, entry, argument);
   pthread_attr_destroy(&attributes);
-  UTILS_RELEASE_ASSERT_MSG(result == 0, "A task scheduler worker thread failed to start");
+  if (result != 0) {
+    return std::nullopt;
+  }
   return thread;
+}
+
+pthread_t StartThreadWithStack(std::size_t bytes, void* (*entry)(void*), void* argument) {
+  const auto thread = TryStartThreadWithStack(bytes, entry, argument, &pthread_create);
+  UTILS_RELEASE_ASSERT_MSG(thread.has_value(), "A task scheduler worker thread failed to start");
+  return *thread;
 }
 
 }  // namespace donner::tasks

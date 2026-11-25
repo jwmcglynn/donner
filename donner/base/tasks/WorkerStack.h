@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace donner::tasks {
 
@@ -72,6 +73,21 @@ constexpr StackBounds UsableStack(const StackBounds& platform, std::size_t usabl
   const std::size_t size = platform.size < usableBytes ? platform.size : usableBytes;
   return StackBounds{platform.floor + platform.size - size, size};
 }
+
+/// Thread creation entry point used by the scheduler and its failure-injection tests.
+using WorkerThreadCreate = int (*)(pthread_t*, const pthread_attr_t*, void* (*)(void*), void*);
+
+/**
+ * Attempts to start a thread with an explicit stack size. Invalid sizes fail a release assertion.
+ *
+ * @param bytes Requested stack size.
+ * @param entry Thread entry point.
+ * @param argument Argument passed to the entry point.
+ * @param create Thread creation function.
+ * @return A joinable handle, or empty when the platform refused to start the thread.
+ */
+std::optional<pthread_t> TryStartThreadWithStack(std::size_t bytes, void* (*entry)(void*),
+                                                 void* argument, WorkerThreadCreate create);
 
 /**
  * Starts a thread running `entry(argument)` on a stack of \ref WorkerStackSize(\p bytes) bytes.

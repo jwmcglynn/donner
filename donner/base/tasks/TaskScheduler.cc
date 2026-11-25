@@ -62,6 +62,7 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
     case SchedulerStep::AsyncJoinBeforeEnqueue: return os << "AsyncJoinBeforeEnqueue";
     case SchedulerStep::ScopeFinisherAfterDecrement: return os << "ScopeFinisherAfterDecrement";
     case SchedulerStep::ParallelForBeforeClaim: return os << "ParallelForBeforeClaim";
+    case SchedulerStep::WorkerBeforeStartupBarrier: return os << "WorkerBeforeStartupBarrier";
     case SchedulerStep::ParallelForAfterClaim: return os << "ParallelForAfterClaim";
   }
   UTILS_UNREACHABLE();
@@ -128,14 +129,19 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
     (void)WorkerStackSize(options_.workerStackBytes);  // Rejects a size the workers cannot use.
   }
   workers_.reserve(options_.workerCount);
-  for (std::size_t i = 0; i < options_.workerCount; ++i) {
-    workers_.push_back(std::make_unique<Worker>(*this, i, options_));
+  // A new thread must see the complete, densely indexed roster before scanning its peers.
+  std::lock_guard startup(globalMutex_);
+  for (std::size_t attempt = 0; attempt < options_.workerCount; ++attempt) {
+    auto worker = std::make_unique<Worker>(*this, workers_.size(), options_);
+    const WorkerThreadCreate create =
+        testHooks_ ? testHooks_->workerThreadCreate(attempt) : &pthread_create;
+    if (const auto thread = TryStartThreadWithStack(options_.workerStackBytes, &WorkerEntry,
+                                                    worker.get(), create)) {
+      worker->thread = *thread;
+      workers_.push_back(std::move(worker));
+    }
   }
-  // Workers start awake and counted, before any of them runs.
   awake_.store(static_cast<std::int64_t>(workers_.size()), std::memory_order_relaxed);
-  for (const std::unique_ptr<Worker>& worker : workers_) {
-    worker->thread = StartThreadWithStack(options_.workerStackBytes, &WorkerEntry, worker.get());
-  }
 }
 
 TaskScheduler::~TaskScheduler() {
@@ -622,6 +628,12 @@ std::optional<std::size_t> TaskScheduler::CurrentWorkerStackRemaining() {
 
 void* TaskScheduler::WorkerEntry(void* worker) {
   Worker& self = *static_cast<Worker*>(worker);
+  self.scheduler.hook(SchedulerStep::WorkerBeforeStartupBarrier, self.index);
+  {
+    // Acquire the final roster and initial awake count from the constructor.
+    std::lock_guard startup(self.scheduler.globalMutex_);
+  }
+  detail::SetCurrentWorkerQos(self.scheduler.options_.workerQos);
   self.stack = UsableStack(CurrentThreadStackBounds(),
                            WorkerStackSize(self.scheduler.options_.workerStackBytes));
   self.scheduler.workerMain(self);

@@ -61,6 +61,7 @@ donner_cc_library(
         "CoroutineFramePool.cc",
         "TaskScheduler.cc",
         "TaskScope.cc",
+        "WorkerPolicy.cc",
     ],
     hdrs = [
         "AsyncTaskScope.h",
@@ -69,6 +70,7 @@ donner_cc_library(
         "Task.h",
         "TaskScheduler.h",
         "TaskScope.h",
+        "WorkerPolicy.h",
     ],
     visibility = [
         "//donner/base/tasks:__subpackages__",
@@ -215,6 +217,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "worker_policy_tests",
+    srcs = ["tests/WorkerPolicy_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
     name = "worker_stack_tests",
     srcs = ["tests/WorkerStack_tests.cc"],
     deps = [
@@ -277,4 +290,11 @@ donner_cc_binary(
         ":scheduler_test_utils",
         ":task_scheduler",
     ],
+)
+
+# Ordinary CI compiles the benchmark on its native platforms. Running it is a manual measurement.
+filegroup(
+    name = "parallel_for_scaling_bench_build",
+    testonly = True,
+    srcs = [":parallel_for_scaling_bench"],
 )
