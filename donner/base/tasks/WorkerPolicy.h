@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iosfwd>
 #include <ostream>
 
 #include "donner/base/Utils.h"
@@ -33,8 +34,14 @@ constexpr std::size_t WorkerCountForProcessors(std::size_t available) {
   return std::clamp<std::size_t>(available > 0 ? available - 1 : 0, 1, 32);
 }
 
-/// Sets the requested scheduling class when the platform supports it.
-void SetCurrentWorkerQos(WorkerQos qos);
+#if defined(__linux__)
+/// Caps the affinity count by CPU bandwidth limits visible in this cgroup hierarchy.
+std::size_t CgroupLimitedProcessors(std::size_t affinity, std::istream& membership,
+                                    std::istream& mountInfo);
+#endif
+
+/// Returns the platform error code for a refused scheduling hint, or zero.
+int TrySetCurrentWorkerQos(WorkerQos qos);
 
 }  // namespace detail
 }  // namespace donner::tasks

@@ -35,8 +35,13 @@ class TaskScopeTestPeer;
  * \ref TaskScheduler). Nested scopes must be joined in last-in, first-out order. A coroutine
  * must not suspend while a synchronous scope is live.
  *
- * On a thread that is not a worker, the creator never runs tasks. Its spawns go to the scheduler's
- * global queue, and its wait re-checks the count and sleeps on its parker, from the scheduler's
+ * On an adopted thread, the creator runs only its own scope's entries above the watermark
+ * and otherwise waits on the slot's parker. While a nested synchronous scope is live, submitting
+ * to an outer scope fails a release assertion, including for a spawn that would run inline.
+ *
+ * On an unadopted thread that is not a worker, the creator never runs tasks. Its spawns go to the
+ * scheduler's global queue, and its wait re-checks the count and sleeps on its parker, from the
+ * scheduler's
  * \ref ParkerPool, until a finisher changes it. Without a seed and with zero workers, every spawn
  * runs inline and a wait returns at once.
  *
@@ -93,8 +98,8 @@ public:
 
   /**
    * Returns once every task spawned into the scope has finished; on return, everything those tasks
-   * wrote is visible. On the creating thread only. On a worker it runs and helps with work
-   * meanwhile; on another thread it sleeps on the creator's parker.
+   * wrote is visible. On the creating thread only. A worker can help elsewhere. An adopted
+   * creator runs only its local entries above the watermark and otherwise waits on its slot.
    */
   void wait();
 
@@ -115,6 +120,8 @@ private:
 
   /// The creating worker, or null when the creator is not a worker of the scheduler.
   TaskScheduler::Worker* const worker_;
+  TaskScheduler::AdoptedSlot* const adopted_;
+  const TaskScheduler::ScopeLink* previousScope_ = nullptr;
 
   /// The creating worker's deque bottom index when the scope was created; unused off a worker.
   const WorkStealingDeque<SchedulerWork*>::Index watermark_;
@@ -135,7 +142,8 @@ private:
  *
  * On a worker, \p b is pushed to the worker's deque and \p a runs on the calling thread; the wait
  * then takes \p b back and runs it if no other worker stole it, and otherwise waits for it as a
- * \ref TaskScope's creator does. On any other thread, \p b is spawned to the scheduler's global
+ * \ref TaskScope's creator does. On an adopted thread it also takes back its local second branch.
+ * An ordinary non-worker spawns \p b to the scheduler's global
  * queue, \p a runs on the calling thread, and the call then waits for \p b as a \ref TaskScope
  * does; it cannot take \p b back. With zero workers, \p a runs and then \p b, both on the calling
  * thread.

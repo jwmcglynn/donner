@@ -24,12 +24,34 @@ using testing::Ne;
 
 constexpr std::size_t kMaxWorkers = 4;
 
+/// An injected hold, armed once for a chosen step and optionally a particular worker.
+struct StepHold {
+  void arm(SchedulerStep at, int worker = -1) {
+    target.store(worker);
+    step.store(static_cast<int>(at));
+  }
+
+  void visit(SchedulerStep at, std::size_t worker) {
+    if (step.load() == static_cast<int>(at)) {
+      const int selected = target.load();
+      if (selected == -1 || selected == static_cast<int>(worker)) {
+        gate.arriveAndWait();
+      }
+    }
+  }
+
+  Gate gate;
+  std::atomic<int> step{-1};
+  std::atomic<int> target{-1};
+};
+
 class SearchHooks : public SchedulerTestHooks {
 public:
   SearchHooks(unsigned searchHolds, bool holdFirstPark)
       : searchHolds_(searchHolds), holdFirstPark_(holdFirstPark) {}
 
   void at(SchedulerStep step, std::size_t worker) override {
+    hold.visit(step, worker);
     if (step == SchedulerStep::AfterSearchStart && (searchHolds_ & (1u << worker)) &&
         !heldSearch_[worker]) {
       heldSearch_[worker] = true;
@@ -46,18 +68,21 @@ public:
     }
   }
 
-  bool parked(const TaskScheduler& scheduler, std::size_t worker) const {
-    return Peer::State(scheduler, worker) == WorkerState::AsleepShallow &&
+  bool parked(const TaskScheduler& scheduler, std::size_t worker,
+              WorkerState state = WorkerState::AsleepShallow) const {
+    return Peer::State(scheduler, worker) == state &&
            parkEpoch_[worker].load() == wakes[worker].load() + 1;
   }
 
   void release() {
+    hold.gate.release();
     for (Gate& gate : firstSearch) {
       gate.release();
     }
     firstPark.release();
   }
 
+  StepHold hold;
   std::array<Gate, kMaxWorkers> firstSearch;
   Gate firstPark;
   std::array<std::atomic<unsigned>, kMaxWorkers> wakes{};
@@ -154,6 +179,217 @@ TEST(ParallelismWakeTest, AForkFromTheOnlyAwakeWorkerRunsChildrenOnTwoWorkers) {
   EXPECT_THAT(calls.load(), Eq(64u));
   EXPECT_TRUE(PollUntil([&] { return pool.allParkedExcept(-1); }));
   EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(0));
+}
+
+TEST(ParallelismWakeTest, ForkBurstRecruitsOnlyOneWorkerBeforeItStartsSearching) {
+  std::atomic<unsigned> calls{0};
+  unsigned wakesDuringFork = 0;
+  bool recruitReachedGate = false;
+  WakePool pool(4);
+  const auto totalWakes = [&] {
+    unsigned total = 0;
+    for (const auto& count : pool.hooks.wakes) {
+      total += count.load();
+    }
+    return total;
+  };
+
+  const auto started = pool.runOnSoleAwakeWorker([&] {
+    pool.hooks.hold.arm(SchedulerStep::BeforeSearchStart);
+    const unsigned before = totalWakes();
+    TaskScope children(*pool.scheduler);
+    children.spawn([&] { ++calls; });
+    recruitReachedGate = pool.hooks.hold.gate.waitForArrival();
+    for (int i = 1; i < 64; ++i) {
+      children.spawn([&] { ++calls; });
+    }
+    wakesDuringFork = totalWakes() - before;
+    pool.hooks.hold.gate.release();
+  });
+  EXPECT_TRUE(started);
+  EXPECT_TRUE(recruitReachedGate);
+  EXPECT_FALSE(pool.hooks.hold.gate.heldPastHangGuard());
+  EXPECT_THAT(wakesDuringFork, Eq(1u));
+  EXPECT_THAT(calls.load(), Eq(64u));
+  EXPECT_TRUE(PollUntil([&] { return pool.allParkedExcept(-1); }));
+  EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(0u));
+}
+
+TEST(ParallelismWakeTest, LocalForkLeavesDeepWaiterAsleepUntilItsScopeFinishes) {
+  SearchHooks hooks(0, false);
+  Gate heldTask;
+  Event forked;
+  std::atomic<int> creator{-1};
+  int thief = -1;
+  unsigned wakesDuringFork = 0;
+  unsigned extraCalls = 0;
+  auto scheduler =
+      Peer::Make(TaskSchedulerOptions{.workerCount = 2,
+                                      .idleSpinRounds = std::numeric_limits<std::size_t>::max(),
+                                      .helpMarginBytes = std::numeric_limits<std::size_t>::max()},
+                 &hooks);
+  TaskScope roots(*scheduler);
+  roots.spawn([&] {
+    creator.store(Peer::WorkerIndex(*scheduler));
+    TaskScope waiting(*scheduler);
+    waiting.spawn([&] {
+      thief = Peer::WorkerIndex(*scheduler);
+      heldTask.arriveAndWait();
+      const auto index = static_cast<std::size_t>(creator.load());
+      const unsigned before = hooks.wakes[index].load();
+      TaskScope extra(*scheduler);
+      extra.spawn([&] { ++extraCalls; });
+      // Finishing 'waiting' must wake its creator. Count only the optional hint from this push.
+      wakesDuringFork = hooks.wakes[index].load() - before;
+    });
+    forked.set();
+    EXPECT_TRUE(heldTask.waitForArrival());
+  });
+  const bool arranged =
+      forked.wait() && heldTask.waitForArrival() && PollUntil([&] {
+        const int worker = creator.load();
+        return worker >= 0 &&
+               hooks.parked(*scheduler, static_cast<std::size_t>(worker), WorkerState::AsleepDeep);
+      });
+  heldTask.release();
+  roots.wait();
+  EXPECT_TRUE(arranged);
+  EXPECT_FALSE(heldTask.heldPastHangGuard());
+  EXPECT_THAT(thief, Ne(creator.load()));
+  EXPECT_THAT(wakesDuringFork, Eq(0u));
+  EXPECT_THAT(extraCalls, Eq(1u));
+}
+
+void CheckRetiringSearcher(unsigned workers) {
+  Gate rootReady;
+  Gate rootHolding;
+  std::atomic<int> childWorker{-1};
+  WakePool pool(workers, (1u << workers) - 1);
+  for (unsigned i = 0; i < workers; ++i) {
+    if (!pool.hooks.firstSearch[i].waitForArrival()) {
+      ADD_FAILURE() << "worker " << i << " did not start its first search";
+      return;
+    }
+  }
+  pool.roots.spawn([&] {
+    rootReady.arriveAndWait();
+    TaskScope children(*pool.scheduler);
+    children.spawn([&] { childWorker.store(Peer::WorkerIndex(*pool.scheduler)); });
+    rootHolding.arriveAndWait();
+  });
+  pool.hooks.firstSearch[0].release();
+  const bool rootStarted = rootReady.waitForArrival();
+  pool.hooks.hold.arm(SchedulerStep::AfterEmptySearch, 1);
+  pool.hooks.firstSearch[1].release();
+  const bool missed = rootStarted && pool.hooks.hold.gate.waitForArrival();
+  EXPECT_TRUE(missed);
+  if (missed) {
+    EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(workers - 1));
+  }
+  rootReady.release();
+  const bool published = rootHolding.waitForArrival();
+  EXPECT_TRUE(published);
+  pool.hooks.hold.gate.release();
+  // The owner holds the fork, and any other enrolled searcher stays at its gate. Parking here
+  // without first taking the fork is the observable failed rescan, even with time to spare.
+  const bool decided = missed && published && PollUntil([&] {
+                         return childWorker.load() >= 0 || pool.hooks.parked(*pool.scheduler, 1);
+                       });
+  const int runnerBeforeRecovery = childWorker.load();
+  rootHolding.release();
+  pool.hooks.release();
+  pool.roots.wait();
+  EXPECT_TRUE(decided);
+  EXPECT_THAT(runnerBeforeRecovery, Eq(1));
+  for (std::size_t i = 0; i < pool.scheduler->workerCount(); ++i) {
+    EXPECT_FALSE(pool.hooks.firstSearch[i].heldPastHangGuard());
+  }
+  EXPECT_FALSE(rootReady.heldPastHangGuard());
+  EXPECT_FALSE(rootHolding.heldPastHangGuard());
+  EXPECT_FALSE(pool.hooks.hold.gate.heldPastHangGuard());
+}
+
+TEST(ParallelismWakeTest, LastSearcherRechecksAForkPublishedAfterItsEmptyScan) {
+  CheckRetiringSearcher(2);
+}
+
+TEST(ParallelismWakeTest, ShallowSearcherRechecksAForkWhileAnotherSearcherIsEnrolled) {
+  CheckRetiringSearcher(3);
+}
+
+TEST(ParallelismWakeTest, ScopeCompletionRetiresAnUnusedRecruitBeforeTheNextFork) {
+  Gate heldChild;
+  Gate afterJoin;
+  Event firstFork;
+  Event secondRan;
+  int secondWorker = -1;
+  bool sawSecond = false;
+  WakePool pool(2, 0b11);
+  const bool searchersHeld =
+      pool.hooks.firstSearch[0].waitForArrival() && pool.hooks.firstSearch[1].waitForArrival();
+  EXPECT_TRUE(searchersHeld);
+  if (!searchersHeld) {
+    return;
+  }
+  pool.hooks.hold.arm(SchedulerStep::BeforeSleeperWaits, 0);
+  pool.roots.spawn([&] {
+    {
+      TaskScope waiting(*pool.scheduler);
+      waiting.spawn([&] {
+        heldChild.arriveAndWait();
+        TaskScope fork(*pool.scheduler);
+        fork.spawn([] {});  // Recruit the shallow creator before completing its scope.
+      });
+      firstFork.set();
+      EXPECT_TRUE(heldChild.waitForArrival());
+    }
+    afterJoin.arriveAndWait();
+    TaskScope next(*pool.scheduler);
+    next.spawn([&] {
+      secondWorker = Peer::WorkerIndex(*pool.scheduler);
+      secondRan.set();
+    });
+    sawSecond = secondRan.wait();
+  });
+  pool.hooks.firstSearch[0].release();
+  const bool firstQueued = firstFork.wait();
+  pool.hooks.firstSearch[1].release();
+  const bool shallow = firstQueued && pool.hooks.hold.gate.waitForArrival();
+  EXPECT_TRUE(shallow);
+  const unsigned before = pool.hooks.wakes[0].load();
+  heldChild.release();
+  // The first wake recruits worker zero. The second announces that its scope is complete.
+  const bool completed =
+      shallow && PollUntil([&] { return pool.hooks.wakes[0].load() >= before + 2; });
+  EXPECT_TRUE(completed);
+  pool.hooks.hold.gate.release();
+  const bool returned = afterJoin.waitForArrival();
+  const bool soleAwake = returned && PollUntil([&] { return pool.allParkedExcept(0); });
+  EXPECT_TRUE(soleAwake);
+  EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(0u));
+  afterJoin.release();
+  pool.roots.wait();
+  EXPECT_TRUE(sawSecond);
+  EXPECT_THAT(secondWorker, Eq(1));
+  EXPECT_FALSE(heldChild.heldPastHangGuard());
+  EXPECT_FALSE(afterJoin.heldPastHangGuard());
+  EXPECT_FALSE(pool.hooks.hold.gate.heldPastHangGuard());
+}
+
+TEST(ParallelismWakeTest, SearchEnrollmentAndRetirementAreIdempotentOnTheOwner) {
+  WakePool pool(1);
+  const auto started = pool.runOnSoleAwakeWorker([&] {
+    EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(0u));
+    Peer::StartCurrentSearch(*pool.scheduler);
+    EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(1u));
+    Peer::StartCurrentSearch(*pool.scheduler);
+    EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(1u));
+    EXPECT_TRUE(Peer::StopCurrentSearch(*pool.scheduler));
+    EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(0u));
+    EXPECT_FALSE(Peer::StopCurrentSearch(*pool.scheduler));
+    EXPECT_THAT(Peer::SearchingCount(*pool.scheduler), Eq(0u));
+  });
+  EXPECT_TRUE(started);
 }
 
 TEST(ParallelismWakeTest, LastSearcherTakingWorkWakesAnotherThief) {

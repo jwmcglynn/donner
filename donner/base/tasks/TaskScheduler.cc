@@ -1,5 +1,8 @@
 #include "donner/base/tasks/TaskScheduler.h"
 
+#include <algorithm>
+#include <bit>
+#include <limits>
 #include <optional>
 #include <random>
 #include <thread>
@@ -14,6 +17,25 @@ namespace {
 /// A worker takes from the outside sources at least once every this many tasks it runs from its
 /// own deque, so a busy worker cannot leave the global queue waiting behind its local work.
 constexpr std::size_t kOutsideTakeInterval = 61;
+
+constexpr std::size_t kSlotsPerWord = 64;
+
+constexpr std::size_t SlotMaskWords(std::size_t slots) {
+  return slots / kSlotsPerWord + (slots % kSlotsPerWord != 0);
+}
+
+bool LiveRecordBoundFits(const TaskSchedulerOptions& options, std::uint64_t limit) {
+  if (options.maxExternalTasks >= limit || options.workerCount == 0) {
+    return options.maxExternalTasks < limit;
+  }
+  if (options.maxTasksPerCreator == 0 ||
+      options.adoptableThreads == std::numeric_limits<std::size_t>::max()) {
+    return false;
+  }
+  const auto creators = (limit - 1 - options.maxExternalTasks) / options.maxTasksPerCreator;
+  return options.workerCount <= creators &&
+         options.adoptableThreads <= creators - options.workerCount;
+}
 
 /// The worker the calling thread is, of whichever scheduler created it.
 thread_local const TaskScheduler* tCurrentScheduler = nullptr;
@@ -39,8 +61,16 @@ std::size_t ReduceRange(std::uint32_t value, std::size_t bound) {
 
 }  // namespace
 
+thread_local TaskScheduler::AdoptedSlot* TaskScheduler::adoptedOnThread_ = nullptr;
+thread_local const TaskScheduler::ScopeLink* TaskScheduler::innermostOnAdoptedThread_ = nullptr;
+thread_local std::size_t TaskScheduler::threadScopeCount_ = 0;
+
 std::ostream& operator<<(std::ostream& os, SchedulerStep step) {
   switch (step) {
+    case SchedulerStep::BeforeSearchStart: return os << "BeforeSearchStart";
+    case SchedulerStep::AfterEmptySearch: return os << "AfterEmptySearch";
+    case SchedulerStep::BeforeAdoptedStealClaim: return os << "BeforeAdoptedStealClaim";
+    case SchedulerStep::AfterAdoptedPush: return os << "AfterAdoptedPush";
     case SchedulerStep::AfterSearchStart: return os << "AfterSearchStart";
     case SchedulerStep::AfterDrain: return os << "AfterDrain";
     case SchedulerStep::AfterWaitingBit: return os << "AfterWaitingBit";
@@ -110,8 +140,8 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
       parkerPool_(std::make_shared<ParkerPool>()),
       externalPool_(globalMutex_, options.maxExternalTasks),
       framePool_(options.retainedCoroutineFrameBytes) {
-  // A scope's count is at most the live-record bound, workers times records per worker plus the
-  // external records; keep it clear of the counter's top bits.
+  // Worker pools, adopted slots and the shared external pool bound the number of live records.
+  // Keep a scope's counter clear of its reserved high bits.
   constexpr std::uint64_t kCountLimit = std::uint64_t{1} << 62;
   if (options_.seed.has_value()) {
     UTILS_RELEASE_ASSERT_MSG(options_.maxTasksPerCreator < kCountLimit,
@@ -119,12 +149,8 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
     seeded_ = std::make_unique<SeededState>(*options_.seed, options_.maxTasksPerCreator);
     return;
   }
-  const std::uint64_t external = options_.maxExternalTasks;
-  bool boundFits = external < kCountLimit;
-  if (boundFits && options_.workerCount != 0) {
-    boundFits = options_.maxTasksPerCreator <= (kCountLimit - 1 - external) / options_.workerCount;
-  }
-  UTILS_RELEASE_ASSERT_MSG(boundFits, "A task scheduler's live-record bound must be below 2^62");
+  UTILS_RELEASE_ASSERT_MSG(LiveRecordBoundFits(options_, kCountLimit),
+                           "A task scheduler's live-record bound must be below 2^62");
   if (options_.workerCount != 0) {
     (void)WorkerStackSize(options_.workerStackBytes);  // Rejects a size the workers cannot use.
   }
@@ -141,10 +167,13 @@ TaskScheduler::TaskScheduler(TaskSchedulerOptions options, SchedulerTestHooks* t
       workers_.push_back(std::move(worker));
     }
   }
+  initializeAdoptedSlots();
   awake_.store(static_cast<std::int64_t>(workers_.size()), std::memory_order_relaxed);
 }
 
 TaskScheduler::~TaskScheduler() {
+  UTILS_RELEASE_ASSERT_MSG(!hasAdoptedThread(),
+                           "A task scheduler was destroyed with a live AdoptedThread");
   framePool_.assertNoLiveFrames();
   UTILS_RELEASE_ASSERT_MSG(
       liveScopes_.load(std::memory_order_relaxed) == 0,
@@ -165,7 +194,7 @@ TaskScheduler::~TaskScheduler() {
                            "A stopped scheduler still has searching workers");
   std::int64_t awakeStates = 0;
   for (const std::unique_ptr<Worker>& worker : workers_) {
-    if (worker->state.load(std::memory_order_relaxed) == WorkerState::Awake) {
+    if (IsWorkerAwake(worker->state.load(std::memory_order_relaxed))) {
       ++awakeStates;
     }
     UTILS_RELEASE_ASSERT_MSG(!worker->deque.take().has_value(),
@@ -179,6 +208,118 @@ TaskScheduler::~TaskScheduler() {
 
   // Every worker is joined and no scope is live, so none of the pool's slots will be used again.
   parkerPool_->close();
+}
+
+void TaskScheduler::initializeAdoptedSlots() {
+  if (workers_.empty() || options_.adoptableThreads == 0) {
+    return;
+  }
+  adoptedSlots_.reserve(options_.adoptableThreads);
+  claimedSlots_ =
+      std::make_unique<std::atomic<std::uint64_t>[]>(SlotMaskWords(options_.adoptableThreads));
+  for (std::size_t i = 0; i < options_.adoptableThreads; ++i) {
+    adoptedSlots_.push_back(std::make_unique<AdoptedSlot>(*this, i, options_));
+  }
+}
+
+std::optional<std::size_t> TaskScheduler::claimAdoptedSlot() {
+  const std::size_t slots = adoptedSlots_.size();
+  for (std::size_t word = 0; word < SlotMaskWords(slots); ++word) {
+    const std::size_t remaining = slots - word * kSlotsPerWord;
+    const std::uint64_t valid = remaining < kSlotsPerWord
+                                    ? (std::uint64_t{1} << remaining) - 1
+                                    : std::numeric_limits<std::uint64_t>::max();
+    auto& mask = claimedSlots_[word];
+    std::uint64_t claimed = mask.load(std::memory_order_relaxed);
+    while ((valid & ~claimed) != 0) {
+      const auto bit = static_cast<std::size_t>(std::countr_zero(valid & ~claimed));
+      if (mask.compare_exchange_weak(claimed, claimed | (std::uint64_t{1} << bit),
+                                     std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        return word * kSlotsPerWord + bit;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+AdoptedThread TaskScheduler::adopt() {
+  UTILS_RELEASE_ASSERT_MSG(tCurrentScheduler == nullptr, "A scheduler worker cannot adopt a slot");
+  UTILS_RELEASE_ASSERT_MSG(threadScopeCount_ == 0, "A thread cannot adopt with a live TaskScope");
+  if (const auto index = claimAdoptedSlot()) {
+    AdoptedSlot& slot = *adoptedSlots_[*index];
+    slot.stack = CurrentThreadStackBounds();
+    slot.previousOnThread = adoptedOnThread_;
+    adoptedOnThread_ = &slot;
+    return AdoptedThread(*this, *index);
+  }
+  return {};
+}
+
+AdoptedThread::~AdoptedThread() {
+  if (scheduler_ != nullptr) {
+    scheduler_->releaseAdoptedSlot(index_);
+  }
+}
+
+void TaskScheduler::releaseAdoptedSlot(std::size_t index) {
+  UTILS_RELEASE_ASSERT_MSG(threadScopeCount_ == 0,
+                           "An AdoptedThread was released with a live TaskScope");
+  AdoptedSlot& slot = *adoptedSlots_[index];
+  AdoptedSlot** link = &adoptedOnThread_;
+  while (*link != nullptr && *link != &slot) {
+    link = &(*link)->previousOnThread;
+  }
+  UTILS_RELEASE_ASSERT_MSG(*link == &slot, "An AdoptedThread was released on a different thread");
+  while (const auto record = slot.deque.take()) {
+    publishToGlobalQueue(*record);
+  }
+  *link = slot.previousOnThread;
+  slot.previousOnThread = nullptr;
+  // A later claim acquires the empty deque and the pool's owner-only state.
+  claimedSlots_[index / kSlotsPerWord].fetch_and(~(std::uint64_t{1} << (index % kSlotsPerWord)),
+                                                 std::memory_order_release);
+}
+
+bool TaskScheduler::hasAdoptedThread() const {
+  for (std::size_t i = 0; i < SlotMaskWords(adoptedSlots_.size()); ++i) {
+    if (claimedSlots_[i].load(std::memory_order_relaxed) != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TaskScheduler::AdoptedSlot* TaskScheduler::currentAdoptedSlot() const {
+  for (AdoptedSlot* slot = adoptedOnThread_; slot != nullptr; slot = slot->previousOnThread) {
+    if (&slot->scheduler == this) {
+      return slot;
+    }
+  }
+  return nullptr;
+}
+
+void TaskScheduler::recordAdoptedBirth(ScopeLink& scope) {
+  // The stamp survives guard/slot reuse and does not retain an unrelated scheduler's storage.
+  static thread_local const std::uint64_t thread = ParkerPool::NextGeneration();
+  static thread_local std::uint64_t order = 0;
+  UTILS_RELEASE_ASSERT_MSG(thread != 0 && order != std::numeric_limits<std::uint64_t>::max(),
+                           "Adopted scope creation order exhausted");
+  scope.birthThread = thread;
+  scope.birthOrder = ++order;
+}
+
+bool TaskScheduler::adoptedSubmissionNeedsGlobal(const ScopeLink* scope) {
+  const ScopeLink* inner = innermostOnAdoptedThread_;
+  if (inner == nullptr || inner == scope) {
+    return false;
+  }
+  // The active scope chain belongs to the thread, even across scheduler boundaries.
+  UTILS_RELEASE_ASSERT_MSG(scope != nullptr && scope->asyncScope != nullptr &&
+                               scope->birthThread == inner->birthThread &&
+                               scope->birthOrder > inner->birthOrder,
+                           "An adopted thread may only spawn into its innermost synchronous scope "
+                           "or a younger async scope");
+  return true;
 }
 
 ScheduleAwaitable TaskScheduler::schedule() noexcept {
@@ -291,14 +432,25 @@ SchedulerWork* TaskScheduler::takeGlobal() {
   return work;
 }
 
+TaskRecord* TaskScheduler::stealFromSlot(AdoptedSlot& slot, std::size_t workerIndex) {
+  StealResult<TaskRecord*> result;
+  do {
+    result = testHooks_ == nullptr ? slot.deque.steal() : slot.deque.stealWithHook([&] {
+      hook(SchedulerStep::BeforeAdoptedStealClaim, workerIndex);
+    });
+  } while (result.status == StealStatus::Lost);
+  return result.status == StealStatus::Taken ? result.item : nullptr;
+}
+
 SchedulerWork* TaskScheduler::takeOutside(Worker& worker) {
-  // The outside sources, in a fixed cyclic order. The global queue is the only one a scheduler
-  // without adoptable slots has.
-  constexpr std::size_t kSources = 1;
-  for (std::size_t i = 0; i < kSources; ++i) {
-    const std::size_t source = (worker.outsideCursor + i) % kSources;
-    if (SchedulerWork* work = takeGlobal()) {
-      worker.outsideCursor = (source + 1) % kSources;
+  const std::size_t sources = 1 + adoptedSlots_.size();
+  std::size_t source = worker.outsideCursor;
+  for (std::size_t i = 0; i < sources; ++i) {
+    SchedulerWork* work =
+        source == 0 ? takeGlobal() : stealFromSlot(*adoptedSlots_[source - 1], worker.index);
+    source = source + 1 == sources ? 0 : source + 1;
+    if (work != nullptr) {
+      worker.outsideCursor = source;
       return work;
     }
   }
@@ -344,9 +496,7 @@ SchedulerWork* TaskScheduler::findOtherWork(Worker& worker) {
 }
 
 void TaskScheduler::runTask(Worker& worker, SchedulerWork* work) {
-  if (stopSearching(worker)) {
-    wakeForParallelism();
-  }
+  finishSearchWithWork(worker);
   UTILS_RELEASE_ASSERT_MSG(
       StackRemaining(CurrentStackPosition(), worker.stack) >= kStackReserveBytes,
       "A task scheduler worker is out of stack: less than the reserve is "
@@ -377,7 +527,7 @@ void TaskScheduler::runRecord(CreatorRecordPool<>& localPool, std::size_t worker
     std::unique_lock lock(globalMutex_);
     externalPool_.release(record, lock);
   } else {
-    // Every other record belongs to another worker of this scheduler.
+    // Every other record belongs to a worker or adopted slot of this scheduler.
     static_cast<CreatorRecordPool<>*>(const_cast<void*>(record->pool()))
         ->returnFromOtherThread(record);
   }
@@ -436,6 +586,7 @@ void TaskScheduler::waitOnScope(Worker& worker, const std::atomic<std::uint64_t>
 
     // Acquire the task results before returning to the creator.
     if (count.load(std::memory_order_acquire) == 0) {
+      stopSearching(worker);
       return;
     }
 
@@ -476,7 +627,7 @@ TaskScheduler::Worker* TaskScheduler::findAsleepShallow(const Worker& self) cons
 TaskScheduler::WaitSleep TaskScheduler::sleepWhileWaiting(Worker& worker,
                                                           const std::atomic<std::uint64_t>& count,
                                                           bool pastMargin) {
-  const auto [token, awakeBefore] =
+  const auto sleep =
       prepareSleep(worker, pastMargin ? WorkerState::AsleepDeep : WorkerState::AsleepShallow);
 
   // 4. Re-check. The stop flag is set only with no scope live, so a waiting creator never sees it.
@@ -485,20 +636,19 @@ TaskScheduler::WaitSleep TaskScheduler::sleepWhileWaiting(Worker& worker,
   // The finisher may have decremented before swapping our state or changing our parker.
   if (count.load(std::memory_order_acquire) == 0) {
     hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
-    swapToAwake(worker);
-    worker.parker.finishWait();
+    finishSleep(worker);
+    stopSearching(worker);
     return WaitSleep::ScopeComplete;
   }
   if (queuedWorkVisible()) {
     if (!pastMargin) {
       hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
-      swapToAwake(worker);
-      worker.parker.finishWait();
+      finishSleep(worker);
       return WaitSleep::Resume;
     }
     // A transiently low count errs toward staying awake.
     const bool lastAwake =
-        awakeBefore <= 1 && (testHooks_ == nullptr || testHooks_->lastAwakeRule());
+        sleep.awakeBefore <= 1 && (testHooks_ == nullptr || testHooks_->lastAwakeRule());
     if (lastAwake) {
       if (Worker* shallow = findAsleepShallow(worker)) {
         // The hand-off: whether or not this swap succeeds, an awake worker exists that re-checks
@@ -507,35 +657,40 @@ TaskScheduler::WaitSleep TaskScheduler::sleepWhileWaiting(Worker& worker,
         wakeWorker(*shallow);
       } else {
         hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
-        swapToAwake(worker);
-        worker.parker.finishWait();
+        finishSleep(worker);
         return WaitSleep::RunQueuedPastMargin;
       }
     }
   }
+  if (!pastMargin && runAfterFinalSearch(worker, sleep)) {
+    return WaitSleep::Resume;
+  }
   hook(SchedulerStep::BeforeSleeperWaits, worker.index);
 
   // 5. Wait; whatever ends the wait, wake through the swap before doing anything else.
-  worker.parker.wait(token);
-  swapToAwake(worker);
-  worker.parker.finishWait();
+  worker.parker.wait(sleep.token);
+  finishSleep(worker);
   return WaitSleep::Resume;
 }
 
 bool TaskScheduler::queuedWorkVisible() const {
-  return globalQueued_.load(std::memory_order_seq_cst) > 0;
+  if (globalQueued_.load(std::memory_order_seq_cst) > 0) {
+    return true;
+  }
+  return std::any_of(adoptedSlots_.begin(), adoptedSlots_.end(),
+                     [](const auto& slot) { return slot->deque.publishedWorkVisible(); });
 }
 
 bool TaskScheduler::swapToAwake(Worker& worker) {
   WorkerState observed = worker.state.load(std::memory_order_seq_cst);
-  if (observed == WorkerState::Awake) {
+  if (IsWorkerAwake(observed)) {
     observed = WorkerState::AsleepShallow;
   }
   // Sequentially consistent on success and on failure: a failed swap's read is half of the
   // shutdown pairing, and every swap is in one total order with the awake count.
   while (!worker.state.compare_exchange_strong(
       observed, WorkerState::Awake, std::memory_order_seq_cst, std::memory_order_seq_cst)) {
-    if (observed == WorkerState::Awake) {
+    if (IsWorkerAwake(observed)) {
       return false;
     }
   }
@@ -550,8 +705,70 @@ void TaskScheduler::wakeWorker(Worker& worker) {
   worker.parker.unpark();
 }
 
+void TaskScheduler::finishSleep(Worker& worker) {
+  const auto previous = worker.state.exchange(WorkerState::Awake, std::memory_order_seq_cst);
+  if (previous == WorkerState::AwakeReserved) {
+    hook(SchedulerStep::BeforeSearchStart, worker.index);
+    worker.searching = true;
+    hook(SchedulerStep::AfterSearchStart, worker.index);
+  } else if (previous != WorkerState::Awake) {
+    awake_.fetch_add(1, std::memory_order_seq_cst);
+  }
+  worker.parker.finishWait();
+}
+
+bool TaskScheduler::runAfterFinalSearch(Worker& worker, const SleepPreparation& sleep) {
+  if (sleep.rescanPeers) {
+    if (SchedulerWork* work = stealFromWorkers(worker)) {
+      hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
+      finishSleep(worker);
+      startSearching(worker);
+      runTask(worker, work);
+      return true;
+    }
+  }
+  return false;
+}
+
+void TaskScheduler::passSearchCredit() {
+  if (searching_.load(std::memory_order_relaxed) == 1 &&
+      awake_.load(std::memory_order_relaxed) < static_cast<std::int64_t>(workers_.size()) &&
+      (testHooks_ == nullptr || testHooks_->allowParallelismWake())) {
+    for (const auto& candidate : workers_) {
+      if (candidate->state.load(std::memory_order_relaxed) != WorkerState::AsleepShallow) {
+        continue;
+      }
+      WorkerState expected = WorkerState::AsleepShallow;
+      if (candidate->state.compare_exchange_strong(expected, WorkerState::AwakeReserved,
+                                                   std::memory_order_seq_cst)) {
+        awake_.fetch_add(1, std::memory_order_seq_cst);
+        hook(SchedulerStep::BetweenWakeSwapAndParkerChange, candidate->index);
+        candidate->parker.unpark();
+        return;
+      }
+    }
+  }
+  searching_.fetch_sub(1, std::memory_order_relaxed);
+}
+
+void TaskScheduler::finishSearchWithWork(Worker& worker) {
+  if (!worker.searching) {
+    return;
+  }
+  worker.searching = false;
+  auto count = searching_.load(std::memory_order_relaxed);
+  while (count != 1) {
+    if (searching_.compare_exchange_weak(count, count - 1, std::memory_order_relaxed)) {
+      return;
+    }
+  }
+  // Keep the credit counted while choosing a successor: producers cannot start a second chain.
+  passSearchCredit();
+}
+
 void TaskScheduler::startSearching(Worker& worker) {
   if (!worker.searching) {
+    hook(SchedulerStep::BeforeSearchStart, worker.index);
     worker.searching = true;
     searching_.fetch_add(1, std::memory_order_relaxed);
     hook(SchedulerStep::AfterSearchStart, worker.index);
@@ -578,6 +795,10 @@ void TaskScheduler::wakeAsleepWorker() {
 }
 
 TaskScheduler::SleepPreparation TaskScheduler::prepareSleep(Worker& worker, WorkerState state) {
+  const bool rescanPeers = worker.searching && state == WorkerState::AsleepShallow;
+  if (worker.searching) {
+    hook(SchedulerStep::AfterEmptySearch, worker.index);
+  }
   stopSearching(worker);
   while (const std::optional<SchedulerWork*> work = worker.deque.take()) {
     publishToGlobalQueue(*work);
@@ -591,7 +812,7 @@ TaskScheduler::SleepPreparation TaskScheduler::prepareSleep(Worker& worker, Work
   worker.state.store(state, std::memory_order_seq_cst);
   const std::int64_t awakeBefore = awake_.fetch_sub(1, std::memory_order_seq_cst);
   hook(SchedulerStep::AfterSleeperDecrement, worker.index);
-  return {token, awakeBefore};
+  return {token, awakeBefore, rescanPeers};
 }
 
 bool TaskScheduler::trySleep(Worker& worker) {
@@ -599,22 +820,22 @@ bool TaskScheduler::trySleep(Worker& worker) {
   // 4. Re-check the stop flag and the visible queued work.
   if (stop_.load(std::memory_order_seq_cst)) {
     hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
-    swapToAwake(worker);
-    worker.parker.finishWait();
+    finishSleep(worker);
     return false;
   }
   if (queuedWorkVisible()) {
     hook(SchedulerStep::BeforeSelfWakeSwap, worker.index);
-    swapToAwake(worker);
-    worker.parker.finishWait();
+    finishSleep(worker);
+    return true;
+  }
+  if (runAfterFinalSearch(worker, sleep)) {
     return true;
   }
   hook(SchedulerStep::BeforeSleeperWaits, worker.index);
 
   // 5. Wait; whatever ends the wait, wake through the swap before doing anything else.
   worker.parker.wait(sleep.token);
-  swapToAwake(worker);
-  worker.parker.finishWait();
+  finishSleep(worker);
   return !stop_.load(std::memory_order_seq_cst);
 }
 
@@ -633,7 +854,12 @@ void* TaskScheduler::WorkerEntry(void* worker) {
     // Acquire the final roster and initial awake count from the constructor.
     std::lock_guard startup(self.scheduler.globalMutex_);
   }
-  detail::SetCurrentWorkerQos(self.scheduler.options_.workerQos);
+  const WorkerQos qos = self.scheduler.options_.workerQos;
+  const int error = self.scheduler.testHooks_ ? self.scheduler.testHooks_->setWorkerQos(qos)
+                                              : detail::TrySetCurrentWorkerQos(qos);
+  if (error != 0) {
+    self.scheduler.workerQosRefusals_.fetch_add(1, std::memory_order_relaxed);
+  }
   self.stack = UsableStack(CurrentThreadStackBounds(),
                            WorkerStackSize(self.scheduler.options_.workerStackBytes));
   self.scheduler.workerMain(self);

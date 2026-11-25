@@ -156,6 +156,28 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "adopted_thread_tests",
+    srcs = ["tests/AdoptedThread_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "adopted_scheduling_tests",
+    srcs = ["tests/AdoptedScheduling_tests.cc"],
+    deps = [
+        ":scheduler_test_utils",
+        ":task_scheduler",
+        "//donner/base:gtest_timeout_main",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
     name = "task_scope_tests",
     srcs = ["tests/TaskScope_tests.cc"],
     deps = [

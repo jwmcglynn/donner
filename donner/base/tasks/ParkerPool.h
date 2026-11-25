@@ -82,7 +82,7 @@ public:
   static Parker<>* ParkerForThread(std::uint64_t generation,
                                    const std::shared_ptr<ParkerPool>& pool);
 
-  /// A generation number no scheduler in this process has had.
+  /// A unique process-wide generation used for scheduler and adopting-thread identities.
   static std::uint64_t NextGeneration();
 
   /// Pools alive in the process, for tests.

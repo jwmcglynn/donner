@@ -178,19 +178,15 @@ public:
    * @param item Entry to push.
    * @return True if the entry was pushed, false if the deque was full.
    */
-  [[nodiscard]] bool push(T item) {
-    const Index bottom = bottom_.load(IndexOrder(std::memory_order_relaxed));
-    // Acquire: a thief's read of the slot it claimed happens before the owner rewrites that slot.
-    const Index top = top_.load(IndexOrder(std::memory_order_acquire));
-    if (bottom - top >= static_cast<Index>(capacity())) {
-      return false;
-    }
+  [[nodiscard]] bool push(T item) { return pushImpl<false>(item); }
 
-    slots_[slotOf(bottom)].store(item, std::memory_order_relaxed);
-    // Publishes the slot, and whatever the entry points to, to a thief that reads the new bottom.
-    Fence(std::memory_order_release);
-    bottom_.store(bottom + 1, IndexOrder(std::memory_order_relaxed));
-    return true;
+  /// Pushes from a blocking owner, publishing the new bottom in the sleepers' SC order.
+  [[nodiscard]] bool pushPublished(T item) { return pushImpl<true>(item); }
+
+  /// Tests the adopted-deque half of the publish/sleep handshake without touching a slot.
+  [[nodiscard]] bool publishedWorkVisible() const {
+    const Index top = top_.load(std::memory_order_seq_cst);
+    return bottom_.load(std::memory_order_seq_cst) > top;
   }
 
   /**
@@ -253,7 +249,12 @@ public:
    *   none; or \ref StealStatus::Lost if another thread claimed it first, in which case the deque
    *   may still hold entries and the caller may retry.
    */
-  [[nodiscard]] StealResult<T> steal() {
+  [[nodiscard]] StealResult<T> steal() { return stealWithHook(nullptr); }
+
+  /// Steals as in \ref steal, holding at \p beforeClaim after reading a nonempty slot and before
+  /// its CAS. The ordinary path instantiates no runtime callback.
+  template <typename BeforeClaim>
+  [[nodiscard]] StealResult<T> stealWithHook(BeforeClaim beforeClaim) {
     Index top = top_.load(IndexOrder(std::memory_order_acquire));
     // Store-load barrier paired with the one in take.
     Fence(std::memory_order_seq_cst);
@@ -265,6 +266,9 @@ public:
 
     const T item = slots_[slotOf(top)].load(std::memory_order_relaxed);
     Hooks::BeforeStealClaims();
+    if constexpr (!std::is_same_v<BeforeClaim, std::nullptr_t>) {
+      beforeClaim();
+    }
     // A failed claim takes nothing, so its read needs no ordering.
     if (!top_.compare_exchange_strong(top, top + 1, std::memory_order_seq_cst,
                                       IndexOrder(std::memory_order_relaxed))) {
@@ -274,6 +278,23 @@ public:
   }
 
 private:
+  template <bool kPublished>
+  bool pushImpl(T item) {
+    const Index bottom = bottom_.load(IndexOrder(std::memory_order_relaxed));
+    // Acquire: a thief's read of the slot it claimed happens before the owner rewrites that slot.
+    const Index top = top_.load(IndexOrder(std::memory_order_acquire));
+    if (bottom - top >= static_cast<Index>(capacity())) {
+      return false;
+    }
+
+    slots_[slotOf(bottom)].store(item, std::memory_order_relaxed);
+    // A thief can acquire a later relaxed bottom store from an owner take, not just this push.
+    Fence(std::memory_order_release);
+    bottom_.store(bottom + 1,
+                  kPublished ? std::memory_order_seq_cst : IndexOrder(std::memory_order_relaxed));
+    return true;
+  }
+
   static constexpr bool kSequentiallyConsistent =
       kOrdering == DequeOrdering::SequentiallyConsistent;
 
