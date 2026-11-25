@@ -438,8 +438,9 @@ Part C estimate: 13.5 engineering days.
 - [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
   - [x] Compare admission cutoffs and sample a warmed native task on Arm Linux and Apple arm64.
         Retain the current cutoff and grain. See [Native Calibration](#native-calibration).
-  - [ ] Establish the client stack bound for supported native builds and meet the remaining
-        speedup and small-document timing goals.
+  - [x] Declare and qualify the 64 KiB non-waiting client allowance for native release builds.
+        See [Scheduler Stack Admission](#scheduler-stack-admission).
+  - [ ] Meet the remaining speedup target and verify small-document timing on quiet hosts.
 
 Part D estimate: 9 engineering days.
 
@@ -2086,21 +2087,61 @@ settings. In a local diagnostic build, vary only the admission threshold selecte
 measurement order, discard a warmup group, and record dispatch, rollback, replay and logical work
 with the timings.
 
-The warmed stack fixture publishes the styles of four 224-level ancestor chains before
-invalidating their 1,088 terminal rectangles. A child selector traverses all 224 levels and
-uses 16 nested `:is()` tests at the terminal subject. On each native toolchain, the diagnostic
-samples 12 real worker tasks and verifies the expected fill on every rectangle, all 1,088
-replayed traces and zero rollbacks. The largest observed frame delta is **19,632 bytes** on
-Arm Linux and **23,040 bytes** on Apple arm64. At those samples 104,528 and 107,856 bytes
-remain respectively on configured 128 KiB stacks, and both samples run without nesting.
-The scheduler's [real frame-address probe](../../donner/base/tasks/WorkerStack.h) defines the
-measurement. In the diagnostic, post-inlining function-entry hooks in the task, cascade,
-selector and declaration code sample the low frame relative to the scheduler's TaskRecord
-entry. The samples cover those instrumented paths and optimized toolchains. Instrumentation
-can change frame layout, and other paths can go deeper. A client bound for the scheduler
-owner still needs coverage of the supported native paths and a justified margin. See
-[0073-task_scheduler](0073-task_scheduler.md) for the non-waiting task contract and the
-separate 32 KiB reporting reserve.
+Warmed stack fixtures publish four 224-level ancestor chains before invalidating 1,088
+terminal rectangles. They exercise the admitted four-level `:is()`, nth-of and relative
+`:has()` paths and verify the expected fill on every rectangle, all 1,088 replayed traces,
+and no rollbacks. Each case samples 12 real worker tasks on configured 128 KiB stacks.
+The largest observed frame-address deltas from TaskRecord entry are 11,344 bytes on
+Arm Linux and 11,200 bytes on Apple arm64. The instrumented frame addresses sample the
+covered paths. See [Scheduler Stack Admission](#scheduler-stack-admission) for the client
+declaration and the separate reporting reserve.
+
+### Scheduler Stack Admission
+
+Linux and Apple style tasks never join a scope. They use explicit stacks for subtrees and
+selector combinators. If the last main range cannot enqueue the offscreen phase, it reuses its
+context after the main walk returns, without another range frame on the stack.
+
+An active stylesheet revision is eligible only when its selector arguments and declaration
+component values are at most four levels deep. Its rule index records this once, including
+imported sheets. A provisional element with unparsed local values declines before copying
+their component trees.
+
+The owner and every executing range check for **64 KiB of client headroom** above the
+scheduler's separate **32 KiB reporting reserve**. Worker bounds honor the configured usable
+stack. The owner measures once after sizing the pass and reuses those bounds for the ranges
+it executes. Unavailable bounds, insufficient configured worker space, or too little live
+headroom decline scheduling. The owner applies the original serial cascade after discarding
+any tentative work. Other build platforms use the serial path.
+
+The release qualification budget allows 12 KiB for fixed task-entry, range, preparation and
+style frames. It allows another 32 KiB for the selector branch or 24 KiB for declaration
+parsing and component-value copies and destruction. The selector allowance includes five
+live levels at four descents, with specificity, relative selection and nth-of filters.
+Matching returns before declaration parsing, so use the larger branch allowance. With
+another 16 KiB for native library calls and compiler and ABI variation, the budget totals
+60 KiB. The budget qualifies native release admission. Debug and sanitizer tests exercise
+admission and rollback with their own frame layouts. The ordinary serial caller retains its
+existing stack contract.
+
+Run the **release cascade frame check** with the normal native CI toolchain and runner
+options. It catches individual emitted frames above 8 KiB in the selected translation
+units, including `ParseFontShorthand` in `PropertyRegistry.cc`. This selective compiler
+check measures individual frames. The structural depth restrictions, cumulative allowances,
+and sampled worker high-water checks cover the call paths separately.
+`//donner/svg/components/style:style_parallel_tests` checks both sides of the depth gate,
+including real scheduled work on configured 128 KiB workers, and checks low-headroom
+rollback against the original serial cascade.
+
+```sh
+units='(ParallelStylePass|StyleSystem|SelectorContent|PropertyRegistry'
+units="$units|ComplexSelector|PseudoClassSelector|ComponentValue"
+units="$units|TaskScheduler|RuleIndex|ColorParser)[.]cc"
+bazel test -c opt --config=re --config=ci --config=ci-platforms \
+  --per_file_copt="$units@-Wframe-larger-than=8192,-Werror=frame-larger-than" \
+  //donner/svg/components/style:style_parallel_tests \
+  //donner/svg/components/style:ci_darwin_style_parallel_tests
+```
 
 ### What Must Hold for Parallel Cascading
 
@@ -2222,45 +2263,7 @@ separate 32 KiB reporting reserve.
   are checked by `//donner/svg/components/style:matched_properties_cache_tests`; cross-width
   family admission and filter accounting are checked by
   `//donner/svg/components/style:style_parallel_tests` and by the cascade differential fuzzer.
-- **Scheduler stack admission.** Linux and Apple style tasks never join a scope. They walk
-  subtrees and selector combinators with explicit stacks. If the last main range cannot enqueue
-  the offscreen phase, it reuses its context after the main walk returns, without another range
-  frame on the stack. A stylesheet revision is eligible
-  only when its selector arguments and declaration component values are at most four levels
-  deep. The active revision's rule index records this once, including imported sheets. A provisional
-  element with unparsed local values is declined before their component trees are copied.
-  The caller and each executing range must have 64 KiB of client headroom above the scheduler's
-  separate 32 KiB reporting reserve. Worker bounds honor the configured usable stack, and
-  scheduling declines when the configured worker size cannot meet the admission requirement.
-  The owner measures its stack once after sizing the pass, then reuses those bounds for ranges
-  it executes. Unavailable bounds cause the optional pass to decline. Other build platforms
-  use the serial path. The serial owner applies the original cascade if admission fails,
-  including after discarding tentative work. The rule is a conservative native release qualification envelope. Samples
-  check it without defining a universal stack maximum. Debug and sanitizer tests exercise the
-  admission and rollback behavior, and their instrumented frames are outside the release
-  measurement envelope. The ordinary serial caller retains its existing stack contract.
-  `//donner/svg/components/style:style_parallel_tests` checks both sides of the CSS depth gate
-  and compares the low-headroom rollback to the ordinary serial path.
-  The release qualification budget allows 12 KiB for fixed task-entry, range, preparation, and
-  style frames. It allows another 32 KiB for the selector branch or 24 KiB for declaration
-  parsing and component-value copies and destruction. The selector allowance includes five
-  live levels at four descents, with specificity, relative selection and nth-of filters.
-  Matching returns before declaration parsing, so use the larger branch allowance. With
-  another 16 KiB for native library calls and compiler and ABI variation, the budget totals
-  60 KiB. This is an admission envelope, not a runtime consumption limit.
-
-  Run the **release cascade frame check** with the normal native CI toolchain and runner
-  options. An affected emitted frame over 8 KiB fails compilation. The on-limit selector test
-  also requires real scheduled work on workers configured with a 128 KiB stack.
-
-  ```sh
-  units='(ParallelStylePass|StyleSystem|SelectorContent|PropertyRegistry|ComplexSelector|PseudoClassSelector|ComponentValue|TaskScheduler|RuleIndex|ColorParser)[.]cc'
-  bazel test -c opt --config=re --config=ci --config=ci-platforms \
-    --per_file_copt="$units@-Wframe-larger-than=8192,-Werror=frame-larger-than" \
-    //donner/svg/components/style:style_parallel_tests \
-    //donner/svg/components/style:ci_darwin_style_parallel_tests
-  ```
-
+- **Stack admission.** See [Scheduler Stack Admission](#scheduler-stack-admission).
 - **Serial cases.** Animated documents (animation hooks charge a shared contextual-work budget),
   external-use registries, passes below the threshold, and builds or runtimes without workers run
   the serial path.

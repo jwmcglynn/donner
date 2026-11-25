@@ -1354,6 +1354,11 @@ queue, and *started* once a thread begins running it.
   products and computable. A declaration that is wrong is not caught by the check, and the
   stack-floor assertion is then still what stops the process.
 
+  The parallel CSS cascade declares 64 KiB of client working space for non-waiting tasks in
+  native release builds. Count it separately from the scheduler's 32 KiB reporting reserve.
+  The client bounds recursive inputs and checks the executing stack before a range.
+  See [Scheduler Stack Admission](0072-css_cascade.md#scheduler-stack-admission).
+
   **Worker startup and QoS.** The constructor holds the global-queue mutex while starting the
   requested threads. It assigns dense indices to successful starts and writes the initial awake
   count from the final roster before releasing the mutex. Each worker acquires that same mutex
