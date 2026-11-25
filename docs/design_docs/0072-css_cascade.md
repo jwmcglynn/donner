@@ -112,9 +112,11 @@ same harness, machine class and method. Each goal names the counter or timer tha
   [Decisions](#decisions)). First frames, full-restyle frames and retained updates compute the
   same styles: selector matching for document elements never reaches `<use>` instanced content
   (see [Single Cascade per Full Restyle](#single-cascade-per-full-restyle)).
-- **Bounded memory.** The rule index costs at most 16 bytes per selector-list entry plus shared
-  key strings. The ancestor filter costs 4 KiB per style traversal. Matched-style key metadata
-  is bounded independently of the document and family accounts for retained record data.
+- **Bounded memory.** The rule index, with its ancestor hashes, costs at most
+  `RuleIndex::kMaxBytesPerEntry` (64 bytes on 64-bit builds) per selector-list entry plus key
+  text, vector slack and 4 bytes per nonempty index; the ancestor filter costs 4 KiB per style traversal
+  plus its chain. Matched-style key metadata is bounded independently of the document and family
+  accounts for retained record data.
 
 ### Part B: Cascade Features
 
@@ -303,7 +305,8 @@ including tests and review fixes. "After" names the milestones that must land fi
   - Done when: the no-false-negative property test, the counting-removal and saturation tests,
     the deterministic false-positive-rate test and the fuzzer are green.
 - [ ] Milestone A7: Ancestor filter in the cascade (3 days). After A3 and A6.
-  - [ ] Store up to four ancestor hashes per selector-list entry in `RuleIndex`.
+  - [x] Store up to four ancestor hashes per selector-list entry in `RuleIndex`, and add
+        `StyleAncestorFilter` with its chain synchronization.
   - [ ] Maintain the filter with `StyleAncestorFilter` in every traversal mode and check it
         before `MatchSelectorRule`; count filter rejections.
   - [ ] Run the differential test and fuzzer with the filter on and off, including the
@@ -1147,6 +1150,8 @@ many rules as its sheet has, so a sheet changed without a rebuild fails loudly. 
 - Each entry is `{uint32_t ruleIndex}` (4 bytes); the per-key arrays add 8 bytes per distinct key
   besides the key itself, an `RcString` that shares the selector's storage, or a lowercased copy
   for a type or attribute name written with capitals.
+- Per rule, the ancestor hash groups of [Ancestor Bloom Filter](#ancestor-bloom-filter): a span of
+  one flat vector of four-hash groups (16 bytes each), through a vector of per-rule offsets.
 
 Lookups are binary searches with exact (id, class) or ASCII-lowercased (type, attribute)
 comparison. Sorted vectors avoid hashing attacker-chosen strings, keep the structure contiguous,
@@ -1211,8 +1216,15 @@ a `<style>` element is parsed and when a source edit reparses it
 (`RuleIndexCharge.StylesheetChargeIncludesItsRuleIndex` in
 `//donner/svg/components/style:style_system_tests`). Imported sheets are not charged to that
 budget; their rules and component values are bounded by the import budget
-(`StylesheetImportBudget`). The index never exceeds 16 bytes
-per selector-list entry plus vector slack, and selector-list entries are already bounded by the
+(`StylesheetImportBudget`). The index never exceeds `RuleIndex::kMaxBytesPerEntry` per
+selector-list entry plus key text and vector slack: a 4-byte rule position, at most one key record
+(an `RcString` and two 4-byte fields, 40 bytes on 64-bit builds), a 16-byte ancestor hash group and
+at most one 4-byte per-rule offset, 64 bytes in all on 64-bit builds, plus one leading 4-byte
+offset per nonempty index
+(`RuleIndexAncestorHashes.RetainedBytesCountTheGroupsWithinThePerEntryBound` in
+`//donner/svg/components/style:rule_index_tests`, and
+`RuleIndexCharge.StylesheetChargeIncludesItsAncestorHashes` for the charge). Selector-list
+entries are already bounded by the
 parser's per-stylesheet rule and component-value limits (`RuleParser::kMaximumRules`,
 `Stylesheet::kMaximumDeclarations`, `kMaximumComponentValues`). `SVGStyleElement::setContents`
 reparses without charging the parsed-payload budget (issue #2726); the candidate list collected
@@ -1408,10 +1420,14 @@ their own unit tests.
 
 **Cascade filter.** `StyleAncestorFilter` in `donner/svg/components/style/` owns one
 `CountingBloomFilter<12>` (4,096 counters, 4 KiB) and a stack of the entities whose hashes it
-holds. For each element on the stack it inserts the salted hashes of the lowercased tag name, the
-id, each class and each lowercased attribute local name, read through `ShadowedElementAdapter` so
-shadow entities contribute their light element's id, classes and attributes and their own tag,
-exactly as matching sees them.
+holds. For each element on the stack it inserts the salted hashes
+(`RuleIndex::AncestorKeyHash`, salted by key kind) of the lowercased tag name, the id, each class
+and each lowercased attribute local name whatever its namespace (a superset of the un-namespaced
+names selectors key on). Keys are read through `RuleIndexElementView` and chains walked with
+`StyleParentElement` (`StyleElementView.h`), which `ShadowedElementAdapter` also uses, so shadow
+entities contribute their light element's id, classes and attributes and their own tag, and their
+chains continue through the `<use>` host, exactly as matching sees them. Names are lowercased into
+one reused buffer rather than a new string per name.
 
 **Selector hashes.** When `RuleIndex` is built, each selector-list entry stores up to four
 `BloomHash` values. Walking left from the subject compound, compounds reached through descendant
@@ -1420,8 +1436,13 @@ combinator, because compounds beyond it are siblings of an ancestor, not ancesto
 ancestor compounds it takes id, class, non-universal type and un-namespaced attribute-name simple
 selectors, preferring ids, then classes, then attributes, then types (rarer first, as WebKit does).
 Simple selectors inside pseudo-class arguments are never used, because `:not()` inverts them and
-`:is()` lists alternatives. An entry with no such selector has no hashes and is never rejected by
-the filter.
+`:is()` lists alternatives. Repeated keys count once. Each rule stores one group of four hashes
+per selector-list entry, repeating a hash when an entry has fewer than four (a repeat is absent
+exactly when the original is); an entry with no such selector makes its rule store no groups at
+all, and a rule without groups is never rejected by the filter. Continuing the walk past the first
+sibling combinator, where compounds left of a later descendant or child combinator are still
+ancestors of the subject (`.a .b + .c`: `.a` is an ancestor of `.c`), is a possible later
+refinement.
 
 **Check.** After the index produces a candidate rule, the rule is skipped when every one of its
 entries has a hash the filter does not contain. A skipped candidate is still charged to the
@@ -1448,7 +1469,9 @@ be decremented, which would leave the filter's content depending on history rath
 when an insertion would saturate a counter, the filter is cleared and disabled (every probe
 answers "may contain") until synchronization pops back above the ancestor whose insertion
 saturated it, and then rebuilt from the chain. Saturation needs 255 live probe contributions to
-one counter. An insertion contributes two when its probes coincide. With that rule, whether the
+one counter. An insertion contributes two when its probes coincide. The filter is disabled the
+same way below an ancestor with more than `StyleAncestorFilter::kMaxKeysPerAncestor` (64) keys,
+which bounds the work one ancestor costs. With those rules, whether the
 filter is enabled and what it contains are functions of E's ancestor chain alone, so the filter
 is correct in every traversal mode and makes the same decisions in the serial and parallel passes:
 
@@ -1471,8 +1494,15 @@ The filter belongs to one style pass object, created when `computeAllStyles` or
 destroys its filter with it, so no later pass can see a half-maintained set. Chain
 synchronization is not charged to `SelectorTraversalBudget` or any other style budget, so it adds
 nothing to any budget outcome; the only budget difference the filter makes is the skipped walks
-above. Its cost is bounded instead by the parser's nesting-depth limit: at most one pop and one
-push per ancestor level per element.
+above. Its cost per element, in key operations: a synchronization walks the new chain, pops and
+pushes at most the old and new chains, each ancestor costing at most 64 key insertions or removals
+(an ancestor with more keys has only 65 of them hashed, which disables the filter), and rebuilds at
+most once. Each key insertion or removal updates two counters, and a clear or rebuild also writes
+all 4,096 counters. The chain's length is not bounded by the XML parser's nesting limit of 256: a
+`<use>` clone's chain runs through its host and can reach up to 256 levels further
+(`ShadowTreeResourceBudget::kMaximumTraversalDepth`), and trees built through the DOM have no
+depth limit. So the cascade that consults the filter has to cap the depth it synchronizes to, or
+charge synchronization to the style budget, to bound this work whatever the document.
 
 **Expected effect.** See [Ancestor Filter Opportunity](#ancestor-filter-opportunity): no
 measurable time on the real documents, and up to 902 of 1,913 candidates on the descendant-only

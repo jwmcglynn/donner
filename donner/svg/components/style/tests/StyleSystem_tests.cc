@@ -2635,6 +2635,39 @@ TEST(RuleIndexCharge, StylesheetChargeIncludesItsRuleIndex) {
   EXPECT_EQ(charge(oneKey), charge(twoKeys));
 }
 
+TEST(RuleIndexCharge, StylesheetChargeIncludesItsAncestorHashes) {
+  // Same counts and the same rule-index key (`.b`); only the child combinator gives the entry an
+  // ancestor hash group, so only the indexes' hash storage differs.
+  const auto parse = [](std::string_view css) {
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    auto result = parser::SVGParser::ParseSVG(
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)") + std::string(css) +
+            "</style></svg>",
+        warnings);
+    EXPECT_THAT(result, NoParseError());
+    return std::move(result.result());
+  };
+  const auto stylesheet = [](SVGDocument& document) -> const StylesheetComponent& {
+    const Entity style = document.querySelector("style")->entityHandle().entity();
+    return document.registry().get<StylesheetComponent>(style);
+  };
+  const auto charge = [](SVGDocument& document) {
+    return document.registry()
+        .ctx()
+        .get<ParsedPayloadResourceBudget>()
+        .securityStats()
+        .stylesheetBytes;
+  };
+  SVGDocument child = parse(".a > .b { fill: red }");
+  SVGDocument sibling = parse(".a + .b { fill: red }");
+  ASSERT_THAT(stylesheet(child).ruleIndex.ancestorHashes(0), testing::SizeIs(1));
+  ASSERT_THAT(stylesheet(sibling).ruleIndex.ancestorHashes(0), testing::IsEmpty());
+  const std::size_t extra =
+      stylesheet(child).ruleIndexBytes() - stylesheet(sibling).ruleIndexBytes();
+  ASSERT_GE(extra, sizeof(RuleIndex::AncestorHashGroup));
+  EXPECT_EQ(charge(child) - charge(sibling), extra);
+}
+
 TEST(RuleIndexCandidates, LargePassesDoNotLeaveTheirCandidateListAllocated) {
   // Every rule is filed under both of the rect's classes, so its cascade gathers two entries per
   // rule before duplicates are removed: more than the per-thread list keeps between passes.

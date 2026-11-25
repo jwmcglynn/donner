@@ -214,6 +214,97 @@ TEST(RuleIndexCandidates, EmptyIndex) {
   RuleIndexElementKeys keys;
   keys.tag = "rect";
   EXPECT_THAT(Candidates(index, keys), IsEmpty());
+  EXPECT_EQ(index.retainedBytes(), 0u);
+
+  const RuleIndex constructedEmpty(std::span<const css::SelectorRule>{});
+  EXPECT_EQ(constructedEmpty.ruleCount(), 0u);
+  EXPECT_THAT(Candidates(constructedEmpty, keys), IsEmpty());
+  EXPECT_EQ(constructedEmpty.retainedBytes(), 0u);
+}
+
+/// The ancestor hashes of the first selector-list entry of `<selector> {}`.
+std::vector<std::uint32_t> AncestorHashesOf(std::string_view selector) {
+  const css::Stylesheet sheet = Parse(std::string(selector) + " { fill: red }");
+  EXPECT_EQ(sheet.rules().size(), 1u) << selector;
+  if (sheet.rules().empty()) {
+    return {};
+  }
+  const auto hashes = RuleIndex::AncestorHashesFor(sheet.rules()[0].selector.entries[0]);
+  return std::vector<std::uint32_t>(hashes.begin(), hashes.end());
+}
+
+std::uint32_t Hash(Kind kind, std::string_view name) {
+  return RuleIndex::AncestorKeyHash(kind, name).value();
+}
+
+TEST(RuleIndexAncestorHashes, TakeKeysOfCompoundsReachedThroughDescendantAndChildCombinators) {
+  EXPECT_THAT(AncestorHashesOf(".a .b"), ElementsAre(Hash(Kind::Class, "a")));
+  EXPECT_THAT(AncestorHashesOf("#x > .b"), ElementsAre(Hash(Kind::Id, "x")));
+  EXPECT_THAT(AncestorHashesOf(".b"), IsEmpty());
+}
+
+TEST(RuleIndexAncestorHashes, IdAndClassKeysKeepTheirCase) {
+  EXPECT_THAT(AncestorHashesOf(".A .b"), ElementsAre(Hash(Kind::Class, "A")));
+  EXPECT_THAT(AncestorHashesOf("#X .b"), ElementsAre(Hash(Kind::Id, "X")));
+}
+
+TEST(RuleIndexAncestorHashes, StopAtTheFirstSiblingCombinator) {
+  EXPECT_THAT(AncestorHashesOf(".a + .b"), IsEmpty());
+  EXPECT_THAT(AncestorHashesOf(".p .a + .c"), IsEmpty());
+  EXPECT_THAT(AncestorHashesOf(".a ~ .b .c"), ElementsAre(Hash(Kind::Class, "b")));
+}
+
+TEST(RuleIndexAncestorHashes, PreferIdsThenClassesThenAttributesThenTypesUpToFour) {
+  // Ancestors nearest first: `[K]`, `#i`, `g.a`.
+  EXPECT_THAT(AncestorHashesOf("g.a #i [K] .b"),
+              ElementsAre(Hash(Kind::Id, "i"), Hash(Kind::Class, "a"), Hash(Kind::Attribute, "k"),
+                          Hash(Kind::Type, "g")));
+  EXPECT_THAT(AncestorHashesOf("#i #j .a .b .c"),
+              ElementsAre(Hash(Kind::Id, "j"), Hash(Kind::Id, "i"), Hash(Kind::Class, "b"),
+                          Hash(Kind::Class, "a")));
+  // Repeated keys count once.
+  EXPECT_THAT(AncestorHashesOf(".a .a.b .c"),
+              ElementsAre(Hash(Kind::Class, "a"), Hash(Kind::Class, "b")));
+}
+
+TEST(RuleIndexAncestorHashes, SkipPseudoClassArgumentsNamespacesAndUniversals) {
+  EXPECT_THAT(AncestorHashesOf(":is(.a) .b"), IsEmpty());
+  EXPECT_THAT(AncestorHashesOf(".a:not(.z) .b"), ElementsAre(Hash(Kind::Class, "a")));
+  EXPECT_THAT(AncestorHashesOf("[*|x] .b"), IsEmpty());
+  EXPECT_THAT(AncestorHashesOf("* .b"), IsEmpty());
+  EXPECT_THAT(AncestorHashesOf("RECT .b"), ElementsAre(Hash(Kind::Type, "rect")));
+}
+
+TEST(RuleIndexAncestorHashes, EachRuleHasOneGroupPerEntryOrNone) {
+  const css::Stylesheet sheet = Parse(
+      ".a .b { fill: red }"         // 0: one group
+      ".x { fill: red }"            // 1: no ancestor key
+      ".a .b, .c .d { fill: red }"  // 2: two groups
+      ".a .b, .e { fill: red }");   // 3: `.e` can match under any ancestors
+  const RuleIndex index(sheet.rules());
+  const std::uint32_t a = Hash(Kind::Class, "a");
+  const std::uint32_t c = Hash(Kind::Class, "c");
+  EXPECT_THAT(index.ancestorHashes(0), ElementsAre(RuleIndex::AncestorHashGroup{a, a, a, a}));
+  EXPECT_THAT(index.ancestorHashes(1), IsEmpty());
+  EXPECT_THAT(index.ancestorHashes(2), ElementsAre(RuleIndex::AncestorHashGroup{a, a, a, a},
+                                                   RuleIndex::AncestorHashGroup{c, c, c, c}));
+  EXPECT_THAT(index.ancestorHashes(3), IsEmpty());
+}
+
+TEST(RuleIndexAncestorHashes, RetainedBytesCountTheGroupsWithinThePerEntryBound) {
+  const RuleIndex child(Parse(".a > .b { fill: red }").rules());
+  const RuleIndex sibling(Parse(".a + .b { fill: red }").rules());
+  EXPECT_GE(child.retainedBytes() - sibling.retainedBytes(), sizeof(RuleIndex::AncestorHashGroup));
+
+  // Worst case: every entry under its own key, with a hash group.
+  std::string css;
+  for (int i = 0; i < 1000; ++i) {
+    const std::string n = std::to_string(i);
+    css += "#p" + n + " #i" + n + ", .q" + n + " #j" + n + " { fill: red }";
+  }
+  const RuleIndex index(Parse(css).rules());
+  ASSERT_EQ(index.entryCount(), 2000u);
+  EXPECT_LE(index.retainedBytes(), index.entryCount() * RuleIndex::kMaxBytesPerEntry);
 }
 
 }  // namespace
