@@ -98,7 +98,7 @@ is not shaped by one user.
 
 ## Next Steps
 
-- Finish Milestone S1's adopted threads, worker QoS and thread-start handling.
+- Finish Milestone S1's adopted threads.
   The scheduler package already runs in the native CI graph under ThreadSanitizer and
   AddressSanitizer on Linux.
 - Land S7's build setting early, so the compiled-out lane runs from the first client onward.
@@ -157,9 +157,9 @@ milestone of [0072-css_cascade](0072-css_cascade.md); the scheduler lands first.
         worker's stack bounds recorded when it starts, the remaining-stack accessor the waits use,
         and the stack-floor assertion (0.25 day): `//donner/base/tasks:worker_stack` and
         `//donner/base/tasks:worker_stack_tests`.
-  - [ ] Worker QoS, `DefaultWorkerCount()`, and tolerating a worker thread that fails to start:
-        the scheduler runs with the workers that started and `workerCount()` reports fewer (today
-        a failed start fails a release assertion) (0.25 day).
+  - [x] Worker QoS, `DefaultWorkerCount()` and partial thread startup (0.25 day):
+        `//donner/base/tasks:worker_policy_tests`. Workers see the final dense roster before
+        scheduling. If every requested start fails, ordinary submissions run inline.
   - [x] `trySpawn` declining at each bound and the zero-worker inline mode (0.25 day):
         `//donner/base/tasks:task_scheduler_tests`.
   - Done when: deque linearization stress tests, scope and join tests at 0, 1 and 4 workers, the
@@ -487,7 +487,8 @@ target, so code that never schedules work does not link it).
 enum class WorkerQos { kInteractive, kUserInitiated, kDefault };  // Apple QoS; ignored elsewhere.
 
 struct TaskSchedulerOptions {
-  std::size_t workerCount = DefaultWorkerCount(); // Without a seed, 0 runs work inline on the caller.
+  // Without a seed, zero runs work inline on the caller.
+  std::size_t workerCount = DefaultWorkerCount();
   std::size_t dequeCapacity = 4096;          // Entries per deque; a power of two.
   std::size_t maxTasksPerCreator = 4096;     // Live task records per worker or adopted slot.
   std::size_t maxExternalTasks = 64 * 1024;  // Live task records for all other threads together.
@@ -495,8 +496,8 @@ struct TaskSchedulerOptions {
   std::size_t helpMarginBytes = 128 * 1024;  // Stack kept free when stealing while waiting.
   std::size_t workerStackBytes = 512 * 1024; // Each worker's stack, in whole pages.
   std::size_t idleSpinRounds = 1;            // Steal rounds before sleeping; set from S6's W5.
-  WorkerQos workerQos = WorkerQos::kInteractive;
   std::optional<std::uint64_t> seed;         // Seeded deterministic mode (tests).
+  WorkerQos workerQos = WorkerQos::kInteractive;
 };
 
 // Hardware threads available to the process (the affinity mask on Linux, the active processor
@@ -518,6 +519,8 @@ public:
   explicit TaskScheduler(TaskSchedulerOptions options);
   ~TaskScheduler();      // Joins every worker; asserts no scope and no AdoptedThread is live.
   std::size_t workerCount() const;           // Workers actually started (may be fewer).
+  // Use this query to select the scheduled path, including single-thread seeded replay.
+  std::size_t schedulingWidth() const;
   // True when threading is compiled out or the options asked for zero workers; false when workers
   // were requested, even if none started. Clients use it to tell a configured disable apart from
   // failed starts.
@@ -585,15 +588,21 @@ template <typename T> class Task;             // Lazily started coroutine; co_aw
     with a relaxed atomic increment. Only an in-range ordinal is converted to a start index,
     so exhausted runners cannot wrap the cursor back into the range. A final partial chunk ends
     at `end`. The scope join publishes the results for both partitioners. S6 compares them on
-    W2 and W4 before choosing which implementation to keep.
+    W2 and W4. S6 keeps the winner and removes the losing partitioner.
+  - Worker count and steal timing determine how a physical run partitions the range. Callbacks
+    that compute independent per-index values and write disjoint slots reproduce the serial
+    output. Callback boundaries do not define stable reduction groups. The seeded adaptive loop
+    uses a fixed four-piece split budget on its constructing thread. Grain, range and capacity can
+    reduce the number of pieces. Given identical inputs and admission, the boundaries repeat even
+    when a seed changes their visitation order. The shared cursor instead partitions by grain.
 - **Zero workers.** `spawn` runs the work inline. `trySpawn` returns false without running it, so a
   client with its own explicit work stack (0072 Part D) keeps its native stack flat at zero workers
   as it does at a bound, instead of recursing once per spawned level. `Join` runs `a` then `b`;
-  `ParallelFor` runs one `body(begin, end)` for a nonempty range. This holds whether zero workers came from the runtime
-  option, from workers that failed to start, or from threading compiled out. Seeded mode is not
-  zero-worker mode: its tasks are queued and run on the calling thread in seeded order, so
-  `trySpawn` there returns true until the calling thread's `maxTasksPerCreator` records are live,
-  and false after that.
+  `ParallelFor` runs one `body(begin, end)` for a nonempty range. This applies to a configured
+  zero, failure of every requested worker start, and the compiled-out configuration. Clients use
+  `schedulingWidth()` to decide whether to submit work. Ordinary inline mode reports zero; seeded
+  mode reports four even though `workerCount()` is zero. A seeded `trySpawn` succeeds until the
+  calling thread reaches its live-record bound.
 - **Coroutines.** `co_await scheduler.schedule()` enqueues the coroutine handle and suspends; a
   worker resumes it. With zero workers, or in seeded mode, `schedule()` is ready immediately and
   the coroutine continues inline on the calling thread, the same rule every other operation
@@ -1866,8 +1875,9 @@ clients that size work from documents.
   the platform, the accessor unclamped, a non-worker reporting a stack, the minimum not enforced,
   and the size not rounded to pages. The position taken from a local's address instead of the frame
   address is red only under AddressSanitizer, where it trips the floor check, and equivalent
-  elsewhere. Ignoring a failed thread start survives: no test can make thread creation fail
-  portably.
+  elsewhere. `worker_policy_tests` injects failed starts at the thread-creation boundary,
+  checks that successful workers have contiguous indices, and checks inline behavior when every
+  start fails. Its startup interleaving exercises publication of the final roster.
 - **Coroutine tests** (`//donner/base/tasks:task_tests`,
   `//donner/base/tasks:async_task_scope_tests`): lazy single-consumer ownership, nested results,
   bounded native stack depth during symmetric transfer, over-aligned frame storage, cross-thread
@@ -1898,6 +1908,11 @@ clients that size work from documents.
   deriving an alignment from the frame size. The pool charges the requested bytes, including
   the trailer and its padding. Any additional heap space needed by the allocator to honor the
   alignment is allocator-dependent and outside that budget.
+- **Scheduler test matrix.** Exercise scopes, `Join`, loop coverage, cancellation, nested scopes,
+  coroutine joins and applicable shutdown assertions at zero, one and four workers and in seeded
+  mode. Seeded coverage includes admission, cancellation, replay, nested joins and coroutine
+  joins. Real concurrency and parking interleavings require physical workers. Keep additional
+  applicable combinations open until their named cases execute.
 - **Parallel loops** (`//donner/base/tasks:parallel_for_tests`): the public entry point covers
   inline, queued, worker-origin and bounded-admission paths. Empty ranges make no calls, reversed
   bounds fail a release assertion, and zero grain uses one before applying the chunk cap.
@@ -1905,6 +1920,8 @@ clients that size work from documents.
   scope joins, and bring two shared-cursor workers to a claim together. Linux CI also runs the
   ASan and TSan variants. The scaling benchmark checks a million independent outputs against the
   inline result and reports the four-worker median for each partitioner from an idle pool.
+  The `parallel_for_scaling_bench_build` target keeps the manual benchmark compiled in ordinary
+  Linux and Darwin CI without executing its timed samples.
 - **Seeded replay** (`//donner/base/tasks:seeded_scheduler_tests`): repeat the same submissions
   with the same seed, compare distinct seeds, fill the caller's record pool, and exercise nested
   synchronous and coroutine joins. A flat backlog with nested joins checks that independent
