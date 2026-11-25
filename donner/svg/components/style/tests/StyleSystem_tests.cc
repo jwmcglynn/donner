@@ -1937,6 +1937,66 @@ TEST_F(StyleSystemTest, PreparedSiblingsCascadeConcurrentlyIntoOwnedSlots) {
   EXPECT_EQ(documentBudget.complexPropertyBytes(), retainedBefore);
 }
 
+TEST_F(StyleSystemTest, SpeculativeSlotsKeepTheirBoundWhenFrontEntriesAreCleared) {
+  constexpr std::size_t kLanes = 2;
+  constexpr auto kPerLane = StyleSystem::StagedRecords::kMaximumRecords;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="group">)";
+  for (std::size_t i = 0; i < kLanes * (kPerLane + 1); ++i) {
+    source += "<rect id='r" + std::to_string(i) + "' stroke-dasharray='2 3 5'/>";
+  }
+  source += "</g></svg>";
+  auto doc = ParseSVG(source);
+  auto& registry = doc.registry();
+  ParseWarningSink warnings;
+  styleSystem.computeStyle(doc.querySelector("#group")->entityHandle(), warnings);
+  auto& logical = registry.ctx().get<StyleResourceBudget>();
+  const std::size_t before = logical.complexPropertyBytes();
+  std::vector<Entity> entities;
+  for (std::size_t i = 0; i < kLanes * (kPerLane + 1); ++i) {
+    const auto entity = doc.querySelector("#r" + std::to_string(i))->entityHandle().entity();
+    registry.get_or_emplace<ComputedStyleComponent>(entity);
+    entities.push_back(entity);
+  }
+
+  std::weak_ptr<const ComputedStyle> tentative;
+  {
+    std::array<StyleSystem::StagedRecords, kLanes> records;
+    for (std::size_t lane = 0; lane < kLanes; ++lane) {
+      MatchedPropertiesCache front;
+      StyleResourceBudget budget(logical, logical.limits());
+      StyleCascadeCounters counters;
+      StyleSystem::CascadePass pass{budget, counters, front, 0, &records[lane]};
+      for (std::size_t i = lane; i < entities.size(); i += kLanes) {
+        auto& slot = registry.get<ComputedStyleComponent>(entities[i]);
+        front.clear();
+        StyleSystem::computePreparedStyle(registry, entities[i], slot, pass, warnings);
+        EXPECT_LE(records[lane].retainedBytes(), StyleSystem::StagedRecords::kMaximumBytes);
+        EXPECT_EQ(logical.complexPropertyBytes(), before);
+        if (i / kLanes < kPerLane) {
+          ASSERT_TRUE(slot.style);
+          tentative = slot.style;
+        } else {
+          EXPECT_FALSE(slot.style);
+          EXPECT_TRUE(records[lane].declined());
+        }
+      }
+    }
+    for (Entity entity : entities) {
+      registry.get<ComputedStyleComponent>(entity) = {};
+    }
+  }
+  EXPECT_TRUE(tentative.expired());
+  styleSystem.computeStylesFor(registry, entities, warnings);
+  const auto& first = registry.get<ComputedStyleComponent>(entities.front());
+  ASSERT_TRUE(first.style);
+  const auto bytes = first.properties()->complexPropertyBytes();
+  ASSERT_GT(bytes, 0u);
+  EXPECT_EQ(logical.complexPropertyBytes(), before + bytes);
+  for (Entity entity : entities) {
+    EXPECT_EQ(registry.get<ComputedStyleComponent>(entity).style, first.style);
+  }
+}
+
 TEST_F(StyleSystemTest, LocalDeclarationsOutrankMoreSpecificInheritedDeclarations) {
   // The group's `style` declarations are more specific than the rectangle's presentation
   // attributes, yet the rectangle's own values win: inheritance only supplies what it does not

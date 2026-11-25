@@ -970,6 +970,10 @@ bool CanInheritPaint(const Registry& registry, Entity parent,
 void RetainComputedRecord(StyleSystem::CascadePass& pass, ComputedStyle& record,
                           ComputedStyleComponent& computedStyle,
                           const ComputedResourceOpacities& resourceOpacities) {
+  if (pass.staging) {
+    record.resourceOpacities = resourceOpacities;
+    return;
+  }
   const std::size_t retainedBytes = record.properties.complexPropertyBytes();
   if (!pass.budget.canRetainComputedStyle(retainedBytes)) {
     pass.cache.clear();
@@ -1179,6 +1183,72 @@ private:
   CascadePass pass_;
 };
 
+// All slots share the storage's ownership block. A cache eviction cannot uncharge a record
+// still reachable from an element or from another worker's inherited cache key.
+struct StyleSystem::StagedRecords::Storage {
+  std::array<std::optional<ComputedStyle>, kMaximumRecords> records;
+  std::size_t count = 0;
+  std::size_t payloadBytes = 0;
+};
+
+std::size_t StyleSystem::StagedRecords::retainedBytes() const {
+  return storage_ ? sizeof(Storage) + storage_->payloadBytes : 0;
+}
+
+namespace {
+
+template <typename T>
+bool HasBoundedStagedValue(const std::optional<T>& value) {
+  if constexpr (std::is_same_v<T, PaintServer>) {
+    return !value || std::visit(
+                         [](const auto& paint) {
+                           return std::is_trivially_copyable_v<std::decay_t<decltype(paint)>>;
+                         },
+                         value->value);
+  } else if constexpr (std::is_same_v<T, StrokeDasharray>) {
+    return true;
+  } else {
+    return !value || std::is_trivially_copyable_v<T>;
+  }
+}
+
+std::optional<std::size_t> StagedPayloadBytes(const PropertyRegistry& properties) {
+  if (!properties.unparsedProperties.empty() ||
+      !std::apply(
+          [](const auto&... property) { return (HasBoundedStagedValue(property.value) && ...); },
+          properties.allProperties())) {
+    return std::nullopt;
+  }
+  const auto& dashes = properties.strokeDasharray.value;
+  if (!dashes) {
+    return 0;
+  }
+  if (dashes->capacity() > StyleSystem::StagedRecords::kMaximumBytes / sizeof(Lengthd)) {
+    return std::nullopt;
+  }
+  return dashes->capacity() * sizeof(Lengthd);
+}
+
+}  // namespace
+
+std::shared_ptr<const ComputedStyle> StyleSystem::StagedRecords::retain(ComputedStyle& record) {
+  static_assert(sizeof(Storage) < kMaximumBytes);
+  const std::size_t used = storage_ ? retainedBytes() : sizeof(Storage);
+  const auto bytes = StagedPayloadBytes(record.properties);
+  if (!bytes || *bytes > kMaximumBytes - used || (storage_ && storage_->count == kMaximumRecords)) {
+    declined_ = true;
+    return nullptr;
+  }
+  if (!storage_) {
+    storage_ = std::make_shared<Storage>();
+  }
+  auto& staged = storage_->records[storage_->count++].emplace();
+  staged.properties = std::move(record.properties);
+  staged.resourceOpacities = record.resourceOpacities;
+  storage_->payloadBytes += *bytes;
+  return std::shared_ptr<const ComputedStyle>(storage_, &staged);
+}
+
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
                                                         ParseWarningSink& warningSink) {
   if (auto* existing = handle.try_get<ComputedStyleComponent>(); existing && existing->style) {
@@ -1193,7 +1263,9 @@ void StyleSystem::computePreparedStyle(const Registry& registry, Entity entity,
   assert(registry.try_get<ComputedStyleComponent>(entity) == &output);
   UTILS_RELEASE_ASSERT(!registry.ctx().contains<ExternalUseStyleContext>());
   UTILS_RELEASE_ASSERT(registry.view<const AnimatedValuesComponent>().empty());
-  computePropertiesInto(registry, entity, output, pass, warnings, nullptr);
+  if (!pass.staging || !pass.staging->declined()) {
+    computePropertiesInto(registry, entity, output, pass, warnings, nullptr);
+  }
 }
 
 void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
@@ -1523,7 +1595,11 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   const double rootFontSizePx = ComputedRootFontSize(registry, handle.entity(), properties);
   properties.resolveTextDecorationThickness(rootFontSizePx);
   properties.resolveInsetClipLengths(rootFontSizePx);
-  computedStyle.style = std::move(record);
+  computedStyle.style = pass.staging ? pass.staging->retain(*record) : std::move(record);
+  if (!computedStyle.style) {
+    computedStyle = {};
+    return;
+  }
 
   FinishMatchedCacheMiss(registry, pass.cache, cacheKey, fillState, strokeState,
                          warningBeforeParent, warningAttemptsAfterParent, warningSink, styleBudget,

@@ -472,13 +472,42 @@ public:
    */
   const ComputedStyleComponent& computeStyle(EntityHandle handle, ParseWarningSink& warningSink);
 
+  /**
+   * Exclusive provisional storage for one executing cascade context. A full front or an
+   * unbounded payload declines speculation, leaving admission to the serial document owner.
+   */
+  class StagedRecords {
+  public:
+    /// Maximum fixed record storage plus owned dynamic payload retained by this context.
+    static constexpr std::size_t kMaximumBytes = 1024 * 1024;
+    /// Maximum provisional records, including those evicted from the worker cache.
+    static constexpr std::size_t kMaximumRecords = 64;
+
+    StagedRecords() = default;
+    StagedRecords(const StagedRecords&) = delete;
+    StagedRecords& operator=(const StagedRecords&) = delete;
+
+    /// Whether a candidate required a serial replay.
+    bool declined() const { return declined_; }
+    /// Fixed record storage and dynamic payload held until the pass's last reference.
+    std::size_t retainedBytes() const;
+
+  private:
+    friend class StyleSystem;
+    struct Storage;
+    std::shared_ptr<const ComputedStyle> retain(ComputedStyle& record);
+    std::shared_ptr<Storage> storage_;
+    bool declined_ = false;
+  };
+
   /// Mutable state used exclusively by one worker or by a nested serial cascade.
   struct CascadePass {
     StyleResourceBudget& budget;     ///< Work allowance and shared record account.
     StyleCascadeCounters& counters;  ///< Work attributed to this pass.
     MatchedPropertiesCache&
         cache;  ///< Cache exclusive to this worker and this stylesheet generation.
-    unsigned activeCascades = 0;  ///< Nesting for whole-registry copy accounting.
+    unsigned activeCascades = 0;       ///< Nesting for whole-registry copy accounting.
+    StagedRecords* staging = nullptr;  ///< Optional worker-private tentative output.
   };
 
   /**
