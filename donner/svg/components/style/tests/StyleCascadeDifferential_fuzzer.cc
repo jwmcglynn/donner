@@ -74,6 +74,16 @@ void Require(bool condition, std::source_location where = std::source_location::
   }
 }
 
+void AppendUseFixtures(std::string& svg, std::string_view tree) {
+  const std::uint8_t choice = tree.empty() ? 0 : static_cast<std::uint8_t>(tree.front());
+  const std::string_view resourceTag = choice & 1 ? "symbol" : "g";
+  svg += "<" + std::string(resourceTag) + R"( id="fuzz-resource"><rect class="cache-probe"/>)";
+  svg += "</" + std::string(resourceTag) + R"(></defs><use id="fuzz-use" href="#fuzz-resource"/>)";
+  if (choice & 2) {
+    svg += R"(<use id="fuzz-use-2" href="#fuzz-resource" fill="blue"/>)";
+  }
+}
+
 std::string MakeDocument(std::string_view css, std::string_view tree) {
   std::string svg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" )"
@@ -85,13 +95,7 @@ std::string MakeDocument(std::string_view css, std::string_view tree) {
     }
   }
   svg += R"(]]></style><rect id="fuzz-probe" class="cache-probe"/><defs>)";
-  const std::uint8_t choice = tree.empty() ? 0 : static_cast<std::uint8_t>(tree.front());
-  const std::string_view resourceTag = choice & 1 ? "symbol" : "g";
-  svg += "<" + std::string(resourceTag) + R"( id="fuzz-resource"><rect class="cache-probe"/>)";
-  svg += "</" + std::string(resourceTag) + R"(></defs><use id="fuzz-use" href="#fuzz-resource"/>)";
-  if (choice & 2) {
-    svg += R"(<use id="fuzz-use-2" href="#fuzz-resource" fill="blue"/>)";
-  }
+  AppendUseFixtures(svg, tree);
   std::vector<std::string_view> open;
   for (std::size_t i = 0; i + kElementBytes <= tree.size() && i / kElementBytes < kMaximumElements;
        i += kElementBytes) {
