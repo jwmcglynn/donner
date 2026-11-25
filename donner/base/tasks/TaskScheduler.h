@@ -102,6 +102,7 @@ enum class SchedulerStep : std::uint8_t {
                                 //!< before it changes the recorded parker.
   ParallelForBeforeClaim,       //!< A loop participant is about to claim a range.
   ParallelForAfterClaim,        //!< A loop participant has claimed or exhausted the range.
+  AfterSearchStart,  //!< A worker counted itself as searching before scanning outside its deque.
 };
 
 /// Ostream output operator for \ref SchedulerStep, for test diagnostics.
@@ -109,9 +110,9 @@ std::ostream& operator<<(std::ostream& os, SchedulerStep step);
 
 /**
  * Test seam: called at each \ref SchedulerStep with the index of the worker the step concerns.
- * Production schedulers have none, and each step then costs one branch on a path that is already
- * about to sleep or wake a thread. A supplied hook must outlive the scheduler and any resumption
- * publication or join registration still returning after its continuation ran.
+ * Production schedulers have none, and each step then costs one branch on a search, wait or wake
+ * transition. A supplied hook must outlive the scheduler and any resumption publication or join
+ * registration still returning after its continuation ran.
  */
 class SchedulerTestHooks {
 public:
@@ -133,6 +134,9 @@ public:
    * is queued.
    */
   [[nodiscard]] virtual bool lastAwakeRule() const { return true; }
+
+  /// Lets a test isolate the mandatory publish handshake when an optional wake hint is missed.
+  [[nodiscard]] virtual bool allowParallelismWake() const { return true; }
 };
 
 class TaskSchedulerTestPeer;
@@ -246,9 +250,10 @@ private:
     pthread_t thread{};
 
     // Owner-only state.
-    StackBounds stack;                      //!< The configured part of the worker's stack,
-                                            //!< recorded when it starts.
-    std::uint32_t stealRng;                 //!< Seeded generator for the steal round's offset.
+    bool searching = false;  //!< Counted in the shared searcher total while looking for work.
+    StackBounds stack;       //!< The configured part of the worker's stack,
+                             //!< recorded when it starts.
+    std::uint32_t stealRng;  //!< Seeded generator for the steal round's offset.
     std::size_t localRunsSinceOutside = 0;  //!< Tasks run from the own deque since the last
                                             //!< outside take.
     std::size_t outsideCursor = 0;          //!< Rotating cursor into the outside sources.
@@ -281,6 +286,7 @@ private:
       prepareRecord(record, std::forward<F>(work), scope);
       const bool pushed = worker->deque.push(record);
       UTILS_RELEASE_ASSERT_MSG(pushed, "A worker deque that was not full rejected a push");
+      wakeForParallelism();
       return true;
     }
     TaskRecord* record = allocateExternalRecord();
@@ -463,6 +469,22 @@ private:
   /// The swap rule for a thread waking another worker: the swap, then a parker change.
   void wakeWorker(Worker& worker);
 
+  /// Requests a replacement if workers are asleep and none is looking for work.
+  void wakeForParallelism() {
+    // A missed hint can leave work with its owner, which is already awake.
+    if (awake_.load(std::memory_order_relaxed) < static_cast<std::int64_t>(workers_.size()) &&
+        searching_.load(std::memory_order_relaxed) == 0 &&
+        (testHooks_ == nullptr || testHooks_->allowParallelismWake())) {
+      wakeAsleepWorker();
+    }
+  }
+
+  /// Adds the owner to the search count once, even across consecutive idle probes.
+  void startSearching(Worker& worker);
+
+  /// Removes the owner and returns whether it was the last searcher.
+  bool stopSearching(Worker& worker);
+
   /// Wakes one asleep worker, preferring one asleep shallow.
   void wakeAsleepWorker();
 
@@ -504,6 +526,7 @@ private:
 
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> globalQueued_{0};
   alignas(kFalseSharingBytes) std::atomic<std::int64_t> awake_{0};
+  alignas(kFalseSharingBytes) std::atomic<std::size_t> searching_{0};
   alignas(kFalseSharingBytes) std::atomic<bool> stop_{false};
 
   std::unique_ptr<SeededState> seeded_;
