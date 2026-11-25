@@ -141,6 +141,9 @@ struct StylesheetComponent {
   /// Candidate-rule index of \ref stylesheet, rebuilt whenever it or its imports change.
   RuleIndex ruleIndex;
 
+  /// Identity of this revision of the document and imported rules.
+  std::uint64_t contentRevision() const { return contentRevision_; }
+
   /// Candidate-rule index of each sheet in \ref importedStylesheets, in the same order.
   std::vector<RuleIndex> importedRuleIndexes;
 
@@ -229,6 +232,8 @@ private:
   /// Recompute the selector-dependency caches and the rule indexes from \ref stylesheet and
   /// \ref importedStylesheets.
   void rebuildSelectorCaches();
+
+  std::uint64_t contentRevision_ = 0;
 };
 
 }  // namespace donner::svg::components

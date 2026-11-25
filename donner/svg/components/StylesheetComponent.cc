@@ -1,12 +1,24 @@
 #include "donner/svg/components/StylesheetComponent.h"  // IWYU pragma: keep
 
+#include <atomic>
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Utils.h"
 #include "donner/css/Stylesheet.h"
 #include "donner/css/parser/StylesheetParser.h"
 
 namespace donner::svg::components {
+namespace {
+
+std::uint64_t NextStylesheetContentRevision() {
+  static std::atomic<std::uint64_t> nextRevision{1};
+  const std::uint64_t revision = nextRevision.fetch_add(1, std::memory_order_relaxed);
+  UTILS_RELEASE_ASSERT(revision != 0);
+  return revision;
+}
+
+}  // namespace
 
 void StylesheetSourceMap::addSegment(std::size_t cssStartOffset, std::size_t cssEndOffset,
                                      FileOffset documentStartOffset) {
@@ -136,6 +148,7 @@ void StylesheetComponent::setImportedStylesheets(std::vector<css::Stylesheet>&& 
 }
 
 void StylesheetComponent::rebuildSelectorCaches() {
+  contentRevision_ = NextStylesheetContentRevision();
   attributeSelectorNames.clear();
   attributeSelectorMatchesAnyName = false;
   selectorsDependOnTextContent = false;

@@ -78,18 +78,18 @@ TEST(MatchedPropertiesCacheTests, EveryKeyInputDistinguishesCollidingStyles) {
   check(key, other);
 
   const auto rules = [](std::uint32_t first, std::uint32_t second, css::Specificity specificity,
-                        Entity sheet, std::size_t ordinal) {
+                        std::uint64_t sheetRevision, std::size_t ordinal) {
     MatchedPropertiesKey result;
-    result.addRule(sheet, ordinal, first, specificity);
-    result.addRule(sheet, ordinal, second, specificity);
+    result.addRule(sheetRevision, ordinal, first, specificity);
+    result.addRule(sheetRevision, ordinal, second, specificity);
     return result;
   };
-  const auto sheet = static_cast<Entity>(1);
+  constexpr std::uint64_t sheet = 1;
   const auto base = rules(1, 2, {}, sheet, 0);
   check(base, rules(2, 1, {}, sheet, 0));
   check(base, rules(1, 3, {}, sheet, 0));
   check(base, rules(1, 2, css::Specificity::FromABC(0, 1, 0), sheet, 0));
-  check(base, rules(1, 2, {}, static_cast<Entity>(2), 0));
+  check(base, rules(1, 2, {}, (std::uint64_t{1} << 32) | sheet, 0));
   check(base, rules(1, 2, {}, sheet, 1));
 }
 
@@ -128,12 +128,12 @@ TEST(MatchedPropertiesCacheTests, OversizeRuleOrDeclarationKeysSkipInsertion) {
   const auto record = std::make_shared<const ComputedStyle>();
   MatchedPropertiesKey key;
   for (std::uint32_t i = 0; i < 128; ++i) {
-    key.addRule(static_cast<Entity>(1), 0, i, {});
+    key.addRule(1, 0, i, {});
   }
   ASSERT_THAT(key.cacheable(), Eq(true));
   cache.insert(key, {.style = record});
   ASSERT_THAT(cache.find(key), NotNull());
-  key.addRule(static_cast<Entity>(1), 0, 128, {});
+  key.addRule(1, 0, 128, {});
   EXPECT_THAT(key.cacheable(), Eq(false));
   cache.insert(key, {.style = record});
   EXPECT_THAT(cache.find(key), IsNull());
@@ -153,7 +153,7 @@ TEST(MatchedPropertiesCacheTests, FullBucketGivesAccessedRecordASecondChance) {
   std::vector<MatchedPropertiesKey> keys;
   for (std::uint32_t i = 0; keys.size() < 10; ++i) {
     MatchedPropertiesKey key;
-    key.addRule(static_cast<Entity>(1), 0, i, {});
+    key.addRule(1, 0, i, {});
     if (keys.empty() || MatchedPropertiesCacheTestPeer::bucket(key) ==
                             MatchedPropertiesCacheTestPeer::bucket(keys.front())) {
       keys.push_back(std::move(key));

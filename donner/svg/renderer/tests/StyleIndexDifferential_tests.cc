@@ -274,6 +274,30 @@ TEST(MatchedPropertiesCache, SetContentsBeforeLocalRestyleUsesNewRules) {
   ExpectRewrittenStylesheet(/*afterFrame=*/true);
 }
 
+TEST(MatchedPropertiesCache, StyleTypeChangesWhichRulesApply) {
+  SVGDocument document = ParseSource(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>rect { fill: red }</style>
+      <rect id="first"/><rect id="second"/><rect id="third"/>
+    </svg>)svg");
+  const PaintServer red(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))));
+  const PaintServer black(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 255))));
+  auto first = document.querySelector("#first");
+  auto second = document.querySelector("#second");
+  auto third = document.querySelector("#third");
+  auto stylesheet = document.querySelector("style");
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
+  ASSERT_THAT(third, testing::Optional(testing::_));
+  ASSERT_THAT(stylesheet, testing::Optional(testing::_));
+  auto style = stylesheet->cast<SVGStyleElement>();
+  ASSERT_THAT(first->getComputedStyle().fill.get(), testing::Optional(red));
+  style.setType("text/plain");
+  EXPECT_THAT(second->getComputedStyle().fill.get(), testing::Optional(black));
+  style.setType("text/css");
+  EXPECT_THAT(third->getComputedStyle().fill.get(), testing::Optional(red));
+}
+
 TEST(MatchedPropertiesCache, SiblingFloodOpacitiesStayDistinct) {
   constexpr std::string_view kSource = R"svg(
     <svg xmlns="http://www.w3.org/2000/svg">
