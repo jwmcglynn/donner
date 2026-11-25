@@ -43,10 +43,9 @@ SANITIZER_VARIANTS = {
     ),
 }
 
-# Packages whose every test gets sanitizer variants, and which sanitizers. The native CI package
-# finalizer emits them after the package's own rules, so a test added anywhere in a listed package
-# gets its variants. Today only the task scheduler, whose races and lifetime faults are often
-# visible only to a sanitizer.
+# Packages whose eligible cc_tests get sanitizer variants, and which sanitizers. The native CI
+# finalizer emits them after the package's own rules. Manual and fuzzer corpus tests are excluded.
+# The task scheduler's races and lifetime faults are often visible only to a sanitizer.
 SANITIZER_VARIANT_PACKAGES = {
     "donner/base/tasks": ("asan", "tsan"),
 }
