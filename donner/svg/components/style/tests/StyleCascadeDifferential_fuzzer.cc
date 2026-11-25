@@ -259,7 +259,7 @@ void RestyleStylesheetProbe(SVGDocument& document) {
   if (tree && tree->mainBranch && !tree->mainBranch->shadowEntities.empty()) {
     Registry& registry = document.registry();
     const Entity clone = tree->mainBranch->shadowEntities.back();
-    const components::StyleSystem styles;
+    components::StyleSystem styles;
     styles.invalidateComputed(EntityHandle(registry, clone));
     ParseWarningSink warnings = ParseWarningSink::Disabled();
     styles.computeStylesFor(registry, std::span<const Entity>(&clone, 1), warnings);
