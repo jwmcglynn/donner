@@ -32,6 +32,17 @@ cc_library(
     ],
 )
 
+# Simple-selector lookup and name comparison shared by the per-stylesheet selector caches.
+donner_cc_library(
+    name = "selector_walk",
+    srcs = ["SelectorWalk.cc"],
+    hdrs = ["SelectorWalk.h"],
+    deps = [
+        "//donner/base",
+        "//donner/css",
+    ],
+)
+
 # Per-stylesheet index of candidate rules by the subject compound's id, class, attribute or type.
 donner_cc_library(
     name = "rule_index",
@@ -42,6 +53,23 @@ donner_cc_library(
         "//donner/svg/components:__subpackages__",
     ],
     deps = [
+        ":selector_walk",
+        "//donner/base",
+        "//donner/css",
+    ],
+)
+
+# Per-stylesheet summary of which elements a change to each id, class or attribute name restyles.
+donner_cc_library(
+    name = "selector_dependency_summary",
+    srcs = ["SelectorDependencySummary.cc"],
+    hdrs = ["SelectorDependencySummary.h"],
+    visibility = [
+        "//donner/svg:__subpackages__",
+        "//donner/svg/components:__subpackages__",
+    ],
+    deps = [
+        ":selector_walk",
         "//donner/base",
         "//donner/css",
     ],
@@ -157,6 +185,17 @@ donner_cc_test(
     srcs = ["tests/RuleIndex_tests.cc"],
     deps = [
         ":rule_index",
+        "//donner/base",
+        "//donner/css",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "selector_dependency_summary_tests",
+    srcs = ["tests/SelectorDependencySummary_tests.cc"],
+    deps = [
+        ":selector_dependency_summary",
         "//donner/base",
         "//donner/css",
         "@com_google_gtest//:gtest_main",
