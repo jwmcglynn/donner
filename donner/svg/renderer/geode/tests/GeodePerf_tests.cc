@@ -462,9 +462,17 @@ TEST_F(GeodePerfTest, OffscreenCountersReturnToOwnerAtEndFrame) {
   EXPECT_THAT(device->counters(), testing::Eq(hostCounters));
   EXPECT_THAT(hostCounters->textureCreates, testing::Eq(2u))
       << "the owning frame counts its own target and the offscreen target";
-  offscreen.reset();
   host.endFrame();
   EXPECT_THAT(host.lastFrameTimings().counters.textureCreates, testing::Eq(2u));
+
+  host.beginFrame(RenderViewport{.size = Vector2d(64, 64)});
+  offscreen->beginFrame(RenderViewport{.size = Vector2d(8, 8)});
+  offscreen->endFrame();
+  EXPECT_THAT(device->counters(), testing::Eq(hostCounters));
+  host.endFrame();
+  EXPECT_THAT(host.lastFrameTimings().counters.textureCreates, testing::Eq(0u));
+  EXPECT_THAT(host.lastFrameTimings().counters.submits, testing::Eq(2u))
+      << "the retained offscreen renderer contributes to each owning frame";
 }
 
 TEST_F(GeodePerfTest, OffscreenCountersRestoreTheLastLiveSink) {

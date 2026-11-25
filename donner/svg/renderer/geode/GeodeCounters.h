@@ -54,8 +54,9 @@ struct GeodeCounters {
   uint64_t unclosedMaskScopes = 0;
 
   /// `gpu::Device::submit` calls. Steady-state target with the frame's command
-  /// buffers submitted together: `== 1` per frame regardless of layer / filter /
-  /// mask push depth. A frame that reaches the most command buffers one
+  /// buffers submitted together: one per renderer pass regardless of layer / filter /
+  /// mask push depth. The owning frame includes each of its offscreen passes. A frame that
+  /// reaches the most command buffers one
   /// submission carries, or that a memory-limited filter budget forces to submit
   /// mid-frame, costs more than one.
   uint64_t submits = 0;
@@ -177,6 +178,38 @@ struct GeodeCounters {
   /// budget. Steady-state target: `== 0`; sustained nonzero means the working
   /// set does not fit and every frame repays the upload.
   uint64_t glyphResidencyEvictions = 0;
+
+  /// Include the completed work of a nested renderer in its owning frame.
+  /// @param other Counters from the nested frame, including any of its own nested work.
+  void add(const GeodeCounters& other) {
+    static_assert(sizeof(GeodeCounters) == 25 * sizeof(uint64_t),
+                  "Include every counter in the frame total");
+    bufferCreates += other.bufferCreates;
+    bindgroupCreates += other.bindgroupCreates;
+    textureCreates += other.textureCreates;
+    unclosedLayerScopes += other.unclosedLayerScopes;
+    unclosedFilterScopes += other.unclosedFilterScopes;
+    unclosedMaskScopes += other.unclosedMaskScopes;
+    submits += other.submits;
+    commandBuffers += other.commandBuffers;
+    pathEncodes += other.pathEncodes;
+    gradientStopConversions += other.gradientStopConversions;
+    gradientStopBytesHashed += other.gradientStopBytesHashed;
+    gradientStopBytesCompared += other.gradientStopBytesCompared;
+    drawCalls += other.drawCalls;
+    pipelineSwitches += other.pipelineSwitches;
+    sameSourceDrawPairs += other.sameSourceDrawPairs;
+    bufferWrites += other.bufferWrites;
+    bufferWriteBytes += other.bufferWriteBytes;
+    textureWriteBytes += other.textureWriteBytes;
+    strokeOutlineFlattens += other.strokeOutlineFlattens;
+    strokeOutlinePoints += other.strokeOutlinePoints;
+    textStrokeBoundsTests += other.textStrokeBoundsTests;
+    clipPolygonIntersections += other.clipPolygonIntersections;
+    glyphResidencyHits += other.glyphResidencyHits;
+    glyphResidencyUploads += other.glyphResidencyUploads;
+    glyphResidencyEvictions += other.glyphResidencyEvictions;
+  }
 
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
