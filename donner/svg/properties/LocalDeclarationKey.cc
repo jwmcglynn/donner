@@ -2,11 +2,22 @@
 #include <ranges>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::svg {
 namespace {
+
+struct AggregateInitializer {
+  template <typename T>
+  operator T() const;
+};
+
+template <typename T, typename... Members>
+constexpr bool HasAggregateLayout = std::is_aggregate_v<T> && requires {
+  T{std::declval<Members>()...};
+} && !requires { T{std::declval<Members>()..., AggregateInitializer()}; };
 
 /// Process-local encoding for exact declaration equality. Field types fix the layout; variable
 /// length sequences carry their size. Only scalar values are copied as bytes, never object padding.
@@ -83,71 +94,107 @@ private:
     token.visit([this](const auto& value) { this->append(value); });
   }
 
-  void append(const Lengthd& v) { fields(v.value, v.unit); }
-  void append(const Vector2d& v) { fields(v.x, v.y); }
-  void append(const TransformOrigin& v) { fields(v.x, v.y); }
-  void append(const css::RGBA& v) { fields(v.r, v.g, v.b, v.a); }
-  void append(const css::HSLA& v) { fields(v.hDeg, v.s, v.l, v.a); }
-  void append(const css::Color& v) { fields(v.value); }
-  void append(const PaintServer& v) { fields(v.value); }
-  void append(const PaintServer::Solid& v) { fields(v.color); }
-  void append(const PaintServer::ElementReference& v) { fields(v.reference, v.fallback); }
-  void append(const Reference& v) { fields(v.href); }
-  void append(const PaintOrder& v) { fields(v.order); }
-  void append(const TextDecorationThickness& v) { fields(v.kind, v.value); }
-  void append(const Cursor& v) { fields(v.images, v.fallback); }
-  void append(const CursorImage& v) { fields(v.url, v.hotspot); }
-  void append(const FilterEffect& v) { fields(v.value); }
-  void append(const FilterEffect::Blur& v) { fields(v.stdDeviationX, v.stdDeviationY); }
-  void append(const FilterEffect::ElementReference& v) { fields(v.reference); }
-  void append(const FilterEffect::HueRotate& v) { fields(v.angleDegrees); }
-  void append(const FilterEffect::Brightness& v) { fields(v.amount); }
-  void append(const FilterEffect::Contrast& v) { fields(v.amount); }
-  void append(const FilterEffect::Grayscale& v) { fields(v.amount); }
-  void append(const FilterEffect::Invert& v) { fields(v.amount); }
-  void append(const FilterEffect::FilterOpacity& v) { fields(v.amount); }
-  void append(const FilterEffect::Saturate& v) { fields(v.amount); }
-  void append(const FilterEffect::Sepia& v) { fields(v.amount); }
-  void append(const FilterEffect::DropShadow& v) {
-    fields(v.offsetX, v.offsetY, v.stdDeviation, v.color);
+  // Decomposing each structure makes a field addition a build error until its encoding is updated.
+  template <std::size_t N, typename T>
+  void appendMembers(const T& value) {
+    static_assert(N >= 1 && N <= 6);
+    if constexpr (N == 1) {
+      const auto& [a] = value;
+      fields(a);
+    } else if constexpr (N == 2) {
+      const auto& [a, b] = value;
+      fields(a, b);
+    } else if constexpr (N == 3) {
+      const auto& [a, b, c] = value;
+      fields(a, b, c);
+    } else if constexpr (N == 4) {
+      const auto& [a, b, c, d] = value;
+      fields(a, b, c, d);
+    } else if constexpr (N == 5) {
+      const auto& [a, b, c, d, e] = value;
+      fields(a, b, c, d, e);
+    } else {
+      const auto& [a, b, c, d, e, f] = value;
+      fields(a, b, c, d, e, f);
+    }
   }
-  void append(const ClipPath& v) { fields(v.value); }
-  void append(const RadialClipPath::Position& v) { fields(v.offset, v.fromFarEdge); }
-  void append(const CircleClipPath& v) { fields(v.box, v.x, v.y, v.radiusType, v.radius); }
-  void append(const EllipseClipPath& v) {
-    fields(v.box, v.x, v.y, v.radiusXType, v.radiusYType, v.radiusX, v.radiusY);
+
+  void append(const Lengthd& value) { appendMembers<2>(value); }
+  void append(const Vector2d& value) { appendMembers<2>(value); }
+  void append(const TransformOrigin& value) { appendMembers<2>(value); }
+  void append(const css::RGBA& value) { appendMembers<4>(value); }
+  void append(const css::HSLA& value) { appendMembers<4>(value); }
+  void append(const css::Color& value) { appendMembers<1>(value); }
+  void append(const PaintServer& value) { appendMembers<1>(value); }
+  void append(const PaintServer::Solid& value) { appendMembers<1>(value); }
+  void append(const PaintServer::ElementReference& value) { appendMembers<2>(value); }
+  void append(const Reference& value) { appendMembers<1>(value); }
+  void append(const PaintOrder& value) { appendMembers<1>(value); }
+  void append(const TextDecorationThickness& value) { appendMembers<2>(value); }
+  void append(const Cursor& value) { appendMembers<2>(value); }
+  void append(const CursorImage& value) { appendMembers<2>(value); }
+  void append(const FilterEffect& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::Blur& value) { appendMembers<2>(value); }
+  void append(const FilterEffect::ElementReference& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::HueRotate& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::Brightness& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::Contrast& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::Grayscale& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::Invert& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::FilterOpacity& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::Saturate& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::Sepia& value) { appendMembers<1>(value); }
+  void append(const FilterEffect::DropShadow& value) { appendMembers<4>(value); }
+  void append(const ClipPath& value) { appendMembers<1>(value); }
+  void append(const RadialClipPath::Position& value) { appendMembers<2>(value); }
+
+  void append(const PolygonClipPath& value) { appendMembers<3>(value); }
+  void append(const PolygonClipPath::Vertex& value) { appendMembers<2>(value); }
+  void append(const InsetClipPath& value) { appendMembers<4>(value); }
+  void append(const PathClipPath& value) { appendMembers<3>(value); }
+  void append(const Path::Command& value) { appendMembers<3>(value); }
+  void append(const FileOffset& value) { appendMembers<2>(value); }
+  void append(const FileOffset::LineInfo& value) { appendMembers<2>(value); }
+  void append(const SourceRange& value) { appendMembers<2>(value); }
+  void append(const css::Function& value) { appendMembers<3>(value); }
+  void append(const css::SimpleBlock& value) { appendMembers<3>(value); }
+  void append(const css::ComponentValue& value) { appendMembers<1>(value); }
+  void append(const css::Declaration& value) { appendMembers<6>(value); }
+  void append(const css::Token::Ident& value) { appendMembers<1>(value); }
+  void append(const css::Token::AtKeyword& value) { appendMembers<1>(value); }
+  void append(const css::Token::String& value) { appendMembers<1>(value); }
+  void append(const css::Token::BadString& value) { appendMembers<1>(value); }
+  void append(const css::Token::Url& value) { appendMembers<1>(value); }
+  void append(const css::Token::Delim& value) { appendMembers<1>(value); }
+  void append(const css::Token::Whitespace& value) { appendMembers<1>(value); }
+  void append(const css::Token::Function& value) { appendMembers<1>(value); }
+  void append(const css::Token::Hash& value) { appendMembers<2>(value); }
+  void append(const css::Token::Number& value) { appendMembers<3>(value); }
+  void append(const css::Token::Percentage& value) { appendMembers<3>(value); }
+  void append(const css::Token::Dimension& value) { appendMembers<5>(value); }
+  void append(const css::Token::ErrorToken& value) { appendMembers<1>(value); }
+
+  void append(const RadialClipPath& value) { appendMembers<3>(value); }
+
+  // These shapes split their data between a base and their own members.
+  void append(const CircleClipPath& value) {
+    static_assert(
+        HasAggregateLayout<CircleClipPath, RadialClipPath, RadialClipPath::Radius, Lengthd>);
+    fields(static_cast<const RadialClipPath&>(value), value.radiusType, value.radius);
   }
-  void append(const PolygonClipPath& v) { fields(v.box, v.rule, v.vertices); }
-  void append(const PolygonClipPath::Vertex& v) { fields(v.x, v.y); }
-  void append(const InsetClipPath& v) { fields(v.box, v.offsets, v.radiiX, v.radiiY); }
-  void append(const PathClipPath& v) { fields(v.box, v.rule, v.data.commands(), v.data.points()); }
-  void append(const Path::Command& v) { fields(v.verb, v.pointIndex, v.isInternal); }
-  void append(const FileOffset& v) { fields(v.offset, v.lineInfo); }
-  void append(const FileOffset::LineInfo& v) { fields(v.line, v.offsetOnLine); }
-  void append(const SourceRange& v) { fields(v.start, v.end); }
-  void append(const css::Function& v) { fields(v.name, v.values, v.sourceOffset); }
-  void append(const css::SimpleBlock& v) { fields(v.associatedToken, v.values, v.sourceOffset); }
-  void append(const css::ComponentValue& v) { fields(v.value); }
-  void append(const css::Declaration& v) {
-    fields(v.name, v.values, v.sourceOffset, v.sourceRange, v.sourceByteSize, v.important);
+
+  void append(const EllipseClipPath& value) {
+    static_assert(HasAggregateLayout<EllipseClipPath, RadialClipPath, RadialClipPath::Radius,
+                                     RadialClipPath::Radius, Lengthd, Lengthd>);
+    fields(static_cast<const RadialClipPath&>(value), value.radiusXType, value.radiusYType,
+           value.radiusX, value.radiusY);
   }
-  void append(const css::Token::Ident& v) { fields(v.value); }
-  void append(const css::Token::AtKeyword& v) { fields(v.value); }
-  void append(const css::Token::String& v) { fields(v.value); }
-  void append(const css::Token::BadString& v) { fields(v.value); }
-  void append(const css::Token::Url& v) { fields(v.value); }
-  void append(const css::Token::Delim& v) { fields(v.value); }
-  void append(const css::Token::Whitespace& v) { fields(v.value); }
-  void append(const css::Token::Function& v) { fields(v.name); }
-  void append(const css::Token::Hash& v) { fields(v.type, v.name); }
-  void append(const css::Token::Number& v) { fields(v.value, v.valueString, v.type); }
-  void append(const css::Token::Percentage& v) { fields(v.value, v.valueString, v.type); }
-  void append(const css::Token::Dimension& v) {
-    fields(v.value, v.suffixString, v.suffixUnit, v.valueString, v.type);
-  }
-  void append(const css::Token::ErrorToken& v) { fields(v.type); }
-  void append(const css::Specificity& v) {
-    fields(v.specialValue(), v.abc().a, v.abc().b, v.abc().c);
+
+  void append(const Path& path) { fields(path.commands(), path.points()); }
+
+  void append(const css::Specificity& value) {
+    const auto [a, b, c] = value.abc();
+    fields(value.specialValue(), a, b, c);
   }
 
   const std::size_t maximumBytes_;
