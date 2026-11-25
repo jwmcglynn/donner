@@ -84,6 +84,9 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
     const Registry& registry = access.registry();
     for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
       const StylesheetComponent& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+      if (!stylesheet.isCssType()) {
+        continue;
+      }
       if (stylesheet.isUserAgentStylesheet ? !includeUserAgent : stylesheet.sourceMap.empty()) {
         continue;
       }
@@ -103,7 +106,7 @@ bool AuthorStyleDependsOnTreePosition(const SVGDocument& document) {
     Registry& registry = access.registry();
     for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
       const StylesheetComponent& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
-      if (stylesheet.isUserAgentStylesheet) {
+      if (!stylesheet.isCssType() || stylesheet.isUserAgentStylesheet) {
         continue;
       }
 

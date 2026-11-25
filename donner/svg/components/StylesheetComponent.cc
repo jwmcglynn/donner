@@ -148,6 +148,7 @@ void StylesheetComponent::setImportedStylesheets(std::vector<css::Stylesheet>&& 
 }
 
 void StylesheetComponent::rebuildSelectorCaches() {
+  // Both parsing and import installation change the rules named by the cache key.
   contentRevision_ = NextStylesheetContentRevision();
   attributeSelectorNames.clear();
   attributeSelectorMatchesAnyName = false;

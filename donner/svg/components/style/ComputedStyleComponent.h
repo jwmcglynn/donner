@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "donner/base/Utils.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
@@ -56,7 +57,11 @@ public:
     if (family_) {
       family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes);
     }
-    retainedBytes_.fetch_sub(bytes, std::memory_order_relaxed);
+    std::size_t current = retainedBytes_.load(std::memory_order_relaxed);
+    do {
+      UTILS_RELEASE_ASSERT_MSG(current >= bytes, "Retained style byte underflow");
+    } while (
+        !retainedBytes_.compare_exchange_weak(current, current - bytes, std::memory_order_relaxed));
   }
 
   /// Current retained bytes.

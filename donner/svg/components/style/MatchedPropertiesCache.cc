@@ -99,6 +99,19 @@ const MatchedPropertiesEntry* MatchedPropertiesCache::find(const MatchedProperti
   return nullptr;
 }
 
+std::size_t MatchedPropertiesCache::Slot::keyPayloadBytes() const {
+  // Count inline capacity here as well; overcounting keeps the bound independent of the STL.
+  return (localKey.capacity() + 1) + key.rules_.capacity() * sizeof(MatchedPropertiesKey::Rule);
+}
+
+MatchedPropertiesCache::Slot& MatchedPropertiesCache::Bucket::nextVictim() {
+  // At most one complete turn clears all reference bits before finding a victim.
+  while (std::exchange(slots[hand].referenced, false)) {
+    hand = (hand + 1) % kSlotsPerBucket;
+  }
+  return slots[hand];
+}
+
 void MatchedPropertiesCache::insert(const MatchedPropertiesKey& key, MatchedPropertiesEntry entry) {
   if (!key.cacheable()) {
     return;
@@ -108,28 +121,35 @@ void MatchedPropertiesCache::insert(const MatchedPropertiesKey& key, MatchedProp
     return;
   }
   auto& bucket = buckets_[key.hash() % kBuckets];
-  if (!bucket) {
-    bucket = std::make_unique<Bucket>();
-  }
   Slot incoming{key, std::move(*local), std::move(entry)};
   incoming.key.localStyle = nullptr;
-  if (bucket->slots.size() < kSlotsPerBucket) {
-    bucket->slots.emplace_back(std::move(incoming));
+  Slot* victim =
+      bucket && bucket->slots.size() == kSlotsPerBucket ? &bucket->nextVictim() : nullptr;
+  const std::size_t keptBytes = retainedKeyPayloadBytes_ - (victim ? victim->keyPayloadBytes() : 0);
+  const std::size_t incomingBytes = incoming.keyPayloadBytes();
+  if (incomingBytes > kMaximumKeyPayloadBytes - keptBytes) {
     return;
   }
+  retainedKeyPayloadBytes_ = keptBytes + incomingBytes;
 
-  // At most one complete turn clears all the reference bits. The next probe finds a victim.
-  while (std::exchange(bucket->slots[bucket->hand].referenced, false)) {
+  if (victim) {
+    // Reconstruct the slot so an old string allocation cannot survive a smaller key.
+    std::destroy_at(victim);
+    std::construct_at(victim, std::move(incoming));
     bucket->hand = (bucket->hand + 1) % kSlotsPerBucket;
+  } else {
+    if (!bucket) {
+      bucket = std::make_unique<Bucket>();
+    }
+    bucket->slots.emplace_back(std::move(incoming));
   }
-  bucket->slots[bucket->hand] = std::move(incoming);
-  bucket->hand = (bucket->hand + 1) % kSlotsPerBucket;
 }
 
 void MatchedPropertiesCache::clear() {
   for (auto& bucket : buckets_) {
     bucket.reset();
   }
+  retainedKeyPayloadBytes_ = 0;
 }
 
 void MatchedPropertiesCache::discardComputedStyles(Registry& registry) {
