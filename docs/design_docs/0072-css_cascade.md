@@ -2026,9 +2026,9 @@ per-element cost and is calibrated in Milestone D3.
   every pool's size and the entity count before the region and asserts they are unchanged after
   it.
 - **The serial placeholder step is small.** With shared records, creating placeholder components
-  on the sprite costs 0.05 microseconds per element, including the clock reading. This is about
-  1 percent of the measured style pass ([Per-Element Cost](#per-element-cost)). D3 measures the
-  serial phases of the parallel pass.
+  on the sprite costs 0.05 microseconds per element, including the clock reading, or about
+  0.26 ms across its 5,137 elements ([Per-Element Cost](#per-element-cost)). D3 measures the serial
+  phases of the parallel pass.
 - **Parents before children.** Inheritance needs the parent's computed record. The pass is a
   top-down traversal from each root inside one flat `TaskScope`: a task cascades its root, then
   walks each child subtree smaller than the grain (initially 64 elements) with an explicit,
