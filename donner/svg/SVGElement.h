@@ -729,6 +729,10 @@ public:
    * returned \ref donner::svg::PropertyRegistry contains resolved values for all CSS properties
    * (fill, stroke, font-size, etc.).
    *
+   * The reference is valid until the element's style is invalidated or recomputed, or until the
+   * element or its document is destroyed. Copy any property values you need to keep across those
+   * operations.
+   *
    * @note Include `donner/svg/properties/PropertyRegistry.h` to inspect the returned properties.
    */
   const PropertyRegistry& getComputedStyle() const;

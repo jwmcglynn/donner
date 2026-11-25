@@ -2025,11 +2025,10 @@ per-element cost and is calibrated in Milestone D3.
   computed-style slot of an entity it owns and its own per-worker state. A debug guard records
   every pool's size and the entity count before the region and asserts they are unchanged after
   it.
-- **The serial placeholder step is small.** With a pointer-sized slot to a shared record, the
-  placeholder step costs 0.04 microseconds per element on the sprite, clock reading included
-  ([Per-Element Cost](#per-element-cost)), about 1 percent of its style time, against 0.67 with
-  the 4,840-byte `PropertyRegistry` inline in the component, so it does not cap the speedup of four
-  workers. D3 measures the serial phases of the parallel pass.
+- **The serial placeholder step is small.** With shared records, creating placeholder components
+  on the sprite costs 0.05 microseconds per element, including the clock reading. This is about
+  1 percent of the measured style pass ([Per-Element Cost](#per-element-cost)). D3 measures the
+  serial phases of the parallel pass.
 - **Parents before children.** Inheritance needs the parent's computed record. The pass is a
   top-down traversal from each root inside one flat `TaskScope`: a task cascades its root, then
   walks each child subtree smaller than the grain (initially 64 elements) with an explicit,
