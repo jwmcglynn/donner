@@ -676,34 +676,45 @@ TEST(StyleParallel, RootPrefixIsNotARecordWitnessForPublishedRootFont) {
     <defs><g id="prefix"><svg id="root" font-size="36"/></g><g id="later"/></defs>
   </svg>)",
                                             warnings);
-  ASSERT_FALSE(parsed.hasError());
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
   auto document = std::move(parsed).result();
-  const Entity prefix = document.querySelector("#prefix")->entityHandle().entity();
-  const Entity root = document.querySelector("#root")->entityHandle().entity();
-  const Entity later = document.querySelector("#later")->entityHandle().entity();
+  const auto prefix = document.querySelector("#prefix");
+  const auto root = document.querySelector("#root");
+  const auto later = document.querySelector("#later");
+  ASSERT_THAT(prefix, ::testing::Optional(::testing::_)) << "#prefix";
+  ASSERT_THAT(root, ::testing::Optional(::testing::_)) << "#root";
+  ASSERT_THAT(later, ::testing::Optional(::testing::_)) << "#later";
   auto& registry = document.registry();
   // A nested document root makes the first <g> a prepared ancestor of the root. The
   // later <g> has the same tag and parent, but can use the now-published root font.
-  registry.ctx().get<SVGDocumentContext>().rootEntity = root;
+  registry.ctx().get<SVGDocumentContext>().rootEntity = root->entityHandle().entity();
   std::vector<Entity> entities;
   const auto tree = registry.view<donner::components::TreeComponent>();
   for (Entity entity : tree) {
     entities.push_back(entity);
-    std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
   }
 
   StyleSystem::PreparedBatch batch(registry, entities, 1);
-  ASSERT_TRUE(batch.prepareDocumentRoot());
+  ASSERT_TRUE(batch.prepareDocumentRoot()) << "prepare the nested document root";
   auto* worker = batch.bindWorker();
-  ASSERT_NE(worker, nullptr);
-  ASSERT_TRUE(batch.compute(later, *worker));
-  const auto& before = registry.get<ComputedStyleComponent>(prefix);
-  const auto& after = registry.get<ComputedStyleComponent>(later);
+  ASSERT_THAT(worker, ::testing::NotNull()) << "bind the prepared batch worker";
+  const Entity laterEntity = later->entityHandle().entity();
+  ASSERT_TRUE(batch.compute(laterEntity, *worker)) << "compute the style for #later";
+  const auto& before = registry.get<ComputedStyleComponent>(prefix->entityHandle().entity());
+  const auto& after = registry.get<ComputedStyleComponent>(laterEntity);
   ASSERT_THAT(before.style, ::testing::NotNull());
   ASSERT_THAT(after.style, ::testing::NotNull());
-  EXPECT_DOUBLE_EQ(before.properties()->textDecorationThickness.get()->value.value,
-                   FontMetrics().rootFontSize);
-  EXPECT_DOUBLE_EQ(after.properties()->textDecorationThickness.get()->value.value, 36);
+  const TextDecorationThickness prefixThickness{
+      TextDecorationThickness::Kind::Length,
+      Lengthd(FontMetrics().rootFontSize, Lengthd::Unit::Px)};
+  const TextDecorationThickness laterThickness{TextDecorationThickness::Kind::Length,
+                                               Lengthd(36, Lengthd::Unit::Px)};
+  EXPECT_THAT(before.properties()->textDecorationThickness.get(),
+              ::testing::Optional(::testing::Eq(prefixThickness)))
+      << "#prefix";
+  EXPECT_THAT(after.properties()->textDecorationThickness.get(),
+              ::testing::Optional(::testing::Eq(laterThickness)))
+      << "#later";
 }
 
 TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
@@ -719,10 +730,14 @@ TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
   }
   source += "</svg>";
 
-  const auto run = [&](std::size_t width, bool disableCache) {
+  const auto run = [&](std::size_t width, bool disableCache) -> std::optional<Frame> {
     ParseWarningSink warnings;
     auto parsed = parser::SVGParser::ParseSVG(source, warnings);
-    EXPECT_FALSE(parsed.hasError());
+    SCOPED_TRACE(::testing::Message() << "worker count " << width);
+    if (parsed.hasError()) {
+      ADD_FAILURE() << parsed.error().reason;
+      return std::nullopt;
+    }
     auto document = std::move(parsed).result();
     auto& registry = document.registry();
     if (disableCache) {
@@ -732,13 +747,15 @@ TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
     RendererUtils::prepareDocumentForRendering(document, false, warnings, &scheduler);
     const auto& metrics = registry.ctx().get<StyleCascadeMetrics>();
     auto expectFill = [&](std::string_view selector, css::RGBA color) {
+      SCOPED_TRACE(selector);
       const auto host = document.querySelector(selector);
-      ASSERT_TRUE(host);
+      ASSERT_THAT(host, ::testing::Optional(::testing::_));
       const auto& shadow = host->entityHandle().get<ComputedShadowTreeComponent>();
-      ASSERT_TRUE(shadow.mainBranch);
-      ASSERT_GT(shadow.mainBranch->shadowEntities.size(), 1u);
+      ASSERT_THAT(shadow.mainBranch, ::testing::Optional(::testing::_));
+      ASSERT_THAT(shadow.mainBranch->shadowEntities, ::testing::SizeIs(::testing::Gt(1u)));
       const auto& child =
           registry.get<ComputedStyleComponent>(shadow.mainBranch->shadowEntities[1]);
+      ASSERT_THAT(child.style, ::testing::NotNull());
       EXPECT_THAT(child.properties()->fill.get(),
                   ::testing::Eq(PaintServer(PaintServer::Solid(css::Color(color)))));
     };
@@ -750,15 +767,18 @@ TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
                  warnings.warnings()};
   };
   for (bool disableCache : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "cache disabled " << disableCache);
     const auto serial = run(0, disableCache);
+    ASSERT_THAT(serial, ::testing::Optional(::testing::_)) << "serial frame";
     const auto parallel = run(4, disableCache);
-    EXPECT_GT(parallel.scheduled, 0u);
+    ASSERT_THAT(parallel, ::testing::Optional(::testing::_)) << "parallel frame";
+    EXPECT_GT(parallel->scheduled, 0u);
     if (disableCache) {
-      EXPECT_EQ(parallel.counters.matchedPropertiesCacheHits, 0u);
+      EXPECT_EQ(parallel->counters.matchedPropertiesCacheHits, 0u);
     } else {
-      EXPECT_GT(parallel.traces, 1000u);
+      EXPECT_GT(parallel->traces, 1000u);
     }
-    ExpectSame(serial, parallel);
+    ExpectSame(*serial, *parallel);
   }
 }
 
