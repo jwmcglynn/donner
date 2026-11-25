@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -698,7 +699,8 @@ TEST(StyleParallel, RootPrefixIsNotARecordWitnessForPublishedRootFont) {
   ASSERT_TRUE(batch.compute(later, *worker));
   const auto& before = registry.get<ComputedStyleComponent>(prefix);
   const auto& after = registry.get<ComputedStyleComponent>(later);
-  ASSERT_TRUE(before.style && after.style);
+  ASSERT_THAT(before.style, ::testing::NotNull());
+  ASSERT_THAT(after.style, ::testing::NotNull());
   EXPECT_DOUBLE_EQ(before.properties()->textDecorationThickness.get()->value.value,
                    FontMetrics().rootFontSize);
   EXPECT_DOUBLE_EQ(after.properties()->textDecorationThickness.get()->value.value, 36);
