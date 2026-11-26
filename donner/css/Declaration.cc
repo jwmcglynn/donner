@@ -134,7 +134,13 @@ bool CloseRecoveredToken(std::span<const ComponentValue> values, const Declarati
   const auto* token = std::get_if<Token>(&values.back().value);
   const auto* error = token ? token->tryGet<Token::ErrorToken>() : nullptr;
   if (!error) {
-    return FinishUnterminatedEscape(token, spelling, result);
+    const bool repaired = FinishUnterminatedEscape(token, spelling, result);
+    const auto* badUrl = token ? token->tryGet<Token::BadUrl>() : nullptr;
+    if (badUrl && badUrl->closedAtEof) {
+      result += ')';
+      return true;
+    }
+    return repaired;
   }
   switch (error->type) {
     case Token::ErrorToken::Type::EofInComment: result += "*/"; return true;
