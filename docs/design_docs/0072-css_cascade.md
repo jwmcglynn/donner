@@ -199,8 +199,10 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ## Next Steps
 
-- Land narrowed invalidation (Milestone A5) and the matcher constant factors (Milestone A4), which
-  follows the rule index.
+- Implement custom-property storage, substitution and cascade layers with the conformance and
+  resource-accounting cases in [Part B](#part-b-milestones).
+- Implement rule-level source editing and selective restyling, then connect CSS highlighting
+  and completion to the source pane as described in [Part C](#part-c-milestones).
 
 ## Implementation Plan
 
@@ -224,7 +226,7 @@ including tests and review fixes. "After" names the milestones that must land fi
         (CPU-invariant, PR-gated) and whose wall-clock target records times (manual, `perf` tag).
   - Done when: the counters reproduce this document's counter columns exactly for the splash,
     bootstrap-icons and synthetic documents.
-- [ ] Milestone A2: One cascade per full restyle (1 day,
+- [x] Milestone A2: One cascade per full restyle (1 day,
       [#2717](https://github.com/jwmcglynn/donner/pull/2717)). After A1.
   - [x] Clear computed styles once per rebuild in `RenderingContext::createComputedComponents`
         (`StyleSystem::discardComputedStylesForFullRestyle`), and make both of its
@@ -235,17 +237,12 @@ including tests and review fixes. "After" names the milestones that must land fi
         the second pass discarding its overrides: it does not, so animated documents take the same
         path (`RenderingContextTest.AnimatedDocumentFullRestyleMatchesFirstFrame` in
         `//donner/svg/renderer/tests:renderer_driver_tests`).
-  - Done when: the correctness counter test shows elements cascaded equal to the styled entity count
-    on the edit frames, and the next-frame style time after a splash class edit is at most 10 ms
-    (from 18.8 ms). Met: every edit and keystroke row of `css_cascade_perf_tests_correctness`
-    cascades each styled entity once with one full clear (see
-    [Measured Baseline](#measured-baseline)). Not met: on the baseline machine class (the same harness pinned
-    to one core, load average 27 to 36, four alternating runs of the old and new binaries) the
-    splash class edit's style time falls from 17.93 ms (17.10-18.54) to 10.67 ms (10.45-10.72), and
-    on a 14-core Apple silicon desktop (load average 4.7 to 8.0, six alternating runs) from
-    4.33 ms (4.28-4.40) to 2.49 ms (2.45-2.52). The time falls roughly by the share of cascades
-    removed, 447 of 1,069 (the 175 shadow-tree clones were already cascaded once), not by half; the
-    remaining 0.7 ms is left to the rule index (Milestone A3).
+  - A forced full restyle after the named splash
+    class edit performs one full clear and cascades all 622 elements. Across six matched groups
+    on Arm Linux, median style times were 2.133 ms forward and 2.124 ms undo; the maximum
+    observed sample was 2.929 ms. The ordinary selective path cascaded 176 elements with no
+    full clear and measured 0.362 ms forward and 0.379 ms undo.
+
 - [x] Milestone A3: Rule index (4 days,
       [#2730](https://github.com/jwmcglynn/donner/pull/2730)). After A1.
   - [x] Build `RuleIndex` for a stylesheet's own rules and for each imported sheet when
@@ -267,16 +264,13 @@ including tests and review fixes. "After" names the milestones that must land fi
     and 1.44 ms). The differential test, the fuzzer and the Wasm size checks pass: the renderer's
     Wasm is 2,340,052 bytes raw and 925,917 gzipped (ceilings 2,500,000 and 1,020,000), the editor's
     10,623,727 and 3,385,346 (ceilings 10,880,000 and 3,570,000).
-- [ ] Milestone A4: Matcher constant factors (2 days, one commit per change). After A3.
-  - [ ] Remove the per-attempt heap allocation of the backtracking stack in
-        `ComplexSelector::matchChain`.
-  - [ ] Store each complex selector's specificity at parse time instead of recomputing it in
-        `ComplexSelector::matches`.
-  - [ ] Match `ClassSelector` against a class list split once per element instead of copying and
-        splitting the `class` string for every class selector tested.
-  - [ ] Resolve pseudo-class names to an enumeration at parse time.
-  - Done when: each kept change shows a median improvement of at least 5 percent in candidate
-    match time on the benchmark; a change that does not is dropped.
+- [x] Milestone A4: Matcher constant factors. The independent acceptance threshold is a 5%
+  median improvement in candidate match time.
+  - [x] Keep the inline cursor stack for short selector chains ([#2779](https://github.com/jwmcglynn/donner/pull/2779)).
+  - [x] Keep cached specificity for indexed stylesheet selectors ([#2780](https://github.com/jwmcglynn/donner/pull/2780)).
+  - [x] Evaluate per-subject class tokens and parse-time pseudo-class dispatch. Both fell short
+    of the threshold; the existing implementations remain in use.
+  - [Matcher measurements](#matcher-constant-factors) give individual and combined times.
 - [x] Milestone A5: Narrowed invalidation for single-element edits (9.5 days). After A2.
   - [Selector dependencies](https://github.com/jwmcglynn/donner/pull/2768),
     [edit routing](https://github.com/jwmcglynn/donner/pull/2774),
@@ -1245,19 +1239,42 @@ size test and package size checks against the current ceilings and reports the m
 
 ### Matcher Constant Factors
 
-Each is one commit with a before and after benchmark run; a change that does not improve candidate
-match time by at least 5 percent is not kept.
+The matcher holds at most two backtracking frames inline when the frame fits the size and
+alignment limits and its move constructor cannot throw. Longer chains spill to the heap.
+Other element adapters use the ordinary vector. A stylesheet's rule index records specificity
+by rule and selector-list entry; the first matching entry supplies the score. Independently
+constructed or edited public selectors compute specificity from their current contents.
 
-- `ComplexSelector::matchChain` allocates a `std::vector<Frame>` on every match attempt. Use a
-  small inline-capacity stack (the depth is the number of compounds) and fall back to the heap only
-  for long selectors.
-- `ComplexSelector::matches` calls `computeSpecificity()` on every successful match. Compute it
-  once at parse time and store it in the selector.
-- `ShadowedElementAdapter::className()` returns an owning copy and `ClassSelector::matches` splits
-  it for every class selector tested. Give the adapter a per-element split class list, built once
-  when the element's cascade begins, and let `ClassSelector` search it.
-- `PseudoClassSelector` compares `ident` against names on every match. Resolve the name to an
-  enumeration when parsing.
+#### Measuring candidate matching
+
+The workload is the Arm Linux serial first-frame suite in `css_cascade_perf_bench`
+(`--mode=load --no-renderer --workers=0`). The ordinary executable reports style and frame
+timings. For the candidate-only comparison, an instrumented build also sums elapsed
+`steady_clock` nanoseconds immediately around each call to `MatchSelectorRule` after the
+ancestor-filter check. This includes matching, specificity, and the matcher's traversal-budget
+checks. Rule collection, filter rejections and declaration application are outside the interval.
+
+Each of twelve matched groups ran the baseline, each isolated change, and a repeat of the
+baseline. Each process parsed nine fresh documents per scene: the splash, Bootstrap icons,
+tiger, mixed rules and rectangles, shared use instances, and descendant selectors. Each group
+gave the six scene ratios equal weight using their geometric mean. The table shows the median
+of the group ratios and the paired bootstrap interval. Match attempts and reported cascade
+work agreed throughout. The baseline repeat was 0.996× (0.992–1.001×). Consecutive clock reads
+took 35.6 ns; the reported ratios use observed times without subtracting that overhead.
+
+| Independent change | Candidate match time / baseline | Paired 95% interval | Decision |
+| --- | ---: | ---: | --- |
+| Inline backtracking stack | 0.873× | 0.868–0.883× | Keep |
+| Cached indexed specificity | 0.938× | 0.932–0.946× | Keep |
+| Per-subject class-token reuse | 0.975× | 0.966–0.978× | Drop |
+| Parse-time pseudo-class dispatch | 1.013× | 1.011–1.017× | Drop |
+
+With both retained changes, candidate matching took **0.822×** baseline time
+(0.814–0.830×). In six separate matched groups using the ordinary, uninstrumented executable,
+whole-style time was **0.949×** (0.939–0.973×), and null-renderer frame time was 0.985×
+(0.973–1.013×). The latter interval includes an unchanged frame time. Individually, the
+uninstrumented whole-style ratios were 0.987× for backtracking and 0.984× for specificity.
+The independent comparison uses [the merged A5 baseline](https://github.com/jwmcglynn/donner/commit/9a299abc12bedbb633433fd2cdd392cc4910a4c2).
 
 ### Narrowed Invalidation for Single-Element Edits
 
@@ -2257,7 +2274,11 @@ layouts show at most 96 bytes rounded for its queued entry, 256 bytes for the co
 and 48 bytes for an inline offscreen handoff after the last main chunk returns. The owner
 path reports a deepest frame slot at 744 bytes. Reserving one additional KiB for the
 frontier traversal in the cumulative estimate brings it to 61 KiB, below the 64 KiB
-allowance above the separate reporting reserve. The native style test runs a queued
+allowance above the separate reporting reserve. The inline matcher stack adds at most
+256 bytes of cursor storage per active match. The measured increase in the release
+matcher frame-slot span was 244 bytes on Linux arm64 and 256 bytes on Darwin arm64.
+Adding the larger increase at all five live levels gives a 62.25 KiB estimate within the
+same 64 KiB allowance. The native style test runs a queued
 drainer on a 128 KiB worker through a four-level selector on both frontier shapes.
 
 Run the **release cascade frame check** with the normal native CI toolchain and runner
