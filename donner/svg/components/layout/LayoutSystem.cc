@@ -1,13 +1,16 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <tuple>
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -110,6 +113,51 @@ PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
   }
 
   return PreserveAspectRatio::Default();
+}
+
+bool AppendSvgTransformFunction(std::string& text, const css::Function& function) {
+  const std::string_view name(function.name);
+  if (!std::ranges::all_of(name, StringUtils::IsAsciiAlpha)) {
+    return false;
+  }
+  text.append(name);
+  text.push_back('(');
+  for (const auto& argument : function.values) {
+    if (const auto* number = argument.tryGetToken<css::Token::Number>()) {
+      const std::string_view spelling(number->valueString);
+      if (spelling.empty() || spelling.find_first_not_of("0123456789+-.eE") != spelling.npos) {
+        return false;
+      }
+      text.append(spelling);
+      // Substitution can place two number tokens next to each other. Keep their boundaries.
+      text.push_back(' ');
+    } else if (argument.isToken<css::Token::Comma>()) {
+      text.push_back(',');
+    } else if (!argument.isToken<css::Token::Whitespace>()) {
+      return false;
+    }
+  }
+  text.push_back(')');
+  return true;
+}
+
+[[gnu::noinline]] std::optional<Transform2d> ParseSvgTransformTokens(
+    std::span<const css::ComponentValue> components) {
+  // Only number lists with validated function names reach the ordinary SVG text parser.
+  // CSS dimensions and other token types retain their interpretation in the CSS parser.
+  std::string text;
+  for (const auto& component : components) {
+    if (component.isToken<css::Token::Comma>()) {
+      text.push_back(',');
+    } else if (!component.isToken<css::Token::Whitespace>()) {
+      const auto* function = std::get_if<css::Function>(&component.value);
+      if (!function || !AppendSvgTransformFunction(text, *function)) {
+        return std::nullopt;
+      }
+    }
+  }
+  auto svg = parser::TransformParser::Parse(text);
+  return svg.hasResult() ? std::optional(svg.result()) : std::nullopt;
 }
 
 parser::PropertyParseFnParams DeferredTransformParams(const parser::UnparsedProperty& property) {
@@ -803,14 +851,15 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
 
     auto maybeError = Parse(
         params,
-        [](const parser::PropertyParseFnParams& params) {
-          if (const std::string_view* str =
-                  std::get_if<std::string_view>(&params.valueOrComponents)) {
-            return parser::TransformParser::Parse(*str).map<CssTransform>(
-                [](const Transform2d& transform) { return CssTransform(transform); });
-          } else {
-            return parser::CssTransformParser::Parse(params.components());
+        [&](const parser::PropertyParseFnParams& input) -> ParseResult<CssTransform> {
+          const auto components = input.components();
+          auto result = parser::CssTransformParser::Parse(components);
+          if (result.hasError() && property.variableFromPresentation) {
+            if (const auto svg = ParseSvgTransformTokens(components)) {
+              return CssTransform(*svg);
+            }
           }
+          return result;
         },
         &transform->transform);
 
