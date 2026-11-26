@@ -223,34 +223,26 @@ void markConditionalProcessingChanged(EntityHandle handle) {
   markStyleCascadeDirty(handle);
 }
 
-void invalidateComputedStyleForDescendants(EntityHandle handle) {
-  auto& tree = handle.get<donner::components::TreeComponent>();
+void ForEachStyleDescendant(EntityHandle handle, void (*apply)(EntityHandle)) {
+  const auto& tree = handle.get<donner::components::TreeComponent>();
   Registry& registry = *handle.registry();
-  for (entt::entity child = tree.firstChild(); child != entt::null;
+  for (Entity child = tree.firstChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    donner::components::ForAllChildrenRecursive(
-        EntityHandle(registry, child), [](EntityHandle desc) { invalidateComputedStyle(desc); });
+    donner::components::ForAllChildrenRecursive(EntityHandle(registry, child), apply);
   }
 }
 
 /// Propagate style-related dirty flags to all descendants of the given entity.
 void propagateStyleDirtyToDescendants(EntityHandle handle) {
-  auto& tree = handle.get<donner::components::TreeComponent>();
-  Registry& registry = *handle.registry();
-  for (entt::entity child = tree.firstChild(); child != entt::null;
-       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    donner::components::ForAllChildrenRecursive(
-        EntityHandle(registry, child), [](EntityHandle desc) {
-          markDirty(desc, components::DirtyFlagsComponent::Style |
+  ForEachStyleDescendant(handle, [](EntityHandle descendant) {
+    markDirty(descendant, components::DirtyFlagsComponent::Style |
                               components::DirtyFlagsComponent::Paint |
                               components::DirtyFlagsComponent::RenderInstance);
-          // The font properties inherit, so a style change on an ancestor restyles every text
-          // root beneath it. Match on the root itself to keep this O(1) per descendant.
-          if (desc.all_of<components::TextRootComponent>()) {
-            (void)components::InvalidateTextLayout(desc);
-          }
-        });
-  }
+    // The font properties inherit, so an ancestor edit restyles the text roots beneath it.
+    if (descendant.all_of<components::TextRootComponent>()) {
+      (void)components::InvalidateTextLayout(descendant);
+    }
+  });
 }
 
 // A narrow pass must collect every affected element before removing any old style records.
@@ -327,7 +319,7 @@ void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute, TrySt
   }
   markNeedsFullStyleRecompute(handle);
   invalidateComputedStyle(handle);
-  invalidateComputedStyleForDescendants(handle);
+  ForEachStyleDescendant(handle, invalidateComputedStyle);
   markStyleCascadeDirty(handle);
   propagateStyleDirtyToDescendants(handle);
 }
@@ -472,7 +464,7 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
     invalidateComputedStyle(handle);
     markStyleCascadeDirty(handle, components::DirtyFlagsComponent::Shape);
     if (ShouldInvalidateDescendantStyles(actualName)) {
-      invalidateComputedStyleForDescendants(handle);
+      ForEachStyleDescendant(handle, invalidateComputedStyle);
       propagateStyleDirtyToDescendants(handle);
     }
     if (elementType == ElementType::Use && IsUseGeometryAttribute(actualName)) {
