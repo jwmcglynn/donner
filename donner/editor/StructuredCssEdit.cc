@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLTokenizer.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/TextEditor.h"
@@ -216,10 +217,24 @@ bool EndsInSemicolon(std::string_view source, SourceByteRange range) {
   return Slice(source, range).ends_with(';');
 }
 
+bool IsCDataContent(std::string_view bytes) {
+  if (bytes.find(']') == std::string_view::npos) {
+    return true;
+  }
+  std::string wrapped = "<![CDATA[";
+  wrapped += bytes;
+  wrapped += "]]>";
+  bool complete = false;
+  xml::Tokenize(wrapped, [&](const xml::XMLToken& token) {
+    complete |= token.type == xml::XMLTokenType::CData && token.range.start.offset == 0 &&
+                token.range.end.offset == wrapped.size();
+  });
+  return complete;
+}
+
 bool CanTransferLiteral(std::string_view bytes, const StructuredCssTarget& destination) {
   // Moving independently projected spans must not reinterpret XML entities or delimiters.
-  return bytes.find_first_of("<&") == std::string_view::npos &&
-         bytes.find("]]>") == std::string_view::npos &&
+  return bytes.find_first_of("<&") == std::string_view::npos && IsCDataContent(bytes) &&
          (!destination.attributeQuote ||
           bytes.find(destination.attributeQuote) == std::string_view::npos);
 }
