@@ -2221,6 +2221,36 @@ test("the drag sampler retains presentation completions between animation frames
   );
 });
 
+test("completed drag frames reject a matching coordinate dispatched in the future", async () => {
+  const metrics = await import("./drag-input-stream.mjs");
+  const presentation = {
+    completedSerial: 2,
+    completedAtMs: 150,
+    inputRepresented: false,
+    mouseDown: true,
+    pointerX: 2,
+    pointerY: 3,
+    viewportZoom: 1,
+  };
+  const stream = {
+    startedAtMs: 100,
+    finishedAtMs: 250,
+    dispatchTimes: [200],
+    dispatchPoints: [{ x: 2, y: 3 }],
+    frames: [{ frame: 1, atMs: 150, presentation }],
+    end: { x: 2, y: 3 },
+    releasedAtMs: 240,
+    releaseFrame: null,
+  };
+  assert.deepEqual(
+    metrics.completedDragFrames(stream, 1),
+    [],
+    "a coordinate does not count before the matching input was dispatched",
+  );
+  stream.dispatchTimes[0] = 140;
+  assert.deepEqual(metrics.completedDragFrames(stream, 1), [stream.frames[0]]);
+});
+
 test("the drag sampler observes the drag until the one release stall guard", async () => {
   const stream = await import("./drag-input-stream.mjs");
   const completed = (sampled) => stream.dragInputLatencies(sampled, 1).length;

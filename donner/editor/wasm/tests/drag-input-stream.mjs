@@ -234,8 +234,9 @@ export function completedDragFrames(stream, baselineSerial) {
   for (const frame of stream.frames) {
     if (
       completesThisDrag(frame, stream, baselineSerial)
-      && stream.dispatchPoints.some((point) =>
+      && stream.dispatchPoints.some((point, index) =>
         point.x === frame.presentation.pointerX && point.y === frame.presentation.pointerY
+          && stream.dispatchTimes[index] <= frame.presentation.completedAtMs
       )
     ) {
       completions.set(frame.presentation.completedSerial, frame);
