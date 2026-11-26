@@ -36,7 +36,8 @@ TEST(Specificity, ToString) {
 }
 
 TEST(Specificity, CascadePriorityImportantFactoriesKeepOriginAbcAndObjectSize) {
-  static_assert(sizeof(Specificity) == sizeof(Specificity::ABC) + sizeof(Specificity::SpecialType));
+  // Layer rank and the narrowed origin enum keep the original four-byte priority slot.
+  static_assert(sizeof(Specificity) == 16);
   const auto selector = Specificity::FromABC(1, 2, 3);
   const auto important = Specificity::Important(selector);
   EXPECT_EQ(important.abc().a, 1u);
