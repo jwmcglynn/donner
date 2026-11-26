@@ -114,6 +114,25 @@ bool IsUseGeometryAttribute(std::string_view name) {
   return name == "x" || name == "y" || name == "width" || name == "height";
 }
 
+bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& name,
+                         std::string_view value) {
+  if (name == xml::XMLQualifiedNameRef("id")) {
+    element.setId(value);
+  } else if (IsUseHrefAttribute(element.entityHandle(), name)) {
+    // The stored attribute feeds `[href]` selectors; retargeting itself needs no restyle.
+    if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(
+            *element.entityHandle().registry(), name.name)) {
+      markNeedsFullStyleRecompute(element.entityHandle());
+    }
+    element.entityHandle().get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+        *element.entityHandle().registry(), name, RcString(value));
+    RetargetUseFromAttributes(element.entityHandle());
+  } else {
+    return false;
+  }
+  return true;
+}
+
 struct LineAttributeMutationResult {
   bool handled = false;
   std::optional<ParseDiagnostic> diagnostic;
@@ -962,28 +981,24 @@ void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_
   (void)document.setElementAttribute(*this, name, value);
 }
 
-bool SVGElement::setCoreAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value,
-                                  StyleEditRouter route) {
-  if (name == xml::XMLQualifiedNameRef("id")) {
-    setId(value);
-  } else if (name == xml::XMLQualifiedNameRef("class")) {
-    setClassNameWithRouter(value, route);
-  } else if (name == xml::XMLQualifiedNameRef("style")) {
-    setStyleWithRouter(value, route);
-  } else if (EntityHandle node = handle_; IsUseHrefAttribute(node, name)) {
-    // The stored attribute feeds [href] selectors; retargeting itself needs no restyle.
-    if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*node.registry(),
-                                                                       name.name)) {
-      markNeedsFullStyleRecompute(node);
-    }
-    node.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
-        *node.registry(), name, RcString(value));
-    RetargetUseFromAttributes(node);
-  } else {
-    return false;
-  }
-  return true;
+namespace {
+
+bool WasPresentationAttributeSet(const ParseResult<bool>& result) {
+  return result.hasResult() && result.result();
 }
+
+void MarkSettledTransform(EntityHandle handle, std::string_view name) {
+  if (name == "transform") {
+    // XML-sourced transforms must reraster filtered layers at their settled position.
+    markDirty(handle, components::DirtyFlagsComponent::Paint);
+  }
+}
+
+bool RemoveTypedPresentationAttribute(EntityHandle handle, const xml::XMLQualifiedNameRef& name) {
+  return RemoveLineCoordinateAttribute(handle, name) || RemoveConvolveOrderAttribute(handle, name);
+}
+
+}  // namespace
 
 std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
     const xml::XMLQualifiedNameRef& name, std::string_view value,
@@ -1001,7 +1016,15 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeWithRouter(
   }
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
-  if (setCoreAttribute(name, value, route)) {
+  if (name == xml::XMLQualifiedNameRef("class")) {
+    setClassNameWithRouter(value, route);
+    return std::nullopt;
+  }
+  if (name == xml::XMLQualifiedNameRef("style")) {
+    setStyleWithRouter(value, route);
+    return std::nullopt;
+  }
+  if (SetCoreXMLAttribute(*this, name, value)) {
     return std::nullopt;
   }
 
@@ -1023,18 +1046,12 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeWithRouter(
   // Only parse empty namespaces for now.
   if (name.namespacePrefix.empty()) {
     auto trySetResult = trySetPresentationAttributeWithRouter(name.name, value, route);
-    const bool attributeWasSet = trySetResult.hasResult() && trySetResult.result();
+    const bool attributeWasSet = WasPresentationAttributeSet(trySetResult);
     if (consumedAsPresentationAttribute != nullptr) {
       *consumedAsPresentationAttribute = attributeWasSet;
     }
     if (attributeWasSet) {
-      if (name.name == "transform") {
-        // Source/XML transform edits are settled document changes, not active drag frames.
-        // Keep canvas drag mutations on the transform-only fast path, but force XML-sourced
-        // transform changes through the normal dirty reraster path so filtered layer pixels
-        // settle exactly.
-        markDirty(handle_, components::DirtyFlagsComponent::Paint);
-      }
+      MarkSettledTransform(handle_, name.name);
       // Early-return since if this succeeds, the attribute has already been stored.
       return std::nullopt;
     }
@@ -1057,18 +1074,6 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeWithRouter(
 void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
   SVGDocument document = ownerDocument();
   (void)document.removeElementAttribute(*this, name);
-}
-
-void SVGElement::removePresentationAttribute(const xml::XMLQualifiedNameRef& name,
-                                             DocumentWriteAccess& access, StyleEditRouter route) {
-  if (name.namespacePrefix.empty()) {
-    if (RemovePresentationDeclaration(handle_, access, type(), name.name, route)) {
-      return;
-    }
-    // Element-specific attributes reset typed state and require a full restyle.
-    std::ignore = trySetPresentationAttributeWithRouter(name.name, "initial", route);
-  }
-  markNeedsFullStyleRecompute(handle_);
 }
 
 void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name) {
@@ -1095,9 +1100,13 @@ void SVGElement::removeAttributeWithRouter(const xml::XMLQualifiedNameRef& name,
       }
     }
     markConditionalProcessingChanged(handle_);
-  } else if (!RemoveLineCoordinateAttribute(handle_, name) &&
-             !RemoveConvolveOrderAttribute(handle_, name)) {
-    removePresentationAttribute(name, access, route);
+  } else if (RemoveTypedPresentationAttribute(handle_, name)) {
+  } else if (!name.namespacePrefix.empty()) {
+    markNeedsFullStyleRecompute(handle_);
+  } else if (!RemovePresentationDeclaration(handle_, access, type(), name.name, route)) {
+    // Element-specific attributes reset their typed state and require a full restyle.
+    std::ignore = trySetPresentationAttributeWithRouter(name.name, "initial", route);
+    markNeedsFullStyleRecompute(handle_);
   }
 
   // Remove any storage for this attribute.

@@ -854,10 +854,6 @@ protected:
 private:
   // The parser shares the attribute writers but has no previous render to invalidate.
   using StyleEditRouter = bool (*)(EntityHandle, std::string_view, std::string_view);
-  bool setCoreAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value,
-                        StyleEditRouter route);
-  void removePresentationAttribute(const xml::XMLQualifiedNameRef& name,
-                                   DocumentWriteAccess& access, StyleEditRouter route);
   void setClassNameWithRouter(std::string_view name, StyleEditRouter route);
   void setStyleWithRouter(std::string_view style, StyleEditRouter route);
   ParseResult<bool> trySetPresentationAttributeWithRouter(std::string_view name,
