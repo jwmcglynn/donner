@@ -1,0 +1,7 @@
+@layer reset, theme.part;
+@import 'plain.css';
+@import url(theme.css) layer(theme.part) all;
+@import 'anonymous.css' layer;
+@layer reset { g { fill: red } }
+@layer theme { @layer part { rect { fill: blue } } @layer { rect { fill: red } } }
+@layer escaped\.dot, escaped.dot;

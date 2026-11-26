@@ -54,7 +54,7 @@ public:
    * The order of these values is important, since operator<=> considers later enum values to be
    * greater.
    */
-  enum class SpecialType {
+  enum class SpecialType : std::uint8_t {
     UserAgent,                ///< Normal user agent stylesheet declaration.
     None,                     ///< Normal author declaration.
     StyleAttribute,           ///< Normal inline style, above normal author selectors.
@@ -150,6 +150,9 @@ public:
       case SpecialType::ImportantUserAgent: os << "user-agent !important, "; break;
       case SpecialType::None: break;
     }
+    if (obj.layerRank_ != 0) {
+      os << "layer " << obj.layerRank_ << ", ";
+    }
     return os << obj.abc_.a << ", " << obj.abc_.b << ", " << obj.abc_.c << ")";
   }
 
@@ -203,13 +206,27 @@ public:
    */
   static constexpr Specificity Override() { return Specificity(SpecialType::Override); }
 
+  /// Assign the document layer's normal-order rank. Rank zero is the unlayered fast path.
+  Specificity withLayerRank(std::uint16_t rank) const {
+    Specificity result = *this;
+    result.layerRank_ = rank;
+    return result;
+  }
+
+  /// Rank in normal precedence order, before reversal for important origin levels.
+  std::uint16_t layerRank() const { return layerRank_; }
+
   /// Spaceship operator.
   auto operator<=>(const Specificity& other) const {
     if (special_ != other.special_) {
       return special_ <=> other.special_;
-    } else {
-      return abc_ <=> other.abc_;
     }
+    if (layerRank_ != other.layerRank_) {
+      const bool reverse =
+          special_ == SpecialType::Important || special_ == SpecialType::ImportantUserAgent;
+      return reverse ? other.layerRank_ <=> layerRank_ : layerRank_ <=> other.layerRank_;
+    }
+    return abc_ <=> other.abc_;
   }
 
   /// Equality operator, for gtest.
@@ -244,6 +261,7 @@ private:
   explicit constexpr Specificity(SpecialType special) : special_(special) {}
 
   ABC abc_;                                  ///< The 3-tuple of integers.
+  std::uint16_t layerRank_ = 0;              ///< Normal-order document layer rank.
   SpecialType special_ = SpecialType::None;  ///< Special value, if any.
 };
 

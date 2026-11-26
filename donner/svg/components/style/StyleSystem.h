@@ -51,6 +51,7 @@ class AnimationContextualWorkBudget;
 class AnimationResourceBudget;
 class MatchedPropertiesCache;
 struct MatchedPropertiesKey;
+class DocumentLayerOrder;
 class StyleAncestorFilter;
 struct StyleComponent;
 
@@ -625,6 +626,7 @@ public:
     unsigned activeCascades = 0;                    ///< Nesting for whole-registry copy accounting.
     StagedRecords* staging = nullptr;               ///< Optional worker-private tentative output.
     StyleAncestorFilter* ancestorFilter = nullptr;  ///< Optional pass-owned ancestor filter.
+    const DocumentLayerOrder* layers = nullptr;     ///< Frozen document layer ranks, if used.
     CascadeAncestorFilter* testFilter = nullptr;    ///< Optional test provider owned by the pass.
   };
 
@@ -861,7 +863,8 @@ private:
                                    ParseWarningSink& warningSink,
                                    PendingStyleDeclarations& declarations, RuleTrace* capture,
                                    RuleTrace* replay, StyleAncestorFilter* ancestorFilter,
-                                   CascadeAncestorFilter* testFilter);
+                                   CascadeAncestorFilter* testFilter,
+                                   const DocumentLayerOrder* layers);
   static void inheritComputedParent(const Registry& registry, Entity entity, Entity parent,
                                     PropertyRegistry& properties, ComputedStyleComponent& computed,
                                     ParseWarningSink& warningSink, SerialCascade* serial);

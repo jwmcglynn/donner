@@ -18,6 +18,19 @@ std::uint64_t NextStylesheetContentRevision() {
   return revision;
 }
 
+std::size_t LayerSyntaxBytes(const css::Stylesheet& sheet) {
+  if (const auto* syntax = sheet.layers()) {
+    std::size_t bytes = sizeof(*syntax) + 2 * sizeof(void*) +
+                        syntax->nodes.capacity() * sizeof(css::LayerNode) +
+                        syntax->events.capacity() * sizeof(css::LayerEvent);
+    for (const auto& node : syntax->nodes) {
+      bytes += node.name.size();
+    }
+    return bytes;
+  }
+  return 0;
+}
+
 }  // namespace
 
 void StylesheetSourceMap::addSegment(std::size_t cssStartOffset, std::size_t cssEndOffset,
@@ -120,6 +133,7 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
   sourceMap = std::move(newSourceMap);
   stylesheet = donner::css::parser::StylesheetParser::Parse(str, warnings);
   importedStylesheets.clear();
+  importOrigins.clear();
   combinedFontFaces.clear();
   importGeneration.reset();
   ++fontFaceRevision;
@@ -130,8 +144,10 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
 }
 
 void StylesheetComponent::setImportedStylesheets(std::vector<css::Stylesheet>&& imported,
-                                                 std::uint64_t generation) {
+                                                 std::uint64_t generation,
+                                                 std::vector<StylesheetImportOrigin> origins) {
   importedStylesheets = std::move(imported);
+  importOrigins = std::move(origins);
   importGeneration = generation;
   ++fontFaceRevision;
 
@@ -164,9 +180,11 @@ void StylesheetComponent::rebuildSelectorCaches() {
 
 std::size_t StylesheetComponent::selectorCacheBytes() const {
   std::size_t bytes = ruleIndex.retainedBytes() + dependencySummary.retainedBytes() +
-                      importedRuleIndexes.capacity() * sizeof(RuleIndex);
-  for (const RuleIndex& index : importedRuleIndexes) {
-    bytes += index.retainedBytes();
+                      importedRuleIndexes.capacity() * sizeof(RuleIndex) +
+                      importOrigins.capacity() * sizeof(StylesheetImportOrigin) +
+                      LayerSyntaxBytes(stylesheet);
+  for (std::size_t i = 0; i < importedRuleIndexes.size(); ++i) {
+    bytes += importedRuleIndexes[i].retainedBytes() + LayerSyntaxBytes(importedStylesheets[i]);
   }
   return bytes;
 }

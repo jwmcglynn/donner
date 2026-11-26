@@ -44,6 +44,7 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
+#include "donner/svg/components/style/DocumentLayerOrder.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleAncestorFilter.h"
@@ -139,6 +140,55 @@ auto AuthoredMatchedRuleIs(std::size_t selectorEntryIndex, css::Specificity spec
 }
 
 }  // namespace
+
+TEST_F(StyleSystemTest, LayerOrderRefusesMalformedPublicMetadata) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><style/></svg>)");
+  const auto style = document.querySelector("style");
+  ASSERT_THAT(style, ::testing::Optional(::testing::_));
+  auto& sheet = style->entityHandle().get_or_emplace<StylesheetComponent>();
+
+  using Kind = css::LayerEvent::Kind;
+  const std::array<css::StylesheetLayers, 4> invalid = {{
+      {{{0, "cycle"}}, {{Kind::Block, 0}}},
+      {{{css::kUnlayered, "root"}, {7, "invalid-parent"}}, {{Kind::Block, 1}}},
+      {{{css::kUnlayered, "root"}}, {{Kind::Block, 200}}},
+      {{{css::kUnlayered, "root"}}, {{Kind::Import, 1}, {Kind::Import, 0}}},
+  }};
+  for (const auto& metadata : invalid) {
+    sheet.stylesheet =
+        css::Stylesheet({}, {}, {}, {}, std::make_shared<const css::StylesheetLayers>(metadata));
+    const auto order = DocumentLayerOrder::Build(document.registry());
+    ASSERT_THAT(order.get(), NotNull());
+    EXPECT_THAT(order->ranksFor(sheet.stylesheet).forLayer(0), Eq(0));
+    ParseWarningSink warnings;
+    order->reportRefusal(warnings);
+    EXPECT_THAT(warnings.warnings(), ::testing::SizeIs(1));
+  }
+}
+
+TEST_F(StyleSystemTest, LayerOrderRefusesMissingDuplicateAndCyclicImportOrigins) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><style>@import 'one.css' layer(theme);</style></svg>
+  )");
+  const auto style = document.querySelector("style");
+  ASSERT_THAT(style, ::testing::Optional(::testing::_));
+  auto& sheet = style->entityHandle().get<StylesheetComponent>();
+  const std::array<std::vector<StylesheetImportOrigin>, 3> invalid = {{
+      {},
+      {{0, std::nullopt}, {0, std::nullopt}},
+      {{0, 1}, {0, 0}},
+  }};
+  for (auto origins : invalid) {
+    sheet.setImportedStylesheets(std::vector<css::Stylesheet>(2), 1, std::move(origins));
+    const auto order = DocumentLayerOrder::Build(document.registry());
+    ASSERT_THAT(order.get(), NotNull());
+    EXPECT_THAT(order->allowsImportsOf(sheet.stylesheet), Eq(false));
+    EXPECT_THAT(order->ranksFor(sheet.stylesheet).forLayer(0), Gt(0));
+    ParseWarningSink warnings;
+    order->reportRefusal(warnings);
+    EXPECT_THAT(warnings.warnings(), ::testing::SizeIs(1));
+  }
+}
 
 // --- Basic style computation ---
 

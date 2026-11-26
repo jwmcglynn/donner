@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <vector>
 
@@ -535,18 +536,78 @@ bool WarnUnsupportedAtRule(const AtRule& atRule, ParseWarningSink& warningSink) 
 enum class ImportPreludeKind : std::uint8_t {
   Unconditional,  ///< Applies unconditionally and is retained.
   Invalid,        ///< Malformed; dropped.
-  Layer,          ///< Valid but imports into a cascade layer, which is unsupported.
   Supports,       ///< Valid but conditional on `supports()`, which is unsupported.
   Media,          ///< Valid but conditional on a media query list other than `all`.
 };
 
+using LayerPath = std::vector<RcString>;
+
 struct ParsedImportPrelude {
   ImportPreludeKind kind = ImportPreludeKind::Invalid;
   RcString url;
+  std::optional<LayerPath> layer;  //!< An empty path denotes a fresh anonymous layer.
 };
 
 bool IsWhitespaceComponent(const ComponentValue& value) {
   return value.isToken<Token::Whitespace>();
+}
+
+std::span<const ComponentValue> TrimLayerWhitespace(std::span<const ComponentValue> values) {
+  while (!values.empty() && IsWhitespaceComponent(values.front())) {
+    values = values.subspan(1);
+  }
+  while (!values.empty() && IsWhitespaceComponent(values.back())) {
+    values = values.first(values.size() - 1);
+  }
+  return values;
+}
+
+bool IsLayerIdent(const RcString& name) {
+  constexpr std::array<std::string_view, 5> kReserved{"initial", "inherit", "unset", "revert",
+                                                      "revert-layer"};
+  return !name.empty() && std::ranges::none_of(kReserved, [&](std::string_view keyword) {
+    return name.equalsLowercase(keyword);
+  });
+}
+
+std::optional<LayerPath> ParseLayerPath(std::span<const ComponentValue> values) {
+  values = TrimLayerWhitespace(values);
+  if (values.empty() || values.size() % 2 == 0) {
+    return std::nullopt;
+  }
+  LayerPath result;
+  for (std::size_t i = 0; i < values.size(); i += 2) {
+    const auto* ident = values[i].tryGetToken<Token::Ident>();
+    if (!ident || !IsLayerIdent(ident->value)) {
+      return std::nullopt;
+    }
+    if (i != 0) {
+      const auto* dot = values[i - 1].tryGetToken<Token::Delim>();
+      if (!dot || dot->value != '.') {
+        return std::nullopt;
+      }
+    }
+    result.push_back(ident->value);
+  }
+  return result;
+}
+
+std::optional<std::vector<LayerPath>> ParseLayerNames(std::span<const ComponentValue> values) {
+  std::vector<LayerPath> result;
+  for (;;) {
+    const auto comma = std::ranges::find_if(
+        values, [](const ComponentValue& value) { return value.isToken<Token::Comma>(); });
+    const auto length = static_cast<std::size_t>(comma - values.begin());
+    auto path = ParseLayerPath(values.first(length));
+    if (!path) {
+      return std::nullopt;
+    }
+    result.push_back(std::move(*path));
+    if (comma == values.end()) {
+      return result;
+    }
+    values = values.subspan(length + 1);
+  }
 }
 
 /// The URL of an `@import` target: a `<string>`, an unquoted `url()` token, or `url(<string>)`.
@@ -604,23 +665,36 @@ ImportPreludeKind ClassifyImportMediaList(std::span<const ComponentValue* const>
 
 /// Classify the import conditions following the URL, per the CSS Cascade 5 `@import` grammar:
 /// `[ layer | layer(<name>) ]? [ supports(...) ]? <media-query-list>?`.
-ImportPreludeKind ClassifyImportConditions(std::span<const ComponentValue> conditions) {
+void ParseImportConditions(std::span<const ComponentValue> conditions,
+                           ParsedImportPrelude& parsed) {
   std::vector<const ComponentValue*> significant;
   for (const ComponentValue& value : conditions) {
     if (!IsWhitespaceComponent(value)) {
       significant.push_back(&value);
     }
   }
-  if (significant.empty()) {
-    return ImportPreludeKind::Unconditional;
+  std::span<const ComponentValue* const> remainder(significant);
+  if (!remainder.empty() && IsNamedComponent(*remainder.front(), "layer")) {
+    const auto& layer = *remainder.front();
+    if (const auto* function = std::get_if<Function>(&layer.value)) {
+      parsed.layer = ParseLayerPath(function->values);
+      if (!parsed.layer) {
+        // An invalid layer() stays in the media query list, which this parser does not apply.
+        parsed.kind = ImportPreludeKind::Media;
+        return;
+      }
+    } else {
+      parsed.layer.emplace();
+    }
+    remainder = remainder.subspan(1);
   }
-  if (IsNamedComponent(*significant.front(), "layer")) {
-    return ImportPreludeKind::Layer;
+  if (remainder.empty()) {
+    parsed.kind = ImportPreludeKind::Unconditional;
+  } else if (IsFunctionNamed(*remainder.front(), "supports")) {
+    parsed.kind = ImportPreludeKind::Supports;
+  } else {
+    parsed.kind = ClassifyImportMediaList(remainder);
   }
-  if (IsFunctionNamed(*significant.front(), "supports")) {
-    return ImportPreludeKind::Supports;
-  }
-  return ClassifyImportMediaList(significant);
 }
 
 ParsedImportPrelude ParseImportPrelude(const AtRule& atRule) {
@@ -639,8 +713,10 @@ ParsedImportPrelude ParseImportPrelude(const AtRule& atRule) {
   if (!url.has_value() || url->empty()) {
     return {};
   }
-  return ParsedImportPrelude{.kind = ClassifyImportConditions(prelude.subspan(index + 1)),
-                             .url = std::move(*url)};
+  ParsedImportPrelude result;
+  result.url = std::move(*url);
+  ParseImportConditions(prelude.subspan(index + 1), result);
+  return result;
 }
 
 const char* IgnoredImportReason(ImportPreludeKind kind) {
@@ -648,8 +724,6 @@ const char* IgnoredImportReason(ImportPreludeKind kind) {
     case ImportPreludeKind::Unconditional: return nullptr;
     case ImportPreludeKind::Invalid:
       return "CSS @import requires a single non-empty URL or string; this import is ignored";
-    case ImportPreludeKind::Layer:
-      return "CSS @import cascade layers are unsupported; this import is ignored";
     case ImportPreludeKind::Supports:
       return "CSS @import supports() conditions are unsupported; this import is ignored";
     case ImportPreludeKind::Media:
@@ -691,15 +765,92 @@ bool AtRuleEndsImportSection(const AtRule& atRule) {
                      [&](std::string_view name) { return atRule.name.equalsLowercase(name); });
 }
 
-/// Mutable state threaded through the rule loop of \ref StylesheetParser::Parse.
+/// Mutable state threaded through top-level rules and layer bodies.
 struct StylesheetParseState {
   std::vector<SelectorRule> selectorRules;
   std::vector<FontFace> fontFaces;
   std::vector<ImportRule> imports;
+  StylesheetLayers layers;
+  std::map<std::pair<LayerId, RcString>, LayerId> namedLayers;
   Stylesheet::SecurityStats securityStats;
-  /// True until a rule that must follow every `@import` has been retained.
+  std::size_t nestedRulesRemaining = 0;
   bool importsAllowed = true;
+  bool sawImport = false;
 };
+
+void RecordLayerEvent(StylesheetParseState& state, LayerEvent event) {
+  if (state.layers.events.empty()) {
+    // Plain import-only sheets can keep the order implicit in imports(). Once a layer needs
+    // an explicit stream, record those earlier import positions too.
+    for (std::size_t i = 0; i < state.imports.size(); ++i) {
+      state.layers.events.push_back({LayerEvent::Kind::Import, static_cast<std::uint32_t>(i)});
+    }
+  }
+  state.layers.events.push_back(event);
+}
+
+std::size_t LayerDepth(const StylesheetLayers& layers, LayerId parent) {
+  std::size_t depth = 0;
+  for (; parent != kUnlayered; parent = layers.nodes[parent].parent) {
+    ++depth;
+  }
+  return depth;
+}
+
+std::optional<LayerId> AddLayerSegment(StylesheetParseState& state, LayerId parent,
+                                       const RcString& name) {
+  const auto key = std::pair(parent, name);
+  if (!name.empty()) {
+    if (const auto it = state.namedLayers.find(key); it != state.namedLayers.end()) {
+      return it->second;
+    }
+  }
+  if (state.layers.nodes.size() == Stylesheet::kMaximumLayers) {
+    return std::nullopt;
+  }
+  const LayerId layer = static_cast<LayerId>(state.layers.nodes.size());
+  state.layers.nodes.push_back({parent, name});
+  if (!name.empty()) {
+    state.namedLayers.emplace(key, layer);
+  }
+  return layer;
+}
+
+std::optional<LayerId> AddLayerPath(StylesheetParseState& state, LayerId parent,
+                                    const LayerPath& path) {
+  const std::size_t depth = LayerDepth(state.layers, parent);
+  if (std::max<std::size_t>(1, path.size()) > Stylesheet::kMaximumLayerDepth - depth) {
+    return std::nullopt;
+  }
+  if (path.empty()) {
+    return AddLayerSegment(state, parent, RcString());
+  }
+  for (const auto& name : path) {
+    const auto layer = AddLayerSegment(state, parent, name);
+    if (!layer) {
+      return std::nullopt;
+    }
+    parent = *layer;
+  }
+  return parent;
+}
+
+void UndoNewLayers(StylesheetParseState& state, std::size_t checkpoint) {
+  while (state.layers.nodes.size() > checkpoint) {
+    const auto& node = state.layers.nodes.back();
+    if (!node.name.empty()) {
+      state.namedLayers.erase({node.parent, node.name});
+    }
+    state.layers.nodes.pop_back();
+  }
+}
+
+void WarnLayerLimit(const AtRule& atRule, ParseWarningSink& warningSink) {
+  warningSink.add([&] {
+    return ParseDiagnostic::Warning("CSS cascade layer limit exceeded; this rule is ignored",
+                                    atRule.sourceOffset);
+  });
+}
 
 void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
                       ParseWarningSink& warningSink) {
@@ -711,17 +862,157 @@ void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
     return;
   }
   ParsedImportPrelude parsed = ParseImportPrelude(atRule);
+  state.sawImport |= parsed.kind != ImportPreludeKind::Invalid;
   if (const char* reason = IgnoredImportReason(parsed.kind)) {
     warningSink.add([&] { return ParseDiagnostic::Warning(reason, atRule.sourceOffset); });
     return;
   }
-  state.imports.push_back(
-      ImportRule{.url = std::move(parsed.url), .sourceOffset = atRule.sourceOffset});
+  LayerId layer = kUnlayered;
+  if (parsed.layer) {
+    const auto checkpoint = state.layers.nodes.size();
+    if (const auto id = AddLayerPath(state, kUnlayered, *parsed.layer)) {
+      layer = *id;
+    } else {
+      UndoNewLayers(state, checkpoint);
+      WarnLayerLimit(atRule, warningSink);
+      return;
+    }
+  }
+  if (!state.layers.nodes.empty()) {
+    RecordLayerEvent(state,
+                     {LayerEvent::Kind::Import, static_cast<std::uint32_t>(state.imports.size())});
+  }
+  state.imports.push_back(ImportRule{
+      .url = std::move(parsed.url), .sourceOffset = atRule.sourceOffset, .layer = layer});
 }
 
-void HandleAtRule(AtRule& atRule, StylesheetParseState& state, ParseWarningSink& warningSink) {
+SimpleBlock* CurlyBlock(ComponentValue& value) {
+  auto* block = std::get_if<SimpleBlock>(&value.value);
+  return block && block->associatedToken == Token::indexOf<Token::CurlyBracket>() ? block : nullptr;
+}
+
+AtRule TakeNestedAtRule(std::span<ComponentValue> values, std::size_t& index,
+                        const Token::AtKeyword& keyword) {
+  AtRule rule(keyword.value);
+  rule.sourceOffset = values[index++].sourceOffset();
+  while (index < values.size()) {
+    auto& component = values[index++];
+    if (component.isToken<Token::Semicolon>()) {
+      break;
+    }
+    if (auto* block = CurlyBlock(component)) {
+      rule.block = std::move(*block);
+      break;
+    }
+    rule.prelude.push_back(std::move(component));
+  }
+  return rule;
+}
+
+std::optional<QualifiedRule> TakeNestedQualifiedRule(std::span<ComponentValue> values,
+                                                     std::size_t& index) {
+  std::vector<ComponentValue> prelude;
+  while (index < values.size()) {
+    auto& component = values[index++];
+    if (auto* block = CurlyBlock(component)) {
+      return QualifiedRule(std::move(prelude), std::move(*block));
+    }
+    prelude.push_back(std::move(component));
+  }
+  return std::nullopt;
+}
+
+void HandleRule(std::string_view source, Rule& rule, StylesheetParseState& state,
+                ParseWarningSink& warningSink, LayerId parent);
+
+void HandleLayerBody(std::string_view source, SimpleBlock& block, StylesheetParseState& state,
+                     ParseWarningSink& warningSink, LayerId parent) {
+  std::span<ComponentValue> values(block.values);
+  for (std::size_t i = 0; i < values.size() && !state.securityStats.rejected;) {
+    if (IsWhitespaceComponent(values[i])) {
+      ++i;
+      continue;
+    }
+    if (state.nestedRulesRemaining == 0) {
+      state.securityStats.rejected = true;
+      return;
+    }
+    --state.nestedRulesRemaining;
+    if (const auto* keyword = values[i].tryGetToken<Token::AtKeyword>()) {
+      Rule rule(TakeNestedAtRule(values, i, *keyword));
+      HandleRule(source, rule, state, warningSink, parent);
+    } else if (auto qualified = TakeNestedQualifiedRule(values, i)) {
+      Rule rule(std::move(*qualified));
+      HandleRule(source, rule, state, warningSink, parent);
+    }
+  }
+}
+
+std::optional<std::vector<LayerPath>> ParseLayerRuleNames(const AtRule& rule) {
+  if (!rule.block) {
+    return ParseLayerNames(rule.prelude);
+  }
+  if (TrimLayerWhitespace(rule.prelude).empty()) {
+    return std::vector<LayerPath>(1);
+  }
+  auto path = ParseLayerPath(rule.prelude);
+  if (!path) {
+    return std::nullopt;
+  }
+  std::vector<LayerPath> names;
+  names.push_back(std::move(*path));
+  return names;
+}
+
+std::optional<std::vector<LayerId>> AddLayerDeclaration(StylesheetParseState& state, LayerId parent,
+                                                        std::span<const LayerPath> names) {
+  const std::size_t checkpoint = state.layers.nodes.size();
+  std::vector<LayerId> ids;
+  for (const auto& path : names) {
+    const auto layer = AddLayerPath(state, parent, path);
+    if (!layer) {
+      UndoNewLayers(state, checkpoint);
+      return std::nullopt;
+    }
+    ids.push_back(*layer);
+  }
+  return ids;
+}
+
+void HandleLayerRule(std::string_view source, AtRule& rule, StylesheetParseState& state,
+                     ParseWarningSink& warningSink, LayerId parent) {
+  const auto names = ParseLayerRuleNames(rule);
+  if (!names) {
+    warningSink.add([&] {
+      return ParseDiagnostic::Warning("Invalid CSS cascade layer name", rule.sourceOffset);
+    });
+    return;
+  }
+  if (rule.block || state.sawImport) {
+    state.importsAllowed = false;
+  }
+  const auto ids = AddLayerDeclaration(state, parent, *names);
+  if (!ids) {
+    WarnLayerLimit(rule, warningSink);
+    return;
+  }
+  const auto kind = rule.block ? LayerEvent::Kind::Block : LayerEvent::Kind::Statement;
+  for (LayerId layer : *ids) {
+    RecordLayerEvent(state, {kind, layer});
+  }
+  if (rule.block) {
+    HandleLayerBody(source, *rule.block, state, warningSink, ids->front());
+  }
+}
+
+void HandleAtRule(std::string_view source, AtRule& atRule, StylesheetParseState& state,
+                  ParseWarningSink& warningSink, LayerId parent) {
   if (atRule.name.equalsLowercase("import")) {
     HandleImportRule(atRule, state, warningSink);
+    return;
+  }
+  if (atRule.name.equalsLowercase("layer")) {
+    HandleLayerRule(source, atRule, state, warningSink, parent);
     return;
   }
   if (AtRuleEndsImportSection(atRule)) {
@@ -730,9 +1021,26 @@ void HandleAtRule(AtRule& atRule, StylesheetParseState& state, ParseWarningSink&
   if (WarnUnsupportedAtRule(atRule, warningSink)) {
     return;
   }
-  if (auto fontFace = ParseFontFaceRule(atRule, state.securityStats)) {
-    state.fontFaces.push_back(std::move(*fontFace));
-    ++state.securityStats.rules;
+  if (parent == kUnlayered) {
+    if (auto fontFace = ParseFontFaceRule(atRule, state.securityStats)) {
+      state.fontFaces.push_back(std::move(*fontFace));
+      ++state.securityStats.rules;
+    }
+  }
+}
+
+void HandleRule(std::string_view source, Rule& rule, StylesheetParseState& state,
+                ParseWarningSink& warningSink, LayerId parent) {
+  if (auto* qualified = std::get_if<QualifiedRule>(&rule.value)) {
+    if (auto parsed =
+            ParseQualifiedSelectorRule(source, *qualified, warningSink, state.securityStats)) {
+      parsed->layer = parent;
+      state.selectorRules.push_back(std::move(*parsed));
+      ++state.securityStats.rules;
+      state.importsAllowed = false;
+    }
+  } else if (auto* atRule = std::get_if<AtRule>(&rule.value)) {
+    HandleAtRule(source, *atRule, state, warningSink, parent);
   }
 }
 
@@ -746,24 +1054,18 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
   state.securityStats.rejected = ruleStats.rejected;
   state.securityStats.componentValues = ruleStats.componentValues;
 
-  for (auto&& rule : rules) {
-    if (QualifiedRule* qualifiedRule = std::get_if<QualifiedRule>(&rule.value)) {
-      if (auto selectorRule =
-              ParseQualifiedSelectorRule(str, *qualifiedRule, warningSink, state.securityStats)) {
-        state.selectorRules.push_back(std::move(*selectorRule));
-        ++state.securityStats.rules;
-        state.importsAllowed = false;
-      }
-    } else if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
-      HandleAtRule(*atRule, state, warningSink);
-    }
+  state.nestedRulesRemaining = RuleParser::kMaximumRules - rules.size();
+  for (Rule& rule : rules) {
+    HandleRule(str, rule, state, warningSink, kUnlayered);
     if (state.securityStats.rejected) {
       break;
     }
   }
-
+  auto layers = state.layers.nodes.empty()
+                    ? nullptr
+                    : std::make_shared<const StylesheetLayers>(std::move(state.layers));
   return Stylesheet(std::move(state.selectorRules), std::move(state.fontFaces),
-                    std::move(state.imports), state.securityStats);
+                    std::move(state.imports), state.securityStats, std::move(layers));
 }
 
 }  // namespace donner::css::parser

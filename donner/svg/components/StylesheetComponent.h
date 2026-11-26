@@ -97,6 +97,12 @@ private:
   std::optional<std::size_t> cssLength_;  ///< Concatenated CSS length, when recorded.
 };
 
+/// Identifies a successful import occurrence in an imports-first flattened list.
+struct StylesheetImportOrigin {
+  std::size_t importIndex;  ///< Index in the importing sheet's retained import stream.
+  std::optional<std::size_t> parentEntry;  ///< Flattened parent, or the root stylesheet.
+};
+
 /**
  * Data for a \ref xml_style element.
  *
@@ -122,6 +128,9 @@ struct StylesheetComponent {
    * source provenance, so source-mapped editor queries consider only \ref stylesheet.
    */
   std::vector<css::Stylesheet> importedStylesheets;
+
+  /// Positions of successful loads in their original import streams.
+  std::vector<StylesheetImportOrigin> importOrigins;
 
   /// Candidate-rule index of \ref stylesheet, rebuilt whenever it or its imports change.
   RuleIndex ruleIndex;
@@ -167,8 +176,10 @@ struct StylesheetComponent {
    *
    * @param imported Imported stylesheets in cascade order.
    * @param generation Resource-manager generation the imports were resolved for.
+   * @param origins Original positions of the successful imports, parallel to \p imported.
    */
-  void setImportedStylesheets(std::vector<css::Stylesheet>&& imported, std::uint64_t generation);
+  void setImportedStylesheets(std::vector<css::Stylesheet>&& imported, std::uint64_t generation,
+                              std::vector<StylesheetImportOrigin> origins = {});
 
   /**
    * Returns true if the \ref xml_style element has either no `type` attribute, or if it has been
