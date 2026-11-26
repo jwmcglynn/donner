@@ -783,19 +783,22 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
 const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransformComponentWithStyle(
     EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
     ParseWarningSink& warningSink) {
-  std::optional<TransformComponent> shadowTransform;
+  std::optional<TransformComponent> substitutedTransform;
   EntityHandle lightEntity = handle;
   if (const auto* shadowComponent = lightEntity.try_get<ShadowEntityComponent>()) {
     lightEntity = EntityHandle(*handle.registry(), shadowComponent->lightEntity);
   }
 
-  TransformComponent& transform = lightEntity.get<TransformComponent>();
+  auto* transform = &lightEntity.get<TransformComponent>();
 
   // TODO(jwmcglynn): This should avoid recomputing the transform each request.
   const auto& properties = style.properties()->unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
     const parser::UnparsedProperty& property = it->second;
-
+    if (property.substituted) {
+      // Computed values can differ between shadow occurrences and disappear after an edit.
+      transform = &substitutedTransform.emplace(*transform);
+    }
     const auto params = DeferredTransformParams(property);
 
     auto maybeError = Parse(
@@ -809,7 +812,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
             return parser::CssTransformParser::Parse(params.components());
           }
         },
-        &transform.transform);
+        &transform->transform);
 
     if (maybeError) {
       warningSink.add(std::move(maybeError.value()));
@@ -817,8 +820,8 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   }
 
   auto& computedTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
-  if (transform.transform.get()) {
-    computedTransform.rawCssTransform = transform.transform.get().value();
+  if (const auto* raw = transform->transform.getStoredValue()) {
+    computedTransform.rawCssTransform = *raw;
     const TransformOrigin originValue = style.properties()->transformOrigin.get().value();
 
     // The transform-origin is relative to the element's bounding box.
@@ -845,12 +848,9 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
     computedTransform.transformOrigin = absoluteOrigin;
 
     // The transform itself is also computed relative to the element's bounding box.
-    computedTransform.parentFromEntity =
-        transform.transform.get().value().compute(percentageBox, fontMetrics);
-
+    computedTransform.parentFromEntity = raw->compute(percentageBox, fontMetrics);
   } else {
-    computedTransform.parentFromEntity = Transform2d();
-    computedTransform.transformOrigin = Vector2d();
+    computedTransform = {};
   }
 
   return computedTransform;
