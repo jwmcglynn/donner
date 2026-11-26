@@ -557,6 +557,7 @@ private:
   /// Selects every selectable element on the canvas via the shared `setSelection()` path, so the
   /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
   void selectAllCanvasElements();
+  void renderSourceDiagnosticsPanel(float diagnosticsHeight);
   void renderStructuredCssContextMenu();
   void renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight, float paneWidth,
                         ImFont* codeFont);
@@ -861,6 +862,8 @@ private:
       const std::vector<svg::SVGElement>& elements) const;
   [[nodiscard]] std::vector<svg::SVGElement> referenceHighlightElements() const;
   [[nodiscard]] std::vector<svg::SVGElement> combinedSourcePreviewElements() const;
+  void beginSourceStructuralDrag(std::string_view source, int startedLine);
+  void evaluateXmlSourceStructuralDragTarget(std::string_view source, const Coordinates& target);
   void updateCssSourceStructuralDrag(std::string_view source);
   void updateSourceStructuralDrag();
   void clearSourceStructuralDrag();

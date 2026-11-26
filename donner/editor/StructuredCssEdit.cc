@@ -104,40 +104,50 @@ struct CssReplacement {
   std::string bytes;
 };
 
+std::optional<SourceByteRange> ReplacementExtent(const StructuredCssTarget& target,
+                                                 StructuredCssOperation operation) {
+  switch (operation) {
+    case StructuredCssOperation::ReplaceSelector: return target.selector;
+    case StructuredCssOperation::ReplaceName: return target.name;
+    case StructuredCssOperation::ReplaceValue: return target.value;
+    case StructuredCssOperation::RemoveDeclaration: return target.declaration;
+    case StructuredCssOperation::RemoveRule: return target.rule;
+    case StructuredCssOperation::RemoveImportant: return target.priority;
+    default: return std::nullopt;
+  }
+}
+
+bool AllowsEdit(const StructuredCssTarget& target, StructuredCssOperation operation) {
+  using Operation = StructuredCssOperation;
+  return !target.inlineStyle ||
+         (operation != Operation::ReplaceSelector && operation != Operation::RemoveRule &&
+          operation != Operation::InsertRule);
+}
+
 std::optional<CssReplacement> MakeReplacement(const StructuredCssTarget& target,
                                               StructuredCssOperation operation,
                                               std::string_view replacement) {
   using Operation = StructuredCssOperation;
-  if (target.inlineStyle &&
-      (operation == Operation::ReplaceSelector || operation == Operation::RemoveRule ||
-       operation == Operation::InsertRule)) {
+  if (!AllowsEdit(target, operation)) {
     return std::nullopt;
   }
-  const auto replace = [&](const std::optional<SourceByteRange>& range,
-                           std::string_view bytes) -> std::optional<CssReplacement> {
-    return range ? std::optional(CssReplacement{*range, std::string(bytes)}) : std::nullopt;
-  };
   switch (operation) {
-    case StructuredCssOperation::ReplaceSelector: return replace(target.selector, replacement);
-    case StructuredCssOperation::ReplaceName: return replace(target.name, replacement);
-    case StructuredCssOperation::ReplaceValue: return replace(target.value, replacement);
-    case StructuredCssOperation::RemoveDeclaration: return replace(target.declaration, {});
-    case StructuredCssOperation::RemoveRule: return replace(target.rule, {});
-    case StructuredCssOperation::RemoveImportant: return replace(target.priority, {});
-    case StructuredCssOperation::AddImportant:
+    case Operation::AddImportant:
       if (target.priority || !target.value) {
         return std::nullopt;
       }
       return CssReplacement{{target.value->end, target.value->end}, " !important"};
-    case StructuredCssOperation::InsertDeclaration: {
+    case Operation::InsertDeclaration: {
       std::string bytes = target.declarationNeedsSeparator ? "; " : " ";
       bytes.append(replacement);
       return CssReplacement{{target.insertDeclaration, target.insertDeclaration}, std::move(bytes)};
     }
-    case StructuredCssOperation::InsertRule:
+    case Operation::InsertRule:
       return CssReplacement{{target.rule.end, target.rule.end}, "\n" + std::string(replacement)};
+    default: break;
   }
-  return std::nullopt;
+  const auto range = ReplacementExtent(target, operation);
+  return range ? std::optional(CssReplacement{*range, std::string(replacement)}) : std::nullopt;
 }
 
 bool IsCurrent(EditorApp& app, std::string_view source, const StructuredCssTarget& target) {
@@ -232,8 +242,7 @@ std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::
   for (const auto& stylesheetRule : svg::CollectStylesheetRules(document)) {
     const auto rule = ByteRange(stylesheetRule.ruleSourceRange, source.size());
     const auto selector = ByteRange(stylesheetRule.selectorSourceRange, source.size());
-    if (!rule || !selector || !Contains(*rule, offset) || rule->end <= rule->start ||
-        source[rule->end - 1] != '}') {
+    if (!rule || !selector || !Contains(*rule, offset) || source[rule->end - 1] != '}') {
       continue;
     }
     StructuredCssTarget target{.rule = *rule,

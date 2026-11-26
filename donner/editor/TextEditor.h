@@ -1686,6 +1686,12 @@ private:
    * Main internal rendering implementation. Renders editor content and UI.
    * @param title Window title
    */
+  void renderScrollbarMarkers();
+  void renderContextMenu(const std::string& titleStr,
+                         const std::function<void()>& extraContextMenu);
+  void renderFindReplacePanel(const std::string& titleStr);
+  void renderReplaceControls(const std::string& titleStr);
+
   void renderInternal(std::string_view title);
   void rebuildVisualLines(const ImVec2& contentSize);
   [[nodiscard]] bool isLineHiddenByFocus(int lineNo) const;
