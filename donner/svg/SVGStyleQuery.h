@@ -71,6 +71,10 @@ struct SVGStyleRuleAtSourceOffset {
 
 /// Collect stylesheet rules that match \p element.
 ///
+/// Match collection is complete, while optional document source ranges are projected through a
+/// bounded annotation cache and may be absent after that cache declines a stylesheet index. Use
+/// \ref MapStylesheetSourceRange for an exact individual source mapping.
+///
 /// @param element Element to inspect.
 /// @return Matched stylesheet rules in cascade scan order.
 std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element);

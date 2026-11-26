@@ -3129,6 +3129,15 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
 
 namespace {
 
+enum class StylesheetSourceMapMode {
+  Exact,
+  Bounded,
+};
+
+std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity stylesheetEntity,
+                                                      const SourceRange& cssRange,
+                                                      StylesheetSourceMapMode mode);
+
 MatchedStyleRule BuildMatchedStyleRule(Registry& registry, const StylesheetComponent& stylesheet,
                                        Entity stylesheetEntity, const css::SelectorRule& rule,
                                        std::size_t ruleIndex, std::size_t selectorEntryIndex,
@@ -3137,7 +3146,8 @@ MatchedStyleRule BuildMatchedStyleRule(Registry& registry, const StylesheetCompo
                              ? rule.selectorEntrySourceRanges[selectorEntryIndex]
                              : rule.selectorSourceRange;
   const auto project = [&](const SourceRange& range) {
-    return StyleSystem().mapStylesheetSourceRange(registry, stylesheetEntity, range);
+    return MapEmbeddedStylesheetRange(registry, stylesheetEntity, range,
+                                      StylesheetSourceMapMode::Bounded);
   };
   MatchedStyleRule matchedRule;
   matchedRule.stylesheetEntity = stylesheetEntity;
@@ -3316,6 +3326,7 @@ struct StylesheetSourceIndexEntry {
   std::uint64_t stylesheetRevision = 0;
   std::size_t retainedBytes = 0;
   std::optional<xml::XMLDecodedTextSourceMap> mapping;
+  bool budgetRefused = false;
 };
 
 struct StylesheetSourceIndexCache {
@@ -3323,20 +3334,45 @@ struct StylesheetSourceIndexCache {
   std::uint64_t sourceVersion = 0;
   std::unordered_map<Entity, StylesheetSourceIndexEntry> entries;
   std::size_t retainedBytes = 0;
+  std::size_t maximumRetainedBytes = kMaximumStylesheetSourceIndexRetainedBytes;
+  Entity transientEntity = entt::null;
+  std::uint64_t transientRevision = 0;
+  std::optional<xml::XMLDecodedTextSourceMap> transientMapping;
   std::size_t builds = 0;
 
-  void reset(const std::shared_ptr<xml::XMLSourceStore>& newSource,
-             std::uint64_t newSourceVersion) {
+  void reset(const std::shared_ptr<xml::XMLSourceStore>& newSource, std::uint64_t newSourceVersion,
+             std::size_t newMaximumRetainedBytes) {
     source = newSource;
     sourceVersion = newSourceVersion;
     entries.clear();
     retainedBytes = 0;
+    maximumRetainedBytes = newMaximumRetainedBytes;
+    clearTransient();
+  }
+
+  void clearTransient() {
+    transientEntity = entt::null;
+    transientRevision = 0;
+    transientMapping.reset();
+  }
+
+  template <typename Build>
+  const xml::XMLDecodedTextSourceMap* transient(Entity entity, std::uint64_t stylesheetRevision,
+                                                Build&& build) {
+    if (transientEntity != entity || transientRevision != stylesheetRevision) {
+      transientMapping = build();
+      transientEntity = entity;
+      transientRevision = stylesheetRevision;
+      ++builds;
+    }
+    return transientMapping ? &*transientMapping : nullptr;
   }
 
   const xml::XMLDecodedTextSourceMap* store(Entity entity, std::uint64_t stylesheetRevision,
                                             std::optional<xml::XMLDecodedTextSourceMap> mapping) {
     std::size_t mappingBytes = mapping ? mapping->retainedCapacityBytes() : 0;
-    if (mappingBytes > kMaximumStylesheetSourceIndexRetainedBytes - retainedBytes) {
+    const bool budgetRefused = mappingBytes > maximumRetainedBytes - retainedBytes;
+    if (budgetRefused) {
       mapping.reset();
       mappingBytes = 0;
     }
@@ -3344,9 +3380,38 @@ struct StylesheetSourceIndexCache {
     auto inserted =
         entries
             .emplace(entity, StylesheetSourceIndexEntry{stylesheetRevision, mappingBytes,
-                                                        std::move(mapping)})
+                                                        std::move(mapping), budgetRefused})
             .first;
     return inserted->second.mapping ? &*inserted->second.mapping : nullptr;
+  }
+
+  template <typename Build>
+  const xml::XMLDecodedTextSourceMap* get(Entity entity, std::uint64_t stylesheetRevision,
+                                          StylesheetSourceMapMode mode, Build&& build) {
+    if (mode == StylesheetSourceMapMode::Bounded) {
+      clearTransient();
+    }
+    auto existing = entries.find(entity);
+    if (existing != entries.end() && existing->second.stylesheetRevision == stylesheetRevision) {
+      if (existing->second.mapping) {
+        return &*existing->second.mapping;
+      }
+      if (existing->second.budgetRefused && mode == StylesheetSourceMapMode::Exact) {
+        return transient(entity, stylesheetRevision, build);
+      }
+      return nullptr;
+    }
+    if (existing != entries.end()) {
+      retainedBytes -= existing->second.retainedBytes;
+      entries.erase(existing);
+    }
+    if (entries.size() >= kMaximumStylesheetSourceIndices) {
+      return mode == StylesheetSourceMapMode::Exact ? transient(entity, stylesheetRevision, build)
+                                                    : nullptr;
+    }
+    auto mapping = build();
+    ++builds;
+    return store(entity, stylesheetRevision, std::move(mapping));
   }
 };
 
@@ -3356,32 +3421,25 @@ StylesheetSourceIndexCache& SourceIndexCache() {
 }
 
 const xml::XMLDecodedTextSourceMap* MapForStylesheet(Registry& registry, Entity entity,
-                                                     const StylesheetComponent& sheet) {
+                                                     const StylesheetComponent& sheet,
+                                                     StylesheetSourceMapMode mode) {
   const auto* document = registry.ctx().find<xml::components::XMLDocumentContext>();
   const auto& source = document->sourceStoreHolder->store;
   auto& cache = SourceIndexCache();
   const auto version = source->sourceVersion();
+  const std::size_t maximumRetainedBytes = std::min(kMaximumStylesheetSourceIndexRetainedBytes,
+                                                    source->resourceLimits().maximumSourceSize);
   if (cache.source.lock() != source || cache.sourceVersion != version) {
-    cache.reset(source, version);
+    cache.reset(source, version, maximumRetainedBytes);
+  } else if (cache.maximumRetainedBytes != maximumRetainedBytes) {
+    cache.reset(source, version, maximumRetainedBytes);
   }
 
-  auto existing = cache.entries.find(entity);
-  if (existing != cache.entries.end() &&
-      existing->second.stylesheetRevision == sheet.contentRevision()) {
-    return existing->second.mapping ? &*existing->second.mapping : nullptr;
-  }
-  if (existing != cache.entries.end()) {
-    cache.retainedBytes -= existing->second.retainedBytes;
-    cache.entries.erase(existing);
-  }
-
-  if (cache.entries.size() >= kMaximumStylesheetSourceIndices) {
-    return nullptr;
-  }
-  const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
-  auto mapping = node ? node->decodedTextSourceMap(sheet.text) : std::nullopt;
-  ++cache.builds;
-  return cache.store(entity, sheet.contentRevision(), std::move(mapping));
+  const auto build = [&]() {
+    const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
+    return node ? node->decodedTextSourceMap(sheet.text) : std::nullopt;
+  };
+  return cache.get(entity, sheet.contentRevision(), mode, build);
 }
 
 bool HasCurrentSourceProjection(const Registry& registry) {
@@ -3391,7 +3449,8 @@ bool HasCurrentSourceProjection(const Registry& registry) {
 }
 
 std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity stylesheetEntity,
-                                                      const SourceRange& cssRange) {
+                                                      const SourceRange& cssRange,
+                                                      StylesheetSourceMapMode mode) {
   const auto* sheet = registry.try_get<StylesheetComponent>(stylesheetEntity);
   if (!sheet || sheet->isUserAgentStylesheet) {
     return std::nullopt;
@@ -3401,7 +3460,7 @@ std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity
   if (!start || !end || *end < *start || *end > sheet->text.size()) {
     return std::nullopt;
   }
-  const auto* mapping = MapForStylesheet(registry, stylesheetEntity, *sheet);
+  const auto* mapping = MapForStylesheet(registry, stylesheetEntity, *sheet, mode);
   return mapping ? mapping->mapRange(cssRange) : std::nullopt;
 }
 
@@ -3420,7 +3479,8 @@ std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
                 : std::nullopt;
   }
   return winner.sheetEntity != entt::null
-             ? MapEmbeddedStylesheetRange(registry, winner.sheetEntity, local)
+             ? MapEmbeddedStylesheetRange(registry, winner.sheetEntity, local,
+                                          StylesheetSourceMapMode::Exact)
              : std::nullopt;
 }
 
@@ -3445,7 +3505,8 @@ std::optional<SourceRange> StyleSystem::mapStylesheetSourceRange(
   if (!HasCurrentSourceProjection(registry) || !registry.valid(stylesheetEntity)) {
     return std::nullopt;
   }
-  return MapEmbeddedStylesheetRange(registry, stylesheetEntity, cssRange);
+  return MapEmbeddedStylesheetRange(registry, stylesheetEntity, cssRange,
+                                    StylesheetSourceMapMode::Exact);
 }
 
 std::optional<SourceRange> StyleSystem::findCustomPropertyDeclaration(EntityHandle handle,
