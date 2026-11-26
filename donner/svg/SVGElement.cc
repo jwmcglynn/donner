@@ -1,6 +1,10 @@
 #include "donner/svg/SVGElement.h"
 
+#include <algorithm>
 #include <atomic>
+#include <iterator>
+#include <span>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/StringUtils.h"
@@ -31,6 +35,7 @@
 #include "donner/svg/components/shape/LineComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/SelectorContent.h"
+#include "donner/svg/components/style/SelectorDependencySummary.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextInvalidation.h"
@@ -252,6 +257,96 @@ void propagateStyleDirtyToDescendants(EntityHandle handle) {
   }
 }
 
+// A narrow pass must collect every affected element before removing any old style records.
+bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
+                        std::span<const std::string_view> changedClasses = {}) {
+  using components::DirtyFlagsComponent;
+  using components::SelectorDependency;
+  using components::StyleSystem;
+  using Tree = donner::components::TreeComponent;
+  Registry& registry = *handle.registry();
+  const auto* state = registry.ctx().find<components::RenderTreeState>();
+  if (!state || !state->hasBeenBuilt || state->needsFullRebuild || state->needsFullStyleRecompute) {
+    return false;
+  }
+
+  const auto relations = StyleSystem::styleEditDependencies(registry, attribute, changedClasses);
+  if (relations & SelectorDependency::Ancestors) {
+    return false;
+  }
+
+  for (Entity parent = handle.get<Tree>().parent(); parent != entt::null;
+       parent = registry.get<Tree>(parent).parent()) {
+    if (StyleSystem::isStyleEditSubtreeBoundary(registry, parent)) {
+      return false;
+    }
+  }
+
+  std::vector<Entity> affected;
+  const auto addSubtree = [&](Entity root) {
+    bool local = true;
+    donner::components::ForAllChildrenRecursivePruned(
+        EntityHandle(registry, root), [&](EntityHandle node) {
+          if (StyleSystem::isStyleEditSubtreeBoundary(registry, node.entity())) {
+            local = false;
+          }
+          if (local) {
+            affected.push_back(node.entity());
+          }
+          return local;
+        });
+    return local;
+  };
+
+  Entity first = handle.entity();
+  if (relations & SelectorDependency::PrecedingSiblings) {
+    for (Entity previous = registry.get<Tree>(first).previousSibling(); previous != entt::null;
+         previous = registry.get<Tree>(first).previousSibling()) {
+      first = previous;
+    }
+  }
+  const Entity end = relations & SelectorDependency::FollowingSiblings
+                         ? entt::null
+                         : handle.get<Tree>().nextSibling();
+  for (Entity root = first; root != end; root = registry.get<Tree>(root).nextSibling()) {
+    if (!addSubtree(root)) {
+      return false;
+    }
+  }
+
+  for (Entity entity : affected) {
+    const EntityHandle node(registry, entity);
+    invalidateComputedStyle(node);
+    markDirty(node, DirtyFlagsComponent::StyleCascade);
+  }
+  return true;
+}
+
+void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute,
+                          std::span<const std::string_view> changedClasses = {}) {
+  if (TryNarrowStyleEdit(handle, attribute, changedClasses)) {
+    return;
+  }
+  markNeedsFullStyleRecompute(handle);
+  invalidateComputedStyle(handle);
+  invalidateComputedStyleForDescendants(handle);
+  markStyleCascadeDirty(handle);
+  propagateStyleDirtyToDescendants(handle);
+}
+
+std::vector<std::string_view> ChangedClassNames(const RcString& oldName, const RcString& newName) {
+  auto oldClasses = StringUtils::SplitAsciiWhitespace(oldName);
+  auto newClasses = StringUtils::SplitAsciiWhitespace(newName);
+  for (auto* tokens : {&oldClasses, &newClasses}) {
+    std::ranges::sort(*tokens);
+    const auto duplicates = std::ranges::unique(*tokens);
+    tokens->erase(duplicates.begin(), duplicates.end());
+  }
+  std::vector<std::string_view> changed;
+  std::ranges::set_symmetric_difference(oldClasses, newClasses, std::back_inserter(changed));
+  return changed;
+}
+
 /// Dirty flags for an element whose compositing properties changed, see \ref markCompositingDirty.
 constexpr uint16_t kCompositingDirtyFlags = components::DirtyFlagsComponent::Style |
                                             components::DirtyFlagsComponent::Compositing |
@@ -316,9 +411,9 @@ parser::PropertyParseFnParams ElementAttributeParams(ElementType elementType, st
   return params;
 }
 
-/// Request the whole-tree restyle when a stylesheet selects on the attribute \p name.
-void markFullStyleRecomputeIfSelected(EntityHandle handle, std::string_view name) {
-  if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*handle.registry(), name)) {
+void MarkSelectorSensitivePresentationEdit(EntityHandle handle, std::string_view name) {
+  if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*handle.registry(), name) &&
+      !TryNarrowStyleEdit(handle, name)) {
     markNeedsFullStyleRecompute(handle);
   }
 }
@@ -333,25 +428,29 @@ void markFullStyleRecomputeIfSelected(EntityHandle handle, std::string_view name
  *   `transform`).
  */
 void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType,
-                                    std::string_view name, std::string_view actualName) {
+                                    std::string_view name, std::string_view actualName,
+                                    bool commonProperty) {
   if (actualName == "transform") {
     // The value is stored as an attribute, and attributes are a live selector input:
-    // `[transform]`, `[transform="..."]` and combinators keyed on them can start or stop
-    // matching, including on elements other than this one. Per-entity dirty flags cannot express
-    // that, so it needs the whole-tree restyle - but only when a stylesheet actually selects on
-    // this attribute, which keeps the common case on the selective style pass.
-    markFullStyleRecomputeIfSelected(handle, name);
+    // `[transform]`, `[transform="..."]` and combinators keyed on them can change matches.
+    // Preserve the ordinary transform-only path when no stylesheet uses the attribute.
+    MarkSelectorSensitivePresentationEdit(handle, name);
     components::LayoutSystem().invalidate(handle);
     markDirty(handle, components::DirtyFlagsComponent::RenderInstance);
     propagateWorldTransformDirtyToDescendants(handle);
   } else if (actualName == "opacity" && elementType != ElementType::Stop) {
-    // Like `transform`, the stored attribute only needs the whole-tree restyle when a stylesheet
-    // selects on it.
-    markFullStyleRecomputeIfSelected(handle, name);
+    // Preserve the compositing-only path when no stylesheet selects on the attribute.
+    MarkSelectorSensitivePresentationEdit(handle, name);
     markCompositingDirty(handle);
   } else {
     // For CSS properties (fill, stroke, etc.) and element-specific attributes (cx, cy, r, d,
     // etc.), mark style cascade + shape dirty.
+    if (commonProperty &&
+        !(elementType == ElementType::Use && IsUseGeometryAttribute(actualName)) &&
+        TryNarrowStyleEdit(handle, name)) {
+      markDirty(handle, components::DirtyFlagsComponent::Shape);
+      return;
+    }
     markNeedsFullStyleRecompute(handle);
     invalidateComputedStyle(handle);
     markStyleCascadeDirty(handle, components::DirtyFlagsComponent::Shape);
@@ -384,11 +483,11 @@ bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAcc
   const Clear result = style ? style->clearPresentationAttribute(name)
                              : PropertyRegistry().clearPresentationAttribute(name);
   if (result == Clear::Cleared) {
-    MarkPresentationAttributeDirty(handle, elementType, name, name);
+    MarkPresentationAttributeDirty(handle, elementType, name, name, true);
   } else if (result == Clear::NotSet) {
     // The attribute may still be present, overridden by `style` or holding a value that did not
     // parse, so a stylesheet selecting on it must re-match.
-    markFullStyleRecomputeIfSelected(handle, name);
+    MarkSelectorSensitivePresentationEdit(handle, name);
   }
   return result != Clear::NotStored;
 }
@@ -726,22 +825,23 @@ RcString SVGElement::className() const {
 void SVGElement::setClassName(std::string_view name) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
+  const auto* state = handle_.registry()->ctx().find<components::RenderTreeState>();
+  const bool hasOldStyles = state && state->hasBeenBuilt && !state->needsFullStyleRecompute;
+  const RcString previous = hasOldStyles ? className() : RcString();
+  const RcString next(name);
   if (!name.empty()) {
     auto& component = handle_.get_or_emplace<components::ClassComponent>(access);
-    component.className = name;
+    component.className = next;
   } else {
     handle_.remove<components::ClassComponent>(access);
   }
 
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
-      *handle_.registry(), xml::XMLQualifiedName("class"), RcString(name));
-
-  // Class changes affect CSS selector matching, which can change any inherited property.
-  markNeedsFullStyleRecompute(handle_);
-  invalidateComputedStyle(handle_);
-  invalidateComputedStyleForDescendants(handle_);
-  markStyleCascadeDirty(handle_);
-  propagateStyleDirtyToDescendants(handle_);
+      *handle_.registry(), xml::XMLQualifiedName("class"), next);
+  // Initial parsing has no old computed styles or selector dependencies to route.
+  const auto changed =
+      hasOldStyles ? ChangedClassNames(previous, next) : std::vector<std::string_view>();
+  MarkClassOrStyleEdit(handle_, "class", changed);
 }
 
 void SVGElement::setStyle(std::string_view style) {
@@ -751,29 +851,13 @@ void SVGElement::setStyle(std::string_view style) {
 
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
-
-  invalidateComputedStyle(handle_);
-  markNeedsFullStyleRecompute(handle_);
-  invalidateComputedStyleForDescendants(handle_);
-
-  markStyleCascadeDirty(handle_);
-  propagateStyleDirtyToDescendants(handle_);
+  MarkClassOrStyleEdit(handle_, "style");
 }
 
 void SVGElement::updateStyle(std::string_view style) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   components::StyleSystem().updateStyle(handle_, style);
-
-  // TODO(jwmcglynn): Update the style attribute too
-  // handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
-  //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
-
-  markNeedsFullStyleRecompute(handle_);
-  invalidateComputedStyle(handle_);
-  invalidateComputedStyleForDescendants(handle_);
-
-  markStyleCascadeDirty(handle_);
-  propagateStyleDirtyToDescendants(handle_);
+  MarkClassOrStyleEdit(handle_, "style");
 }
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
@@ -806,7 +890,8 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     return trySetResult;
   }
 
-  if (!trySetResult.result()) {
+  const bool commonProperty = trySetResult.result();
+  if (!commonProperty) {
     // Try element-specific presentation attributes (cx, cy, r, rx, ry, d, etc.).
     trySetResult = parser::ParsePresentationAttribute(
         elementType, handle_, actualName, ElementAttributeParams(elementType, actualName, value));
@@ -817,7 +902,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
         *handle_.registry(), xml::XMLQualifiedName(RcString(name)), RcString(value));
 
-    MarkPresentationAttributeDirty(handle_, elementType, name, actualName);
+    MarkPresentationAttributeDirty(handle_, elementType, name, actualName, commonProperty);
     return true;
   }
 

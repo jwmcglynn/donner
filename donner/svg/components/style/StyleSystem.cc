@@ -3075,6 +3075,73 @@ bool StyleSystem::anyStylesheetUsesAttributeInSelector(Registry& registry,
   return false;
 }
 
+std::uint8_t StyleSystem::styleEditDependencies(const Registry& registry,
+                                                std::string_view attribute,
+                                                std::span<const std::string_view> changedClasses) {
+  std::uint8_t relations = 0;
+  for (auto view = registry.view<const StylesheetComponent>(); auto entity : view) {
+    const auto& sheet = view.get<const StylesheetComponent>(entity);
+    if (!HasSvgNamespace(registry, entity) || !sheet.isCssType()) {
+      continue;
+    }
+    const auto& summary = sheet.dependencySummary;
+    if (summary.usesHas() || summary.usesAnyAttributeName()) {
+      return SelectorDependency::Ancestors;
+    }
+    if (!attribute.empty()) {
+      relations |= summary.attributeDependency(attribute);
+    }
+    for (std::string_view name : changedClasses) {
+      relations |= summary.classDependency(name);
+    }
+  }
+  return relations;
+}
+
+bool StyleSystem::isStyleEditSubtreeBoundary(const Registry& registry, Entity entity) {
+  const auto* type = registry.try_get<ElementTypeComponent>(entity);
+  if (!type || !type->inSvgNamespace()) {
+    return false;
+  }
+  switch (type->type()) {
+    case ElementType::ClipPath:
+    case ElementType::Filter:
+    case ElementType::LinearGradient:
+    case ElementType::Marker:
+    case ElementType::Mask:
+    case ElementType::Pattern:
+    case ElementType::RadialGradient:
+    case ElementType::Stop:
+    case ElementType::Symbol:
+    case ElementType::Text:
+    case ElementType::TextPath:
+    case ElementType::TSpan: return true;
+    default: return false;
+  }
+}
+
+bool StyleSystem::canRetainStyleEdit(const Registry& registry, Entity entity) {
+  using Tree = donner::components::TreeComponent;
+  const auto* computed = registry.try_get<ComputedStyleComponent>(entity);
+  if (!computed || !computed->style || computed->externalFill || computed->externalStroke) {
+    return false;
+  }
+  for (Entity current = entity; current != entt::null;
+       current = registry.get<Tree>(current).parent()) {
+    if (isStyleEditSubtreeBoundary(registry, current)) {
+      return false;
+    }
+  }
+  const auto& style = *computed->properties();
+  const auto localPaint = [](const auto& paint) {
+    return !paint || paint->template is<PaintServer::None>() ||
+           paint->template is<PaintServer::Solid>();
+  };
+  return localPaint(style.fill.get()) && localPaint(style.stroke.get()) && !style.clipPath.get() &&
+         !style.mask.get() && !style.markerStart.get() && !style.markerMid.get() &&
+         !style.markerEnd.get() && (!style.filter.value || style.filter.value->empty());
+}
+
 void StyleSystem::invalidateComputed(EntityHandle handle) {
   handle.remove<ComputedStyleComponent>();
 }

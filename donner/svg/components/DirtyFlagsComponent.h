@@ -37,6 +37,9 @@ struct DirtyFlagsComponent {
     /// redone.
     ReferencedContent = 1 << 11,
 
+    /// This style change is eligible for local recomputation, subject to render-side checks.
+    NarrowedStyle = 1 << 12,
+
     /// Compound flag: style change that may affect paint, filter, and render instance.
     StyleCascade = Style | Paint | Filter | RenderInstance,
     /// Compound flag: layout change that affects transforms and render instance.

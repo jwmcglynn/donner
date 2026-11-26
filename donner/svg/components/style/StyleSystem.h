@@ -795,6 +795,17 @@ public:
    */
   bool anyStylesheetUsesAttributeInSelector(Registry& registry, std::string_view localName) const;
 
+  /// Relations affected by an attribute and any changed class tokens. Ancestors requires a
+  /// full restyle because a relative selector can reach beyond the edited branch.
+  static std::uint8_t styleEditDependencies(const Registry& registry, std::string_view attribute,
+                                            std::span<const std::string_view> changedClasses);
+
+  /// Whether this element can be restyled without rebuilding resource or text subtrees.
+  static bool isStyleEditSubtreeBoundary(const Registry& registry, Entity entity);
+
+  /// Whether the current computed style and its ancestry have no nonlocal rendering inputs.
+  static bool canRetainStyleEdit(const Registry& registry, Entity entity);
+
   /**
    * Invalidate the full style and reparse attributes.
    *
