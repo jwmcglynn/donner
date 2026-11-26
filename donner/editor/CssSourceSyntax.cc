@@ -10,6 +10,7 @@
 #include "donner/base/Utf8.h"
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLTokenizer.h"
+#include "donner/css/FontFace.h"
 #include "donner/css/parser/details/Tokenizer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
@@ -195,7 +196,7 @@ bool IsKnownProperty(std::string_view name) {
 }
 
 enum class CssMode { SelectorPrelude, AtRulePrelude, DeclarationName, DeclarationValue };
-enum class BlockKind { RuleList, Declarations };
+enum class BlockKind { RuleList, Declarations, FontFace };
 
 struct CssState {
   explicit CssState(CssSourceRegionKind kind)
@@ -217,8 +218,20 @@ struct CssState {
 };
 
 bool InDeclarationList(const CssState& state) {
-  return !state.blocks.empty() ? state.blocks.back() == BlockKind::Declarations
+  return !state.blocks.empty() ? state.blocks.back() != BlockKind::RuleList
                                : state.rootDeclarationList;
+}
+
+ColorIndex DeclarationNameColor(std::string_view name, const CssState& state) {
+  if (!state.blocks.empty() && state.blocks.back() == BlockKind::FontFace) {
+    return css::IdentifyFontFaceDescriptor(name) == css::FontFaceDescriptor::Unknown
+               ? ColorIndex::ErrorMarker
+               : ColorIndex::KnownIdentifier;
+  }
+  if (name.starts_with("--")) {
+    return ColorIndex::Identifier;
+  }
+  return IsKnownProperty(name) ? ColorIndex::KnownIdentifier : ColorIndex::ErrorMarker;
 }
 
 ColorIndex IdentColor(const Token::Ident& ident, CssState& state) {
@@ -230,11 +243,7 @@ ColorIndex IdentColor(const Token::Ident& ident, CssState& state) {
   switch (state.mode) {
     case CssMode::SelectorPrelude: return ColorIndex::Keyword;
     case CssMode::AtRulePrelude: return ColorIndex::Identifier;
-    case CssMode::DeclarationName:
-      if (name.starts_with("--")) {
-        return ColorIndex::Identifier;
-      }
-      return IsKnownProperty(name) ? ColorIndex::KnownIdentifier : ColorIndex::ErrorMarker;
+    case CssMode::DeclarationName: return DeclarationNameColor(name, state);
     case CssMode::DeclarationValue:
       return name.starts_with("--") ? ColorIndex::Identifier : ColorIndex::Keyword;
   }
@@ -242,11 +251,14 @@ ColorIndex IdentColor(const Token::Ident& ident, CssState& state) {
 }
 
 void OpenBlock(CssState& state) {
-  const bool declarations =
-      state.mode == CssMode::SelectorPrelude ||
-      (state.mode == CssMode::AtRulePrelude && state.atRuleName == "font-face");
-  state.blocks.push_back(declarations ? BlockKind::Declarations : BlockKind::RuleList);
-  state.mode = declarations ? CssMode::DeclarationName : CssMode::SelectorPrelude;
+  BlockKind block = BlockKind::RuleList;
+  if (state.mode == CssMode::SelectorPrelude) {
+    block = BlockKind::Declarations;
+  } else if (state.mode == CssMode::AtRulePrelude && state.atRuleName == "font-face") {
+    block = BlockKind::FontFace;
+  }
+  state.blocks.push_back(block);
+  state.mode = InDeclarationList(state) ? CssMode::DeclarationName : CssMode::SelectorPrelude;
   state.atRuleName.clear();
 }
 

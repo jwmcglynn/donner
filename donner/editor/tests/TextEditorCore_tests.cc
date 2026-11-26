@@ -2832,4 +2832,18 @@ TEST(CssSourceSyntaxTests, EmitsDisjointRegionsAndCoversEveryCssByte) {
   }
 }
 
+TEST_F(TextEditorCoreTests, FontFaceDescriptorsFollowTheirEnclosingRule) {
+  constexpr std::string_view source =
+      "<svg><style>@layer theme { @font-face { font-family: Test; SRC: url(font.woff2); "
+      "font-width: normal; fill: red; } } rect { src: url(other); fill: red }</style></svg>";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("SRC:")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("font-width:")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("fill:")), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("src:")), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.rfind("fill:")), ColorIndex::KnownIdentifier);
+}
+
 }  // namespace donner::editor

@@ -431,16 +431,16 @@ void ApplyFontFaceWidth(std::span<const ComponentValue> values, FontFace& fontFa
                                     std::max(first->percentage, last->percentage)});
 }
 
-void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& fontFace) {
+void ApplyFontFaceMatchingDescriptor(FontFaceDescriptor descriptor, const Declaration& declaration,
+                                     FontFace& fontFace) {
   if (declaration.important) {
     return;
   }
-  if (declaration.name.equalsLowercase("font-weight")) {
+  if (descriptor == FontFaceDescriptor::Weight) {
     ApplyFontFaceWeight(declaration.values, fontFace);
     return;
   }
-  if (declaration.name.equalsLowercase("font-stretch") ||
-      declaration.name.equalsLowercase("font-width")) {
+  if (descriptor == FontFaceDescriptor::Width) {
     ApplyFontFaceWidth(declaration.values, fontFace);
     return;
   }
@@ -448,7 +448,7 @@ void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& f
     return;
   }
   const ComponentValue& value = declaration.values.front();
-  if (declaration.name.equalsLowercase("font-style")) {
+  if (descriptor == FontFaceDescriptor::Style) {
     constexpr std::array<std::string_view, 3> kStyles = {"normal", "italic", "oblique"};
     if (const auto style = ParseFontFaceKeyword(value, kStyles, 0)) {
       fontFace.fontStyle = *style;
@@ -459,8 +459,8 @@ void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& f
 std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations) {
   FontFace fontFace;
   for (const Declaration& declaration : declarations) {
-    if (StringUtils::EqualsLowercase(declaration.name, std::string_view("font-family")) &&
-        !declaration.values.empty()) {
+    const auto descriptor = IdentifyFontFaceDescriptor(declaration.name);
+    if (descriptor == FontFaceDescriptor::Family && !declaration.values.empty()) {
       if (const Token* token = std::get_if<Token>(&declaration.values.front().value)) {
         if (token->is<Token::Ident>()) {
           fontFace.familyName = token->get<Token::Ident>().value;
@@ -468,10 +468,10 @@ std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations)
           fontFace.familyName = token->get<Token::String>().value;
         }
       }
-    } else if (StringUtils::EqualsLowercase(declaration.name, std::string_view("src"))) {
+    } else if (descriptor == FontFaceDescriptor::Source) {
       AppendFontFaceSources(declaration.values, fontFace);
     } else {
-      ApplyFontFaceMatchingDescriptor(declaration, fontFace);
+      ApplyFontFaceMatchingDescriptor(descriptor, declaration, fontFace);
     }
   }
   if (fontFace.familyName.empty() || fontFace.sources.empty()) {
