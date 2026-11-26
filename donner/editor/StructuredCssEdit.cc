@@ -65,21 +65,32 @@ StructuredCssSourceEncoding EmbeddedEncoding(const svg::SVGStyleElement& stylesh
   return cdata ? StructuredCssSourceEncoding::CData : StructuredCssSourceEncoding::Text;
 }
 
+std::optional<SourceRange> IncludeDecodedSemicolon(const std::optional<SourceRange>& authored,
+                                                   std::string_view decoded) {
+  if (!authored || !authored->end.offset) {
+    return std::nullopt;
+  }
+  const auto end = *authored->end.offset;
+  if (end >= decoded.size() || decoded[end] != ';') {
+    return std::nullopt;
+  }
+  return SourceRange{authored->start, FileOffset::Offset(end + 1)};
+}
+
 template <typename Mapper>
 void AddDeclarationTarget(const css::Declaration& declaration, std::string_view decoded,
-                          std::string_view source, std::size_t offset, StructuredCssTarget& target,
-                          Mapper map) {
-  const auto extent = map(declaration.authoredDeclarationRange());
+                          std::size_t offset, StructuredCssTarget& target, Mapper map) {
+  const auto authored = declaration.authoredDeclarationRange();
+  const auto extent = map(authored);
   if (!extent) {
     return;
   }
-  SourceByteRange removable = *extent;
-  if (removable.end < target.insertDeclaration && source[removable.end] == ';') {
-    ++removable.end;
-  }
-  target.declarationNeedsSeparator = removable.end == extent->end;
+  const auto withSemicolon = map(IncludeDecodedSemicolon(authored, decoded));
+  const SourceByteRange removable = withSemicolon.value_or(*extent);
+  target.declarationNeedsSeparator = !withSemicolon;
   if (Contains(removable, offset)) {
-    const char semicolon = removable.end != extent->end ? ';' : '\0';
+    target.declarationIncludesSemicolon = withSemicolon.has_value();
+    const char semicolon = target.declarationIncludesSemicolon ? ';' : '\0';
     if (!AppendDecoded(target.decodedMoveText, decoded, declaration.authoredDeclarationRange(),
                        semicolon)) {
       target.encoding = StructuredCssSourceEncoding::Unmapped;
@@ -103,7 +114,7 @@ void AddDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view 
   };
   const auto decoded = rule.stylesheetElement->textContent();
   for (const auto& entry : rule.declarations) {
-    AddDeclarationTarget(entry.declaration, decoded, source, offset, target, map);
+    AddDeclarationTarget(entry.declaration, decoded, offset, target, map);
   }
 }
 
@@ -164,7 +175,7 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
                  : std::nullopt;
   };
   for (const auto& declaration : declarations) {
-    AddDeclarationTarget(declaration, *value, source, offset, target, map);
+    AddDeclarationTarget(declaration, *value, offset, target, map);
   }
   return target;
 }
@@ -276,10 +287,6 @@ bool Overlap(SourceByteRange first, SourceByteRange second) {
   return first.start < second.end && second.start < first.end;
 }
 
-bool EndsInSemicolon(std::string_view source, SourceByteRange range) {
-  return Slice(source, range).ends_with(';');
-}
-
 bool IsCDataContent(std::string_view bytes) {
   if (bytes.find(']') == std::string_view::npos) {
     return true;
@@ -361,14 +368,16 @@ std::string TransferSeparator(std::string_view source, SourceByteRange destinati
 }
 
 std::string TransferText(std::string_view source, std::string_view moved, SourceByteRange to,
-                         bool declaration, bool after) {
-  std::string bytes;
+                         const StructuredCssTarget& from, const StructuredCssTarget& destination,
+                         bool after) {
+  const bool declaration = from.declaration.has_value();
   const auto separator = TransferSeparator(source, to);
+  std::string bytes;
   if (after) {
-    bytes = declaration && !EndsInSemicolon(source, to) ? ";" + separator : separator;
+    bytes = declaration && !destination.declarationIncludesSemicolon ? ";" + separator : separator;
   }
   bytes += moved;
-  if (declaration && !moved.ends_with(';')) {
+  if (declaration && !from.declarationIncludesSemicolon) {
     bytes += ';';
   }
   if (!after) {
@@ -392,10 +401,11 @@ std::optional<CssReplacement> PlanTransfer(std::string_view source, const Struct
   }
   const bool declaration = from.declaration.has_value();
   if (adjacent && SameEncoding(from, destination) &&
-      (!declaration || (EndsInSemicolon(source, item) && EndsInSemicolon(source, anchor)))) {
+      (!declaration ||
+       (from.declarationIncludesSemicolon && destination.declarationIncludesSemicolon))) {
     return SwapAdjacent(source, item, anchor, gap);
   }
-  const auto bytes = TransferText(source, *encoded, anchor, declaration, after);
+  const auto bytes = TransferText(source, *encoded, anchor, from, destination, after);
   return CutAndInsert(source, item, insertion, bytes);
 }
 

@@ -30,10 +30,11 @@ struct StructuredCssTarget {
   std::string decodedMoveText;  ///< Original CSS token bytes before XML encoding.
   char attributeQuote = '\0';   ///< Original delimiter for an inline style attribute.
   bool inlineStyle = false;     ///< The selected declaration belongs to a style attribute.
-  bool declarationNeedsSeparator = false;  ///< Last declaration has no terminating semicolon.
-  std::size_t selectionOffset = 0;         ///< Original hit that resolves the same parsed target.
-  std::uint64_t generation = 0;            ///< Document generation at selection.
-  std::uint64_t sourceVersion = 0;         ///< Document source revision at selection.
+  bool declarationIncludesSemicolon = false;  ///< Selected bytes include a CSS separator.
+  bool declarationNeedsSeparator = false;     ///< Last declaration has no terminating semicolon.
+  std::size_t selectionOffset = 0;  ///< Original hit that resolves the same parsed target.
+  std::uint64_t generation = 0;     ///< Document generation at selection.
+  std::uint64_t sourceVersion = 0;  ///< Document source revision at selection.
 
   /// Compare resolved ranges and revision identity.
   bool operator==(const StructuredCssTarget&) const = default;

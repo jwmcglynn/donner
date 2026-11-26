@@ -25,6 +25,7 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/SourceRecoveryPolicyTestUtils.h"
@@ -875,6 +876,43 @@ TEST(EditorSyncTest, StructuredCssMoveReencodesForTheDestinationAttributeQuote) 
   ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, /*after=*/false));
   EXPECT_THAT(text.getText(), testing::HasSubstr("style='--a:&apos;A &amp; B&apos;; fill:red;'"));
   EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  EXPECT_EQ(app.document().document().source(), text.getText());
+  UndoStructuredCssForTest(app, sync, text);
+  EXPECT_EQ(text.getText(), original);
+}
+
+TEST(EditorSyncTest, StructuredCssMovesDoNotTreatEntityEndAsADeclarationSeparator) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<rect id="r" style="fill:red; --x:&quot;x&quot;"/>
+<circle id="other" style="stroke:blue&#59;"/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
+  const auto custom = FindStructuredCssTarget(app, original, original.find("--x:"));
+  const auto fill = FindStructuredCssTarget(app, original, original.find("fill:red"));
+  ASSERT_THAT(custom, testing::Optional(testing::_));
+  ASSERT_THAT(fill, testing::Optional(testing::_));
+  EXPECT_FALSE(custom->declarationIncludesSemicolon);
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *custom, *fill, /*after=*/false));
+  EXPECT_THAT(text.getText(), testing::HasSubstr("--x:&quot;x&quot;; fill:red;"));
+  const auto rect = app.document().document().querySelector("#r");
+  ASSERT_THAT(rect, testing::Optional(testing::_));
+  EXPECT_THAT(rect->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+  UndoStructuredCssForTest(app, sync, text);
+  ASSERT_EQ(text.getText(), original);
+
+  const auto stroke = FindStructuredCssTarget(app, original, original.find("stroke:blue"));
+  const auto anchor = FindStructuredCssTarget(app, original, original.find("--x:"));
+  ASSERT_THAT(stroke, testing::Optional(testing::_));
+  ASSERT_THAT(anchor, testing::Optional(testing::_));
+  EXPECT_TRUE(stroke->declarationIncludesSemicolon);
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *stroke, *anchor, /*after=*/true));
+  EXPECT_THAT(text.getText(), testing::HasSubstr("--x:&quot;x&quot;; stroke:blue&#59;"));
   EXPECT_EQ(app.document().document().source(), text.getText());
   UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(text.getText(), original);
