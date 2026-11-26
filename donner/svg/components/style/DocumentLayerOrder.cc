@@ -121,7 +121,7 @@ struct LayerNode {
 
 struct SheetLayers {
   css::LayerId base;
-  std::vector<css::LayerId> local;
+  std::vector<css::LayerId> bySheetId;
 };
 
 struct ImportLinks {
@@ -200,7 +200,7 @@ struct DocumentLayerOrder::Data {
         break;
       }
       parent = existing->second;
-      sheet.local[path[--length]] = parent;
+      sheet.bySheetId[path[--length]] = parent;
     }
   }
 
@@ -209,17 +209,17 @@ struct DocumentLayerOrder::Data {
     if (local == css::kUnlayered) {
       return sheet.base;
     }
-    if (sheet.base == kRefused || sheet.local[local] != kRefused) {
-      return sheet.local[local];
+    if (sheet.base == kRefused || sheet.bySheetId[local] != kRefused) {
+      return sheet.bySheetId[local];
     }
     std::array<css::LayerId, css::Stylesheet::kMaximumLayerDepth> path;
     std::size_t length = 0;
     css::LayerId cursor = local;
-    while (cursor != css::kUnlayered && sheet.local[cursor] == kRefused) {
+    while (cursor != css::kUnlayered && sheet.bySheetId[cursor] == kRefused) {
       path[length++] = cursor;
       cursor = syntax.nodes[cursor].parent;
     }
-    css::LayerId parent = cursor == css::kUnlayered ? sheet.base : sheet.local[cursor];
+    css::LayerId parent = cursor == css::kUnlayered ? sheet.base : sheet.bySheetId[cursor];
     adoptExistingPath(syntax, sheet, path, parent, length);
     if (length > kMaximumDocumentLayers + 1 - nodes.size() ||
         length + nodes[parent].depth > css::Stylesheet::kMaximumLayerDepth) {
@@ -229,7 +229,7 @@ struct DocumentLayerOrder::Data {
     while (length > 0) {
       const auto segment = path[--length];
       parent = append(parent, syntax.nodes[segment].name);
-      sheet.local[segment] = parent;
+      sheet.bySheetId[segment] = parent;
     }
     return parent;
   }
@@ -263,7 +263,7 @@ struct DocumentLayerOrder::Data {
       }
       return;
     }
-    mapping.local.resize(syntax->nodes.size(), kRefused);
+    mapping.bySheetId.resize(syntax->nodes.size(), kRefused);
     for (const auto& event : syntax->events) {
       if (event.kind == css::LayerEvent::Kind::Import) {
         visitImport(sheet, syntax, mapping, links, occurrence, event.index);
@@ -305,7 +305,7 @@ struct DocumentLayerOrder::Data {
     rootRank = rankOf(kRoot);
     for (auto& [key, sheet] : sheets) {
       sheet.base = rankOf(sheet.base);
-      std::ranges::transform(sheet.local, sheet.local.begin(), rankOf);
+      std::ranges::transform(sheet.bySheetId, sheet.bySheetId.begin(), rankOf);
     }
     names.clear();
     std::vector<LayerNode>().swap(nodes);
@@ -365,7 +365,7 @@ DocumentLayerOrder::SheetRanks DocumentLayerOrder::ranksFor(const css::Styleshee
     return {data_->rootRank, {}};
   }
   const auto& mapping = found->second;
-  return {mapping.base, mapping.local};
+  return {mapping.base, mapping.bySheetId};
 }
 
 std::span<const Entity> DocumentLayerOrder::stylesheets() const {
