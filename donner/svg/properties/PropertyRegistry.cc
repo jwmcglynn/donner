@@ -3564,25 +3564,33 @@ struct VariableField {
   std::string_view name;
   PropertyState& state;
   css::Specificity& specificity;
-  void* storage;
-  void (*resetStorage)(void*, PropertyState, css::Specificity);
-  void (*installStorage)(void*, void*);
+  void* value;
+  void (*resetValue)(void*);
+  void (*installValue)(void*, void*);
 
   bool isSpecified() const { return state != PropertyState::NotSet; }
   void reset(PropertyState newState, css::Specificity priority) const {
-    resetStorage(storage, newState, priority);
+    resetValue(value);
+    state = newState;
+    specificity = priority;
   }
-  void install(VariableField source) const { installStorage(storage, source.storage); }
+  // The same field accessor selected both values, so their optional storage types agree.
+  void install(VariableField source) const {
+    installValue(value, source.value);
+    state = source.state;
+    specificity = source.specificity;
+  }
 };
 
-template <typename P>
-void ResetVariableField(void* storage, PropertyState state, css::Specificity specificity) {
-  static_cast<P*>(storage)->set(state, specificity);
+template <typename Value>
+void ResetVariableValue(void* storage) {
+  static_cast<std::optional<Value>*>(storage)->reset();
 }
 
-template <typename P>
-void InstallVariableField(void* destination, void* source) {
-  *static_cast<P*>(destination) = std::move(*static_cast<P*>(source));
+template <typename Value>
+void InstallVariableValue(void* destination, void* source) {
+  *static_cast<std::optional<Value>*>(destination) =
+      std::move(*static_cast<std::optional<Value>*>(source));
 }
 
 using VariableFieldAccessor = VariableField (*)(PropertyRegistry&);
@@ -3591,9 +3599,13 @@ template <std::size_t Index>
 VariableField GetVariableField(PropertyRegistry& registry) {
   auto fields = registry.allPropertiesMutable();
   auto& property = std::get<Index>(fields);
-  using P = std::remove_reference_t<decltype(property)>;
-  return {property.name, property.state,        property.specificity,
-          &property,     ResetVariableField<P>, InstallVariableField<P>};
+  using Value = typename std::remove_reference_t<decltype(property)>::Type;
+  return {property.name,
+          property.state,
+          property.specificity,
+          &property.value,
+          ResetVariableValue<Value>,
+          InstallVariableValue<Value>};
 }
 
 template <std::size_t... Index>
