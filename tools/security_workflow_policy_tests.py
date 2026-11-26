@@ -4145,6 +4145,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         filters = ["--build_tests_only", "--test_tag_filters=-fuzz_target,-ci-remote-gpu",
                    "--build_tag_filters=-fuzz_target,-ci-remote-gpu"]
         expected = {
+            "hosted-asan-cache": ["--experimental_circuit_breaker_strategy=failure",
+                                  "--experimental_remote_failure_window_interval=5m"],
             "asan-lane": ["--config=asan", "--test_output=errors", *filters],
             "asan-lane-no-leaks": ["--config=asan", "--test_output=errors",
                                    "--test_env=ASAN_OPTIONS=detect_leaks=0", *filters],
@@ -4155,9 +4157,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             self.assertEqual(_lane_config_flags(lane), flags, lane)
         asan = _step_body(self.sanitizers, "Test //donner/... with ASan")
         self.assertIn("--exclude-suite //tools/ci:asan_exclusions -- \\\n"
-                      "            bazelisk test --config=asan-lane -- //donner/... "
+                      "            bazelisk test --config=hosted-asan-cache --config=asan-lane -- //donner/... "
                       "-//donner/svg/renderer/geode/...\n", asan)
-        self.assertIn("bazelisk test --config=asan-lane-no-leaks \\\n"
+        self.assertIn("bazelisk test --config=hosted-asan-cache --config=asan-lane-no-leaks \\\n"
                       "            //donner/svg/renderer/geode/... //tools/ci:asan_no_leak_tests\n",
                       asan)
         ubsan = _step_body(self.sanitizers, "Test //donner/... with UBSan")

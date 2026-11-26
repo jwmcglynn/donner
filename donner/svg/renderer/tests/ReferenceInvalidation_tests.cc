@@ -526,8 +526,8 @@ TEST_P(ReferenceRetainedUpdateTest, EditTakesTheRetainedUpdate) {
 
   SVGDocument fresh = instantiateSubtree(item.body, {}, kCanvasSize);
   item.edit(fresh);
-  editor::tests::CompareBitmapToBitmap(renderer->takeSnapshot(),
-                                       RenderDocumentWithActiveBackend(fresh), item.name,
+  const RendererBitmap retained = SnapshotActiveFrame(*renderer);
+  editor::tests::CompareBitmapToBitmap(retained, RenderDocumentWithActiveBackend(fresh), item.name,
                                        editor::tests::PixelmatchIdentityParams());
 }
 
