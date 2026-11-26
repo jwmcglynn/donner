@@ -129,9 +129,32 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
 void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
                                           StylesheetSourceMap newSourceMap,
                                           ParseWarningSink& warnings) {
+  installParsedStylesheet(str, std::move(newSourceMap),
+                          css::parser::StylesheetParser::Parse(str, warnings));
+}
+
+bool StylesheetComponent::applyTextEdit(const StylesheetComponent& previous,
+                                        std::string_view updatedText,
+                                        const StylesheetSourceMap& updatedSourceMap,
+                                        std::size_t offset, std::size_t removedLength,
+                                        std::size_t insertedLength,
+                                        css::EditedRuleWindow* changed) {
+  const css::parser::StylesheetParser::TextEdit edit{offset, removedLength, insertedLength};
+  auto updated = css::parser::StylesheetParser::TryReparseTextEdit(
+      previous.stylesheet, previous.text, updatedText, edit, changed);
+  if (!updated) {
+    return false;
+  }
+  installParsedStylesheet(RcStringOrRef(updatedText), updatedSourceMap, std::move(*updated));
+  return true;
+}
+
+void StylesheetComponent::installParsedStylesheet(const RcStringOrRef& str,
+                                                  StylesheetSourceMap newSourceMap,
+                                                  css::Stylesheet parsed) {
   text = RcString(str);
   sourceMap = std::move(newSourceMap);
-  stylesheet = donner::css::parser::StylesheetParser::Parse(str, warnings);
+  stylesheet = std::move(parsed);
   importedStylesheets.clear();
   importOrigins.clear();
   combinedFontFaces.clear();

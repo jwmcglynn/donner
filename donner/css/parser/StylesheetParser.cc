@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <span>
 #include <vector>
@@ -1046,13 +1047,15 @@ void HandleRule(std::string_view source, Rule& rule, StylesheetParseState& state
 
 }  // namespace
 
-Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
-  RuleParser::SecurityStats ruleStats;
-  std::vector<Rule> rules = RuleParser::ParseStylesheet(str, &ruleStats);
+namespace {
 
+Stylesheet ParseStylesheetRules(std::string_view str, std::span<Rule> rules,
+                                const RuleParser::SecurityStats& ruleStats,
+                                ParseWarningSink& warningSink) {
   StylesheetParseState state;
   state.securityStats.rejected = ruleStats.rejected;
   state.securityStats.componentValues = ruleStats.componentValues;
+  state.securityStats.rawRules = ruleStats.rules;
 
   state.nestedRulesRemaining = RuleParser::kMaximumRules - rules.size();
   for (Rule& rule : rules) {
@@ -1066,6 +1069,350 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
                     : std::make_shared<const StylesheetLayers>(std::move(state.layers));
   return Stylesheet(std::move(state.selectorRules), std::move(state.fontFaces),
                     std::move(state.imports), state.securityStats, std::move(layers));
+}
+
+}  // namespace
+
+Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
+  RuleParser::SecurityStats ruleStats;
+  auto rules = RuleParser::ParseStylesheet(str, &ruleStats);
+  return ParseStylesheetRules(str, rules, ruleStats, warningSink);
+}
+
+namespace {
+
+constexpr std::size_t kMaximumEditWindowBytes = 64 * 1024;
+constexpr std::size_t kMaximumEditWindowRules = 8;
+
+struct ParsedEditWindow {
+  Stylesheet stylesheet;
+  std::size_t rawRules = 0;
+};
+
+constexpr std::string_view kBoundaryRule = "#boundary{}";
+
+/// A following rule is recognized only if the tokenizer and rule parser have resynchronized.
+bool HasVerifiedBoundary(std::span<const Rule> raw, std::size_t textSize) {
+  if (raw.empty() || !std::ranges::all_of(raw, [](const Rule& rule) {
+        return std::holds_alternative<QualifiedRule>(rule.value);
+      })) {
+    return false;
+  }
+  const auto& boundary = std::get<QualifiedRule>(raw.back().value);
+  return boundary.prelude.size() == 1 &&
+         ComponentSourceOffset(boundary.prelude.front()) == textSize &&
+         boundary.block.sourceOffset.offset == textSize + kBoundaryRule.size() - 2;
+}
+
+std::optional<std::size_t> UpdatedCount(std::size_t total, std::size_t before, std::size_t after,
+                                        std::size_t maximum) {
+  if (total > maximum) {
+    return std::nullopt;
+  }
+  if (before > after) {
+    return before - after <= total ? std::optional(total - (before - after)) : std::nullopt;
+  }
+  return after - before <= maximum - total ? std::optional(total + (after - before)) : std::nullopt;
+}
+
+struct RuleOffsetChange {
+  std::size_t from;
+  std::size_t to;
+  bool valid = true;
+
+  void apply(FileOffset& value) {
+    if (value.offset) {
+      if (*value.offset < from ||
+          *value.offset - from > std::numeric_limits<std::size_t>::max() - to) {
+        valid = false;
+        return;
+      }
+      value.offset = to + (*value.offset - from);
+    }
+  }
+
+  void apply(SourceRange& range) {
+    apply(range.start);
+    apply(range.end);
+  }
+
+  void apply(ComponentValue& value) {
+    std::visit(
+        [&](auto& node) {
+          if constexpr (std::is_same_v<std::remove_cvref_t<decltype(node)>, Token>) {
+            auto offset = node.offset();
+            apply(offset);
+            node.setSourceOffset(*offset.offset);
+          } else {
+            apply(node.sourceOffset);
+            for (auto& child : node.values) {
+              apply(child);
+            }
+          }
+        },
+        value.value);
+  }
+
+  void applySelector(Selector& selector) {
+    for (auto& chain : selector.entries) {
+      for (auto& entry : chain.entries) {
+        for (auto& simple : entry.compoundSelector.entries) {
+          applyPseudo(simple);
+        }
+      }
+    }
+  }
+
+  void applyPseudo(CompoundSelector::Entry& simple) {
+    if (auto* pseudo = std::get_if<PseudoClassSelector>(&simple)) {
+      applyArguments(pseudo->argsIfFunction);
+      if (pseudo->selector) {
+        applySelector(*pseudo->selector);
+      }
+    } else if (auto* pseudo = std::get_if<PseudoElementSelector>(&simple)) {
+      applyArguments(pseudo->argsIfFunction);
+    }
+  }
+
+  void applyArguments(std::optional<std::vector<ComponentValue>>& values) {
+    if (values) {
+      for (auto& value : *values) {
+        apply(value);
+      }
+    }
+  }
+
+  void apply(SelectorRule& rule) {
+    if (from == to) {
+      return;
+    }
+    applySelector(rule.selector);
+    apply(rule.ruleSourceRange);
+    apply(rule.selectorSourceRange);
+    for (auto& range : rule.selectorEntrySourceRanges) {
+      apply(range);
+    }
+    for (auto& declaration : rule.declarations) {
+      apply(declaration.sourceOffset);
+      apply(declaration.sourceRange);
+      for (auto& value : declaration.values) {
+        apply(value);
+      }
+    }
+  }
+};
+
+bool ReanchorQualifiedEditRules(std::span<Rule> raw, std::size_t start) {
+  RuleOffsetChange anchor{0, start};
+  for (auto& rule : raw) {
+    auto& qualified = std::get<QualifiedRule>(rule.value);
+    for (auto& value : qualified.prelude) {
+      anchor.apply(value);
+    }
+    anchor.apply(qualified.block.sourceOffset);
+    for (auto& value : qualified.block.values) {
+      anchor.apply(value);
+    }
+  }
+  return anchor.valid;
+}
+
+std::optional<ParsedEditWindow> ParseEditWindow(std::string_view source, std::size_t start,
+                                                std::size_t end) {
+  const std::string_view text = source.substr(start, end - start);
+  if (text.size() > kMaximumEditWindowBytes || text.starts_with("@charset")) {
+    return std::nullopt;
+  }
+  std::string withBoundary(text);
+  withBoundary.append(kBoundaryRule);
+  RuleParser::SecurityStats stats;
+  auto raw = RuleParser::ParseStylesheet(withBoundary, &stats);
+  if (stats.rejected || !HasVerifiedBoundary(raw, text.size())) {
+    return std::nullopt;
+  }
+  raw.pop_back();
+  const std::size_t count = raw.size();
+  if (!ReanchorQualifiedEditRules(raw, start)) {
+    return std::nullopt;
+  }
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  // Compute typed source ranges with the same complete source view as the full parser.
+  Stylesheet parsed = ParseStylesheetRules(source, raw, stats, warnings);
+  if (parsed.securityStats().rejected || parsed.rules().size() != count) {
+    return std::nullopt;
+  }
+  for (const auto& rule : parsed.rules()) {
+    if (!rule.ruleSourceRange.end.offset || *rule.ruleSourceRange.end.offset > end) {
+      return std::nullopt;
+    }
+  }
+  return ParsedEditWindow{std::move(parsed), count};
+}
+
+struct RuleWindow {
+  std::size_t first;
+  std::size_t last;
+  std::size_t start;
+  std::size_t end;
+};
+
+bool HasVerifiedRuleRanges(std::span<const SelectorRule> rules) {
+  std::size_t previousEnd = 0;
+  for (const auto& rule : rules) {
+    const auto& range = rule.ruleSourceRange;
+    if (!range.start.offset || !range.end.offset || *range.start.offset < previousEnd ||
+        *range.end.offset <= *range.start.offset) {
+      return false;
+    }
+    previousEnd = *range.end.offset;
+  }
+  return true;
+}
+
+std::optional<RuleWindow> LocateEditWindow(std::span<const SelectorRule> rules, std::size_t start,
+                                           std::size_t end) {
+  if (rules.empty() || !HasVerifiedRuleRanges(rules)) {
+    return std::nullopt;
+  }
+  std::size_t first = 0;
+  while (first + 1 < rules.size() && *rules[first].ruleSourceRange.end.offset < start) {
+    ++first;
+  }
+  if (first && start <= *rules[first].ruleSourceRange.start.offset) {
+    --first;
+  }
+  std::size_t last = first;
+  while (last + 1 < rules.size() && end > *rules[last].ruleSourceRange.end.offset) {
+    ++last;
+  }
+  return RuleWindow{first, last, std::min(start, *rules[first].ruleSourceRange.start.offset),
+                    std::max(end, *rules[last].ruleSourceRange.end.offset)};
+}
+
+bool MatchesOldBoundaries(const ParsedEditWindow& before, std::span<const SelectorRule> previous) {
+  const auto rules = before.stylesheet.rules();
+  if (before.rawRules != previous.size() || rules.size() != previous.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < previous.size(); ++i) {
+    if (rules[i].ruleSourceRange != previous[i].ruleSourceRange ||
+        rules[i].selectorSourceRange != previous[i].selectorSourceRange ||
+        rules[i].selectorEntrySourceRanges != previous[i].selectorEntrySourceRanges ||
+        rules[i].declarations != previous[i].declarations) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<Stylesheet> SpliceEditWindow(const Stylesheet& old, RuleWindow window,
+                                           const ParsedEditWindow& before, ParsedEditWindow after,
+                                           std::size_t newEnd) {
+  const auto& oldStats = old.securityStats();
+  const auto rawCount =
+      UpdatedCount(oldStats.rawRules, before.rawRules, after.rawRules, RuleParser::kMaximumRules);
+  if (!rawCount) {
+    return std::nullopt;
+  }
+  const auto& beforeStats = before.stylesheet.securityStats();
+  const auto& afterStats = after.stylesheet.securityStats();
+  const auto declarations = UpdatedCount(oldStats.declarations, beforeStats.declarations,
+                                         afterStats.declarations, Stylesheet::kMaximumDeclarations);
+  const auto components =
+      UpdatedCount(oldStats.componentValues, beforeStats.componentValues,
+                   afterStats.componentValues, RuleParser::kMaximumComponentValues);
+  if (!declarations || !components) {
+    return std::nullopt;
+  }
+  const auto oldRules = old.rules();
+  std::vector<SelectorRule> rules;
+  rules.reserve(oldRules.size() - (window.last + 1 - window.first) +
+                after.stylesheet.rules().size());
+  rules.insert(rules.end(), oldRules.begin(), oldRules.begin() + window.first);
+  rules.insert(rules.end(), after.stylesheet.rules().begin(), after.stylesheet.rules().end());
+  for (const auto& unchanged : oldRules.subspan(window.last + 1)) {
+    RuleOffsetChange relocation{window.end, newEnd};
+    relocation.apply(rules.emplace_back(unchanged));
+    if (!relocation.valid) {
+      return std::nullopt;
+    }
+  }
+  const Stylesheet::SecurityStats stats{rules.size(), *declarations, *components, false, *rawCount};
+  return Stylesheet(std::move(rules), {}, stats);
+}
+
+bool IsWholeTextEdit(std::string_view before, std::string_view after,
+                     StylesheetParser::TextEdit edit) {
+  return edit.offset <= before.size() && edit.offset <= after.size() &&
+         edit.removedLength <= before.size() - edit.offset &&
+         edit.insertedLength <= after.size() - edit.offset &&
+         before.substr(0, edit.offset) == after.substr(0, edit.offset) &&
+         before.substr(edit.offset + edit.removedLength) ==
+             after.substr(edit.offset + edit.insertedLength);
+}
+
+bool CanReparseQualifiedEdit(const Stylesheet& old, std::string_view before, std::string_view after,
+                             StylesheetParser::TextEdit edit) {
+  return !old.securityStats().rejected && !old.layers() && old.imports().empty() &&
+         old.fontFaces().empty() && !before.starts_with("@charset") &&
+         IsWholeTextEdit(before, after, edit);
+}
+
+std::optional<std::size_t> VerifiedWindowEnd(std::span<const SelectorRule> rules, RuleWindow window,
+                                             std::size_t requiredEnd, std::size_t textSize) {
+  auto end = rules[window.last].ruleSourceRange.end.offset;
+  if (end && window.last + 1 == rules.size()) {
+    *end = std::max(*end, requiredEnd);
+  }
+  if (!end || *end < requiredEnd || *end > textSize || *end < window.start ||
+      *end - window.start > kMaximumEditWindowBytes) {
+    return std::nullopt;
+  }
+  return end;
+}
+
+}  // namespace
+
+std::optional<Stylesheet> StylesheetParser::TryReparseTextEdit(const Stylesheet& old,
+                                                               std::string_view before,
+                                                               std::string_view after,
+                                                               TextEdit edit,
+                                                               EditedRuleWindow* changed) {
+  if (!CanReparseQualifiedEdit(old, before, after, edit)) {
+    return std::nullopt;
+  }
+  const auto rules = old.rules();
+  auto found = LocateEditWindow(rules, edit.offset, edit.offset + edit.removedLength);
+  if (!found) {
+    return std::nullopt;
+  }
+  RuleWindow window = *found;
+  while (window.last < rules.size() && window.last - window.first < kMaximumEditWindowRules) {
+    const auto end =
+        VerifiedWindowEnd(rules, window, edit.offset + edit.removedLength, before.size());
+    if (!end) {
+      return std::nullopt;
+    }
+    window.end = *end;
+    const std::size_t newEnd = window.end - edit.removedLength + edit.insertedLength;
+    const auto replacement = ParseEditWindow(after, window.start, newEnd);
+    if (replacement) {
+      const auto previous = ParseEditWindow(before, window.start, window.end);
+      if (!previous ||
+          !MatchesOldBoundaries(*previous,
+                                rules.subspan(window.first, window.last + 1 - window.first))) {
+        return std::nullopt;
+      }
+      auto updated = SpliceEditWindow(old, window, *previous, *replacement, newEnd);
+      if (updated && changed) {
+        *changed = {window.first, window.last - window.first + 1, window.first,
+                    replacement->stylesheet.rules().size()};
+      }
+      return updated;
+    }
+    ++window.last;
+  }
+  return std::nullopt;
 }
 
 }  // namespace donner::css::parser

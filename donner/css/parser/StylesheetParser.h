@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <optional>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
@@ -33,6 +34,25 @@ public:
    * @return Parsed stylesheet.
    */
   static Stylesheet Parse(std::string_view str, ParseWarningSink& warningSink);
+  /// A single replacement in the original stylesheet text.
+  struct TextEdit {
+    std::size_t offset;
+    std::size_t removedLength;
+    std::size_t insertedLength;
+  };
+
+  /**
+   * Reparse a bounded qualified-rule window, or return nullopt for a full parse.
+   * @param old Fully parsed stylesheet before the edit.
+   * @param before Original stylesheet text.
+   * @param after Updated stylesheet text.
+   * @param edit Byte replacement in the original stylesheet.
+   * @param changed Optional rule-window output, set only on success.
+   */
+  static std::optional<Stylesheet> TryReparseTextEdit(const Stylesheet& old,
+                                                      std::string_view before,
+                                                      std::string_view after, TextEdit edit,
+                                                      EditedRuleWindow* changed = nullptr);
 };
 
 }  // namespace donner::css::parser

@@ -953,4 +953,76 @@ TEST(StylesheetParser, FontFaceSrcKeepsStringUrlAndIdentFormat) {
           "urlfallback", ElementsAre(UrlFontSourceIs("font-string.woff", "opentype", IsEmpty())))));
 }
 
+TEST(StylesheetTextEdit, RebasedTypedValuesEqualAFullParse) {
+  constexpr std::string_view before = "g{opacity:0.5} rect{fill:red} :not(:is(.a)){x:calc(1 + 2)}";
+  const std::size_t start = before.find("red");
+  std::string after(before);
+  after.replace(start, 3, "purple");
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto updated = StylesheetParser::TryReparseTextEdit(original, before, after, {start, 3, 6});
+  ASSERT_THAT(updated, testing::Optional(testing::_));
+  const Stylesheet full = StylesheetParser::Parse(after, warnings);
+  ASSERT_EQ(updated->rules().size(), full.rules().size());
+  for (std::size_t i = 0; i < full.rules().size(); ++i) {
+    const auto& actual = updated->rules()[i];
+    const auto& expected = full.rules()[i];
+    EXPECT_EQ(actual.ruleSourceRange, expected.ruleSourceRange);
+    EXPECT_EQ(actual.selectorSourceRange, expected.selectorSourceRange);
+    EXPECT_THAT(actual.declarations, testing::ElementsAreArray(expected.declarations));
+  }
+  EXPECT_EQ(updated->securityStats().componentValues, full.securityStats().componentValues);
+}
+
+TEST(StylesheetTextEdit, UnterminatedRuleFallsBack) {
+  constexpr std::string_view before = "rect{fill:red} circle{fill:blue}";
+  const std::size_t start = before.find('}');
+  std::string after(before);
+  after.erase(start, 1);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  EXPECT_THAT(StylesheetParser::TryReparseTextEdit(original, before, after, {start, 1, 0}),
+              testing::Eq(std::nullopt));
+}
+
+TEST(StylesheetParser, IncrementalEditRelocatesNestedCustomPropertyTokens) {
+  constexpr std::string_view before =
+      "rect { fill: red; } circle { --payload: f([red]); fill: var(--payload, blue); }";
+  const std::size_t start = before.find("red");
+  std::string after(before);
+  after.replace(start, 3, "purple");
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto incremental =
+      StylesheetParser::TryReparseTextEdit(original, before, after, {start, 3, 6});
+  ASSERT_THAT(incremental, testing::Optional(testing::_));
+  const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  ASSERT_THAT(incremental->rules(), testing::SizeIs(2));
+  ASSERT_THAT(fresh.rules(), testing::SizeIs(2));
+  const auto& declarations = incremental->rules()[1].declarations;
+  const auto& freshDeclarations = fresh.rules()[1].declarations;
+  ASSERT_THAT(declarations, testing::SizeIs(2));
+  ASSERT_THAT(freshDeclarations, testing::SizeIs(2));
+  EXPECT_THAT(declarations, ElementsAreArray(freshDeclarations));
+  const auto nestedOffset = [](const Declaration& declaration) {
+    const auto& function = declaration.values.front().get<Function>();
+    const auto& block = function.values.front().get<SimpleBlock>();
+    return block.values.front().sourceOffset();
+  };
+  EXPECT_EQ(nestedOffset(declarations[0]), nestedOffset(freshDeclarations[0]));
+  EXPECT_EQ(declarations[1].variableReferences, VariableReferences::Valid);
+}
+
+TEST(StylesheetParser, IncrementalEditLeavesLayeredStylesheetsToFullParse) {
+  constexpr std::string_view before = "@layer reset, palette; rect { fill: red; }";
+  const std::size_t start = before.find("red");
+  std::string after(before);
+  after.replace(start, 3, "blue");
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  ASSERT_THAT(original.layers(), testing::NotNull());
+  EXPECT_THAT(StylesheetParser::TryReparseTextEdit(original, before, after, {start, 3, 4}),
+              testing::Eq(std::nullopt));
+}
+
 }  // namespace donner::css::parser
