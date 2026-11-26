@@ -1890,7 +1890,9 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
 namespace {
 void SetLanguageColor(Glyph& glyph, ColorIndex color, bool preserveCss) {
   if (!preserveCss || !glyph.hasCssColor) {
-    glyph.colorIndex = color;
+    glyph.colorIndex = preserveCss && glyph.svgMarkupColor != 0
+                           ? static_cast<ColorIndex>(glyph.svgMarkupColor)
+                           : color;
   }
 }
 
@@ -1994,9 +1996,45 @@ void PaintCssSpan(TextBuffer& text, const std::vector<std::size_t>& lineStarts,
 
 }  // namespace
 
+namespace {
+// XMLTokenizer supplies source-ordered spans. Advance over each glyph once, even in a
+// single-line document with many attributes. CSS overrides still take precedence.
+class MarkupColorCursor {
+public:
+  explicit MarkupColorCursor(TextBuffer& buffer) : buffer_(buffer) {}
+  void paint(CssColorSpan span, int& first, int& last) {
+    while (line_ < buffer_.getTotalLines() && start_ < span.endOffset) {
+      Line& glyphs = buffer_.getLineGlyphsMutable(line_);
+      const auto end = start_ + glyphs.size();
+      const auto color = static_cast<std::uint8_t>(span.color);
+      for (auto i = std::max(start_, span.startOffset); i < std::min(end, span.endOffset); ++i) {
+        auto& glyph = glyphs[i - start_];
+        if (glyph.svgMarkupColor != color) {
+          glyph.svgMarkupColor = color;
+          first = std::min(first, line_);
+          last = std::max(last, line_ + 1);
+        }
+      }
+      if (span.endOffset <= end) {
+        break;
+      }
+      start_ = end + 1;
+      ++line_;
+    }
+  }
+
+private:
+  TextBuffer& buffer_;
+  int line_ = 0;
+  std::size_t start_ = 0;
+};
+}  // namespace
+
 void TextEditorCore::prepareSvgCssColors(int& fromLine, int& toLine) {
   const std::string source = text_.getText();
-  const auto regions = FindSvgCssSourceRegions(source);
+  MarkupColorCursor markup(text_);
+  const auto regions = FindSvgCssSourceRegions(
+      source, [&](CssColorSpan span) { markup.paint(span, fromLine, toLine); });
   std::vector<std::size_t> lineStarts;
   lineStarts.reserve(text_.getTotalLines());
   std::size_t start = 0;

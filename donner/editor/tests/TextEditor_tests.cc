@@ -5979,8 +5979,8 @@ TEST_F(TextEditorTests, DirectFoldMarkerRenderingTogglesFoldAndDrawsConnections)
 TEST_F(TextEditorTests, DarkPaletteUsesGraphiteDesignLanguage) {
   const TextEditor::Palette& palette = TextEditor::getDarkPalette();
   EXPECT_EQ(palette[static_cast<int>(ColorIndex::Background)], 0xff191615u);
-  EXPECT_EQ(palette[static_cast<int>(ColorIndex::Keyword)], 0xffb7d135u);
-  EXPECT_EQ(palette[static_cast<int>(ColorIndex::String)], 0xff74b7f0u);
+  EXPECT_EQ(palette[static_cast<int>(ColorIndex::Keyword)], 0xff9399ffu);
+  EXPECT_EQ(palette[static_cast<int>(ColorIndex::String)], 0xffa5dda8u);
   EXPECT_EQ(palette[static_cast<int>(ColorIndex::ErrorMessage)], 0xff6a61f0u);
   EXPECT_NE(palette[static_cast<int>(ColorIndex::Default)],
             palette[static_cast<int>(ColorIndex::Comment)]);
