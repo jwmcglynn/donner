@@ -112,7 +112,7 @@ same harness, machine class and method. Each goal names the counter or timer tha
   same styles: selector matching for document elements never reaches `<use>` instanced content
   (see [Single Cascade per Full Restyle](#single-cascade-per-full-restyle)).
 - **Bounded memory.** The rule index, with its ancestor hashes, costs at most
-  `RuleIndex::kMaxBytesPerEntry` (64 bytes on 64-bit builds) per selector-list entry plus key
+  `RuleIndex::kMaxBytesPerEntry` (84 bytes on 64-bit builds) per selector-list entry plus key
   text, vector slack and 4 bytes per nonempty index; the ancestor filter costs 4 KiB per style traversal
   plus its chain. Matched-style key metadata is bounded independently of the document and family
   accounts for retained record data.
@@ -1224,8 +1224,9 @@ a `<style>` element is parsed and when a source edit reparses it
 budget; their rules and component values are bounded by the import budget
 (`StylesheetImportBudget`). The index never exceeds `RuleIndex::kMaxBytesPerEntry` per
 selector-list entry plus key text and vector slack: a 4-byte rule position, at most one key record
-(an `RcString` and two 4-byte fields, 40 bytes on 64-bit builds), a 16-byte ancestor hash group and
-at most one 4-byte per-rule offset, 64 bytes in all on 64-bit builds, plus one leading 4-byte
+(an `RcString` and two 4-byte fields, 40 bytes on 64-bit builds), a 16-byte ancestor hash group, a 12-byte
+specificity tuple, and up to two per-rule offsets (4 and 8 bytes on a 64-bit build). The total is
+84 bytes on 64-bit builds, plus one leading 4-byte
 offset per nonempty index
 (`RuleIndexAncestorHashes.RetainedBytesCountTheGroupsWithinThePerEntryBound` in
 `//donner/svg/components/style:rule_index_tests`, and

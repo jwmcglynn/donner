@@ -208,6 +208,22 @@ TEST(RuleIndexCandidates, GatheringNeverExceedsTheEntryCount) {
   EXPECT_EQ(Gathered(index, keys, 2), index.entryCount());
 }
 
+TEST(RuleIndexSpecificity, KeepsRuleAndSelectorListOrder) {
+  const css::Stylesheet sheet = Parse(R"css(
+      rect, :is(.hot, #id), :where(#ignored) { fill: red }
+      :nth-child(2n of g, [title]) { stroke: blue }
+  )css");
+  ASSERT_THAT(sheet.rules(), ::testing::SizeIs(2));
+  ASSERT_THAT(sheet.rules()[0].selector.entries, ::testing::SizeIs(3));
+  ASSERT_THAT(sheet.rules()[1].selector.entries, ::testing::SizeIs(1));
+  const RuleIndex index(sheet.rules());
+  using css::Specificity;
+  EXPECT_THAT(Specificity(index.specificity(0, 0)), ::testing::Eq(Specificity::FromABC(0, 0, 1)));
+  EXPECT_THAT(Specificity(index.specificity(0, 1)), ::testing::Eq(Specificity::FromABC(1, 0, 0)));
+  EXPECT_THAT(Specificity(index.specificity(0, 2)), ::testing::Eq(Specificity::FromABC(0, 0, 0)));
+  EXPECT_THAT(Specificity(index.specificity(1, 0)), ::testing::Eq(Specificity::FromABC(0, 2, 0)));
+}
+
 TEST(RuleIndexCandidates, EmptyIndex) {
   const RuleIndex index;
   EXPECT_EQ(index.ruleCount(), 0u);

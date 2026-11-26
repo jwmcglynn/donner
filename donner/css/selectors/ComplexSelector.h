@@ -137,15 +137,18 @@ struct ComplexSelector {
   template <ElementLike T>
   SelectorMatchResult matches(const T& targetElement,
                               const SelectorMatchOptions<T>& options) const {
-    if (entries.empty()) {
-      return SelectorMatchResult::None();
-    }
-    return matchChain(
-               entries.size() - 1, 0, false,
-               CandidateCursor<T>(targetElement, std::nullopt, false, options.traversalBudget),
-               options)
+    return matchesPattern(targetElement, options)
                ? SelectorMatchResult::Match(Specificity(computeSpecificity()))
                : SelectorMatchResult::None();
+  }
+
+  /** Match the selector chain without computing the score. */
+  template <ElementLike T>
+  bool matchesPattern(const T& targetElement, const SelectorMatchOptions<T>& options) const {
+    return !entries.empty() && matchChain(entries.size() - 1, 0, false,
+                                          CandidateCursor<T>(targetElement, std::nullopt, false,
+                                                             options.traversalBudget),
+                                          options);
   }
 
   /**
