@@ -1686,8 +1686,11 @@ void RenderCoordinator::installFrameDecision(
     const FramePresentationInput& input,
     const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
     std::shared_ptr<const FramePresentation> next) {
+  const bool pixelsRepresentInput =
+      FrameCarriesInput(*next, input) ||
+      (input.desired.has_value() && compositedPresentation_.represents(*input.desired));
   frameRepresentsCurrentIntent_ =
-      (input.selection.empty() || next->hasSelectionGeometry()) && FrameCarriesInput(*next, input);
+      (input.selection.empty() || next->hasSelectionGeometry()) && pixelsRepresentInput;
   framePresentation_ = std::move(next);
   immediateOverlaySnapshot_ = framePresentation_->chrome();
   selectionBoundsCache_.displayedBoundsDoc = framePresentation_->selectionBounds();
