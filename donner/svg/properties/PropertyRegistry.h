@@ -758,6 +758,9 @@ public:
   /// Whether any ordinary declaration is still waiting for variable substitution.
   [[nodiscard]] bool hasPendingVariableDeclarations() const;
 
+  /// Cheap prefilter for registries whose parsers have never admitted variable declarations.
+  [[nodiscard]] bool mayHaveVariableInputs() const { return mayHaveVariableInputs_; }
+
   /// Resolve winning variable declarations before the ordinary inheritance step.
   [[nodiscard]] std::optional<FileOffset> resolveVariableDeclarations(
       const css::VariableLookup& lookup,
@@ -923,6 +926,10 @@ private:
 
   /// Inline-origin state is fixed size and independent of the number of declarations.
   std::array<std::optional<InlineResourceColor>, kResourceColorCount> inlineResourceColors_;
+
+  // Sticky across edits. Variable declarations enter through the parser; removing a declaration
+  // may leave this true, which only selects the regular exact check.
+  bool mayHaveVariableInputs_ = false;
 
   /// Returns the stable color property stored in this registry.
   Property<css::Color>& resourceColor(std::size_t index) UTILS_LIFETIME_BOUND;

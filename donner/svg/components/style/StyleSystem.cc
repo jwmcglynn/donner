@@ -2933,7 +2933,8 @@ bool StyleSystem::resolveComputedVariables(ComputedStyle& record,
 namespace {
 
 bool HasInlineVariableInputs(const StyleComponent* local) {
-  return local && std::ranges::any_of(local->properties().unparsedProperties, [](const auto& item) {
+  return local && local->properties().mayHaveVariableInputs() &&
+         std::ranges::any_of(local->properties().unparsedProperties, [](const auto& item) {
            return item.second.sourceDeclaration().variableReferences ==
                       css::VariableReferences::Valid ||
                   item.second.presentationVariable;

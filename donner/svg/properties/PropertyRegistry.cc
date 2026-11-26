@@ -3660,6 +3660,7 @@ void PropertyRegistry::writeVariableAwareDeclaration(
   if (!variable && declaration.variableReferences == css::VariableReferences::Valid) {
     variable = std::make_shared<const css::Declaration>(declaration);
   }
+  mayHaveVariableInputs_ |= static_cast<bool>(variable);
   // The lightweight entry identifies the destination; its raw token tree has one owner.
   const auto storedDeclaration = [&] {
     return variable ? css::Declaration(declaration.name, {}, declaration.sourceOffset,
@@ -3741,6 +3742,9 @@ std::optional<ParseDiagnostic> PropertyRegistry::deferVariableDeclaration(
 }
 
 bool PropertyRegistry::hasPendingVariableDeclarations() const {
+  if (!mayHaveVariableInputs_) {
+    return false;
+  }
   return std::ranges::any_of(unparsedProperties, [](const auto& item) {
     return IsPendingVariable(item.second) || item.second.presentationVariable;
   });
@@ -3958,6 +3962,7 @@ bool PropertyRegistry::storeCustomProperty(const css::Declaration& declaration,
   if (declaration.variableReferences == css::VariableReferences::Invalid) {
     return true;
   }
+  mayHaveVariableInputs_ |= declaration.variableReferences == css::VariableReferences::Valid;
   if (declaration.important) {
     specificity = css::Specificity::Important(specificity);
   }
@@ -4062,6 +4067,9 @@ bool IsPendingPresentationVariable(const parser::UnparsedProperty& entry, std::s
 }  // namespace
 
 bool PropertyRegistry::hasPendingPresentationVariable(std::string_view name) const {
+  if (!mayHaveVariableInputs_) {
+    return false;
+  }
   return std::ranges::any_of(unparsedProperties, [&](const auto& entry) {
     return IsPendingPresentationVariable(entry.second, name) ||
            (entry.second.presentationVariable && entry.second.presentationVariable->name == name);
@@ -4077,6 +4085,9 @@ bool PropertyRegistry::discardPendingPresentationVariable(std::string_view name)
 #endif
 
 bool PropertyRegistry::removePendingPresentationVariable(std::string_view name, bool clearMarkers) {
+  if (!mayHaveVariableInputs_) {
+    return false;
+  }
   bool removed = false;
   for (auto it = unparsedProperties.begin(); it != unparsedProperties.end();) {
     if (IsPendingPresentationVariable(it->second, name)) {
