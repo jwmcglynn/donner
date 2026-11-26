@@ -305,7 +305,13 @@ INSTANTIATE_TEST_SUITE_P(
         Edit("SplashClassUndo", Document::Splash, kSplashTarget, CascadeEdit::Class,
              kSplashNarrowEdit, OneDirection(kRepeatedEdits, RecordedRepetitions::Odd)),
         Edit("SplashFill", Document::Splash, kSplashTarget, CascadeEdit::Fill, kSplashNarrowEdit),
-        Edit("SplashStyle", Document::Splash, kSplashTarget, CascadeEdit::Style, kSplashNarrowEdit),
+        // The first inline fill replaces a gradient. Later writes only alternate solid fills.
+        Edit("SplashStyleInitial", Document::Splash, kSplashTarget, CascadeEdit::Style,
+             kSplashNarrowEdit, {.warmup = 0, .measured = 1}),
+        Edit("SplashStyle", Document::Splash, kSplashTarget, CascadeEdit::Style, {1, 3, 3, 3, 0, 0},
+             OneDirection(kRepeatedEdits, RecordedRepetitions::Even)),
+        Edit("SplashStyleUndo", Document::Splash, kSplashTarget, CascadeEdit::Style,
+             {1, 3, 3, 3, 0, 0}, OneDirection(kRepeatedEdits, RecordedRepetitions::Odd)),
         // The appended rule's class is on no element, so it is no element's candidate.
         Edit("SplashAppendRule", Document::Splash, kSplashTarget, CascadeEdit::AppendRule,
              {622, 1384, 1382, 1386, 1, 0}, kAppendFrame),
