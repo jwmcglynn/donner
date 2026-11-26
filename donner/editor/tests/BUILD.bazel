@@ -1218,11 +1218,31 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "css_source_corpus_tests",
+    srcs = ["CssSourceCorpus_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+        "//donner/svg/renderer/testdata",
+        "//third_party/bootstrap-icons:bootstrap-icons.svg",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    shard_count = 4,
+    deps = [
+        "//donner/base/xml",
+        "//donner/editor:css_source_syntax",
+        "//donner/editor:text_editor_core",
+        "//donner/svg/renderer/tests:svg_corpus",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_editor_core_tests",
     srcs = ["TextEditorCore_tests.cc"],
     deps = [
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/editor:css_source_syntax",
         "//donner/editor:text_editor_core",
         "@com_google_gtest//:gtest",
     ],

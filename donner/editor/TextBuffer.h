@@ -98,6 +98,10 @@ struct Glyph {
   bool isComment : 1;                           //!< Part of a single-line comment
   bool isMultiLineComment : 1;                  //!< Part of a multi-line comment
 
+  bool hasCssColor : 1 =
+      false;  //!< Cached CSS token color takes precedence over the XML line pass.
+  unsigned char cssRegionKind : 2 = 0;  //!< Previously painted CSS grammar, or zero for XML.
+
   /// Create a character with its syntax-color index.
   /// @param c Character stored in the glyph.
   /// @param color Syntax-color index.

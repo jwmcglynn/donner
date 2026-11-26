@@ -1649,6 +1649,7 @@ donner_cc_library(
     hdrs = ["SvgCorpus.h"],
     # Its headers come through //donner/svg, whose compile follows the text-tier variant of the
     # test that links it, so one variant-neutral compile cannot serve them all.
+    visibility = ["//donner/editor/tests:__pkg__"],
     variant_neutral = False,
     deps = [
         "//donner/base",

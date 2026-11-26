@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "donner/base/tests/ScopedCtypeLocale.h"
+#include "donner/editor/CssSourceSyntax.h"
 
 namespace donner::editor {
 
@@ -106,6 +107,12 @@ std::vector<std::optional<ColorIndex>> ColorIndexesAt(const Line& line,
   }
 
   return colors;
+}
+
+ColorIndex ColorAtByteOffset(const TextEditorCore& editor, std::size_t offset) {
+  const Coordinates coordinates = editor.getCoordinatesAtByteOffset(offset);
+  const Line& line = editor.buffer().getLineGlyphs(coordinates.line);
+  return line[editor.buffer().getCharacterIndex(coordinates)].colorIndex;
 }
 
 class TextEditorCoreTests : public ::testing::Test {
@@ -2673,6 +2680,193 @@ TEST_F(TextEditorCoreTests, ColorizeInternalHandlesStringEscapesAndDoubledQuotes
   const std::size_t escapedLineBlockComment = escapedLineText.find("/*");
   ASSERT_NE(escapedLineBlockComment, std::string_view::npos);
   EXPECT_FALSE(escapedLine[escapedLineBlockComment].isMultiLineComment);
+}
+
+TEST_F(TextEditorCoreTests, SvgColorizerClassifiesCssRegionsWithCssTokenSemantics) {
+  constexpr std::string_view kSource = R"SVG(<svg>
+  <style>
+    rect.shape, #target { fill: 12px; mystery: url("paint.svg"); --ink: red; /* note */ }
+  </style>
+  <rect id="target" style="stroke: var(--ink); unknown: 2" fill="rgb(1, 2, 3)"/>
+</svg>)SVG";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(kSource);
+  editor_.colorizeInternal();
+
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("rect.shape")), ColorIndex::Keyword);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find(".shape")), ColorIndex::Punctuation);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("shape")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("#target")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("fill: 12px")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("12px")), ColorIndex::Number);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("mystery")), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("url(")), ColorIndex::String);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("paint.svg")), ColorIndex::String);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("--ink")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("/* note */") + 2), ColorIndex::Comment);
+
+  const std::size_t inlineStroke = kSource.find("stroke: var");
+  EXPECT_EQ(ColorAtByteOffset(editor_, inlineStroke), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("var(--ink)")), ColorIndex::Keyword);
+  const std::size_t inlineUnknown = kSource.find("unknown: 2");
+  EXPECT_EQ(ColorAtByteOffset(editor_, inlineUnknown), ColorIndex::ErrorMarker);
+  const std::size_t presentationValue = kSource.find("rgb(1, 2, 3)");
+  EXPECT_EQ(ColorAtByteOffset(editor_, presentationValue), ColorIndex::Keyword);
+  EXPECT_EQ(ColorAtByteOffset(editor_, presentationValue + 4), ColorIndex::Number);
+}
+
+TEST_F(TextEditorCoreTests, SvgColorizerReusesCssRegionsOutsideRequestedLines) {
+  constexpr std::string_view kSource = R"(<svg>
+<style>rect { mystery: 1 }</style>
+
+
+<style>circle { fill: red }</style>
+</svg>)";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(kSource);
+  editor_.colorizeInternal();
+
+  const std::size_t firstProperty = kSource.find("mystery");
+  const std::size_t secondProperty = kSource.find("fill");
+  const Coordinates second = editor_.getCoordinatesAtByteOffset(secondProperty);
+  const int secondIndex = editor_.buffer().getCharacterIndex(second);
+  editor_.buffer().getLineGlyphsMutable(second.line)[secondIndex].colorIndex =
+      ColorIndex::UserFunction;
+
+  const Coordinates first = editor_.getCoordinatesAtByteOffset(firstProperty);
+  editor_.colorizeRange(first.line, first.line + 1);
+
+  EXPECT_EQ(ColorAtByteOffset(editor_, firstProperty), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, secondProperty), ColorIndex::UserFunction);
+}
+
+TEST_F(TextEditorCoreTests, RemovingMultilineStyleRestoresXmlColorsBeyondTheEditedLine) {
+  const std::string original = R"(<svg><rect style="
+fill: red;
+opacity: 1;
+stroke: blue;
+" /></svg>)";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(original);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, original.find("stroke")), ColorIndex::KnownIdentifier);
+
+  const auto name = original.find("style");
+  editor_.applyExternalSourceEdit(name, 0, "data-");
+  editor_.colorizeInternal();
+  const std::string renamed = editor_.getText();
+  const auto stroke = renamed.find("stroke");
+  const ColorIndex afterEdit = ColorAtByteOffset(editor_, stroke);
+  TextEditorCore fresh;
+  fresh.setSvgLanguageDefinition();
+  fresh.setText(renamed);
+  fresh.colorizeInternal();
+  EXPECT_EQ(afterEdit, ColorAtByteOffset(fresh, stroke));
+  EXPECT_NE(afterEdit, ColorIndex::KnownIdentifier);
+
+  editor_.applyExternalSourceEdit(name, 5, "");
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, original.find("stroke")), ColorIndex::KnownIdentifier);
+}
+
+TEST_F(TextEditorCoreTests, CssColorsUseSourceBytesAcrossTabsAndUtf8) {
+  const std::string source = "<svg>\n\t<style>/* café */\n\t.été { fill: 12px }</style></svg>";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("café")), ColorIndex::Comment);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("été")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("fill")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("12px")), ColorIndex::Number);
+}
+
+TEST_F(TextEditorCoreTests, CssColorsMapDecodedStringsAndReferencesBackToSource) {
+  constexpr std::string_view source =
+      R"(<svg><rect style="font-family: &quot;Arial&quot;; F&#73;LL: red; --MiXeD: 2"/></svg>)";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  const auto start = source.find("&quot;");
+  const auto end = source.find("; F&#");
+  for (std::size_t i = start; i < end; ++i) {
+    EXPECT_EQ(ColorAtByteOffset(editor_, i), ColorIndex::String);
+  }
+  for (std::size_t i = source.find("F&#73;"); i < source.find("LL:") + 2; ++i) {
+    EXPECT_EQ(ColorAtByteOffset(editor_, i), ColorIndex::KnownIdentifier);
+  }
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("--MiXeD")), ColorIndex::Identifier);
+}
+
+TEST_F(TextEditorCoreTests, CssColorsFollowScopedSvgNamespaceAndCdata) {
+  constexpr std::string_view source = R"(<s:svg xmlns:s="http://www.w3.org/2000/svg">
+<s:style><![CDATA[.card { StRoKe-WiDtH: 2px; }]]></s:style>
+<g xmlns:s="urn:example"><s:style>.foreign { unknown: 2 }</s:style></g>
+<s:style>.item { FILL: blue }</s:style></s:svg>)";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("StRoKe-WiDtH")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("2px")), ColorIndex::Number);
+  EXPECT_NE(ColorAtByteOffset(editor_, source.find("unknown")), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("FILL")), ColorIndex::KnownIdentifier);
+}
+
+TEST(CssSourceSyntaxTests, EmitsDisjointRegionsAndCoversEveryCssByte) {
+  constexpr std::string_view source = R"(<svg>
+<style>.a { FILL: red }<title>Styles</title>.b { stroke: blue }</style>
+<rect style="font-family: &quot;Sans&quot;; opacity: 0.5" fill="red"/>
+</svg>)";
+  const auto regions = FindSvgCssSourceRegions(source);
+  ASSERT_EQ(regions.size(), 4u);
+  std::size_t previousEnd = 0;
+  for (const auto& region : regions) {
+    EXPECT_LE(previousEnd, region.startOffset);
+    std::size_t nextByte = region.startOffset;
+    ClassifySvgCssRegion(source, region, [&](CssColorSpan span) {
+      EXPECT_EQ(span.startOffset, nextByte);
+      EXPECT_GT(span.endOffset, span.startOffset);
+      nextByte = span.endOffset;
+    });
+    EXPECT_EQ(nextByte, region.endOffset);
+    previousEnd = region.endOffset;
+  }
+}
+
+TEST_F(TextEditorCoreTests, FontFaceDescriptorsFollowTheirEnclosingRule) {
+  constexpr std::string_view source =
+      "<svg><style>@layer theme { @font-face { font-family: Test; SRC: url(font.woff2); "
+      "font-width: normal; fill: red; } } rect { src: url(other); fill: red }</style></svg>";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("SRC:")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("font-width:")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("fill:")), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("src:")), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.rfind("fill:")), ColorIndex::KnownIdentifier);
+}
+
+TEST_F(TextEditorCoreTests, LaterXmlColorBatchesReuseTheCssOverlay) {
+  // A language without a line tokenizer uses ten-line paint batches.
+  auto language = LanguageDefinition::SVG();
+  language.tokenize = nullptr;
+  editor_.setLanguageDefinition(language);
+  const std::string source =
+      "<svg>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n"
+      "<style>rect { fill: red }</style>\n</svg>";
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  const auto fill = source.find("fill");
+  const auto where = editor_.getCoordinatesAtByteOffset(fill);
+  auto& glyph =
+      editor_.buffer().getLineGlyphsMutable(where.line)[editor_.buffer().getCharacterIndex(where)];
+  ASSERT_EQ(glyph.colorIndex, ColorIndex::KnownIdentifier);
+  glyph.colorIndex = ColorIndex::UserFunction;
+  editor_.colorizeInternal();
+  EXPECT_EQ(glyph.colorIndex, ColorIndex::UserFunction);
+  editor_.applyExternalSourceEdit(fill, 4, "stroke");
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, fill), ColorIndex::KnownIdentifier);
 }
 
 }  // namespace donner::editor
