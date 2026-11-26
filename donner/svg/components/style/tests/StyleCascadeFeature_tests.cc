@@ -388,6 +388,72 @@ TEST_F(StyleSystemTest, PresentationVariableEditsRetainOnlyTheCurrentAttribute) 
   fill(css::RGBA::RGB(0, 128, 0));
 }
 
+TEST_F(StyleSystemTest, HiddenPresentationVariablesTrackReplacementAndRemoval) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" style="--ink:red;--next:green;fill:blue"/>
+    </svg>)svg");
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto expectFill = [&](css::RGBA color) {
+    EXPECT_THAT(target->getComputedStyle().fill.get(),
+                testing::Optional(Eq(PaintServer::Solid(css::Color(color)))));
+  };
+
+  target->setAttribute("fill", "var(--ink)");
+  target->setAttribute("fill", "var(--next)");
+  expectFill(css::RGBA::RGB(0, 0, 255));
+  target->setStyle("--ink:red;--next:green");
+  expectFill(css::RGBA::RGB(0, 128, 0));
+
+  target->setStyle("--ink:red;--next:green;fill:blue");
+  target->setAttribute("fill", "var(--ink)");
+  target->removeAttribute("fill");
+  expectFill(css::RGBA::RGB(0, 0, 255));
+  target->setStyle("--ink:red;--next:green");
+  expectFill(css::RGBA::RGB(0, 0, 0));
+
+  target->setStyle("--ink:red;--next:green;fill:var(--next)");
+  target->setAttribute("fill", "var(--ink)");
+  expectFill(css::RGBA::RGB(0, 128, 0));
+  target->setStyle("--ink:red;--next:green");
+  expectFill(css::RGBA::RGB(255, 0, 0));
+}
+
+TEST_F(StyleSystemTest, MarkerVariablesDiscoverAndOrderTheirLonghands) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--m:url(#arrow)">
+      <path id="target" style="marker:var(--m);marker-end:url(#other)"/>
+      <path id="invalid" style="marker:url(#other);marker:var(--absent)"/>
+      <g style="marker:url(#arrow)">
+        <path id="inherited" style="marker:initial;marker:inherit"/>
+      </g>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  const auto invalid = document.querySelector("#invalid");
+  const auto inherited = document.querySelector("#inherited");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_THAT(invalid, testing::Optional(testing::_));
+  ASSERT_THAT(inherited, testing::Optional(testing::_));
+
+  const Reference arrow(RcString("#arrow"));
+  const Reference other(RcString("#other"));
+  const auto& property = target->getComputedStyle();
+  EXPECT_THAT(property.markerStart.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(property.markerMid.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(property.markerEnd.get(), testing::Optional(Eq(other)));
+
+  const auto& invalidProperty = invalid->getComputedStyle();
+  EXPECT_THAT(invalidProperty.markerStart.get(), Eq(std::nullopt));
+  EXPECT_THAT(invalidProperty.markerMid.get(), Eq(std::nullopt));
+  EXPECT_THAT(invalidProperty.markerEnd.get(), Eq(std::nullopt));
+
+  const auto& inheritedProperty = inherited->getComputedStyle();
+  EXPECT_THAT(inheritedProperty.markerStart.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(inheritedProperty.markerMid.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(inheritedProperty.markerEnd.get(), testing::Optional(Eq(arrow)));
+}
+
 TEST_F(StyleSystemTest, InlineVariableEditsKeepTheWinningPriorityInSource) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" style="--ink: red">
