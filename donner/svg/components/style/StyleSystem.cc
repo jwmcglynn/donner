@@ -3123,33 +3123,32 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
 
 namespace {
 
-MatchedStyleRule BuildMatchedStyleRule(const StylesheetComponent& stylesheet,
+MatchedStyleRule BuildMatchedStyleRule(Registry& registry, const StylesheetComponent& stylesheet,
                                        Entity stylesheetEntity, const css::SelectorRule& rule,
                                        std::size_t ruleIndex, std::size_t selectorEntryIndex,
                                        css::Specificity specificity) {
+  const auto& selector = selectorEntryIndex < rule.selectorEntrySourceRanges.size()
+                             ? rule.selectorEntrySourceRanges[selectorEntryIndex]
+                             : rule.selectorSourceRange;
+  const auto project = [&](const SourceRange& range) {
+    return StyleSystem().mapStylesheetSourceRange(registry, stylesheetEntity, range);
+  };
   MatchedStyleRule matchedRule;
   matchedRule.stylesheetEntity = stylesheetEntity;
   matchedRule.ruleIndex = ruleIndex;
   matchedRule.selectorEntryIndex = selectorEntryIndex;
   matchedRule.specificity = specificity;
   matchedRule.isUserAgentStylesheet = stylesheet.isUserAgentStylesheet;
-  matchedRule.ruleSourceRange = stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
-
-  if (selectorEntryIndex < rule.selectorEntrySourceRanges.size()) {
-    matchedRule.selectorSourceRange = stylesheet.sourceMap.mapToDocumentSource(
-        rule.selectorEntrySourceRanges[selectorEntryIndex]);
-  } else {
-    matchedRule.selectorSourceRange =
-        stylesheet.sourceMap.mapToDocumentSource(rule.selectorSourceRange);
-  }
-
+  matchedRule.ruleCssRange = rule.ruleSourceRange;
+  matchedRule.selectorCssRange = selector;
+  matchedRule.ruleSourceRange = project(rule.ruleSourceRange);
+  matchedRule.selectorSourceRange = project(selector);
   for (const css::Declaration& declaration : rule.declarations) {
-    if (std::optional<SourceRange> sourceRange =
-            stylesheet.sourceMap.mapToDocumentSource(declaration.sourceRange)) {
-      matchedRule.declarationSourceRanges.push_back(*sourceRange);
+    if (const auto range =
+            project(declaration.authoredDeclarationRange().value_or(declaration.sourceRange))) {
+      matchedRule.declarationSourceRanges.push_back(*range);
     }
   }
-
   return matchedRule;
 }
 
@@ -3195,8 +3194,8 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
       const auto specificity = CascadeSpecificity(match->specificity.withLayerRank(*rank),
                                                   stylesheet.isUserAgentStylesheet);
 
-      result.push_back(BuildMatchedStyleRule(stylesheet, stylesheetEntity, rule, ruleIndex,
-                                             match->selectorEntryIndex, specificity));
+      result.push_back(BuildMatchedStyleRule(registry, stylesheet, stylesheetEntity, rule,
+                                             ruleIndex, match->selectorEntryIndex, specificity));
     }
     return true;
   };

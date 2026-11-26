@@ -534,6 +534,8 @@ struct MatchedStyleRule {
   std::size_t selectorEntryIndex = 0;    ///< Index of the matched selector-list entry.
   css::Specificity specificity;          ///< Specificity used for cascading this rule.
   bool isUserAgentStylesheet = false;    ///< True when this came from the built-in UA stylesheet.
+  std::optional<SourceRange> ruleCssRange;           ///< Rule range in the parsed CSS text.
+  std::optional<SourceRange> selectorCssRange;       ///< Selector range in the parsed CSS text.
   std::optional<SourceRange> ruleSourceRange;        ///< Matched rule range in SVG source.
   std::optional<SourceRange> selectorSourceRange;    ///< Matched selector branch in SVG source.
   std::vector<SourceRange> declarationSourceRanges;  ///< Declaration ranges in SVG source.

@@ -20,21 +20,29 @@ SVGMatchedStyleRule ToPublicMatchedRule(const components::MatchedStyleRule& rule
       .selectorEntryIndex = rule.selectorEntryIndex,
       .specificity = rule.specificity,
       .isUserAgentStylesheet = rule.isUserAgentStylesheet,
+      .ruleCssRange = rule.ruleCssRange,
+      .selectorCssRange = rule.selectorCssRange,
       .ruleSourceRange = rule.ruleSourceRange,
       .selectorSourceRange = rule.selectorSourceRange,
       .declarationSourceRanges = rule.declarationSourceRanges,
   };
 }
 
-SVGStylesheetRule ToPublicStylesheetRule(Entity stylesheetEntity, std::size_t ruleIndex,
+SVGStylesheetRule ToPublicStylesheetRule(Registry& registry, Entity stylesheetEntity,
+                                         std::size_t ruleIndex,
                                          const StylesheetComponent& stylesheet,
                                          const css::SelectorRule& rule) {
+  const auto project = [&](const SourceRange& range) {
+    return components::StyleSystem().mapStylesheetSourceRange(registry, stylesheetEntity, range);
+  };
   SVGStylesheetRule result{
       .isUserAgentStylesheet = stylesheet.isUserAgentStylesheet,
       .stylesheetEntity = stylesheetEntity,
       .ruleIndex = ruleIndex,
-      .ruleSourceRange = stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange),
-      .selectorSourceRange = stylesheet.sourceMap.mapToDocumentSource(rule.selectorSourceRange),
+      .ruleCssRange = rule.ruleSourceRange,
+      .selectorCssRange = rule.selectorSourceRange,
+      .ruleSourceRange = project(rule.ruleSourceRange),
+      .selectorSourceRange = project(rule.selectorSourceRange),
   };
   result.declarations.reserve(rule.declarations.size());
   for (std::size_t declarationIndex = 0; declarationIndex < rule.declarations.size();
@@ -43,7 +51,8 @@ SVGStylesheetRule ToPublicStylesheetRule(Entity stylesheetEntity, std::size_t ru
     result.declarations.push_back(SVGStylesheetDeclaration{
         .declarationIndex = declarationIndex,
         .declaration = declaration,
-        .declarationSourceRange = stylesheet.sourceMap.mapToDocumentSource(declaration.sourceRange),
+        .declarationSourceRange =
+            project(declaration.authoredDeclarationRange().value_or(declaration.sourceRange)),
     });
   }
   return result;
@@ -82,20 +91,23 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
                                                       bool includeUserAgent) {
   return document.withReadAccess([includeUserAgent](DocumentReadAccess& access) {
     std::vector<SVGStylesheetRule> result;
-    const Registry& registry = access.registry();
+    Registry& registry = access.registry();
     for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
       const StylesheetComponent& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
       if (!stylesheet.isCssType()) {
         continue;
       }
-      if (stylesheet.isUserAgentStylesheet ? !includeUserAgent : stylesheet.sourceMap.empty()) {
+      if (stylesheet.isUserAgentStylesheet && !includeUserAgent) {
         continue;
       }
 
       const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
       for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {
-        result.push_back(
-            ToPublicStylesheetRule(stylesheetEntity, ruleIndex, stylesheet, rules[ruleIndex]));
+        auto rule = ToPublicStylesheetRule(registry, stylesheetEntity, ruleIndex, stylesheet,
+                                           rules[ruleIndex]);
+        if (stylesheet.isUserAgentStylesheet || rule.ruleSourceRange) {
+          result.push_back(std::move(rule));
+        }
       }
     }
     return result;
