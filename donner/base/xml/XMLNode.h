@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstddef>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -16,6 +17,7 @@ namespace donner::xml {
 
 // Forward declaration, #include "donner/base/xml/XMLDocument.h"
 class XMLDocument;
+class XMLSourceStore;
 
 /// Resolved source metadata for one serialized XML attribute.
 struct XMLAttributeSourceLocation {
