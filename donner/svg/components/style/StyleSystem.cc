@@ -3263,7 +3263,7 @@ struct CustomPropertySearch {
       const auto priority = CascadeSpecificity(match->specificity.withLayerRank(*rank), userAgent);
       AdmitRuleDeclarations(rule, priority, budget, counters,
                             [&](const css::Declaration& declaration, css::Specificity specificity) {
-                              ConsiderCustomProperty(winner, name, declaration, specificity, source,
+                              ConsiderCustomProperty(winner, name, declaration, specificity,
                                                      sourceEntity);
                             });
     }
@@ -3329,7 +3329,7 @@ std::optional<SourceRange> MapStylesheetText(const xml::XMLNode& node, std::stri
 }
 
 bool HasCurrentSourceProjection(const Registry& registry) {
-  const auto* document = registry.ctx().find<xml::XMLDocumentContext>();
+  const auto* document = registry.ctx().find<xml::components::XMLDocumentContext>();
   return document && document->sourceStoreHolder->store &&
          !document->sourceRequiresDocumentReparse && document->unreparsedSpans.empty();
 }
@@ -3345,8 +3345,8 @@ std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity
   if (!start || !end || *end <= *start || *end > sheet->text.size()) {
     return std::nullopt;
   }
-  return MapStylesheetText(xml::XMLNode(EntityHandle(registry, stylesheetEntity)), sheet->text,
-                           *start, *end);
+  const auto node = xml::XMLNode::TryCast(EntityHandle(registry, stylesheetEntity));
+  return node ? MapStylesheetText(*node, sheet->text, *start, *end) : std::nullopt;
 }
 
 std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
@@ -3359,8 +3359,9 @@ std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
   const auto end = *start + length;
   const SourceRange local{FileOffset::Offset(*start), FileOffset::Offset(end)};
   if (winner.inlineEntity != entt::null) {
-    const xml::XMLNode node(EntityHandle(registry, winner.inlineEntity));
-    return node.mapDecodedAttributeRange(xml::XMLQualifiedNameRef("style"), local);
+    const auto node = xml::XMLNode::TryCast(EntityHandle(registry, winner.inlineEntity));
+    return node ? node->mapDecodedAttributeRange(xml::XMLQualifiedNameRef("style"), local)
+                : std::nullopt;
   }
   return winner.sheetEntity != entt::null
              ? MapEmbeddedStylesheetRange(registry, winner.sheetEntity, local)
