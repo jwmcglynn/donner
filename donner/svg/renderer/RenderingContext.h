@@ -19,6 +19,8 @@
 
 namespace donner::svg::components {
 
+struct RenderTreeState;
+
 class ShadowTreeComponent;
 
 /// Registry context marker: the document's missing packaged fallback font was already reported.
@@ -212,8 +214,14 @@ private:
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.
    *
    * @param warningSink Sink to collect warnings.
+   * @return False when the edited style passes refused work and need a full restyle.
    */
-  void createComputedComponents(ParseWarningSink& warningSink, StylePassScheduler scheduler);
+  bool createComputedComponents(RenderTreeState& state, ParseWarningSink& warningSink,
+                                StylePassScheduler scheduler);
+
+  /// Discard the previous frame's derived tree, then create the new one.
+  bool rebuildComputedComponents(RenderTreeState& state, ParseWarningSink& warningSink,
+                                 StylePassScheduler scheduler);
 
   /**
    * Creates all rendering instances for the document, the final step before it can be rendered.

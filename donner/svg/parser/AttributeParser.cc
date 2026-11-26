@@ -2384,11 +2384,11 @@ std::optional<ParseDiagnostic> AttributeParser::ParseAndSetAttribute(
 std::optional<ParseDiagnostic> AttributeParser::ApplyParsedAttribute(
     SVGElement& element, const XMLQualifiedNameRef& name, std::string_view value,
     bool* consumedAsPresentationAttribute) {
-  return element.setAttributeFromXMLMutation(name, value, consumedAsPresentationAttribute);
+  return element.setAttributeWithRouter(name, value, consumedAsPresentationAttribute, nullptr);
 }
 
 void AttributeParser::RemoveParsedAttribute(SVGElement& element, const XMLQualifiedNameRef& name) {
-  element.removeAttributeFromXMLMutation(name);
+  element.removeAttributeWithRouter(name, nullptr);
 }
 
 components::TypedFilterAttributeEdit AttributeParser::ReapplyTypedFilterAttributes(

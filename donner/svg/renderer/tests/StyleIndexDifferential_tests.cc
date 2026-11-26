@@ -9,10 +9,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -30,6 +32,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -552,6 +555,244 @@ CascadePassSnapshot PrepareFirstFrameWithDiagnostics(SVGDocument& document) {
   return CaptureCascadePass(document, warnings, before);
 }
 
+// Normalize reference targets by tree position, since the two documents own different entities.
+auto PositionedRenderInstances(SVGDocument& document) {
+  const Registry& registry = document.registry();
+  const auto positions = PositionedEntities(document);
+  const auto position = [&](Entity entity) -> std::string {
+    const auto found = std::ranges::find(positions, entity, &PositionedEntity::entity);
+    return found == positions.end() ? std::string() : found->position;
+  };
+  const auto paintReference = [&](const ResolvedPaintServer& paint) {
+    const auto* reference = std::get_if<PaintResolvedReference>(&paint);
+    return reference ? position(reference->reference) : std::string();
+  };
+  const auto referenceTarget = [&](const auto& reference) {
+    return reference ? position(reference->reference) : std::string();
+  };
+  using Instance = std::tuple<std::string, int, bool, bool, std::string, Transform2d,
+                              std::array<std::string, 8>>;
+  std::vector<Instance> result;
+  for (const auto& entity : positions) {
+    const auto* instance = registry.try_get<RenderingInstanceComponent>(entity.entity);
+    if (!instance) {
+      continue;
+    }
+    const auto* filter = instance->resolvedFilter
+                             ? std::get_if<ResolvedReference>(&*instance->resolvedFilter)
+                             : nullptr;
+    result.emplace_back(
+        entity.position, instance->drawOrder, instance->visible, instance->isolatedLayer,
+        position(instance->subtreeLastEntity), instance->worldFromEntityTransform,
+        std::array{paintReference(instance->resolvedFill), paintReference(instance->resolvedStroke),
+                   referenceTarget(instance->clipPath), referenceTarget(instance->mask),
+                   referenceTarget(instance->markerStart), referenceTarget(instance->markerMid),
+                   referenceTarget(instance->markerEnd),
+                   filter ? position(*filter) : std::string()});
+  }
+  return result;
+}
+
+TEST(StyleInvalidationDifferential, PublicEditsMatchFullRestyle) {
+  struct Edit {
+    std::string_view name;
+    std::string_view contents;
+    void (*apply)(SVGElement&);
+    bool fullStyleFallback = false;
+    std::optional<std::size_t> affectedCount = std::nullopt;
+  };
+  const Edit edits[] = {
+      {"class-subject",
+       R"(<style>.hot { fill: red }</style><rect id="target" width="8" height="8"/>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 1},
+      {"class-attribute-order",
+       R"(<style>[class="cold hot"] { fill: red }</style><rect id="target" class="hot cold" width="8" height="8"/>)",
+       [](SVGElement& e) { e.setClassName("cold hot"); }, false, 1},
+      {"class-inheritance",
+       R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
+      {"class-following-sibling",
+       R"(<style>.hot + .after rect { fill: red }</style><g><g id="target"/><g class="after"><rect width="8" height="8"/></g></g>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 3},
+      {"class-filtered-nth-child",
+       R"(<style>rect:nth-child(1 of :is(.hot)) { fill: red }</style><g><rect id="target" width="8" height="8"/><rect class="hot" x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
+      {"class-filtered-nth-last-child",
+       R"(<style>rect:nth-last-child(1 of :is(.hot)) { fill: red }</style><g><rect class="hot" width="8" height="8"/><rect id="target" x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
+      {"style", R"(<rect id="target" width="8" height="8"/>)",
+       [](SVGElement& e) { e.setStyle("fill: red"); }, false, 1},
+      {"update-style",
+       R"(<style>[style] + rect { fill: red }</style><g><g id="target"/><rect width="8" height="8"/></g>)",
+       [](SVGElement& e) { e.updateStyle("fill: red"); }, false, 2},
+      {"presentation-attribute",
+       R"(<style>[fill=red] + rect { fill: lime }</style><g><rect id="target" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) { e.setAttribute("fill", "red"); }, false, 2},
+      {"presentation-removal",
+       R"(<style>[fill] + rect { fill: lime }</style><g><rect id="target" fill="red" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) { e.removeAttribute("fill"); }, false, 2},
+      {"ancestor-selector",
+       R"(<style>g:has(.hot) { fill: red }</style><g><rect id="target" width="8" height="8"/></g>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, true},
+      {"resource-subtree",
+       R"svg(<defs><linearGradient id="paint"><stop id="target" stop-color="blue"/></linearGradient></defs><rect fill="url(#paint)" width="8" height="8"/>)svg",
+       [](SVGElement& e) { e.setAttribute("stop-color", "red"); }, true},
+      {"remove-paint-reference",
+       R"svg(<defs><linearGradient id="paint"><stop stop-color="blue"/></linearGradient></defs><rect id="target" fill="url(#paint)" width="8" height="8"/>)svg",
+       [](SVGElement& e) { e.setAttribute("fill", "red"); }, false, 1},
+      {"id-reference",
+       R"(<rect id="target" fill="red" width="8" height="8"/><use href="#target" x="8"/>)",
+       [](SVGElement& e) { e.setId("other"); }, true},
+      {"uninstantiated-symbol",
+       R"(<style>.hot { fill: red }</style><symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 1},
+      {"instantiated-symbol",
+       R"(<style>.hot { fill: red }</style><symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol><use href="#tile" width="8" height="8"/>)",
+       [](SVGElement& e) { e.setClassName("hot"); }},
+      {"use-source",
+       R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g><use href="#target" x="8"/>)",
+       [](SVGElement& e) { e.setClassName("hot"); }},
+  };
+  for (const auto& edit : edits) {
+    SCOPED_TRACE(edit.name);
+    const std::string source =
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">)") +
+        std::string(edit.contents) + R"(<circle cx="12" cy="12" r="2"/></svg>)";
+    SVGDocument narrow = ParseSource(source);
+    SVGDocument full = ParseSource(source);
+    const auto beforeEdit = PrepareFirstFrameWithDiagnostics(narrow);
+    std::ignore = PrepareFirstFrameWithDiagnostics(full);
+    for (SVGDocument* document : {&narrow, &full}) {
+      auto target = document->querySelector("#target");
+      ASSERT_THAT(target, ::testing::Optional(::testing::_));
+      edit.apply(*target);
+    }
+    auto& narrowState = narrow.registry().ctx().get<RenderTreeState>();
+    auto& fullState = full.registry().ctx().get<RenderTreeState>();
+    EXPECT_EQ(narrowState.needsFullStyleRecompute, edit.fullStyleFallback);
+    fullState.needsFullStyleRecompute = true;
+    const auto before = narrowState.counters;
+    const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
+    const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
+
+    EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
+    EXPECT_THAT(narrowPass.styles, ::testing::Not(ElementsAreArray(beforeEdit.styles)));
+    EXPECT_THAT(narrowPass.rules, ElementsAreArray(fullPass.rules));
+    EXPECT_THAT(narrowPass.warnings, ElementsAreArray(fullPass.warnings));
+    EXPECT_THAT(PositionedRenderInstances(narrow),
+                ElementsAreArray(PositionedRenderInstances(full)));
+    EXPECT_EQ(narrowState.counters.fullRebuilds - before.fullRebuilds, 1u);
+    EXPECT_EQ(narrowState.counters.retainedUpdates - before.retainedUpdates, 0u);
+    EXPECT_EQ(narrowPass.counters.fullClears, edit.fullStyleFallback ? 1u : 0u);
+    EXPECT_EQ(fullPass.counters.fullClears, 1u);
+    if (edit.affectedCount) {
+      EXPECT_EQ(narrowPass.counters.elementsCascaded, *edit.affectedCount);
+      EXPECT_GT(fullPass.counters.elementsCascaded, narrowPass.counters.elementsCascaded);
+    }
+
+    Renderer narrowRenderer;
+    Renderer fullRenderer;
+    narrowRenderer.draw(narrow);
+    fullRenderer.draw(full);
+    editor::tests::CompareBitmapToBitmap(narrowRenderer.takeSnapshot(), fullRenderer.takeSnapshot(),
+                                         std::string(edit.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(StyleInvalidationDifferential, LaterUseReadsPreviouslyRestyledSymbol) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>.hot { fill: red }</style>
+      <symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol>
+      <use id="consumer" href="#missing" width="8" height="8"/>
+    </svg>)svg";
+  SVGDocument narrow = ParseSource(kSource);
+  SVGDocument full = ParseSource(kSource);
+  for (SVGDocument* document : {&narrow, &full}) {
+    std::ignore = PrepareFirstFrameWithDiagnostics(*document);
+    auto target = document->querySelector("#target");
+    ASSERT_THAT(target, ::testing::Optional(::testing::_));
+    target->setClassName("hot");
+  }
+  EXPECT_EQ(PrepareFirstFrameWithDiagnostics(narrow).counters.elementsCascaded, 1u);
+  full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+  std::ignore = PrepareFirstFrameWithDiagnostics(full);
+
+  for (SVGDocument* document : {&narrow, &full}) {
+    auto consumer = document->querySelector("#consumer");
+    ASSERT_THAT(consumer, ::testing::Optional(::testing::_));
+    consumer->setAttribute("href", "#tile");
+  }
+  full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+  const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
+  const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
+  EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
+  EXPECT_THAT(PositionedRenderInstances(narrow), ElementsAreArray(PositionedRenderInstances(full)));
+  Renderer narrowRenderer;
+  Renderer fullRenderer;
+  narrowRenderer.draw(narrow);
+  fullRenderer.draw(full);
+  editor::tests::CompareBitmapToBitmap(narrowRenderer.takeSnapshot(), fullRenderer.takeSnapshot(),
+                                       "later-use", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleInvalidationDifferential, LimitedPassPreservesNewRefusalAndWarnings) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>
+        .hot { fill: not-a-color; }
+        .hot { stroke: red; }
+        .distal { fill: lime; }
+      </style>
+      <rect class="distal" id="distal" width="8" height="8"/>
+      <rect id="target" x="8" width="8" height="8"/>
+    </svg>)svg";
+  SVGDocument measurement = ParseSource(kSource);
+  const auto base = PrepareFirstFrameWithDiagnostics(measurement);
+  for (bool limitAfterEdit : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "limit installed after routing=" << limitAfterEdit);
+    StyleResourceBudget::Limits limits;
+    // Adding the class exceeds the previously admitted full workload. With a late limit of
+    // two even the selective pass refuses, which exercises the renderer's actual retry.
+    limits.ruleElementMatches = limitAfterEdit ? 2u : base.counters.rulesTested;
+
+    SVGDocument narrow = ParseSource(kSource);
+    SVGDocument full = ParseSource(kSource);
+    for (SVGDocument* document : {&narrow, &full}) {
+      auto& context = document->registry().ctx();
+      if (!limitAfterEdit) {
+        context.emplace<StyleResourceBudget>(limits);
+      }
+      const auto before = PrepareFirstFrameWithDiagnostics(*document);
+      EXPECT_EQ(before.counters.budgetRejections, 0u);
+      auto target = document->querySelector("#target");
+      ASSERT_THAT(target, ::testing::Optional(::testing::_));
+      target->setClassName("hot");
+      if (limitAfterEdit) {
+        context.erase<StyleResourceBudget>();
+        context.emplace<StyleResourceBudget>(limits);
+      }
+    }
+
+    auto& narrowState = narrow.registry().ctx().get<RenderTreeState>();
+    EXPECT_EQ(narrowState.needsFullStyleRecompute, !limitAfterEdit);
+    full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+    const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
+    const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
+    EXPECT_GT(fullPass.counters.budgetRejections, 0u);
+    EXPECT_GT(fullPass.warningAttempts, 0u);
+    EXPECT_EQ(narrowPass.counters.fullClears, 1u);
+    EXPECT_EQ(narrowPass.counters.budgetRejections,
+              fullPass.counters.budgetRejections + static_cast<std::uint64_t>(limitAfterEdit));
+    EXPECT_EQ(narrowPass.warningAttempts, fullPass.warningAttempts);
+    EXPECT_THAT(narrowPass.warnings, ElementsAreArray(fullPass.warnings));
+    EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
+    EXPECT_THAT(PositionedRenderInstances(narrow),
+                ElementsAreArray(PositionedRenderInstances(full)));
+  }
+}
+
 CascadePassSnapshot ForceFullRestyleWithDiagnostics(SVGDocument& document) {
   Registry& registry = document.registry();
   const StyleCascadeCounters before = Counters(document);
@@ -814,6 +1055,165 @@ std::vector<CorpusDocument> CorpusDocumentsExceptTheSprite() {
                 [](const CorpusDocument& document) { return document.name == kSpriteName; });
   return documents;
 }
+
+/// Two draws on independent documents. The reference rebuilds its styles and render tree even
+/// when the tested mutation would normally take the retained path.
+void CompareAfterCorpusEdit(SVGDocument& actual, SVGDocument& reference, Renderer& renderer,
+                            Renderer& referenceRenderer, std::string_view artifactName) {
+  auto& state = reference.registry().ctx().get<RenderTreeState>();
+  state.retainedUpdatesEnabled = false;
+  state.needsFullStyleRecompute = true;
+  state.needsFullRebuild = true;
+  renderer.draw(actual);
+  referenceRenderer.draw(reference);
+  const auto actualStyles = PositionedStyles(actual);
+  const auto expectedStyles = PositionedStyles(reference);
+  ASSERT_THAT(actualStyles, ::testing::SizeIs(expectedStyles.size()));
+  // The full sprite has thousands of records. Construct a diagnostic matcher only for a mismatch.
+  const auto mismatch =
+      std::mismatch(actualStyles.begin(), actualStyles.end(), expectedStyles.begin());
+  if (mismatch.first != actualStyles.end()) {
+    EXPECT_THAT(*mismatch.first, ::testing::Eq(*mismatch.second)) << mismatch.second->position;
+  }
+  EXPECT_THAT(PositionedRenderInstances(actual),
+              ElementsAreArray(PositionedRenderInstances(reference)));
+  const RendererBitmap expected = referenceRenderer.takeSnapshot();
+  const RendererBitmap observed = renderer.takeSnapshot();
+  if (expected.empty()) {
+    // Documents rejected by the render size limit still have comparable styles and instances.
+    EXPECT_THAT(observed.dimensions, ::testing::Eq(expected.dimensions));
+    EXPECT_THAT(observed.pixels, ElementsAreArray(expected.pixels));
+  } else {
+    editor::tests::CompareBitmapToBitmap(observed, expected, artifactName,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// Authored elements in breadth-first order, excluding shadow clones. Two parses of one document
+/// produce the same targets, even when their render trees use different entity identifiers.
+std::vector<SVGElement> AuthoredElements(SVGDocument& document) {
+  std::vector<SVGElement> result{document.svgElement()};
+  for (std::size_t i = 0; i < result.size(); ++i) {
+    for (auto child = result[i].firstChild(); child; child = child->nextSibling()) {
+      result.push_back(*child);
+    }
+  }
+  return result;
+}
+
+struct CorpusEditTargets {
+  std::size_t leaf = 0;
+  std::optional<std::size_t> withClass;
+  std::map<std::string, std::size_t> presentation;
+};
+
+/// Start at a stable offset for each document (32-bit FNV-1a). Sample one authored leaf, one
+/// element with an existing class when possible, and one occurrence per presentation attribute.
+/// The targeted fixtures separately exercise particular selector directions and fallback paths.
+CorpusEditTargets SelectCorpusEditTargets(const std::vector<SVGElement>& elements,
+                                          std::string_view name) {
+  std::uint32_t hash = 2166136261u;
+  for (const unsigned char c : name) {
+    hash = (hash ^ c) * 16777619u;
+  }
+  const std::size_t start = hash % elements.size();
+  CorpusEditTargets targets;
+  std::optional<std::size_t> firstLeaf;
+  for (std::size_t offset = 0; offset < elements.size(); ++offset) {
+    const std::size_t index = (start + offset) % elements.size();
+    const auto& element = elements[index];
+    if (!firstLeaf && !element.firstChild()) {
+      firstLeaf = index;
+    }
+    if (!targets.withClass && !element.className().empty()) {
+      targets.withClass = index;
+    }
+    for (const auto& attribute : element.attributes()) {
+      if (attribute.namespacePrefix.empty() &&
+          PropertyRegistry::isPresentationAttributeName(attribute.name)) {
+        targets.presentation.try_emplace(std::string(std::string_view(attribute.name)), index);
+      }
+    }
+  }
+  targets.leaf = firstLeaf.value_or(start);
+  return targets;
+}
+
+class StyleEditCorpusTest : public ::testing::TestWithParam<CorpusDocument> {
+protected:
+  void SetUp() override {
+    actual_ = tests::ParseCorpusDocument(GetParam());
+    reference_ = tests::ParseCorpusDocument(GetParam());
+    if (!actual_ || !reference_) {
+      GTEST_SKIP() << "Does not parse: " << GetParam();
+    }
+    for (SVGDocument* document : {&*actual_, &*reference_}) {
+      document->setCanvasSize(48, 48);
+    }
+    renderer_.draw(*actual_);
+    referenceRenderer_.draw(*reference_);
+    elements_ = AuthoredElements(*actual_);
+    mirrors_ = AuthoredElements(*reference_);
+    ASSERT_THAT(elements_, ::testing::Not(::testing::IsEmpty()));
+    ASSERT_THAT(mirrors_, ::testing::SizeIs(elements_.size()));
+    targets_ = SelectCorpusEditTargets(elements_, GetParam().name);
+  }
+
+  template <typename Edit>
+  void compare(std::string_view operation, std::size_t index, Edit edit) {
+    SCOPED_TRACE(::testing::Message()
+                 << GetParam().name << ", " << operation << ", target " << index);
+    edit(elements_[index]);
+    edit(mirrors_[index]);
+    std::string artifactName = GetParam().name + "_" + std::string(operation) + "_" +
+                               std::to_string(index) + "_" + std::to_string(editOrdinal_++);
+    for (char& ch : artifactName) {
+      constexpr std::string_view kSafe =
+          "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+      if (kSafe.find(ch) == std::string_view::npos) {
+        ch = '_';
+      }
+    }
+    CompareAfterCorpusEdit(*actual_, *reference_, renderer_, referenceRenderer_, artifactName);
+  }
+
+  CorpusEditTargets targets_;
+
+private:
+  std::optional<SVGDocument> actual_, reference_;
+  std::vector<SVGElement> elements_, mirrors_;
+  Renderer renderer_, referenceRenderer_;
+  std::size_t editOrdinal_ = 0;
+};
+
+TEST_P(StyleEditCorpusTest, ClassAndIdEditsMatchFullRebuild) {
+  const std::size_t withClass = targets_.withClass.value_or(targets_.leaf);
+  compare("add class", targets_.leaf, [](auto& e) {
+    e.setClassName(std::string(std::string_view(e.className())) + " corpus-edited");
+  });
+  compare("replace class", withClass, [](auto& e) { e.setClassName("corpus-replaced"); });
+  compare("remove class", withClass, [](auto& e) { e.removeAttribute("class"); });
+  compare("set id", targets_.leaf, [](auto& e) { e.setId("corpus-edited-id"); });
+}
+
+TEST_P(StyleEditCorpusTest, InlineAndFillEditsMatchFullRebuild) {
+  compare("inline style", targets_.leaf,
+          [](auto& e) { e.setStyle("fill:#196ab2;stroke:#9d412b"); });
+  compare("update inline style", targets_.leaf, [](auto& e) { e.updateStyle("fill:#37c29a"); });
+  compare("set fill", targets_.leaf, [](auto& e) { e.setAttribute("fill", "#357fb9"); });
+}
+
+TEST_P(StyleEditCorpusTest, RemovingAuthoredPresentationMatchesFullRebuild) {
+  for (const auto& [attribute, index] : targets_.presentation) {
+    compare(attribute, index,
+            [&](auto& e) { e.removeAttribute(xml::XMLQualifiedNameRef(attribute)); });
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Corpus, StyleEditCorpusTest, ::testing::ValuesIn(tests::CorpusDocuments()),
+                         [](const ::testing::TestParamInfo<CorpusDocument>& info) {
+                           return info.param.name;
+                         });
 
 class StyleIndexDifferentialTest : public ::testing::TestWithParam<CorpusDocument> {};
 

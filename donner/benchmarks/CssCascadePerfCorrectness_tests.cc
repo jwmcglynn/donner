@@ -313,28 +313,35 @@ const CascadeEditTarget kIconsTarget = BootstrapIconsEditTarget();
 // A frame after an edit that restyles the whole document discards every computed style once and
 // cascades each styled entity once, so it does the work of the edited document's first frame.
 constexpr StyleCascadeCounters kSplashRestyle{622, 1384, 1382, 1386, 1, 0};
-constexpr StyleCascadeCounters kIconsRestyle{5137, 9293, 9291, 9291, 1, 0};
+// The splash rebuilds its shadow occurrences even when only the edited light node restyles.
+constexpr StyleCascadeCounters kSplashNarrowEdit{176, 353, 353, 353, 0, 0};
+constexpr StyleCascadeCounters kIconsNarrowEdit{1, 1, 1, 1, 0, 0};
+// Forward and undo have the same logical work but use different warm cache entries.
+constexpr CascadeRepetitions kRepeatedEdits{.warmup = 2, .measured = 4};
 
 INSTANTIATE_TEST_SUITE_P(
     EditFrame, CssCascadeWorkTest,
     ::testing::Values(
-        Edit("SplashClass", Document::Splash, kSplashTarget, CascadeEdit::Class, kSplashRestyle),
-        Edit("SplashFill", Document::Splash, kSplashTarget, CascadeEdit::Fill, kSplashRestyle),
-        Edit("SplashStyle", Document::Splash, kSplashTarget, CascadeEdit::Style, kSplashRestyle),
+        Edit("SplashClass", Document::Splash, kSplashTarget, CascadeEdit::Class, kSplashNarrowEdit,
+             OneDirection(kRepeatedEdits, RecordedRepetitions::Even)),
+        Edit("SplashClassUndo", Document::Splash, kSplashTarget, CascadeEdit::Class,
+             kSplashNarrowEdit, OneDirection(kRepeatedEdits, RecordedRepetitions::Odd)),
+        Edit("SplashFill", Document::Splash, kSplashTarget, CascadeEdit::Fill, kSplashNarrowEdit),
+        Edit("SplashStyle", Document::Splash, kSplashTarget, CascadeEdit::Style, kSplashNarrowEdit),
         // The appended rule's class is on no element, so it is no element's candidate.
         Edit("SplashAppendRule", Document::Splash, kSplashTarget, CascadeEdit::AppendRule,
              {622, 1384, 1382, 1386, 1, 0}, kAppendFrame),
         Edit("SyntheticClass", Document::Synthetic, kSyntheticTarget, CascadeEdit::Class,
-             {2003, 3544, 3255, 4508, 1, 0}),
+             {1, 2, 2, 3, 0, 0}),
         Edit("SyntheticFill", Document::Synthetic, kSyntheticTarget, CascadeEdit::Fill,
-             {2003, 3543, 3254, 4506, 1, 0}),
+             {1, 1, 1, 1, 0, 0}),
         Edit("SyntheticStyle", Document::Synthetic, kSyntheticTarget, CascadeEdit::Style,
-             {2003, 3543, 3254, 4506, 1, 0}),
+             {1, 1, 1, 1, 0, 0}),
         Edit("SyntheticAppendRule", Document::Synthetic, kSyntheticTarget, CascadeEdit::AppendRule,
              {2003, 3543, 3254, 4506, 1, 0}, kAppendFrame),
-        Edit("IconsClass", Document::Icons, kIconsTarget, CascadeEdit::Class, kIconsRestyle),
-        Edit("IconsFill", Document::Icons, kIconsTarget, CascadeEdit::Fill, kIconsRestyle),
-        Edit("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style, kIconsRestyle)),
+        Edit("IconsClass", Document::Icons, kIconsTarget, CascadeEdit::Class, kIconsNarrowEdit),
+        Edit("IconsFill", Document::Icons, kIconsTarget, CascadeEdit::Fill, kIconsNarrowEdit),
+        Edit("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style, kIconsNarrowEdit)),
     CaseName);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -347,7 +354,7 @@ INSTANTIATE_TEST_SUITE_P(
         Keystroke("ClosingBraceDeleted", CascadeKeystroke::ClosingBrace,
                   {622, 1246, 1244, 1245, 1, 0}, kForwardKeystroke),
         Keystroke("ClassLetterInserted", CascadeKeystroke::ClassAttribute,
-                  {622, 1383, 1381, 1385, 1, 0}, kForwardKeystroke)),
+                  {176, 352, 352, 352, 0, 0}, kForwardKeystroke)),
     CaseName);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -480,9 +487,9 @@ INSTANTIATE_TEST_SUITE_P(
                       GeneratedUncached("Mixed1000x0", 1000, 0, CascadeRuleKind::Mixed,
                                         RegistryCopies(910)),
                       EditUncached("SplashClass", Document::Splash, kSplashTarget,
-                                   CascadeEdit::Class, RegistryCopies(520)),
+                                   CascadeEdit::Class, RegistryCopies(153)),
                       EditUncached("IconsStyle", Document::Icons, kIconsTarget, CascadeEdit::Style,
-                                   RegistryCopies(3057))),
+                                   RegistryCopies(1))),
     CaseName);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -543,9 +550,9 @@ INSTANTIATE_TEST_SUITE_P(
         Generated("Descendant1000x1000", 1000, 1000, CascadeRuleKind::Descendant, FilterWork(898)),
         Generated("Mixed4000x1000", 4000, 1000, CascadeRuleKind::Mixed, FilterWork(545)),
         Edit("SyntheticClass", Document::Synthetic, kSyntheticTarget, CascadeEdit::Class,
-             FilterWork(287)),
+             FilterWork(0)),
         Edit("SyntheticFill", Document::Synthetic, kSyntheticTarget, CascadeEdit::Fill,
-             FilterWork(287))),
+             FilterWork(0))),
     CaseName);
 
 }  // namespace

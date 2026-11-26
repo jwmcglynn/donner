@@ -99,6 +99,9 @@ public:
     std::size_t externalMeasureEntities = kMaximumRuleElementMatches;
     /// Maximum path bytes retained per frame by external-use content measured for host effects.
     std::size_t externalMeasureGeometryBytes = kMaximumExternalMeasureGeometryBytes;
+
+    /// Compare every work and retained-resource ceiling.
+    bool operator==(const Limits&) const = default;
   };
 
   /**
@@ -794,6 +797,14 @@ public:
    * @param localName Attribute local name that is about to be written.
    */
   bool anyStylesheetUsesAttributeInSelector(Registry& registry, std::string_view localName) const;
+
+  /// Relations affected by an attribute and any changed class tokens. Ancestors requires a
+  /// full restyle because a relative selector can reach beyond the edited branch.
+  static std::uint8_t styleEditDependencies(const Registry& registry, std::string_view attribute,
+                                            std::span<const std::string_view> changedClasses);
+
+  /// Whether this element can be restyled without rebuilding resource or text subtrees.
+  static bool isStyleEditSubtreeBoundary(const Registry& registry, Entity entity);
 
   /**
    * Invalidate the full style and reparse attributes.

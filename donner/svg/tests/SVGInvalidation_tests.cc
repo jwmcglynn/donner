@@ -157,21 +157,24 @@ TEST_F(SVGInvalidationTests, SetClassNameMarksDirtyWithStyleCascade) {
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::StyleCascade));
 }
 
-TEST_F(SVGInvalidationTests, SetClassNameRequestsFullStyleRecompute) {
+TEST_F(SVGInvalidationTests, SetClassNameKeepsUnrelatedSiblingClean) {
   auto doc = parseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
-      <rect id="target" width="10" height="10" />
+      <rect id="target" width="10" height="10" /><rect id="untouched"/>
     </svg>
   )");
   simulateRenderComplete(doc);
 
   auto target = doc.querySelector("#target");
-  ASSERT_TRUE(target.has_value());
+  auto untouched = doc.querySelector("#untouched");
+  ASSERT_THAT(target, ::testing::Optional(::testing::_));
+  ASSERT_THAT(untouched, ::testing::Optional(::testing::_));
 
   target->setClassName("highlight");
 
   auto& renderState = doc.registry().ctx().get<RenderTreeState>();
-  EXPECT_TRUE(renderState.needsFullStyleRecompute);
+  EXPECT_FALSE(renderState.needsFullStyleRecompute);
+  EXPECT_THAT(untouched->entityHandle().try_get<DirtyFlagsComponent>(), ::testing::IsNull());
 }
 
 // ---------------------------------------------------------------------------
