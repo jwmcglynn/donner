@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "donner/svg/SVGDocument.h"
@@ -34,6 +35,8 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceUsesNormalAndImportantLayerWinner
   const auto target = doc.querySelector("#target");
   ASSERT_THAT(target, Optional(testing::_));
 
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--normal"), testing::Eq(std::nullopt));
+  std::ignore = target->getComputedStyle();
   const auto normal = FindCustomPropertyDeclaration(*target, "--normal");
   ASSERT_THAT(normal, Optional(testing::_));
   EXPECT_EQ(normal->start, FileOffset::Offset(doc.source().find(R"(--n\6frmal)")));
@@ -53,6 +56,7 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceMapsInlineXmlReferencesAndLiveEdi
   )svg");
   const auto target = doc.querySelector("#target");
   ASSERT_THAT(target, Optional(testing::_));
+  std::ignore = target->getComputedStyle();
   constexpr std::string_view authoredName = "--t&#111;n&#x65;";
   const auto before = FindCustomPropertyDeclaration(*target, "--tone");
   ASSERT_THAT(before, Optional(testing::_));
@@ -68,6 +72,7 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceMapsInlineXmlReferencesAndLiveEdi
       .sourceVersion = doc.sourceVersion(),
   });
   ASSERT_TRUE(result.applied);
+  std::ignore = target->getComputedStyle();
   const auto after = FindCustomPropertyDeclaration(*target, "--tone");
   ASSERT_THAT(after, Optional(testing::_));
   EXPECT_EQ(after->start, FileOffset::Offset(doc.source().find("--t&#111;ne: red")));

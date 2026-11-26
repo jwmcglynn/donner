@@ -106,8 +106,9 @@ std::optional<SourceRange> MapStylesheetSourceRange(const SVGDocument& document,
 
 /// Find the source span of the declaration supplying a custom property to this element.
 ///
-/// The name is case sensitive. Missing or invalid values and winners without document-local
-/// source return no span. An inherited value points to the declaration that supplied it.
+/// The name is case sensitive. This read-only query uses the prepared cascade for the element.
+/// Unprepared styles, missing or invalid values, and winners without document-local source
+/// return no span. An inherited value points to the declaration that supplied it.
 ///
 /// @param element Concrete SVG element whose cascade supplies the value.
 /// @param name Decoded CSS custom-property identifier, including its two leading hyphens.

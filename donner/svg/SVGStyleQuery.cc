@@ -1,7 +1,6 @@
 #include "donner/svg/SVGStyleQuery.h"
 
 #include <span>
-#include <tuple>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -133,12 +132,11 @@ std::optional<SourceRange> MapStylesheetSourceRange(const SVGDocument& document,
 
 std::optional<SourceRange> FindCustomPropertyDeclaration(const SVGElement& element,
                                                          std::string_view name) {
-  return element.withWriteAccess(
-      [&](DocumentWriteAccess&, EntityHandle handle) -> std::optional<SourceRange> {
+  return element.withReadAccess(
+      [&](DocumentReadAccess&, EntityHandle handle) -> std::optional<SourceRange> {
         if (!handle || name.size() <= 2 || !name.starts_with("--")) {
           return std::nullopt;
         }
-        std::ignore = element.getComputedStyle();
         return components::StyleSystem().findCustomPropertyDeclaration(handle, name);
       });
 }
