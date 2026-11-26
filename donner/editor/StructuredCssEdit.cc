@@ -145,12 +145,32 @@ std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRu
   return target;
 }
 
+bool IsCssTrivia(std::string_view text);
+
+template <typename Mapper>
+bool InsertBeforeDiscardedCss(std::string_view value, std::size_t start,
+                              StructuredCssTarget& target, Mapper map) {
+  if (IsCssTrivia(value.substr(start))) {
+    return true;
+  }
+  const auto point = FileOffset::Offset(start);
+  const auto insertion = map(SourceRange{point, point});
+  if (!insertion) {
+    return false;
+  }
+  target.insertDeclaration = *insertion;
+  target.declarationNeedsSeparator = false;
+  return true;
+}
+
 template <typename Mapper>
 bool PrepareInlineDeclarationInsertion(const css::Declaration& last, std::string_view spelling,
                                        std::string_view value, StructuredCssTarget& target,
                                        Mapper map) {
-  if (*last.sourceOffset.offset + spelling.size() != value.size()) {
-    return true;
+  const std::size_t end = *last.sourceOffset.offset + spelling.size();
+  if (end < value.size()) {
+    // The retained spelling is bounded by an actual declaration-list semicolon.
+    return InsertBeforeDiscardedCss(value, end + 1, target, map);
   }
   // The final spelling excludes an explicit semicolon. A recovered value may lack a mapped
   // authored range, so use the parser's terminator instead of the selected declaration's range.
@@ -210,9 +230,12 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
   for (const auto& declaration : declarations) {
     AddDeclarationTarget(declaration, *value, offset, target, map);
   }
-  if (!declarations.empty() &&
-      !PrepareInlineDeclarationInsertion(declarations.back(), authoredSpellings.back(), *value,
-                                         target, map)) {
+  const bool insertionReady =
+      declarations.empty()
+          ? InsertBeforeDiscardedCss(*value, 0, target, map)
+          : PrepareInlineDeclarationInsertion(declarations.back(), authoredSpellings.back(), *value,
+                                              target, map);
+  if (!insertionReady) {
     return std::nullopt;
   }
   return target;
@@ -243,6 +266,21 @@ bool AllowsEdit(const StructuredCssTarget& target, StructuredCssOperation operat
           operation != Operation::InsertRule);
 }
 
+CssReplacement InsertDeclaration(const StructuredCssTarget& target, std::string_view replacement) {
+  const bool beforeTail = target.inlineStyle && target.insertDeclaration.end < target.rule.end;
+  std::string bytes = target.declarationInsertionPrefix;
+  if (target.declarationNeedsSeparator) {
+    bytes += "; ";
+  } else if (!beforeTail || target.insertDeclaration.start != target.rule.start) {
+    bytes += ' ';
+  }
+  bytes.append(replacement);
+  if (beforeTail && !replacement.ends_with(';')) {
+    bytes += ';';
+  }
+  return {target.insertDeclaration, std::move(bytes)};
+}
+
 std::optional<CssReplacement> MakeReplacement(const StructuredCssTarget& target,
                                               StructuredCssOperation operation,
                                               std::string_view replacement) {
@@ -256,12 +294,7 @@ std::optional<CssReplacement> MakeReplacement(const StructuredCssTarget& target,
         return std::nullopt;
       }
       return CssReplacement{{target.value->end, target.value->end}, " !important"};
-    case Operation::InsertDeclaration: {
-      std::string bytes = target.declarationInsertionPrefix;
-      bytes += target.declarationNeedsSeparator ? "; " : " ";
-      bytes.append(replacement);
-      return CssReplacement{target.insertDeclaration, std::move(bytes)};
-    }
+    case Operation::InsertDeclaration: return InsertDeclaration(target, replacement);
     case Operation::InsertRule:
       return CssReplacement{{target.rule.end, target.rule.end}, "\n" + std::string(replacement)};
     default: break;

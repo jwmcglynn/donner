@@ -999,6 +999,38 @@ TEST(EditorSyncTest, StructuredCssAppendClosesRecoveredInlineValuesAndUndoesOnce
   check("value/* comment", "value/* comment*/");
 }
 
+TEST(EditorSyncTest, StructuredCssInsertsBeforeDiscardedInlineTail) {
+  const auto check = [](std::string_view value, std::string_view editedValue) {
+    SCOPED_TRACE(value);
+    constexpr std::string_view prefix =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" style=")svg";
+    constexpr std::string_view suffix = R"svg("/></svg>)svg";
+    TextEditor text;
+    text.setText(std::string(prefix) + std::string(value) + std::string(suffix));
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto target = FindStructuredCssTarget(app, original, prefix.size());
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "stroke: red"));
+    const std::string expected =
+        std::string(prefix) + std::string(editedValue) + std::string(suffix);
+    EXPECT_EQ(text.getText(), expected);
+    EXPECT_EQ(app.document().document().source(), expected);
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().stroke.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+  };
+  check("fill:red&#59; /* pending", "fill:red&#59; stroke: red; /* pending");
+  check("/* pending", "stroke: red;/* pending");
+  check("fill:red; invalid calc(", "fill:red; stroke: red; invalid calc(");
+}
+
 TEST(EditorSyncTest, StructuredCssDoesNotUseInnerBraceAsTheRuleInsertionPoint) {
   const auto check = [](std::string_view closingBrace) {
     TextEditor text;
