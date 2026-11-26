@@ -3408,8 +3408,17 @@ bool CanScanStylesheetEdit(const Registry& registry, const RenderTreeState* stat
   return state && state->hasBeenBuilt && !state->needsFullRebuild &&
          !state->needsFullStyleRecompute && !RequiresFullStyleBudgetReplay(registry) &&
          removedCount <= kMaximumRulesPerEdit && addedCount <= kMaximumRulesPerEdit &&
-         registry.view<const ComputedStyleComponent>().size() <=
+         registry.view<const donner::components::TreeComponent>().size() <=
              StyleSystem::PreparedBatch::kMaximumElements;
+}
+
+bool NeedsRuleEditProbe(const Registry& registry, Entity entity) {
+  if (registry.all_of<ComputedStyleComponent>(entity)) {
+    return true;
+  }
+  // A prior live edit can remove the computed record before the next frame.
+  const auto* dirty = registry.try_get<DirtyFlagsComponent>(entity);
+  return dirty && dirty->test(DirtyFlagsComponent::Style);
 }
 
 bool MatchChangedRules(const Registry& registry, std::span<const css::SelectorRule> rules,
@@ -3419,9 +3428,10 @@ bool MatchChangedRules(const Registry& registry, std::span<const css::SelectorRu
   }
   const RuleIndex index(rules);
   std::vector<std::uint32_t> candidates;
-  auto view =
-      registry.view<const ComputedStyleComponent, const donner::components::TreeComponent>();
-  for (const Entity entity : view) {
+  for (const Entity entity : registry.view<const donner::components::TreeComponent>()) {
+    if (!NeedsRuleEditProbe(registry, entity)) {
+      continue;
+    }
     const Entity source = StyleDataEntity(registry, entity);
     const RuleIndexElementView keys(registry, entity, source);
     CollectCandidateRules(rules, index, keys, false, candidates);

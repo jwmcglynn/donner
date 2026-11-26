@@ -1693,6 +1693,43 @@ TEST(StyleIndexDifferential, SourceRuleEditPreservesShiftedCustomTokenOffsets) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(StyleIndexDifferential, SourceRuleEditRebuildsGeometryAfterPendingOpacityEdit) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>#r { width: 4px; height: 8px; fill: red; }</style>
+      <rect id="r" />
+    </svg>)svg";
+  auto actual = ParseSource(source);
+  Renderer renderer;
+  renderer.draw(actual);
+  auto target = actual.querySelector("#r");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  target->setAttribute("opacity", "0.5");
+  const auto handle = target->unsafeEntityHandle();
+  ASSERT_THAT(handle.try_get<ComputedStyleComponent>(), testing::IsNull());
+
+  const auto start = std::string_view(actual.source()).find("4px");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 1)},
+      .replacement = "8",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+
+  auto expected = ParseSource(actual.source());
+  auto referenceTarget = expected.querySelector("#r");
+  ASSERT_THAT(referenceTarget, testing::Optional(testing::_));
+  referenceTarget->setAttribute("opacity", "0.5");
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  ExpectSameStyleOutputs(actual, expected);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_geometry_after_pending_opacity",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(StyleIndexDifferential, SourceRuleEditLayerOrderUsesCanonicalFrame) {
   constexpr std::string_view kSource = R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
