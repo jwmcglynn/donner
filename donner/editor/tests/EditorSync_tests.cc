@@ -997,6 +997,35 @@ TEST(EditorSyncTest, StructuredCssAppendClosesRecoveredInlineValuesAndUndoesOnce
   check("value/* comment", "value/* comment*/");
 }
 
+TEST(EditorSyncTest, StructuredCssDoesNotUseInnerBraceAsTheRuleInsertionPoint) {
+  const auto check = [](std::string_view closingBrace) {
+    TextEditor text;
+    text.setText(
+        std::string(
+            R"svg(<svg xmlns="http://www.w3.org/2000/svg"><style>rect { --note: {value})svg") +
+        std::string(closingBrace) + "</style><rect/></svg>");
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto target = FindStructuredCssTarget(app, original, original.find("--note:"));
+    if (closingBrace.empty()) {
+      EXPECT_FALSE(target.has_value());
+      EXPECT_EQ(app.document().document().source(), original);
+      EXPECT_FALSE(app.canUndo());
+      return;
+    }
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "fill: red;"));
+    EXPECT_THAT(text.getText(), testing::HasSubstr("rect { --note: {value}; fill: red;}"));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+  };
+  check("");
+  check("}");
+}
+
 TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";

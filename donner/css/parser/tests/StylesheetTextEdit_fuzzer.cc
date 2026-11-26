@@ -91,7 +91,8 @@ void CheckSelector(const Selector& incremental, const Selector& full) {
 
 void CheckRule(const SelectorRule& actual, const SelectorRule& expected) {
   CheckSelector(actual.selector, expected.selector);
-  Require(actual.ruleSourceRange == expected.ruleSourceRange &&
+  Require(actual.blockClosedAtEof == expected.blockClosedAtEof &&
+          actual.ruleSourceRange == expected.ruleSourceRange &&
           actual.selectorSourceRange == expected.selectorSourceRange &&
           actual.selectorEntrySourceRanges == expected.selectorEntrySourceRanges &&
           actual.declarations == expected.declarations && actual.layer == expected.layer);

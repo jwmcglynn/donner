@@ -75,6 +75,7 @@ struct SelectorRule {
   std::vector<SourceRange>
       selectorEntrySourceRanges;  ///< Per-entry selector ranges in local CSS source.
   LayerId layer = kUnlayered;     //!< Sheet-local cascade layer.
+  bool blockClosedAtEof = false;  //!< No closing brace was authored for the rule block.
 
   /**
    * Output a human-readable representation of the delector to a stream.

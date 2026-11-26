@@ -125,7 +125,8 @@ std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRu
                                                       std::uint64_t sourceVersion) {
   const auto rule = ByteRange(stylesheetRule.ruleSourceRange, source.size());
   const auto selector = ByteRange(stylesheetRule.selectorSourceRange, source.size());
-  if (!rule || !selector || !Contains(*rule, offset) || source[rule->end - 1] != '}') {
+  if (!rule || !selector || stylesheetRule.blockClosedAtEof || !Contains(*rule, offset) ||
+      source[rule->end - 1] != '}') {
     return std::nullopt;
   }
   StructuredCssTarget target{.rule = *rule,

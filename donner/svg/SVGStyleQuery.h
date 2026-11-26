@@ -44,6 +44,7 @@ struct SVGStylesheetDeclaration {
 
 /// Stylesheet rule in a document; built-in rules have no document source ranges.
 struct SVGStylesheetRule {
+  bool blockClosedAtEof = false;       ///< No closing brace was authored for the rule block.
   bool isUserAgentStylesheet = false;  ///< True for a built-in rule without document source ranges.
   Entity stylesheetEntity = entt::null;                ///< Owning `<style>` or `<svg>` element key.
   std::size_t ruleIndex = 0;                           ///< Index within the stylesheet.
