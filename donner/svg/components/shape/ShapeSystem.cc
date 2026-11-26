@@ -324,6 +324,19 @@ bool SampleShapeProperty(EntityHandle handle, const Properties& bases,
   return true;
 }
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_PREPARATION_MINSIZE 1
+#endif
+#endif
+
+// The prepared shape kernels are shared by ordinary and retained rendering. Limit size
+// optimization to preparation, leaving bounds, clipping, and hit testing at the normal level.
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 template <typename Component, typename Computed, typename Output>
 auto EffectiveShapeProperties(EntityHandle handle, const Component& shape,
                               const ComputedStyleComponent& style, const FontMetrics& metrics,
@@ -383,6 +396,10 @@ LineComponent EffectiveLine(EntityHandle handle, const LineComponent& line,
   }
   return result;
 }
+
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute pop
+#endif
 
 bool ReserveComputedPathPayload(EntityHandle handle, const Path& path) {
   auto& registryContext = handle.registry()->ctx();
@@ -1274,6 +1291,10 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
   return accumulator.result();
 }
 
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace {
 
 struct PublishedShapePaths {
@@ -1729,6 +1750,10 @@ bool ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entit
   }
   return output.commit(budget);
 }
+
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute pop
+#endif
 
 ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::string_view name,
                                                  const parser::PropertyParseFnParams& params) {

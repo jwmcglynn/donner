@@ -24,6 +24,19 @@
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/graph/Reference.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_PREPARATION_MINSIZE 1
+#endif
+#endif
+
+// Keep the frame preparation paths compact in Apple native products. Shape math and drawing
+// remain in their own translation units under their existing optimization policies.
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace donner::svg::components {
 namespace {
 
@@ -307,3 +320,7 @@ void AttachExternalUse(Registry& registry, Entity entity, const RcString& href,
 }
 
 }  // namespace donner::svg::components
+
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute pop
+#endif
