@@ -206,10 +206,9 @@ budgets and prints one `native-linked-size` line per product.
 
 ### Budgets
 
-The initial budgets were set about 3% above the recorded product sizes and rounded up to a
-thousand bytes. The macOS arm64 converter budget subsequently increased by 5%, from
-4,665,000 to 4,898,250 bytes. All rows are read with `tools/ci/native_linked_size.py`, and read-only
-includes the shader artifacts.
+The macOS arm64 converter has a budget of 4,898,250 linked bytes. The other budgets allow
+about 3% above the recorded product sizes, rounded up to a thousand bytes.
+All rows are read with `tools/ci/native_linked_size.py`, and read-only includes the shader artifacts.
 The Linux x86_64 and macOS arm64 rows are measured in the shipped configuration by the
 native Perf workflow, including declarative animation and CLI GIF export.
 
