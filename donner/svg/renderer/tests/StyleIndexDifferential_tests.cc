@@ -1693,7 +1693,7 @@ TEST(StyleIndexDifferential, SourceRuleEditPreservesShiftedCustomTokenOffsets) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-TEST(StyleIndexDifferential, SourceRuleEditRebuildsGeometryAfterPendingOpacityEdit) {
+TEST(StyleIndexDifferential, SourceRuleEditMarksPendingOpacityTargetForGeometryRebuild) {
   constexpr std::string_view source = R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
       <style>#r { width: 4px; height: 8px; fill: red; }</style>
@@ -1707,6 +1707,10 @@ TEST(StyleIndexDifferential, SourceRuleEditRebuildsGeometryAfterPendingOpacityEd
   target->setAttribute("opacity", "0.5");
   const auto handle = target->unsafeEntityHandle();
   ASSERT_THAT(handle.try_get<ComputedStyleComponent>(), testing::IsNull());
+  const auto paintDirty = [&] {
+    return handle.get<DirtyFlagsComponent>().test(DirtyFlagsComponent::Paint);
+  };
+  ASSERT_THAT(paintDirty(), testing::IsFalse());
 
   const auto start = std::string_view(actual.source()).find("4px");
   ASSERT_THAT(start, testing::Ne(std::string_view::npos));
@@ -1716,6 +1720,7 @@ TEST(StyleIndexDifferential, SourceRuleEditRebuildsGeometryAfterPendingOpacityEd
       .sourceVersion = actual.sourceVersion(),
   });
   ASSERT_THAT(edit.applied, testing::IsTrue());
+  EXPECT_THAT(paintDirty(), testing::IsTrue());
 
   auto expected = ParseSource(actual.source());
   auto referenceTarget = expected.querySelector("#r");
