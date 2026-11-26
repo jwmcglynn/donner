@@ -207,14 +207,15 @@ TEST(VariableSubstitution, EachActiveCycleFrameIsChargedOnce) {
   };
   std::vector<std::pair<std::size_t, std::size_t>> charges;
   EXPECT_TRUE(ResolveVariableDefinitions(
-      definitions, [](std::string_view) -> std::optional<Values> { return std::nullopt; },
-      outputs, {}, [&](std::size_t work, std::size_t bytes) {
+      definitions, [](std::string_view) -> std::optional<Values> { return std::nullopt; }, outputs,
+      {},
+      [&](std::size_t work, std::size_t bytes) {
         charges.emplace_back(work, bytes);
         return true;
       }));
-  EXPECT_THAT(statuses, ElementsAre(VariableSubstitutionStatus::Invalid,
-                                   VariableSubstitutionStatus::Invalid,
-                                   VariableSubstitutionStatus::Invalid));
+  EXPECT_THAT(statuses,
+              ElementsAre(VariableSubstitutionStatus::Invalid, VariableSubstitutionStatus::Invalid,
+                          VariableSubstitutionStatus::Invalid));
   EXPECT_THAT(charges, ElementsAre(testing::Pair(1u, 0u), testing::Pair(2u, 0u)));
 }
 

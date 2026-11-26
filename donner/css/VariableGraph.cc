@@ -98,10 +98,14 @@ struct PendingReference {
 };
 
 struct Frame {
-  Frame(std::size_t node, Values values, bool valueInvalid)
-      : node(node), scanner(values), valueInvalid(valueInvalid) {}
+  Frame(std::size_t node, std::size_t previousUnmarkedEnd, Values values, bool valueInvalid)
+      : node(node),
+        previousUnmarkedEnd(previousUnmarkedEnd),
+        scanner(values),
+        valueInvalid(valueInvalid) {}
 
   std::size_t node;
+  std::size_t previousUnmarkedEnd;
   SelectedReferenceScanner scanner;
   std::optional<PendingReference> pending;
   bool valueInvalid;
@@ -231,21 +235,26 @@ private:
   }
 
   bool markCycle(std::size_t first) {
-    for (std::size_t i = first; i < frames_.size(); ++i) {
+    const std::size_t before = graphWorkLeft_;
+    while (unmarkedEnd_ > first) {
       if (!graphWorkLeft_) {
         return false;
       }
       --graphWorkLeft_;
-      nodes_[frames_[i].node].cyclic = true;
+      const Frame& frame = frames_[unmarkedEnd_ - 1];
+      nodes_[frame.node].cyclic = true;
+      unmarkedEnd_ = frame.previousUnmarkedEnd;
     }
-    return true;
+    return before == graphWorkLeft_ || acceptAggregate(before - graphWorkLeft_, 0);
   }
 
   void enter(std::size_t i) {
     auto& node = nodes_[i];
     node.state = NodeState::Visiting;
     node.activeDepth = frames_.size();
-    frames_.emplace_back(i, node.syntaxInvalid ? Values{} : *local_[i].value, node.syntaxInvalid);
+    frames_.emplace_back(i, unmarkedEnd_, node.syntaxInvalid ? Values{} : *local_[i].value,
+                         node.syntaxInvalid);
+    unmarkedEnd_ = frames_.size();
   }
 
   std::optional<VariableSubstitutionResult> computeValue(const Frame& frame) {
@@ -281,6 +290,9 @@ private:
     auto& node = nodes_[index];
     node.state = resolved ? NodeState::Resolved : NodeState::Invalid;
     node.activeDepth = kNoDepth;
+    if (unmarkedEnd_ == frames_.size()) {
+      unmarkedEnd_ = frames_.back().previousUnmarkedEnd;
+    }
     frames_.pop_back();
     return true;
   }
@@ -316,6 +328,9 @@ private:
   Names names_;
   std::vector<Node> nodes_;
   SmallVector<Frame, 16> frames_;
+  // The chain tracks unmarked active frames in stack order using one-based indices. Marking
+  // a suffix unlinks its frames so later back-edges cannot visit them again.
+  std::size_t unmarkedEnd_ = 0;
   std::size_t validationWorkLeft_ = kMaxGraphWork;
   std::size_t graphWorkLeft_ = kMaxGraphWork;
   std::size_t componentWorkLeft_ = kMaxAggregateWork;

@@ -3852,14 +3852,13 @@ void PropertyRegistry::applyResolvedVariableGroup(const parser::UnparsedProperty
 
 void PropertyRegistry::storeDeferredProperty(const css::Declaration& declaration,
                                              css::Specificity specificity) {
+  const auto effective =
+      declaration.important ? css::Specificity::Important(specificity) : specificity;
   const auto [previous, inserted] = unparsedProperties.try_emplace(
-      declaration.name, parser::UnparsedProperty{declaration, specificity});
-  if (!inserted && IsPendingVariable(previous->second)) {
-    const auto effective =
-        declaration.important ? css::Specificity::Important(specificity) : specificity;
-    if (previous->second.specificity <= effective) {
-      writeVariableAwareDeclaration(declaration.name, declaration, effective, false, true);
-    }
+      declaration.name, parser::UnparsedProperty{declaration, effective});
+  if (!inserted && IsPendingVariable(previous->second) &&
+      previous->second.specificity <= effective) {
+    writeVariableAwareDeclaration(declaration.name, declaration, effective, false, true);
   }
 }
 
