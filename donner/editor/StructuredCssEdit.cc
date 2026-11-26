@@ -27,13 +27,13 @@ bool Contains(SourceByteRange range, std::size_t offset) {
   return range.start <= offset && offset < range.end;
 }
 
-void AddDeclarationTargets(const svg::SVGDocument& document, const svg::SVGStylesheetRule& rule,
-                           std::string_view source, std::size_t offset,
-                           StructuredCssTarget& target) {
+void AddDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view source,
+                           std::size_t offset, StructuredCssTarget& target) {
   const auto map = [&](const std::optional<SourceRange>& range) -> std::optional<SourceByteRange> {
-    return range ? ByteRange(svg::MapStylesheetSourceRange(document, rule.stylesheetEntity, *range),
-                             source.size())
-                 : std::nullopt;
+    return range && rule.stylesheetElement
+               ? ByteRange(svg::MapStylesheetSourceRange(*rule.stylesheetElement, *range),
+                           source.size())
+               : std::nullopt;
   };
   for (const auto& entry : rule.declarations) {
     const auto& declaration = entry.declaration;
@@ -176,7 +176,7 @@ std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::
                                .selectionOffset = offset,
                                .generation = app.document().documentGeneration(),
                                .sourceVersion = document.sourceVersion()};
-    AddDeclarationTargets(document, stylesheetRule, source, offset, target);
+    AddDeclarationTargets(stylesheetRule, source, offset, target);
     return target;
   }
   return std::nullopt;
