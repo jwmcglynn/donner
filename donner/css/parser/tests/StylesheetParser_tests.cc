@@ -1044,4 +1044,26 @@ TEST(StylesheetParser, IncrementalDeletionCannotHideNewlyEligibleImport) {
             FileOffset::Offset(after.find("circle") + std::string_view("circle").size()));
 }
 
+TEST(StylesheetParser, RetainsFontFacesInNestedLayers) {
+  ParseWarningSink warnings;
+  const auto stylesheet = StylesheetParser::Parse(R"css(
+    @font-face { font-family: Outside; src: local("Outside"); }
+    @layer theme {
+      @layer text { @font-face { font-family: Inside; src: local("Inside"); } }
+      @font-face { font-family: Parent; src: local("Parent"); }
+    }
+    @font-face { font-family: Later; src: local("Later"); }
+  )css",
+                                                  warnings);
+  ASSERT_THAT(stylesheet.fontFaces(), testing::SizeIs(4));
+  EXPECT_THAT(stylesheet.fontFaces(),
+              ElementsAre(Field("familyName", &FontFace::familyName, Eq("Outside")),
+                          Field("familyName", &FontFace::familyName, Eq("Inside")),
+                          Field("familyName", &FontFace::familyName, Eq("Parent")),
+                          Field("familyName", &FontFace::familyName, Eq("Later"))));
+  ASSERT_THAT(stylesheet.layers(), testing::NotNull());
+  EXPECT_THAT(stylesheet.layers()->fontFaceLayers, ElementsAre(kUnlayered, 1, 0, kUnlayered));
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
 }  // namespace donner::css::parser

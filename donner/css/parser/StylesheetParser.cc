@@ -1023,11 +1023,14 @@ void HandleAtRule(std::string_view source, AtRule& atRule, StylesheetParseState&
   if (WarnUnsupportedAtRule(atRule, warningSink)) {
     return;
   }
-  if (parent == kUnlayered) {
-    if (auto fontFace = ParseFontFaceRule(atRule, state.securityStats)) {
-      state.fontFaces.push_back(std::move(*fontFace));
-      ++state.securityStats.rules;
+  if (auto fontFace = ParseFontFaceRule(atRule, state.securityStats)) {
+    auto& faceLayers = state.layers.fontFaceLayers;
+    if (!faceLayers.empty() || parent != kUnlayered) {
+      faceLayers.resize(state.fontFaces.size(), kUnlayered);
+      faceLayers.push_back(parent);
     }
+    state.fontFaces.push_back(std::move(*fontFace));
+    ++state.securityStats.rules;
   }
 }
 

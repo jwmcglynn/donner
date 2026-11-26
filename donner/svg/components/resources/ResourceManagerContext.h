@@ -194,6 +194,22 @@ public:
    * Get all registered `@font-face` declarations.
    */
   const std::vector<css::FontFace>& fontFaces() const { return fontFaces_; }
+  /// Admit an applicable stylesheet face and return its index, or nullopt on refusal.
+  std::optional<std::size_t> registerStylesheetFontFace(const css::FontFace& face);
+
+  /// Install active document faces in ascending cascade precedence.
+  void setLayeredStylesheetFontOrder(std::vector<std::size_t> authorOrder,
+                                     std::optional<std::uint64_t> documentRevision);
+
+  /// A repeated text query can reuse the live attachment and stylesheet order at this revision.
+  bool hasLayeredFontOrderFor(std::uint64_t documentRevision) const {
+    return layeredFontOrderRevision_ == documentRevision;
+  }
+
+  /// Programmatic and active ranked stylesheet faces, as indexes into fontFaces().
+  const std::optional<std::vector<std::size_t>>& layeredFontFaceOrder() const {
+    return layeredFontFaceOrder_;
+  }
   /// Font faces still awaiting loading or registration.
   size_t pendingFontFaceCount() const { return fontFaceIndexesToLoad_.size(); }
   /// Whether stylesheet font-face registration exceeded its document limit.
@@ -241,6 +257,9 @@ private:
 
   /// Indexes into \ref fontFaces_ for font faces with URL sources that need hydration.
   std::vector<size_t> fontFaceIndexesToLoad_;
+  std::vector<bool> fontFaceQueued_;
+
+  void queueFontFace(std::size_t index);
 
   struct StylesheetFontFaceRegistration {
     const css::FontFace* data = nullptr;
@@ -248,6 +267,9 @@ private:
     std::uint64_t revision = 0;
   };
   std::unordered_map<Entity, StylesheetFontFaceRegistration> stylesheetFontFaceRegistrations_;
+  std::vector<std::size_t> programmaticFontFaces_;
+  std::optional<std::vector<std::size_t>> layeredFontFaceOrder_;
+  std::optional<std::uint64_t> layeredFontOrderRevision_;
   size_t stylesheetFontFaceCount_ = 0;
 
   /// Set when a stylesheet is destroyed, so the next import pass redistributes the import budget.

@@ -97,15 +97,6 @@ void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& reg
       stylesheet.fontFaceRevision);
 }
 
-/// Register the `@font-face` rules of every stylesheet with the document's resources.
-void SynchronizeAllStylesheetFonts(Registry& registry) {
-  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    auto [stylesheet] = view.get(stylesheetEntity);
-    SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
-  }
-}
-
 bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
                               const StylesheetComponent& stylesheet) {
   return HasSvgNamespace(registry, entity) && stylesheet.isCssType() &&
@@ -3268,6 +3259,116 @@ std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
   return std::nullopt;
 }
 
+namespace {
+
+bool HasPotentialLayeredFonts(const StylesheetComponent& sheet) {
+  if (!sheet.isCssType() || sheet.isUserAgentStylesheet || sheet.cascadeFontFaces().empty()) {
+    return false;
+  }
+  return sheet.stylesheet.layers() ||
+         std::ranges::any_of(sheet.importedStylesheets,
+                             [](const auto& imported) { return imported.layers(); });
+}
+
+class StylesheetFontOrder {
+public:
+  explicit StylesheetFontOrder(ResourceManagerContext& resources) : resources_(resources) {}
+
+  void add(const css::Stylesheet& sheet, const DocumentLayerOrder* layers) {
+    const auto faces = sheet.fontFaces();
+    const auto ranks = layers ? layers->ranksFor(sheet) : DocumentLayerOrder::SheetRanks{};
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+      const std::uint16_t rank = layers ? ranks.forLayer(sheet.fontFaceLayer(i)) : 1;
+      if (rank != 0) {
+        addFace(faces[i], rank);
+      }
+    }
+  }
+
+  std::vector<std::size_t> ordered() const {
+    std::vector<std::pair<Priority, std::size_t>> sorted;
+    sorted.reserve(priorities_.size());
+    for (const auto& [index, priority] : priorities_) {
+      sorted.emplace_back(priority, index);
+    }
+    std::ranges::sort(sorted);
+    std::vector<std::size_t> result;
+    result.reserve(sorted.size());
+    for (const auto& [_, index] : sorted) {
+      result.push_back(index);
+    }
+    return result;
+  }
+
+private:
+  using Priority = std::pair<std::uint16_t, std::size_t>;
+
+  void addFace(const css::FontFace& face, std::uint16_t rank) {
+    if (const auto index = resources_.registerStylesheetFontFace(face)) {
+      const Priority priority(rank, next_++);
+      auto [current, inserted] = priorities_.try_emplace(*index, priority);
+      if (!inserted) {
+        current->second = std::max(current->second, priority);
+      }
+    }
+  }
+
+  ResourceManagerContext& resources_;
+  std::unordered_map<std::size_t, Priority> priorities_;
+  std::size_t next_ = 0;
+};
+
+void AddStylesheetFontLayers(StylesheetFontOrder& order, const StylesheetComponent& sheet,
+                             const DocumentLayerOrder* layers) {
+  if (!layers || layers->allowsImportsOf(sheet.stylesheet)) {
+    for (const auto& imported : sheet.importedStylesheets) {
+      order.add(imported, layers);
+    }
+  }
+  order.add(sheet.stylesheet, layers);
+}
+
+void UpdateLayeredFontOrder(Registry& registry, ResourceManagerContext& resources) {
+  const auto* document = registry.ctx().find<SVGDocumentContext>();
+  const auto revision = document ? std::optional(document->mutationRevision()) : std::nullopt;
+  if (revision && resources.hasLayeredFontOrderFor(*revision)) {
+    return;
+  }
+  const auto layers = DocumentLayerOrder::Build(registry);
+  const auto* activeLayers = layers && layers->hasRanks() ? layers.get() : nullptr;
+  StylesheetFontOrder order(resources);
+  const auto add = [&](Entity entity) {
+    const auto& sheet = registry.get<StylesheetComponent>(entity);
+    if (sheet.isCssType() && HasSvgNamespace(registry, entity)) {
+      AddStylesheetFontLayers(order, sheet, activeLayers);
+    }
+  };
+  if (activeLayers) {
+    std::ranges::for_each(activeLayers->stylesheets(), add);
+  } else {
+    std::ranges::for_each(DocumentLayerOrder::StylesheetsInDocumentOrder(registry), add);
+  }
+  resources.setLayeredStylesheetFontOrder(order.ordered(), revision);
+}
+
+}  // namespace
+
+void StyleSystem::synchronizeDocumentFontFaces(Registry& registry) {
+  auto& resources = registry.ctx().get<ResourceManagerContext>();
+  const auto view = registry.view<const StylesheetComponent>();
+  const auto usesLayers = [&](Entity entity) {
+    return HasPotentialLayeredFonts(view.get<const StylesheetComponent>(entity));
+  };
+  if (resources.layeredFontFaceOrder() || std::ranges::any_of(view, usesLayers)) {
+    UpdateLayeredFontOrder(registry, resources);
+    return;
+  }
+  for (Entity entity : view) {
+    SynchronizeStylesheetFonts(resources, registry, entity,
+                               view.get<const StylesheetComponent>(entity));
+  }
+}
+
 void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink,
                                    FullRestyle fullRestyle, StylePassScheduler scheduler) {
   StyleCascadeMetrics& metrics = GetStyleCascadeMetrics(registry);
@@ -3303,7 +3404,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
     computeMissingStyles(registry, warningSink, scheduler);
   }
 
-  SynchronizeAllStylesheetFonts(registry);
+  synchronizeDocumentFontFaces(registry);
 }
 
 void StyleSystem::computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink,
