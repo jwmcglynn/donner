@@ -1040,11 +1040,6 @@ void HandleLayerRule(std::string_view source, AtRule& rule, StylesheetParseState
   }
 }
 
-#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
-#pragma clang attribute pop
-#undef DONNER_APPLE_LAYER_PARSER_MINSIZE
-#endif
-
 void HandleAtRule(std::string_view source, AtRule& atRule, StylesheetParseState& state,
                   ParseWarningSink& warningSink, LayerId parent) {
   if (atRule.name.equalsLowercase("import")) {
@@ -1086,6 +1081,11 @@ void HandleRule(std::string_view source, Rule& rule, StylesheetParseState& state
     HandleAtRule(source, *atRule, state, warningSink, parent);
   }
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_LAYER_PARSER_MINSIZE
+#endif
 
 }  // namespace
 

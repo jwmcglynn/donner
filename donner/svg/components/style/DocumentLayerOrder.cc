@@ -6,7 +6,6 @@
 #include <map>
 #include <span>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "donner/base/xml/components/TreeComponent.h"
@@ -141,13 +140,14 @@ struct LayerNode {
 
 struct SheetLayers {
   css::LayerId base;
+  bool allowsImports = true;
   std::vector<css::LayerId> bySheetId;
 };
 
 struct ImportLinks {
   explicit ImportLinks(const StylesheetComponent& root) : root(root) {
     if (!build()) {
-      children.clear();
+      childCount = 0;
       valid = false;
     }
   }
@@ -164,8 +164,19 @@ struct ImportLinks {
     }
     depths[i] = static_cast<std::uint8_t>(depth);
     const auto& parentSheet = parent == count ? root.stylesheet : root.importedStylesheets[parent];
-    return origin.importIndex < parentSheet.imports().size() &&
-           children.emplace(std::pair(parent, origin.importIndex), i).second;
+    if (origin.importIndex >= parentSheet.imports().size()) {
+      return false;
+    }
+    const Key key(parent, origin.importIndex);
+    auto* end = children.data() + childCount;
+    auto* position = children.data() + locate(key);
+    if (position != end && childKey(*position) == key) {
+      return false;
+    }
+    std::move_backward(position, end, end + 1);
+    *position = static_cast<std::uint8_t>(i);
+    ++childCount;
+    return true;
   }
 
   bool build() {
@@ -182,9 +193,38 @@ struct ImportLinks {
     return true;
   }
 
+  std::optional<std::size_t> child(std::size_t parent, std::size_t position) const {
+    const Key key(parent, position);
+    const auto found = locate(key);
+    return found != childCount && childKey(children[found]) == key
+               ? std::optional<std::size_t>(children[found])
+               : std::nullopt;
+  }
+
   const StylesheetComponent& root;
-  std::map<std::pair<std::size_t, std::size_t>, std::size_t> children;
   bool valid = true;
+
+private:
+  using Key = std::pair<std::size_t, std::size_t>;
+
+  Key childKey(std::uint8_t child) const {
+    const auto& origin = root.importOrigins[child];
+    return {origin.parentEntry.value_or(root.importedStylesheets.size()), origin.importIndex};
+  }
+
+  std::size_t locate(const Key& key) const {
+    const auto* begin = children.data();
+    const auto* found = std::lower_bound(
+        begin, begin + childCount, key,
+        [&](std::uint8_t child, const Key& sought) { return childKey(child) < sought; });
+    return static_cast<std::size_t>(found - begin);
+  }
+
+  // Each checked index names an existing flattened import. Sorting the bounded index array
+  // avoids owning a second copy of the provenance and keeps lookup logarithmic.
+  static_assert(StylesheetImportBudget::kMaximumImports <= 256);
+  std::array<std::uint8_t, StylesheetImportBudget::kMaximumImports> children;
+  std::size_t childCount = 0;
 };
 
 }  // namespace
@@ -260,9 +300,8 @@ struct DocumentLayerOrder::Data {
     const auto local = sheet.imports()[position].layer;
     const auto target = syntax ? declare(*syntax, mapping, local) : mapping.base;
     // An applicable import establishes its layer at this point even if the URL failed to load.
-    if (const auto found = links.children.find({occurrence, position});
-        found != links.children.end()) {
-      visit(links, found->second, target);
+    if (const auto child = links.child(occurrence, position)) {
+      visit(links, *child, target);
     }
   }
 
@@ -306,11 +345,11 @@ struct DocumentLayerOrder::Data {
     if (links.valid) {
       for (const auto& imported : sheet.importedStylesheets) {
         // An unreachable occurrence cannot contribute even its unlayered declarations.
-        sheets.emplace(&imported, SheetLayers{kRefused, {}});
+        sheets.emplace(&imported, SheetLayers{.base = kRefused, .bySheetId = {}});
       }
     } else {
       refused = true;
-      blockedImports.insert(&sheet.stylesheet);
+      sheets[&sheet.stylesheet].allowsImports = false;
     }
     visit(links, sheet.importedStylesheets.size(), kRoot);
   }
@@ -335,7 +374,6 @@ struct DocumentLayerOrder::Data {
   std::vector<Entity> orderedSheets;
   std::map<std::pair<css::LayerId, RcString>, css::LayerId> names;
   std::unordered_map<const css::Stylesheet*, SheetLayers> sheets;
-  std::unordered_set<const css::Stylesheet*> blockedImports;
   std::uint16_t rootRank = 0;
   bool refused = false;
 };
@@ -377,7 +415,8 @@ std::unique_ptr<DocumentLayerOrder> DocumentLayerOrder::Build(const Registry& re
 #endif
 
 bool DocumentLayerOrder::allowsImportsOf(const css::Stylesheet& sheet) const {
-  return !data_->blockedImports.contains(&sheet);
+  const auto found = data_->sheets.find(&sheet);
+  return found == data_->sheets.end() || found->second.allowsImports;
 }
 
 bool DocumentLayerOrder::hasRanks() const {
