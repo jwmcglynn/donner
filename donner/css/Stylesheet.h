@@ -120,6 +120,8 @@ public:
     std::size_t declarations = 0;
     std::size_t componentValues = 0;
     bool rejected = false;
+    /// An import directive appeared, including one rejected by its position or conditions.
+    bool hasImportRule = false;
     /// Raw top-level entries charged by RuleParser, including ignored rules.
     std::size_t rawRules = 0;
   };

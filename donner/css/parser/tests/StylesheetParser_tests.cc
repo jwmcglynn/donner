@@ -1025,4 +1025,23 @@ TEST(StylesheetParser, IncrementalEditLeavesLayeredStylesheetsToFullParse) {
               testing::Eq(std::nullopt));
 }
 
+TEST(StylesheetParser, IncrementalDeletionCannotHideNewlyEligibleImport) {
+  constexpr std::string_view first = "rect { fill: red; }";
+  constexpr std::string_view after = "@import 'theme.css'; circle { fill: blue; }";
+  const std::string before = std::string(first) + std::string(after);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  EXPECT_THAT(original.imports(), IsEmpty());
+  EXPECT_THAT(original.securityStats().hasImportRule, testing::IsTrue());
+  EXPECT_THAT(StylesheetParser::TryReparseTextEdit(original, before, after, {0, first.size(), 0}),
+              testing::Eq(std::nullopt));
+
+  const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  EXPECT_THAT(fresh.imports(), ElementsAre(ImportIs("theme.css", 0)));
+  ASSERT_THAT(fresh.rules(), testing::SizeIs(1));
+  EXPECT_EQ(fresh.rules()[0].ruleSourceRange.start, FileOffset::Offset(after.find("circle")));
+  EXPECT_EQ(fresh.rules()[0].selectorSourceRange.end,
+            FileOffset::Offset(after.find("circle") + std::string_view("circle").size()));
+}
+
 }  // namespace donner::css::parser

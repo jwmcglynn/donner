@@ -855,6 +855,7 @@ void WarnLayerLimit(const AtRule& atRule, ParseWarningSink& warningSink) {
 
 void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
                       ParseWarningSink& warningSink) {
+  state.securityStats.hasImportRule = true;
   if (!state.importsAllowed) {
     warningSink.add([&] {
       return ParseDiagnostic::Warning(
@@ -1337,7 +1338,10 @@ std::optional<Stylesheet> SpliceEditWindow(const Stylesheet& old, RuleWindow win
       return std::nullopt;
     }
   }
-  const Stylesheet::SecurityStats stats{rules.size(), *declarations, *components, false, *rawCount};
+  const Stylesheet::SecurityStats stats{.rules = rules.size(),
+                                        .declarations = *declarations,
+                                        .componentValues = *components,
+                                        .rawRules = *rawCount};
   return Stylesheet(std::move(rules), {}, stats);
 }
 
@@ -1353,8 +1357,8 @@ bool IsWholeTextEdit(std::string_view before, std::string_view after,
 
 bool CanReparseQualifiedEdit(const Stylesheet& old, std::string_view before, std::string_view after,
                              StylesheetParser::TextEdit edit) {
-  return !old.securityStats().rejected && !old.layers() && old.imports().empty() &&
-         old.fontFaces().empty() && !before.starts_with("@charset") &&
+  return !old.securityStats().rejected && !old.securityStats().hasImportRule && !old.layers() &&
+         old.imports().empty() && old.fontFaces().empty() && !before.starts_with("@charset") &&
          IsWholeTextEdit(before, after, edit);
 }
 

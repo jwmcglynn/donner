@@ -110,7 +110,7 @@ void CheckStylesheet(const Stylesheet& incremental, const Stylesheet& full) {
   const auto& b = full.securityStats();
   Require(a.rules == b.rules && a.declarations == b.declarations &&
           a.componentValues == b.componentValues && a.rawRules == b.rawRules &&
-          a.rejected == b.rejected);
+          a.rejected == b.rejected && a.hasImportRule == b.hasImportRule);
   Require(!incremental.layers() && !full.layers());
   Require(incremental.imports().empty() && full.imports().empty());
   Require(incremental.fontFaces().empty() && full.fontFaces().empty());
