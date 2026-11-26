@@ -22,7 +22,8 @@ std::size_t LayerSyntaxBytes(const css::Stylesheet& sheet) {
   if (const auto* syntax = sheet.layers()) {
     std::size_t bytes = sizeof(*syntax) + 2 * sizeof(void*) +
                         syntax->nodes.capacity() * sizeof(css::LayerNode) +
-                        syntax->events.capacity() * sizeof(css::LayerEvent);
+                        syntax->events.capacity() * sizeof(css::LayerEvent) +
+                        syntax->fontFaceLayers.capacity() * sizeof(css::LayerId);
     for (const auto& node : syntax->nodes) {
       bytes += node.name.size();
     }

@@ -2329,8 +2329,12 @@ bool RenderingContext::createComputedComponents(RenderTreeState& renderState,
   {
     auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
     auto& fontManager = registry_.ctx().emplace<FontManager>(registry_);
-    for (const auto& face : resourceManager.fontFaces()) {
-      fontManager.addFontFace(face);
+    if (const auto& order = resourceManager.layeredFontFaceOrder()) {
+      fontManager.synchronizeLayeredResourceFaces(resourceManager.fontFaces(), *order);
+    } else {
+      for (const auto& face : resourceManager.fontFaces()) {
+        fontManager.addFontFace(face);
+      }
     }
     registry_.ctx().emplace<TextEngine>(fontManager, registry_);
     ReportMissingFallbackFontOnce(registry_, fontManager, warningSink);

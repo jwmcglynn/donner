@@ -39,6 +39,8 @@ struct LayerEvent {
 struct StylesheetLayers {
   std::vector<LayerNode> nodes;
   std::vector<LayerEvent> events;
+  /// Sheet-local layer of each font face, populated only when a face is layered.
+  std::vector<LayerId> fontFaceLayers;
 };
 
 /**
@@ -183,6 +185,12 @@ public:
 
   /// Layer syntax in source order. A null value leaves ordinary imports in imports() order.
   const StylesheetLayers* layers() const UTILS_LIFETIME_BOUND { return layers_.get(); }
+
+  /// Local layer of the font face at this position, or the implicit sheet layer.
+  LayerId fontFaceLayer(std::size_t position) const {
+    return layers_ && position < layers_->fontFaceLayers.size() ? layers_->fontFaceLayers[position]
+                                                                : kUnlayered;
+  }
 
   /// Return resource-limit accounting from parsing this stylesheet.
   const SecurityStats& securityStats() const { return securityStats_; }

@@ -778,6 +778,9 @@ public:
    */
   void invalidateComputed(EntityHandle handle);
 
+  /// Register document fonts and compute their active ordering when cascade layers apply.
+  static void synchronizeDocumentFontFaces(Registry& registry);
+
   /**
    * Discard every cached computed style and its retained style budget, for changes that affect
    * selector matching across the whole document, such as reloaded stylesheet imports. Unlike
