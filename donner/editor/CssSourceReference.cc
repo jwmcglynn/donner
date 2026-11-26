@@ -103,9 +103,12 @@ private:
     if (args.empty() || !args.front().isToken<Token::Ident>()) {
       return true;
     }
-    const auto& token = std::get<Token>(args.front().value);
+    return variableArguments(std::get<Token>(args.front().value), args.subspan(1), depth);
+  }
+
+  bool variableArguments(const Token& token, std::span<const ComponentValue> rest,
+                         std::size_t depth) {
     const std::string_view name = token.get<Token::Ident>().value;
-    auto rest = args.subspan(1);
     if (!skipWhitespace(rest)) {
       return false;
     }
