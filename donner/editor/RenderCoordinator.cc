@@ -510,8 +510,11 @@ std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
       .entity = preview->entity,
       .extraEntities = preview->extraEntities,
       .translation = preview->translation,
+      .pointerDocumentPoint = preview->pointerDocumentPoint,
+      .mouseDown = preview->mouseDown,
       .documentFromCachedDocument = preview->documentFromCachedDocument,
       .dragGeneration = preview->dragGeneration,
+      .contentIdentity = preview->contentIdentity,
   };
 }
 
@@ -549,6 +552,7 @@ bool SameRequestedDragPreview(const std::optional<RenderRequest::DragPreview>& l
   return lhs->entity == rhs->entity && lhs->extraEntities == rhs->extraEntities &&
          lhs->interactionKind == rhs->interactionKind &&
          lhs->dragGeneration == rhs->dragGeneration && lhs->translation == rhs->translation &&
+         lhs->contentIdentity.sameContent(rhs->contentIdentity) &&
          SameTransform(lhs->documentFromCachedDocument, rhs->documentFromCachedDocument);
 }
 
