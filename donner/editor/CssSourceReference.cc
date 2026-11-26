@@ -12,30 +12,20 @@ namespace {
 using css::ComponentValue;
 using css::Token;
 
-std::span<const ComponentValue> SkipWhitespace(std::span<const ComponentValue> values) {
-  while (!values.empty() && values.front().isToken<Token::Whitespace>()) {
-    values = values.subspan(1);
-  }
-  return values;
-}
-
 class ReferenceVisitor {
 public:
   ReferenceVisitor(std::string_view source,
                    const std::function<bool(const CssSourceReference&)>& visit,
-                   const std::function<std::optional<bool>(std::string_view)>& hasValue)
-      : source_(source), visit_(visit), hasValue_(hasValue) {}
+                   const std::function<std::optional<bool>(std::string_view)>& hasValue,
+                   const CssSourceReferenceHooks& hooks)
+      : source_(source), visit_(visit), hasValue_(hasValue), hooks_(hooks) {}
 
   bool walk(std::span<const ComponentValue> values, std::size_t depth = 0) {
     if (depth > css::parser::details::ComponentValueParsingContext::kMaximumNestingDepth) {
       return false;
     }
     for (const auto& value : values) {
-      if (!remaining_) {
-        return false;
-      }
-      --remaining_;
-      if (!visitValue(value, depth)) {
+      if (!charge() || !visitValue(value, depth)) {
         return false;
       }
     }
@@ -43,6 +33,27 @@ public:
   }
 
 private:
+  bool charge() {
+    if (!remaining_ || (hooks_.consume && !hooks_.consume())) {
+      return false;
+    }
+    --remaining_;
+    return true;
+  }
+
+  bool skipWhitespace(std::span<const ComponentValue>& values) {
+    while (!values.empty()) {
+      if (!charge()) {
+        return false;
+      }
+      if (!values.front().isToken<Token::Whitespace>()) {
+        break;
+      }
+      values = values.subspan(1);
+    }
+    return true;
+  }
+
   bool emit(CssSourceReference::Kind kind, std::string_view name, std::size_t start,
             std::size_t length) const {
     if (name.empty() || start > source_.size() || length == 0 || length > source_.size() - start) {
@@ -63,9 +74,18 @@ private:
                 start + static_cast<std::size_t>(spelling.data() - raw.data()), spelling.size());
   }
 
-  bool quotedUrl(std::span<const ComponentValue> values) const {
-    values = SkipWhitespace(values);
-    if (values.empty() || !SkipWhitespace(values.subspan(1)).empty()) {
+  bool quotedUrl(std::span<const ComponentValue> values) {
+    if (!skipWhitespace(values)) {
+      return false;
+    }
+    if (values.empty()) {
+      return true;
+    }
+    auto rest = values.subspan(1);
+    if (!skipWhitespace(rest)) {
+      return false;
+    }
+    if (!rest.empty()) {
       return true;
     }
     const auto* token = std::get_if<Token>(&values.front().value);
@@ -77,13 +97,18 @@ private:
   }
 
   bool variable(std::span<const ComponentValue> args, std::size_t depth) {
-    args = SkipWhitespace(args);
+    if (!skipWhitespace(args)) {
+      return false;
+    }
     if (args.empty() || !args.front().isToken<Token::Ident>()) {
       return true;
     }
     const auto& token = std::get<Token>(args.front().value);
     const std::string_view name = token.get<Token::Ident>().value;
-    const auto rest = SkipWhitespace(args.subspan(1));
+    auto rest = args.subspan(1);
+    if (!skipWhitespace(rest)) {
+      return false;
+    }
     if (name.size() <= 2 || !name.starts_with("--") ||
         (!rest.empty() && !rest.front().isToken<Token::Comma>())) {
       return true;
@@ -95,7 +120,18 @@ private:
     if (rest.empty() || (hasValue_ && hasValue_(name).value_or(true))) {
       return true;
     }
-    return walk(rest.subspan(1), depth + 1);
+    return fallback(name, rest.subspan(1), depth + 1);
+  }
+
+  bool fallback(std::string_view name, std::span<const ComponentValue> values, std::size_t depth) {
+    if (hooks_.enterFallback) {
+      hooks_.enterFallback(name);
+    }
+    const bool complete = walk(values, depth);
+    if (hooks_.leaveFallback) {
+      hooks_.leaveFallback();
+    }
+    return complete;
   }
 
   bool visitValue(const ComponentValue& value, std::size_t depth) {
@@ -123,16 +159,18 @@ private:
   std::string_view source_;
   const std::function<bool(const CssSourceReference&)>& visit_;
   const std::function<std::optional<bool>(std::string_view)>& hasValue_;
+  const CssSourceReferenceHooks& hooks_;
   std::size_t remaining_ =
       css::parser::details::ComponentValueParsingBudget::kMaximumComponentValues;
 };
 }  // namespace
 
-bool VisitCssSourceReferences(
-    std::span<const css::ComponentValue> values, std::string_view cssSource,
-    const std::function<bool(const CssSourceReference&)>& visit,
-    const std::function<std::optional<bool>(std::string_view)>& hasValue) {
-  return ReferenceVisitor(cssSource, visit, hasValue).walk(values);
+bool VisitCssSourceReferences(std::span<const css::ComponentValue> values,
+                              std::string_view cssSource,
+                              const std::function<bool(const CssSourceReference&)>& visit,
+                              const std::function<std::optional<bool>(std::string_view)>& hasValue,
+                              const CssSourceReferenceHooks& hooks) {
+  return ReferenceVisitor(cssSource, visit, hasValue, hooks).walk(values);
 }
 
 }  // namespace donner::editor

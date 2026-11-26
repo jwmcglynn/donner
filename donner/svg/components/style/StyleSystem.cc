@@ -3127,7 +3127,7 @@ namespace {
 MatchedStyleRule BuildMatchedStyleRule(Registry& registry, const StylesheetComponent& stylesheet,
                                        Entity stylesheetEntity, const css::SelectorRule& rule,
                                        std::size_t ruleIndex, std::size_t selectorEntryIndex,
-                                       css::Specificity specificity) {
+                                       css::Specificity specificity, bool includeDeclarations) {
   const auto& selector = selectorEntryIndex < rule.selectorEntrySourceRanges.size()
                              ? rule.selectorEntrySourceRanges[selectorEntryIndex]
                              : rule.selectorSourceRange;
@@ -3144,6 +3144,9 @@ MatchedStyleRule BuildMatchedStyleRule(Registry& registry, const StylesheetCompo
   matchedRule.selectorCssRange = selector;
   matchedRule.ruleSourceRange = project(rule.ruleSourceRange);
   matchedRule.selectorSourceRange = project(selector);
+  if (!includeDeclarations) {
+    return matchedRule;
+  }
   for (const css::Declaration& declaration : rule.declarations) {
     if (const auto range =
             project(declaration.authoredDeclarationRange().value_or(declaration.sourceRange))) {
@@ -3155,7 +3158,8 @@ MatchedStyleRule BuildMatchedStyleRule(Registry& registry, const StylesheetCompo
 
 }  // namespace
 
-std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle handle) const {
+std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(
+    EntityHandle handle, bool includeDeclarations) const {
   Registry& registry = *handle.registry();
 
   const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
@@ -3196,7 +3200,8 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
                                                   stylesheet.isUserAgentStylesheet);
 
       result.push_back(BuildMatchedStyleRule(registry, stylesheet, stylesheetEntity, rule,
-                                             ruleIndex, match->selectorEntryIndex, specificity));
+                                             ruleIndex, match->selectorEntryIndex, specificity,
+                                             includeDeclarations));
     }
     return true;
   };

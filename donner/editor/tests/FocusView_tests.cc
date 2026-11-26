@@ -468,6 +468,76 @@ TEST(FocusViewTest, RepeatedVariableUsesConnectToTheWinnerForEachSelectedElement
   }
 }
 
+TEST(FocusViewTest, RepeatedRuleMatchesReuseNoReferenceWork) {
+  const auto work = [](std::size_t count, std::string_view value) {
+    std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>rect { --tokens: ";
+    source += value;
+    source += "; }</style><g id='group'>";
+    for (std::size_t i = 0; i < count; ++i) {
+      source += "<rect/>";
+    }
+    source += "</g></svg>";
+    EditorApp app;
+    EXPECT_TRUE(app.loadFromString(source));
+    auto& document = app.document().document();
+    const auto group = document.querySelector("#group");
+    EXPECT_THAT(group, testing::Optional(testing::_));
+    if (!group) {
+      return std::size_t{};
+    }
+    const std::array selected{*group};
+    const auto summary = ComputeReferenceHighlightSummary(document, selected);
+    EXPECT_FALSE(summary.resourceLimitExceeded);
+    EXPECT_THAT(summary.referencedElements, IsEmpty());
+    return summary.traversalWork;
+  };
+  const auto extraWithTwoMatches = work(2, "0 1 2 3 4 5") - work(2, "0");
+  const auto extraWithFiveMatches = work(5, "0 1 2 3 4 5") - work(5, "0");
+  EXPECT_GT(extraWithTwoMatches, 0u);
+  EXPECT_EQ(extraWithFiveMatches, extraWithTwoMatches);
+}
+
+TEST(FocusViewTest, IndexedFallbacksUseEachSubjectAndRefreshOnSourceEdit) {
+  constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
+<style>rect { fill:var(--ink, var(--second, url(#paint))); }</style>
+<defs><linearGradient id="paint"/><linearGradient id="alternate"/></defs>
+<g id="group"><rect id="set" style="--ink:blue"/><rect id="missing"/></g>
+</svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  auto& document = app.document().document();
+  const auto set = document.querySelector("#set");
+  const auto missing = document.querySelector("#missing");
+  const auto paint = document.querySelector("#paint");
+  ASSERT_THAT(set, testing::Optional(testing::_));
+  ASSERT_THAT(missing, testing::Optional(testing::_));
+  ASSERT_THAT(paint, testing::Optional(testing::_));
+  std::ignore = set->getComputedStyle();
+  std::ignore = missing->getComputedStyle();
+  const std::array chosen{*set, *missing};
+  EXPECT_THAT(
+      FocusElementIds(ComputeReferenceHighlightSummary(document, chosen).referencedElements),
+      ElementsAre("paint"));
+  const std::array reverse{*paint};
+  EXPECT_THAT(
+      FocusElementIds(ComputeReferenceHighlightSummary(document, reverse).referencingElements),
+      ElementsAre("missing"));
+
+  const auto start = source.find("#paint");
+  const auto edit = document.applySourceEdit({
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 6)},
+      .replacement = "#alternate",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  std::ignore = set->getComputedStyle();
+  std::ignore = missing->getComputedStyle();
+  EXPECT_THAT(
+      FocusElementIds(ComputeReferenceHighlightSummary(document, chosen).referencedElements),
+      ElementsAre("alternate"));
+  EXPECT_THAT(ComputeReferenceHighlightSummary(document, reverse).referencingElements, IsEmpty());
+}
+
 TEST(FocusViewTest, UrlUnderCaretResolvesWithoutAnyMatchingShape) {
   constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
 <style>.unused { fill: var(--missing, var(--second, url(#spectrum))) }</style>

@@ -767,7 +767,8 @@ public:
    * @param handle Entity handle to trace stylesheet matches for.
    * @return Matched stylesheet rules in cascade scan order.
    */
-  std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle) const;
+  std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle,
+                                                         bool includeDeclarations = true) const;
 
   /// Number of stylesheet source indices constructed on this thread.
   static std::size_t StylesheetSourceIndexBuildsForTesting();

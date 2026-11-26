@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -74,6 +75,15 @@ struct SVGStyleRuleAtSourceOffset {
 std::optional<SVGStylesheetRule> GetAuthoredStylesheetRule(const SVGStyleElement& stylesheet,
                                                            std::size_t ruleIndex);
 
+/// Borrow the declaration tokens of one exact authored stylesheet rule during the call.
+/// @param stylesheet Embedded stylesheet owner.
+/// @param ruleIndex Rule index in the parsed stylesheet.
+/// @param expectedRuleRange Authored CSS range identifying the same rule.
+/// @param visit Receives the stylesheet bytes and borrowed declaration span.
+bool VisitAuthoredStylesheetDeclarations(
+    const SVGStyleElement& stylesheet, std::size_t ruleIndex, const SourceRange& expectedRuleRange,
+    const std::function<void(std::string_view, std::span<const css::Declaration>)>& visit);
+
 /// Whether the element's prepared cascade supplies a usable value for the case-sensitive name.
 /// A disjoint or unprepared document state has no answer. A valid imported value can be present
 /// even when it has no source range in this document.
@@ -83,8 +93,10 @@ std::optional<bool> HasPreparedCustomPropertyValue(const SVGElement& element,
 /// Collect stylesheet rules that match \p element.
 ///
 /// @param element Element to inspect.
+/// @param includeDeclarations Project declaration ranges as well as the rule and selector.
 /// @return Matched stylesheet rules in cascade scan order.
-std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element);
+std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element,
+                                                          bool includeDeclarations = true);
 
 /// Collect source-backed author stylesheet rules in \p document, optionally with the built-in user
 /// agent stylesheet rules.
@@ -99,8 +111,9 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
 /// Collect one document-local author rule and its declarations at a source byte offset.
 /// @param document SVG document to inspect.
 /// @param documentSourceOffset Offset inside the complete authored CSS rule.
+/// @param includeDeclarations Copy and map declaration tokens in the result.
 std::optional<SVGStylesheetRule> CollectStylesheetRuleAtSourceOffset(
-    const SVGDocument& document, std::size_t documentSourceOffset);
+    const SVGDocument& document, std::size_t documentSourceOffset, bool includeDeclarations = true);
 
 /// Return true when an author stylesheet rule in \p document matches on tree position.
 ///
