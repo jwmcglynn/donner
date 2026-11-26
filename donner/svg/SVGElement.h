@@ -853,8 +853,7 @@ protected:
 
 private:
   // The parser shares the attribute writers but has no previous render to invalidate.
-  using StyleEditRouter = bool (*)(EntityHandle, std::string_view, std::string_view,
-                                   std::string_view);
+  using StyleEditRouter = bool (*)(EntityHandle, std::string_view, std::string_view);
   void setClassNameWithRouter(std::string_view name, StyleEditRouter route);
   void setStyleWithRouter(std::string_view style, StyleEditRouter route);
   ParseResult<bool> trySetPresentationAttributeWithRouter(std::string_view name,

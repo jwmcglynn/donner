@@ -325,13 +325,9 @@ bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
   return true;
 }
 
-using TryStyleEdit = bool (*)(EntityHandle, std::string_view, std::string_view, std::string_view);
+using TryStyleEdit = bool (*)(EntityHandle, std::string_view, std::string_view);
 
-void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute, TryStyleEdit route,
-                          std::string_view previous = {}, std::string_view next = {}) {
-  if (route && route(handle, attribute, previous, next)) {
-    return;
-  }
+void MarkFullClassOrStyleEdit(EntityHandle handle) {
   markNeedsFullStyleRecompute(handle);
   invalidateComputedStyle(handle);
   ForEachStyleDescendant(handle, invalidateComputedStyle);
@@ -341,11 +337,13 @@ void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute, TrySt
 
 // Most class lists have only a few names. Bound the pairwise token comparisons; an oversized
 // list uses the existing whole-document restyle.
-bool RouteStyleEdit(EntityHandle handle, std::string_view attribute, std::string_view previous,
-                    std::string_view next) {
+bool RouteStyleEdit(EntityHandle handle, std::string_view attribute, std::string_view next) {
   if (attribute != "class") {
     return TryNarrowStyleEdit(handle, attribute);
   }
+  const auto* component = handle.try_get<components::ClassComponent>();
+  const std::string_view previous =
+      component ? std::string_view(component->className) : std::string_view();
   constexpr std::size_t kMaximumClassBytes = 4096;
   constexpr std::size_t kMaximumClassTokens = 32;
   if (previous.size() > kMaximumClassBytes || next.size() > kMaximumClassBytes) {
@@ -437,7 +435,7 @@ parser::PropertyParseFnParams ElementAttributeParams(ElementType elementType, st
 void MarkSelectorSensitivePresentationEdit(EntityHandle handle, std::string_view name,
                                            TryStyleEdit route) {
   if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*handle.registry(), name) &&
-      (!route || !route(handle, name, {}, {}))) {
+      (!route || !route(handle, name, {}))) {
     markNeedsFullStyleRecompute(handle);
   }
 }
@@ -471,7 +469,7 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
     // etc.), mark style cascade + shape dirty.
     if (commonProperty &&
         !(elementType == ElementType::Use && IsUseGeometryAttribute(actualName)) && route &&
-        route(handle, name, {}, {})) {
+        route(handle, name, {})) {
       markDirty(handle, components::DirtyFlagsComponent::Shape);
       return;
     }
@@ -835,11 +833,9 @@ void SVGElement::setClassName(std::string_view name) {
 void SVGElement::setClassNameWithRouter(std::string_view name, StyleEditRouter route) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
-  const auto* state = handle_.registry()->ctx().find<components::RenderTreeState>();
-  const bool hasOldStyles =
-      route && state && state->hasBeenBuilt && !state->needsFullStyleRecompute;
-  const RcString previous = hasOldStyles ? className() : RcString();
   const RcString next(name);
+  // The live router reads the old class tokens before this writer replaces their storage.
+  const bool routed = route && route(handle_, "class", next);
   if (!name.empty()) {
     auto& component = handle_.get_or_emplace<components::ClassComponent>(access);
     component.className = next;
@@ -849,7 +845,9 @@ void SVGElement::setClassNameWithRouter(std::string_view name, StyleEditRouter r
 
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("class"), next);
-  MarkClassOrStyleEdit(handle_, "class", hasOldStyles ? route : nullptr, previous, next);
+  if (!routed) {
+    MarkFullClassOrStyleEdit(handle_);
+  }
 }
 
 void SVGElement::setStyle(std::string_view style) {
@@ -863,13 +861,17 @@ void SVGElement::setStyleWithRouter(std::string_view style, StyleEditRouter rout
 
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
-  MarkClassOrStyleEdit(handle_, "style", route);
+  if (!route || !route(handle_, "style", {})) {
+    MarkFullClassOrStyleEdit(handle_);
+  }
 }
 
 void SVGElement::updateStyle(std::string_view style) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   components::StyleSystem().updateStyle(handle_, style);
-  MarkClassOrStyleEdit(handle_, "style", RouteStyleEdit);
+  if (!RouteStyleEdit(handle_, "style", {})) {
+    MarkFullClassOrStyleEdit(handle_);
+  }
 }
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
