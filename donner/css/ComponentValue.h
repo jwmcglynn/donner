@@ -34,6 +34,9 @@ struct Function {
   /// Authored extent through the matching closer. Zero if synthetic or unterminated.
   std::size_t sourceByteLength = 0;
 
+  /// True when parsing reached EOF before the function's closing parenthesis.
+  bool closedAtEof = false;
+
   /**
    * Construct a new Function object with a name and an empty parameter list. To supply parameters,
    * modify the \ref values vector after construction.
@@ -81,6 +84,9 @@ struct SimpleBlock {
   FileOffset sourceOffset;
   /// Authored extent through the matching closer. Zero if synthetic or unterminated.
   std::size_t sourceByteLength = 0;
+
+  /// True when parsing reached EOF before the block's matching closing token.
+  bool closedAtEof = false;
 
   /**
    * Construct a new SimpleBlock object with an opening token and an empty list of component values.

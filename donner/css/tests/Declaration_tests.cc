@@ -8,6 +8,7 @@
 
 #include "donner/base/tests/ScopedCtypeLocale.h"
 #include "donner/css/CSS.h"
+#include "donner/css/parser/DeclarationListParser.h"
 
 namespace donner::css {
 
@@ -20,6 +21,17 @@ using testing::ResultOf;
 // Helper: parse a style string and return declarations.
 static std::vector<Declaration> parse(std::string_view str) {
   return CSS::ParseStyleAttribute(str);
+}
+
+static std::string mergePreservingAuthored(std::string_view existingText,
+                                           std::string_view updateText) {
+  std::vector<std::string_view> existingSpellings;
+  auto existing = parser::DeclarationListParser::ParseOnlyDeclarations(existingText, nullptr,
+                                                                       &existingSpellings);
+  std::vector<std::string_view> updateSpellings;
+  auto updates =
+      parser::DeclarationListParser::ParseOnlyDeclarations(updateText, nullptr, &updateSpellings);
+  return mergeStyleDeclarations(existing, updates, existingSpellings, updateSpellings);
 }
 
 auto DeclarationCssTextIs(std::string_view cssText) {
@@ -456,6 +468,38 @@ TEST(MergeStyleDeclarations, CustomPropertyNamesAreCaseSensitive) {
   auto existing = parse("--Foo: 1; COLOR: red");
   auto updates = parse("--foo: 2; color: blue");
   EXPECT_EQ(mergeStyleDeclarations(existing, updates), "--Foo: 1; --foo: 2; color: blue");
+}
+
+TEST(MergeStyleDeclarations, ClosesEveryEofRecoveredConstructBeforeAnUpdate) {
+  struct Case {
+    std::string_view existing;
+    std::string_view merged;
+  };
+  constexpr Case cases[] = {
+      {R"(--a\:b: f\6f o()", R"(--a\:b: f\6f o(); opacity: .5)"},
+      {R"(--note: var(--x, calc()", R"(--note: var(--x, calc()); opacity: .5)"},
+      {R"(--note: outer([inner{value)", R"(--note: outer([inner{value}]); opacity: .5)"},
+      {R"(--note: (value)", R"(--note: (value); opacity: .5)"},
+      {R"(--note: url(path)", R"(--note: url(path); opacity: .5)"},
+      {R"(--note: "/*)", R"(--note: "/*"; opacity: .5)"},
+      {"--note: 'tail\\", "--note: 'tail'; opacity: .5"},
+      {R"(--note: "/*")", R"(--note: "/*"; opacity: .5)"},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.existing);
+    const std::string merged = mergePreservingAuthored(testCase.existing, "opacity: .5");
+    EXPECT_EQ(merged, testCase.merged);
+
+    std::vector<std::string_view> spellings;
+    const auto reparsed =
+        parser::DeclarationListParser::ParseOnlyDeclarations(merged, nullptr, &spellings);
+    ASSERT_THAT(reparsed, testing::SizeIs(2));
+    ASSERT_THAT(spellings, testing::SizeIs(2));
+    EXPECT_EQ(reparsed[1].name, "opacity");
+    EXPECT_EQ(spellings[1], "opacity: .5");
+    EXPECT_EQ(reparsed[1].sourceOffset, FileOffset::Offset(merged.find("opacity: .5")));
+  }
 }
 
 TEST(MergeStyleDeclarations, AddsNewProperty) {

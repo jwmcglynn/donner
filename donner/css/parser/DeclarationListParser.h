@@ -48,10 +48,13 @@ public:
    *
    * @param str Input string.
    * @param securityStats Optional destination for bounded parsing counters.
+   * @param authoredSpellings Optional parallel output borrowing each declaration's original text
+   * from \p str, excluding the terminating semicolon.
    * @return Parsed declaration list.
    */
-  static std::vector<Declaration> ParseOnlyDeclarations(std::string_view str,
-                                                        SecurityStats* securityStats = nullptr);
+  static std::vector<Declaration> ParseOnlyDeclarations(
+      std::string_view str, SecurityStats* securityStats = nullptr,
+      std::vector<std::string_view>* authoredSpellings = nullptr);
 
   /**
    * Parse a list of component values, from a Rule definition, corresponding to a CSS

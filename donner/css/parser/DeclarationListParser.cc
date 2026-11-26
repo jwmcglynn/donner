@@ -77,6 +77,10 @@ struct ParseUntilSemicolonOrEOF {
            next_.template isToken<Token::EofToken>();
   }
 
+  std::optional<std::size_t> terminatorOffset() const {
+    return !eof_ && isEOF() ? next_.offset().offset : std::nullopt;
+  }
+
 private:
   T& tokenizer_;
   Item next_;
@@ -85,7 +89,8 @@ private:
 
 template <details::DeclarationTokenizer T>
 std::optional<Declaration> parseDeclarationGeneric(
-    T& tokenizer, Token&& token, details::ComponentValueParsingBudget* aggregateBudget = nullptr) {
+    T& tokenizer, Token&& token, details::ComponentValueParsingBudget* aggregateBudget = nullptr,
+    std::optional<std::size_t>* terminator = nullptr) {
   if (token.is<Token::Ident>()) {
     // <ident-token>: Initialize a temporary list initially filled with the current input token.
     Token::Ident ident = std::move(token.get<Token::Ident>());
@@ -96,8 +101,12 @@ std::optional<Declaration> parseDeclarationGeneric(
     }
     ParseUntilSemicolonOrEOF<T> declarationInputTokenizer(tokenizer);
     if constexpr (std::is_same_v<typename T::ItemType, Token>) {
-      return consumeDeclaration(declarationInputTokenizer, std::move(ident), token.offset(),
-                                aggregateBudget);
+      auto result = consumeDeclaration(declarationInputTokenizer, std::move(ident), token.offset(),
+                                       aggregateBudget);
+      if (terminator) {
+        *terminator = declarationInputTokenizer.terminatorOffset();
+      }
+      return result;
     } else {
       return consumeDeclaration(declarationInputTokenizer, std::move(ident), token.offset());
     }
@@ -187,7 +196,11 @@ public:
     return result;
   }
 
-  std::vector<Declaration> parseDeclarations() {
+  std::vector<Declaration> parseDeclarations(std::string_view source,
+                                             std::vector<std::string_view>* spellings) {
+    if (spellings) {
+      spellings->clear();
+    }
     std::vector<Declaration> result;
 
     while (!tokenizer_.isEOF()) {
@@ -208,13 +221,7 @@ public:
       } else if (token.is<Token::Whitespace>() || token.is<Token::Semicolon>()) {
         // Skip.
       } else {
-        details::DeclarationTokenTokenizer declarationTokenizer(tokenizer_, &aggregateBudget_);
-
-        auto maybeDeclaration =
-            parseDeclarationGeneric(declarationTokenizer, std::move(token), &aggregateBudget_);
-        if (maybeDeclaration.has_value()) {
-          result.emplace_back(std::move(maybeDeclaration.value()));
-        }
+        appendAuthoredDeclaration(std::move(token), source, spellings, result);
       }
       if (aggregateBudget_.resourceLimitExceeded()) {
         if (securityStats_) {
@@ -232,6 +239,24 @@ public:
   }
 
 private:
+  void appendAuthoredDeclaration(Token token, std::string_view source,
+                                 std::vector<std::string_view>* spellings,
+                                 std::vector<Declaration>& result) {
+    details::DeclarationTokenTokenizer declarationTokenizer(tokenizer_, &aggregateBudget_);
+
+    std::optional<std::size_t> terminator;
+    auto maybeDeclaration =
+        parseDeclarationGeneric(declarationTokenizer, std::move(token), &aggregateBudget_,
+                                spellings ? &terminator : nullptr);
+    if (maybeDeclaration.has_value()) {
+      if (spellings) {
+        const auto start = *maybeDeclaration->sourceOffset.offset;
+        spellings->push_back(source.substr(start, terminator.value_or(source.size()) - start));
+      }
+      result.emplace_back(std::move(maybeDeclaration.value()));
+    }
+  }
+
   details::Tokenizer tokenizer_;
   details::ComponentValueParsingBudget aggregateBudget_;
   DeclarationListParser::SecurityStats* securityStats_;
@@ -260,9 +285,10 @@ std::vector<DeclarationOrAtRule> DeclarationListParser::Parse(std::string_view s
 }
 
 std::vector<Declaration> DeclarationListParser::ParseOnlyDeclarations(
-    std::string_view str, SecurityStats* securityStats) {
+    std::string_view str, SecurityStats* securityStats,
+    std::vector<std::string_view>* authoredSpellings) {
   DeclarationListParserImpl parser(str, securityStats);
-  return parser.parseDeclarations();
+  return parser.parseDeclarations(str, authoredSpellings);
 }
 
 std::vector<Declaration> DeclarationListParser::ParseRuleDeclarations(
