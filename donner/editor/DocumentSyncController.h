@@ -62,11 +62,6 @@ public:
   /// @param textEditor Source editor containing the current text.
   /// @param deltaSeconds Elapsed frame time used by pending-edit timers.
   void handleTextEdits(EditorApp& app, TextEditor& textEditor, float deltaSeconds);
-  /// Dispatch a source edit issued by another pane through the same guarded source owner.
-  /// @param app Application receiving source changes.
-  /// @param textEditor Source editor that recorded the ordinary undoable intent.
-  void dispatchCurrentSourceEdit(EditorApp& app, TextEditor& textEditor);
-
   /// Return the pending source-text sync wake interval, if a throttled edit is waiting.
   [[nodiscard]] std::optional<float> nextTextSyncWakeSeconds() const;
 

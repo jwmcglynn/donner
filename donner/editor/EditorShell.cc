@@ -4185,7 +4185,6 @@ void EditorShell::renderStructuredCssContextMenu() {
 
 void EditorShell::renderStructuredCssInspector() {
   if (ImGui::Button("CSS source")) {
-    setSourcePaneVisible(true);
     ImGui::OpenPopup("##inspectorCssSource");
   }
   if (!ImGui::BeginPopup("##inspectorCssSource")) {
@@ -4194,20 +4193,10 @@ void EditorShell::renderStructuredCssInspector() {
   const auto offset = textEditor_.getByteOffsetAtCoordinates(textEditor_.getCursorPosition());
   if (const auto target = FindStructuredCssTarget(app_, textEditor_.getText(), offset)) {
     renderStructuredCssActions(*target);
-    dispatchInspectorSourceEdit();
   } else {
     ImGui::TextDisabled("Place the source cursor on a CSS rule or declaration.");
   }
   ImGui::EndPopup();
-}
-
-void EditorShell::dispatchInspectorSourceEdit() {
-  if (!textEditor_.isTextChanged()) {
-    return;
-  }
-  const auto before = app_.document().currentFrameVersion();
-  documentSyncController_.dispatchCurrentSourceEdit(app_, textEditor_);
-  requestRenderForAcceptedSourceEdit(before);
 }
 
 void EditorShell::renderStructuredCssMoveActions(const StructuredCssTarget& target) {
@@ -4218,14 +4207,17 @@ void EditorShell::renderStructuredCssMoveActions(const StructuredCssTarget& targ
   if (!markedCssMoveSource_) {
     return;
   }
+  const auto documentVersion = app_.document().currentFrameVersion();
   const std::string source = textEditor_.getText();
   const auto move = [&](const char* caption, bool after) {
     const bool enabled = CanMoveStructuredCss(app_, source, *markedCssMoveSource_, target, after);
     return ImGui::MenuItem(caption, nullptr, false, enabled) &&
-           MoveStructuredCss(app_, textEditor_, *markedCssMoveSource_, target, after);
+           MoveStructuredCss(app_, documentSyncController_, textEditor_, *markedCssMoveSource_,
+                             target, after);
   };
   if (move("Move marked item before", false) || move("Move marked item after", true)) {
     markedCssMoveSource_.reset();
+    requestRenderForAcceptedSourceEdit(documentVersion);
     window_.wakeEventLoop();
   }
 }
@@ -4233,6 +4225,7 @@ void EditorShell::renderStructuredCssMoveActions(const StructuredCssTarget& targ
 void EditorShell::renderStructuredCssActions(const StructuredCssTarget& target) {
   const auto select = [&](const char* label, std::optional<SourceByteRange> range) {
     if (ImGui::MenuItem(label, nullptr, false, range.has_value()) && range) {
+      setSourcePaneVisible(true);
       textEditor_.selectAndFocus(textEditor_.getCoordinatesAtByteOffset(range->start),
                                  textEditor_.getCoordinatesAtByteOffset(range->end));
     }
@@ -4240,7 +4233,10 @@ void EditorShell::renderStructuredCssActions(const StructuredCssTarget& target) 
   const auto edit = [&](const char* label, StructuredCssOperation operation,
                         std::string_view replacement, bool enabled = true) {
     if (ImGui::MenuItem(label, nullptr, false, enabled)) {
-      if (ApplyStructuredCssEdit(app_, textEditor_, target, operation, replacement)) {
+      const auto before = app_.document().currentFrameVersion();
+      if (ApplyStructuredCssEdit(app_, documentSyncController_, textEditor_, target, operation,
+                                 replacement)) {
+        requestRenderForAcceptedSourceEdit(before);
         window_.wakeEventLoop();
       }
     }
@@ -8495,8 +8491,12 @@ void EditorShell::updateCssSourceStructuralDrag(std::string_view source) {
   });
   if (drop) {
     if (valid) {
-      const bool moved = MoveStructuredCss(app_, textEditor_, from, *target, after);
-      (void)moved;
+      const auto before = app_.document().currentFrameVersion();
+      const bool moved =
+          MoveStructuredCss(app_, documentSyncController_, textEditor_, from, *target, after);
+      if (moved) {
+        requestRenderForAcceptedSourceEdit(before);
+      }
     }
     clearSourceStructuralDrag();
     window_.wakeEventLoop();

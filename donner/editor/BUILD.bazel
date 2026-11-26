@@ -483,9 +483,12 @@ donner_cc_library(
     srcs = ["StructuredCssEdit.cc"],
     hdrs = ["StructuredCssEdit.h"],
     deps = [
+        ":document_sync_controller",
         ":editor_app",
         ":flash_decorations",
+        ":source_sync",
         ":text_editor",
+        ":undo_timeline",
         "//donner/base/xml",
         "//donner/css/parser",
         "//donner/svg",

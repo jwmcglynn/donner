@@ -656,7 +656,17 @@ TEST(EditorSyncTest, DeleteWritebackReparseRefreshesFollowingElementLocation) {
             originalSecondLocation->start.offset.value());
 }
 
-TEST(EditorSyncTest, StructuredCssChangeUsesOneSourceIntentAndOneUndo) {
+void UndoStructuredCssForTest(EditorApp& app, DocumentSyncController& sync, TextEditor& text) {
+  ASSERT_TRUE(app.canUndo());
+  EXPECT_FALSE(text.canUndo());
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  SelectTool selection;
+  sync.applyPendingWritebacks(app, selection, text);
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST(EditorSyncTest, StructuredCssChangeCommitsToDocumentAndUsesOneUndo) {
   constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
 <style>rect { fill : /* keep */ red; stroke:black }</style>
 <rect id="r" width="10" height="10"/>
@@ -667,33 +677,23 @@ TEST(EditorSyncTest, StructuredCssChangeUsesOneSourceIntentAndOneUndo) {
   const std::string original = previous;
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   const auto red = original.find("red;");
   const auto target = FindStructuredCssTarget(app, original, red);
   ASSERT_THAT(target, testing::Optional(testing::_));
-  ASSERT_TRUE(
-      ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::ReplaceValue, "blue"));
+  ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target, StructuredCssOperation::ReplaceValue,
+                                     "blue"));
   std::string expected = original;
   expected.replace(red, 3, "blue");
   EXPECT_EQ(text.getText(), expected);
   EXPECT_FALSE(
-      ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::RemoveDeclaration));
+      ApplyStructuredCssEdit(app, sync, text, *target, StructuredCssOperation::RemoveDeclaration));
 
-  std::optional<std::string> writeback;
-  auto intent = text.takePendingSourceEditIntents();
-  ASSERT_THAT(intent, testing::SizeIs(1));
-  EXPECT_EQ(intent.front().offset, red);
-  EXPECT_TRUE(
-      DispatchSourceEditIntents(app, intent, expected, &previous, &writeback).dispatchedMutation);
   EXPECT_TRUE(app.document().queue().empty());
   EXPECT_EQ(app.document().document().source(), expected);
-
-  text.undo();
+  EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(text.getText(), original);
-  EXPECT_FALSE(text.canUndo());
-  intent = text.takePendingSourceEditIntents();
-  ASSERT_THAT(intent, testing::SizeIs(1));
-  EXPECT_TRUE(
-      DispatchSourceEditIntents(app, intent, original, &previous, &writeback).dispatchedMutation);
   EXPECT_EQ(app.document().document().source(), original);
 }
 
@@ -706,6 +706,7 @@ TEST(EditorSyncTest, StructuredCssInlineTargetMapsEncodedNameAndPriority) {
   const std::string original = text.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
 
   const auto target = FindStructuredCssTarget(app, original, original.find("red "));
   ASSERT_THAT(target, testing::Optional(testing::_));
@@ -713,21 +714,17 @@ TEST(EditorSyncTest, StructuredCssInlineTargetMapsEncodedNameAndPriority) {
   ASSERT_THAT(target->name, testing::Optional(testing::_));
   EXPECT_EQ(original.substr(target->name->start, target->name->end - target->name->start),
             "--t&#111;ne");
-  EXPECT_FALSE(ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::RemoveRule));
-  ASSERT_TRUE(ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::RemoveImportant));
+  EXPECT_FALSE(
+      ApplyStructuredCssEdit(app, sync, text, *target, StructuredCssOperation::RemoveRule));
+  ASSERT_TRUE(
+      ApplyStructuredCssEdit(app, sync, text, *target, StructuredCssOperation::RemoveImportant));
   std::string expected = original;
   expected.erase(expected.find("!important"), std::string_view("!important").size());
   EXPECT_EQ(text.getText(), expected);
-  std::string previous = original;
-  std::optional<std::string> writeback;
-  const auto intents = text.takePendingSourceEditIntents();
-  ASSERT_THAT(intents, testing::SizeIs(1));
-  EXPECT_TRUE(
-      DispatchSourceEditIntents(app, intents, expected, &previous, &writeback).dispatchedMutation);
   EXPECT_EQ(app.document().document().source(), expected);
-  text.undo();
+  EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(text.getText(), original);
-  EXPECT_FALSE(text.canUndo());
 }
 
 TEST(EditorSyncTest, StructuredCssMoveLeavesTheSeparatorInPlace) {
@@ -740,18 +737,20 @@ TEST(EditorSyncTest, StructuredCssMoveLeavesTheSeparatorInPlace) {
   const std::string original = text.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   const auto fill = FindStructuredCssTarget(app, original, original.find("fill:"));
   const auto stroke = FindStructuredCssTarget(app, original, original.find("stroke:"));
   ASSERT_THAT(fill, testing::Optional(testing::_));
   ASSERT_THAT(stroke, testing::Optional(testing::_));
-  ASSERT_TRUE(MoveStructuredCss(app, text, *stroke, *fill, /*after=*/false));
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *stroke, *fill, /*after=*/false));
   std::string expected = original;
   const auto start = expected.find("fill:");
   const auto end = expected.find("black;") + std::string_view("black;").size();
   expected.replace(start, end - start, "stroke:black; /* separator */ fill:red;");
   EXPECT_EQ(text.getText(), expected);
-  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
-  text.undo();
+  EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  EXPECT_EQ(app.document().document().source(), text.getText());
+  UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(text.getText(), original);
   EXPECT_FALSE(text.canUndo());
 }
@@ -767,33 +766,21 @@ TEST(EditorSyncTest, StructuredCssRuleMoveTransfersAcrossLayeredStylesheetOwners
   const std::string original = text.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   const auto from = FindStructuredCssTarget(app, original, original.find("#r {"));
   const auto to = FindStructuredCssTarget(app, original, original.find("#other {"));
   ASSERT_THAT(from, testing::Optional(testing::_));
   ASSERT_THAT(to, testing::Optional(testing::_));
-  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, /*after=*/false));
   EXPECT_THAT(text.getText(), testing::HasSubstr("@layer original {  /* stay */ }"));
   EXPECT_THAT(text.getText(),
               testing::HasSubstr("@layer destination { #r {fill:red;} #other {stroke:black;} }"));
-  EXPECT_FALSE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+  EXPECT_FALSE(MoveStructuredCss(app, sync, text, *from, *to, /*after=*/false));
 
-  std::string previous = original;
-  std::optional<std::string> writeback;
-  const auto changed = text.getText();
-  auto intents = text.takePendingSourceEditIntents();
-  ASSERT_THAT(intents, testing::SizeIs(1));
-  EXPECT_TRUE(
-      DispatchSourceEditIntents(app, intents, changed, &previous, &writeback).dispatchedMutation);
-  std::ignore = app.flushFrame();
-  EXPECT_EQ(app.document().document().source(), changed);
-  text.undo();
-  ASSERT_EQ(text.getText(), original);
-  EXPECT_FALSE(text.canUndo());
-  intents = text.takePendingSourceEditIntents();
-  ASSERT_THAT(intents, testing::SizeIs(1));
-  EXPECT_TRUE(
-      DispatchSourceEditIntents(app, intents, original, &previous, &writeback).dispatchedMutation);
-  std::ignore = app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), text.getText());
+  EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  UndoStructuredCssForTest(app, sync, text);
+  EXPECT_EQ(text.getText(), original);
   EXPECT_EQ(app.document().document().source(), original);
 }
 
@@ -806,18 +793,20 @@ TEST(EditorSyncTest, StructuredCssDeclarationMoveSeparatesAnUnterminatedDestinat
   const std::string original = text.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   const auto from = FindStructuredCssTarget(app, original, original.find("fill:"));
   const auto to = FindStructuredCssTarget(app, original, original.find("stroke:"));
   const auto rule = FindStructuredCssTarget(app, original, original.find("circle"));
   ASSERT_THAT(from, testing::Optional(testing::_));
   ASSERT_THAT(to, testing::Optional(testing::_));
   ASSERT_THAT(rule, testing::Optional(testing::_));
-  EXPECT_FALSE(MoveStructuredCss(app, text, *from, *rule, /*after=*/true));
-  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/true));
+  EXPECT_FALSE(MoveStructuredCss(app, sync, text, *from, *rule, /*after=*/true));
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, /*after=*/true));
   EXPECT_THAT(text.getText(),
               testing::HasSubstr("rect {  /* keep */ } circle {stroke:black; fill:red;}"));
-  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
-  text.undo();
+  EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  EXPECT_EQ(app.document().document().source(), text.getText());
+  UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(text.getText(), original);
 }
 
@@ -830,17 +819,15 @@ TEST(EditorSyncTest, StructuredCssMovePreservesEntitySpellingWithinAnInlineStyle
   const std::string original = text.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
-  DocumentSyncController controller(original);
+  DocumentSyncController sync(original);
   const auto from = FindStructuredCssTarget(app, original, original.find("--a:"));
   const auto to = FindStructuredCssTarget(app, original, original.find("fill:red"));
   ASSERT_THAT(from, testing::Optional(testing::_));
   ASSERT_THAT(to, testing::Optional(testing::_));
-  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/true));
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, /*after=*/true));
   EXPECT_THAT(text.getText(), testing::HasSubstr("fill:red; /* keep */ --a:'&lt;A &amp; B&gt;';"));
-  controller.dispatchCurrentSourceEdit(app, text);
   EXPECT_EQ(app.document().document().source(), text.getText());
-  text.undo();
-  controller.dispatchCurrentSourceEdit(app, text);
+  UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(app.document().document().source(), original);
   EXPECT_FALSE(text.canUndo());
 }
@@ -855,16 +842,18 @@ TEST(EditorSyncTest, StructuredCssMoveReencodesCDataIntoPlainStylesheetText) {
   const std::string original = text.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   const auto from = FindStructuredCssTarget(app, original, original.find("#r {"));
   const auto to = FindStructuredCssTarget(app, original, original.find("#other {"));
   ASSERT_THAT(from, testing::Optional(testing::_));
   ASSERT_THAT(to, testing::Optional(testing::_));
-  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, /*after=*/false));
   EXPECT_THAT(
       text.getText(),
       testing::HasSubstr("<style>#r { --a: 'A &amp; &lt;B&gt;'; } #other {fill:red;}</style>"));
-  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
-  text.undo();
+  EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  EXPECT_EQ(app.document().document().source(), text.getText());
+  UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(text.getText(), original);
 }
 
@@ -878,14 +867,16 @@ TEST(EditorSyncTest, StructuredCssMoveReencodesForTheDestinationAttributeQuote) 
   const std::string original = text.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   const auto from = FindStructuredCssTarget(app, original, original.find("--a:"));
   const auto to = FindStructuredCssTarget(app, original, original.find("fill:red"));
   ASSERT_THAT(from, testing::Optional(testing::_));
   ASSERT_THAT(to, testing::Optional(testing::_));
-  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+  ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, /*after=*/false));
   EXPECT_THAT(text.getText(), testing::HasSubstr("style='--a:&apos;A &amp; B&apos;; fill:red;'"));
-  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
-  text.undo();
+  EXPECT_FALSE(text.hasPendingSourceEditIntents());
+  EXPECT_EQ(app.document().document().source(), text.getText());
+  UndoStructuredCssForTest(app, sync, text);
   EXPECT_EQ(text.getText(), original);
 }
 

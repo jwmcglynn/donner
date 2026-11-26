@@ -559,7 +559,6 @@ private:
   void selectAllCanvasElements();
   void renderSourceDiagnosticsPanel(float diagnosticsHeight);
   void renderStructuredCssInspector();
-  void dispatchInspectorSourceEdit();
   void renderStructuredCssActions(const StructuredCssTarget& target);
   void renderStructuredCssMoveActions(const StructuredCssTarget& target);
   void renderStructuredCssContextMenu();

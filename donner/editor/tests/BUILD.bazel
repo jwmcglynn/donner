@@ -1235,7 +1235,9 @@ donner_cc_test(
     name = "text_editor_tests",
     srcs = ["TextEditor_tests.cc"],
     deps = [
+        "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
         "//donner/editor:structured_css_edit",
         "//donner/base:gtest_timeout_main",
         "//donner/editor:text_editor",

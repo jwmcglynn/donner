@@ -1617,8 +1617,11 @@ public:
     shell.renderStructuredCssInspector();
   }
 
-  static void DispatchInspectorSourceEdit(EditorShell& shell) {
-    shell.dispatchInspectorSourceEdit();
+  static void UndoStructuredCss(EditorShell& shell) {
+    shell.applyMenuHistoryActions(MenuBarActions{.undo = true}, /*sourcePaneFocused=*/false);
+    std::ignore = shell.app_.flushFrame();
+    shell.documentSyncController_.applyPendingWritebacks(shell.app_, shell.selectTool_,
+                                                         shell.textEditor_);
   }
 
   static ImVec2 SourceLinePoint(const EditorShell& shell, int line, bool gutter) {
@@ -8828,8 +8831,8 @@ ellipse {fill:green;}
   EXPECT_THAT(source.getText(),
               testing::HasSubstr(
                   "/* keep */\ncircle {fill:blue;}\nellipse {fill:green;}\nrect {fill:red;}"));
-  EXPECT_TRUE(source.canUndo());
-  source.undo();
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).canUndo());
+  EditorShellTestAccess::UndoStructuredCss(shell);
   frame(to, false);
   EXPECT_EQ(source.getText(), original);
   EXPECT_FALSE(source.canUndo());
@@ -8908,6 +8911,7 @@ rect { fill:blue; }
   ASSERT_THAT(shell.valid(), testing::IsTrue());
   ImGui::GetIO().ConfigInputTrickleEventQueue = false;
   TextEditor& source = EditorShellTestAccess::Source(shell);
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
   const std::string original = source.getText();
   source.setCursorPosition(source.getCoordinatesAtByteOffset(original.find("rect { --label")));
   ClickStructuredCssInspectorItem(window, shell, "Mark CSS item to move");
@@ -8918,6 +8922,7 @@ rect { fill:blue; }
                   "rect { fill:blue; }\n/* separator */\nrect { --label:'A &amp; B'; fill:red; }"));
 
   auto& app = EditorShellTestAccess::App(shell);
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
   ASSERT_EQ(app.document().document().source(), source.getText());
   const auto target = app.document().document().querySelector("#target");
   ASSERT_THAT(target, testing::Optional(testing::_));
@@ -8929,12 +8934,13 @@ rect { fill:blue; }
   EXPECT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
             app.document().currentFrameVersion());
 
-  source.undo();
-  EditorShellTestAccess::DispatchInspectorSourceEdit(shell);
+  EditorShellTestAccess::UndoStructuredCss(shell);
   EXPECT_EQ(source.getText(), original);
   EXPECT_EQ(app.document().document().source(), original);
   EXPECT_FALSE(source.canUndo());
-  EXPECT_THAT(target->getComputedStyle().fill.get(),
+  const auto restored = app.document().document().querySelector("#target");
+  ASSERT_THAT(restored, testing::Optional(testing::_));
+  EXPECT_THAT(restored->getComputedStyle().fill.get(),
               testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255)))));
 }
 

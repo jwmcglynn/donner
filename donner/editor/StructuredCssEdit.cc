@@ -6,8 +6,11 @@
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLTokenizer.h"
 #include "donner/css/parser/DeclarationListParser.h"
+#include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SourceSync.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGStyleQuery.h"
 
 namespace donner::editor {
@@ -221,14 +224,28 @@ bool IsCurrent(EditorApp& app, std::string_view source, const StructuredCssTarge
   return FindStructuredCssTarget(app, source, target.selectionOffset) == target;
 }
 
-bool ApplyReplacement(TextEditor& editor, std::string_view source, const CssReplacement& edit) {
-  if (edit.range.start > edit.range.end || edit.range.end > source.size() ||
+bool ApplyReplacement(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
+                      std::string_view source, const CssReplacement& edit,
+                      std::uint64_t sourceVersion) {
+  if (editor.hasPendingSourceEditIntents() || sync.hasPendingSourceTextSync() ||
+      edit.range.start > edit.range.end || edit.range.end > source.size() ||
       source.substr(edit.range.start, edit.range.end - edit.range.start) == edit.bytes) {
     return false;
   }
-  editor.selectAndFocus(editor.getCoordinatesAtByteOffset(edit.range.start),
-                        editor.getCoordinatesAtByteOffset(edit.range.end));
-  editor.insertText(edit.bytes);
+  const auto& document = app.document().document();
+  auto before = captureDocumentSourceSnapshot(document.svgElement(), document.source());
+  const auto delta = CommitStructuredSourceEdit(app,
+                                                {.offset = edit.range.start,
+                                                 .removedLength = edit.range.end - edit.range.start,
+                                                 .replacement = edit.bytes},
+                                                sourceVersion);
+  if (!delta) {
+    return false;
+  }
+  const auto& committed = app.document().document();
+  auto after = captureDocumentSourceSnapshot(committed.svgElement(), committed.source());
+  app.undoTimeline().record("Edit CSS", std::move(before), std::move(after));
+  std::ignore = sync.mirrorSourceDeltas(app, editor, {*delta});
   return true;
 }
 
@@ -427,14 +444,15 @@ std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::
   return MakeEmbeddedTarget(*stylesheetRule, source, offset, generation, document.sourceVersion());
 }
 
-bool ApplyStructuredCssEdit(EditorApp& app, TextEditor& editor, const StructuredCssTarget& target,
-                            StructuredCssOperation operation, std::string_view replacement) {
+bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
+                            const StructuredCssTarget& target, StructuredCssOperation operation,
+                            std::string_view replacement) {
   const std::string source = editor.getText();
   if (!IsCurrent(app, source, target)) {
     return false;
   }
   const auto edit = MakeReplacement(target, operation, replacement);
-  return edit && ApplyReplacement(editor, source, *edit);
+  return edit && ApplyReplacement(app, sync, editor, source, *edit, target.sourceVersion);
 }
 
 bool CanMoveStructuredCss(EditorApp& app, std::string_view source, const StructuredCssTarget& from,
@@ -442,11 +460,12 @@ bool CanMoveStructuredCss(EditorApp& app, std::string_view source, const Structu
   return PlanMove(app, source, from, destination, after).has_value();
 }
 
-bool MoveStructuredCss(EditorApp& app, TextEditor& editor, const StructuredCssTarget& from,
-                       const StructuredCssTarget& destination, bool after) {
+bool MoveStructuredCss(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
+                       const StructuredCssTarget& from, const StructuredCssTarget& destination,
+                       bool after) {
   const std::string source = editor.getText();
   const auto edit = PlanMove(app, source, from, destination, after);
-  return edit && ApplyReplacement(editor, source, *edit);
+  return edit && ApplyReplacement(app, sync, editor, source, *edit, from.sourceVersion);
 }
 
 }  // namespace donner::editor

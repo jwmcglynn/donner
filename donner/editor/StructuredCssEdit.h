@@ -10,6 +10,7 @@
 
 namespace donner::editor {
 
+class DocumentSyncController;
 class EditorApp;
 class TextEditor;
 
@@ -58,15 +59,17 @@ enum class StructuredCssOperation {
 std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
                                                            std::size_t offset);
 
-/// Apply one CSS operation as one ordinary source-edit intent and undo step.
+/// Apply one CSS operation as one document command and one document undo step.
 /// @param app Active editor document.
+/// @param sync Source owner that mirrors the committed document delta.
 /// @param editor Source editor receiving the edit.
 /// @param target Previously resolved, revision-bound CSS target.
 /// @param operation Requested typed operation.
 /// @param replacement Authored CSS replacement for replace or insert operations.
 /// @return True if the operation changed the source buffer.
-bool ApplyStructuredCssEdit(EditorApp& app, TextEditor& editor, const StructuredCssTarget& target,
-                            StructuredCssOperation operation, std::string_view replacement = {});
+bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
+                            const StructuredCssTarget& target, StructuredCssOperation operation,
+                            std::string_view replacement = {});
 
 /// Check whether two revision-bound CSS targets can be reordered.
 /// @param app Active editor document.
@@ -79,12 +82,14 @@ bool CanMoveStructuredCss(EditorApp& app, std::string_view source, const Structu
 
 /// Move a CSS item relative to another compatible item.
 /// @param app Active editor document.
-/// @param editor Source editor receiving the move as one undoable intent.
+/// @param sync Source owner that mirrors the committed document delta.
+/// @param editor Source editor receiving the committed source delta.
 /// @param from Dragged CSS item.
 /// @param destination Compatible destination of the same item kind.
 /// @param after Insert after rather than before the destination.
 /// @return True when the source changed.
-bool MoveStructuredCss(EditorApp& app, TextEditor& editor, const StructuredCssTarget& from,
-                       const StructuredCssTarget& destination, bool after);
+bool MoveStructuredCss(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
+                       const StructuredCssTarget& from, const StructuredCssTarget& destination,
+                       bool after);
 
 }  // namespace donner::editor

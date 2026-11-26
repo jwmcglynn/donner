@@ -16,9 +16,11 @@
 #include <utility>
 #include <vector>
 
+#include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/SelectTool.h"
 #include "donner/editor/StructuredCssEdit.h"
 
 namespace donner::editor {
@@ -6276,6 +6278,7 @@ ellipse {fill:green;}
   const std::string original = editor.getText();
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   RenderEditorFrame();
 
   const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/2);
@@ -6295,13 +6298,19 @@ ellipse {fill:green;}
       app, original, editor.getByteOffsetAtCoordinates(Coordinates{drop->line, 0}));
   ASSERT_THAT(from, testing::Optional(testing::_));
   ASSERT_THAT(to, testing::Optional(testing::_));
-  ASSERT_TRUE(MoveStructuredCss(app, editor, *from, *to, /*after=*/true));
+  ASSERT_TRUE(MoveStructuredCss(app, sync, editor, *from, *to, /*after=*/true));
   EXPECT_THAT(
       editor.getText(),
       testing::HasSubstr(
           "/* keep this comment */\ncircle {fill:blue;}\nellipse {fill:green;}\nrect {fill:red;}"));
-  EXPECT_THAT(editor.takePendingSourceEditIntents(), testing::SizeIs(1));
-  editor.undo();
+  EXPECT_FALSE(editor.hasPendingSourceEditIntents());
+  EXPECT_EQ(app.document().document().source(), editor.getText());
+  ASSERT_TRUE(app.canUndo());
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  SelectTool selection;
+  sync.applyPendingWritebacks(app, selection, editor);
+  EXPECT_FALSE(app.canUndo());
   EXPECT_EQ(editor.getText(), original);
   EXPECT_FALSE(editor.canUndo());
 }
