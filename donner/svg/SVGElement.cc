@@ -983,11 +983,12 @@ void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_
 
 namespace {
 
-bool WasPresentationAttributeSet(const ParseResult<bool>& result) {
+[[gnu::always_inline]] inline bool WasPresentationAttributeSet(ParseResult<bool>& result) {
   return result.hasResult() && result.result();
 }
 
-void MarkSettledTransform(const ElementAnchor& handle, std::string_view name) {
+[[gnu::always_inline]] inline void MarkSettledTransform(const ElementAnchor& handle,
+                                                         std::string_view name) {
   if (name == "transform") {
     // XML-sourced transforms must reraster filtered layers at their settled position.
     markDirty(handle, components::DirtyFlagsComponent::Paint);
