@@ -16,6 +16,8 @@
 
 namespace donner::svg::components {
 
+struct StylesheetImportOrigin;
+
 /**
  * Bounds applied to one document-wide `@import` resolution pass, across every stylesheet of the
  * document. Fetches are additionally charged against the document's existing external-fetch and
@@ -64,12 +66,13 @@ using StylesheetImportFetch = std::function<std::variant<UrlLoader::Result, RcSt
  * @param fetch Callback that loads one resolved URL.
  * @param budget Document-wide budget, decremented by this call.
  * @param warnings Sink receiving load diagnostics.
+ * @param origins Optional destination for source positions of successful import occurrences.
  * @return Imported stylesheets in cascade order: each sheet follows the sheets it imports, in
  *   import order, and all precede \p stylesheet.
  */
-std::vector<css::Stylesheet> LoadStylesheetImports(const css::Stylesheet& stylesheet,
-                                                   const StylesheetImportFetch& fetch,
-                                                   StylesheetImportBudget& budget,
-                                                   ParseWarningSink& warnings);
+std::vector<css::Stylesheet> LoadStylesheetImports(
+    const css::Stylesheet& stylesheet, const StylesheetImportFetch& fetch,
+    StylesheetImportBudget& budget, ParseWarningSink& warnings,
+    std::vector<StylesheetImportOrigin>* origins = nullptr);
 
 }  // namespace donner::svg::components

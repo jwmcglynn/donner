@@ -20,9 +20,10 @@ public:
    * Unconditional `@import` rules are retained in \ref Stylesheet::imports, in source order, with
    * their URLs exactly as authored; the parser never resolves or fetches them. Following the CSS
    * Cascade 5 grammar, an import is valid only before every other retained rule except `@layer`
-   * statements (`@charset` is consumed first). Imports that appear later, have a malformed or empty
-   * target, or carry `layer`, `supports()`, or media conditions other than `all` are dropped with a
-   * bounded warning at the `@` token that never includes the target URL.
+   * statements that precede the first import (`@charset` is consumed first). A bare `layer`
+   * modifier creates a distinct anonymous layer and `layer(name)` references the named layer.
+   * Imports that appear later, have a malformed or empty target, or carry unsupported conditions
+   * receive a bounded warning at the `@` token that never includes the target URL.
    *
    * CSS `@media` and `@supports` blocks are unsupported. Their complete blocks, including nested
    * styles and font faces, are ignored with a bounded warning at the outer `@` token.

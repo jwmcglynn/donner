@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <desc>A normal declaration in the first author layer overrides the presentation attribute. https://www.w3.org/TR/css-cascade-5/#cascade-layering</desc>
+  <style>@layer base { rect { fill: green; } }</style>
+  <rect width="10" height="10" fill="red"/>
+</svg>

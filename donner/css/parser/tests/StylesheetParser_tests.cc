@@ -174,8 +174,6 @@ constexpr std::string_view kImportMedia =
     "CSS @import media conditions other than 'all' are unsupported; this import is ignored";
 constexpr std::string_view kImportSupports =
     "CSS @import supports() conditions are unsupported; this import is ignored";
-constexpr std::string_view kImportLayer =
-    "CSS @import cascade layers are unsupported; this import is ignored";
 
 TEST(StylesheetParser, ImportFormsAreRetainedBeforeFollowingRules) {
   const std::array<std::string_view, 6> imports = {
@@ -269,9 +267,9 @@ TEST(StylesheetParser, ConditionalImportsAreDiagnosedAndIgnored) {
       {"@import 'a.css' all, print;", kImportMedia},
       {"@import 'a.css' (min-width: 10px);", kImportMedia},
       {"@import 'a.css' supports(display: grid);", kImportSupports},
-      {"@import 'a.css' layer;", kImportLayer},
-      {"@import 'a.css' layer(base);", kImportLayer},
-      {"@import 'a.css' LAYER(base) supports(display: grid) screen;", kImportLayer},
+      {"@import 'a.css' layer();", kImportMedia},
+      {"@import 'a.css' layer(base . theme);", kImportMedia},
+      {"@import 'a.css' LAYER(base) supports(display: grid) screen;", kImportSupports},
   }};
   for (const auto& [source, reason] : cases) {
     SCOPED_TRACE(source);
@@ -284,6 +282,137 @@ TEST(StylesheetParser, ConditionalImportsAreDiagnosedAndIgnored) {
     EXPECT_THAT(warnings.warnings(),
                 ElementsAre(ParseDiagnostic::Warning(RcString(reason), FileOffset::Offset(0))));
   }
+}
+
+TEST(StylesheetParser, LayerEventsKeepImportAndDeclarationOrder) {
+  constexpr std::string_view source = R"css(
+    @import "plain.css";
+    @import "missing.css" layer(reset);
+    @import "anonymous.css" layer All;
+    @import "another.css" layer;
+    @layer reset, theme;
+    @import "too-late.css";
+    @layer theme {
+      rect { fill: red; }
+      @layer core { circle { fill: blue; } }
+      @layer core { path { fill: green; } }
+    }
+    line { fill: none; }
+  )css";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  ASSERT_THAT(sheet.layers(), testing::NotNull());
+  const auto& layers = *sheet.layers();
+  EXPECT_THAT(layers.nodes, ElementsAre(Field("name", &LayerNode::name, Eq("reset")),
+                                        Field("name", &LayerNode::name, Eq("")),
+                                        Field("name", &LayerNode::name, Eq("")),
+                                        Field("name", &LayerNode::name, Eq("theme")),
+                                        Field("name", &LayerNode::name, Eq("core"))));
+  ASSERT_THAT(layers.nodes, testing::SizeIs(5));
+  EXPECT_EQ(layers.nodes[4].parent, 3);
+  EXPECT_THAT(sheet.imports(), ElementsAre(Field("layer", &ImportRule::layer, Eq(kUnlayered)),
+                                           Field("layer", &ImportRule::layer, Eq(0)),
+                                           Field("layer", &ImportRule::layer, Eq(1)),
+                                           Field("layer", &ImportRule::layer, Eq(2))));
+  using Kind = LayerEvent::Kind;
+  const auto eventIs = [](Kind kind, std::uint32_t index) {
+    return testing::AllOf(Field("kind", &LayerEvent::kind, Eq(kind)),
+                          Field("index", &LayerEvent::index, Eq(index)));
+  };
+  EXPECT_THAT(layers.events, ElementsAre(eventIs(Kind::Import, 0), eventIs(Kind::Import, 1),
+                                         eventIs(Kind::Import, 2), eventIs(Kind::Import, 3),
+                                         eventIs(Kind::Statement, 0), eventIs(Kind::Statement, 3),
+                                         eventIs(Kind::Block, 3), eventIs(Kind::Block, 4),
+                                         eventIs(Kind::Block, 4)));
+  EXPECT_THAT(sheet.rules(), ElementsAre(Field("layer", &SelectorRule::layer, Eq(3)),
+                                         Field("layer", &SelectorRule::layer, Eq(4)),
+                                         Field("layer", &SelectorRule::layer, Eq(4)),
+                                         Field("layer", &SelectorRule::layer, Eq(kUnlayered))));
+  ASSERT_THAT(sheet.rules(), testing::SizeIs(4));
+  EXPECT_EQ(sheet.rules()[1].selectorSourceRange.start, FileOffset::Offset(source.find("circle")));
+  EXPECT_THAT(warnings.warnings(), WarningReasonsAre({std::string(kImportNotFirst)}));
+}
+
+TEST(StylesheetParser, LayerSegmentsUseDecodedCaseSensitiveIdentity) {
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(
+      R"css(@layer a\.b, a.b, A, a.b; @layer { rect { fill: red; } } @layer {})css", warnings);
+  ASSERT_THAT(sheet.layers(), testing::NotNull());
+  EXPECT_THAT(sheet.layers()->nodes, ElementsAre(Field("name", &LayerNode::name, Eq("a.b")),
+                                                 Field("name", &LayerNode::name, Eq("a")),
+                                                 Field("name", &LayerNode::name, Eq("b")),
+                                                 Field("name", &LayerNode::name, Eq("A")),
+                                                 Field("name", &LayerNode::name, Eq("")),
+                                                 Field("name", &LayerNode::name, Eq(""))));
+  ASSERT_THAT(sheet.layers()->nodes, testing::SizeIs(6));
+  EXPECT_EQ(sheet.layers()->nodes[0].parent, kUnlayered);
+  EXPECT_EQ(sheet.layers()->nodes[2].parent, 1);
+  EXPECT_THAT(sheet.rules(), ElementsAre(Field("layer", &SelectorRule::layer, Eq(4))));
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
+TEST(StylesheetParser, RejectedLayerStatementsLeaveNoPartialMetadata) {
+  std::string source = "@layer valid, InHeRiT; @layer x,y { rect { fill: red; } } @layer ";
+  for (std::size_t i = 0; i <= Stylesheet::kMaximumLayerDepth; ++i) {
+    source += i == 0 ? "over" : ".over";
+  }
+  source += "; @layer kept; rect { fill: green; }";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  ASSERT_THAT(sheet.layers(), testing::NotNull());
+  EXPECT_THAT(sheet.layers()->nodes, ElementsAre(Field("name", &LayerNode::name, Eq("kept"))));
+  EXPECT_THAT(sheet.rules(), ElementsAre(Field("layer", &SelectorRule::layer, Eq(kUnlayered))));
+  EXPECT_THAT(warnings.warnings(), testing::SizeIs(3));
+}
+
+TEST(StylesheetParser, LayerNamesMustBeValidIdentifierSegments) {
+  for (const std::string_view name : {"42", "outer.42", "-", "outer..inner"}) {
+    SCOPED_TRACE(name);
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@layer " + std::string(name) + " { rect { fill: red; } }", warnings);
+    EXPECT_THAT(sheet.rules(), IsEmpty());
+    EXPECT_THAT(sheet.layers(), testing::IsNull());
+    EXPECT_THAT(warnings.warnings(), WarningReasonsAre({"Invalid CSS cascade layer name"}));
+  }
+  ParseWarningSink warnings;
+  const Stylesheet sheet =
+      StylesheetParser::Parse("@layer palette.spring-green { rect { fill: green; } }", warnings);
+  EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+  EXPECT_THAT(sheet.layers(), testing::NotNull());
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
+TEST(StylesheetParser, LayerNameLimitRollsBackAnIncompleteStatement) {
+  std::string source = "@layer ";
+  for (std::size_t i = 1; i < Stylesheet::kMaximumLayers; ++i) {
+    if (i != 1) {
+      source += ',';
+    }
+    source += "layer" + std::to_string(i);
+  }
+  source += "; @layer discarded1, discarded2; @layer kept { rect { fill: green; } }";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  ASSERT_THAT(sheet.layers(), testing::NotNull());
+  EXPECT_THAT(sheet.layers()->nodes, testing::SizeIs(Stylesheet::kMaximumLayers));
+  EXPECT_EQ(sheet.layers()->nodes.back().name, "kept");
+  EXPECT_THAT(sheet.rules(), ElementsAre(Field("layer", &SelectorRule::layer,
+                                               Eq(Stylesheet::kMaximumLayers - 1))));
+  EXPECT_THAT(warnings.warnings(),
+              WarningReasonsAre({"CSS cascade layer limit exceeded; this rule is ignored"}));
+}
+
+TEST(StylesheetParser, LayerBodiesShareTheStylesheetRuleAdmissionLimit) {
+  std::string source = "@layer a {";
+  for (std::size_t i = 0; i < RuleParser::kMaximumRules; ++i) {
+    source += "x{}";
+  }
+  source += "}";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  EXPECT_THAT(sheet.rules(), testing::SizeIs(RuleParser::kMaximumRules - 1));
+  EXPECT_THAT(sheet.securityStats().rejected, testing::IsTrue());
 }
 
 TEST(StylesheetParser, MalformedImportsAreDiagnosedAndIgnored) {

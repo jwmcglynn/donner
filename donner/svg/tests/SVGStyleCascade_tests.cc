@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
@@ -15,6 +17,110 @@ namespace {
 
 using css::Color;
 using css::RGBA;
+
+TEST(SVGStyleCascadeTests, LayerPrecedenceComputesCustomValuesBeforeInheritance) {
+  auto doc = instantiateSubtree(R"(
+    <style>
+      @layer base, theme;
+      @layer base { #parent { --normal: red; } g { --priority: green !important; } }
+      @layer theme {
+        g { --normal: blue; --inherited: var(--normal); }
+        #parent { --priority: red !important; }
+        rect { fill: var(--inherited); stroke: var(--priority); --normal: red; }
+        circle { fill: var(--normal); stroke: var(--priority); }
+      }
+    </style>
+    <g id="parent">
+      <rect id="fixed" width="10" height="10" />
+      <circle id="inherited" r="5" />
+    </g>
+  )");
+  const auto fixed = doc.querySelector("#fixed");
+  const auto inherited = doc.querySelector("#inherited");
+  ASSERT_THAT(fixed, Optional(testing::_));
+  ASSERT_THAT(inherited, Optional(testing::_));
+  const PaintServer blue = PaintServer::Solid(Color(RGBA(0, 0, 255, 255)));
+  const PaintServer green = PaintServer::Solid(Color(RGBA(0, 128, 0, 255)));
+  for (const auto* element : {&*fixed, &*inherited}) {
+    const auto& style = element->getComputedStyle();
+    EXPECT_THAT(style.fill.get(), Optional(blue));
+    EXPECT_THAT(style.stroke.get(), Optional(green));
+  }
+}
+
+TEST(SVGStyleCascadeTests, NestedLayerNormalAndImportantOrder) {
+  auto doc = instantiateSubtree(R"(
+    <style>
+      @layer a, b;
+      @layer b { rect { fill: blue; stroke: blue !important; } }
+      @layer a { #r { fill: green; stroke: green !important; } }
+      @layer a.child { rect { fill: red; stroke: red !important; } }
+    </style>
+    <rect id="r" fill="yellow" stroke="yellow" width="10" height="10" />
+  )");
+  auto rect = doc.querySelector("#r");
+  ASSERT_THAT(rect, Optional(testing::_));
+  const auto& style = rect->getComputedStyle();
+  EXPECT_THAT(style.fill.get(), Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
+  EXPECT_THAT(style.stroke.get(), Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+}
+
+TEST(SVGStyleCascadeTests, MatchedStyleQueryReportsLayerPrecedenceInTreeOrder) {
+  auto doc = instantiateSubtree(R"(
+    <style>@layer base { #target { fill: red; } }</style>
+    <style>@layer theme { rect { fill: blue; } }</style>
+    <rect id="target" width="10" height="10" />
+  )");
+  const auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+
+  auto rules = CollectMatchedStyleRules(*target);
+  std::erase_if(rules, [](const auto& rule) { return rule.isUserAgentStylesheet; });
+  ASSERT_THAT(rules, testing::SizeIs(2));
+  EXPECT_THAT(rules[0].specificity.abc().a, testing::Eq(1));
+  EXPECT_THAT(rules[1].specificity.abc().a, testing::Eq(0));
+  EXPECT_THAT(rules[1].specificity, testing::Gt(rules[0].specificity));
+  EXPECT_THAT(css::Specificity::Important(rules[0].specificity),
+              testing::Gt(css::Specificity::Important(rules[1].specificity)));
+}
+
+TEST(SVGStyleCascadeTests, LayeredPropertyDoesNotOverrideExplicitChildViaInheritance) {
+  auto doc = instantiateSubtree(R"(
+    <style>
+      @layer early, late;
+      @layer early { rect { fill: red; } }
+      @layer late { #parent { fill: blue; stroke: blue !important; } }
+    </style>
+    <g id="parent">
+      <rect id="child" stroke="red" width="10" height="10" />
+      <circle id="inherited" r="5" />
+    </g>
+  )");
+  const auto child = doc.querySelector("#child");
+  const auto inherited = doc.querySelector("#inherited");
+  ASSERT_THAT(child, Optional(testing::_));
+  ASSERT_THAT(inherited, Optional(testing::_));
+  const auto& childStyle = child->getComputedStyle();
+  EXPECT_THAT(childStyle.fill.get(), Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  EXPECT_THAT(childStyle.stroke.get(), Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  EXPECT_THAT(inherited->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
+}
+
+TEST(SVGStyleCascadeTests, UnlayeredRulesAndInlineStylesKeepTheirPrecedence) {
+  auto doc = instantiateSubtree(R"(
+    <style>
+      @layer base { #r { fill: blue; stroke: blue !important; } }
+      rect { fill: red; stroke: red !important; }
+    </style>
+    <rect id="r" fill="yellow" style="stroke: green !important" width="10" height="10" />
+  )");
+  auto rect = doc.querySelector("#r");
+  ASSERT_THAT(rect, Optional(testing::_));
+  const auto& style = rect->getComputedStyle();
+  EXPECT_THAT(style.fill.get(), Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  EXPECT_THAT(style.stroke.get(), Optional(PaintServer::Solid(Color(RGBA(0, 128, 0, 255)))));
+}
 
 // ---------------------------------------------------------------------------
 // 1. Inline style overrides presentation attribute

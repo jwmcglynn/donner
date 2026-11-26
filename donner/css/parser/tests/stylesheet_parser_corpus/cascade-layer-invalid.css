@@ -1,0 +1,8 @@
+@import 'missing.css' layer();
+@import 'conditional.css' layer(a) supports(display: grid);
+@layer valid, inherit;
+@layer invalid, duplicate { a { fill: red } }
+@layer valid {
+  @import 'nested.css' layer;
+  @layer nested.one { a { fill: green } }
+}

@@ -154,6 +154,7 @@ donner_perf_sensitive_cc_library(
 donner_perf_sensitive_cc_library(
     name = "style_system",
     srcs = [
+        "DocumentLayerOrder.cc",
         "PaintAnimationStyle.cc",
         "ParallelStylePass.cc",
         "ScalarAnimationStyle.cc",
@@ -161,6 +162,7 @@ donner_perf_sensitive_cc_library(
         "StyleSystem.cc",
     ],
     hdrs = [
+        "DocumentLayerOrder.h",
         "PaintAnimationStyle.h",
         "ParallelStylePass.h",
         "ScalarAnimationStyle.h",

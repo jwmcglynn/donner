@@ -675,11 +675,12 @@ bool ResourceManagerContext::loadStylesheetImports(ParseWarningSink& warningSink
     reloaded = true;
     ParseWarningSink warnings =
         warningSink.isEnabled() ? ParseWarningSink() : ParseWarningSink::Disabled();
+    std::vector<StylesheetImportOrigin> origins;
     std::vector<css::Stylesheet> imported =
-        LoadStylesheetImports(stylesheet.stylesheet, fetch, budget, warnings);
+        LoadStylesheetImports(stylesheet.stylesheet, fetch, budget, warnings, &origins);
     MapImportWarnings(warnings, stylesheet.sourceMap);
     warningSink.merge(std::move(warnings));
-    stylesheet.setImportedStylesheets(std::move(imported), cacheGeneration_);
+    stylesheet.setImportedStylesheets(std::move(imported), cacheGeneration_, std::move(origins));
   }
   return reloaded;
 }

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <desc>An important declaration in an earlier layer overrides later layers and unlayered declarations. https://www.w3.org/TR/css-cascade-5/#cascade-layering</desc>
+  <style>
+    @layer base, theme;
+    @layer theme { #panel { fill: red !important; } }
+    @layer base { rect { fill: green !important; } }
+    #panel { fill: blue !important; }
+  </style>
+  <rect id="panel" width="10" height="10"/>
+</svg>
