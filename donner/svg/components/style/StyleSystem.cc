@@ -3360,6 +3360,7 @@ struct StylesheetSourceIndexCache {
   const xml::XMLDecodedTextSourceMap* transient(Entity entity, std::uint64_t stylesheetRevision,
                                                 Build&& build) {
     if (transientEntity != entity || transientRevision != stylesheetRevision) {
+      clearTransient();
       transientMapping = build();
       transientEntity = entity;
       transientRevision = stylesheetRevision;
@@ -3369,19 +3370,27 @@ struct StylesheetSourceIndexCache {
   }
 
   const xml::XMLDecodedTextSourceMap* store(Entity entity, std::uint64_t stylesheetRevision,
+                                            StylesheetSourceMapMode mode,
                                             std::optional<xml::XMLDecodedTextSourceMap> mapping) {
     std::size_t mappingBytes = mapping ? mapping->retainedCapacityBytes() : 0;
     const bool budgetRefused = mappingBytes > maximumRetainedBytes - retainedBytes;
     if (budgetRefused) {
-      mapping.reset();
       mappingBytes = 0;
     }
-    retainedBytes += mappingBytes;
     auto inserted =
         entries
-            .emplace(entity, StylesheetSourceIndexEntry{stylesheetRevision, mappingBytes,
-                                                        std::move(mapping), budgetRefused})
+            .emplace(entity,
+                     StylesheetSourceIndexEntry{stylesheetRevision, mappingBytes,
+                                                budgetRefused ? std::nullopt : std::move(mapping),
+                                                budgetRefused})
             .first;
+    if (budgetRefused && mode == StylesheetSourceMapMode::Exact) {
+      transientEntity = entity;
+      transientRevision = stylesheetRevision;
+      transientMapping = std::move(mapping);
+      return transientMapping ? &*transientMapping : nullptr;
+    }
+    retainedBytes += mappingBytes;
     return inserted->second.mapping ? &*inserted->second.mapping : nullptr;
   }
 
@@ -3409,9 +3418,12 @@ struct StylesheetSourceIndexCache {
       return mode == StylesheetSourceMapMode::Exact ? transient(entity, stylesheetRevision, build)
                                                     : nullptr;
     }
+    if (mode == StylesheetSourceMapMode::Exact) {
+      clearTransient();
+    }
     auto mapping = build();
     ++builds;
-    return store(entity, stylesheetRevision, std::move(mapping));
+    return store(entity, stylesheetRevision, mode, std::move(mapping));
   }
 };
 

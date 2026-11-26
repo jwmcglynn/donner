@@ -569,6 +569,15 @@ TEST_F(StyleSystemTest, StylesheetSourceIndexBudgetKeepsStandaloneMappingExact) 
   const SourceRange secondRange = secondComponent.stylesheet.rules()[0].ruleSourceRange;
   const auto starts = StyleSystem::StylesheetSourceIndexBuildsForTesting();
 
+  const auto mapRule = [&](const SVGStyleElement& sheet, const SourceRange& range) {
+    const auto mapped = MapStylesheetSourceRange(sheet, range);
+    EXPECT_THAT(mapped, testing::Optional(testing::_));
+    return mapped ? std::string(SourceSlice(document.source(), *mapped)) : std::string();
+  };
+  EXPECT_EQ(mapRule(*firstSheet, firstRange), firstRule);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 1)
+      << "a cold exact lookup must return the over-budget map it just constructed";
+
   const auto boundedRanges = [](const std::vector<MatchedStyleRule>& matches) {
     std::vector<bool> ranges;
     for (const auto& match : matches) {
@@ -586,11 +595,6 @@ TEST_F(StyleSystemTest, StylesheetSourceIndexBudgetKeepsStandaloneMappingExact) 
   EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2)
       << "bounded annotations must cache both refusals instead of rebuilding per element";
 
-  const auto mapRule = [&](const SVGStyleElement& sheet, const SourceRange& range) {
-    const auto mapped = MapStylesheetSourceRange(sheet, range);
-    EXPECT_THAT(mapped, testing::Optional(testing::_));
-    return mapped ? std::string(SourceSlice(document.source(), *mapped)) : std::string();
-  };
   EXPECT_EQ(mapRule(*firstSheet, firstRange), firstRule);
   EXPECT_EQ(mapRule(*firstSheet, firstRange), firstRule);
   EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 3);
