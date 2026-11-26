@@ -803,9 +803,6 @@ public:
   /// Whether this element can be restyled without rebuilding resource or text subtrees.
   static bool isStyleEditSubtreeBoundary(const Registry& registry, Entity entity);
 
-  /// Whether the current computed style and its ancestry have no nonlocal rendering inputs.
-  static bool canRetainStyleEdit(const Registry& registry, Entity entity);
-
   /**
    * Invalidate the full style and reparse attributes.
    *

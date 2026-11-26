@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -30,6 +31,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -550,6 +552,159 @@ CascadePassSnapshot PrepareFirstFrameWithDiagnostics(SVGDocument& document) {
   ParseWarningSink warnings;
   registry.ctx().get<RenderingContext>().instantiateRenderTree(false, warnings);
   return CaptureCascadePass(document, warnings, before);
+}
+
+// Normalize reference targets by tree position, since the two documents own different entities.
+auto PositionedRenderInstances(SVGDocument& document) {
+  const Registry& registry = document.registry();
+  const auto positions = PositionedEntities(document);
+  const auto position = [&](Entity entity) -> std::string {
+    const auto found = std::ranges::find(positions, entity, &PositionedEntity::entity);
+    return found == positions.end() ? std::string() : found->position;
+  };
+  const auto paintReference = [&](const ResolvedPaintServer& paint) {
+    const auto* reference = std::get_if<PaintResolvedReference>(&paint);
+    return reference ? position(reference->reference) : std::string();
+  };
+  const auto referenceTarget = [&](const auto& reference) {
+    return reference ? position(reference->reference) : std::string();
+  };
+  using Instance = std::tuple<std::string, int, bool, bool, std::string, Transform2d,
+                              std::array<std::string, 8>>;
+  std::vector<Instance> result;
+  for (const auto& entity : positions) {
+    const auto* instance = registry.try_get<RenderingInstanceComponent>(entity.entity);
+    if (!instance) {
+      continue;
+    }
+    const auto* filter = instance->resolvedFilter
+                             ? std::get_if<ResolvedReference>(&*instance->resolvedFilter)
+                             : nullptr;
+    result.emplace_back(
+        entity.position, instance->drawOrder, instance->visible, instance->isolatedLayer,
+        position(instance->subtreeLastEntity), instance->worldFromEntityTransform,
+        std::array{paintReference(instance->resolvedFill), paintReference(instance->resolvedStroke),
+                   referenceTarget(instance->clipPath), referenceTarget(instance->mask),
+                   referenceTarget(instance->markerStart), referenceTarget(instance->markerMid),
+                   referenceTarget(instance->markerEnd),
+                   filter ? position(*filter) : std::string()});
+  }
+  return result;
+}
+
+TEST(StyleInvalidationDifferential, PublicEditsMatchFullRestyle) {
+  struct Edit {
+    std::string_view name;
+    std::string_view contents;
+    void (*apply)(SVGElement&);
+    bool fullStyleFallback = false;
+    std::optional<std::size_t> affectedCount = std::nullopt;
+  };
+  const Edit edits[] = {
+      {"class-subject", R"(<style>.hot { fill: red }</style><rect id="target" width="8" height="8"/>)",
+       [](SVGElement& e) {
+    e.setClassName("hot"); }, false, 1},
+      {"class-attribute-order",
+       R"(<style>[class="cold hot"] { fill: red }</style><rect id="target" class="hot cold" width="8" height="8"/>)",
+       [](SVGElement& e) {
+    e.setClassName("cold hot"); }, false, 1},
+      {"class-inheritance",
+       R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g>)",
+       [](SVGElement& e) {
+    e.setClassName("hot"); }, false, 2},
+      {"class-following-sibling",
+       R"(<style>.hot + .after rect { fill: red }</style><g><g id="target"/><g class="after"><rect width="8" height="8"/></g></g>)",
+       [](SVGElement& e) {
+    e.setClassName("hot"); }, false, 3},
+      {"class-filtered-nth-child",
+       R"(<style>rect:nth-child(1 of :is(.hot)) { fill: red }</style><g><rect id="target" width="8" height="8"/><rect class="hot" x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) {
+    e.setClassName("hot"); }, false, 2},
+      {"class-filtered-nth-last-child",
+       R"(<style>rect:nth-last-child(1 of :is(.hot)) { fill: red }</style><g><rect class="hot" width="8" height="8"/><rect id="target" x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) {
+    e.setClassName("hot"); }, false, 2},
+      {"style", R"(<rect id="target" width="8" height="8"/>)",
+       [](SVGElement& e) {
+    e.setStyle("fill: red"); }, false, 1},
+      {"update-style",
+       R"(<style>[style] + rect { fill: red }</style><g><g id="target"/><rect width="8" height="8"/></g>)",
+       [](SVGElement& e) {
+    e.updateStyle("fill: red"); }, false, 2},
+      {"presentation-attribute",
+       R"(<style>[fill=red] + rect { fill: lime }</style><g><rect id="target" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) {
+    e.setAttribute("fill", "red"); }, false, 2},
+      {"presentation-removal",
+       R"(<style>[fill] + rect { fill: lime }</style><g><rect id="target" fill="red" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
+       [](SVGElement& e) {
+    e.removeAttribute("fill"); }, false, 2},
+      {"ancestor-selector",
+       R"(<style>g:has(.hot) { fill: red }</style><g><rect id="target" width="8" height="8"/></g>)",
+       [](SVGElement& e) {
+    e.setClassName("hot"); }, true},
+      {"resource-subtree",
+       R"(<defs><linearGradient id="paint"><stop id="target" stop-color="blue"/></linearGradient></defs><rect fill="url(#paint)" width="8" height="8"/>)",
+       [](SVGElement& e) {
+    e.setAttribute("stop-color", "red"); }, true},
+      {"remove-paint-reference",
+       R"(<defs><linearGradient id="paint"><stop stop-color="blue"/></linearGradient></defs><rect id="target" fill="url(#paint)" width="8" height="8"/>)",
+       [](SVGElement& e) {
+    e.setAttribute("fill", "red"); }, false, 1},
+      {"id-reference",
+       R"(<rect id="target" fill="red" width="8" height="8"/><use href="#target" x="8"/>)",
+       [](SVGElement& e) {
+    e.setId("other"); }, true},
+      {"use-source",
+       R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g><use href="#target" x="8"/>)",
+       [](SVGElement& e) {
+    e.setClassName("hot"); }},
+  };
+  for (const auto& edit : edits) {
+    SCOPED_TRACE(edit.name);
+    const std::string source =
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">)") +
+        std::string(edit.contents) + R"(<circle cx="12" cy="12" r="2"/></svg>)";
+    SVGDocument narrow = ParseSource(source);
+    SVGDocument full = ParseSource(source);
+    const auto beforeEdit = PrepareFirstFrameWithDiagnostics(narrow);
+    std::ignore = PrepareFirstFrameWithDiagnostics(full);
+    for (SVGDocument* document : {&narrow, &full}) {
+      auto target = document->querySelector("#target");
+      ASSERT_THAT(target, ::testing::Optional(::testing::_));
+      edit.apply(*target);
+    }
+    auto& narrowState = narrow.registry().ctx().get<RenderTreeState>();
+    auto& fullState = full.registry().ctx().get<RenderTreeState>();
+    EXPECT_EQ(narrowState.needsFullStyleRecompute, edit.fullStyleFallback);
+    fullState.needsFullStyleRecompute = true;
+    const auto before = narrowState.counters;
+    const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
+    const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
+
+    EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
+    EXPECT_THAT(narrowPass.styles, ::testing::Not(ElementsAreArray(beforeEdit.styles)));
+    EXPECT_THAT(narrowPass.rules, ElementsAreArray(fullPass.rules));
+    EXPECT_THAT(narrowPass.warnings, ElementsAreArray(fullPass.warnings));
+    EXPECT_THAT(PositionedRenderInstances(narrow),
+                ElementsAreArray(PositionedRenderInstances(full)));
+    EXPECT_EQ(narrowState.counters.fullRebuilds - before.fullRebuilds, 1u);
+    EXPECT_EQ(narrowState.counters.retainedUpdates - before.retainedUpdates, 0u);
+    EXPECT_EQ(narrowPass.counters.fullClears, edit.fullStyleFallback ? 1u : 0u);
+    EXPECT_EQ(fullPass.counters.fullClears, 1u);
+    if (edit.affectedCount) {
+      EXPECT_EQ(narrowPass.counters.elementsCascaded, *edit.affectedCount);
+      EXPECT_GT(fullPass.counters.elementsCascaded, narrowPass.counters.elementsCascaded);
+    }
+
+    Renderer narrowRenderer;
+    Renderer fullRenderer;
+    narrowRenderer.draw(narrow);
+    fullRenderer.draw(full);
+    editor::tests::CompareBitmapToBitmap(narrowRenderer.takeSnapshot(), fullRenderer.takeSnapshot(),
+                                         std::string(edit.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 CascadePassSnapshot ForceFullRestyleWithDiagnostics(SVGDocument& document) {

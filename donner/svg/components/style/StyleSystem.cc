@@ -3078,6 +3078,11 @@ bool StyleSystem::anyStylesheetUsesAttributeInSelector(Registry& registry,
 std::uint8_t StyleSystem::styleEditDependencies(const Registry& registry,
                                                 std::string_view attribute,
                                                 std::span<const std::string_view> changedClasses) {
+  const auto* budget = registry.ctx().find<StyleResourceBudget>();
+  if (budget && budget->rejected()) {
+    // Retained records may include fallback values from a partially completed cascade.
+    return SelectorDependency::Ancestors;
+  }
   std::uint8_t relations = 0;
   for (auto view = registry.view<const StylesheetComponent>(); auto entity : view) {
     const auto& sheet = view.get<const StylesheetComponent>(entity);
@@ -3118,28 +3123,6 @@ bool StyleSystem::isStyleEditSubtreeBoundary(const Registry& registry, Entity en
     case ElementType::TSpan: return true;
     default: return false;
   }
-}
-
-bool StyleSystem::canRetainStyleEdit(const Registry& registry, Entity entity) {
-  using Tree = donner::components::TreeComponent;
-  const auto* computed = registry.try_get<ComputedStyleComponent>(entity);
-  if (!computed || !computed->style || computed->externalFill || computed->externalStroke) {
-    return false;
-  }
-  for (Entity current = entity; current != entt::null;
-       current = registry.get<Tree>(current).parent()) {
-    if (isStyleEditSubtreeBoundary(registry, current)) {
-      return false;
-    }
-  }
-  const auto& style = *computed->properties();
-  const auto localPaint = [](const auto& paint) {
-    return !paint || paint->template is<PaintServer::None>() ||
-           paint->template is<PaintServer::Solid>();
-  };
-  return localPaint(style.fill.get()) && localPaint(style.stroke.get()) && !style.clipPath.get() &&
-         !style.mask.get() && !style.markerStart.get() && !style.markerMid.get() &&
-         !style.markerEnd.get() && (!style.filter.value || style.filter.value->empty());
 }
 
 void StyleSystem::invalidateComputed(EntityHandle handle) {
