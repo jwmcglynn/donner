@@ -201,8 +201,10 @@ private:
   void append(const css::Specificity& value) {
     const auto [a, b, c] = value.abc();
     // Preserve the legacy 32-bit origin field for the common zero-rank representation.
-    const auto priority = static_cast<std::uint32_t>(value.specialValue()) |
-                          (static_cast<std::uint32_t>(value.layerRank()) << 8);
+    auto priority = static_cast<std::uint32_t>(value.specialValue());
+    if (value.hasLayerRank()) {
+      priority |= static_cast<std::uint32_t>(value.layerRank()) << 8;
+    }
     fields(priority, a, b, c);
   }
 
