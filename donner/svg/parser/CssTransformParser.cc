@@ -8,6 +8,10 @@ namespace donner::svg::parser {
 
 namespace {
 
+[[gnu::noinline]] ParseDiagnostic TransformErrorAt(std::string_view reason, FileOffset offset) {
+  return ParseDiagnostic::Error(RcString(reason), offset);
+}
+
 /**
  * Create a Transform from the CSS "skew" function parameters, alpha and theta. Note that skew is
  * deprecated in favor of skewX/skewY.
@@ -68,17 +72,11 @@ public:
         components_ = components_.subspan(1);
         return number->value;
       } else {
-        ParseDiagnostic err;
-        err.reason = "Expected a number";
-        err.range = {components_.front().sourceOffset(), components_.front().sourceOffset()};
-        return err;
+        return TransformErrorAt("Expected a number", components_.front().sourceOffset());
       }
     }
 
-    ParseDiagnostic err;
-    err.reason = "Not enough parameters";
-    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
-    return err;
+    return TransformErrorAt("Not enough parameters", FileOffset::EndOfString());
   }
 
   std::optional<ParseDiagnostic> readNumbers(std::span<double> resultStorage) {
@@ -86,10 +84,8 @@ public:
       if (i != 0) {
         skipWhitespace();
         if (!tryConsumeToken<css::Token::Comma>()) {
-          ParseDiagnostic err;
-          err.reason = isEOF() ? "Not enough parameters" : "Expected a comma";
-          err.range = {sourceOffset(), sourceOffset()};
-          return err;
+          return TransformErrorAt(isEOF() ? "Not enough parameters" : "Expected a comma",
+                                  sourceOffset());
         }
         skipWhitespace();
       }
@@ -116,10 +112,7 @@ public:
       return result.result();
     }
 
-    ParseDiagnostic err;
-    err.reason = "Not enough parameters";
-    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
-    return err;
+    return TransformErrorAt("Not enough parameters", FileOffset::EndOfString());
   }
 
   ParseResult<double> readAngle(AngleParseOptions options) {
@@ -133,10 +126,7 @@ public:
       return result.result();
     }
 
-    ParseDiagnostic err;
-    err.reason = "Not enough parameters";
-    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
-    return err;
+    return TransformErrorAt("Not enough parameters", FileOffset::EndOfString());
   }
 
   FileOffset sourceOffset() const {
@@ -246,10 +236,8 @@ public:
         return err;
       }
     } else {
-      ParseDiagnostic err;
-      err.reason = "Expected a function, found unexpected token";
-      err.range = {parser_.sourceOffset(), parser_.sourceOffset()};
-      return err;
+      return TransformErrorAt("Expected a function, found unexpected token",
+                              parser_.sourceOffset());
     }
 
     return std::nullopt;
@@ -263,10 +251,7 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseDiagnostic err;
-      err.reason = "Expected only one parameter";
-      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-      return err;
+      return TransformErrorAt("Expected only one parameter", subparser.sourceOffset());
     }
 
     return maybeNumber;
@@ -280,10 +265,7 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseDiagnostic err;
-      err.reason = "Expected only one parameter";
-      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-      return err;
+      return TransformErrorAt("Expected only one parameter", subparser.sourceOffset());
     }
 
     return maybeLength;
@@ -298,10 +280,7 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseDiagnostic err;
-      err.reason = "Expected only one parameter";
-      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-      return err;
+      return TransformErrorAt("Expected only one parameter", subparser.sourceOffset());
     }
 
     return maybeAngle;
@@ -315,10 +294,8 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseDiagnostic err;
-      err.reason = "Unexpected parameters when parsing 'matrix'";
-      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-      return err;
+      return TransformErrorAt("Unexpected parameters when parsing 'matrix'",
+                              subparser.sourceOffset());
     }
 
     transform_.appendTransform(t);
@@ -341,10 +318,7 @@ public:
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
       } else {
-        ParseDiagnostic err;
-        err.reason = "Expected a comma";
-        err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-        return err;
+        return TransformErrorAt("Expected a comma", subparser.sourceOffset());
       }
 
       auto maybeTy = subparser.readLengthPercentage();
@@ -358,10 +332,8 @@ public:
     subparser.skipWhitespace();
 
     if (!subparser.isEOF()) {
-      ParseDiagnostic err;
-      err.reason = "Unexpected parameters when parsing 'translate'";
-      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-      return err;
+      return TransformErrorAt("Unexpected parameters when parsing 'translate'",
+                              subparser.sourceOffset());
     }
 
     return std::nullopt;
@@ -383,10 +355,7 @@ public:
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
       } else {
-        ParseDiagnostic err;
-        err.reason = "Expected a comma";
-        err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-        return err;
+        return TransformErrorAt("Expected a comma", subparser.sourceOffset());
       }
 
       auto maybeSy = subparser.readNumber();
@@ -400,10 +369,8 @@ public:
     subparser.skipWhitespace();
 
     if (!subparser.isEOF()) {
-      ParseDiagnostic err;
-      err.reason = "Unexpected parameters when parsing 'scale'";
-      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-      return err;
+      return TransformErrorAt("Unexpected parameters when parsing 'scale'",
+                              subparser.sourceOffset());
     }
 
     return std::nullopt;
@@ -425,10 +392,7 @@ public:
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
       } else {
-        ParseDiagnostic err;
-        err.reason = "Expected a comma";
-        err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-        return err;
+        return TransformErrorAt("Expected a comma", subparser.sourceOffset());
       }
 
       auto maybeTheta = subparser.readAngle(AngleParseOptions::AllowBareZero);
@@ -442,10 +406,8 @@ public:
     subparser.skipWhitespace();
 
     if (!subparser.isEOF()) {
-      ParseDiagnostic err;
-      err.reason = "Unexpected parameters when parsing 'skew'";
-      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
-      return err;
+      return TransformErrorAt("Unexpected parameters when parsing 'skew'",
+                              subparser.sourceOffset());
     }
 
     return std::nullopt;
