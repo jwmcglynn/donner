@@ -81,9 +81,15 @@ jobs:
 
       - name: Test //donner/... with ASan
         run: |
+          # This hosted job builds locally. After sustained cache failures, finish the
+          # invocation locally instead of paying further network deadlines on every action.
+          cache_options=(
+            --experimental_circuit_breaker_strategy=failure
+            --experimental_remote_failure_window_interval=5m
+          )
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:asan_exclusions -- \
-            bazelisk test --config=asan-lane -- //donner/... -//donner/svg/renderer/geode/...
-          bazelisk test --config=asan-lane-no-leaks \
+            bazelisk test --config=asan-lane "${cache_options[@]}" -- //donner/... -//donner/svg/renderer/geode/...
+          bazelisk test --config=asan-lane-no-leaks "${cache_options[@]}" \
             //donner/svg/renderer/geode/... //tools/ci:asan_no_leak_tests
 
       - name: Retain failed test evidence

@@ -305,6 +305,7 @@ donner_cc_test(
 donner_cc_test(
     name = "style_parallel_tests",
     srcs = ["tests/StyleParallel_tests.cc"],
+    shard_count = 4,
     deps = [
         ":custom_property_map",
         ":style_system",
