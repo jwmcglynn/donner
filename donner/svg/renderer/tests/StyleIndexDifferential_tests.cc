@@ -1013,9 +1013,16 @@ void CompareAfterCorpusEdit(SVGDocument& actual, SVGDocument& reference, Rendere
   EXPECT_THAT(PositionedStyles(actual), ElementsAreArray(PositionedStyles(reference)));
   EXPECT_THAT(PositionedRenderInstances(actual),
               ElementsAreArray(PositionedRenderInstances(reference)));
-  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), referenceRenderer.takeSnapshot(),
-                                       "corpus_style_edit",
-                                       editor::tests::PixelmatchIdentityParams());
+  const RendererBitmap expected = referenceRenderer.takeSnapshot();
+  const RendererBitmap observed = renderer.takeSnapshot();
+  if (expected.empty()) {
+    // Documents rejected by the render size limit still have comparable styles and instances.
+    EXPECT_THAT(observed.dimensions, ::testing::Eq(expected.dimensions));
+    EXPECT_THAT(observed.pixels, ElementsAreArray(expected.pixels));
+  } else {
+    editor::tests::CompareBitmapToBitmap(observed, expected, "corpus_style_edit",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 /// Authored elements in breadth-first order, excluding shadow clones. Two parses of one document
