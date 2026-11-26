@@ -94,6 +94,16 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
 /// @return True when any author stylesheet rule depends on tree position.
 bool AuthorStyleDependsOnTreePosition(const SVGDocument& document);
 
+/// Map a contiguous stylesheet-local CSS byte range into the original SVG source.
+///
+/// @param document Document owning the stylesheet.
+/// @param stylesheetEntity Entity of the embedded SVG `<style>` node.
+/// @param cssRange Half-open byte range in the stylesheet's decoded CSS.
+/// @return Original document range, or nullopt for stale, source-less, or discontinuous text.
+std::optional<SourceRange> MapStylesheetSourceRange(const SVGDocument& document,
+                                                    Entity stylesheetEntity,
+                                                    const SourceRange& cssRange);
+
 /// Find the source span of the declaration supplying a custom property to this element.
 ///
 /// The name is case sensitive. Missing or invalid values and winners without document-local

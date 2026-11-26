@@ -757,6 +757,10 @@ public:
    */
   std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle) const;
 
+  /// Map a decoded range in one embedded stylesheet to original document bytes.
+  std::optional<SourceRange> mapStylesheetSourceRange(Registry& registry, Entity stylesheetEntity,
+                                                      const SourceRange& cssRange) const;
+
   /// Look up source provenance for an already-computed custom value.
   std::optional<SourceRange> findCustomPropertyDeclaration(EntityHandle handle,
                                                            std::string_view name) const;

@@ -1,8 +1,8 @@
 #include "donner/base/xml/XMLNode.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
-#include <iterator>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -656,21 +656,19 @@ std::optional<XMLAttributeSourceLocation> XMLNode::getAttributeSourceLocation(
 
 namespace {
 
+constexpr std::array<std::pair<std::string_view, char32_t>, 5> kXmlCharacterReferences{{
+    {"&amp;", U'&'},
+    {"&apos;", U'\''},
+    {"&quot;", U'"'},
+    {"&lt;", U'<'},
+    {"&gt;", U'>'},
+}};
+
 std::optional<char32_t> DecodeSourceCharacterReference(std::string_view text) {
-  if (text == "&amp;") {
-    return U'&';
-  }
-  if (text == "&apos;") {
-    return U'\'';
-  }
-  if (text == "&quot;") {
-    return U'"';
-  }
-  if (text == "&lt;") {
-    return U'<';
-  }
-  if (text == "&gt;") {
-    return U'>';
+  const auto builtin =
+      std::ranges::find(kXmlCharacterReferences, text, [](const auto& ref) { return ref.first; });
+  if (builtin != kXmlCharacterReferences.end()) {
+    return builtin->second;
   }
   if (!text.starts_with("&#")) {
     return std::nullopt;
@@ -683,11 +681,74 @@ std::optional<char32_t> DecodeSourceCharacterReference(std::string_view text) {
   }
   std::uint32_t value = 0;
   const auto result = std::from_chars(text.data(), text.data() + text.size(), value, hex ? 16 : 10);
-  if (result.ec != std::errc() || result.ptr != text.data() + text.size() || value > 0x10ffff ||
-      (value >= 0xd800 && value <= 0xdfff)) {
+  if (result.ec != std::errc() || result.ptr != text.data() + text.size() ||
+      !Utf8::IsValidCodepoint(value)) {
     return std::nullopt;
   }
   return static_cast<char32_t>(value);
+}
+
+struct DecodedSourceUnit {
+  std::size_t rawBytes;
+  std::size_t decodedBytes;
+};
+
+std::optional<DecodedSourceUnit> MatchDecodedSourceUnit(std::string_view raw,
+                                                        std::string_view decoded) {
+  if (raw.front() != '&') {
+    return !decoded.empty() && raw.front() == decoded.front()
+               ? std::optional(DecodedSourceUnit{1, 1})
+               : std::nullopt;
+  }
+  const auto semicolon = raw.find(';');
+  if (semicolon == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const auto codepoint = DecodeSourceCharacterReference(raw.substr(0, semicolon + 1));
+  if (!codepoint) {
+    return std::nullopt;
+  }
+  char utf8[4];
+  const auto* end = Utf8::Append(*codepoint, utf8);
+  const std::string_view translated(utf8, static_cast<std::size_t>(end - utf8));
+  return decoded.starts_with(translated)
+             ? std::optional(DecodedSourceUnit{semicolon + 1, translated.size()})
+             : std::nullopt;
+}
+
+std::optional<SourceRange> ProjectDecodedXmlRange(std::string_view raw, std::string_view decoded,
+                                                  std::size_t start, std::size_t end,
+                                                  std::size_t rawStart) {
+  const auto makeRange = [&](std::size_t first, std::size_t last) {
+    return SourceRange{FileOffset::Offset(rawStart + first), FileOffset::Offset(rawStart + last)};
+  };
+  if (raw == decoded) {
+    return makeRange(start, end);
+  }
+  std::optional<std::size_t> mappedStart, mappedEnd;
+  std::size_t rawOffset = 0;
+  std::size_t decodedOffset = 0;
+  for (;;) {
+    if (decodedOffset == start) {
+      mappedStart = rawOffset;
+    }
+    if (decodedOffset == end) {
+      mappedEnd = rawOffset;
+    }
+    if (rawOffset == raw.size()) {
+      break;
+    }
+    const auto unit = MatchDecodedSourceUnit(raw.substr(rawOffset), decoded.substr(decodedOffset));
+    if (!unit) {
+      return std::nullopt;
+    }
+    rawOffset += unit->rawBytes;
+    decodedOffset += unit->decodedBytes;
+  }
+  if (decodedOffset != decoded.size() || !mappedStart || !mappedEnd) {
+    return std::nullopt;
+  }
+  return makeRange(*mappedStart, *mappedEnd);
 }
 
 std::optional<SourceRange> MapDecodedRange(std::string_view source, const SourceRange& authored,
@@ -704,60 +765,8 @@ std::optional<SourceRange> MapDecodedRange(std::string_view source, const Source
   if (rawStart > rawEnd || rawEnd > source.size()) {
     return std::nullopt;
   }
-  const auto raw = source.substr(rawStart, rawEnd - rawStart);
-  const auto makeRange = [&](std::size_t first, std::size_t last) {
-    return SourceRange{FileOffset::Offset(rawStart + first), FileOffset::Offset(rawStart + last)};
-  };
-  if (raw == decoded) {
-    return makeRange(*start, *end);
-  }
-
-  std::optional<std::size_t> mappedStart;
-  std::optional<std::size_t> mappedEnd;
-  std::size_t rawOffset = 0;
-  std::size_t decodedOffset = 0;
-  for (;;) {
-    if (decodedOffset == *start) {
-      mappedStart = rawOffset;
-    }
-    if (decodedOffset == *end) {
-      mappedEnd = rawOffset;
-    }
-    if (rawOffset == raw.size()) {
-      break;
-    }
-
-    const auto remaining = raw.substr(rawOffset);
-    if (remaining.front() != '&') {
-      if (decodedOffset == decoded.size() || remaining.front() != decoded[decodedOffset]) {
-        return std::nullopt;
-      }
-      ++rawOffset;
-      ++decodedOffset;
-      continue;
-    }
-
-    const auto semicolon = remaining.find(';');
-    if (semicolon == std::string_view::npos) {
-      return std::nullopt;
-    }
-    const auto codepoint = DecodeSourceCharacterReference(remaining.substr(0, semicolon + 1));
-    if (!codepoint) {
-      return std::nullopt;
-    }
-    char utf8[4];
-    const auto* utf8End = Utf8::Append(*codepoint, utf8);
-    const std::string_view translated(utf8, utf8End - utf8);
-    if (!decoded.substr(decodedOffset).starts_with(translated)) {
-      return std::nullopt;
-    }
-    rawOffset += semicolon + 1;
-    decodedOffset += translated.size();
-  }
-  if (decodedOffset != decoded.size() || !mappedStart || !mappedEnd) {
-    return std::nullopt;
-  }
-  return makeRange(*mappedStart, *mappedEnd);
+  return ProjectDecodedXmlRange(source.substr(rawStart, rawEnd - rawStart), decoded, *start, *end,
+                                rawStart);
 }
 
 }  // namespace

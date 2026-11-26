@@ -122,6 +122,15 @@ bool AuthorStyleDependsOnTreePosition(const SVGDocument& document) {
   });
 }
 
+std::optional<SourceRange> MapStylesheetSourceRange(const SVGDocument& document,
+                                                    Entity stylesheetEntity,
+                                                    const SourceRange& cssRange) {
+  return document.withReadAccess([&](DocumentReadAccess& access) {
+    return components::StyleSystem().mapStylesheetSourceRange(access.registry(), stylesheetEntity,
+                                                              cssRange);
+  });
+}
+
 std::optional<SourceRange> FindCustomPropertyDeclaration(const SVGElement& element,
                                                          std::string_view name) {
   return element.withWriteAccess(

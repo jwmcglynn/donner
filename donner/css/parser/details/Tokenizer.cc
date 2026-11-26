@@ -535,11 +535,7 @@ Token Tokenizer::consumeIdentLikeToken() {
     return token<Token::Function>(nameCharsConsumed + 1, std::move(name));
   } else {
     // Otherwise, create an <ident-token> with its value set to `name` and return it.
-    auto result = token<Token::Ident>(nameCharsConsumed, std::move(name));
-    if (nameCharsConsumed <= UINT32_MAX) {
-      result.get<Token::Ident>().sourceByteLength = static_cast<std::uint32_t>(nameCharsConsumed);
-    }
-    return result;
+    return token<Token::Ident>(nameCharsConsumed, std::move(name), nameCharsConsumed);
   }
 }
 

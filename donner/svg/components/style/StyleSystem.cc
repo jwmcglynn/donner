@@ -3210,78 +3210,143 @@ namespace {
 struct CustomPropertyWinner {
   const css::Declaration* declaration = nullptr;
   css::Specificity specificity;
-  // A null stylesheet and a null inline entity represent a source-less rule.
-  const StylesheetComponent* stylesheet = nullptr;
+  // Two null entities represent a source-less rule.
   Entity inlineEntity = entt::null;
   Entity sheetEntity = entt::null;
+};
+
+void ConsiderCustomProperty(CustomPropertyWinner& winner, std::string_view name,
+                            const css::Declaration& declaration, css::Specificity priority,
+                            Entity sheetEntity) {
+  if (std::string_view(declaration.name) != name ||
+      declaration.variableReferences == css::VariableReferences::Invalid) {
+    return;
+  }
+  if (declaration.important) {
+    priority = css::Specificity::Important(priority);
+  }
+  if (!winner.declaration || winner.specificity <= priority) {
+    winner = {&declaration, priority, entt::null, sheetEntity};
+  }
+}
+
+struct CustomPropertySearch {
+  const ShadowedElementAdapter& adapter;
+  const RuleIndexElementView& keys;
+  const DocumentLayerOrder* layers;
+  StyleResourceBudget& budget;
+  bool unindexed;
+  std::string_view name;
+  CustomPropertyWinner winner;
+  std::vector<std::uint32_t> candidates;
+  StyleCascadeCounters counters;
+
+  bool visit(const css::Stylesheet& sheet, const RuleIndex& index, bool userAgent,
+             Entity sourceEntity) {
+    const RuleLayerRanks ranks(layers, userAgent, sheet);
+    const auto rules = sheet.rules();
+    CollectCandidateRules(rules, index, keys, unindexed, candidates);
+    for (const auto position : candidates) {
+      const auto& rule = rules[position];
+      const auto rank = ranks.rank(rule.layer);
+      if (!rank) {
+        continue;
+      }
+      if (!budget.reserveRuleElementMatch()) {
+        return false;
+      }
+      const auto match = MatchCascadeCandidate(rule, adapter, budget.selectorTraversal(), nullptr,
+                                               index, position, unindexed);
+      if (!match) {
+        continue;
+      }
+      const auto priority = CascadeSpecificity(match->specificity.withLayerRank(*rank), userAgent);
+      AdmitRuleDeclarations(rule, priority, budget, counters,
+                            [&](const css::Declaration& declaration, css::Specificity specificity) {
+                              ConsiderCustomProperty(winner, name, declaration, specificity, source,
+                                                     sourceEntity);
+                            });
+    }
+    return !budget.rejected();
+  }
 };
 
 CustomPropertyWinner FindLocalCustomProperty(const Registry& registry, Entity treeEntity,
                                              Entity dataEntity, std::string_view name,
                                              const DocumentLayerOrder* layers,
                                              StyleResourceBudget& budget) {
-  CustomPropertyWinner winner;
+  const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
+  const RuleIndexElementView keys(registry, treeEntity, dataEntity);
+  CustomPropertySearch search{
+      adapter, keys, layers, budget, registry.ctx().contains<UnindexedCascadeForTesting>(),
+      name,    {},   {},     {}};
   if (const auto* style = registry.try_get<StyleComponent>(dataEntity)) {
     const auto& properties = style->properties().unparsedProperties;
     if (const auto local = properties.find(RcString(name)); local != properties.end()) {
-      winner = {&local->second.declaration, local->second.specificity, nullptr, dataEntity};
+      search.winner = {&local->second.declaration, local->second.specificity, dataEntity};
     }
   }
+  VisitCascadeStylesheets(
+      registry, layers, [&](const StylesheetComponent& stylesheet, Entity sheetEntity) {
+        if (!IsApplicableStylesheet(registry, stylesheet, sheetEntity, dataEntity)) {
+          return true;
+        }
+        const auto imported = [&](std::uint64_t, std::size_t, const css::Stylesheet& sheet,
+                                  const RuleIndex& index, bool userAgent) {
+          return search.visit(sheet, index, userAgent, entt::null);
+        };
+        return VisitCascadeImports(stylesheet, layers, imported) &&
+               search.visit(stylesheet.stylesheet, stylesheet.ruleIndex,
+                            stylesheet.isUserAgentStylesheet,
+                            stylesheet.isUserAgentStylesheet ? entt::null : sheetEntity);
+      });
+  return search.winner;
+}
 
-  const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
-  const RuleIndexElementView elementKeys(registry, treeEntity, dataEntity);
-  const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
-  StyleCascadeCounters counters;
-  std::vector<std::uint32_t> candidates;
-  const auto visit = [&](const StylesheetComponent& stylesheet, Entity sheetEntity) {
-    if (!IsApplicableStylesheet(registry, stylesheet, sheetEntity, dataEntity)) {
-      return true;
+std::optional<SourceRange> MapStylesheetText(const xml::XMLNode& node, std::string_view css,
+                                             std::size_t start, std::size_t end) {
+  // Recover the exact XML text chunk for the CSS token. A token split between chunks
+  // has no contiguous document range.
+  std::size_t offset = 0;
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() != xml::XMLNode::Type::Data && child->type() != xml::XMLNode::Type::CData) {
+      continue;
     }
-    const auto collect = [&](std::uint64_t, std::size_t, const css::Stylesheet& sheet,
-                             const RuleIndex& index, bool userAgent) {
-      const RuleLayerRanks ranks(layers, userAgent, sheet);
-      const auto rules = sheet.rules();
-      CollectCandidateRules(rules, index, elementKeys, unindexed, candidates);
-      for (const auto position : candidates) {
-        const auto& rule = rules[position];
-        const auto rank = ranks.rank(rule.layer);
-        if (!rank) {
-          continue;
-        }
-        if (!budget.reserveRuleElementMatch()) {
-          return false;
-        }
-        const auto match = MatchSelectorRule(rule, adapter, &budget.selectorTraversal());
-        if (!match) {
-          continue;
-        }
-        const auto specificity =
-            CascadeSpecificity(match->specificity.withLayerRank(*rank), userAgent);
-        AdmitRuleDeclarations(
-            rule, specificity, budget, counters,
-            [&](const css::Declaration& declaration, css::Specificity priority) {
-              if (std::string_view(declaration.name) != name ||
-                  declaration.variableReferences == css::VariableReferences::Invalid) {
-                return;
-              }
-              if (declaration.important) {
-                priority = css::Specificity::Important(priority);
-              }
-              if (!winner.declaration || winner.specificity <= priority) {
-                const bool localSheet = !userAgent && &sheet == &stylesheet.stylesheet;
-                winner = {&declaration, priority, localSheet ? &stylesheet : nullptr, entt::null,
-                          localSheet ? sheetEntity : entt::null};
-              }
-            });
+    const auto chunk = child->value();
+    if (!chunk) {
+      continue;
+    }
+    if (start >= offset && end - offset <= chunk->size()) {
+      if (css.substr(offset, chunk->size()) != std::string_view(*chunk)) {
+        return std::nullopt;
       }
-      return !budget.rejected();
-    };
-    return VisitCascadeImports(stylesheet, layers, collect) &&
-           collect(stylesheet.contentRevision(), stylesheet.importedStylesheets.size(),
-                   stylesheet.stylesheet, stylesheet.ruleIndex, stylesheet.isUserAgentStylesheet);
-  };
-  VisitCascadeStylesheets(registry, layers, visit);
-  return winner;
+      return child->mapDecodedTextRange(
+          {FileOffset::Offset(start - offset), FileOffset::Offset(end - offset)});
+    }
+    offset += chunk->size();
+  }
+  return std::nullopt;
+}
+
+bool HasCurrentSourceProjection(const Registry& registry) {
+  const auto* document = registry.ctx().find<xml::XMLDocumentContext>();
+  return document && document->sourceStoreHolder->store &&
+         !document->sourceRequiresDocumentReparse && document->unreparsedSpans.empty();
+}
+
+std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity stylesheetEntity,
+                                                      const SourceRange& cssRange) {
+  const auto* sheet = registry.try_get<StylesheetComponent>(stylesheetEntity);
+  if (!sheet || sheet->isUserAgentStylesheet) {
+    return std::nullopt;
+  }
+  const auto start = cssRange.start.offset;
+  const auto end = cssRange.end.offset;
+  if (!start || !end || *end <= *start || *end > sheet->text.size()) {
+    return std::nullopt;
+  }
+  return MapStylesheetText(xml::XMLNode(EntityHandle(registry, stylesheetEntity)), sheet->text,
+                           *start, *end);
 }
 
 std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
@@ -3297,54 +3362,37 @@ std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
     const xml::XMLNode node(EntityHandle(registry, winner.inlineEntity));
     return node.mapDecodedAttributeRange(xml::XMLQualifiedNameRef("style"), local);
   }
-  if (!winner.stylesheet || end > winner.stylesheet->text.size()) {
-    return std::nullopt;
+  return winner.sheetEntity != entt::null
+             ? MapEmbeddedStylesheetRange(registry, winner.sheetEntity, local)
+             : std::nullopt;
+}
+
+bool CanTraceCustomProperty(const Registry& registry, EntityHandle handle, std::string_view name) {
+  if (!HasCurrentSourceProjection(registry)) {
+    return false;
   }
-  // Recover the exact XML text chunk for the CSS token. A token split between chunks
-  // has no contiguous document range.
-  const auto css = std::string_view(winner.stylesheet->text);
-  const xml::XMLNode node(EntityHandle(registry, winner.sheetEntity));
-  std::size_t offset = 0;
-  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
-    if (child->type() != xml::XMLNode::Type::Data && child->type() != xml::XMLNode::Type::CData) {
-      continue;
-    }
-    const auto chunk = child->value();
-    if (!chunk) {
-      continue;
-    }
-    if (*start >= offset && end - offset <= chunk->size()) {
-      if (css.substr(offset, chunk->size()) != std::string_view(*chunk)) {
-        return std::nullopt;
-      }
-      return child->mapDecodedTextRange(
-          {FileOffset::Offset(*start - offset), FileOffset::Offset(end - offset)});
-    }
-    offset += chunk->size();
-  }
-  return std::nullopt;
+  const auto* budget = registry.ctx().find<StyleResourceBudget>();
+  const auto* computed = handle.try_get<ComputedStyleComponent>();
+  return !(budget && budget->rejected()) && computed && computed->style &&
+         computed->style->customProperties && computed->style->customProperties->find(name);
 }
 
 }  // namespace
 
+std::optional<SourceRange> StyleSystem::mapStylesheetSourceRange(
+    Registry& registry, Entity stylesheetEntity, const SourceRange& cssRange) const {
+  if (!HasCurrentSourceProjection(registry) || !registry.valid(stylesheetEntity)) {
+    return std::nullopt;
+  }
+  return MapEmbeddedStylesheetRange(registry, stylesheetEntity, cssRange);
+}
+
 std::optional<SourceRange> StyleSystem::findCustomPropertyDeclaration(EntityHandle handle,
                                                                       std::string_view name) const {
   Registry& registry = *handle.registry();
-  const auto* document = registry.ctx().find<xml::XMLDocumentContext>();
-  if (!document || !document->sourceStoreHolder->store || document->sourceRequiresDocumentReparse ||
-      !document->unreparsedSpans.empty()) {
+  if (!CanTraceCustomProperty(registry, handle, name)) {
     return std::nullopt;
   }
-  const auto* liveBudget = registry.ctx().find<StyleResourceBudget>();
-  if (liveBudget && liveBudget->rejected()) {
-    return std::nullopt;
-  }
-  const auto* selected = handle.try_get<ComputedStyleComponent>();
-  if (!selected || !selected->style || !selected->style->customProperties ||
-      !selected->style->customProperties->find(name)) {
-    return std::nullopt;
-  }
-
   const auto layers = DocumentLayerOrder::Build(registry);
   StyleResourceBudget budget;
   for (Entity current = handle.entity(); current != entt::null;) {
@@ -3359,15 +3407,15 @@ std::optional<SourceRange> StyleSystem::findCustomPropertyDeclaration(EntityHand
     if (budget.rejected()) {
       return std::nullopt;
     }
-    if (winner.declaration) {
-      using Action = CustomPropertyMap::Action;
-      const auto action = CustomPropertyAction(*winner.declaration);
-      if (action == Action::Initial) {
-        return std::nullopt;
-      }
-      if (action == Action::Set) {
-        return MapCustomPropertyWinner(registry, winner);
-      }
+    using Action = CustomPropertyMap::Action;
+    const auto action =
+        winner.declaration ? CustomPropertyAction(*winner.declaration) : Action::Inherit;
+    if (action == Action::Set) {
+      return MapCustomPropertyWinner(registry, winner);
+    }
+    // An explicit initial value cannot supply the selected computed token sequence.
+    if (action == Action::Initial) {
+      return std::nullopt;
     }
     if (ExternalRootContext(registry, current)) {
       return std::nullopt;

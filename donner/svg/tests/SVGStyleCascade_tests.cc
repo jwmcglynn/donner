@@ -72,6 +72,11 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceMapsInlineXmlReferencesAndLiveEdi
   ASSERT_THAT(after, Optional(testing::_));
   EXPECT_EQ(after->start, FileOffset::Offset(doc.source().find("--t&#111;ne: red")));
   EXPECT_EQ(after->end, FileOffset::Offset(doc.source().find("--t&#111;ne: red") + 11));
+  const auto sheet = doc.querySelector("style");
+  ASSERT_THAT(sheet, Optional(testing::_));
+  const auto projected = MapStylesheetSourceRange(doc, sheet->entityHandle().entity(),
+                                                  {FileOffset::Offset(7), FileOffset::Offset(13)});
+  EXPECT_EQ(projected, after);
   const auto uppercase = FindCustomPropertyDeclaration(*target, "--Tone");
   ASSERT_THAT(uppercase, Optional(testing::_));
   EXPECT_EQ(uppercase->start, FileOffset::Offset(doc.source().find("--Tone: blue")));

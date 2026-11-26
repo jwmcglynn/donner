@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <ostream>
@@ -62,8 +63,12 @@ struct Token {
      * Create an identifier token.
      *
      * @param value Identifier value.
+     * @param sourceLength Byte count before decoding CSS escapes.
      */
-    explicit Ident(RcString value) : value(std::move(value)) {}
+    explicit Ident(RcString value, std::size_t sourceLength = 0)
+        : value(std::move(value)),
+          sourceByteLength(sourceLength <= UINT32_MAX ? static_cast<std::uint32_t>(sourceLength)
+                                                      : 0) {}
 
     /// Equality operator.
     bool operator==(const Ident& other) const { return value == other.value; }
