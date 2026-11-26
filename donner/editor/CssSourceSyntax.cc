@@ -4,6 +4,7 @@
 #include <charconv>
 #include <map>
 #include <optional>
+#include <unordered_set>
 #include <utility>
 
 #include "donner/base/StringUtils.h"
@@ -470,12 +471,6 @@ std::optional<char32_t> ReferenceValue(std::string_view ref) {
   return static_cast<char32_t>(value);
 }
 
-struct CssTextPiece {
-  std::size_t sourceStart;
-  std::size_t sourceEnd;
-  std::string_view text;
-};
-
 template <class Visit>
 void VisitCssText(std::string_view raw, Visit visit) {
   xml::Tokenize(raw, [&](const XMLToken& token) {
@@ -544,7 +539,65 @@ private:
   std::optional<CssColorSpan> pending_;
 };
 
+struct CustomNameCatalog {
+  std::vector<std::string> names;
+  std::unordered_set<std::string> seen;
+  std::size_t tokensLeft = 32768;
+
+  bool add(const RcString& ident) {
+    constexpr std::size_t kMaximumNames = 4096;
+    const auto [it, inserted] = seen.emplace(std::string_view(ident));
+    if (inserted) {
+      names.push_back(*it);
+    }
+    return names.size() < kMaximumNames;
+  }
+};
+
+std::optional<RcString> CustomDeclarationName(const Token& token, const CssState& state) {
+  const auto* ident = token.tryGet<Token::Ident>();
+  if (!ident || state.skippedBlocks || state.mode != CssMode::DeclarationName ||
+      (!state.blocks.empty() && state.blocks.back() == BlockKind::FontFace)) {
+    return std::nullopt;
+  }
+  const std::string_view name = ident->value;
+  return name.size() > 2 && name.starts_with("--") ? std::optional(ident->value) : std::nullopt;
+}
+
+bool CollectCustomNames(std::string_view text, CssSourceRegionKind kind, bool truncated,
+                        CustomNameCatalog& catalog) {
+  std::optional<RcString> pending;
+  css::parser::details::Tokenizer tokenizer(text);
+  CssState state(kind);
+  while (!tokenizer.isEOF() && catalog.tokensLeft != 0) {
+    --catalog.tokensLeft;
+    const Token token = tokenizer.next();
+    if (token.is<Token::EofToken>() || (truncated && tokenizer.endOffset() == text.size())) {
+      break;
+    }
+    if (!token.is<Token::Whitespace>()) {
+      if (pending && token.is<Token::Colon>() && !catalog.add(*pending)) {
+        return false;
+      }
+      pending = CustomDeclarationName(token, state);
+    }
+    std::ignore = TokenColor(token, state);
+  }
+  return catalog.tokensLeft != 0;
+}
+
+std::string DecodeCssText(std::string_view raw) {
+  std::string decoded;
+  VisitCssText(raw, [&](const CssTextPiece& piece) { decoded.append(piece.text); });
+  return decoded;
+}
+
 }  // namespace
+
+void VisitDecodedCssText(std::string_view raw,
+                         const std::function<void(const CssTextPiece&)>& visit) {
+  VisitCssText(raw, visit);
+}
 
 void ClassifySvgCssRegion(std::string_view source, const CssSourceRegion& region,
                           const std::function<void(CssColorSpan)>& paint) {
@@ -579,5 +632,28 @@ void ClassifySvgCssRegion(std::string_view source, const CssSourceRegion& region
     }
     cssStart = cssEnd;
   });
+}
+
+std::vector<std::string> CollectDeclaredCustomPropertyNames(std::string_view source) {
+  CustomNameCatalog catalog;
+  std::size_t bytesLeft = 256 * 1024;
+  for (const CssSourceRegion& region : FindSvgCssSourceRegions(source)) {
+    if (region.kind == CssSourceRegionKind::PropertyValue) {
+      continue;
+    }
+    const auto size = region.endOffset - region.startOffset;
+    const auto raw = source.substr(region.startOffset, std::min(bytesLeft, size));
+    bytesLeft -= raw.size();
+    std::string decoded;
+    std::string_view text = raw;
+    if (raw.find_first_of("&<") != raw.npos) {
+      decoded = DecodeCssText(raw);
+      text = decoded;
+    }
+    if (!CollectCustomNames(text, region.kind, raw.size() < size, catalog) || bytesLeft == 0) {
+      break;
+    }
+  }
+  return std::move(catalog.names);
 }
 }  // namespace donner::editor

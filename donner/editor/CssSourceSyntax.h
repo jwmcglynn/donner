@@ -37,9 +37,25 @@ struct CssColorSpan {
   bool operator==(const CssColorSpan&) const = default;
 };
 
+/// A decoded run of CSS text and its half-open byte range within the raw XML region.
+/// The text is borrowed for the duration of the visitor call.
+struct CssTextPiece {
+  std::size_t sourceStart;
+  std::size_t sourceEnd;
+  std::string_view text;
+};
+
+/// Visit literal CSS text, XML character references, and CDATA payloads in source order.
+void VisitDecodedCssText(std::string_view raw,
+                         const std::function<void(const CssTextPiece&)>& visit);
+
 /// Locate every CSS-bearing region in SVG/XML source, in source order.
 /// @param source SVG/XML source bytes.
 std::vector<CssSourceRegion> FindSvgCssSourceRegions(std::string_view source);
+
+/// Collect distinct authored custom property names from stylesheets and style attributes.
+/// @param source SVG/XML source bytes.
+std::vector<std::string> CollectDeclaredCustomPropertyNames(std::string_view source);
 
 /// Visit the token colors for one CSS region, using absolute source byte offsets.
 void ClassifySvgCssRegion(std::string_view source, const CssSourceRegion& region,
