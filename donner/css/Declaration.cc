@@ -91,6 +91,12 @@ std::optional<char> RecoveredStringQuote(const Declaration& declaration, std::st
   return spelling[localOffset];
 }
 
+bool HasDanglingEscape(std::string_view spelling) {
+  const auto lastOther = spelling.find_last_not_of('\\');
+  const auto start = lastOther == std::string_view::npos ? 0 : lastOther + 1;
+  return (spelling.size() - start) % 2 != 0;
+}
+
 bool CloseRecoveredString(std::span<const ComponentValue> values, const Declaration& declaration,
                           std::string_view spelling, std::string& result) {
   if (values.size() < 2) {
@@ -102,15 +108,24 @@ bool CloseRecoveredString(std::span<const ComponentValue> values, const Declarat
   if (!quote) {
     return false;
   }
-  std::size_t trailingBackslashes = 0;
-  while (trailingBackslashes < result.size() &&
-         result[result.size() - trailingBackslashes - 1] == '\\') {
-    ++trailingBackslashes;
-  }
-  if (trailingBackslashes % 2 != 0) {
+  if (HasDanglingEscape(spelling)) {
     result.pop_back();
   }
   result += *quote;
+  return true;
+}
+
+// At EOF the name scanner decodes an incomplete escape as U+FFFD. Spell it explicitly
+// before a following semicolon or implicit closer can become the escaped character.
+bool FinishUnterminatedEscape(const Token* token, std::string_view spelling, std::string& result) {
+  if (!token || !HasDanglingEscape(spelling)) {
+    return false;
+  }
+  if (const auto* delim = token->tryGet<Token::Delim>(); delim && delim->value == '\\') {
+    result += '\n';  // Preserve a standalone reverse-solidus delimiter as an invalid escape.
+  } else {
+    result += "fffd";
+  }
   return true;
 }
 
@@ -119,11 +134,16 @@ bool CloseRecoveredToken(std::span<const ComponentValue> values, const Declarati
   const auto* token = std::get_if<Token>(&values.back().value);
   const auto* error = token ? token->tryGet<Token::ErrorToken>() : nullptr;
   if (!error) {
-    return false;
+    return FinishUnterminatedEscape(token, spelling, result);
   }
   switch (error->type) {
     case Token::ErrorToken::Type::EofInComment: result += "*/"; return true;
-    case Token::ErrorToken::Type::EofInUrl: result += ')'; return true;
+    case Token::ErrorToken::Type::EofInUrl:
+      if (HasDanglingEscape(spelling)) {
+        result += "fffd";
+      }
+      result += ')';
+      return true;
     case Token::ErrorToken::Type::EofInString:
       return CloseRecoveredString(values, declaration, spelling, result);
   }
