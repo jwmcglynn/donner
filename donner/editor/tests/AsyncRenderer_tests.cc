@@ -4306,16 +4306,16 @@ TEST(AsyncRendererTest, SelectedSplashStylesheetSourceEditMatchesFreshCompositor
   source.replace(initialFillOffset, originalFill.size(), "fill: red;");
   const std::size_t svgEnd = source.rfind("</svg>");
   ASSERT_NE(svgEnd, std::string::npos);
-  source.insert(svgEnd,
-                R"(<rect id="Cached_Style_Probe" class="cls-5" x="10" y="10" width="20" height="20"/>)");
+  source.insert(
+      svgEnd,
+      R"(<rect id="Cached_Style_Probe" class="cls-5" x="10" y="10" width="20" height="20"/>)");
 
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(source));
   app.document().document().setCanvasSize(892, 512);
   const auto selected = app.document().document().querySelector("#Donner_D");
   ASSERT_TRUE(selected.has_value());
-  const auto cachedStyleProbe =
-      app.document().document().querySelector("#Cached_Style_Probe");
+  const auto cachedStyleProbe = app.document().document().querySelector("#Cached_Style_Probe");
   ASSERT_TRUE(cachedStyleProbe.has_value());
   app.setSelection(*selected);
   const Entity entity = selected->unsafeEntityHandle().entity();
