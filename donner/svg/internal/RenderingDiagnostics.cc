@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -116,6 +117,56 @@ RenderingDiagnostics CaptureRenderingDiagnostics(const SVGDocument& document,
     ++result.instanceCount;
     if (result.instances.size() < maxRecords) {
       result.instances.push_back(RenderDiagnosticInstance(registry, entity));
+    }
+  }
+  return result;
+}
+
+RenderingFrameWork CaptureRenderingFrameWork(const SVGDocument& document) {
+  const auto access = document.readAccess();
+  const auto& context = access.registry().ctx();
+  RenderingFrameWork work;
+  if (const auto* style = context.find<components::StyleCascadeMetrics>()) {
+    work.styleCascade = style->counters;
+    work.styleTime = style->styleTime;
+  }
+  if (const auto* render = context.find<components::RenderTreeState>()) {
+    work.fullRebuilds = render->counters.fullRebuilds;
+    work.retainedUpdates = render->counters.retainedUpdates;
+    work.shadowTreeTeardowns = render->counters.shadowTreeTeardowns;
+  }
+  return work;
+}
+
+namespace {
+
+bool MatchesFill(const components::ResolvedPaintServer& fill,
+                 const ExpectedRenderedFill& expected) {
+  if (const auto* rgba = std::get_if<css::RGBA>(&expected)) {
+    const auto* solid = std::get_if<PaintServer::Solid>(&fill);
+    return solid && solid->color.hasRGBA() && solid->color.rgba() == *rgba;
+  }
+  const auto* resolved = std::get_if<components::PaintResolvedReference>(&fill);
+  const auto& paintServer = std::get<std::reference_wrapper<const SVGElement>>(expected).get();
+  return resolved && resolved->reference.valid() &&
+         Entity(resolved->reference) == paintServer.entityHandle().entity();
+}
+
+}  // namespace
+
+VisibleFillCount CountVisibleFills(const SVGDocument& document, const SVGElement& target,
+                                   const ExpectedRenderedFill& expected) {
+  const auto access = document.readAccess();
+  const Entity source = target.entityHandle().entity();
+  const auto instances = access.registry().view<const components::RenderingInstanceComponent>();
+  VisibleFillCount result;
+  for (const auto entity : instances) {
+    const auto& instance = instances.get<const components::RenderingInstanceComponent>(entity);
+    if (instance.dataEntity == source && instance.visible) {
+      ++result.instances;
+      if (MatchesFill(instance.resolvedFill, expected)) {
+        ++result.matching;
+      }
     }
   }
   return result;

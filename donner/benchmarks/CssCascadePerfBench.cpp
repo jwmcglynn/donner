@@ -5,7 +5,8 @@
 /// Usage:
 /// ```
 /// bazel run -c opt //donner/benchmarks:css_cascade_perf_bench -- \
-///     [--mode=all|load|edits|keystrokes|scaling] [--no-renderer] [--workers=0..32 with --mode=load
+///     [--mode=all|load|edits|style-edits|keystrokes|scaling] [--no-renderer] [--workers=0..32 with
+///     --mode=load
 ///     --no-renderer]
 /// ```
 ///
@@ -84,6 +85,12 @@ bool PrintResult(std::string_view kind, std::string_view name,
   if (measurement->rendererFrame) {
     PrintTiming("renderer_frame", *measurement->rendererFrame);
   }
+  if (measurement->renderWork) {
+    const auto& work = *measurement->renderWork;
+    std::printf(" full_rebuilds=%" PRIu64 " retained_updates=%" PRIu64
+                " shadow_tree_teardowns=%" PRIu64,
+                work.fullRebuilds, work.retainedUpdates, work.shadowTreeTeardowns);
+  }
   const auto& scheduled = measurement->scheduled;
   std::printf(" scheduled_passes=%" PRIu64 " admitted_tasks=%" PRIu64 " abandoned_passes=%" PRIu64
               " replayed_traces=%" PRIu64 " canonical_hit_reuses=%" PRIu64,
@@ -144,7 +151,8 @@ std::optional<Options> ParseOptions(int argc, char* argv[]) {
     const std::string_view arg(argv[i]);
     if (arg.starts_with("--mode=")) {
       options.mode = std::string(arg.substr(7));
-      constexpr std::string_view kModes[] = {"all", "load", "edits", "keystrokes", "scaling"};
+      constexpr std::string_view kModes[] = {"all",         "load",       "edits",
+                                             "style-edits", "keystrokes", "scaling"};
       if (std::find(std::begin(kModes), std::end(kModes), options.mode) == std::end(kModes)) {
         return std::nullopt;
       }
@@ -281,6 +289,35 @@ bool RunKeystrokeCases(const Documents& documents, bool withRenderer) {
   return ok;
 }
 
+bool RunStyleEdits(const Documents& documents, bool withRenderer) {
+  using donner::benchmarks::StyleEditScenario;
+  const std::string sharedUse = donner::benchmarks::MakeSharedUseEditDocument();
+  struct Case {
+    std::string_view name;
+    std::string_view source;
+    StyleEditScenario scenario;
+  };
+  const Case cases[] = {
+      {"splash #Shine_glow class", documents.splash.source, StyleEditScenario::SplashClass},
+      {"splash solid inline fill", documents.splash.source, StyleEditScenario::SplashSolid},
+      {"bootstrap icons sprite class", documents.icons.source, StyleEditScenario::SpriteClass},
+      {"bootstrap icons preview fill", documents.icons.source, StyleEditScenario::SpriteFill},
+      {"32 shared use copies class", sharedUse, StyleEditScenario::SharedUseClass},
+  };
+  bool ok = true;
+  for (const Case& scenario : cases) {
+    for (const bool undo : {false, true}) {
+      const auto direction = undo ? RecordedRepetitions::Odd : RecordedRepetitions::Even;
+      const auto repetitions = OneDirection(kEditRepetitions, direction);
+      const std::string name = std::string(scenario.name) + (undo ? ", undo" : ", forward");
+      ok &= PrintResult(
+          "style-edit", name,
+          MeasureStyleEdit(scenario.source, scenario.scenario, repetitions, withRenderer), "edit");
+    }
+  }
+  return ok;
+}
+
 bool RunScalingCases() {
   struct ScalingCase {
     const char* kindName;
@@ -316,9 +353,10 @@ bool RunScalingCases() {
 int main(int argc, char* argv[]) {
   const std::optional<Options> options = ParseOptions(argc, argv);
   if (!options) {
-    std::fprintf(stderr,
-                 "usage: css_cascade_perf_bench [--mode=all|load|edits|keystrokes|scaling] "
-                 "[--no-renderer] [--workers=0..32 with --mode=load --no-renderer]\n");
+    std::fprintf(
+        stderr,
+        "usage: css_cascade_perf_bench [--mode=all|load|edits|style-edits|keystrokes|scaling] "
+        "[--no-renderer] [--workers=0..32 with --mode=load --no-renderer]\n");
     return 2;
   }
   const std::optional<Documents> documents = LoadDocuments();
@@ -339,6 +377,9 @@ int main(int argc, char* argv[]) {
   }
   if (runs("edits")) {
     ok &= RunEditCases(*documents, options->withRenderer);
+  }
+  if (options->mode == "style-edits") {
+    ok &= RunStyleEdits(*documents, options->withRenderer);
   }
   if (runs("keystrokes")) {
     ok &= RunKeystrokeCases(*documents, options->withRenderer);

@@ -5,12 +5,15 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/css/Color.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 
@@ -57,6 +60,36 @@ struct RenderingDiagnostics {
 /// Does not render, recompute style, or consume invalidation. Flag names have static lifetime.
 RenderingDiagnostics CaptureRenderingDiagnostics(const SVGDocument& document,
                                                  std::size_t maxRecords = 4096);
+
+/// Cumulative style and render-tree work. Reading these counters does not scan the document.
+struct RenderingFrameWork {
+  components::StyleCascadeCounters styleCascade;
+  std::chrono::nanoseconds styleTime{0};
+  std::uint64_t fullRebuilds = 0;
+  std::uint64_t retainedUpdates = 0;
+  std::uint64_t shadowTreeTeardowns = 0;
+};
+
+/// Capture cumulative style and frame preparation work for an already prepared document.
+RenderingFrameWork CaptureRenderingFrameWork(const SVGDocument& document);
+
+/// Expected fill of a prepared instance, either a solid color or a local paint server.
+using ExpectedRenderedFill = std::variant<css::RGBA, std::reference_wrapper<const SVGElement>>;
+
+/// How many visible instances of one data element have the expected fill.
+struct VisibleFillCount {
+  std::size_t instances = 0;
+  std::size_t matching = 0;
+};
+
+/**
+ * Inspect resolved fills without recomputing or rendering any instance.
+ * @param document Already prepared document.
+ * @param target Light element whose visible instances are counted.
+ * @param expected Expected solid color or local paint server. Elements belong to this document.
+ */
+VisibleFillCount CountVisibleFills(const SVGDocument& document, const SVGElement& target,
+                                   const ExpectedRenderedFill& expected);
 
 /// Disable matched-properties caching before a diagnostic or benchmark prepares its first frame.
 void DisableMatchedPropertiesCacheForTesting(SVGDocument& document);
