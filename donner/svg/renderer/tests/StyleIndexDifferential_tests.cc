@@ -1066,7 +1066,15 @@ void CompareAfterCorpusEdit(SVGDocument& actual, SVGDocument& reference, Rendere
   state.needsFullRebuild = true;
   renderer.draw(actual);
   referenceRenderer.draw(reference);
-  EXPECT_THAT(PositionedStyles(actual), ElementsAreArray(PositionedStyles(reference)));
+  const auto actualStyles = PositionedStyles(actual);
+  const auto expectedStyles = PositionedStyles(reference);
+  ASSERT_THAT(actualStyles, ::testing::SizeIs(expectedStyles.size()));
+  // The full sprite has thousands of records. Construct a diagnostic matcher only for a mismatch.
+  const auto mismatch =
+      std::mismatch(actualStyles.begin(), actualStyles.end(), expectedStyles.begin());
+  if (mismatch.first != actualStyles.end()) {
+    EXPECT_THAT(*mismatch.first, ::testing::Eq(*mismatch.second)) << mismatch.second->position;
+  }
   EXPECT_THAT(PositionedRenderInstances(actual),
               ElementsAreArray(PositionedRenderInstances(reference)));
   const RendererBitmap expected = referenceRenderer.takeSnapshot();
