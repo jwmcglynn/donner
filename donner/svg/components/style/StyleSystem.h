@@ -759,6 +759,9 @@ public:
    */
   std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle) const;
 
+  /// Number of stylesheet source indices constructed on this thread.
+  static std::size_t StylesheetSourceIndexBuildsForTesting();
+
   /// Map a decoded range in one embedded stylesheet to original document bytes.
   std::optional<SourceRange> mapStylesheetSourceRange(Registry& registry, Entity stylesheetEntity,
                                                       const SourceRange& cssRange) const;

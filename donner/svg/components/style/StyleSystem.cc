@@ -25,6 +25,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLNodeTypeComponent.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/XMLSourceStore.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
@@ -3302,31 +3303,37 @@ CustomPropertyWinner FindLocalCustomProperty(const Registry& registry, Entity tr
   return search.winner;
 }
 
-std::optional<SourceRange> MapStylesheetText(const xml::XMLNode& node, std::string_view css,
-                                             std::size_t start, std::size_t end) {
-  // Recover the exact XML text chunk for the CSS token. A token split between chunks
-  // has no contiguous document range.
-  std::size_t offset = 0;
-  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
-    if (child->type() != xml::XMLNode::Type::Data && child->type() != xml::XMLNode::Type::CData) {
-      continue;
-    }
-    const auto chunk = child->value();
-    if (!chunk) {
-      continue;
-    }
-    if (start >= offset && end - offset <= chunk->size()) {
-      if (css.substr(offset, chunk->size()) != std::string_view(*chunk)) {
-        return std::nullopt;
-      }
-      return child->mapDecodedTextRange(
-          {FileOffset::Offset(start - offset), FileOffset::Offset(end - offset)});
-    }
-    offset += chunk->size();
+struct StylesheetSourceIndexCache {
+  std::weak_ptr<xml::XMLSourceStore> source;
+  std::uint64_t sourceVersion = 0;
+  std::uint64_t stylesheetRevision = 0;
+  Entity entity = entt::null;
+  std::optional<xml::XMLDecodedTextSourceMap> mapping;
+  std::size_t builds = 0;
+};
+
+StylesheetSourceIndexCache& SourceIndexCache() {
+  thread_local StylesheetSourceIndexCache cache;
+  return cache;
+}
+
+const xml::XMLDecodedTextSourceMap* MapForStylesheet(Registry& registry, Entity entity,
+                                                     const StylesheetComponent& sheet) {
+  const auto* document = registry.ctx().find<xml::components::XMLDocumentContext>();
+  const auto& source = document->sourceStoreHolder->store;
+  auto& cache = SourceIndexCache();
+  const auto version = source->sourceVersion();
+  if (cache.source.lock() != source || cache.sourceVersion != version ||
+      cache.stylesheetRevision != sheet.contentRevision() || cache.entity != entity) {
+    const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
+    cache.source = source;
+    cache.sourceVersion = version;
+    cache.stylesheetRevision = sheet.contentRevision();
+    cache.entity = entity;
+    cache.mapping = node ? node->decodedTextSourceMap(sheet.text) : std::nullopt;
+    ++cache.builds;
   }
-  return offset == 0
-             ? node.mapProjectedTextRange(css, {FileOffset::Offset(start), FileOffset::Offset(end)})
-             : std::nullopt;
+  return cache.mapping ? &*cache.mapping : nullptr;
 }
 
 bool HasCurrentSourceProjection(const Registry& registry) {
@@ -3346,8 +3353,8 @@ std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity
   if (!start || !end || *end <= *start || *end > sheet->text.size()) {
     return std::nullopt;
   }
-  const auto node = xml::XMLNode::TryCast(EntityHandle(registry, stylesheetEntity));
-  return node ? MapStylesheetText(*node, sheet->text, *start, *end) : std::nullopt;
+  const auto* mapping = MapForStylesheet(registry, stylesheetEntity, *sheet);
+  return mapping ? mapping->mapRange(cssRange) : std::nullopt;
 }
 
 std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
@@ -3380,6 +3387,10 @@ bool CanTraceCustomProperty(const Registry& registry, EntityHandle handle, std::
 }
 
 }  // namespace
+
+std::size_t StyleSystem::StylesheetSourceIndexBuildsForTesting() {
+  return SourceIndexCache().builds;
+}
 
 std::optional<SourceRange> StyleSystem::mapStylesheetSourceRange(
     Registry& registry, Entity stylesheetEntity, const SourceRange& cssRange) const {

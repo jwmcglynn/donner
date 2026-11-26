@@ -24,6 +24,36 @@ struct XMLAttributeSourceLocation {
   char quote = '"';        ///< Quote delimiter used for the value.
 };
 
+/// Immutable mapping from projected decoded XML text back to authored source bytes.
+class XMLDecodedTextSourceMap {
+public:
+  /// Map a range entirely in one original XML text chunk.
+  /// @param range Half-open decoded byte range.
+  /// @return Original source range when the boundaries have exact authored locations.
+  std::optional<SourceRange> mapRange(const SourceRange& range) const;
+
+private:
+  friend class XMLNode;
+
+  struct Run {
+    std::size_t decodedStart;
+    std::size_t decodedEnd;
+    std::size_t sourceStart;
+    std::size_t sourceEnd;
+  };
+  struct Chunk {
+    std::size_t decodedStart;
+    std::size_t decodedEnd;
+    std::vector<Run> runs;
+  };
+
+  void addChunk(std::string_view source, const std::optional<SourceRange>& authored,
+                std::string_view decoded, std::size_t start);
+  static std::optional<FileOffset> mapBoundary(const Chunk& chunk, std::size_t offset);
+
+  std::vector<Chunk> chunks_;
+};
+
 /**
  * Represents an XML node, such as an element, text, or comment, belonging to an
  * \ref donner::xml::XMLDocument. See \ref donner::xml::XMLNode::Type for the node types.
@@ -372,6 +402,11 @@ public:
    */
   std::optional<SourceRange> mapProjectedTextRange(std::string_view decodedText,
                                                    const SourceRange& decodedRange) const;
+
+  /// Index the exact authored locations of this element's projected text for repeated lookups.
+  /// @param decodedText Complete projected value from the consumer, in decoded byte order.
+  /// @return Source map when the element and its original text projection agree.
+  std::optional<XMLDecodedTextSourceMap> decodedTextSourceMap(std::string_view decodedText) const;
 
   /**
    * Store source metadata for an attribute using the document source store.

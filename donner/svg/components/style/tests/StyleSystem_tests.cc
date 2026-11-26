@@ -460,6 +460,65 @@ TEST_F(StyleSystemTest, StylesheetSourceMapMapsRuleBackToSvgSource) {
   EXPECT_EQ(SourceSlice(document.source(), *mappedRule), ".cls { fill: red; }");
 }
 
+TEST_F(StyleSystemTest, StylesheetSourceIndexBuildsOnceForManyAnnotatedRanges) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><g id='x'/><style>";
+  constexpr std::size_t kRules = 256;
+  for (std::size_t i = 0; i < kRules; ++i) {
+    source += "rect { fill: red; stroke: blue; --raw: 'text'; }\n";
+  }
+  source += "</style></svg>";
+  auto document = ParseSVG(source);
+  const auto starts = StyleSystem::StylesheetSourceIndexBuildsForTesting();
+  const auto rules = CollectStylesheetRules(document);
+  ASSERT_THAT(rules, testing::SizeIs(kRules));
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 1);
+
+  const auto oldRange = rules.back().ruleSourceRange;
+  ASSERT_THAT(oldRange, testing::Optional(testing::_));
+  EXPECT_EQ(SourceSlice(document.source(), *oldRange),
+            "rect { fill: red; stroke: blue; --raw: 'text'; }");
+  const std::size_t idOffset = source.find("id='x'") + std::string_view("id='").size();
+  const auto delta = document.applySourceEdit({
+      .range = {FileOffset::Offset(idOffset), FileOffset::Offset(idOffset + 1)},
+      .replacement = "shifted",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(delta.applied);
+  const auto shifted = CollectStylesheetRules(document);
+  ASSERT_THAT(shifted, testing::SizeIs(kRules));
+  ASSERT_THAT(shifted.back().ruleSourceRange, testing::Optional(testing::_));
+  EXPECT_EQ(*shifted.back().ruleSourceRange->start.offset, *oldRange->start.offset + 6);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2);
+}
+
+TEST_F(StyleSystemTest, StylesheetSourceIndexKeepsEncodedAndCDataChunksDistinct) {
+  auto document = ParseSVG(R"svg(<svg xmlns='http://www.w3.org/2000/svg'>
+<style>rect { --x: '&amp;'; fill: red; }<![CDATA[circle { --x: '<raw&>'; stroke: blue; }]]></style>
+</svg>)svg");
+  const auto starts = StyleSystem::StylesheetSourceIndexBuildsForTesting();
+  const auto rules = CollectStylesheetRules(document);
+  ASSERT_THAT(rules, testing::SizeIs(2));
+  ASSERT_THAT(rules[0].ruleSourceRange, testing::Optional(testing::_));
+  ASSERT_THAT(rules[1].ruleSourceRange, testing::Optional(testing::_));
+  EXPECT_EQ(SourceSlice(document.source(), *rules[0].ruleSourceRange),
+            "rect { --x: '&amp;'; fill: red; }");
+  EXPECT_EQ(SourceSlice(document.source(), *rules[1].ruleSourceRange),
+            "circle { --x: '<raw&>'; stroke: blue; }");
+  ASSERT_THAT(rules[0].stylesheetElement, testing::Optional(testing::_));
+  ASSERT_THAT(rules[0].ruleCssRange, testing::Optional(testing::_));
+  ASSERT_THAT(rules[1].ruleCssRange, testing::Optional(testing::_));
+  EXPECT_THAT(MapStylesheetSourceRange(*rules[0].stylesheetElement,
+                                       {rules[0].ruleCssRange->start, rules[1].ruleCssRange->end}),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 1);
+
+  auto stylesheet = rules[0].stylesheetElement;
+  stylesheet->setContents("ellipse { fill: green; }");
+  EXPECT_THAT(MapStylesheetSourceRange(*stylesheet, {FileOffset::Offset(0), FileOffset::Offset(7)}),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2);
+}
+
 TEST_F(StyleSystemTest, StylesheetQueryIncludesUserAgentRulesOnlyWhenRequested) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
