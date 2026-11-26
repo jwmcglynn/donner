@@ -22,41 +22,49 @@ void PrintTo(const Coordinates& coords, std::ostream* os) {
 }
 
 void PrintTo(ColorIndex color, std::ostream* os) {
-  switch (color) {
-    case ColorIndex::Default: *os << "Default"; return;
-    case ColorIndex::Keyword: *os << "Keyword"; return;
-    case ColorIndex::Number: *os << "Number"; return;
-    case ColorIndex::String: *os << "String"; return;
-    case ColorIndex::CharLiteral: *os << "CharLiteral"; return;
-    case ColorIndex::Punctuation: *os << "Punctuation"; return;
-    case ColorIndex::Identifier: *os << "Identifier"; return;
-    case ColorIndex::KnownIdentifier: *os << "KnownIdentifier"; return;
-    case ColorIndex::Comment: *os << "Comment"; return;
-    case ColorIndex::MultiLineComment: *os << "MultiLineComment"; return;
-    case ColorIndex::Background: *os << "Background"; return;
-    case ColorIndex::Cursor: *os << "Cursor"; return;
-    case ColorIndex::Selection: *os << "Selection"; return;
-    case ColorIndex::ErrorMarker: *os << "ErrorMarker"; return;
-    case ColorIndex::Breakpoint: *os << "Breakpoint"; return;
-    case ColorIndex::BreakpointOutline: *os << "BreakpointOutline"; return;
-    case ColorIndex::CurrentLineIndicator: *os << "CurrentLineIndicator"; return;
-    case ColorIndex::CurrentLineIndicatorOutline: *os << "CurrentLineIndicatorOutline"; return;
-    case ColorIndex::LineNumber: *os << "LineNumber"; return;
-    case ColorIndex::CurrentLineFill: *os << "CurrentLineFill"; return;
-    case ColorIndex::CurrentLineFillInactive: *os << "CurrentLineFillInactive"; return;
-    case ColorIndex::CurrentLineEdge: *os << "CurrentLineEdge"; return;
-    case ColorIndex::ErrorMessage: *os << "ErrorMessage"; return;
-    case ColorIndex::BreakpointDisabled: *os << "BreakpointDisabled"; return;
-    case ColorIndex::UserFunction: *os << "UserFunction"; return;
-    case ColorIndex::UserType: *os << "UserType"; return;
-    case ColorIndex::UniformVariable: *os << "UniformVariable"; return;
-    case ColorIndex::GlobalVariable: *os << "GlobalVariable"; return;
-    case ColorIndex::LocalVariable: *os << "LocalVariable"; return;
-    case ColorIndex::FunctionArgument: *os << "FunctionArgument"; return;
-    case ColorIndex::Max: *os << "Max"; return;
+  static constexpr std::array names = {"Default",
+                                       "Keyword",
+                                       "Number",
+                                       "String",
+                                       "CharLiteral",
+                                       "Punctuation",
+                                       "Identifier",
+                                       "KnownIdentifier",
+                                       "Comment",
+                                       "MultiLineComment",
+                                       "Background",
+                                       "Cursor",
+                                       "Selection",
+                                       "ErrorMarker",
+                                       "Breakpoint",
+                                       "BreakpointOutline",
+                                       "CurrentLineIndicator",
+                                       "CurrentLineIndicatorOutline",
+                                       "LineNumber",
+                                       "CurrentLineFill",
+                                       "CurrentLineFillInactive",
+                                       "CurrentLineEdge",
+                                       "ErrorMessage",
+                                       "BreakpointDisabled",
+                                       "UserFunction",
+                                       "UserType",
+                                       "UniformVariable",
+                                       "GlobalVariable",
+                                       "LocalVariable",
+                                       "FunctionArgument",
+                                       "CssAtRule",
+                                       "CssSelector",
+                                       "CssCustomProperty",
+                                       "CssFunction",
+                                       "CssColor",
+                                       "Max"};
+  static_assert(names.size() == static_cast<std::size_t>(ColorIndex::Max) + 1);
+  const auto index = static_cast<std::size_t>(color);
+  if (index < names.size()) {
+    *os << names[index];
+  } else {
+    *os << "ColorIndex(" << static_cast<int>(color) << ")";
   }
-
-  *os << "ColorIndex(" << static_cast<int>(color) << ")";
 }
 
 void PrintTo(SourceEditIntentKind kind, std::ostream* os) {
@@ -2695,23 +2703,23 @@ TEST_F(TextEditorCoreTests, SvgColorizerClassifiesCssRegionsWithCssTokenSemantic
 
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("rect.shape")), ColorIndex::Keyword);
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find(".shape")), ColorIndex::Punctuation);
-  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("shape")), ColorIndex::Identifier);
-  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("#target")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("shape")), ColorIndex::CssSelector);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("#target")), ColorIndex::CssSelector);
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("fill: 12px")), ColorIndex::KnownIdentifier);
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("12px")), ColorIndex::Number);
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("mystery")), ColorIndex::ErrorMarker);
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("url(")), ColorIndex::String);
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("paint.svg")), ColorIndex::String);
-  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("--ink")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("--ink")), ColorIndex::CssCustomProperty);
   EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("/* note */") + 2), ColorIndex::Comment);
 
   const std::size_t inlineStroke = kSource.find("stroke: var");
   EXPECT_EQ(ColorAtByteOffset(editor_, inlineStroke), ColorIndex::KnownIdentifier);
-  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("var(--ink)")), ColorIndex::Keyword);
+  EXPECT_EQ(ColorAtByteOffset(editor_, kSource.find("var(--ink)")), ColorIndex::CssFunction);
   const std::size_t inlineUnknown = kSource.find("unknown: 2");
   EXPECT_EQ(ColorAtByteOffset(editor_, inlineUnknown), ColorIndex::ErrorMarker);
   const std::size_t presentationValue = kSource.find("rgb(1, 2, 3)");
-  EXPECT_EQ(ColorAtByteOffset(editor_, presentationValue), ColorIndex::Keyword);
+  EXPECT_EQ(ColorAtByteOffset(editor_, presentationValue), ColorIndex::CssFunction);
   EXPECT_EQ(ColorAtByteOffset(editor_, presentationValue + 4), ColorIndex::Number);
 }
 
@@ -2775,7 +2783,7 @@ TEST_F(TextEditorCoreTests, CssColorsUseSourceBytesAcrossTabsAndUtf8) {
   editor_.setText(source);
   editor_.colorizeInternal();
   EXPECT_EQ(ColorAtByteOffset(editor_, source.find("café")), ColorIndex::Comment);
-  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("été")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("été")), ColorIndex::CssSelector);
   EXPECT_EQ(ColorAtByteOffset(editor_, source.find("fill")), ColorIndex::KnownIdentifier);
   EXPECT_EQ(ColorAtByteOffset(editor_, source.find("12px")), ColorIndex::Number);
 }
@@ -2794,7 +2802,7 @@ TEST_F(TextEditorCoreTests, CssColorsMapDecodedStringsAndReferencesBackToSource)
   for (std::size_t i = source.find("F&#73;"); i < source.find("LL:") + 2; ++i) {
     EXPECT_EQ(ColorAtByteOffset(editor_, i), ColorIndex::KnownIdentifier);
   }
-  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("--MiXeD")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("--MiXeD")), ColorIndex::CssCustomProperty);
 }
 
 TEST_F(TextEditorCoreTests, CssColorsFollowScopedSvgNamespaceAndCdata) {
@@ -2867,6 +2875,31 @@ TEST_F(TextEditorCoreTests, LaterXmlColorBatchesReuseTheCssOverlay) {
   editor_.applyExternalSourceEdit(fill, 4, "stroke");
   editor_.colorizeInternal();
   EXPECT_EQ(ColorAtByteOffset(editor_, fill), ColorIndex::KnownIdentifier);
+}
+
+TEST_F(TextEditorCoreTests, SvgAndCssDistinguishMarkupReferencesAndFunctions) {
+  constexpr std::string_view source = R"SVG(<svg id="aurora" viewBox="0 0 90 60">
+<style>@import url("palette.css"); .ribbon { --glow: #76e6c5; fill: url(#paint);
+stroke: var(--glow); stroke-width: calc(12px - 10px); }</style>
+<linearGradient id="paint"/></svg>)SVG";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  for (const auto& [text, role] : std::initializer_list<std::pair<std::string_view, ColorIndex>>{
+           {"linearGradient", ColorIndex::Keyword},
+           {"viewBox", ColorIndex::KnownIdentifier},
+           {"aurora", ColorIndex::String},
+           {"@import", ColorIndex::CssAtRule},
+           {"ribbon", ColorIndex::CssSelector},
+           {"--glow", ColorIndex::CssCustomProperty},
+           {"#76e6c5", ColorIndex::CssColor},
+           {"url(#paint)", ColorIndex::String},
+           {"var(", ColorIndex::CssFunction},
+           {"calc(", ColorIndex::CssFunction},
+           {"12px", ColorIndex::Number}}) {
+    SCOPED_TRACE(text);
+    EXPECT_THAT(ColorAtByteOffset(editor_, source.find(text)), testing::Eq(role));
+  }
 }
 
 }  // namespace donner::editor

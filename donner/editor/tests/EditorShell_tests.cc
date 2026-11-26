@@ -10664,6 +10664,69 @@ svg::RendererBitmap CropSuggestionWindow(const svg::RendererBitmap& image, ImRec
 
 }  // namespace
 
+TEST(EditorShellTest, SvgAndCssSourcePaletteScreenshot) {
+  constexpr std::string_view kSource = R"SVG(<svg xmlns="http://www.w3.org/2000/svg"
+     class="aurora" viewBox="0 0 480 240">
+  <style>
+    @import url("palette.css") layer(base);
+
+    .aurora {
+      --glow: #76e6c5;
+      --edge: #ffab85;
+    }
+
+    .ribbon {
+      fill: url(#spectrum);
+      stroke: var(--edge);
+      stroke-width: 3px;
+      stroke-dasharray: 8px 4px;
+      stroke-dashoffset: 2px;
+      stroke-dashoffset: calc(12px - 10px);
+    }
+  </style>
+
+  <defs>
+    <linearGradient id="spectrum" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7068df"/>
+      <stop offset="100%" stop-color="var(--glow)"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(20 16)">
+    <path class="ribbon" d="M0 116 Q96 12 210 80 T440 50 L440 170 Q180 92 0 180 Z"/>
+  </g>
+</svg>)SVG";
+  constexpr int kWidth = 760;
+  constexpr int kHeight = 475;
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "SVG and CSS source palette",
+      .initialWidth = kWidth,
+      .initialHeight = kHeight,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  }));
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  TextEditor& editor = EditorShellTestAccess::Source(shell);
+  editor.setText(kSource);
+  editor.setShowWhitespaces(false);
+  editor.setCursorPosition(Coordinates(0, 0));
+  const auto paint = [&] {
+    window.beginFrame();
+    EditorShellTestAccess::RenderSourcePane(shell, 0, kHeight, kWidth, window.editorFonts().code);
+  };
+  paint();
+  window.endFrame();
+  paint();
+  const auto pixels = window.endFrameAndReadPixels();
+  ASSERT_FALSE(pixels.empty());
+  EXPECT_THAT(editor.getText(), testing::Eq(kSource));
+  WriteEyedropperScreenshot(pixels, "svg_css_source_palette.png");
+}
+
 TEST(EditorShellTest, CssSourceColoringAndCompletionScreenshot) {
   gui::EditorWindow window(TestWindowOptions({
       .title = "CSS source coloring and completion screenshot",

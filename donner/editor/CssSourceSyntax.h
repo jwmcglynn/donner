@@ -51,7 +51,8 @@ void VisitDecodedCssText(std::string_view raw,
 
 /// Locate every CSS-bearing region in SVG/XML source, in source order.
 /// @param source SVG/XML source bytes.
-std::vector<CssSourceRegion> FindSvgCssSourceRegions(std::string_view source);
+std::vector<CssSourceRegion> FindSvgCssSourceRegions(
+    std::string_view source, const std::function<void(CssColorSpan)>& paintMarkup = {});
 
 /// Collect distinct authored custom property names from stylesheets and style attributes.
 /// @param source SVG/XML source bytes.

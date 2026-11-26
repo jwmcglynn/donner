@@ -58,13 +58,71 @@ struct NamespaceChange {
   std::optional<bool> previous;
 };
 
+// Preserve numeric and path tokenization inside SVG coordinate lists.
+bool HasSvgNumericGrammar(std::string_view name) {
+  static constexpr std::string_view kAttributes[] = {"d",
+                                                     "points",
+                                                     "viewBox",
+                                                     "transform",
+                                                     "gradientTransform",
+                                                     "patternTransform",
+                                                     "x",
+                                                     "y",
+                                                     "x1",
+                                                     "y1",
+                                                     "x2",
+                                                     "y2",
+                                                     "cx",
+                                                     "cy",
+                                                     "r",
+                                                     "rx",
+                                                     "ry",
+                                                     "offset",
+                                                     "width",
+                                                     "height",
+                                                     "pathLength"};
+  return std::ranges::find(kAttributes, name) != std::end(kAttributes);
+}
+
+void PaintMarkupToken(const XMLToken& token, std::string_view source, std::string_view attribute,
+                      const std::function<void(CssColorSpan)>& paint) {
+  const auto start = TokenStart(token);
+  const auto end = TokenEnd(token);
+  ColorIndex role = ColorIndex::Default;
+  switch (token.type) {
+    case XMLTokenType::TagName: role = ColorIndex::Keyword; break;
+    case XMLTokenType::AttributeName: role = ColorIndex::KnownIdentifier; break;
+    case XMLTokenType::TagOpen:
+    case XMLTokenType::TagClose:
+    case XMLTokenType::TagSelfClose: role = ColorIndex::Punctuation; break;
+    case XMLTokenType::Comment: role = ColorIndex::Comment; break;
+    case XMLTokenType::AttributeValue: {
+      if (const auto range = QuotedValueRange(token, source)) {
+        paint({start, range->first, ColorIndex::Punctuation});
+        paint({range->first, range->second,
+               HasSvgNumericGrammar(attribute) ? ColorIndex::Default : ColorIndex::String});
+        paint({range->second, end, ColorIndex::Punctuation});
+        return;
+      }
+      break;
+    }
+    default: break;
+  }
+  paint({start, end, role});
+}
+
 /// Read namespace scopes from the same token stream as the source editor. All views borrow source.
 class RegionReader {
 public:
   explicit RegionReader(std::string_view source) : source_(source) {}
 
-  std::vector<CssSourceRegion> read() {
-    xml::Tokenize(source_, [&](XMLToken token) { accept(token); });
+  std::vector<CssSourceRegion> read(const std::function<void(CssColorSpan)>& paintMarkup) {
+    xml::Tokenize(source_, [&](XMLToken token) {
+      if (paintMarkup) {
+        PaintMarkupToken(token, source_, attribute_, paintMarkup);
+      }
+      accept(token);
+    });
     finishStyleText(source_.size());
     if (!attributes_.empty() && !closing_ && svgElement()) {
       std::ranges::move(attributes_, std::back_inserter(regions_));
@@ -235,10 +293,6 @@ private:
   bool skipTag_ = false;
 };
 
-std::vector<CssSourceRegion> FindRegions(std::string_view source) {
-  return RegionReader(source).read();
-}
-
 bool IsKnownProperty(std::string_view name) {
   const auto names = svg::PropertyRegistry::propertyNames();
   return std::ranges::any_of(
@@ -280,7 +334,7 @@ ColorIndex DeclarationNameColor(std::string_view name, const CssState& state) {
                : ColorIndex::KnownIdentifier;
   }
   if (name.starts_with("--")) {
-    return ColorIndex::Identifier;
+    return ColorIndex::CssCustomProperty;
   }
   return IsKnownProperty(name) ? ColorIndex::KnownIdentifier : ColorIndex::ErrorMarker;
 }
@@ -289,14 +343,14 @@ ColorIndex IdentColor(const Token::Ident& ident, CssState& state) {
   const std::string_view name = ident.value;
   if (state.classNameNext) {
     state.classNameNext = false;
-    return ColorIndex::Identifier;
+    return ColorIndex::CssSelector;
   }
   switch (state.mode) {
     case CssMode::SelectorPrelude: return ColorIndex::Keyword;
-    case CssMode::AtRulePrelude: return ColorIndex::Identifier;
+    case CssMode::AtRulePrelude: return ColorIndex::CssSelector;
     case CssMode::DeclarationName: return DeclarationNameColor(name, state);
     case CssMode::DeclarationValue:
-      return name.starts_with("--") ? ColorIndex::Identifier : ColorIndex::Keyword;
+      return name.starts_with("--") ? ColorIndex::CssCustomProperty : ColorIndex::Identifier;
   }
   return ColorIndex::Default;
 }
@@ -368,15 +422,15 @@ std::optional<ColorIndex> NamedTokenColor(const Token& token, CssState& state) {
       state.stringFunctionDepth = state.parenthesisDepth;
       return ColorIndex::String;
     }
-    return ColorIndex::Keyword;
+    return ColorIndex::CssFunction;
   }
   if (const auto* at = token.tryGet<Token::AtKeyword>()) {
     state.mode = CssMode::AtRulePrelude;
     state.atRuleName = StringUtils::ToLowerAscii(at->value);
-    return ColorIndex::Keyword;
+    return ColorIndex::CssAtRule;
   }
   if (token.is<Token::Hash>()) {
-    return ColorIndex::Identifier;
+    return state.mode == CssMode::DeclarationValue ? ColorIndex::CssColor : ColorIndex::CssSelector;
   }
   if (const auto* delim = token.tryGet<Token::Delim>()) {
     state.classNameNext = state.mode == CssMode::SelectorPrelude && delim->value == '.';
@@ -433,8 +487,9 @@ ColorIndex TokenColor(const Token& token, CssState& state) {
 
 }  // namespace
 
-std::vector<CssSourceRegion> FindSvgCssSourceRegions(std::string_view source) {
-  return FindRegions(source);
+std::vector<CssSourceRegion> FindSvgCssSourceRegions(
+    std::string_view source, const std::function<void(CssColorSpan)>& paintMarkup) {
+  return RegionReader(source).read(paintMarkup);
 }
 
 namespace {
