@@ -17,6 +17,7 @@
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/components/filter/FilterEffect.h"
@@ -100,44 +101,58 @@ ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components)
   return err;
 }
 
-ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-
-      if (value.equalsLowercase("inline")) {
-        return Display::Inline;
-      } else if (value.equalsLowercase("block")) {
-        return Display::Block;
-      } else if (value.equalsLowercase("list-item")) {
-        return Display::ListItem;
-      } else if (value.equalsLowercase("inline-block")) {
-        return Display::InlineBlock;
-      } else if (value.equalsLowercase("table")) {
-        return Display::Table;
-      } else if (value.equalsLowercase("inline-table")) {
-        return Display::InlineTable;
-      } else if (value.equalsLowercase("table-row-group")) {
-        return Display::TableRowGroup;
-      } else if (value.equalsLowercase("table-header-group")) {
-        return Display::TableHeaderGroup;
-      } else if (value.equalsLowercase("table-footer-group")) {
-        return Display::TableFooterGroup;
-      } else if (value.equalsLowercase("table-row")) {
-        return Display::TableRow;
-      } else if (value.equalsLowercase("table-column-group")) {
-        return Display::TableColumnGroup;
-      } else if (value.equalsLowercase("table-column")) {
-        return Display::TableColumn;
-      } else if (value.equalsLowercase("table-cell")) {
-        return Display::TableCell;
-      } else if (value.equalsLowercase("table-caption")) {
-        return Display::TableCaption;
-      } else if (value.equalsLowercase("none")) {
-        return Display::None;
-      }
+template <typename Value, std::size_t N>
+std::optional<Value> LookupKeyword(const RcString& identifier,
+                                   const std::pair<std::string_view, Value> (&keywords)[N]) {
+  for (const auto& [keyword, value] : keywords) {
+    if (identifier.equalsLowercase(keyword)) {
+      return value;
     }
+  }
+  return std::nullopt;
+}
+
+template <typename Value, std::size_t N>
+std::optional<Value> ParseKeyword(std::span<const css::ComponentValue> components,
+                                  const std::pair<std::string_view, Value> (&keywords)[N]) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      return LookupKeyword(ident->value, keywords);
+    }
+  }
+  return std::nullopt;
+}
+
+template <const auto& Keywords>
+constexpr auto KeywordNames = [] {
+  std::array<std::string_view, std::size(Keywords)> names{};
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    names[i] = Keywords[i].first;
+  }
+  return names;
+}();
+
+constexpr std::pair<std::string_view, Display> kDisplayKeywords[] = {
+    {"inline", Display::Inline},
+    {"block", Display::Block},
+    {"list-item", Display::ListItem},
+    {"inline-block", Display::InlineBlock},
+    {"table", Display::Table},
+    {"inline-table", Display::InlineTable},
+    {"table-row-group", Display::TableRowGroup},
+    {"table-header-group", Display::TableHeaderGroup},
+    {"table-footer-group", Display::TableFooterGroup},
+    {"table-row", Display::TableRow},
+    {"table-column-group", Display::TableColumnGroup},
+    {"table-column", Display::TableColumn},
+    {"table-cell", Display::TableCell},
+    {"table-caption", Display::TableCaption},
+    {"none", Display::None},
+};
+
+ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kDisplayKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -146,15 +161,14 @@ ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> component
   return err;
 }
 
+constexpr std::pair<std::string_view, Direction> kDirectionKeywords[] = {
+    {"ltr", Direction::Ltr},
+    {"rtl", Direction::Rtl},
+};
+
 ParseResult<Direction> ParseDirection(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("ltr")) {
-        return Direction::Ltr;
-      } else if (ident->value.equalsLowercase("rtl")) {
-        return Direction::Rtl;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kDirectionKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -163,23 +177,18 @@ ParseResult<Direction> ParseDirection(std::span<const css::ComponentValue> compo
   return err;
 }
 
+constexpr std::pair<std::string_view, UnicodeBidi> kUnicodeBidiKeywords[] = {
+    {"normal", UnicodeBidi::Normal},
+    {"embed", UnicodeBidi::Embed},
+    {"isolate", UnicodeBidi::Isolate},
+    {"bidi-override", UnicodeBidi::BidiOverride},
+    {"isolate-override", UnicodeBidi::IsolateOverride},
+    {"plaintext", UnicodeBidi::Plaintext},
+};
+
 ParseResult<UnicodeBidi> ParseUnicodeBidi(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      constexpr std::pair<std::string_view, UnicodeBidi> kKeywords[] = {
-          {"normal", UnicodeBidi::Normal},
-          {"embed", UnicodeBidi::Embed},
-          {"isolate", UnicodeBidi::Isolate},
-          {"bidi-override", UnicodeBidi::BidiOverride},
-          {"isolate-override", UnicodeBidi::IsolateOverride},
-          {"plaintext", UnicodeBidi::Plaintext},
-      };
-      for (const auto& [keyword, value] : kKeywords) {
-        if (ident->value.equalsLowercase(keyword)) {
-          return value;
-        }
-      }
-    }
+  if (const auto value = ParseKeyword(components, kUnicodeBidiKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -188,20 +197,15 @@ ParseResult<UnicodeBidi> ParseUnicodeBidi(std::span<const css::ComponentValue> c
   return err;
 }
 
-ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, TextAnchor> kTextAnchorKeywords[] = {
+    {"start", TextAnchor::Start},
+    {"middle", TextAnchor::Middle},
+    {"end", TextAnchor::End},
+};
 
-      if (value.equalsLowercase("start")) {
-        return TextAnchor::Start;
-      } else if (value.equalsLowercase("middle")) {
-        return TextAnchor::Middle;
-      } else if (value.equalsLowercase("end")) {
-        return TextAnchor::End;
-      }
-    }
+ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kTextAnchorKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -211,17 +215,16 @@ ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> com
 }
 
 /// Parse CSS isolation property: auto | isolate.
+constexpr std::pair<std::string_view, Isolation> kIsolationKeywords[] = {
+    {"auto", Isolation::Auto},
+    {"isolate", Isolation::Isolate},
+};
+
 ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("auto")) {
-        return Isolation::Auto;
-      }
-      if (ident->value.equalsLowercase("isolate")) {
-        return Isolation::Isolate;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kIsolationKeywords)) {
+    return *value;
   }
+
   ParseDiagnostic err;
   err.reason = "Invalid isolation value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
@@ -233,32 +236,21 @@ ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> compo
 /// https://www.w3.org/TR/css-values-4/#keywords (though the SVG 1.1 spec spelling is
 /// camelCase); minifiers routinely lowercase the ident. See
 /// https://drafts.csswg.org/css-images/#the-image-rendering.
+constexpr std::pair<std::string_view, ImageRendering> kImageRenderingKeywords[] = {
+    {"auto", ImageRendering::Auto},
+    {"smooth", ImageRendering::Smooth},
+    {"crisp-edges", ImageRendering::CrispEdges},
+    {"pixelated", ImageRendering::Pixelated},
+    {"high-quality", ImageRendering::HighQuality},
+    {"optimizespeed", ImageRendering::OptimizeSpeed},
+    {"optimizequality", ImageRendering::OptimizeQuality},
+};
+
 ParseResult<ImageRendering> ParseImageRendering(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("auto")) {
-        return ImageRendering::Auto;
-      }
-      if (ident->value.equalsLowercase("smooth")) {
-        return ImageRendering::Smooth;
-      }
-      if (ident->value.equalsLowercase("crisp-edges")) {
-        return ImageRendering::CrispEdges;
-      }
-      if (ident->value.equalsLowercase("pixelated")) {
-        return ImageRendering::Pixelated;
-      }
-      if (ident->value.equalsLowercase("high-quality")) {
-        return ImageRendering::HighQuality;
-      }
-      if (ident->value.equalsLowercase("optimizespeed")) {
-        return ImageRendering::OptimizeSpeed;
-      }
-      if (ident->value.equalsLowercase("optimizequality")) {
-        return ImageRendering::OptimizeQuality;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kImageRenderingKeywords)) {
+    return *value;
   }
+
   ParseDiagnostic err;
   err.reason = "Invalid image-rendering value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
@@ -567,41 +559,28 @@ std::optional<ParseDiagnostic> ApplyTextDecoration(PropertyRegistry& registry,
   return std::nullopt;
 }
 
+constexpr std::pair<std::string_view, DominantBaseline> kDominantBaselineKeywords[] = {
+    // The SVG 1.1 text-before-edge and text-after-edge names alias CSS baselines.
+    {"auto", DominantBaseline::Auto},
+    {"text-bottom", DominantBaseline::TextBottom},
+    {"text-after-edge", DominantBaseline::TextBottom},
+    {"alphabetic", DominantBaseline::Alphabetic},
+    {"ideographic", DominantBaseline::Ideographic},
+    {"middle", DominantBaseline::Middle},
+    {"central", DominantBaseline::Central},
+    {"mathematical", DominantBaseline::Mathematical},
+    {"hanging", DominantBaseline::Hanging},
+    {"text-top", DominantBaseline::TextTop},
+    {"text-before-edge", DominantBaseline::TextTop},
+    {"use-script", DominantBaseline::UseScript},
+    {"no-change", DominantBaseline::NoChange},
+    {"reset-size", DominantBaseline::ResetSize},
+};
+
 ParseResult<DominantBaseline> ParseDominantBaseline(
     std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-
-      if (value.equalsLowercase("auto")) {
-        return DominantBaseline::Auto;
-      } else if (value.equalsLowercase("text-bottom") || value.equalsLowercase("text-after-edge")) {
-        // `text-after-edge` is the SVG 1.1 name for CSS Inline 3's `text-bottom`.
-        return DominantBaseline::TextBottom;
-      } else if (value.equalsLowercase("alphabetic")) {
-        return DominantBaseline::Alphabetic;
-      } else if (value.equalsLowercase("ideographic")) {
-        return DominantBaseline::Ideographic;
-      } else if (value.equalsLowercase("middle")) {
-        return DominantBaseline::Middle;
-      } else if (value.equalsLowercase("central")) {
-        return DominantBaseline::Central;
-      } else if (value.equalsLowercase("mathematical")) {
-        return DominantBaseline::Mathematical;
-      } else if (value.equalsLowercase("hanging")) {
-        return DominantBaseline::Hanging;
-      } else if (value.equalsLowercase("text-top") || value.equalsLowercase("text-before-edge")) {
-        // `text-before-edge` is the SVG 1.1 name for CSS Inline 3's `text-top`.
-        return DominantBaseline::TextTop;
-      } else if (value.equalsLowercase("use-script")) {
-        return DominantBaseline::UseScript;
-      } else if (value.equalsLowercase("no-change")) {
-        return DominantBaseline::NoChange;
-      } else if (value.equalsLowercase("reset-size")) {
-        return DominantBaseline::ResetSize;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kDominantBaselineKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -616,35 +595,28 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
  * baseline"), and the SVG 1.1 `before-edge` / `after-edge` keywords map to the same baselines as
  * `text-before-edge` / `text-after-edge`, matching resvg and Chrome.
  */
+constexpr std::pair<std::string_view, DominantBaseline> kAlignmentBaselineKeywords[] = {
+    // Preserve the SVG 1.1 aliases alongside the CSS baseline names.
+    {"auto", DominantBaseline::Auto},
+    {"baseline", DominantBaseline::Auto},
+    {"text-bottom", DominantBaseline::TextBottom},
+    {"text-after-edge", DominantBaseline::TextBottom},
+    {"after-edge", DominantBaseline::TextBottom},
+    {"alphabetic", DominantBaseline::Alphabetic},
+    {"ideographic", DominantBaseline::Ideographic},
+    {"middle", DominantBaseline::Middle},
+    {"central", DominantBaseline::Central},
+    {"mathematical", DominantBaseline::Mathematical},
+    {"hanging", DominantBaseline::Hanging},
+    {"text-top", DominantBaseline::TextTop},
+    {"text-before-edge", DominantBaseline::TextTop},
+    {"before-edge", DominantBaseline::TextTop},
+};
+
 ParseResult<DominantBaseline> ParseAlignmentBaseline(
     std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-
-      if (value.equalsLowercase("auto") || value.equalsLowercase("baseline")) {
-        return DominantBaseline::Auto;
-      } else if (value.equalsLowercase("text-bottom") || value.equalsLowercase("text-after-edge") ||
-                 value.equalsLowercase("after-edge")) {
-        return DominantBaseline::TextBottom;
-      } else if (value.equalsLowercase("alphabetic")) {
-        return DominantBaseline::Alphabetic;
-      } else if (value.equalsLowercase("ideographic")) {
-        return DominantBaseline::Ideographic;
-      } else if (value.equalsLowercase("middle")) {
-        return DominantBaseline::Middle;
-      } else if (value.equalsLowercase("central")) {
-        return DominantBaseline::Central;
-      } else if (value.equalsLowercase("mathematical")) {
-        return DominantBaseline::Mathematical;
-      } else if (value.equalsLowercase("hanging")) {
-        return DominantBaseline::Hanging;
-      } else if (value.equalsLowercase("text-top") || value.equalsLowercase("text-before-edge") ||
-                 value.equalsLowercase("before-edge")) {
-        return DominantBaseline::TextTop;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kAlignmentBaselineKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -654,60 +626,30 @@ ParseResult<DominantBaseline> ParseAlignmentBaseline(
 }
 
 /// Parse mix-blend-mode CSS keyword values.
+constexpr std::pair<std::string_view, MixBlendMode> kMixBlendModeKeywords[] = {
+    {"normal", MixBlendMode::Normal},
+    {"multiply", MixBlendMode::Multiply},
+    {"screen", MixBlendMode::Screen},
+    {"overlay", MixBlendMode::Overlay},
+    {"darken", MixBlendMode::Darken},
+    {"lighten", MixBlendMode::Lighten},
+    {"color-dodge", MixBlendMode::ColorDodge},
+    {"color-burn", MixBlendMode::ColorBurn},
+    {"hard-light", MixBlendMode::HardLight},
+    {"soft-light", MixBlendMode::SoftLight},
+    {"difference", MixBlendMode::Difference},
+    {"exclusion", MixBlendMode::Exclusion},
+    {"hue", MixBlendMode::Hue},
+    {"saturation", MixBlendMode::Saturation},
+    {"color", MixBlendMode::Color},
+    {"luminosity", MixBlendMode::Luminosity},
+};
+
 ParseResult<MixBlendMode> ParseMixBlendMode(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      const RcString& v = ident->value;
-      if (v.equalsLowercase("normal")) {
-        return MixBlendMode::Normal;
-      }
-      if (v.equalsLowercase("multiply")) {
-        return MixBlendMode::Multiply;
-      }
-      if (v.equalsLowercase("screen")) {
-        return MixBlendMode::Screen;
-      }
-      if (v.equalsLowercase("overlay")) {
-        return MixBlendMode::Overlay;
-      }
-      if (v.equalsLowercase("darken")) {
-        return MixBlendMode::Darken;
-      }
-      if (v.equalsLowercase("lighten")) {
-        return MixBlendMode::Lighten;
-      }
-      if (v.equalsLowercase("color-dodge")) {
-        return MixBlendMode::ColorDodge;
-      }
-      if (v.equalsLowercase("color-burn")) {
-        return MixBlendMode::ColorBurn;
-      }
-      if (v.equalsLowercase("hard-light")) {
-        return MixBlendMode::HardLight;
-      }
-      if (v.equalsLowercase("soft-light")) {
-        return MixBlendMode::SoftLight;
-      }
-      if (v.equalsLowercase("difference")) {
-        return MixBlendMode::Difference;
-      }
-      if (v.equalsLowercase("exclusion")) {
-        return MixBlendMode::Exclusion;
-      }
-      if (v.equalsLowercase("hue")) {
-        return MixBlendMode::Hue;
-      }
-      if (v.equalsLowercase("saturation")) {
-        return MixBlendMode::Saturation;
-      }
-      if (v.equalsLowercase("color")) {
-        return MixBlendMode::Color;
-      }
-      if (v.equalsLowercase("luminosity")) {
-        return MixBlendMode::Luminosity;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kMixBlendModeKeywords)) {
+    return *value;
   }
+
   ParseDiagnostic err;
   err.reason = "Invalid mix-blend-mode value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
@@ -716,32 +658,23 @@ ParseResult<MixBlendMode> ParseMixBlendMode(std::span<const css::ComponentValue>
 
 /// Parse writing-mode: SVG1 values (lr-tb, lr, rl-tb, rl, tb-rl, tb, tb-lr) and
 /// CSS3 values (horizontal-tb, vertical-rl, vertical-lr).
+constexpr std::pair<std::string_view, WritingMode> kWritingModeKeywords[] = {
+    // CSS Writing Modes values followed by supported SVG 1.1 aliases.
+    {"horizontal-tb", WritingMode::HorizontalTb},
+    {"vertical-rl", WritingMode::VerticalRl},
+    {"vertical-lr", WritingMode::VerticalLr},
+    {"lr-tb", WritingMode::HorizontalTb},
+    {"lr", WritingMode::HorizontalTb},
+    {"rl-tb", WritingMode::HorizontalTb},
+    {"rl", WritingMode::HorizontalTb},
+    {"tb-rl", WritingMode::VerticalRl},
+    {"tb", WritingMode::VerticalRl},
+    {"tb-lr", WritingMode::VerticalLr},
+};
+
 ParseResult<WritingMode> ParseWritingMode(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-      // CSS3 values.
-      if (value.equalsLowercase("horizontal-tb")) {
-        return WritingMode::HorizontalTb;
-      }
-      if (value.equalsLowercase("vertical-rl")) {
-        return WritingMode::VerticalRl;
-      }
-      if (value.equalsLowercase("vertical-lr")) {
-        return WritingMode::VerticalLr;
-      }
-      // SVG1 values.
-      if (value.equalsLowercase("lr-tb") || value.equalsLowercase("lr") ||
-          value.equalsLowercase("rl-tb") || value.equalsLowercase("rl")) {
-        return WritingMode::HorizontalTb;
-      }
-      if (value.equalsLowercase("tb-rl") || value.equalsLowercase("tb")) {
-        return WritingMode::VerticalRl;
-      }
-      if (value.equalsLowercase("tb-lr")) {
-        return WritingMode::VerticalLr;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kWritingModeKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -750,19 +683,15 @@ ParseResult<WritingMode> ParseWritingMode(std::span<const css::ComponentValue> c
   return err;
 }
 
+constexpr std::pair<std::string_view, TextOrientation> kTextOrientationKeywords[] = {
+    {"mixed", TextOrientation::Mixed},
+    {"upright", TextOrientation::Upright},
+    {"sideways", TextOrientation::Sideways},
+};
+
 ParseResult<TextOrientation> ParseTextOrientation(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("mixed")) {
-        return TextOrientation::Mixed;
-      }
-      if (ident->value.equalsLowercase("upright")) {
-        return TextOrientation::Upright;
-      }
-      if (ident->value.equalsLowercase("sideways")) {
-        return TextOrientation::Sideways;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kTextOrientationKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -886,20 +815,15 @@ ParseResult<Lengthd> ParseTextIndent(std::span<const css::ComponentValue> compon
   return result;
 }
 
-ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, Visibility> kVisibilityKeywords[] = {
+    {"visible", Visibility::Visible},
+    {"hidden", Visibility::Hidden},
+    {"collapse", Visibility::Collapse},
+};
 
-      if (value.equalsLowercase("visible")) {
-        return Visibility::Visible;
-      } else if (value.equalsLowercase("hidden")) {
-        return Visibility::Hidden;
-      } else if (value.equalsLowercase("collapse")) {
-        return Visibility::Collapse;
-      }
-    }
+ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kVisibilityKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -908,22 +832,16 @@ ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> com
   return err;
 }
 
-ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, Overflow> kOverflowKeywords[] = {
+    {"visible", Overflow::Visible},
+    {"hidden", Overflow::Hidden},
+    {"scroll", Overflow::Scroll},
+    {"auto", Overflow::Auto},
+};
 
-      if (value.equalsLowercase("visible")) {
-        return Overflow::Visible;
-      } else if (value.equalsLowercase("hidden")) {
-        return Overflow::Hidden;
-      } else if (value.equalsLowercase("scroll")) {
-        return Overflow::Scroll;
-      } else if (value.equalsLowercase("auto")) {
-        return Overflow::Auto;
-      }
-    }
+ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kOverflowKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -984,6 +902,23 @@ ParseResult<PaintServer> ParsePaintReference(const RcString& url,
                                 fallback.front().sourceOffset());
 }
 
+enum class PaintKeyword { None, ContextFill, ContextStroke };
+
+constexpr std::pair<std::string_view, PaintKeyword> kPaintKeywords[] = {
+    {"none", PaintKeyword::None},
+    {"context-fill", PaintKeyword::ContextFill},
+    {"context-stroke", PaintKeyword::ContextStroke},
+};
+
+PaintServer PaintForKeyword(PaintKeyword keyword) {
+  switch (keyword) {
+    case PaintKeyword::None: return PaintServer(PaintServer::None());
+    case PaintKeyword::ContextFill: return PaintServer(PaintServer::ContextFill());
+    case PaintKeyword::ContextStroke: return PaintServer(PaintServer::ContextStroke());
+  }
+  UTILS_UNREACHABLE();
+}
+
 ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
   if (components.empty()) {
     ParseDiagnostic err;
@@ -997,17 +932,7 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
     if (token.is<css::Token::Ident>()) {
       const RcString& name = token.get<css::Token::Ident>().value;
 
-      std::optional<PaintServer> result;
-
-      if (name.equalsLowercase("none")) {
-        result = PaintServer(PaintServer::None());
-      } else if (name.equalsLowercase("context-fill")) {
-        result = PaintServer(PaintServer::ContextFill());
-      } else if (name.equalsLowercase("context-stroke")) {
-        result = PaintServer(PaintServer::ContextStroke());
-      }
-
-      if (result) {
+      if (const auto keyword = LookupKeyword(name, kPaintKeywords)) {
         if (components.size() > 1) {
           ParseDiagnostic err;
           err.reason = "Unexpected tokens after paint server value";
@@ -1016,7 +941,7 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
           return err;
         }
 
-        return std::move(result.value());
+        return PaintForKeyword(*keyword);
       }
     }
   }
@@ -1037,18 +962,14 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
   return err;
 }
 
-ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, FillRule> kFillRuleKeywords[] = {
+    {"nonzero", FillRule::NonZero},
+    {"evenodd", FillRule::EvenOdd},
+};
 
-      if (value.equalsLowercase("nonzero")) {
-        return FillRule::NonZero;
-      } else if (value.equalsLowercase("evenodd")) {
-        return FillRule::EvenOdd;
-      }
-    }
+ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kFillRuleKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1057,42 +978,35 @@ ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> compone
   return err;
 }
 
+constexpr std::pair<std::string_view, ColorInterpolation> kColorInterpolationKeywords[] = {
+    {"srgb", ColorInterpolation::SRGB},
+    {"linearrgb", ColorInterpolation::LinearRGB},
+    {"auto", ColorInterpolation::Auto},
+};
+
 ParseResult<ColorInterpolation> ParseColorInterpolation(
     std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("srgb")) {
-        return ColorInterpolation::SRGB;
-      }
-      if (ident->value.equalsLowercase("linearrgb")) {
-        return ColorInterpolation::LinearRGB;
-      }
-      if (ident->value.equalsLowercase("auto")) {
-        return ColorInterpolation::Auto;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kColorInterpolationKeywords)) {
+    return *value;
   }
+
   ParseDiagnostic err;
   err.reason = "Invalid color-interpolation value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
+constexpr std::pair<std::string_view, ColorInterpolationFilters>
+    kColorInterpolationFiltersKeywords[] = {
+        {"srgb", ColorInterpolationFilters::SRGB},
+        {"linearrgb", ColorInterpolationFilters::LinearRGB},
+        {"auto", ColorInterpolationFilters::LinearRGB},
+};
+
 ParseResult<ColorInterpolationFilters> ParseColorInterpolationFilters(
     std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-
-      if (value.equalsLowercase("srgb")) {
-        return ColorInterpolationFilters::SRGB;
-      } else if (value.equalsLowercase("linearrgb")) {
-        return ColorInterpolationFilters::LinearRGB;
-      } else if (value.equalsLowercase("auto")) {
-        return ColorInterpolationFilters::LinearRGB;  // SVG spec: auto = linearRGB
-      }
-    }
+  if (const auto value = ParseKeyword(components, kColorInterpolationFiltersKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1101,18 +1015,14 @@ ParseResult<ColorInterpolationFilters> ParseColorInterpolationFilters(
   return err;
 }
 
-ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, ClipRule> kClipRuleKeywords[] = {
+    {"nonzero", ClipRule::NonZero},
+    {"evenodd", ClipRule::EvenOdd},
+};
 
-      if (value.equalsLowercase("nonzero")) {
-        return ClipRule::NonZero;
-      } else if (value.equalsLowercase("evenodd")) {
-        return ClipRule::EvenOdd;
-      }
-    }
+ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kClipRuleKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1121,15 +1031,14 @@ ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> compone
   return err;
 }
 
+constexpr std::pair<std::string_view, MaskType> kMaskTypeKeywords[] = {
+    {"luminance", MaskType::Luminance},
+    {"alpha", MaskType::Alpha},
+};
+
 ParseResult<MaskType> ParseMaskType(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("luminance")) {
-        return MaskType::Luminance;
-      } else if (ident->value.equalsLowercase("alpha")) {
-        return MaskType::Alpha;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kMaskTypeKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1138,20 +1047,15 @@ ParseResult<MaskType> ParseMaskType(std::span<const css::ComponentValue> compone
   return err;
 }
 
-ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, StrokeLinecap> kStrokeLinecapKeywords[] = {
+    {"butt", StrokeLinecap::Butt},
+    {"round", StrokeLinecap::Round},
+    {"square", StrokeLinecap::Square},
+};
 
-      if (value.equalsLowercase("butt")) {
-        return StrokeLinecap::Butt;
-      } else if (value.equalsLowercase("round")) {
-        return StrokeLinecap::Round;
-      } else if (value.equalsLowercase("square")) {
-        return StrokeLinecap::Square;
-      }
-    }
+ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kStrokeLinecapKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1160,24 +1064,15 @@ ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValu
   return err;
 }
 
-ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, StrokeLinejoin> kStrokeLinejoinKeywords[] = {
+    {"miter", StrokeLinejoin::Miter}, {"miter-clip", StrokeLinejoin::MiterClip},
+    {"round", StrokeLinejoin::Round}, {"bevel", StrokeLinejoin::Bevel},
+    {"arcs", StrokeLinejoin::Arcs},
+};
 
-      if (value.equalsLowercase("miter")) {
-        return StrokeLinejoin::Miter;
-      } else if (value.equalsLowercase("miter-clip")) {
-        return StrokeLinejoin::MiterClip;
-      } else if (value.equalsLowercase("round")) {
-        return StrokeLinejoin::Round;
-      } else if (value.equalsLowercase("bevel")) {
-        return StrokeLinejoin::Bevel;
-      } else if (value.equalsLowercase("arcs")) {
-        return StrokeLinejoin::Arcs;
-      }
-    }
+ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kStrokeLinejoinKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1822,36 +1717,23 @@ ParseResult<std::vector<FilterEffect>> ParseFilter(std::span<const css::Componen
   return effects;
 }
 
-ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, PointerEvents> kPointerEventsKeywords[] = {
+    {"auto", PointerEvents::Auto},
+    {"none", PointerEvents::None},
+    {"bounding-box", PointerEvents::BoundingBox},
+    {"visiblefill", PointerEvents::VisibleFill},
+    {"visiblepainted", PointerEvents::VisiblePainted},
+    {"visiblestroke", PointerEvents::VisibleStroke},
+    {"visible", PointerEvents::Visible},
+    {"painted", PointerEvents::Painted},
+    {"fill", PointerEvents::Fill},
+    {"stroke", PointerEvents::Stroke},
+    {"all", PointerEvents::All},
+};
 
-      if (value.equalsLowercase("auto")) {
-        return PointerEvents::Auto;
-      } else if (value.equalsLowercase("none")) {
-        return PointerEvents::None;
-      } else if (value.equalsLowercase("bounding-box")) {
-        return PointerEvents::BoundingBox;
-      } else if (value.equalsLowercase("visiblefill")) {
-        return PointerEvents::VisibleFill;
-      } else if (value.equalsLowercase("visiblepainted")) {
-        return PointerEvents::VisiblePainted;
-      } else if (value.equalsLowercase("visiblestroke")) {
-        return PointerEvents::VisibleStroke;
-      } else if (value.equalsLowercase("visible")) {
-        return PointerEvents::Visible;
-      } else if (value.equalsLowercase("painted")) {
-        return PointerEvents::Painted;
-      } else if (value.equalsLowercase("fill")) {
-        return PointerEvents::Fill;
-      } else if (value.equalsLowercase("stroke")) {
-        return PointerEvents::Stroke;
-      } else if (value.equalsLowercase("all")) {
-        return PointerEvents::All;
-      }
-    }
+ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kPointerEventsKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1905,15 +1787,8 @@ constexpr std::pair<std::string_view, CursorType> kCursorKeywords[] = {
 };
 
 ParseResult<CursorType> ParseCursorType(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-      for (const auto& [keyword, cursor] : kCursorKeywords) {
-        if (value.equalsLowercase(keyword)) {
-          return cursor;
-        }
-      }
-    }
+  if (const auto value = ParseKeyword(components, kCursorKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -1981,24 +1856,17 @@ ParseResult<Cursor> ParseCursor(std::span<const css::ComponentValue> components)
   return cursor;
 }
 
-ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    const css::ComponentValue& component = components.front();
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
+constexpr std::pair<std::string_view, VectorEffect> kVectorEffectKeywords[] = {
+    {"none", VectorEffect::None},
+    {"non-scaling-stroke", VectorEffect::NonScalingStroke},
+    {"non-scaling-size", VectorEffect::NonScalingSize},
+    {"non-rotation", VectorEffect::NonRotation},
+    {"fixed-position", VectorEffect::FixedPosition},
+};
 
-      if (value.equalsLowercase("none")) {
-        return VectorEffect::None;
-      } else if (value.equalsLowercase("non-scaling-stroke")) {
-        return VectorEffect::NonScalingStroke;
-      } else if (value.equalsLowercase("non-scaling-size")) {
-        return VectorEffect::NonScalingSize;
-      } else if (value.equalsLowercase("non-rotation")) {
-        return VectorEffect::NonRotation;
-      } else if (value.equalsLowercase("fixed-position")) {
-        return VectorEffect::FixedPosition;
-      }
-    }
+ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue> components) {
+  if (const auto value = ParseKeyword(components, kVectorEffectKeywords)) {
+    return *value;
   }
 
   ParseDiagnostic err;
@@ -2007,39 +1875,28 @@ ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue>
   return err;
 }
 
+constexpr double kMediumFontSize = 12.0;
+struct FontSizeKeyword {
+  double value;
+  Lengthd::Unit unit;
+};
+
+constexpr std::pair<std::string_view, FontSizeKeyword> kFontSizeKeywords[] = {
+    {"larger", {120, Lengthd::Unit::Percent}},
+    {"smaller", {100.0 / 1.2, Lengthd::Unit::Percent}},
+    {"xx-small", {kMediumFontSize * 3.0 / 5.0, Lengthd::Unit::Px}},
+    {"x-small", {kMediumFontSize * 3.0 / 4.0, Lengthd::Unit::Px}},
+    {"small", {kMediumFontSize * 8.0 / 9.0, Lengthd::Unit::Px}},
+    {"medium", {kMediumFontSize, Lengthd::Unit::Px}},
+    {"large", {kMediumFontSize * 6.0 / 5.0, Lengthd::Unit::Px}},
+    {"x-large", {kMediumFontSize * 3.0 / 2.0, Lengthd::Unit::Px}},
+    {"xx-large", {kMediumFontSize * 2.0, Lengthd::Unit::Px}},
+};
+
 ParseResult<Lengthd> ParseFontSizeValue(std::span<const css::ComponentValue> components,
                                         bool allowUserUnits) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("larger")) {
-        return Lengthd(120, Lengthd::Unit::Percent);
-      }
-      if (ident->value.equalsLowercase("smaller")) {
-        return Lengthd(100.0 / 1.2, Lengthd::Unit::Percent);
-      }
-      constexpr double kMediumFontSize = 12.0;
-      if (ident->value.equalsLowercase("xx-small")) {
-        return Lengthd(kMediumFontSize * 3.0 / 5.0, Lengthd::Unit::Px);
-      }
-      if (ident->value.equalsLowercase("x-small")) {
-        return Lengthd(kMediumFontSize * 3.0 / 4.0, Lengthd::Unit::Px);
-      }
-      if (ident->value.equalsLowercase("small")) {
-        return Lengthd(kMediumFontSize * 8.0 / 9.0, Lengthd::Unit::Px);
-      }
-      if (ident->value.equalsLowercase("medium")) {
-        return Lengthd(kMediumFontSize, Lengthd::Unit::Px);
-      }
-      if (ident->value.equalsLowercase("large")) {
-        return Lengthd(kMediumFontSize * 6.0 / 5.0, Lengthd::Unit::Px);
-      }
-      if (ident->value.equalsLowercase("x-large")) {
-        return Lengthd(kMediumFontSize * 3.0 / 2.0, Lengthd::Unit::Px);
-      }
-      if (ident->value.equalsLowercase("xx-large")) {
-        return Lengthd(kMediumFontSize * 2.0, Lengthd::Unit::Px);
-      }
-    }
+  if (const auto keyword = ParseKeyword(components, kFontSizeKeywords)) {
+    return Lengthd(keyword->value, keyword->unit);
   }
   auto result = parser::ParseLengthPercentage(components, allowUserUnits);
   if (!result.hasError() && (!std::isfinite(result.result().value) || result.result().value < 0)) {
@@ -2050,25 +1907,20 @@ ParseResult<Lengthd> ParseFontSizeValue(std::span<const css::ComponentValue> com
   return result;
 }
 
+// Relative weights use sentinels that the cascade resolves against the inherited value.
+constexpr std::pair<std::string_view, int> kFontWeightKeywords[] = {
+    {"normal", 400},
+    {"bold", 700},
+    {"bolder", PropertyRegistry::kFontWeightBolder},
+    {"lighter", PropertyRegistry::kFontWeightLighter},
+};
+
 ParseResult<int> ParseFontWeight(std::span<const css::ComponentValue> components) {
+  if (const auto keyword = ParseKeyword(components, kFontWeightKeywords)) {
+    return *keyword;
+  }
   if (components.size() == 1) {
-    const auto& comp = components.front();
-    if (const auto* ident = comp.tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) {
-        return 400;
-      }
-      if (ident->value.equalsLowercase("bold")) {
-        return 700;
-      }
-      // Relative keywords: stored as sentinels, resolved during cascade
-      // by resolveFontWeight() when the inherited value is available.
-      if (ident->value.equalsLowercase("bolder")) {
-        return PropertyRegistry::kFontWeightBolder;
-      }
-      if (ident->value.equalsLowercase("lighter")) {
-        return PropertyRegistry::kFontWeightLighter;
-      }
-    } else if (const auto* num = comp.tryGetToken<css::Token::Number>()) {
+    if (const auto* num = components.front().tryGetToken<css::Token::Number>()) {
       if (num->value >= 1 && num->value <= 1000) {
         return static_cast<int>(num->value);
       }
@@ -2079,80 +1931,57 @@ ParseResult<int> ParseFontWeight(std::span<const css::ComponentValue> components
   return err;
 }
 
+constexpr std::pair<std::string_view, FontStyle> kFontStyleKeywords[] = {
+    {"normal", FontStyle::Normal},
+    {"italic", FontStyle::Italic},
+    {"oblique", FontStyle::Oblique},
+};
+
 ParseResult<FontStyle> ParseFontStyle(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) {
-        return FontStyle::Normal;
-      }
-      if (ident->value.equalsLowercase("italic")) {
-        return FontStyle::Italic;
-      }
-      if (ident->value.equalsLowercase("oblique")) {
-        return FontStyle::Oblique;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kFontStyleKeywords)) {
+    return *value;
   }
+
   ParseDiagnostic err;
   err.reason = "Invalid font-style value";
   return err;
 }
 
+constexpr std::pair<std::string_view, int> kFontStretchKeywords[] = {
+    // Relative SVG 1.1 keywords retain sentinel values until inheritance resolves them.
+    {"normal", static_cast<int>(FontStretch::Normal)},
+    {"ultra-condensed", static_cast<int>(FontStretch::UltraCondensed)},
+    {"extra-condensed", static_cast<int>(FontStretch::ExtraCondensed)},
+    {"condensed", static_cast<int>(FontStretch::Condensed)},
+    {"semi-condensed", static_cast<int>(FontStretch::SemiCondensed)},
+    {"semi-expanded", static_cast<int>(FontStretch::SemiExpanded)},
+    {"expanded", static_cast<int>(FontStretch::Expanded)},
+    {"extra-expanded", static_cast<int>(FontStretch::ExtraExpanded)},
+    {"ultra-expanded", static_cast<int>(FontStretch::UltraExpanded)},
+    {"narrower", PropertyRegistry::kFontStretchNarrower},
+    {"wider", PropertyRegistry::kFontStretchWider},
+};
+
 ParseResult<int> ParseFontStretch(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) {
-        return static_cast<int>(FontStretch::Normal);
-      }
-      if (ident->value.equalsLowercase("ultra-condensed")) {
-        return static_cast<int>(FontStretch::UltraCondensed);
-      }
-      if (ident->value.equalsLowercase("extra-condensed")) {
-        return static_cast<int>(FontStretch::ExtraCondensed);
-      }
-      if (ident->value.equalsLowercase("condensed")) {
-        return static_cast<int>(FontStretch::Condensed);
-      }
-      if (ident->value.equalsLowercase("semi-condensed")) {
-        return static_cast<int>(FontStretch::SemiCondensed);
-      }
-      if (ident->value.equalsLowercase("semi-expanded")) {
-        return static_cast<int>(FontStretch::SemiExpanded);
-      }
-      if (ident->value.equalsLowercase("expanded")) {
-        return static_cast<int>(FontStretch::Expanded);
-      }
-      if (ident->value.equalsLowercase("extra-expanded")) {
-        return static_cast<int>(FontStretch::ExtraExpanded);
-      }
-      if (ident->value.equalsLowercase("ultra-expanded")) {
-        return static_cast<int>(FontStretch::UltraExpanded);
-      }
-      // SVG 1.1 relative keywords, stored as sentinels.
-      if (ident->value.equalsLowercase("narrower")) {
-        return PropertyRegistry::kFontStretchNarrower;
-      }
-      if (ident->value.equalsLowercase("wider")) {
-        return PropertyRegistry::kFontStretchWider;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kFontStretchKeywords)) {
+    return *value;
   }
+
   ParseDiagnostic err;
   err.reason = "Invalid font-stretch value";
   return err;
 }
 
+constexpr std::pair<std::string_view, FontVariant> kFontVariantKeywords[] = {
+    {"normal", FontVariant::Normal},
+    {"small-caps", FontVariant::SmallCaps},
+};
+
 ParseResult<FontVariant> ParseFontVariant(std::span<const css::ComponentValue> components) {
-  if (components.size() == 1) {
-    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) {
-        return FontVariant::Normal;
-      }
-      if (ident->value.equalsLowercase("small-caps")) {
-        return FontVariant::SmallCaps;
-      }
-    }
+  if (const auto value = ParseKeyword(components, kFontVariantKeywords)) {
+    return *value;
   }
+
   ParseDiagnostic err;
   err.reason = "Invalid font-variant value";
   return err;
@@ -2507,24 +2336,50 @@ constexpr std::pair<std::string_view, bool> kValidPresentationAttributeEntries[]
 DONNER_CONSTEXPR_MAP auto kValidPresentationAttributes =
     makeCompileTimeMap(std::to_array(kValidPresentationAttributeEntries));
 
+constexpr std::pair<std::string_view, FontSynthesisSmallCaps> kFontSynthesisSmallCapsKeywords[] = {
+    {"auto", FontSynthesisSmallCaps::Auto},
+    {"none", FontSynthesisSmallCaps::None},
+};
+
+constexpr std::pair<std::string_view, FontSynthesisStyle> kFontSynthesisStyleKeywords[] = {
+    {"auto", FontSynthesisStyle::Auto},
+    {"oblique-only", FontSynthesisStyle::ObliqueOnly},
+    {"none", FontSynthesisStyle::None},
+};
+
+constexpr std::pair<std::string_view, FontKerning> kFontKerningKeywords[] = {
+    {"auto", FontKerning::Auto},
+    {"normal", FontKerning::Normal},
+    {"none", FontKerning::None},
+};
+
+constexpr std::pair<std::string_view, TextTransform> kTextTransformKeywords[] = {
+    {"none", TextTransform::None},
+    {"full-width", TextTransform::FullWidth},
+};
+
+constexpr std::pair<std::string_view, WhiteSpace> kWhiteSpaceKeywords[] = {
+    {"normal", WhiteSpace::Normal},
+    {"pre", WhiteSpace::Pre},
+    {"nowrap", WhiteSpace::Nowrap},
+    {"pre-wrap", WhiteSpace::PreWrap},
+    {"break-spaces", WhiteSpace::BreakSpaces},
+    {"pre-line", WhiteSpace::PreLine},
+};
+
+constexpr std::pair<std::string_view, OverflowWrap> kOverflowWrapKeywords[] = {
+    {"normal", OverflowWrap::Normal},
+    {"break-word", OverflowWrap::BreakWord},
+    {"anywhere", OverflowWrap::Anywhere},
+};
+
 std::optional<ParseDiagnostic> ParseOverflowWrap(PropertyRegistry& registry,
                                                  const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
       [](const parser::PropertyParseFnParams& value) -> ParseResult<OverflowWrap> {
-        const auto& components = value.components();
-        if (components.size() == 1) {
-          if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-            constexpr std::pair<std::string_view, OverflowWrap> keywords[] = {
-                {"normal", OverflowWrap::Normal},
-                {"break-word", OverflowWrap::BreakWord},
-                {"anywhere", OverflowWrap::Anywhere}};
-            for (const auto& [keyword, policy] : keywords) {
-              if (ident->value.equalsLowercase(keyword)) {
-                return policy;
-              }
-            }
-          }
+        if (const auto keyword = ParseKeyword(value.components(), kOverflowWrapKeywords)) {
+          return *keyword;
         }
         ParseDiagnostic error;
         error.reason = "Invalid overflow-wrap value";
@@ -2623,17 +2478,9 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        params,
                        [](const parser::PropertyParseFnParams& value)
                            -> ParseResult<FontSynthesisSmallCaps> {
-                         const auto& components = value.components();
-                         if (components.size() == 1) {
-                           if (const auto* ident =
-                                   components.front().tryGetToken<css::Token::Ident>()) {
-                             if (ident->value.equalsLowercase("auto")) {
-                               return FontSynthesisSmallCaps::Auto;
-                             }
-                             if (ident->value.equalsLowercase("none")) {
-                               return FontSynthesisSmallCaps::None;
-                             }
-                           }
+                         if (const auto keyword = ParseKeyword(value.components(),
+                                                               kFontSynthesisSmallCapsKeywords)) {
+                           return *keyword;
                          }
                          ParseDiagnostic error;
                          error.reason = "Invalid font-synthesis-small-caps value";
@@ -2647,20 +2494,9 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        params,
                        [](const parser::PropertyParseFnParams& value)
                            -> ParseResult<FontSynthesisStyle> {
-                         const auto& components = value.components();
-                         if (components.size() == 1) {
-                           if (const auto* ident =
-                                   components.front().tryGetToken<css::Token::Ident>()) {
-                             if (ident->value.equalsLowercase("auto")) {
-                               return FontSynthesisStyle::Auto;
-                             }
-                             if (ident->value.equalsLowercase("oblique-only")) {
-                               return FontSynthesisStyle::ObliqueOnly;
-                             }
-                             if (ident->value.equalsLowercase("none")) {
-                               return FontSynthesisStyle::None;
-                             }
-                           }
+                         if (const auto keyword =
+                                 ParseKeyword(value.components(), kFontSynthesisStyleKeywords)) {
+                           return *keyword;
                          }
                          ParseDiagnostic error;
                          error.reason = "Invalid font-synthesis-style value";
@@ -2673,20 +2509,9 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    return Parse(
                        params,
                        [](const parser::PropertyParseFnParams& params) -> ParseResult<FontKerning> {
-                         const auto& components = params.components();
-                         if (components.size() == 1) {
-                           if (const auto* ident =
-                                   components.front().tryGetToken<css::Token::Ident>()) {
-                             if (ident->value.equalsLowercase("auto")) {
-                               return FontKerning::Auto;
-                             }
-                             if (ident->value.equalsLowercase("normal")) {
-                               return FontKerning::Normal;
-                             }
-                             if (ident->value.equalsLowercase("none")) {
-                               return FontKerning::None;
-                             }
-                           }
+                         if (const auto keyword =
+                                 ParseKeyword(params.components(), kFontKerningKeywords)) {
+                           return *keyword;
                          }
                          ParseDiagnostic error;
                          error.reason = "Invalid font-kerning value";
@@ -2727,17 +2552,9 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        params,
                        [](const parser::PropertyParseFnParams& value)
                            -> ParseResult<TextTransform> {
-                         const auto& components = value.components();
-                         if (components.size() == 1) {
-                           if (const auto* ident =
-                                   components.front().tryGetToken<css::Token::Ident>()) {
-                             if (ident->value.equalsLowercase("none")) {
-                               return TextTransform::None;
-                             }
-                             if (ident->value.equalsLowercase("full-width")) {
-                               return TextTransform::FullWidth;
-                             }
-                           }
+                         if (const auto keyword =
+                                 ParseKeyword(value.components(), kTextTransformKeywords)) {
+                           return *keyword;
                          }
                          ParseDiagnostic error;
                          error.reason =
@@ -2751,23 +2568,9 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    return Parse(
                        params,
                        [](const parser::PropertyParseFnParams& value) -> ParseResult<WhiteSpace> {
-                         const auto& components = value.components();
-                         if (components.size() == 1) {
-                           if (const auto* ident =
-                                   components.front().tryGetToken<css::Token::Ident>()) {
-                             constexpr std::pair<std::string_view, WhiteSpace> keywords[] = {
-                                 {"normal", WhiteSpace::Normal},
-                                 {"pre", WhiteSpace::Pre},
-                                 {"nowrap", WhiteSpace::Nowrap},
-                                 {"pre-wrap", WhiteSpace::PreWrap},
-                                 {"break-spaces", WhiteSpace::BreakSpaces},
-                                 {"pre-line", WhiteSpace::PreLine}};
-                             for (const auto& [keyword, mode] : keywords) {
-                               if (ident->value.equalsLowercase(keyword)) {
-                                 return mode;
-                               }
-                             }
-                           }
+                         if (const auto keyword =
+                                 ParseKeyword(value.components(), kWhiteSpaceKeywords)) {
+                           return *keyword;
                          }
                          ParseDiagnostic error;
                          error.reason = "Invalid white-space value";
@@ -3395,6 +3198,54 @@ std::span<const std::string_view> PropertyRegistry::propertyNames() {
     return result;
   }();
   return names;
+}
+
+std::span<const std::string_view> PropertyRegistry::keywordValues(std::string_view name) {
+  using Keywords = std::span<const std::string_view>;
+  static constexpr auto kKeywords =
+      makeCompileTimeMap(std::to_array<std::pair<std::string_view, Keywords>>({
+          {"alignment-baseline", KeywordNames<kAlignmentBaselineKeywords>},
+          {"clip-rule", KeywordNames<kClipRuleKeywords>},
+          {"color-interpolation", KeywordNames<kColorInterpolationKeywords>},
+          {"color-interpolation-filters", KeywordNames<kColorInterpolationFiltersKeywords>},
+          {"cursor", KeywordNames<kCursorKeywords>},
+          {"direction", KeywordNames<kDirectionKeywords>},
+          {"display", KeywordNames<kDisplayKeywords>},
+          {"dominant-baseline", KeywordNames<kDominantBaselineKeywords>},
+          {"fill", KeywordNames<kPaintKeywords>},
+          {"fill-rule", KeywordNames<kFillRuleKeywords>},
+          {"font-kerning", KeywordNames<kFontKerningKeywords>},
+          {"font-size", KeywordNames<kFontSizeKeywords>},
+          {"font-stretch", KeywordNames<kFontStretchKeywords>},
+          {"font-style", KeywordNames<kFontStyleKeywords>},
+          {"font-synthesis-small-caps", KeywordNames<kFontSynthesisSmallCapsKeywords>},
+          {"font-synthesis-style", KeywordNames<kFontSynthesisStyleKeywords>},
+          {"font-variant", KeywordNames<kFontVariantKeywords>},
+          {"font-weight", KeywordNames<kFontWeightKeywords>},
+          {"image-rendering", KeywordNames<kImageRenderingKeywords>},
+          {"isolation", KeywordNames<kIsolationKeywords>},
+          {"mask-type", KeywordNames<kMaskTypeKeywords>},
+          {"mix-blend-mode", KeywordNames<kMixBlendModeKeywords>},
+          {"overflow", KeywordNames<kOverflowKeywords>},
+          {"overflow-wrap", KeywordNames<kOverflowWrapKeywords>},
+          {"pointer-events", KeywordNames<kPointerEventsKeywords>},
+          {"stroke", KeywordNames<kPaintKeywords>},
+          {"stroke-linecap", KeywordNames<kStrokeLinecapKeywords>},
+          {"stroke-linejoin", KeywordNames<kStrokeLinejoinKeywords>},
+          {"text-anchor", KeywordNames<kTextAnchorKeywords>},
+          {"text-orientation", KeywordNames<kTextOrientationKeywords>},
+          {"text-transform", KeywordNames<kTextTransformKeywords>},
+          {"unicode-bidi", KeywordNames<kUnicodeBidiKeywords>},
+          {"vector-effect", KeywordNames<kVectorEffectKeywords>},
+          {"visibility", KeywordNames<kVisibilityKeywords>},
+          {"white-space", KeywordNames<kWhiteSpaceKeywords>},
+          {"word-wrap", KeywordNames<kOverflowWrapKeywords>},
+          {"writing-mode", KeywordNames<kWritingModeKeywords>},
+      }));
+  if (const auto* values = kKeywords.find(name)) {
+    return *values;
+  }
+  return {};
 }
 
 bool PropertyRegistry::isPresentationAttributeName(std::string_view name) {

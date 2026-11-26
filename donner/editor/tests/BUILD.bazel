@@ -1254,6 +1254,7 @@ donner_cc_test(
     deps = [
         "//donner/base:gtest_timeout_main",
         "//donner/editor:text_editor",
+        "//donner/editor:xml_autocomplete",
         "@com_google_gtest//:gtest",
         "@imgui",
     ],

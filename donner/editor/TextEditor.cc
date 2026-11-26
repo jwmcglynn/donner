@@ -3597,8 +3597,8 @@ void renderFunctionTooltip(const std::string& declaration, const ImVec2& positio
   pushEditorFontIfNeeded(font);
 }
 
-void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& suggestions,
-                        int selectedIndex, const ImVec2& position, float uiScale) {
+std::optional<int> renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& suggestions,
+                                      int selectedIndex, const ImVec2& position, float uiScale) {
   const float popupWidth = 150.0f * uiScale;
   const float popupHeight = 100.0f * uiScale;
 
@@ -3611,19 +3611,24 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
   const std::string windowName = popupWindowName("Autocomplete");
   if (!ImGui::Begin(windowName.c_str(), nullptr, flags)) {
     ImGui::End();
-    return;
+    return std::nullopt;
   }
 
+  std::optional<int> clicked;
   for (int i = 0; i < suggestions.size(); i++) {
     const bool isSelected = (i == selectedIndex);
     // TODO: Make a better way to have a null-terminated RcString
     const std::string suggestionStr = suggestions[i].first.str();
-    if (ImGui::Selectable(suggestionStr.c_str(), isSelected) && isSelected) {
-      ImGui::SetScrollHereY();
+    if (ImGui::Selectable(suggestionStr.c_str(), isSelected)) {
+      clicked = i;
     }
   }
 
+  auto* popup = ImGui::GetCurrentWindow();
   ImGui::End();
+  // Keep keyboard focus in the source pane while painting its suggestion window above it.
+  ImGui::BringWindowToDisplayFront(popup);
+  return clicked;
 }
 
 }  // namespace
@@ -3665,11 +3670,16 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
 
     ImFont* font = popPushedEditorFont();
 
-    renderAutocomplete(autocompleteSuggestions_, autocompleteIndex_, acPos, uiScale_);
+    const auto clicked =
+        renderAutocomplete(autocompleteSuggestions_, autocompleteIndex_, acPos, uiScale_);
 
     pushEditorFontIfNeeded(font);
 
-    ImGui::SetWindowFocus();
+    if (clicked) {
+      autocompleteIndex_ = *clicked;
+      autocompleteSelect();
+      ImGui::SetWindowFocus();
+    }
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
       autocompleteOpened_ = false;
     }
