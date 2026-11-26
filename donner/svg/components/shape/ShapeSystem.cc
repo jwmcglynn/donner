@@ -1366,12 +1366,8 @@ ComputedPathComponent* PrepareShapePath(EntityHandle handle, const LineComponent
   return output.set(handle, std::move(path));
 }
 
-template <typename Output>
-ComputedPathComponent* PrepareShapePath(EntityHandle handle, const PathComponent& path,
-                                        const ComputedStyleComponent& style,
-                                        const FontMetrics& fontMetrics,
-                                        ParseWarningSink& warningSink, Output& output) {
-  Property<RcString> actualD = path.d;
+bool ApplyStyledPathData(const ComputedStyleComponent& style, Property<RcString>& actualD,
+                         ParseWarningSink& warningSink) {
   const auto& properties = style.properties()->unparsedProperties;
   if (auto it = properties.find("d"); it != properties.end()) {
     auto maybeError = Parse(
@@ -1383,8 +1379,20 @@ ComputedPathComponent* PrepareShapePath(EntityHandle handle, const PathComponent
         &actualD);
     if (maybeError) {
       warningSink.add(std::move(maybeError.value()));
-      return nullptr;
+      return false;
     }
+  }
+  return true;
+}
+
+template <typename Output>
+ComputedPathComponent* PrepareShapePath(EntityHandle handle, const PathComponent& path,
+                                        const ComputedStyleComponent& style,
+                                        const FontMetrics& fontMetrics,
+                                        ParseWarningSink& warningSink, Output& output) {
+  Property<RcString> actualD = path.d;
+  if (!ApplyStyledPathData(style, actualD, warningSink)) {
+    return nullptr;
   }
 
   if (path.splineOverride) {
