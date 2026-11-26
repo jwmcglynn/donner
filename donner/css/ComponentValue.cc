@@ -96,7 +96,7 @@ std::optional<SourceRange> ComponentValue::authoredRange() const {
   const auto length = std::visit(
       [](const auto& item) -> std::size_t {
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(item)>, Token>) {
-          return item.sourceByteLength();
+          return item.template is<Token::ErrorToken>() ? 0 : item.sourceByteLength();
         } else {
           return item.sourceByteLength;
         }

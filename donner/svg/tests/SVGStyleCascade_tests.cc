@@ -94,6 +94,59 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceMapsInlineXmlReferencesAndLiveEdi
   EXPECT_EQ(uppercase->end, FileOffset::Offset(doc.source().find("--Tone: blue") + 6));
 }
 
+TEST(SVGStyleCascadeTests, CustomPropertySourceTracksCompleteMergedInlineStyle) {
+  auto doc = instantiateSubtree(R"svg(
+    <rect id="target" style="fill: red; --Tone: blue !important; --tone: green" />
+    <rect id="escaped" style="--T\6fne: purple" />
+  )svg");
+  auto target = doc.querySelector("#target");
+  const auto escapedTarget = doc.querySelector("#escaped");
+  ASSERT_THAT(target, Optional(testing::_));
+  ASSERT_THAT(escapedTarget, Optional(testing::_));
+  std::ignore = target->getComputedStyle();
+  std::ignore = escapedTarget->getComputedStyle();
+
+  constexpr std::string_view escapedName = R"(--T\6fne)";
+  const auto escaped = FindCustomPropertyDeclaration(*escapedTarget, "--Tone");
+  ASSERT_THAT(escaped, Optional(testing::_));
+  EXPECT_EQ(escaped->start, FileOffset::Offset(doc.source().find(escapedName)));
+  EXPECT_EQ(escaped->end, FileOffset::Offset(doc.source().find(escapedName) + escapedName.size()));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*escapedTarget, "--tone"), testing::Eq(std::nullopt));
+
+  // This semantically and textually identical update leaves both the attribute and source intact.
+  // Refresh metadata from the complete merged attribute so the declaration offset still points
+  // after fill, rather than to byte zero of the update fragment.
+  target->updateStyle("--tone: green");
+  std::ignore = target->getComputedStyle();
+  const auto unchanged = FindCustomPropertyDeclaration(*target, "--tone");
+  ASSERT_THAT(unchanged, Optional(testing::_));
+  const auto unchangedStart = doc.source().find("--tone: green");
+  EXPECT_EQ(unchanged->start, FileOffset::Offset(unchangedStart));
+  EXPECT_EQ(unchanged->end, FileOffset::Offset(unchangedStart + 6));
+  const auto important = FindCustomPropertyDeclaration(*target, "--Tone");
+  ASSERT_THAT(important, Optional(testing::_));
+  const auto importantStart = doc.source().find("--Tone: blue !important");
+  EXPECT_EQ(important->start, FileOffset::Offset(importantStart));
+  EXPECT_EQ(important->end, FileOffset::Offset(importantStart + 6));
+
+  target->updateStyle("--tone: gold !important");
+  std::ignore = target->getComputedStyle();
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--tone"), testing::Eq(std::nullopt))
+      << "a semantic attribute edit invalidates the old document-source projection";
+  const auto merged = target->getAttribute("style");
+  ASSERT_THAT(merged, Optional(testing::_));
+  auto reparsed = instantiateSubtree(R"(<rect id="target" style=")" +
+                                     std::string(std::string_view(*merged)) + R"("/>)");
+  const auto reparsedTarget = reparsed.querySelector("#target");
+  ASSERT_THAT(reparsedTarget, Optional(testing::_));
+  std::ignore = reparsedTarget->getComputedStyle();
+  const auto changed = FindCustomPropertyDeclaration(*reparsedTarget, "--tone");
+  ASSERT_THAT(changed, Optional(testing::_));
+  const auto changedStart = reparsed.source().find("--tone: gold !important");
+  EXPECT_EQ(changed->start, FileOffset::Offset(changedStart));
+  EXPECT_EQ(changed->end, FileOffset::Offset(changedStart + 6));
+}
+
 TEST(SVGStyleCascadeTests, LayerPrecedenceComputesCustomValuesBeforeInheritance) {
   auto doc = instantiateSubtree(R"(
     <style>

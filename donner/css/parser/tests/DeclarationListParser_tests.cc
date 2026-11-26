@@ -192,6 +192,17 @@ TEST(DeclarationListParser, BoundsAggregateInlineComponentValuesAndAtRules) {
   EXPECT_EQ(atRuleStats.componentValues, DeclarationListParser::kMaximumComponentValues);
 }
 
+TEST(DeclarationListParser, IncompleteTokensHaveNoEditableValueOrDeclarationRange) {
+  for (const std::string_view source :
+       {"--x: red /* unfinished", "--x: url(#paint", "--x: \"unfinished", "--x: var(--o, red"}) {
+    SCOPED_TRACE(source);
+    const auto declarations = DeclarationListParser::ParseOnlyDeclarations(source);
+    ASSERT_THAT(declarations, ::testing::SizeIs(1));
+    EXPECT_THAT(declarations.front().authoredDeclarationRange(), ::testing::Eq(std::nullopt));
+    EXPECT_THAT(declarations.front().authoredValueRange(), ::testing::Eq(std::nullopt));
+  }
+}
+
 TEST(DeclarationListParser, RecordsEditableNameValuePriorityAndNestedReferenceSpans) {
   constexpr std::string_view text =
       R"CSS( --p\61 int /*type*/: var(--ink, url( #spectrum )) /*keep*/ !important ; --empty: ; )CSS";
