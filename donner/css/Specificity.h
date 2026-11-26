@@ -140,7 +140,7 @@ public:
    */
   friend std::ostream& operator<<(std::ostream& os, const Specificity& obj) {
     os << "Specificity(";
-    switch (obj.special_) {
+    switch (obj.specialValue()) {
       case SpecialType::StyleAttribute: return os << "style)";
       case SpecialType::Animation: return os << "animation)";
       case SpecialType::ImportantStyleAttribute: return os << "style !important)";
@@ -150,8 +150,8 @@ public:
       case SpecialType::ImportantUserAgent: os << "user-agent !important, "; break;
       case SpecialType::None: break;
     }
-    if (obj.layerRank_ != 0) {
-      os << "layer " << obj.layerRank_ << ", ";
+    if (const auto rank = obj.layerRank()) {
+      os << "layer " << rank << ", ";
     }
     return os << obj.abc_.a << ", " << obj.abc_.b << ", " << obj.abc_.c << ")";
   }
@@ -184,11 +184,17 @@ public:
    * @return The important rank for \p specificity's origin, with its selector specificity.
    */
   static constexpr Specificity Important(Specificity specificity) {
-    switch (specificity.special_) {
-      case SpecialType::UserAgent: specificity.special_ = SpecialType::ImportantUserAgent; break;
-      case SpecialType::None: specificity.special_ = SpecialType::Important; break;
+    switch (specificity.specialValue()) {
+      case SpecialType::UserAgent:
+        specificity.priority_ =
+            EncodePriority(SpecialType::ImportantUserAgent, specificity.layerRank());
+        break;
+      case SpecialType::None:
+        specificity.priority_ = EncodePriority(SpecialType::Important, specificity.layerRank());
+        break;
       case SpecialType::StyleAttribute:
-        specificity.special_ = SpecialType::ImportantStyleAttribute;
+        specificity.priority_ =
+            EncodePriority(SpecialType::ImportantStyleAttribute, specificity.layerRank());
         break;
       default: break;
     }
@@ -207,24 +213,21 @@ public:
   static constexpr Specificity Override() { return Specificity(SpecialType::Override); }
 
   /// Assign the document layer's normal-order rank. Rank zero is the unlayered fast path.
-  Specificity withLayerRank(std::uint16_t rank) const {
+  constexpr Specificity withLayerRank(std::uint16_t rank) const {
     Specificity result = *this;
-    result.layerRank_ = rank;
+    result.priority_ = EncodePriority(specialValue(), rank);
     return result;
   }
 
   /// Rank in normal precedence order, before reversal for important origin levels.
-  std::uint16_t layerRank() const { return layerRank_; }
+  constexpr std::uint16_t layerRank() const {
+    return NormalizeLayerOrder(specialValue(), static_cast<std::uint16_t>(priority_));
+  }
 
   /// Spaceship operator.
   auto operator<=>(const Specificity& other) const {
-    if (special_ != other.special_) {
-      return special_ <=> other.special_;
-    }
-    if (layerRank_ != other.layerRank_) {
-      const bool reverse =
-          special_ == SpecialType::Important || special_ == SpecialType::ImportantUserAgent;
-      return reverse ? other.layerRank_ <=> layerRank_ : layerRank_ <=> other.layerRank_;
+    if (priority_ != other.priority_) {
+      return priority_ <=> other.priority_;
     }
     return abc_ <=> other.abc_;
   }
@@ -238,31 +241,41 @@ public:
   const ABC& abc() const { return abc_; }
 
   /// Gets the special value of the specificity, defaults to \ref SpecialType::None.
-  SpecialType specialValue() const { return special_; }
+  constexpr SpecialType specialValue() const { return static_cast<SpecialType>(priority_ >> 16); }
 
   /// Whether this rank came from an inline style declaration, regardless of importance.
   bool isStyleAttribute() const {
-    return special_ == SpecialType::StyleAttribute ||
-           special_ == SpecialType::ImportantStyleAttribute;
+    return specialValue() == SpecialType::StyleAttribute ||
+           specialValue() == SpecialType::ImportantStyleAttribute;
   }
 
   /// Converts a normal selector rank to user-agent origin; special ranks are unchanged.
   Specificity toUserAgentSpecificity() const {
     Specificity result = *this;
-    if (result.special_ == SpecialType::None) {
-      result.special_ = SpecialType::UserAgent;
+    if (result.specialValue() == SpecialType::None) {
+      result.priority_ = EncodePriority(SpecialType::UserAgent, result.layerRank());
     }
 
     return result;
   }
 
 private:
-  /// Internal constructor for special values.
-  explicit constexpr Specificity(SpecialType special) : special_(special) {}
+  static constexpr std::uint16_t NormalizeLayerOrder(SpecialType origin, std::uint16_t rank) {
+    const bool reversesOrder =
+        origin == SpecialType::Important || origin == SpecialType::ImportantUserAgent;
+    return reversesOrder ? static_cast<std::uint16_t>(0xffffu - rank) : rank;
+  }
 
-  ABC abc_;                                  ///< The 3-tuple of integers.
-  std::uint16_t layerRank_ = 0;              ///< Normal-order document layer rank.
-  SpecialType special_ = SpecialType::None;  ///< Special value, if any.
+  static constexpr std::uint32_t EncodePriority(SpecialType origin, std::uint16_t layerRank) {
+    return (static_cast<std::uint32_t>(origin) << 16) | NormalizeLayerOrder(origin, layerRank);
+  }
+
+  /// Internal constructor for special values.
+  explicit constexpr Specificity(SpecialType special) : priority_(EncodePriority(special, 0)) {}
+
+  ABC abc_;  ///< The 3-tuple of integers.
+  /// The ordered origin occupies the higher bits, with precedence-normalized layer rank below.
+  std::uint32_t priority_ = EncodePriority(SpecialType::None, 0);
 };
 
 }  // namespace donner::css
