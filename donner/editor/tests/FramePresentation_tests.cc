@@ -107,6 +107,16 @@ TEST(FramePresentationTest, SealsInputIdentityWithThePresentedPixels) {
   EXPECT_DOUBLE_EQ(frame->inputIdentity().pointerPosition.x, 12.0);
   EXPECT_DOUBLE_EQ(frame->inputIdentity().pointerPosition.y, 34.0);
   EXPECT_THAT(frame->inputIdentity().mouseDown, IsTrue());
+
+  input.representedResourceInputIdentity = PresentationInputIdentity{
+      .pointerPosition = Vector2d(56.0, 78.0),
+      .mouseDown = true,
+  };
+  const auto retained = FramePresentation::Build(resources, input).frame;
+  ASSERT_THAT(retained, Ne(nullptr));
+  EXPECT_DOUBLE_EQ(retained->inputIdentity().pointerPosition.x, 56.0);
+  EXPECT_DOUBLE_EQ(retained->inputIdentity().pointerPosition.y, 78.0);
+  EXPECT_THAT(retained->inputIdentity().mouseDown, IsTrue());
 }
 
 TEST(FramePresentationTest, SecondDragAndLateRasterShareOnePose) {

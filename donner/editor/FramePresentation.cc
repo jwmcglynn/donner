@@ -514,6 +514,13 @@ void FramePresentation::applyPointerIntent(const FramePresentationInput& input) 
       }
     }
   }
+  resolveInputIdentity(input);
+}
+
+void FramePresentation::resolveInputIdentity(const FramePresentationInput& input) {
+  if (!followsPointer_ && input.representedResourceInputIdentity.has_value()) {
+    inputIdentity_ = *input.representedResourceInputIdentity;
+  }
 }
 
 void FramePresentation::projectSelectionGeometry() {

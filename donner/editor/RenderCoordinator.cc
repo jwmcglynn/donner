@@ -1468,9 +1468,20 @@ FramePresentationInput RenderCoordinator::makeFrameInput(
   if (desired.has_value()) {
     desired->contentIdentity.presentationEpoch = presentationEpoch_;
   }
+  std::optional<PresentationInputIdentity> representedResourceInputIdentity;
+  const auto represented = compositedPresentation_.presentationPreview(desired);
+  if (desired.has_value() && represented.has_value() && represented->entity == desired->entity &&
+      represented->dragGeneration == desired->dragGeneration &&
+      represented->contentIdentity.sameContent(desired->contentIdentity)) {
+    representedResourceInputIdentity = PresentationInputIdentity{
+        .pointerPosition = viewport.documentToScreen(represented->pointerDocumentPoint),
+        .mouseDown = represented->mouseDown,
+    };
+  }
   FramePresentationInput input{
       .frameId = nextPresentationFrameId_++,
       .inputIdentity = inputIdentity,
+      .representedResourceInputIdentity = representedResourceInputIdentity,
       .viewport = viewport,
       .paneClipRect = paneClipRect,
       .selection = selectedPresentationEntities(app),
@@ -1687,8 +1698,7 @@ void RenderCoordinator::installFrameDecision(
     const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
     std::shared_ptr<const FramePresentation> next) {
   const bool pixelsRepresentInput =
-      FrameCarriesInput(*next, input) ||
-      (input.desired.has_value() && compositedPresentation_.represents(*input.desired));
+      FrameCarriesInput(*next, input) || input.representedResourceInputIdentity.has_value();
   frameRepresentsCurrentIntent_ =
       (input.selection.empty() || next->hasSelectionGeometry()) && pixelsRepresentInput;
   framePresentation_ = std::move(next);

@@ -78,11 +78,13 @@ struct PresentationInputIdentity {
 struct FramePresentationInput {
   std::uint64_t frameId = 0;                //!< Nonzero identity of the UI frame being sealed.
   PresentationInputIdentity inputIdentity;  //!< Pointer/button state sealed with the frame.
-  ViewportState viewport;                   //!< Camera and pane geometry for this frame.
-  Box2d paneClipRect;                       //!< Render-pane clip rectangle in logical pixels.
-  std::vector<Entity> selection;            //!< Selected objects, in selection order.
-  PresentationIdentity documentIdentity;    //!< Live document scene the frame should present.
-  bool pendingDocumentMutations = false;    //!< Input not yet incorporated into a guarded capture.
+  /// Same-gesture input represented by retained resource pixels before live pointer projection.
+  std::optional<PresentationInputIdentity> representedResourceInputIdentity;
+  ViewportState viewport;                 //!< Camera and pane geometry for this frame.
+  Box2d paneClipRect;                     //!< Render-pane clip rectangle in logical pixels.
+  std::vector<Entity> selection;          //!< Selected objects, in selection order.
+  PresentationIdentity documentIdentity;  //!< Live document scene the frame should present.
+  bool pendingDocumentMutations = false;  //!< Input not yet incorporated into a guarded capture.
 
   /// Drag poses the pointer requests, including a released drag that is still settling.
   std::optional<SelectTool::ActiveDragPreview> desired;
@@ -240,6 +242,7 @@ private:
   bool retainDisplayedPoses(const FramePresentation* previous);
   bool chosenPosesHaveCoverage(const FramePresentationInput& input) const;
   void applyPointerIntent(const FramePresentationInput& input);
+  void resolveInputIdentity(const FramePresentationInput& input);
   void projectSelectionGeometry();
   void resolveSelectionBounds(const FramePresentationInput& input);
   void resolveTiles(const FramePresentationInput& input);
