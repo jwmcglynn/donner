@@ -29,14 +29,17 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
+#include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
 
@@ -218,6 +221,112 @@ std::string TextSvgWithFamily(std::string_view family, std::string_view extraAtt
       .append("\" ")
       .append(extraAttributes)
       .append(">Text</text></svg>");
+}
+
+class VendoredFaceLoader final : public ResourceLoaderInterface {
+public:
+  std::variant<std::vector<std::uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    const auto& fonts = VendoredFontBytes();
+    const auto found = fonts.find(std::string(url));
+    if (found == fonts.end()) {
+      return ResourceLoaderError::NotFound;
+    }
+    return found->second;
+  }
+};
+
+TEST(FontSelection, LayeredFontFacesUseCurrentDocumentPrecedence) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">
+      <style id="order">@layer base, theme;</style>
+      <style>
+        @layer theme {
+          @layer text {
+            @font-face { font-family: LayeredAlias; src: url("NotoSerif-Regular.ttf"); }
+          }
+        }
+      </style>
+      <style>
+        @layer base {
+          @font-face { font-family: LayeredAlias; src: url("NotoMono-Regular.ttf"); }
+        }
+      </style>
+      <text id="label" x="10" y="45" font-family="LayeredAlias" font-size="30">iiiiiiii</text>
+    </svg>)svg";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings, {});
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  auto document = std::move(parsed.result());
+  // VendoredFaceLoader only serves the packaged fixture fonts. The Tiny backend requires
+  // explicit trust for those bytes, as in the rest of the hermetic image suite.
+  TrustDocumentFontFacesForTesting(document);
+  const auto label = document.querySelector("#label");
+  const auto order = document.querySelector("#order");
+  ASSERT_THAT(label, testing::Optional(testing::_));
+  ASSERT_THAT(order, testing::Optional(testing::_));
+  const auto text = label->cast<SVGTextElement>();
+  auto& resources = document.registry().ctx().get<components::ResourceManagerContext>();
+  components::StyleSystem::synchronizeDocumentFontFaces(document.registry());
+  EXPECT_THAT(resources.pendingFontFaceCount(), Eq(2u));
+  components::StyleSystem::synchronizeDocumentFontFaces(document.registry());
+  EXPECT_THAT(resources.pendingFontFaceCount(), Eq(2u));
+  const auto initialOrder = resources.layeredFontFaceOrder();
+  ASSERT_THAT(initialOrder, testing::Optional(SizeIs(2)));
+
+  const auto selected = [&] {
+    auto& ctx = document.registry().ctx();
+    auto& engine = ctx.get<TextEngine>();
+    const auto used = engine.resolveUsedFont(
+        label->entityHandle(), Box2d(Vector2d::Zero(), Vector2d(200, 80)), FontMetrics());
+    return DescribeFace(ctx.get<FontManager>(), used.font);
+  };
+
+  EXPECT_THAT(text.getComputedTextLength(), testing::Gt(0.0));
+  EXPECT_THAT(selected(), FaceFrom(kEmbeddedFallback));
+  resources.setResourceLoader(std::make_unique<VendoredFaceLoader>());
+  const double before = text.getComputedTextLength();
+  EXPECT_THAT(before, testing::Gt(0.0));
+  EXPECT_THAT(selected(), FaceFrom("NotoSerif-Regular.ttf"));
+  EXPECT_THAT(resources.layeredFontFaceOrder(), Eq(initialOrder));
+  const auto revision = [&] {
+    return document.registry().ctx().get<FontManager>().familySelectionRevision();
+  };
+  const auto originalRevision = revision();
+  EXPECT_THAT(text.getComputedTextLength(), Eq(before));
+  EXPECT_THAT(revision(), Eq(originalRevision));
+  EXPECT_THAT(resources.pendingFontFaceCount(), Eq(0u));
+  const auto resourceEntries = resources.fontFaces().size();
+  const auto fetchAttempts = resources.fetchSecurityStats().attempts;
+  order->cast<SVGStyleElement>().setContents("@layer theme, base;");
+  const double after = text.getComputedTextLength();
+  EXPECT_THAT(after, testing::Gt(0.0));
+  EXPECT_THAT(after, testing::Ne(before));
+  EXPECT_THAT(selected(), FaceFrom("NotoMono-Regular.ttf"));
+  EXPECT_THAT(revision(), testing::Gt(originalRevision));
+  EXPECT_THAT(resources.fontFaces(), SizeIs(resourceEntries));
+  EXPECT_THAT(resources.fetchSecurityStats().attempts, Eq(fetchAttempts));
+
+  css::FontFace programmatic;
+  programmatic.familyName = "ProgrammaticAlias";
+  programmatic.sources.push_back(css::FontFaceSource{
+      .kind = css::FontFaceSource::Kind::Data,
+      .payload = std::make_shared<const std::vector<std::uint8_t>>(
+          VendoredFontBytes().at("NotoSerif-Regular.ttf")),
+      .formatHint = {},
+      .techHints = {},
+      .trusted = true,
+  });
+  resources.addFontFaces(std::span(&programmatic, 1));
+  EXPECT_THAT(text.getComputedTextLength(), Eq(after));
+  auto& fonts = document.registry().ctx().get<FontManager>();
+  EXPECT_THAT(DescribeFace(fonts, fonts.findFont("ProgrammaticAlias")),
+              FaceFrom("NotoSerif-Regular.ttf"));
+
+  Renderer renderer;
+  renderer.draw(document);
+  EXPECT_THAT(selected(), FaceFrom("NotoMono-Regular.ttf"));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsFalse());
 }
 
 TEST(FontSelection, GenericFamiliesResolveToVendoredFaces) {

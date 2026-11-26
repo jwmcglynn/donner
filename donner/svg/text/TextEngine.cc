@@ -3916,13 +3916,7 @@ void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWar
     return;
   }
 
-  if (resourceManager->fontFaces().empty()) {
-    for (auto view = registry_.view<components::StylesheetComponent>(); auto entity : view) {
-      const auto& stylesheet = view.get<components::StylesheetComponent>(entity);
-      resourceManager->synchronizeStylesheetFontFaces(entity, stylesheet.cascadeFontFaces(),
-                                                      stylesheet.fontFaceRevision);
-    }
-  }
+  components::StyleSystem::synchronizeDocumentFontFaces(registry_);
   resourceManager->loadResources(outWarnings);
 
   auto& fontManager = registry_.ctx().contains<FontManager>()
@@ -3931,7 +3925,20 @@ void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWar
   if (!registry_.ctx().contains<TextEngine>()) {
     registry_.ctx().emplace<TextEngine>(fontManager, registry_);
   }
-  addFontFaces(resourceManager->fontFaces());
+  if (const auto& order = resourceManager->layeredFontFaceOrder()) {
+    if (fontManager.synchronizeLayeredResourceFaces(resourceManager->fontFaces(), *order)) {
+      const auto roots = registry_.view<const components::ComputedTextComponent>();
+      const std::vector<Entity> invalidated(roots.begin(), roots.end());
+      for (Entity root : invalidated) {
+        const Entity owner = components::InvalidateTextLayout(EntityHandle(registry_, root));
+        if (owner != entt::null) {
+          registry_.remove<components::ComputedTextComponent>(owner);
+        }
+      }
+    }
+  } else {
+    addFontFaces(resourceManager->fontFaces());
+  }
 
   components::StyleSystem styleSystem;
   const EntityHandle textRootHandle(registry_, textRootEntity);
