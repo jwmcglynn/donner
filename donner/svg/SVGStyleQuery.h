@@ -10,12 +10,12 @@
 #include "donner/base/FileOffset.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/Specificity.h"
+#include "donner/svg/SVGStyleElement.h"
 
 namespace donner::svg {
 
 class SVGDocument;
 class SVGElement;
-class SVGStyleElement;
 
 /// Diagnostic record for one stylesheet rule that matched an element.
 struct SVGMatchedStyleRule {
@@ -24,6 +24,7 @@ struct SVGMatchedStyleRule {
   std::size_t selectorEntryIndex = 0;    ///< Index of the matched selector-list entry.
   css::Specificity specificity;          ///< Selector specificity and its cascade layer rank.
   bool isUserAgentStylesheet = false;    ///< True when this came from the built-in UA stylesheet.
+  std::optional<SVGStyleElement> stylesheetElement;  ///< Typed embedded stylesheet owner.
   std::optional<SourceRange> ruleCssRange;           ///< Rule range in the parsed CSS text.
   std::optional<SourceRange> selectorCssRange;       ///< Selector range in the parsed CSS text.
   std::optional<SourceRange> ruleSourceRange;        ///< Matched rule range in SVG source.
@@ -46,6 +47,7 @@ struct SVGStylesheetRule {
   bool isUserAgentStylesheet = false;  ///< True for a built-in rule without document source ranges.
   Entity stylesheetEntity = entt::null;                ///< Owning `<style>` or `<svg>` element key.
   std::size_t ruleIndex = 0;                           ///< Index within the stylesheet.
+  std::optional<SVGStyleElement> stylesheetElement;    ///< Typed embedded stylesheet owner.
   std::optional<SourceRange> ruleCssRange;             ///< Rule range in the parsed CSS text.
   std::optional<SourceRange> selectorCssRange;         ///< Selector range in the parsed CSS text.
   std::optional<SourceRange> ruleSourceRange;          ///< Rule range in SVG source.

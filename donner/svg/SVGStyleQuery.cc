@@ -13,13 +13,20 @@ namespace {
 
 using components::StylesheetComponent;
 
-SVGMatchedStyleRule ToPublicMatchedRule(const components::MatchedStyleRule& rule) {
+std::optional<SVGStyleElement> EmbeddedStylesheet(Registry& registry, Entity entity) {
+  return SVGElement::CreateFromEntityHandle(EntityHandle(registry, entity))
+      .tryCast<SVGStyleElement>();
+}
+
+SVGMatchedStyleRule ToPublicMatchedRule(Registry& registry,
+                                        const components::MatchedStyleRule& rule) {
   return SVGMatchedStyleRule{
       .stylesheetEntity = rule.stylesheetEntity,
       .ruleIndex = rule.ruleIndex,
       .selectorEntryIndex = rule.selectorEntryIndex,
       .specificity = rule.specificity,
       .isUserAgentStylesheet = rule.isUserAgentStylesheet,
+      .stylesheetElement = EmbeddedStylesheet(registry, rule.stylesheetEntity),
       .ruleCssRange = rule.ruleCssRange,
       .selectorCssRange = rule.selectorCssRange,
       .ruleSourceRange = rule.ruleSourceRange,
@@ -39,6 +46,7 @@ SVGStylesheetRule ToPublicStylesheetRule(Registry& registry, Entity stylesheetEn
       .isUserAgentStylesheet = stylesheet.isUserAgentStylesheet,
       .stylesheetEntity = stylesheetEntity,
       .ruleIndex = ruleIndex,
+      .stylesheetElement = EmbeddedStylesheet(registry, stylesheetEntity),
       .ruleCssRange = rule.ruleSourceRange,
       .selectorCssRange = rule.selectorSourceRange,
       .ruleSourceRange = project(rule.ruleSourceRange),
@@ -81,7 +89,7 @@ std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& elem
     std::vector<SVGMatchedStyleRule> rules;
     rules.reserve(internalRules.size());
     for (const components::MatchedStyleRule& rule : internalRules) {
-      rules.push_back(ToPublicMatchedRule(rule));
+      rules.push_back(ToPublicMatchedRule(*handle.registry(), rule));
     }
     return rules;
   });
