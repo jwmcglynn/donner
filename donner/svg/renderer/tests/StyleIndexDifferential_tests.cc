@@ -699,6 +699,43 @@ TEST(StyleInvalidationDifferential, PublicEditsMatchFullRestyle) {
   }
 }
 
+TEST(StyleInvalidationDifferential, LaterUseReadsPreviouslyRestyledSymbol) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>.hot { fill: red }</style>
+      <symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol>
+      <use id="consumer" href="#missing" width="8" height="8"/>
+    </svg>)svg";
+  SVGDocument narrow = ParseSource(kSource);
+  SVGDocument full = ParseSource(kSource);
+  for (SVGDocument* document : {&narrow, &full}) {
+    std::ignore = PrepareFirstFrameWithDiagnostics(*document);
+    auto target = document->querySelector("#target");
+    ASSERT_THAT(target, ::testing::Optional(::testing::_));
+    target->setClassName("hot");
+  }
+  EXPECT_EQ(PrepareFirstFrameWithDiagnostics(narrow).counters.elementsCascaded, 1u);
+  full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+  std::ignore = PrepareFirstFrameWithDiagnostics(full);
+
+  for (SVGDocument* document : {&narrow, &full}) {
+    auto consumer = document->querySelector("#consumer");
+    ASSERT_THAT(consumer, ::testing::Optional(::testing::_));
+    consumer->setAttribute("href", "#tile");
+  }
+  full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+  const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
+  const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
+  EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
+  EXPECT_THAT(PositionedRenderInstances(narrow), ElementsAreArray(PositionedRenderInstances(full)));
+  Renderer narrowRenderer;
+  Renderer fullRenderer;
+  narrowRenderer.draw(narrow);
+  fullRenderer.draw(full);
+  editor::tests::CompareBitmapToBitmap(narrowRenderer.takeSnapshot(), fullRenderer.takeSnapshot(),
+                                       "later-use", editor::tests::PixelmatchIdentityParams());
+}
+
 CascadePassSnapshot ForceFullRestyleWithDiagnostics(SVGDocument& document) {
   Registry& registry = document.registry();
   const StyleCascadeCounters before = Counters(document);
