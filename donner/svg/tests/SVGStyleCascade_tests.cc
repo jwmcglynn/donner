@@ -159,6 +159,25 @@ TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleKeepsTheLastValidPaint) {
               Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
 }
 
+TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleTerminatesARecoveredComment) {
+  for (const auto note : {"x /*", "var(--fallback, x /*"}) {
+    SCOPED_TRACE(note);
+    auto doc =
+        instantiateSubtree(std::string(R"(<rect style="fill: red; --note: )") + note + R"("/>)");
+    auto target = doc.querySelector("rect");
+    ASSERT_THAT(target, Optional(testing::_));
+    target->updateStyle("fill: blue");
+    const auto merged = target->getAttribute("style");
+    ASSERT_THAT(merged, Optional(testing::_));
+    auto reparsed =
+        instantiateSubtree(R"(<rect style=")" + std::string(std::string_view(*merged)) + R"("/>)");
+    const auto restored = reparsed.querySelector("rect");
+    ASSERT_THAT(restored, Optional(testing::_));
+    EXPECT_THAT(restored->getComputedStyle().fill.get(),
+                Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
+  }
+}
+
 TEST(SVGStyleCascadeTests, UnrelatedInlineUpdatePreservesEscapedCustomPropertySpelling) {
   auto doc =
       instantiateSubtree(R"SVG(<rect id="target" style="--a\:b: red; fill: var(--a\:b)" />)SVG");
