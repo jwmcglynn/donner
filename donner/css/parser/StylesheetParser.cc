@@ -198,6 +198,10 @@ void PopulateSelectorRuleSourceRanges(std::string_view str, const QualifiedRule&
       str, selectorStart, selectorEnd, selectorRule->selector.entries.size());
 }
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 /**
  * Try to parse a `url()` function into either a data URL or an external URL.
  *
@@ -525,6 +529,10 @@ std::optional<FontFace> ParseFontFaceRule(AtRule& atRule,
   }
   return BuildFontFace(declarations);
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
 
 bool WarnUnsupportedAtRule(const AtRule& atRule, ParseWarningSink& warningSink) {
   const char* reason;

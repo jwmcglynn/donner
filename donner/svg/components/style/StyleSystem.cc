@@ -3295,38 +3295,41 @@ public:
   }
 
   std::vector<std::size_t> ordered() const {
-    std::vector<std::pair<Priority, std::size_t>> sorted;
-    sorted.reserve(priorities_.size());
-    for (const auto& [index, priority] : priorities_) {
-      sorted.emplace_back(priority, index);
-    }
-    // Rank and source position already break ties. Heap sort keeps this infrequent
-    // sort bounded while avoiding a separate introsort instantiation for font faces.
-    std::ranges::make_heap(sorted);
-    std::ranges::sort_heap(sorted);
     std::vector<std::size_t> result;
-    result.reserve(sorted.size());
-    for (const auto& [_, index] : sorted) {
-      result.push_back(index);
+    for (std::size_t index = 0; index < priorities_.size(); ++index) {
+      if (priorities_[index].rank != 0) {
+        result.push_back(index);
+      }
     }
+    const auto precedes = [&](std::size_t left, std::size_t right) {
+      return priorities_[left] < priorities_[right];
+    };
+    std::ranges::make_heap(result, precedes);
+    std::ranges::sort_heap(result, precedes);
     return result;
   }
 
 private:
-  using Priority = std::pair<std::uint16_t, std::size_t>;
+  struct Priority {
+    std::uint16_t rank = 0;
+    std::size_t sourcePosition = 0;
+    auto operator<=>(const Priority&) const = default;
+  };
 
   void addFace(const css::FontFace& face, std::uint16_t rank) {
     if (const auto index = resources_.registerStylesheetFontFace(face)) {
-      const Priority priority(rank, next_++);
-      auto [current, inserted] = priorities_.try_emplace(*index, priority);
-      if (!inserted) {
-        current->second = std::max(current->second, priority);
+      if (*index >= priorities_.size()) {
+        priorities_.resize(*index + 1);
       }
+      const Priority priority(rank, next_++);
+      priorities_[*index] = std::max(priorities_[*index], priority);
     }
   }
 
   ResourceManagerContext& resources_;
-  std::unordered_map<std::size_t, Priority> priorities_;
+  // Resource indices are stable and bounded by the registered face table. A zero rank denotes
+  // an entry that does not participate in authored layer order.
+  std::vector<Priority> priorities_;
   std::size_t next_ = 0;
 };
 
