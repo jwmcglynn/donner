@@ -76,40 +76,94 @@ std::unordered_map<std::string, size_t> SelectStyleUpdates(std::span<const Decla
   return updateIndexByName;
 }
 
-// A comment recovered at EOF can appear only at the end of its containing values. Once
-// another declaration follows it, close the comment and any implicitly ended parent blocks.
-bool CloseRecoveredComment(std::span<const ComponentValue> values, std::string& result) {
+std::optional<char> RecoveredStringQuote(const Declaration& declaration, std::string_view spelling,
+                                         const Token& stringToken) {
+  const auto declarationOffset = declaration.sourceOffset.offset;
+  const auto stringOffset = stringToken.offset().offset;
+  if (!declarationOffset || !stringOffset || *stringOffset < *declarationOffset) {
+    return std::nullopt;
+  }
+  const std::size_t localOffset = *stringOffset - *declarationOffset;
+  if (localOffset >= spelling.size() ||
+      (spelling[localOffset] != '\'' && spelling[localOffset] != '"')) {
+    return std::nullopt;
+  }
+  return spelling[localOffset];
+}
+
+bool CloseRecoveredString(std::span<const ComponentValue> values, const Declaration& declaration,
+                          std::string_view spelling, std::string& result) {
+  if (values.size() < 2) {
+    return false;
+  }
+  const auto* stringToken = std::get_if<Token>(&values[values.size() - 2].value);
+  const auto quote =
+      stringToken ? RecoveredStringQuote(declaration, spelling, *stringToken) : std::nullopt;
+  if (!quote) {
+    return false;
+  }
+  std::size_t trailingBackslashes = 0;
+  while (trailingBackslashes < result.size() &&
+         result[result.size() - trailingBackslashes - 1] == '\\') {
+    ++trailingBackslashes;
+  }
+  if (trailingBackslashes % 2 != 0) {
+    result.pop_back();
+  }
+  result += *quote;
+  return true;
+}
+
+bool CloseRecoveredToken(std::span<const ComponentValue> values, const Declaration& declaration,
+                         std::string_view spelling, std::string& result) {
+  const auto* token = std::get_if<Token>(&values.back().value);
+  const auto* error = token ? token->tryGet<Token::ErrorToken>() : nullptr;
+  if (!error) {
+    return false;
+  }
+  switch (error->type) {
+    case Token::ErrorToken::Type::EofInComment: result += "*/"; return true;
+    case Token::ErrorToken::Type::EofInUrl: result += ')'; return true;
+    case Token::ErrorToken::Type::EofInString:
+      return CloseRecoveredString(values, declaration, spelling, result);
+  }
+  return false;
+}
+
+// EOF recovery can implicitly close a token, then every unterminated parent around it. Repair the
+// trailing chain before another declaration is appended; explicitly terminated structures stay
+// byte-for-byte authored.
+bool CloseRecoveredConstructs(std::span<const ComponentValue> values,
+                              const Declaration& declaration, std::string_view spelling,
+                              std::string& result) {
   if (values.empty()) {
     return false;
   }
   const auto& value = values.back().value;
-  if (const auto* token = std::get_if<Token>(&value)) {
-    const auto* error = token->tryGet<Token::ErrorToken>();
-    if (error && error->type == Token::ErrorToken::Type::EofInComment) {
-      result += "*/";
-      return true;
-    }
-    return false;
+  if (std::holds_alternative<Token>(value)) {
+    return CloseRecoveredToken(values, declaration, spelling, result);
   }
   if (const auto* function = std::get_if<Function>(&value)) {
-    if (CloseRecoveredComment(function->values, result)) {
+    bool repaired = CloseRecoveredConstructs(function->values, declaration, spelling, result);
+    if (function->closedAtEof) {
       result += ')';
-      return true;
+      repaired = true;
     }
-    return false;
+    return repaired;
   }
   const auto& block = std::get<SimpleBlock>(value);
-  if (!CloseRecoveredComment(block.values, result)) {
-    return false;
+  bool repaired = CloseRecoveredConstructs(block.values, declaration, spelling, result);
+  if (block.closedAtEof) {
+    if (block.associatedToken == Token::indexOf<Token::CurlyBracket>()) {
+      result += '}';
+    } else if (block.associatedToken == Token::indexOf<Token::SquareBracket>()) {
+      result += ']';
+    } else {
+      result += ')';
+    }
+    repaired = true;
   }
-  if (block.associatedToken == Token::indexOf<Token::CurlyBracket>()) {
-    result += '}';
-  } else if (block.associatedToken == Token::indexOf<Token::SquareBracket>()) {
-    result += ']';
-  } else {
-    result += ')';
-  }
-  return true;
+  return repaired;
 }
 
 }  // namespace
@@ -122,10 +176,12 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
 
   std::string result;
   const Declaration* precedingAuthored = nullptr;
+  std::string_view precedingSpelling;
   const auto append = [&](const Declaration& declaration,
                           std::span<const std::string_view> spellings, std::size_t i) {
     if (precedingAuthored) {
-      CloseRecoveredComment(precedingAuthored->values, result);
+      CloseRecoveredConstructs(precedingAuthored->values, *precedingAuthored, precedingSpelling,
+                               result);
     }
     if (!result.empty()) {
       result += "; ";
@@ -133,9 +189,11 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
     if (i < spellings.size()) {
       result += spellings[i];
       precedingAuthored = &declaration;
+      precedingSpelling = spellings[i];
     } else {
       result += declaration.toCssText();
       precedingAuthored = nullptr;
+      precedingSpelling = {};
     }
   };
   for (std::size_t i = 0; i < existing.size(); ++i) {

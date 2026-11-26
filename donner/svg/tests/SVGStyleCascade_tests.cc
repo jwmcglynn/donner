@@ -159,18 +159,21 @@ TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleKeepsTheLastValidPaint) {
               Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
 }
 
-TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleTerminatesARecoveredComment) {
-  for (const auto note : {"x /*", "var(--fallback, x /*"}) {
-    SCOPED_TRACE(note);
-    auto doc =
-        instantiateSubtree(std::string(R"(<rect style="fill: red; --note: )") + note + R"("/>)");
+TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleTerminatesEofRecoveredConstructs) {
+  for (const std::string_view declaration :
+       {"--note: x /*", "--note: var(--fallback, x /*", "--note: foo(",
+        "--note: outer([inner{value", R"(--note: "/*)", R"(--note: "/*")", "--note: url(path",
+        R"(--n\6fte: f\6f o()"}) {
+    SCOPED_TRACE(declaration);
+    auto doc = instantiateSubtree(std::string(R"(<rect style='fill: red; )") +
+                                  std::string(declaration) + R"('/>)");
     auto target = doc.querySelector("rect");
     ASSERT_THAT(target, Optional(testing::_));
     target->updateStyle("fill: blue");
     const auto merged = target->getAttribute("style");
     ASSERT_THAT(merged, Optional(testing::_));
     auto reparsed =
-        instantiateSubtree(R"(<rect style=")" + std::string(std::string_view(*merged)) + R"("/>)");
+        instantiateSubtree(R"(<rect style=')" + std::string(std::string_view(*merged)) + R"('/>)");
     const auto restored = reparsed.querySelector("rect");
     ASSERT_THAT(restored, Optional(testing::_));
     EXPECT_THAT(restored->getComputedStyle().fill.get(),

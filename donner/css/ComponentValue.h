@@ -32,6 +32,9 @@ struct Function {
   /// Offset of the function name in the source string.
   FileOffset sourceOffset;
 
+  /// True when parsing reached EOF before the function's closing parenthesis.
+  bool closedAtEof = false;
+
   /**
    * Construct a new Function object with a name and an empty parameter list. To supply parameters,
    * modify the \ref values vector after construction.
@@ -77,6 +80,9 @@ struct SimpleBlock {
 
   /// Offset of the opening token in the source string.
   FileOffset sourceOffset;
+
+  /// True when parsing reached EOF before the block's matching closing token.
+  bool closedAtEof = false;
 
   /**
    * Construct a new SimpleBlock object with an opening token and an empty list of component values.
