@@ -7,6 +7,7 @@
 #include "donner/base/RcString.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -197,6 +198,23 @@ bool ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
 
 namespace {
 
+bool GeometryBudgetAllowsRetainedStyle(const Registry& registry) {
+  if (const auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>();
+      budget && (budget->rejected() || budget->limits().maximumBytes !=
+                                           GeometryPreparationResourceBudget::kMaximumBytes)) {
+    return false;
+  }
+  const auto* family = registry.ctx().find<DocumentResourceFamilyContext>();
+  if (!family || !family->budget) {
+    return true;
+  }
+  const DocumentResourceFamilyBudget::Limits defaults;
+  const auto& limits = family->budget->limits();
+  return limits.geometryBytes == defaults.geometryBytes &&
+         limits.maximumTotalRetainedBytes == defaults.maximumTotalRetainedBytes &&
+         family->budget->canReserve(DocumentResourceFamilyBudget::Kind::Geometry, 0);
+}
+
 bool CollectNarrowedStyleEntities(const Registry& registry, std::vector<Entity>& narrowed) {
   constexpr uint16_t kNarrowedFlags =
       DirtyFlagsComponent::NarrowedStyle | DirtyFlagsComponent::Style |
@@ -226,6 +244,9 @@ bool ApplyLiveStyleUpdate(Registry& registry, ParseWarningSink& warningSink,
                                    StyleSystem::FullRestyle::DiscardAndRecompute, scheduler);
     return true;
   }
+  if (!GeometryBudgetAllowsRetainedStyle(registry)) {
+    return false;
+  }
   auto tentativeWarnings = warningSink.remainingAllowance();
   StyleSystem().computeAllStyles(registry, tentativeWarnings,
                                  StyleSystem::FullRestyle::DiscardAndRecompute, scheduler);
@@ -242,11 +263,15 @@ bool ApplyLiveStyleUpdate(Registry& registry, ParseWarningSink& warningSink,
     }
     return false;
   }
-  warningSink.merge(std::move(tentativeWarnings));
+  const bool styleDiagnostics = tentativeWarnings.warningAttempts() != 0;
   for (Entity entity : narrowed) {
-    LayoutSystem().recomputeInvalidatedLayout(EntityHandle(registry, entity), warningSink);
+    LayoutSystem().recomputeInvalidatedLayout(EntityHandle(registry, entity), tentativeWarnings);
   }
-  ShapeSystem().recomputeStyledPaths(registry, narrowed, warningSink);
+  if (!ShapeSystem().recomputeStyledPaths(registry, narrowed, tentativeWarnings)) {
+    registry.ctx().get<RenderTreeState>().needsFullStyleRecompute |= styleDiagnostics;
+    return false;
+  }
+  warningSink.merge(std::move(tentativeWarnings));
   return true;
 }
 

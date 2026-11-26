@@ -145,6 +145,17 @@ public:
     return true;
   }
 
+  /// Charge executed retained geometry without latching a refusal before a full-frame retry.
+  [[nodiscard]] bool tryReserveRetainedGeometry(std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    if (!canReserveUnlocked(Kind::Geometry, bytes)) {
+      return false;
+    }
+    stats_.retainedBytes[static_cast<std::size_t>(Kind::Geometry)] += bytes;
+    stats_.totalRetainedBytes += bytes;
+    return true;
+  }
+
   /// Preflight text-path measurement work before it can allocate adaptive samples.
   bool reserveTextPathMeasurementWork(std::size_t units) {
     const std::lock_guard lock(mutex_);

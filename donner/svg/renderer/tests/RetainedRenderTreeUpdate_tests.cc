@@ -30,6 +30,7 @@
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/resources/SubDocumentAdmission.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
@@ -367,6 +368,97 @@ TEST(RetainedRenderTreeUpdateTest, GeometryAndOrderStylesUseTheFullRebuild) {
   };
   ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::FullRebuild,
                                      "style-geometry-and-order");
+}
+
+TEST(RetainedRenderTreeUpdateTest, PairedPathGrowthAndShrinkageKeepsCanonicalBudgetOrder) {
+  using components::DocumentResourceFamilyBudget;
+  using components::DocumentResourceFamilyContext;
+  using components::GeometryPreparationResourceBudget;
+  using Kind = DocumentResourceFamilyBudget::Kind;
+
+  constexpr std::string_view small = "M2 2 H10 V10 Z";
+  constexpr std::string_view large = "M2 2 H4 V4 H6 V6 H8 V8 H10 V10 H12 V12 H14 V14 Z";
+  const auto source = [&](bool growFirstInFullPass) {
+    const std::string grow = "<path id='grow' fill='red' d='" + std::string(small) + "'/>";
+    const std::string shrink =
+        "<path id='shrink' fill='blue' transform='translate(20)' d='" + std::string(large) + "'/>";
+    return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24">
+                           <style>.grow { d: ")") +
+           std::string(large) + R"(" } .shrink { d: ")" + std::string(small) + R"(" }</style>)" +
+           (growFirstInFullPass ? shrink + grow : grow + shrink) + "</svg>";
+  };
+
+  for (const bool useLocalLimit : {false, true}) {
+    for (const bool growFirstInFullPass : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "local limit " << useLocalLimit << ", grow first " << growFirstInFullPass);
+      const auto input = source(growFirstInFullPass);
+      auto calibration = Parse(input);
+      DriverRenderer probe;
+      probe.draw(calibration);
+      const auto pathBytes = calibration.unsafeRegistry()
+                                 .ctx()
+                                 .get<GeometryPreparationResourceBudget>()
+                                 .retainedBytes();
+      ASSERT_GT(pathBytes, 0u);
+
+      auto retained = Parse(input);
+      auto reference = Parse(input);
+      DisableRetainedUpdates(reference);
+      DriverRenderer actual;
+      DriverRenderer expected;
+      const auto drawInitial = [&](SVGDocument& document, DriverRenderer& renderer) {
+        auto& context = document.unsafeRegistry().ctx();
+        const auto family = context.get<DocumentResourceFamilyContext>().budget;
+        if (useLocalLimit) {
+          context.erase<GeometryPreparationResourceBudget>();
+          context.emplace<GeometryPreparationResourceBudget>(
+              family, GeometryPreparationResourceBudget::Limits{.maximumBytes = pathBytes});
+        }
+        renderer.draw(document);
+        return family;
+      };
+      const auto retainedFamily = drawInitial(retained, actual);
+      const auto referenceFamily = drawInitial(reference, expected);
+      GeometryPreparationResourceBudget otherRetained(retainedFamily);
+      GeometryPreparationResourceBudget otherReference(referenceFamily);
+      const auto otherBytes =
+          useLocalLimit ? std::size_t{64} : retainedFamily->availableBytes(Kind::Geometry);
+      ASSERT_EQ(retainedFamily->availableBytes(Kind::Geometry),
+                referenceFamily->availableBytes(Kind::Geometry));
+      ASSERT_TRUE(otherRetained.reserve(Entity{1}, otherBytes));
+      ASSERT_TRUE(otherReference.reserve(Entity{1}, otherBytes));
+      const auto before = ReadCounters(retained);
+
+      for (SVGDocument* document : {&retained, &reference}) {
+        // The two narrowed paths are collected in reverse dirty insertion order.
+        Element(*document, "#shrink").setClassName("shrink");
+        Element(*document, "#grow").setClassName("grow");
+      }
+      actual.draw(retained);
+      expected.draw(reference);
+      editor::tests::CompareBitmapToBitmap(actual.takeSnapshot(), expected.takeSnapshot(),
+                                           "retained-path-budget-order",
+                                           editor::tests::PixelmatchIdentityParams());
+
+      const auto after = ReadCounters(retained);
+      EXPECT_EQ(after.retainedUpdates, before.retainedUpdates);
+      EXPECT_EQ(after.fullRebuilds - before.fullRebuilds, 1u);
+      const auto& actualBudget =
+          retained.unsafeRegistry().ctx().get<GeometryPreparationResourceBudget>();
+      const auto& expectedBudget =
+          reference.unsafeRegistry().ctx().get<GeometryPreparationResourceBudget>();
+      EXPECT_EQ(actualBudget.rejected(), growFirstInFullPass);
+      EXPECT_EQ(actualBudget.rejected(), expectedBudget.rejected());
+      EXPECT_EQ(actualBudget.retainedBytes(), expectedBudget.retainedBytes());
+      EXPECT_EQ(retainedFamily->securityStats().rejectedReservations,
+                referenceFamily->securityStats().rejectedReservations);
+      EXPECT_EQ(
+          retainedFamily->securityStats().retainedBytes[static_cast<std::size_t>(Kind::Geometry)],
+          otherBytes + actualBudget.retainedBytes());
+      EXPECT_EQ(otherRetained.retainedBytes(), otherBytes);
+    }
+  }
 }
 
 TEST(RetainedRenderTreeUpdateTest, DormantAndMountedSymbolsSeeLocalSourcePaintEdits) {

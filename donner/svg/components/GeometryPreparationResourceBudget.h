@@ -3,12 +3,15 @@
 
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <unordered_map>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 
 namespace donner::svg::components {
+
+struct ComputedPathComponent;
 
 /** Owns the current computed-path reservation for one document registry. */
 class GeometryPreparationResourceBudget {
@@ -52,6 +55,50 @@ public:
     other.retainedBytes_ = 0;
   }
   GeometryPreparationResourceBudget& operator=(GeometryPreparationResourceBudget&&) = delete;
+
+  /// Destination for paths built by one retained style pass. The owner clears it before replay.
+  struct PathStaging {
+    void* context;
+    void (*write)(void*, Entity, ComputedPathComponent*);
+  };
+  const PathStaging* pathStaging = nullptr;
+
+  /// Byte charge of one actually prepared replacement. Zero removes an old path's charge.
+  struct PathReplacement {
+    Entity entity;
+    std::size_t bytes;
+  };
+
+  /// Admit the actual growth of all changed paths before releasing any previous reservation.
+  [[nodiscard]] bool tryReplacePaths(std::span<const PathReplacement> replacements) {
+    std::size_t growth = 0;
+    std::size_t shrink = 0;
+    for (const auto& replacement : replacements) {
+      const auto found = reservations_.find(replacement.entity);
+      const std::size_t old = found == reservations_.end() ? 0 : found->second;
+      if (replacement.bytes > old) {
+        growth += replacement.bytes - old;
+      } else {
+        shrink += old - replacement.bytes;
+      }
+    }
+    if (retainedBytes_ > limits_.maximumBytes || growth > limits_.maximumBytes - retainedBytes_ ||
+        (family_ && !family_->tryReserveRetainedGeometry(growth))) {
+      return false;
+    }
+    for (const auto& replacement : replacements) {
+      if (replacement.bytes == 0) {
+        reservations_.erase(replacement.entity);
+      } else {
+        reservations_[replacement.entity] = replacement.bytes;
+      }
+    }
+    retainedBytes_ = retainedBytes_ + growth - shrink;
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::Geometry, shrink);
+    }
+    return true;
+  }
 
   /// Replace one entity's geometry reservation, releasing bytes when it shrinks.
   /// @param entity Owner of the prepared geometry.

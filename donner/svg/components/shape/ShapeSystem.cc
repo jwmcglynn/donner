@@ -382,7 +382,7 @@ LineComponent EffectiveLine(EntityHandle handle, const LineComponent& line,
   return result;
 }
 
-bool ReserveComputedPathPayload(EntityHandle handle, const Path& path) {
+GeometryPreparationResourceBudget& ComputedPathBudget(EntityHandle handle) {
   auto& registryContext = handle.registry()->ctx();
   if (!registryContext.contains<GeometryPreparationResourceBudget>()) {
     std::shared_ptr<DocumentResourceFamilyBudget> family;
@@ -392,16 +392,19 @@ bool ReserveComputedPathPayload(EntityHandle handle, const Path& path) {
     registryContext.emplace<GeometryPreparationResourceBudget>(std::move(family));
   }
 
-  const std::optional<std::size_t> retainedBytes = path.retainedBytes();
-  return retainedBytes.has_value() &&
-         registryContext.get<GeometryPreparationResourceBudget>().reserve(handle.entity(),
-                                                                          *retainedBytes);
+  return registryContext.get<GeometryPreparationResourceBudget>();
 }
 
 void RemoveComputedPath(EntityHandle handle) {
+  auto* budget = handle.registry()->ctx().find<GeometryPreparationResourceBudget>();
+  if (budget && budget->pathStaging) {
+    const auto& staging = *budget->pathStaging;
+    staging.write(staging.context, handle.entity(), nullptr);
+    return;
+  }
   handle.remove<ComputedPathComponent>();
-  if (auto* budget = handle.registry()->ctx().find<GeometryPreparationResourceBudget>()) {
-    budget->release(handle.entity());
+  if (auto* current = handle.registry()->ctx().find<GeometryPreparationResourceBudget>()) {
+    current->release(handle.entity());
   }
 }
 
@@ -442,7 +445,14 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
 /// left behind - only a parse of path data may leave a key that matches a path-data string.
 ComputedPathComponent* emplaceComputedPathIfChanged(
     EntityHandle handle, Path newPath, std::optional<RcString> sourcePathData = std::nullopt) {
-  if (!ReserveComputedPathPayload(handle, newPath)) {
+  auto& budget = ComputedPathBudget(handle);
+  if (const auto* staging = budget.pathStaging) {
+    ComputedPathComponent path{std::move(newPath), std::nullopt, std::move(sourcePathData)};
+    staging->write(staging->context, handle.entity(), &path);
+    return nullptr;
+  }
+  const auto retainedBytes = newPath.retainedBytes();
+  if (!retainedBytes || !budget.reserve(handle.entity(), *retainedBytes)) {
     RemoveComputedPath(handle);
     return nullptr;
   }
@@ -1086,8 +1096,75 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
   }
 }
 
-void ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entity> entities,
+namespace {
+
+class PreparedRetainedPaths {
+public:
+  explicit PreparedRetainedPaths(Registry& registry) : registry_(registry) {}
+
+  void stage(Entity entity, ComputedPathComponent* path) {
+    if (declined_) {
+      return;
+    }
+    const auto* old = registry_.try_get<ComputedPathComponent>(entity);
+    if ((!old && !path) || (old && path && old->spline == path->spline &&
+                            old->sourcePathData == path->sourcePathData)) {
+      return;
+    }
+    const auto bytes = path ? path->spline.retainedBytes() : std::optional<std::size_t>(0);
+    constexpr std::size_t kMaximumStagedBytes = 1024 * 1024;
+    constexpr std::size_t kMaximumStagedPaths = 512;
+    if (!bytes || *bytes > kMaximumStagedBytes - stagedBytes_ ||
+        updates_.size() == kMaximumStagedPaths) {
+      declined_ = true;
+      return;
+    }
+    stagedBytes_ += *bytes;
+    charges_.push_back({entity, *bytes});
+    updates_.push_back(path ? std::optional(std::move(*path)) : std::nullopt);
+  }
+
+  bool commit(GeometryPreparationResourceBudget& budget) {
+    if (declined_ || (!charges_.empty() && !budget.tryReplacePaths(charges_))) {
+      return false;
+    }
+    for (std::size_t i = 0; i < charges_.size(); ++i) {
+      const Entity entity = charges_[i].entity;
+      if (auto& update = updates_[i]) {
+        auto* existing = registry_.try_get<ComputedPathComponent>(entity);
+        if (existing && existing->spline == update->spline) {
+          existing->sourcePathData = std::move(update->sourcePathData);
+        } else {
+          registry_.emplace_or_replace<ComputedPathComponent>(entity, std::move(*update));
+        }
+      } else {
+        registry_.remove<ComputedPathComponent>(entity);
+      }
+    }
+    return true;
+  }
+
+private:
+  Registry& registry_;
+  std::size_t stagedBytes_ = 0;
+  bool declined_ = false;
+  std::vector<GeometryPreparationResourceBudget::PathReplacement> charges_;
+  std::vector<std::optional<ComputedPathComponent>> updates_;
+};
+
+}  // namespace
+
+bool ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entity> entities,
                                        ParseWarningSink& warningSink) {
+  UTILS_RELEASE_ASSERT(!entities.empty());
+  auto& budget = ComputedPathBudget(EntityHandle(registry, entities.front()));
+  PreparedRetainedPaths prepared(registry);
+  const GeometryPreparationResourceBudget::PathStaging staging{
+      &prepared, [](void* context, Entity entity, ComputedPathComponent* path) {
+        static_cast<PreparedRetainedPaths*>(context)->stage(entity, path);
+      }};
+  UTILS_RELEASE_ASSERT(!budget.pathStaging);
+  budget.pathStaging = &staging;
   for (Entity entity : entities) {
     EntityHandle handle(registry, entity);
     const auto& style = handle.get<ComputedStyleComponent>();
@@ -1107,6 +1184,8 @@ void ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entit
     }
     instantiateShadowComputedPath(handle, warningSink);
   }
+  budget.pathStaging = nullptr;
+  return prepared.commit(budget);
 }
 
 std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
