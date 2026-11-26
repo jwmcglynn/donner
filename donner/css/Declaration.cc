@@ -79,18 +79,29 @@ std::unordered_map<std::string, size_t> SelectStyleUpdates(std::span<const Decla
 }  // namespace
 
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
-                                   std::span<const Declaration> updates) {
+                                   std::span<const Declaration> updates,
+                                   std::span<const std::string_view> existingSpellings,
+                                   std::span<const std::string_view> updateSpellings) {
   const auto updateIndexByName = SelectStyleUpdates(updates);
 
-  // Collect existing declarations not overridden by updates.
-  std::vector<const Declaration*> merged;
-  merged.reserve(existing.size() + updateIndexByName.size());
-
-  for (const auto& decl : existing) {
+  std::string result;
+  const auto append = [&](const Declaration& declaration,
+                          std::span<const std::string_view> spellings, std::size_t i) {
+    if (!result.empty()) {
+      result += "; ";
+    }
+    if (i < spellings.size()) {
+      result += spellings[i];
+    } else {
+      result += declaration.toCssText();
+    }
+  };
+  for (std::size_t i = 0; i < existing.size(); ++i) {
+    const auto& decl = existing[i];
     const auto update = updateIndexByName.find(PropertyKey(decl.name));
     if (update == updateIndexByName.end() ||
         !ReplacesStyleDeclaration(decl, updates[update->second])) {
-      merged.push_back(&decl);
+      append(decl, existingSpellings, i);
     }
   }
 
@@ -99,17 +110,8 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
     const std::string key = PropertyKey(updates[i].name);
     const auto selected = updateIndexByName.find(key);
     if (selected != updateIndexByName.end() && selected->second == i) {
-      merged.push_back(&updates[i]);
+      append(updates[i], updateSpellings, i);
     }
-  }
-
-  // Serialize.
-  std::string result;
-  for (size_t i = 0; i < merged.size(); ++i) {
-    if (i > 0) {
-      result += "; ";
-    }
-    result += merged[i]->toCssText();
   }
 
   return result;

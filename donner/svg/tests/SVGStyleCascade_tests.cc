@@ -147,6 +147,42 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceTracksCompleteMergedInlineStyle) 
   EXPECT_EQ(changed->end, FileOffset::Offset(changedStart + 6));
 }
 
+TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleKeepsTheLastValidPaint) {
+  auto doc = instantiateSubtree(R"(<rect id="target" style="fill: red" />)");
+  auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  target->updateStyle("fill: not-a-color");
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  target->updateStyle("fill: blue; fill: not-a-color");
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
+}
+
+TEST(SVGStyleCascadeTests, UnrelatedInlineUpdatePreservesEscapedCustomPropertySpelling) {
+  auto doc =
+      instantiateSubtree(R"SVG(<rect id="target" style="--a\:b: red; fill: var(--a\:b)" />)SVG");
+  auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  target->updateStyle("opacity: 0.5");
+  const auto merged = target->getAttribute("style");
+  ASSERT_THAT(merged, Optional(testing::_));
+  EXPECT_THAT(std::string(std::string_view(*merged)),
+              testing::Eq(R"(--a\:b: red; fill: var(--a\:b); opacity: 0.5)"));
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  auto reparsed = instantiateSubtree(R"(<rect id="target" style=")" +
+                                     std::string(std::string_view(*merged)) + R"("/>)");
+  const auto again = reparsed.querySelector("#target");
+  ASSERT_THAT(again, Optional(testing::_));
+  EXPECT_THAT(again->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  const auto range = FindCustomPropertyDeclaration(*again, "--a:b");
+  ASSERT_THAT(range, Optional(testing::_));
+  EXPECT_EQ(range->start, FileOffset::Offset(reparsed.source().find(R"(--a\:b)")));
+  EXPECT_EQ(range->end, FileOffset::Offset(reparsed.source().find(R"(--a\:b)") + 6));
+}
+
 TEST(SVGStyleCascadeTests, LayerPrecedenceComputesCustomValuesBeforeInheritance) {
   auto doc = instantiateSubtree(R"(
     <style>

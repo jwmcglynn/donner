@@ -146,9 +146,13 @@ struct DeclarationOrAtRule {
  *
  * @param existing Existing declarations.
  * @param updates Updated declarations to apply.
+ * @param existingSpellings Optional original text, in the same order as existing.
+ * @param updateSpellings Optional original text, in the same order as updates.
  * @return Merged style string with declarations separated by "; ".
  */
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
-                                   std::span<const Declaration> updates);
+                                   std::span<const Declaration> updates,
+                                   std::span<const std::string_view> existingSpellings = {},
+                                   std::span<const std::string_view> updateSpellings = {});
 
 }  // namespace donner::css
