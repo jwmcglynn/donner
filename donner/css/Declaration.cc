@@ -1,5 +1,6 @@
 #include "donner/css/Declaration.h"
 
+#include <limits>
 #include <unordered_map>
 
 #include "donner/base/StringUtils.h"
@@ -11,6 +12,43 @@ DeclarationOrAtRule::DeclarationOrAtRule(DeclarationOrAtRule::Type&& value)
 
 bool DeclarationOrAtRule::operator==(const DeclarationOrAtRule& other) const {
   return value == other.value;
+}
+
+namespace {
+std::optional<SourceRange> AuthoredSpan(FileOffset origin, std::size_t begin, std::size_t end) {
+  if (!origin.offset || !end || begin > end ||
+      end > std::numeric_limits<std::size_t>::max() - *origin.offset) {
+    return std::nullopt;
+  }
+  return SourceRange{FileOffset::Offset(*origin.offset + begin),
+                     FileOffset::Offset(*origin.offset + end)};
+}
+}  // namespace
+
+std::optional<SourceRange> Declaration::authoredNameRange() const {
+  return AuthoredSpan(sourceOffset, 0, nameSourceByteLength);
+}
+std::optional<SourceRange> Declaration::authoredDeclarationRange() const {
+  return AuthoredSpan(sourceOffset, 0, authored.end);
+}
+std::optional<SourceRange> Declaration::authoredPriorityRange() const {
+  return important && authored.importantStart
+             ? AuthoredSpan(sourceOffset, authored.importantStart, authored.end)
+             : std::nullopt;
+}
+std::optional<SourceRange> Declaration::authoredValueRange() const {
+  if (!authored.end) {
+    return std::nullopt;
+  }
+  if (values.empty()) {
+    return AuthoredSpan(sourceOffset, authored.colonEnd, authored.colonEnd);
+  }
+  const auto begin = values.front().authoredRange();
+  const auto end = values.back().authoredRange();
+  if (!begin || !end) {
+    return std::nullopt;
+  }
+  return SourceRange{begin->start, end->end};
 }
 
 std::string Declaration::toCssText() const {

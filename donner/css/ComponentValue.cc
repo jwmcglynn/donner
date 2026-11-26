@@ -1,5 +1,7 @@
 #include "donner/css/ComponentValue.h"
 
+#include <limits>
+
 namespace donner::css {
 
 Function::Function(RcString name, const FileOffset& sourceOffset)
@@ -88,6 +90,24 @@ ComponentValue& ComponentValue::operator=(ComponentValue&&) noexcept = default;
 static_assert(std::is_nothrow_move_constructible_v<ComponentValue::Type>,
               "ComponentValue::Type must be nothrow-move-constructible: the out-of-line "
               "move members are declared noexcept.");
+
+std::optional<SourceRange> ComponentValue::authoredRange() const {
+  const auto start = sourceOffset();
+  const auto length = std::visit(
+      [](const auto& item) -> std::size_t {
+        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(item)>, Token>) {
+          return item.sourceByteLength();
+        } else {
+          return item.sourceByteLength;
+        }
+      },
+      value);
+  if (!start.offset || !length ||
+      length > std::numeric_limits<std::size_t>::max() - *start.offset) {
+    return std::nullopt;
+  }
+  return SourceRange{start, FileOffset::Offset(*start.offset + length)};
+}
 
 bool ComponentValue::operator==(const ComponentValue& other) const {
   return value == other.value;

@@ -558,7 +558,8 @@ Token Tokenizer::consumeUrlToken(const std::string_view afterUrl, size_t charsCo
 
     if (ch == ')') {
       urlValueRange_ = {urlStart + valueStart, urlStart + valueEnd};
-      return token<Token::Url>(i + charsConsumedBefore + 1, RcString::fromVector(std::move(str)));
+      return token<Token::Url>(i + charsConsumedBefore + 1, RcString::fromVector(std::move(str)),
+                               charsConsumedBefore + valueStart, valueEnd - valueStart);
     } else if (isWhitespace(ch)) {
       ++i;
       while (i < afterUrl.size() && isWhitespace(afterUrl[i])) {
@@ -598,7 +599,8 @@ Token Tokenizer::consumeUrlToken(const std::string_view afterUrl, size_t charsCo
 
   // EOF: This is a parse error. Return the <url-token>.
   urlValueRange_ = {urlStart + valueStart, urlStart + valueEnd};
-  auto result = token<Token::Url>(i + charsConsumedBefore, RcString::fromVector(std::move(str)));
+  auto result = token<Token::Url>(i + charsConsumedBefore, RcString::fromVector(std::move(str)),
+                                  charsConsumedBefore + valueStart, valueEnd - valueStart);
   nextToken_ = token<Token::ErrorToken>(0, Token::ErrorToken::Type::EofInUrl);
   return result;
 }

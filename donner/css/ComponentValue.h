@@ -31,6 +31,8 @@ struct Function {
 
   /// Offset of the function name in the source string.
   FileOffset sourceOffset;
+  /// Authored extent through the matching closer. Zero if synthetic or unterminated.
+  std::size_t sourceByteLength = 0;
 
   /**
    * Construct a new Function object with a name and an empty parameter list. To supply parameters,
@@ -77,6 +79,8 @@ struct SimpleBlock {
 
   /// Offset of the opening token in the source string.
   FileOffset sourceOffset;
+  /// Authored extent through the matching closer. Zero if synthetic or unterminated.
+  std::size_t sourceByteLength = 0;
 
   /**
    * Construct a new SimpleBlock object with an opening token and an empty list of component values.
@@ -268,6 +272,8 @@ struct ComponentValue {
    * Get the offset of this component value in the original source. For \ref Function and \ref
    * SimpleBlock, returns the offset of the group opening token.
    */
+  [[nodiscard]] std::optional<SourceRange> authoredRange() const;
+
   FileOffset sourceOffset() const {
     return std::visit(
         [](auto&& v) -> FileOffset {

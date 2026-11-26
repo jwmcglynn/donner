@@ -88,7 +88,7 @@ private:
   Token token(size_t length, Args... args) {
     const size_t offset = currentOffset();
     remaining_.remove_prefix(length);
-    return Token(T(std::forward<Args>(args)...), offset);
+    return Token(T(std::forward<Args>(args)...), offset, length);
   }
 
   /// Consume and discard comments in the input string. Returns an error token if the comment is
