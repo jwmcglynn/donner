@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "donner/base/tests/ScopedCtypeLocale.h"
+#include "donner/editor/CssSourceSyntax.h"
 
 namespace donner::editor {
 
@@ -2808,6 +2809,27 @@ TEST_F(TextEditorCoreTests, CssColorsFollowScopedSvgNamespaceAndCdata) {
   EXPECT_EQ(ColorAtByteOffset(editor_, source.find("2px")), ColorIndex::Number);
   EXPECT_NE(ColorAtByteOffset(editor_, source.find("unknown")), ColorIndex::ErrorMarker);
   EXPECT_EQ(ColorAtByteOffset(editor_, source.find("FILL")), ColorIndex::KnownIdentifier);
+}
+
+TEST(CssSourceSyntaxTests, EmitsDisjointRegionsAndCoversEveryCssByte) {
+  constexpr std::string_view source = R"(<svg>
+<style>.a { FILL: red }<title>Styles</title>.b { stroke: blue }</style>
+<rect style="font-family: &quot;Sans&quot;; opacity: 0.5" fill="red"/>
+</svg>)";
+  const auto regions = FindSvgCssSourceRegions(source);
+  ASSERT_EQ(regions.size(), 4u);
+  std::size_t previousEnd = 0;
+  for (const auto& region : regions) {
+    EXPECT_LE(previousEnd, region.startOffset);
+    std::size_t nextByte = region.startOffset;
+    ClassifySvgCssRegion(source, region, [&](CssColorSpan span) {
+      EXPECT_EQ(span.startOffset, nextByte);
+      EXPECT_GT(span.endOffset, span.startOffset);
+      nextByte = span.endOffset;
+    });
+    EXPECT_EQ(nextByte, region.endOffset);
+    previousEnd = region.endOffset;
+  }
 }
 
 }  // namespace donner::editor

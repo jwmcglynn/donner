@@ -2003,14 +2003,11 @@ void TextEditorCore::colorizeSvgCss(int fromLine, int toLine) {
   colorizeLanguageRange(fromLine, toLine);
   const std::size_t first = lineStarts[fromLine];
   const std::size_t last = toLine == text_.getTotalLines() ? source.size() : lineStarts[toLine];
-  std::vector<CssColorSpan> colors;
   for (const auto& region : regions) {
     if (region.startOffset < last && first < region.endOffset) {
-      ClassifySvgCssRegion(source, region, colors);
+      ClassifySvgCssRegion(source, region,
+                           [&](CssColorSpan span) { PaintCssSpan(text_, lineStarts, span); });
     }
-  }
-  for (const auto& span : colors) {
-    PaintCssSpan(text_, lineStarts, span);
   }
 }
 

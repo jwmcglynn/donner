@@ -2,7 +2,7 @@
 /// @file
 
 #include <cstddef>
-#include <limits>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,8 +41,8 @@ struct CssColorSpan {
 /// @param source SVG/XML source bytes.
 std::vector<CssSourceRegion> FindSvgCssSourceRegions(std::string_view source);
 
-/// Append the token colors for one CSS region, using absolute source byte offsets.
+/// Visit the token colors for one CSS region, using absolute source byte offsets.
 void ClassifySvgCssRegion(std::string_view source, const CssSourceRegion& region,
-                          std::vector<CssColorSpan>& colors);
+                          const std::function<void(CssColorSpan)>& paint);
 
 }  // namespace donner::editor

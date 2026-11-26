@@ -4,11 +4,11 @@
 #include <charconv>
 #include <map>
 #include <optional>
-#include <span>
 #include <utility>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
+#include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLTokenizer.h"
 #include "donner/css/parser/details/Tokenizer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -192,18 +192,6 @@ bool IsKnownProperty(std::string_view name) {
   const auto names = svg::PropertyRegistry::propertyNames();
   return std::ranges::any_of(
       names, [&](std::string_view known) { return StringUtils::EqualsLowercase(name, known); });
-}
-
-void AppendColor(std::vector<CssColorSpan>& colors, std::size_t start, std::size_t end,
-                 ColorIndex color) {
-  if (start >= end) {
-    return;
-  }
-  if (!colors.empty() && colors.back().endOffset == start && colors.back().color == color) {
-    colors.back().endOffset = end;
-  } else {
-    colors.push_back({start, end, color});
-  }
 }
 
 enum class CssMode { SelectorPrelude, AtRulePrelude, DeclarationName, DeclarationValue };
@@ -397,9 +385,7 @@ std::optional<char32_t> ReferenceValue(std::string_view ref) {
   std::uint32_t value = 0;
   const auto [end, error] =
       std::from_chars(ref.data(), ref.data() + ref.size(), value, hex ? 16 : 10);
-  const bool xmlControl = value < 0x20 && value != 9 && value != 10 && value != 13;
-  if (error != std::errc{} || end != ref.data() + ref.size() || xmlControl ||
-      !Utf8::IsValidCodepoint(value) || value == 0xfffe || value == 0xffff) {
+  if (error != std::errc{} || end != ref.data() + ref.size() || !xml::IsValidXmlCharacter(value)) {
     return std::nullopt;
   }
   return static_cast<char32_t>(value);
@@ -420,7 +406,7 @@ void VisitCssText(std::string_view raw, Visit visit) {
     switch (token.type) {
       case XMLTokenType::CData: {
         constexpr std::size_t kOpen = std::string_view("<![CDATA[").size();
-        const auto contentEnd = bytes.ends_with("]]>") ? end - 3 : end;
+        const auto contentEnd = end - 3;  // CData tokens include both delimiters.
         visit(CssTextPiece{begin + kOpen, contentEnd,
                            raw.substr(begin + kOpen, contentEnd - begin - kOpen)});
         break;
@@ -441,65 +427,78 @@ void VisitCssText(std::string_view raw, Visit visit) {
   });
 }
 
-// Map token spans back to authored bytes. Each source piece and CSS span is visited in order,
-// including when a token crosses a character reference, an XML comment or a CDATA boundary.
-void PaintProjectedPiece(const CssTextPiece& piece, std::size_t cssStart, std::size_t sourceBase,
-                         std::span<const CssColorSpan> spans, std::size_t& index,
-                         std::vector<CssColorSpan>& colors) {
-  const auto cssEnd = cssStart + piece.text.size();
-  const bool literal = piece.sourceEnd - piece.sourceStart == piece.text.size();
-  while (index < spans.size() && spans[index].startOffset < cssEnd) {
-    const auto& span = spans[index];
-    const auto start = literal ? piece.sourceStart + std::max(span.startOffset, cssStart) - cssStart
-                               : piece.sourceStart;
-    const auto end =
-        literal ? piece.sourceStart + std::min(span.endOffset, cssEnd) - cssStart : piece.sourceEnd;
-    AppendColor(colors, sourceBase + start, sourceBase + end, span.color);
-    if (span.endOffset > cssEnd) {
-      break;
-    }
-    ++index;
-  }
-}
+// Stream one token and at most one skipped comment gap at a time. The editor can paint a
+// complete stylesheet without keeping an array proportional to its number of tokens.
+class TokenColors {
+public:
+  TokenColors(std::string_view text, CssSourceRegionKind kind)
+      : tokenizer_(text), state_(kind), size_(text.size()) {}
 
-void ClassifyTokens(std::string_view cssText, CssSourceRegionKind kind, std::size_t sourceStart,
-                    std::vector<CssColorSpan>& colors) {
-  css::parser::details::Tokenizer tokenizer(cssText);
-  CssState state(kind);
-  std::size_t consumed = 0;
-  while (!tokenizer.isEOF()) {
-    const Token token = tokenizer.next();
-    if (token.is<Token::EofToken>()) {
-      break;
+  std::optional<CssColorSpan> next() {
+    if (pending_) {
+      return std::exchange(pending_, std::nullopt);
     }
-    const std::size_t start = token.offset().offset.value_or(consumed);
-    const std::size_t end = tokenizer.endOffset();
-    AppendColor(colors, sourceStart + consumed, sourceStart + start, ColorIndex::Comment);
-    AppendColor(colors, sourceStart + start, sourceStart + end, TokenColor(token, state));
-    consumed = end;
+    if (end_ == size_) {
+      return std::nullopt;
+    }
+    const auto token = tokenizer_.next();
+    const auto previous = end_;
+    if (token.is<Token::EofToken>()) {
+      end_ = size_;
+      return CssColorSpan{previous, end_, ColorIndex::Comment};
+    }
+    end_ = tokenizer_.endOffset();
+    const auto start = token.offset().offset.value_or(previous);
+    const CssColorSpan tokenSpan{start, end_, TokenColor(token, state_)};
+    if (previous < start) {
+      pending_ = tokenSpan;
+      return CssColorSpan{previous, start, ColorIndex::Comment};
+    }
+    return tokenSpan;
   }
-  AppendColor(colors, sourceStart + consumed, sourceStart + cssText.size(), ColorIndex::Comment);
-}
+
+private:
+  css::parser::details::Tokenizer tokenizer_;
+  CssState state_;
+  std::size_t size_;
+  std::size_t end_ = 0;
+  std::optional<CssColorSpan> pending_;
+};
 
 }  // namespace
 
 void ClassifySvgCssRegion(std::string_view source, const CssSourceRegion& region,
-                          std::vector<CssColorSpan>& colors) {
+                          const std::function<void(CssColorSpan)>& paint) {
   const auto raw = source.substr(region.startOffset, region.endOffset - region.startOffset);
   if (raw.find_first_of("&<") == raw.npos) {
-    ClassifyTokens(raw, region.kind, region.startOffset, colors);
+    TokenColors tokens(raw, region.kind);
+    while (const auto span = tokens.next()) {
+      paint({region.startOffset + span->startOffset, region.startOffset + span->endOffset,
+             span->color});
+    }
     return;
   }
   std::string decoded;
   VisitCssText(raw, [&](const CssTextPiece& piece) { decoded.append(piece.text); });
-  std::vector<CssColorSpan> spans;
-  ClassifyTokens(decoded, region.kind, 0, spans);
+  TokenColors tokens(decoded, region.kind);
+  auto span = tokens.next();
   std::size_t cssStart = 0;
-  std::size_t index = 0;
   VisitCssText(raw, [&](const CssTextPiece& piece) {
-    PaintProjectedPiece(piece, cssStart, region.startOffset, spans, index, colors);
-    cssStart += piece.text.size();
+    const auto cssEnd = cssStart + piece.text.size();
+    const bool literal = piece.sourceEnd - piece.sourceStart == piece.text.size();
+    while (span && span->startOffset < cssEnd) {
+      const auto begin = literal
+                             ? piece.sourceStart + std::max(span->startOffset, cssStart) - cssStart
+                             : piece.sourceStart;
+      const auto end = literal ? piece.sourceStart + std::min(span->endOffset, cssEnd) - cssStart
+                               : piece.sourceEnd;
+      paint({region.startOffset + begin, region.startOffset + end, span->color});
+      if (span->endOffset > cssEnd) {
+        break;
+      }
+      span = tokens.next();
+    }
+    cssStart = cssEnd;
   });
 }
-
 }  // namespace donner::editor

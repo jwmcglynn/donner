@@ -22,6 +22,7 @@
 #include "donner/base/parser/IntegerParser.h"
 #include "donner/base/parser/LineOffsets.h"
 #include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/EntityDeclarationsContext.h"
@@ -243,13 +244,6 @@ struct NoParameterEntityPredicate {
 
   static bool test(char ch) { return kLookupNoEntity[static_cast<unsigned char>(ch)] != 0; }
 };
-
-bool IsValidXmlCharacter(std::uint64_t codepoint) {
-  return codepoint == 0x9 || codepoint == 0xA || codepoint == 0xD ||
-         (codepoint >= 0x20 && codepoint <= 0xD7FF) ||
-         (codepoint >= 0xE000 && codepoint <= 0xFFFD) ||
-         (codepoint >= 0x10000 && codepoint <= 0x10FFFF);
-}
 
 /// Reject invalid source bytes before allocating parser-owned source or document state.
 std::optional<ParseDiagnostic> ValidateXmlSource(std::string_view source) {

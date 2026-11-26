@@ -1223,6 +1223,7 @@ donner_cc_test(
     deps = [
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/editor:css_source_syntax",
         "//donner/editor:text_editor_core",
         "@com_google_gtest//:gtest",
     ],
