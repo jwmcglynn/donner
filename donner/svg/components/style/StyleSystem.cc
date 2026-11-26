@@ -3332,6 +3332,22 @@ struct StylesheetSourceIndexCache {
     entries.clear();
     retainedBytes = 0;
   }
+
+  const xml::XMLDecodedTextSourceMap* store(Entity entity, std::uint64_t stylesheetRevision,
+                                            std::optional<xml::XMLDecodedTextSourceMap> mapping) {
+    std::size_t mappingBytes = mapping ? mapping->retainedCapacityBytes() : 0;
+    if (mappingBytes > kMaximumStylesheetSourceIndexRetainedBytes - retainedBytes) {
+      mapping.reset();
+      mappingBytes = 0;
+    }
+    retainedBytes += mappingBytes;
+    auto inserted =
+        entries
+            .emplace(entity, StylesheetSourceIndexEntry{stylesheetRevision, mappingBytes,
+                                                        std::move(mapping)})
+            .first;
+    return inserted->second.mapping ? &*inserted->second.mapping : nullptr;
+  }
 };
 
 StylesheetSourceIndexCache& SourceIndexCache() {
@@ -3365,18 +3381,7 @@ const xml::XMLDecodedTextSourceMap* MapForStylesheet(Registry& registry, Entity 
   const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
   auto mapping = node ? node->decodedTextSourceMap(sheet.text) : std::nullopt;
   ++cache.builds;
-  std::size_t retainedBytes = mapping ? mapping->retainedCapacityBytes() : 0;
-  if (retainedBytes > kMaximumStylesheetSourceIndexRetainedBytes - cache.retainedBytes) {
-    mapping.reset();
-    retainedBytes = 0;
-  }
-  cache.retainedBytes += retainedBytes;
-  auto inserted =
-      cache.entries
-          .emplace(entity, StylesheetSourceIndexEntry{sheet.contentRevision(), retainedBytes,
-                                                      std::move(mapping)})
-          .first;
-  return inserted->second.mapping ? &*inserted->second.mapping : nullptr;
+  return cache.store(entity, sheet.contentRevision(), std::move(mapping));
 }
 
 bool HasCurrentSourceProjection(const Registry& registry) {
