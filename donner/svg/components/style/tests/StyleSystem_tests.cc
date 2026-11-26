@@ -491,6 +491,42 @@ TEST_F(StyleSystemTest, StylesheetSourceIndexBuildsOnceForManyAnnotatedRanges) {
   EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2);
 }
 
+TEST_F(StyleSystemTest, StylesheetSourceIndexCachesEverySheetAcrossElementAnnotations) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.hit { fill: red; }</style>
+      <style>.hit { stroke: blue; }</style>
+      <rect id="first" class="hit"/>
+      <rect id="second" class="hit"/>
+    </svg>
+  )");
+  auto first = document.querySelector("#first");
+  auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
+  const auto starts = StyleSystem::StylesheetSourceIndexBuildsForTesting();
+
+  const auto authoredMatches = [&](const SVGElement& element) {
+    std::vector<MatchedStyleRule> authored;
+    for (const auto& match : styleSystem.collectMatchedStyleRules(element.entityHandle())) {
+      if (match.ruleSourceRange) {
+        authored.push_back(match);
+      }
+    }
+    return AuthoredMatchedRuleSummaries(document.source(), authored);
+  };
+  const auto expected = ElementsAre(
+      AuthoredMatchedRuleIs(0u, css::Specificity::FromABC(0, 1, 0), ".hit",
+                            ".hit { stroke: blue; }"),
+      AuthoredMatchedRuleIs(0u, css::Specificity::FromABC(0, 1, 0), ".hit", ".hit { fill: red; }"));
+
+  EXPECT_THAT(authoredMatches(*first), expected);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2);
+  EXPECT_THAT(authoredMatches(*second), expected);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2)
+      << "the second element must reuse both stylesheet indices instead of evicting A with B";
+}
+
 TEST_F(StyleSystemTest, StylesheetSourceIndexKeepsEncodedAndCDataChunksDistinct) {
   auto document = ParseSVG(R"svg(<svg xmlns='http://www.w3.org/2000/svg'>
 <style>rect { --x: '&amp;'; fill: red; }<![CDATA[circle { --x: '<raw&>'; stroke: blue; }]]></style>
