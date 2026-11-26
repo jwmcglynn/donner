@@ -755,6 +755,71 @@ TEST(EditorSyncTest, StructuredCssMoveLeavesTheSeparatorInPlace) {
   EXPECT_FALSE(text.canUndo());
 }
 
+TEST(EditorSyncTest, StructuredCssRuleMoveTransfersAcrossLayeredStylesheetOwners) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>@layer original { #r {fill:red;} /* stay */ }</style>
+<style>@layer destination { #other {stroke:black;} }</style>
+<rect id="r"/><rect id="other"/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  const auto from = FindStructuredCssTarget(app, original, original.find("#r {"));
+  const auto to = FindStructuredCssTarget(app, original, original.find("#other {"));
+  ASSERT_THAT(from, testing::Optional(testing::_));
+  ASSERT_THAT(to, testing::Optional(testing::_));
+  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+  EXPECT_THAT(text.getText(), testing::HasSubstr("@layer original {  /* stay */ }"));
+  EXPECT_THAT(text.getText(),
+              testing::HasSubstr("@layer destination { #r {fill:red;} #other {stroke:black;} }"));
+  EXPECT_FALSE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+
+  std::string previous = original;
+  std::optional<std::string> writeback;
+  const auto changed = text.getText();
+  auto intents = text.takePendingSourceEditIntents();
+  ASSERT_THAT(intents, testing::SizeIs(1));
+  EXPECT_TRUE(
+      DispatchSourceEditIntents(app, intents, changed, &previous, &writeback).dispatchedMutation);
+  std::ignore = app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), changed);
+  text.undo();
+  ASSERT_EQ(text.getText(), original);
+  EXPECT_FALSE(text.canUndo());
+  intents = text.takePendingSourceEditIntents();
+  ASSERT_THAT(intents, testing::SizeIs(1));
+  EXPECT_TRUE(
+      DispatchSourceEditIntents(app, intents, original, &previous, &writeback).dispatchedMutation);
+  std::ignore = app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), original);
+}
+
+TEST(EditorSyncTest, StructuredCssDeclarationMoveSeparatesAnUnterminatedDestination) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>rect { fill:red; /* keep */ } circle {stroke:black}</style>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  const auto from = FindStructuredCssTarget(app, original, original.find("fill:"));
+  const auto to = FindStructuredCssTarget(app, original, original.find("stroke:"));
+  const auto rule = FindStructuredCssTarget(app, original, original.find("circle"));
+  ASSERT_THAT(from, testing::Optional(testing::_));
+  ASSERT_THAT(to, testing::Optional(testing::_));
+  ASSERT_THAT(rule, testing::Optional(testing::_));
+  EXPECT_FALSE(MoveStructuredCss(app, text, *from, *rule, /*after=*/true));
+  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/true));
+  EXPECT_THAT(text.getText(),
+              testing::HasSubstr("rect {  /* keep */ } circle {stroke:black; fill:red;}"));
+  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
+  text.undo();
+  EXPECT_EQ(text.getText(), original);
+}
+
 TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";

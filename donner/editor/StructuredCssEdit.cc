@@ -103,6 +103,7 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
   }
   StructuredCssTarget target{.rule = *valueRange,
                              .insertDeclaration = valueRange->end,
+                             .attributeQuote = attribute->quote,
                              .inlineStyle = true,
                              .selectionOffset = offset,
                              .generation = generation,
@@ -203,45 +204,125 @@ bool IsCssTrivia(std::string_view text) {
   return true;
 }
 
-bool IsMovableDeclarationPair(const StructuredCssTarget& from, const StructuredCssTarget& before,
-                              std::string_view source) {
-  return from.rule == before.rule && source[from.declaration->end - 1] == ';' &&
-         source[before.declaration->end - 1] == ';';
+std::string_view Slice(std::string_view source, SourceByteRange range) {
+  return source.substr(range.start, range.end - range.start);
 }
 
-std::optional<CssReplacement> MakeMove(std::string_view source, SourceByteRange from,
-                                       SourceByteRange before, bool after) {
-  if ((after && from.start >= before.start) || (!after && from.start <= before.start)) {
+bool Overlap(SourceByteRange first, SourceByteRange second) {
+  return first.start < second.end && second.start < first.end;
+}
+
+bool EndsInSemicolon(std::string_view source, SourceByteRange range) {
+  return Slice(source, range).ends_with(';');
+}
+
+bool CanTransferLiteral(std::string_view bytes, const StructuredCssTarget& destination) {
+  // Moving independently projected spans must not reinterpret XML entities or delimiters.
+  return bytes.find_first_of("<&") == std::string_view::npos &&
+         bytes.find("]]>") == std::string_view::npos &&
+         (!destination.attributeQuote ||
+          bytes.find(destination.attributeQuote) == std::string_view::npos);
+}
+
+SourceByteRange Between(SourceByteRange first, SourceByteRange second) {
+  return first.start < second.start ? SourceByteRange{first.end, second.start}
+                                    : SourceByteRange{second.end, first.start};
+}
+
+CssReplacement SwapAdjacent(std::string_view source, SourceByteRange item, SourceByteRange anchor,
+                            SourceByteRange gap) {
+  const auto left = item.start < anchor.start ? item : anchor;
+  const auto right = item.start < anchor.start ? anchor : item;
+  std::string bytes(Slice(source, right));
+  bytes += Slice(source, gap);
+  bytes += Slice(source, left);
+  return {{left.start, right.end}, std::move(bytes)};
+}
+
+CssReplacement CutAndInsert(std::string_view source, SourceByteRange from, std::size_t insertion,
+                            std::string_view bytes) {
+  if (insertion < from.start) {
+    std::string replacement(bytes);
+    replacement += source.substr(insertion, from.start - insertion);
+    return {{insertion, from.end}, std::move(replacement)};
+  }
+  std::string replacement(source.substr(from.end, insertion - from.end));
+  replacement += bytes;
+  return {{from.start, insertion}, std::move(replacement)};
+}
+
+std::string TransferSeparator(std::string_view source, SourceByteRange destination) {
+  const auto newline = source.rfind('\n', destination.start);
+  if (newline == std::string_view::npos) {
+    return " ";
+  }
+  const auto indentation = source.substr(newline + 1, destination.start - newline - 1);
+  if (indentation.find_first_not_of(" \t") != std::string_view::npos) {
+    return " ";
+  }
+  return "\n" + std::string(indentation);
+}
+
+std::string TransferText(std::string_view source, SourceByteRange from, SourceByteRange to,
+                         bool declaration, bool after) {
+  std::string bytes;
+  const auto separator = TransferSeparator(source, to);
+  if (after) {
+    bytes = declaration && !EndsInSemicolon(source, to) ? ";" + separator : separator;
+  }
+  bytes += Slice(source, from);
+  if (declaration && !EndsInSemicolon(source, from)) {
+    bytes += ';';
+  }
+  if (!after) {
+    bytes += separator;
+  }
+  return bytes;
+}
+
+std::optional<CssReplacement> PlanTransfer(std::string_view source, const StructuredCssTarget& from,
+                                           const StructuredCssTarget& destination,
+                                           SourceByteRange item, SourceByteRange anchor,
+                                           std::size_t insertion, bool after) {
+  if (!CanTransferLiteral(Slice(source, item), destination)) {
     return std::nullopt;
   }
-  const bool movingEarlier = from.start > before.start;
-  const auto left = movingEarlier ? before : from;
-  const auto right = movingEarlier ? from : before;
-  if (left.end > right.start) {
+  const auto gap = Between(item, anchor);
+  const bool adjacent = IsCssTrivia(Slice(source, gap));
+  if (adjacent && after == (item.start > anchor.start)) {
     return std::nullopt;
   }
-  const auto gap = source.substr(left.end, right.start - left.end);
-  if (!IsCssTrivia(gap)) {
-    return std::nullopt;
+  const bool declaration = from.declaration.has_value();
+  if (adjacent &&
+      (!declaration || (EndsInSemicolon(source, item) && EndsInSemicolon(source, anchor)))) {
+    return SwapAdjacent(source, item, anchor, gap);
   }
-  std::string bytes(source.substr(right.start, right.end - right.start));
-  bytes += gap;
-  bytes += source.substr(left.start, left.end - left.start);
-  return CssReplacement{{left.start, right.end}, std::move(bytes)};
+  const auto bytes = TransferText(source, item, anchor, declaration, after);
+  return CutAndInsert(source, item, insertion, bytes);
+}
+
+bool CompatibleMoveTargets(const StructuredCssTarget& from, const StructuredCssTarget& to) {
+  return from.declaration.has_value() == to.declaration.has_value() &&
+         (from.declaration || (!from.inlineStyle && !to.inlineStyle));
 }
 
 std::optional<CssReplacement> PlanMove(EditorApp& app, std::string_view source,
                                        const StructuredCssTarget& from,
                                        const StructuredCssTarget& destination, bool after) {
   if (!IsCurrent(app, source, from) || !IsCurrent(app, source, destination) ||
-      from.declaration.has_value() != destination.declaration.has_value()) {
+      !CompatibleMoveTargets(from, destination)) {
     return std::nullopt;
   }
-  if (from.declaration && !IsMovableDeclarationPair(from, destination, source)) {
+  const auto item = from.declaration.value_or(from.rule);
+  const auto anchor = destination.declaration.value_or(destination.rule);
+  if (Overlap(item, anchor)) {
     return std::nullopt;
   }
-  return MakeMove(source, from.declaration.value_or(from.rule),
-                  destination.declaration.value_or(destination.rule), after);
+  const auto insertion = after ? anchor.end : anchor.start;
+  if (insertion == item.start || insertion == item.end) {
+    return std::nullopt;
+  }
+  return PlanTransfer(source, from, destination, item, anchor, insertion, after);
 }
 
 }  // namespace

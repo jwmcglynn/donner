@@ -16,8 +16,10 @@
 #include <utility>
 #include <vector>
 
+#include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/StructuredCssEdit.h"
 
 namespace donner::editor {
 
@@ -6258,6 +6260,49 @@ TEST_F(TextEditorTests, GutterHandleDragPublishesSourceMoveGestureWithoutEditing
   EXPECT_EQ(drop->line, 2);
   EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
   EXPECT_FALSE(editor.isTextChanged());
+}
+
+TEST_F(TextEditorTests, GutterDragMovesNonAdjacentCssRulesWithOneUndo) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>
+rect {fill:red;}
+/* keep this comment */
+circle {fill:blue;}
+ellipse {fill:green;}
+</style>
+</svg>)svg";
+  editor.setText(authored);
+  const std::string original = editor.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  RenderEditorFrame();
+
+  const ImVec2 handle = SourceGutterHandlePoint(/*visualIndex=*/2);
+  const ImVec2 destination = ScreenPointAtVisualTextOffset(/*visualIndex=*/5,
+                                                           /*visualColumnOffset=*/1);
+  RenderEditorFrameWithMouse(handle, false);
+  RenderEditorFrameWithMouse(handle, true);
+  const auto started = editor.takeSourceGutterDragStartedLine();
+  ASSERT_THAT(started, testing::Optional(2));
+  RenderEditorFrameWithMouse(destination, true);
+  RenderEditorFrameWithMouse(destination, false);
+  const auto drop = editor.takeSourceGutterDropTarget();
+  ASSERT_THAT(drop, testing::Optional(testing::_));
+  const auto from = FindStructuredCssTarget(
+      app, original, editor.getByteOffsetAtCoordinates(Coordinates{*started, 0}));
+  const auto to = FindStructuredCssTarget(
+      app, original, editor.getByteOffsetAtCoordinates(Coordinates{drop->line, 0}));
+  ASSERT_THAT(from, testing::Optional(testing::_));
+  ASSERT_THAT(to, testing::Optional(testing::_));
+  ASSERT_TRUE(MoveStructuredCss(app, editor, *from, *to, /*after=*/true));
+  EXPECT_THAT(
+      editor.getText(),
+      testing::HasSubstr(
+          "/* keep this comment */\ncircle {fill:blue;}\nellipse {fill:green;}\nrect {fill:red;}"));
+  EXPECT_THAT(editor.takePendingSourceEditIntents(), testing::SizeIs(1));
+  editor.undo();
+  EXPECT_EQ(editor.getText(), original);
+  EXPECT_FALSE(editor.canUndo());
 }
 
 TEST_F(TextEditorTests, GutterHandleDropUsesCurrentReleasePosition) {

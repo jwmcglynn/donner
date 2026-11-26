@@ -558,6 +558,9 @@ private:
   /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
   void selectAllCanvasElements();
   void renderSourceDiagnosticsPanel(float diagnosticsHeight);
+  void renderStructuredCssInspector();
+  void renderStructuredCssActions(const StructuredCssTarget& target);
+  void renderStructuredCssMoveActions(const StructuredCssTarget& target);
   void renderStructuredCssContextMenu();
   void renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight, float paneWidth,
                         ImFont* codeFont);
@@ -963,6 +966,7 @@ private:
   int sourceFontSizePercent_ = 100;
   SourceDiagnosticsPanel sourceDiagnosticsPanel_;
   std::optional<StructuredCssTarget> sourceCssDragTarget_;
+  std::optional<StructuredCssTarget> markedCssMoveSource_;
   std::optional<svg::SVGElement> sourceStructuralDragElement_;
   std::optional<svg::SVGElement> sourceStructuralMoveTarget_;
   std::optional<SourceStructuralMovePlan> sourceStructuralMovePlan_;
@@ -1103,7 +1107,7 @@ private:
   std::optional<svg::SVGElement> formatBarSnapshotSelection_;
   /// Document-derived fields only; font previews and live UI handles are rebuilt per frame.
   FormatBarState formatBarSelectionSnapshot_;
-  SidebarPresenter sidebarPresenter_;
+  SidebarPresenter sidebarPresenter_{[this] { renderStructuredCssInspector(); }};
   /// A loaded sample has replaced the welcome document, but Layers and Inspector have not yet
   /// captured an idle snapshot of it. Kept until refresh succeeds so a busy renderer or a
   /// trickled input transition cannot consume the only follow-up frame.

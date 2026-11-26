@@ -1244,6 +1244,12 @@ FontMetrics TypedUnitFontMetrics(const svg::SVGSVGElement& root, const svg::SVGE
 
 }  // namespace
 
+void SidebarPresenter::renderSourceCssActions(EditorApp* liveApp) {
+  if (liveApp && sourceCssActions_) {
+    sourceCssActions_();
+  }
+}
+
 bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                                        const IconTextureProvider& iconTextureProvider) {
   bool queuedMutation = false;
@@ -1298,6 +1304,7 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                                   iconTextureProvider) ||
         queuedMutation;
   }
+  renderSourceCssActions(liveApp);
   return queuedMutation;
 }
 

@@ -22,6 +22,7 @@ struct StructuredCssTarget {
   std::optional<SourceByteRange> value;        ///< Authored property value.
   std::optional<SourceByteRange> priority;     ///< Authored importance annotation.
   std::size_t insertDeclaration = 0;  ///< Position directly before the rule's closing brace.
+  char attributeQuote = '\0';         ///< Original delimiter for an inline style attribute.
   bool inlineStyle = false;           ///< The selected declaration belongs to a style attribute.
   bool declarationNeedsSeparator = false;  ///< Last declaration has no terminating semicolon.
   std::size_t selectionOffset = 0;         ///< Original hit that resolves the same parsed target.
@@ -66,16 +67,16 @@ bool ApplyStructuredCssEdit(EditorApp& app, TextEditor& editor, const Structured
 /// @param app Active editor document.
 /// @param source Current source pane contents.
 /// @param from Dragged CSS item.
-/// @param destination Adjacent destination in the same container.
+/// @param destination Compatible destination of the same item kind.
 /// @param after Insert after rather than before the destination.
 bool CanMoveStructuredCss(EditorApp& app, std::string_view source, const StructuredCssTarget& from,
                           const StructuredCssTarget& destination, bool after);
 
-/// Move a CSS item across an adjacent sibling in the same CSS container.
+/// Move a CSS item relative to another compatible item.
 /// @param app Active editor document.
 /// @param editor Source editor receiving the move as one undoable intent.
 /// @param from Dragged CSS item.
-/// @param destination Adjacent destination in the same container.
+/// @param destination Compatible destination of the same item kind.
 /// @param after Insert after rather than before the destination.
 /// @return True when the source changed.
 bool MoveStructuredCss(EditorApp& app, TextEditor& editor, const StructuredCssTarget& from,

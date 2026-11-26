@@ -4179,6 +4179,47 @@ void EditorShell::renderStructuredCssContextMenu() {
     return;
   }
 
+  renderStructuredCssActions(*target);
+  ImGui::EndMenu();
+}
+
+void EditorShell::renderStructuredCssInspector() {
+  if (ImGui::Button("CSS source")) {
+    ImGui::OpenPopup("##inspectorCssSource");
+  }
+  if (!ImGui::BeginPopup("##inspectorCssSource")) {
+    return;
+  }
+  const auto offset = textEditor_.getByteOffsetAtCoordinates(textEditor_.getCursorPosition());
+  if (const auto target = FindStructuredCssTarget(app_, textEditor_.getText(), offset)) {
+    renderStructuredCssActions(*target);
+  } else {
+    ImGui::TextDisabled("Place the source cursor on a CSS rule or declaration.");
+  }
+  ImGui::EndPopup();
+}
+
+void EditorShell::renderStructuredCssMoveActions(const StructuredCssTarget& target) {
+  ImGui::Separator();
+  if (ImGui::MenuItem("Mark CSS item to move")) {
+    markedCssMoveSource_ = target;
+  }
+  if (!markedCssMoveSource_) {
+    return;
+  }
+  const std::string source = textEditor_.getText();
+  const auto move = [&](const char* caption, bool after) {
+    const bool enabled = CanMoveStructuredCss(app_, source, *markedCssMoveSource_, target, after);
+    return ImGui::MenuItem(caption, nullptr, false, enabled) &&
+           MoveStructuredCss(app_, textEditor_, *markedCssMoveSource_, target, after);
+  };
+  if (move("Move marked item before", false) || move("Move marked item after", true)) {
+    markedCssMoveSource_.reset();
+    window_.wakeEventLoop();
+  }
+}
+
+void EditorShell::renderStructuredCssActions(const StructuredCssTarget& target) {
   const auto select = [&](const char* label, std::optional<SourceByteRange> range) {
     if (ImGui::MenuItem(label, nullptr, false, range.has_value()) && range) {
       textEditor_.selectAndFocus(textEditor_.getCoordinatesAtByteOffset(range->start),
@@ -4188,29 +4229,29 @@ void EditorShell::renderStructuredCssContextMenu() {
   const auto edit = [&](const char* label, StructuredCssOperation operation,
                         std::string_view replacement, bool enabled = true) {
     if (ImGui::MenuItem(label, nullptr, false, enabled)) {
-      if (ApplyStructuredCssEdit(app_, textEditor_, *target, operation, replacement)) {
+      if (ApplyStructuredCssEdit(app_, textEditor_, target, operation, replacement)) {
         window_.wakeEventLoop();
       }
     }
   };
-  if (!target->inlineStyle) {
-    select("Select rule", target->rule);
-    select("Edit selector", target->selector);
+  if (!target.inlineStyle) {
+    select("Select rule", target.rule);
+    select("Edit selector", target.selector);
     edit("Add rule after", StructuredCssOperation::InsertRule, "selector { }");
     edit("Remove rule", StructuredCssOperation::RemoveRule, {});
     ImGui::Separator();
   }
-  select("Select declaration", target->declaration);
-  select("Edit property name", target->name);
-  select("Edit value", target->value);
+  select("Select declaration", target.declaration);
+  select("Edit property name", target.name);
+  select("Edit value", target.value);
   edit("Add !important", StructuredCssOperation::AddImportant, {},
-       target->value.has_value() && !target->priority);
+       target.value.has_value() && !target.priority);
   edit("Remove !important", StructuredCssOperation::RemoveImportant, {},
-       target->priority.has_value());
+       target.priority.has_value());
   edit("Add declaration", StructuredCssOperation::InsertDeclaration, "fill: currentColor;");
   edit("Remove declaration", StructuredCssOperation::RemoveDeclaration, {},
-       target->declaration.has_value());
-  ImGui::EndMenu();
+       target.declaration.has_value());
+  renderStructuredCssMoveActions(target);
 }
 
 void EditorShell::renderSourceDiagnosticsPanel(float diagnosticsHeight) {
@@ -8439,7 +8480,7 @@ void EditorShell::updateCssSourceStructuralDrag(std::string_view source) {
       .elementRange = fromRange,
       .insertionOffset = insertion,
       .valid = valid,
-      .message = valid ? "Move CSS item" : "Drop next to a CSS item in the same block",
+      .message = valid ? "Move CSS item" : "Drop by a compatible CSS item",
   });
   if (drop) {
     if (valid) {
