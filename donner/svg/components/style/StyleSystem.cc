@@ -926,21 +926,25 @@ struct MatchedSelectorEntry {
 
 std::optional<MatchedSelectorEntry> MatchSelectorRule(const css::SelectorRule& rule,
                                                       const ShadowedElementAdapter& adapter,
-                                                      css::SelectorTraversalBudget* budget) {
+                                                      css::SelectorTraversalBudget* budget,
+                                                      const RuleIndex* index = nullptr,
+                                                      std::uint32_t position = 0) {
   css::SelectorMatchOptions<ShadowedElementAdapter> options;
   options.traversalBudget = budget;
   for (std::size_t i = 0; i < rule.selector.entries.size(); ++i) {
     if (budget != nullptr && budget->rejected()) {
       return std::nullopt;
     }
-    const css::SelectorMatchResult match = rule.selector.entries[i].matches(adapter, options);
+    const auto& entry = rule.selector.entries[i];
+    const bool matched = entry.matchesPattern(adapter, options);
     if (budget != nullptr && budget->rejected()) {
       return std::nullopt;
     }
-    if (match) {
+    if (matched) {
       return MatchedSelectorEntry{
           .selectorEntryIndex = i,
-          .specificity = match.specificity,
+          .specificity = css::Specificity(index ? index->specificity(position, i)
+                                                : entry.computeSpecificity()),
       };
     }
   }
@@ -953,11 +957,11 @@ std::optional<MatchedSelectorEntry> MatchCascadeCandidate(const css::SelectorRul
                                                           css::SelectorTraversalBudget& traversal,
                                                           CascadeAncestorFilter* filter,
                                                           const RuleIndex& index,
-                                                          std::uint32_t position) {
+                                                          std::uint32_t position, bool unindexed) {
   if (filter && filter->rejects(element.entity(), index, position)) {
     return std::nullopt;
   }
-  return MatchSelectorRule(rule, element, &traversal);
+  return MatchSelectorRule(rule, element, &traversal, unindexed ? nullptr : &index, position);
 }
 
 std::optional<std::size_t> ResolveOffset(const SourceRange& range, std::string_view source,
@@ -2607,7 +2611,7 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
       ++counters.rulesTested;
       const auto match = filterCheck.evaluate(index, position, [&] {
         return MatchCascadeCandidate(rule, adapter, styleBudget.selectorTraversal(), testFilter,
-                                     index, position);
+                                     index, position, unindexed);
       });
       if (!match) {
         continue;

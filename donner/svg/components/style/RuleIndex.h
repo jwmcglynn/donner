@@ -159,6 +159,11 @@ public:
         .subspan(hashGroupFirst_[rule], hashGroupFirst_[rule + 1] - hashGroupFirst_[rule]);
   }
 
+  /// Specificity captured for one selector-list entry of the stylesheet used to build this index.
+  css::Specificity::ABC specificity(std::uint32_t rule, std::size_t entry) const {
+    return specificities_[specificityFirst_[rule] + entry];
+  }
+
   /**
    * Replace \p candidates with the positions of the rules that can match \p element, ascending
    * and without duplicates.
@@ -254,6 +259,9 @@ private:
   /// Record the ancestor hash groups of every rule of \p rules.
   void addAncestorHashes(std::span<const css::SelectorRule> rules);
 
+  /// Capture selector scores when installing the parsed rule index.
+  void addSpecificities(std::span<const css::SelectorRule> rules);
+
   std::vector<Bucket> ids_;             //!< Sorted by key.
   std::vector<Bucket> classes_;         //!< Sorted by key.
   std::vector<Bucket> attributes_;      //!< Sorted by lowercased key.
@@ -263,6 +271,9 @@ private:
   std::vector<AncestorHashGroup> hashGroups_;
   /// Where each rule's groups start in \ref hashGroups_, plus the end when there are rules.
   std::vector<std::uint32_t> hashGroupFirst_;
+  std::vector<css::Specificity::ABC> specificities_;  //!< Scores in rule and selector-list order.
+  std::vector<std::size_t> specificityFirst_;         //!< First score of each rule.
+
   std::uint32_t universalFirst_ = 0;  //!< First universal position in \ref entries_.
   std::uint32_t universalCount_ = 0;  //!< Number of universal positions.
   std::size_t ruleCount_ = 0;         //!< Rules the index was built from.
@@ -272,10 +283,11 @@ private:
 
 public:
   /// Most bytes one selector-list entry adds to \ref retainedBytes besides key text and vector
-  /// slack: its rule position, at most one key record, its ancestor hash group, and at most one
-  /// per-rule offset. A nonempty index also retains one leading 4-byte offset.
+  /// slack: its rule position, at most one key record, its ancestor hash group, its specificity,
+  /// and at most two per-rule offsets. A nonempty index also retains one leading 4-byte offset.
   static constexpr std::size_t kMaxBytesPerEntry =
-      sizeof(std::uint32_t) + sizeof(Bucket) + sizeof(AncestorHashGroup) + sizeof(std::uint32_t);
+      sizeof(std::uint32_t) + sizeof(Bucket) + sizeof(AncestorHashGroup) + sizeof(std::uint32_t) +
+      sizeof(css::Specificity::ABC) + sizeof(std::size_t);
 };
 
 }  // namespace donner::svg::components

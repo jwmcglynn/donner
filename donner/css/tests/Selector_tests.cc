@@ -948,6 +948,27 @@ TEST_F(SelectorTests, DependsOnTreePosition) {
   EXPECT_TRUE(dependsOnPseudoTreePosition("future-pseudo-class"));
 }
 
+TEST_F(SelectorTests, SpecificityReflectsEditsToParsedPseudoArguments) {
+  auto parsed = SelectorParser::Parse(":is(rect)");
+  ASSERT_THAT(parsed, NoParseError());
+  FakeElement rect("rect");
+  const auto initial = parsed.result().matches(rect);
+  EXPECT_THAT(initial.matched, testing::IsTrue());
+  EXPECT_THAT(initial.specificity, SpecificityIs(Specificity::FromABC(0, 0, 1)));
+
+  auto& entry = parsed.result().entries.front().entries.front().compoundSelector.entries.front();
+  auto* pseudo = std::get_if<PseudoClassSelector>(&entry);
+  ASSERT_THAT(pseudo, ::testing::NotNull());
+  ASSERT_THAT(pseudo->selector, ::testing::NotNull());
+  auto unmatched = SelectorParser::Parse("#other");
+  ASSERT_THAT(unmatched, NoParseError());
+  pseudo->selector->entries.push_back(std::move(unmatched.result().entries.front()));
+
+  const auto edited = parsed.result().matches(rect);
+  EXPECT_THAT(edited.matched, testing::IsTrue());
+  EXPECT_THAT(edited.specificity, SpecificityIs(Specificity::FromABC(1, 0, 0)));
+}
+
 TEST_F(SelectorTests, Specificity) {
   EXPECT_THAT(computeSpecificity("test"), SpecificityIs(Specificity::FromABC(0, 0, 1)));
   EXPECT_THAT(computeSpecificity(".test"), SpecificityIs(Specificity::FromABC(0, 1, 0)));

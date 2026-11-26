@@ -143,9 +143,9 @@ std::ostream& operator<<(std::ostream& os, const RuleIndexKey& key) {
   return os;
 }
 
-// The per-entry bound the design states for 64-bit builds: a 4-byte rule position, a 40-byte key
-// record (a 32-byte RcString and two 4-byte fields), a 16-byte hash group and a 4-byte offset.
-static_assert(sizeof(void*) != 8 || RuleIndex::kMaxBytesPerEntry == 64,
+// The 64-bit bound counts a 4-byte rule position, a 40-byte key record, a 16-byte ancestor hash
+// group, a 12-byte specificity, and up to two per-rule offsets of 4 and 8 bytes.
+static_assert(sizeof(void*) != 8 || RuleIndex::kMaxBytesPerEntry == 84,
               "Update the rule index memory bound in the CSS cascade design");
 
 RuleIndexKey RuleIndex::KeyFor(const css::ComplexSelector& selector) {
@@ -220,6 +220,17 @@ void RuleIndex::addAncestorHashes(std::span<const css::SelectorRule> rules) {
   }
 }
 
+void RuleIndex::addSpecificities(std::span<const css::SelectorRule> rules) {
+  specificityFirst_.reserve(rules.size());
+  for (const css::SelectorRule& rule : rules) {
+    specificityFirst_.push_back(specificities_.size());
+    for (const auto& entry : rule.selector.entries) {
+      specificities_.push_back(entry.computeSpecificity());
+    }
+  }
+  specificities_.shrink_to_fit();
+}
+
 RuleIndex::RuleIndex(std::span<const css::SelectorRule> rules) : ruleCount_(rules.size()) {
   shallowForParallelCascade_ = std::ranges::all_of(rules, HasShallowRule);
   const std::vector<FiledEntry> filed = FileEntries(rules);
@@ -237,6 +248,7 @@ RuleIndex::RuleIndex(std::span<const css::SelectorRule> rules) : ruleCount_(rule
   compactHitsAt_ = 2 * bucketCount + BucketHits().capacity();
   entries_.shrink_to_fit();
   addAncestorHashes(rules);
+  addSpecificities(rules);
   hashGroups_.shrink_to_fit();
   hashGroupFirst_.shrink_to_fit();
   retainedBytes_ =
@@ -244,7 +256,9 @@ RuleIndex::RuleIndex(std::span<const css::SelectorRule> rules) : ruleCount_(rule
       (ids_.capacity() + classes_.capacity() + attributes_.capacity() + types_.capacity()) *
           sizeof(Bucket) +
       hashGroups_.capacity() * sizeof(AncestorHashGroup) +
-      hashGroupFirst_.capacity() * sizeof(std::uint32_t) + keyBytes;
+      hashGroupFirst_.capacity() * sizeof(std::uint32_t) +
+      specificities_.capacity() * sizeof(css::Specificity::ABC) +
+      specificityFirst_.capacity() * sizeof(std::size_t) + keyBytes;
 }
 
 std::vector<RuleIndex::Bucket>& RuleIndex::bucketsFor(RuleIndexKey::Kind kind) {
