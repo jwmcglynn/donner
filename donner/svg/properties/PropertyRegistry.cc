@@ -535,10 +535,10 @@ ParseResult<TextDecorationStyle> ParseDecorationStyle(
                 : ParseResult<TextDecorationStyle>(InvalidDecoration());
 }
 
-/// Set one longhand of the `text-decoration` shorthand when the declaration wins the cascade.
+/// Set one longhand of a shorthand when the declaration wins the cascade.
 template <typename T, PropertyCascade kCascade>
-void ApplyDecorationLonghand(Property<T, kCascade>& property,
-                             const parser::PropertyParseFnParams& params, std::optional<T> value) {
+void ApplyShorthandLonghand(Property<T, kCascade>& property,
+                            const parser::PropertyParseFnParams& params, std::optional<T> value) {
   if (property.isSpecified() && params.specificity < property.specificity) {
     return;
   }
@@ -560,11 +560,10 @@ std::optional<ParseDiagnostic> ApplyTextDecoration(PropertyRegistry& registry,
     }
     values = parsed.result();
   }
-  ApplyDecorationLonghand(registry.textDecoration, params, std::optional(values.lines));
-  ApplyDecorationLonghand(registry.textDecorationStyle, params, std::optional(values.style));
-  ApplyDecorationLonghand(registry.textDecorationColor, params, values.color);
-  ApplyDecorationLonghand(registry.textDecorationThickness, params,
-                          std::optional(values.thickness));
+  ApplyShorthandLonghand(registry.textDecoration, params, std::optional(values.lines));
+  ApplyShorthandLonghand(registry.textDecorationStyle, params, std::optional(values.style));
+  ApplyShorthandLonghand(registry.textDecorationColor, params, values.color);
+  ApplyShorthandLonghand(registry.textDecorationThickness, params, std::optional(values.thickness));
   return std::nullopt;
 }
 
@@ -1365,6 +1364,22 @@ ParseResult<Reference> ParseReference(std::string_view tag,
   err.reason = "Invalid url reference";
   err.range.start = firstComponent.sourceOffset();
   return err;
+}
+
+std::optional<ParseDiagnostic> ApplyMarkerShorthand(PropertyRegistry& registry,
+                                                    const parser::PropertyParseFnParams& params) {
+  std::optional<Reference> marker;
+  if (params.explicitState == PropertyState::NotSet) {
+    auto parsed = ParseReference("marker", params.components());
+    if (parsed.hasError()) {
+      return std::move(parsed.error());
+    }
+    marker = std::move(parsed.result());
+  }
+  ApplyShorthandLonghand(registry.markerStart, params, marker);
+  ApplyShorthandLonghand(registry.markerMid, params, marker);
+  ApplyShorthandLonghand(registry.markerEnd, params, std::move(marker));
+  return std::nullopt;
 }
 
 ParseResult<std::optional<ClipPath>> ParseClipPathValue(
@@ -3229,47 +3244,8 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseReference("marker-end", params.components());
                        },
                        &registry.markerEnd);
-                 }},  //
-                {"marker",
-                 [](PropertyRegistry& registry,
-                    const parser::PropertyParseFnParams& params) -> std::optional<ParseDiagnostic> {
-                   // First, parse the shorthand value as a Reference
-                   const auto parseResult = ParseReference("marker", params.components());
-                   if (!parseResult.hasResult()) {
-                     return parseResult.error();
-                   }
-
-                   const Reference& markerValue = parseResult.result();
-
-                   // Now, set marker-start, marker-mid, and marker-end using the Parse function
-                   std::optional<ParseDiagnostic> error;
-
-                   // Set marker-start
-                   error = Parse(
-                       params,
-                       [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                           -> ParseResult<Reference> { return markerValue; },
-                       &registry.markerStart);
-                   assert(!error && "Unexpected error parsing marker shorthand property");
-
-                   // Set marker-mid
-                   error = Parse(
-                       params,
-                       [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                           -> ParseResult<Reference> { return markerValue; },
-                       &registry.markerMid);
-                   assert(!error && "Unexpected error parsing marker shorthand property");
-
-                   // Set marker-end
-                   error = Parse(
-                       params,
-                       [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                           -> ParseResult<Reference> { return markerValue; },
-                       &registry.markerEnd);
-                   assert(!error && "Unexpected error parsing marker shorthand property");
-
-                   return std::nullopt;  // Parsing succeeded
-                 }},                     //
+                 }},                               //
+                {"marker", ApplyMarkerShorthand},  //
             }));
 
 bool ResolveInsetLengthArray(std::array<Lengthd, 4>& values, const FontMetrics& metrics) {
@@ -3669,16 +3645,15 @@ void PropertyRegistry::writeVariableAwareDeclaration(
   };
   auto previous = unparsedProperties.find(name);
   if (!wins) {
-    if (presentation) {
-      if (previous == unparsedProperties.end()) {
-        unparsedProperties.emplace(
-            name,
-            parser::UnparsedProperty{storedDeclaration(), specificity, {}, false, false, variable});
-      } else {
-        previous->second.presentationVariable = variable;
-      }
+    if (!presentation) {
+      return;
     }
-    return;
+    if (previous != unparsedProperties.end() && !previous->second.variableFromPresentation) {
+      previous->second.presentationVariable = std::move(variable);
+      return;
+    }
+    // A concrete inline winner has no deferred entry. Keep the latest attribute here so an
+    // inline edit can reveal it and an attribute edit can replace or remove it.
   }
   std::shared_ptr<const css::Declaration> presentationVariable;
   if (previous != unparsedProperties.end() && !presentation) {
