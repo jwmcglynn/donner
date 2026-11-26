@@ -2779,4 +2779,35 @@ TEST_F(TextEditorCoreTests, CssColorsUseSourceBytesAcrossTabsAndUtf8) {
   EXPECT_EQ(ColorAtByteOffset(editor_, source.find("12px")), ColorIndex::Number);
 }
 
+TEST_F(TextEditorCoreTests, CssColorsMapDecodedStringsAndReferencesBackToSource) {
+  constexpr std::string_view source =
+      R"(<svg><rect style="font-family: &quot;Arial&quot;; F&#73;LL: red; --MiXeD: 2"/></svg>)";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  const auto start = source.find("&quot;");
+  const auto end = source.find("; F&#");
+  for (std::size_t i = start; i < end; ++i) {
+    EXPECT_EQ(ColorAtByteOffset(editor_, i), ColorIndex::String);
+  }
+  for (std::size_t i = source.find("F&#73;"); i < source.find("LL:") + 2; ++i) {
+    EXPECT_EQ(ColorAtByteOffset(editor_, i), ColorIndex::KnownIdentifier);
+  }
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("--MiXeD")), ColorIndex::Identifier);
+}
+
+TEST_F(TextEditorCoreTests, CssColorsFollowScopedSvgNamespaceAndCdata) {
+  constexpr std::string_view source = R"(<s:svg xmlns:s="http://www.w3.org/2000/svg">
+<s:style><![CDATA[.card { StRoKe-WiDtH: 2px; }]]></s:style>
+<g xmlns:s="urn:example"><s:style>.foreign { unknown: 2 }</s:style></g>
+<s:style>.item { FILL: blue }</s:style></s:svg>)";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("StRoKe-WiDtH")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("2px")), ColorIndex::Number);
+  EXPECT_NE(ColorAtByteOffset(editor_, source.find("unknown")), ColorIndex::ErrorMarker);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("FILL")), ColorIndex::KnownIdentifier);
+}
+
 }  // namespace donner::editor
