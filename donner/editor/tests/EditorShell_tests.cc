@@ -1613,6 +1613,13 @@ public:
     return shell.lastConvertTextError_;
   }
 
+  static ImVec2 SourceLinePoint(const EditorShell& shell, int line, bool gutter) {
+    const auto& source = shell.textEditor_;
+    return {source.uiCursorPos_.x + source.textStart_ +
+                (gutter ? -8.0f * source.uiScale_ : source.charAdvance_.x),
+            source.uiCursorPos_.y + (static_cast<float>(line) + 0.5f) * source.charAdvance_.y};
+  }
+
   static void RenderSourcePane(EditorShell& shell, float paneOriginY, float paneHeight,
                                float paneWidth, ImFont* codeFont) {
     shell.renderSourcePane(/*paneOriginX=*/0.0f, paneOriginY, paneHeight, paneWidth, codeFont);
@@ -8772,6 +8779,52 @@ TEST(EditorShellTest, GlobalShortcutDeleteWhilePenDraftingRemovesAnchorBeforeCan
   EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
   EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
   EXPECT_TRUE(EditorShellTestAccess::App(shell).hasDocument());
+}
+
+TEST(EditorShellTest, StructuredCssGutterMovesANonAdjacentRuleAndUndoRestoresSource) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>
+rect {fill:red;}
+/* keep */
+circle {fill:blue;}
+ellipse {fill:green;}
+</style>
+</svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(authored, "rules.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  EditorShellTestAccess::SetSourceFocusMode(shell, false);
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.setWordWrapEnabled(false);
+  const auto original = source.getText();
+  ImGuiIO& io = ImGui::GetIO();
+  io.ConfigInputTrickleEventQueue = false;
+  const auto frame = [&](const ImVec2& mouse, bool down) {
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, down);
+    window.beginFrame();
+    EditorShellTestAccess::RenderSourcePane(shell, 0.0f, 400.0f, 500.0f, window.editorFonts().code);
+    window.endFrame();
+  };
+  frame({10.0f, 10.0f}, false);
+  ASSERT_NE(FindSourceEditorWindow(), nullptr);
+  const auto from = EditorShellTestAccess::SourceLinePoint(shell, 2, /*gutter=*/true);
+  const auto to = EditorShellTestAccess::SourceLinePoint(shell, 5, /*gutter=*/false);
+  frame(from, false);
+  frame(from, true);
+  frame(to, true);
+  frame(to, false);
+  frame(to, false);
+  EXPECT_THAT(source.getText(),
+              testing::HasSubstr(
+                  "/* keep */\ncircle {fill:blue;}\nellipse {fill:green;}\nrect {fill:red;}"));
+  EXPECT_TRUE(source.canUndo());
+  source.undo();
+  frame(to, false);
+  EXPECT_EQ(source.getText(), original);
+  EXPECT_FALSE(source.canUndo());
 }
 
 TEST(EditorShellTest, SourceFontShortcutsResizeTextAndPreserveCanvasZoomAndSelection) {

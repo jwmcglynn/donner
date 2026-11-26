@@ -126,6 +126,7 @@ class TextEditor {
   // once the TextEditor refactor migrates
   // the tests onto `TextEditorCore` directly (commit C3).
   friend class TextEditorTests;
+  friend class EditorShellTestAccess;
   friend class TextEditorTests_UndoReversesInsertion_Test;
   friend class TextEditorTests_RedoRestoresAfterUndo_Test;
   friend class TextEditorTests_MultipleUndoStepsBackthrough_Test;
