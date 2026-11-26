@@ -114,21 +114,158 @@ std::unordered_map<std::string, size_t> SelectStyleUpdates(std::span<const Decla
   return updateIndexByName;
 }
 
+std::optional<char> RecoveredStringQuote(const Declaration& declaration, std::string_view spelling,
+                                         const Token& stringToken) {
+  const auto declarationOffset = declaration.sourceOffset.offset;
+  const auto stringOffset = stringToken.offset().offset;
+  if (!declarationOffset || !stringOffset || *stringOffset < *declarationOffset) {
+    return std::nullopt;
+  }
+  const std::size_t localOffset = *stringOffset - *declarationOffset;
+  if (localOffset >= spelling.size() ||
+      (spelling[localOffset] != '\'' && spelling[localOffset] != '"')) {
+    return std::nullopt;
+  }
+  return spelling[localOffset];
+}
+
+bool HasDanglingEscape(std::string_view spelling) {
+  const auto lastOther = spelling.find_last_not_of('\\');
+  const auto start = lastOther == std::string_view::npos ? 0 : lastOther + 1;
+  return (spelling.size() - start) % 2 != 0;
+}
+
+bool CloseRecoveredString(std::span<const ComponentValue> values, const Declaration& declaration,
+                          std::string_view spelling, std::string& result) {
+  if (values.size() < 2) {
+    return false;
+  }
+  const auto* stringToken = std::get_if<Token>(&values[values.size() - 2].value);
+  const auto quote =
+      stringToken ? RecoveredStringQuote(declaration, spelling, *stringToken) : std::nullopt;
+  if (!quote) {
+    return false;
+  }
+  if (HasDanglingEscape(spelling)) {
+    result.pop_back();
+  }
+  result += *quote;
+  return true;
+}
+
+// At EOF the name scanner decodes an incomplete escape as U+FFFD. Spell it explicitly
+// before a following semicolon or implicit closer can become the escaped character.
+bool FinishUnterminatedEscape(const Token* token, std::string_view spelling, std::string& result) {
+  if (!token || !HasDanglingEscape(spelling)) {
+    return false;
+  }
+  if (const auto* delim = token->tryGet<Token::Delim>(); delim && delim->value == '\\') {
+    result += '\n';  // Preserve a standalone reverse-solidus delimiter as an invalid escape.
+  } else {
+    result += "fffd";
+  }
+  return true;
+}
+
+bool CloseRecoveredToken(std::span<const ComponentValue> values, const Declaration& declaration,
+                         std::string_view spelling, std::string& result) {
+  const auto* token = std::get_if<Token>(&values.back().value);
+  const auto* error = token ? token->tryGet<Token::ErrorToken>() : nullptr;
+  if (!error) {
+    const bool repaired = FinishUnterminatedEscape(token, spelling, result);
+    const auto* badUrl = token ? token->tryGet<Token::BadUrl>() : nullptr;
+    if (badUrl && badUrl->closedAtEof) {
+      result += ')';
+      return true;
+    }
+    return repaired;
+  }
+  switch (error->type) {
+    case Token::ErrorToken::Type::EofInComment: result += "*/"; return true;
+    case Token::ErrorToken::Type::EofInUrl:
+      if (HasDanglingEscape(spelling)) {
+        result += "fffd";
+      }
+      result += ')';
+      return true;
+    case Token::ErrorToken::Type::EofInString:
+      return CloseRecoveredString(values, declaration, spelling, result);
+  }
+  return false;
+}
+
+// EOF recovery can implicitly close a token, then every unterminated parent around it. Repair the
+// trailing chain before another declaration is appended; explicitly terminated structures stay
+// byte-for-byte authored.
+bool CloseRecoveredConstructs(std::span<const ComponentValue> values,
+                              const Declaration& declaration, std::string_view spelling,
+                              std::string& result) {
+  if (values.empty()) {
+    return false;
+  }
+  const auto& value = values.back().value;
+  if (std::holds_alternative<Token>(value)) {
+    return CloseRecoveredToken(values, declaration, spelling, result);
+  }
+  if (const auto* function = std::get_if<Function>(&value)) {
+    bool repaired = CloseRecoveredConstructs(function->values, declaration, spelling, result);
+    if (function->closedAtEof) {
+      result += ')';
+      repaired = true;
+    }
+    return repaired;
+  }
+  const auto& block = std::get<SimpleBlock>(value);
+  bool repaired = CloseRecoveredConstructs(block.values, declaration, spelling, result);
+  if (block.closedAtEof) {
+    if (block.associatedToken == Token::indexOf<Token::CurlyBracket>()) {
+      result += '}';
+    } else if (block.associatedToken == Token::indexOf<Token::SquareBracket>()) {
+      result += ']';
+    } else {
+      result += ')';
+    }
+    repaired = true;
+  }
+  return repaired;
+}
+
 }  // namespace
 
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
-                                   std::span<const Declaration> updates) {
+                                   std::span<const Declaration> updates,
+                                   std::span<const std::string_view> existingSpellings,
+                                   std::span<const std::string_view> updateSpellings) {
   const auto updateIndexByName = SelectStyleUpdates(updates);
 
-  // Collect existing declarations not overridden by updates.
-  std::vector<const Declaration*> merged;
-  merged.reserve(existing.size() + updateIndexByName.size());
-
-  for (const auto& decl : existing) {
+  std::string result;
+  const Declaration* precedingAuthored = nullptr;
+  std::string_view precedingSpelling;
+  const auto append = [&](const Declaration& declaration,
+                          std::span<const std::string_view> spellings, std::size_t i) {
+    if (precedingAuthored) {
+      CloseRecoveredConstructs(precedingAuthored->values, *precedingAuthored, precedingSpelling,
+                               result);
+    }
+    if (!result.empty()) {
+      result += "; ";
+    }
+    if (i < spellings.size()) {
+      result += spellings[i];
+      precedingAuthored = &declaration;
+      precedingSpelling = spellings[i];
+    } else {
+      result += declaration.toCssText();
+      precedingAuthored = nullptr;
+      precedingSpelling = {};
+    }
+  };
+  for (std::size_t i = 0; i < existing.size(); ++i) {
+    const auto& decl = existing[i];
     const auto update = updateIndexByName.find(PropertyKey(decl.name));
     if (update == updateIndexByName.end() ||
         !ReplacesStyleDeclaration(decl, updates[update->second])) {
-      merged.push_back(&decl);
+      append(decl, existingSpellings, i);
     }
   }
 
@@ -137,17 +274,8 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
     const std::string key = PropertyKey(updates[i].name);
     const auto selected = updateIndexByName.find(key);
     if (selected != updateIndexByName.end() && selected->second == i) {
-      merged.push_back(&updates[i]);
+      append(updates[i], updateSpellings, i);
     }
-  }
-
-  // Serialize.
-  std::string result;
-  for (size_t i = 0; i < merged.size(); ++i) {
-    if (i > 0) {
-      result += "; ";
-    }
-    result += merged[i]->toCssText();
   }
 
   return result;

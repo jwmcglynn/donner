@@ -193,6 +193,7 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode,
   }
 
   // <EOF-token>: This is a parse error. Return the block.
+  result.closedAtEof = true;
   return result;
 }
 
@@ -230,6 +231,7 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, const Fi
   }
 
   // <EOF-token>: This is a parse error. Return the function.
+  result.closedAtEof = true;
   return result;
 }
 
