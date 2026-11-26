@@ -1822,7 +1822,7 @@ donner_cc_library(
         ":text_buffer",
         "//donner/base",
         "//donner/base/xml",
-        "//donner/css",
+        "//donner/css:core",
         "//donner/css/parser",
         "//donner/svg/properties:property_parsing",
     ],
