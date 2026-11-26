@@ -375,6 +375,14 @@ public:
   }
   /// Whether the sealed frame represents the input considered by the latest UI frame.
   [[nodiscard]] bool frameRepresentsCurrentIntent() const { return frameRepresentsCurrentIntent_; }
+  /// Input identity sealed by the latest UI frame, or the document frame's identity when its
+  /// pixels or poses depend on input. Static document resources may be reused while a fresh UI
+  /// frame represents a newer pointer.
+  [[nodiscard]] PresentationInputIdentity inputIdentityForPresentedFrame(
+      const FramePresentation* frame) const {
+    return staticFrameInputIdentity_.value_or(frame ? frame->inputIdentity()
+                                                    : PresentationInputIdentity{});
+  }
 
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
@@ -685,6 +693,7 @@ private:
   std::uint64_t nextPresentationFrameId_ = 1;
   bool presentationNeedsRender_ = false;
   bool frameRepresentsCurrentIntent_ = false;
+  std::optional<PresentationInputIdentity> staticFrameInputIdentity_;
   bool presentationNeedsCoverage_ = false;
   FramePresentationFailure adoptionFailure_ = FramePresentationFailure::None;
   std::optional<PresentationRepairIdentity> pendingRepair_;

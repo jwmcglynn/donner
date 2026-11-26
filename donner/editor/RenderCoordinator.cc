@@ -1741,6 +1741,7 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
   cost.liveDragTranslationDoc = live.has_value() ? live->translation : Vector2d::Zero();
   const auto resources = compositedPresentation_.resources();
   frameRepresentsCurrentIntent_ = false;
+  staticFrameInputIdentity_.reset();
   if (!app.hasDocument()) {
     framePresentation_.reset();
     return nullptr;
@@ -1763,6 +1764,10 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
   refreshLivePathCapture(app, input);
   if (canReuseFrame(input, resources)) {
     frameRepresentsCurrentIntent_ = true;
+    // The immutable document resources are pointer-independent in this path. This UI frame still
+    // seals its current input so a completed presentation can prove which sidebar/overlay state it
+    // drew without restamping a pointer-dependent document frame.
+    staticFrameInputIdentity_ = input.inputIdentity;
     recordFramePresentationCost(input, tool, MillisecondsSince(buildStart));
     return framePresentation_;
   }
