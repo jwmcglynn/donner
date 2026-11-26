@@ -34,8 +34,11 @@ struct XmlRegionState {
 };
 
 void PopElement(std::vector<std::string>& stack, std::string_view name) {
-  const auto found = std::find(stack.rbegin(), stack.rend(), name);
-  if (found != stack.rend()) {
+  // Well-formed XML closes the top element. Keep recovery from an incomplete edit bounded.
+  constexpr std::size_t kRecoveryDepth = 32;
+  const auto limit = stack.rbegin() + std::min(stack.size(), kRecoveryDepth);
+  const auto found = std::find(stack.rbegin(), limit, name);
+  if (found != limit) {
     stack.erase(found.base() - 1, stack.end());
   }
 }
