@@ -3,6 +3,15 @@
 
 #include <cstdint>
 
+#include "donner/base/EcsRegistry_fwd.h"
+
+namespace donner {
+class ParseWarningSink;
+namespace svg {
+class StylePassScheduler;
+}
+}  // namespace donner
+
 namespace donner::svg::components {
 
 /**
@@ -102,6 +111,13 @@ struct RenderTreeState {
 
   /// Preparation counters for this document.
   Counters counters;
+
+  /// The two style passes and shadow preparation of a rebuilt frame.
+  using ComputeFrameStyles = bool (*)(Registry&, ParseWarningSink&, StylePassScheduler,
+                                      bool checkRejection);
+  /// An edited frame can stage its diagnostics until both selective passes finish.
+  bool (*computeEditedFrameStyles)(Registry&, ParseWarningSink&, StylePassScheduler,
+                                   ComputeFrameStyles) = nullptr;
 };
 
 }  // namespace donner::svg::components

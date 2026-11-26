@@ -245,6 +245,17 @@ void propagateStyleDirtyToDescendants(EntityHandle handle) {
   });
 }
 
+bool ComputeEditedFrameStyles(Registry& registry, ParseWarningSink& warningSink,
+                              StylePassScheduler scheduler,
+                              components::RenderTreeState::ComputeFrameStyles compute) {
+  auto tentative = warningSink.remainingAllowance();
+  if (!compute(registry, tentative, scheduler, true)) {
+    return false;
+  }
+  warningSink.merge(std::move(tentative));
+  return true;
+}
+
 // A narrow pass must collect every affected element before removing any old style records.
 bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
                         std::span<const std::string_view> changedClasses = {}) {
@@ -253,7 +264,7 @@ bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
   using components::StyleSystem;
   using Tree = donner::components::TreeComponent;
   Registry& registry = *handle.registry();
-  const auto* state = registry.ctx().find<components::RenderTreeState>();
+  auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || state->needsFullRebuild || state->needsFullStyleRecompute) {
     return false;
   }
@@ -307,6 +318,7 @@ bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
     invalidateComputedStyle(node);
     markDirty(node, DirtyFlagsComponent::StyleCascade);
   }
+  state->computeEditedFrameStyles = ComputeEditedFrameStyles;
   return true;
 }
 

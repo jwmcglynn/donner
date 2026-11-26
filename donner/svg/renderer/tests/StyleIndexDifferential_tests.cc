@@ -750,29 +750,47 @@ TEST(StyleInvalidationDifferential, LimitedPassPreservesNewRefusalAndWarnings) {
     </svg>)svg";
   SVGDocument measurement = ParseSource(kSource);
   const auto base = PrepareFirstFrameWithDiagnostics(measurement);
-  StyleResourceBudget::Limits limits;
-  limits.ruleElementMatches = base.counters.rulesTested;
+  for (bool limitAfterEdit : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "limit installed after routing=" << limitAfterEdit);
+    StyleResourceBudget::Limits limits;
+    // Adding the class exceeds the previously admitted full workload. With a late limit of
+    // two even the selective pass refuses, which exercises the renderer's actual retry.
+    limits.ruleElementMatches = limitAfterEdit ? 2u : base.counters.rulesTested;
 
-  SVGDocument narrow = ParseSource(kSource);
-  SVGDocument full = ParseSource(kSource);
-  for (SVGDocument* document : {&narrow, &full}) {
-    document->registry().ctx().emplace<StyleResourceBudget>(limits);
-    const auto before = PrepareFirstFrameWithDiagnostics(*document);
-    EXPECT_EQ(before.counters.budgetRejections, 0u);
-    auto target = document->querySelector("#target");
-    ASSERT_THAT(target, ::testing::Optional(::testing::_));
-    target->setClassName("hot");
+    SVGDocument narrow = ParseSource(kSource);
+    SVGDocument full = ParseSource(kSource);
+    for (SVGDocument* document : {&narrow, &full}) {
+      auto& context = document->registry().ctx();
+      if (!limitAfterEdit) {
+        context.emplace<StyleResourceBudget>(limits);
+      }
+      const auto before = PrepareFirstFrameWithDiagnostics(*document);
+      EXPECT_EQ(before.counters.budgetRejections, 0u);
+      auto target = document->querySelector("#target");
+      ASSERT_THAT(target, ::testing::Optional(::testing::_));
+      target->setClassName("hot");
+      if (limitAfterEdit) {
+        context.erase<StyleResourceBudget>();
+        context.emplace<StyleResourceBudget>(limits);
+      }
+    }
+
+    auto& narrowState = narrow.registry().ctx().get<RenderTreeState>();
+    EXPECT_EQ(narrowState.needsFullStyleRecompute, !limitAfterEdit);
+    full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+    const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
+    const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
+    EXPECT_GT(fullPass.counters.budgetRejections, 0u);
+    EXPECT_GT(fullPass.warningAttempts, 0u);
+    EXPECT_EQ(narrowPass.counters.fullClears, 1u);
+    EXPECT_EQ(narrowPass.counters.budgetRejections,
+              fullPass.counters.budgetRejections + static_cast<std::uint64_t>(limitAfterEdit));
+    EXPECT_EQ(narrowPass.warningAttempts, fullPass.warningAttempts);
+    EXPECT_THAT(narrowPass.warnings, ElementsAreArray(fullPass.warnings));
+    EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
+    EXPECT_THAT(PositionedRenderInstances(narrow),
+                ElementsAreArray(PositionedRenderInstances(full)));
   }
-  EXPECT_TRUE(narrow.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute);
-  full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
-  const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
-  const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
-  EXPECT_GT(fullPass.counters.budgetRejections, 0u);
-  EXPECT_GT(fullPass.warningAttempts, 0u);
-  EXPECT_EQ(narrowPass.counters.budgetRejections, fullPass.counters.budgetRejections);
-  EXPECT_EQ(narrowPass.warningAttempts, fullPass.warningAttempts);
-  EXPECT_THAT(narrowPass.warnings, ElementsAreArray(fullPass.warnings));
-  EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
 }
 
 CascadePassSnapshot ForceFullRestyleWithDiagnostics(SVGDocument& document) {
@@ -1144,7 +1162,7 @@ protected:
     for (char& ch : artifactName) {
       constexpr std::string_view kSafe =
           "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
-      if (!kSafe.contains(ch)) {
+      if (kSafe.find(ch) == std::string_view::npos) {
         ch = '_';
       }
     }
