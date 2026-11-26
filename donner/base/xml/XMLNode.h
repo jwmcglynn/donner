@@ -408,6 +408,17 @@ public:
   std::optional<SourceRange> mapProjectedTextRange(std::string_view decodedText,
                                                    const SourceRange& decodedRange) const;
 
+  /// Count authored and decoded bytes inspected when building an attribute source map.
+  /// @param name Attribute whose source mapping cost is requested.
+  /// @return Byte work if the source and decoded value are available.
+  std::optional<std::size_t> decodedAttributeSourceWork(const XMLQualifiedNameRef& name) const;
+
+  /// Index the authored offsets of one decoded attribute for repeated lookups.
+  /// @param name Attribute whose source and decoded value are indexed.
+  /// @return Source map when the attribute has authored source.
+  std::optional<XMLDecodedTextSourceMap> decodedAttributeSourceMap(
+      const XMLQualifiedNameRef& name) const;
+
   /// Index the exact authored locations of this element's projected text for repeated lookups.
   /// @param decodedText Complete projected value from the consumer, in decoded byte order.
   /// @return Source map when the element and its original text projection agree.

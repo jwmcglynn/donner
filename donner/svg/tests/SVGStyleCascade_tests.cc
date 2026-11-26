@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <span>
 #include <string_view>
 #include <tuple>
 #include <vector>
@@ -684,4 +686,43 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceBatchDistinguishesUnpreparedFromB
 }
 
 }  // namespace
+TEST(SVGStyleCascadeTests, CustomPropertySourceChargesEncodedInlineOwnerOnlyOncePerBatch) {
+  constexpr std::string_view encodedName = "--o&#110;e";
+  constexpr std::string_view extra = "ordinary trivia";
+  const auto query = [&](std::string_view comment, std::span<const std::string_view> names) {
+    std::string body = R"svg(<rect id="target" style="--o&#110;e:red; --two:blue;
+        --three:green; --label:'A &amp; B'; /*)svg";
+    body += comment;
+    body += R"svg(*/"/>)svg";
+    auto document = instantiateSubtree(body);
+    const auto target = document.querySelector("#target");
+    EXPECT_THAT(target, Optional(testing::_));
+    if (!target) {
+      return std::size_t{};
+    }
+    std::ignore = target->getComputedStyle();
+    constexpr std::size_t kWork = 4096;
+    const auto batch = FindCustomPropertyDeclarations(*target, names, kWork);
+    EXPECT_TRUE(batch.complete);
+    EXPECT_FALSE(batch.budgetExceeded);
+    EXPECT_THAT(batch.declarations, testing::SizeIs(names.size()));
+    const auto offset = document.source().find(encodedName);
+    if (!batch.declarations.empty()) {
+      EXPECT_THAT(batch.declarations.front(),
+                  Optional(SourceRange{FileOffset::Offset(offset),
+                                       FileOffset::Offset(offset + encodedName.size())}));
+    }
+    if (batch.work > 0) {
+      const auto rejected = FindCustomPropertyDeclarations(*target, names, batch.work - 1);
+      EXPECT_FALSE(rejected.complete);
+      EXPECT_TRUE(rejected.budgetExceeded);
+    }
+    return batch.work;
+  };
+  const std::array<std::string_view, 1> one{"--one"};
+  const std::array<std::string_view, 3> all{"--one", "--two", "--three"};
+  EXPECT_EQ(query(extra, one) - query("", one), 2 * extra.size());
+  EXPECT_EQ(query(extra, all) - query("", all), 2 * extra.size());
+}
+
 }  // namespace donner::svg

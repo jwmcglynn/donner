@@ -2061,4 +2061,24 @@ TEST(FocusViewTest, IndexedFallbacksUseEachSubjectAndRefreshOnSourceEdit) {
   EXPECT_THAT(ComputeReferenceHighlightSummary(document, reverse).referencingElements, IsEmpty());
 }
 
+TEST(FocusViewTest, EncodedInlineReferencesPreserveAuthoredRopeEndpoints) {
+  constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
+<defs><linearGradient id="paint"/></defs>
+<rect id="target" style="fill:url(#p&#97;int); stroke:url(#p&#97;int)"/>
+</svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  auto& document = app.document().document();
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto partition = ComputeFocusPartition(document, *target);
+  EXPECT_FALSE(partition.resourceLimitExceeded);
+  const auto destination = PointForAuthoredId(source, "paint");
+  for (const auto prefix : {"fill:url(", "stroke:url("}) {
+    EXPECT_THAT(partition.referenceLinks,
+                testing::Contains(ReferenceLinkIs(PointForNeedleAfter(source, "#p&#97;int", prefix),
+                                                  destination)));
+  }
+}
+
 }  // namespace donner::editor

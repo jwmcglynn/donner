@@ -4,6 +4,7 @@
 #include <array>
 #include <charconv>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -967,6 +968,37 @@ std::optional<SourceRange> XMLDecodedTextSourceMap::mapRange(const SourceRange& 
   const auto first = mapBoundary(*chunk, *start);
   const auto last = mapBoundary(*chunk, *end);
   return first && last ? std::optional(SourceRange{*first, *last}) : std::nullopt;
+}
+
+std::optional<std::size_t> XMLNode::decodedAttributeSourceWork(
+    const XMLQualifiedNameRef& name) const {
+  const auto authored = getAttributeSourceLocation(name);
+  const auto decoded = getAttribute(name);
+  if (!authored || !decoded) {
+    return std::nullopt;
+  }
+  const auto start = authored->valueRange.start.offset;
+  const auto end = authored->valueRange.end.offset;
+  if (!start || !end || *end < *start) {
+    return std::nullopt;
+  }
+  const auto bytes = *end - *start;
+  return decoded->size() <= std::numeric_limits<std::size_t>::max() - bytes
+             ? std::optional(bytes + decoded->size())
+             : std::nullopt;
+}
+
+std::optional<XMLDecodedTextSourceMap> XMLNode::decodedAttributeSourceMap(
+    const XMLQualifiedNameRef& name) const {
+  const auto* store = GetSourceStore(handle_);
+  const auto decoded = getAttribute(name);
+  const auto authored = getAttributeSourceLocation(name);
+  if (!store || !decoded || !authored) {
+    return std::nullopt;
+  }
+  XMLDecodedTextSourceMap mapping;
+  mapping.addChunk(store->source(), authored->valueRange, *decoded, 0);
+  return mapping;
 }
 
 std::optional<XMLDecodedTextSourceMap> XMLNode::decodedTextSourceMap(

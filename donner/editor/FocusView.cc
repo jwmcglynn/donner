@@ -349,6 +349,9 @@ void AppendParsedReferences(std::span<const css::ComponentValue> values, std::st
           return false;
         }
         const auto location = project(ref.spelling);
+        if (budget && budget->rejected()) {
+          return false;
+        }
         if (ref.kind == CssSourceReference::Kind::FragmentUrl) {
           references->push_back(
               {std::string(ref.name), location ? location->start.offset : std::nullopt, true});
@@ -369,8 +372,17 @@ void AppendAttributeCssReferences(const xml::XMLNode& node, const xml::XMLQualif
   if (value.find('(') == std::string_view::npos) {
     return;
   }
-  const auto project = [&](const SourceRange& local) {
-    return node.mapDecodedAttributeRange(attr, local);
+  std::optional<xml::XMLDecodedTextSourceMap> mapping;
+  bool builtMapping = false;
+  const auto project = [&](const SourceRange& local) -> std::optional<SourceRange> {
+    if (!builtMapping) {
+      builtMapping = true;
+      const auto sourceWork = node.decodedAttributeSourceWork(attr);
+      if (sourceWork && (!budget || budget->consume(*sourceWork))) {
+        mapping = node.decodedAttributeSourceMap(attr);
+      }
+    }
+    return mapping ? mapping->mapRange(local) : std::nullopt;
   };
   if (!attr.namespacePrefix.empty()) {
     return;

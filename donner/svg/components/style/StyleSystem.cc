@@ -3491,7 +3491,8 @@ std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity
 }
 
 std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
-                                                   const CustomPropertyWinner& winner) {
+                                                   const CustomPropertyWinner& winner,
+                                                   const xml::XMLDecodedTextSourceMap* inlineMap) {
   const auto start = winner.declaration->sourceOffset.offset;
   const std::size_t length = winner.declaration->nameSourceByteLength;
   if (!start || length == 0 || length > std::numeric_limits<std::size_t>::max() - *start) {
@@ -3500,9 +3501,7 @@ std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
   const auto end = *start + length;
   const SourceRange local{FileOffset::Offset(*start), FileOffset::Offset(end)};
   if (winner.inlineEntity != entt::null) {
-    const auto node = xml::XMLNode::TryCast(EntityHandle(registry, winner.inlineEntity));
-    return node ? node->mapDecodedAttributeRange(xml::XMLQualifiedNameRef("style"), local)
-                : std::nullopt;
+    return inlineMap ? inlineMap->mapRange(local) : std::nullopt;
   }
   return winner.sheetEntity != entt::null
              ? MapEmbeddedStylesheetRange(registry, winner.sheetEntity, local)
@@ -3662,15 +3661,42 @@ bool ChargeCustomPropertySourceMapping(const Registry& registry, const CustomPro
   return !sheet || work.consume(sheet->text.size());
 }
 
+using InlineStyleSourceMaps =
+    std::unordered_map<Entity, std::optional<xml::XMLDecodedTextSourceMap>>;
+
+const xml::XMLDecodedTextSourceMap* InlineStyleSourceMapFor(Registry& registry, Entity owner,
+                                                            InlineStyleSourceMaps& maps,
+                                                            CustomPropertyProvenanceWork& work) {
+  if (owner == entt::null) {
+    return nullptr;
+  }
+  const auto [entry, inserted] = maps.try_emplace(owner);
+  if (inserted) {
+    const auto node = xml::XMLNode::TryCast(EntityHandle(registry, owner));
+    const xml::XMLQualifiedNameRef attr("style");
+    const auto sourceWork = node ? node->decodedAttributeSourceWork(attr) : std::nullopt;
+    if (sourceWork && work.consume(*sourceWork)) {
+      entry->second = node->decodedAttributeSourceMap(attr);
+    }
+  }
+  return entry->second ? &*entry->second : nullptr;
+}
+
 bool MapCustomPropertyQueryEntries(Registry& registry, std::span<CustomPropertyQueryEntry> entries,
                                    std::span<std::optional<SourceRange>> declarations,
                                    CustomPropertyProvenanceWork& work) {
+  InlineStyleSourceMaps inlineSources;
   for (auto& entry : entries) {
     if (entry.winner.declaration) {
       if (!ChargeCustomPropertySourceMapping(registry, entry.winner, work)) {
         return false;
       }
-      entry.declaration = MapCustomPropertyWinner(registry, entry.winner);
+      const auto* inlineMap =
+          InlineStyleSourceMapFor(registry, entry.winner.inlineEntity, inlineSources, work);
+      if (work.exceeded()) {
+        return false;
+      }
+      entry.declaration = MapCustomPropertyWinner(registry, entry.winner, inlineMap);
     }
     for (const std::size_t output : entry.outputs) {
       declarations[output] = entry.declaration;
