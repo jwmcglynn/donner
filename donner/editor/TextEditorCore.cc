@@ -1891,13 +1891,8 @@ void TextEditorCore::colorizeLanguageRange(int fromLine, int toLine) {
   std::string buffer;
   std::string_view identifier;
 
-  const int endLine = std::max(0, std::min(text_.getTotalLines(), toLine));
-
-  for (int i = fromLine; i < endLine; ++i) {
+  for (int i = fromLine; i < toLine; ++i) {
     Line& line = text_.getLineGlyphsMutable(i);
-    if (line.empty()) {
-      continue;
-    }
 
     // Build buffer from line
     buffer.resize(line.size());
