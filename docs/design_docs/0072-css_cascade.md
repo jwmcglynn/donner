@@ -197,6 +197,13 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - Raising the XML parser's default 8,192-node cap, which bounds the element count of documents
   parsed with default options.
 
+## Next Steps
+
+- Implement custom-property storage, substitution and cascade layers with the conformance and
+  resource-accounting cases in [Part B](#part-b-milestones).
+- Implement rule-level source editing and selective restyling, then connect CSS highlighting
+  and completion to the source pane as described in [Part C](#part-c-milestones).
+
 ## Implementation Plan
 
 Each milestone is one independently reviewable PR unless noted. Estimates are engineering days,
@@ -230,18 +237,7 @@ including tests and review fixes. "After" names the milestones that must land fi
         the second pass discarding its overrides: it does not, so animated documents take the same
         path (`RenderingContextTest.AnimatedDocumentFullRestyleMatchesFirstFrame` in
         `//donner/svg/renderer/tests:renderer_driver_tests`).
-  - Done when: the correctness counter test shows elements cascaded equal to the styled entity count
-    on the edit frames, and the next-frame style time after a splash class edit is at most 10 ms
-    (from 18.8 ms). At the A2 checkpoint, each edit and keystroke row of
-    `css_cascade_perf_tests_correctness` cascaded each styled entity once with one full clear
-    (see [Measured Baseline](#measured-baseline)). On the baseline machine class (the same harness pinned
-    to one core, load average 27 to 36, four alternating runs of the old and new binaries) the
-    splash class edit's style time falls from 17.93 ms (17.10-18.54) to 10.67 ms (10.45-10.72), and
-    on a 14-core Apple silicon desktop (load average 4.7 to 8.0, six alternating runs) from
-    4.33 ms (4.28-4.40) to 2.49 ms (2.45-2.52). The time falls roughly by the share of cascades
-    removed, 447 of 1,069 (the 175 shadow-tree clones were already cascaded once), not by half; the
-    remaining 0.7 ms is left to the rule index (Milestone A3).
-  - On the qualified Part A implementation, a forced full restyle after the named splash
+  - A forced full restyle after the named splash
     class edit performs one full clear and cascades all 622 elements. Across six matched groups
     on Arm Linux, median style times were 2.133 ms forward and 2.124 ms undo; the maximum
     observed sample was 2.929 ms. The ordinary selective path cascaded 176 elements with no
