@@ -455,6 +455,35 @@ TEST_F(StyleSystemTest, SubstitutedRectangleGeometryKeepsPresentationUnits) {
   EXPECT_EQ(variableRect.computedWidth().value, 0.0);
 }
 
+TEST_F(StyleSystemTest, SubstitutedPresentationTransformsUseSvgGrammar) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--x:18;--pair:8 5;--pivot:30 7 2">
+      <style>.strict { transform:translate(var(--x)); }</style>
+      <rect id="literal-unit" transform="translate(18)"/>
+      <rect id="variable-unit" transform="translate(var(--x))"/>
+      <rect id="literal-combined" transform="translate(8 5),rotate(30 7 2)"/>
+      <rect id="variable-combined" transform="translate(var(--pair)),rotate(var(--pivot))"/>
+      <rect id="strict" class="strict"/>
+    </svg>)svg");
+
+  const auto directUnit = document.querySelector("#literal-unit");
+  const auto variableUnit = document.querySelector("#variable-unit");
+  const auto directCombined = document.querySelector("#literal-combined");
+  const auto variableCombined = document.querySelector("#variable-combined");
+  const auto strict = document.querySelector("#strict");
+  ASSERT_THAT(directUnit, testing::Optional(testing::_));
+  ASSERT_THAT(variableUnit, testing::Optional(testing::_));
+  ASSERT_THAT(directCombined, testing::Optional(testing::_));
+  ASSERT_THAT(variableCombined, testing::Optional(testing::_));
+  ASSERT_THAT(strict, testing::Optional(testing::_));
+  EXPECT_THAT(directUnit->cast<SVGRectElement>().transform(), Eq(Transform2d::Translate(18, 0)));
+  EXPECT_THAT(variableUnit->cast<SVGRectElement>().transform(),
+              Eq(directUnit->cast<SVGRectElement>().transform()));
+  EXPECT_THAT(variableCombined->cast<SVGRectElement>().transform(),
+              Eq(directCombined->cast<SVGRectElement>().transform()));
+  EXPECT_THAT(strict->cast<SVGRectElement>().transform(), Eq(Transform2d()));
+}
+
 TEST_F(StyleSystemTest, TransformVariableEditsRefreshImmediateGeometry) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" style="--position:translate(20px)">
