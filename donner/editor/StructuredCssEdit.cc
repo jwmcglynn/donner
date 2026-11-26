@@ -64,6 +64,25 @@ void AddDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view 
   }
 }
 
+std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRule& stylesheetRule,
+                                                      std::string_view source, std::size_t offset,
+                                                      std::uint64_t generation,
+                                                      std::uint64_t sourceVersion) {
+  const auto rule = ByteRange(stylesheetRule.ruleSourceRange, source.size());
+  const auto selector = ByteRange(stylesheetRule.selectorSourceRange, source.size());
+  if (!rule || !selector || !Contains(*rule, offset) || source[rule->end - 1] != '}') {
+    return std::nullopt;
+  }
+  StructuredCssTarget target{.rule = *rule,
+                             .selector = *selector,
+                             .insertDeclaration = rule->end - 1,
+                             .selectionOffset = offset,
+                             .generation = generation,
+                             .sourceVersion = sourceVersion};
+  AddDeclarationTargets(stylesheetRule, source, offset, target);
+  return target;
+}
+
 std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& document,
                                                     std::string_view source, std::size_t offset,
                                                     std::uint64_t generation) {
@@ -239,22 +258,11 @@ std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::
     return std::nullopt;
   }
   const auto generation = app.document().documentGeneration();
-  for (const auto& stylesheetRule : svg::CollectStylesheetRules(document)) {
-    const auto rule = ByteRange(stylesheetRule.ruleSourceRange, source.size());
-    const auto selector = ByteRange(stylesheetRule.selectorSourceRange, source.size());
-    if (!rule || !selector || !Contains(*rule, offset) || source[rule->end - 1] != '}') {
-      continue;
-    }
-    StructuredCssTarget target{.rule = *rule,
-                               .selector = *selector,
-                               .insertDeclaration = rule->end - 1,
-                               .selectionOffset = offset,
-                               .generation = generation,
-                               .sourceVersion = document.sourceVersion()};
-    AddDeclarationTargets(stylesheetRule, source, offset, target);
-    return target;
+  const auto stylesheetRule = svg::CollectStylesheetRuleAtSourceOffset(document, offset);
+  if (!stylesheetRule) {
+    return FindInlineTarget(document, source, offset, generation);
   }
-  return FindInlineTarget(document, source, offset, generation);
+  return MakeEmbeddedTarget(*stylesheetRule, source, offset, generation, document.sourceVersion());
 }
 
 bool ApplyStructuredCssEdit(EditorApp& app, TextEditor& editor, const StructuredCssTarget& target,
