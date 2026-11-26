@@ -3559,19 +3559,65 @@ css::Declaration VariableUnset(const css::Declaration& source) {
   return css::Declaration(source.name, std::move(unset), source.sourceOffset, source.important);
 }
 
-template <typename Callback>
-bool ApplyToNamedProperty(PropertyRegistry& registry, std::string_view name,
-                          const Callback& apply) {
-  bool found = false;
-  auto properties = registry.allPropertiesMutable();
-  PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>([&](auto i) {
-    auto& property = std::get<i.value>(properties);
-    if (property.name == name) {
-      found = true;
-      apply(i, property);
+// These operations run only when a variable declaration owns a pending field.
+struct VariableField {
+  std::string_view name;
+  PropertyState& state;
+  css::Specificity& specificity;
+  void* storage;
+  void (*resetStorage)(void*, PropertyState, css::Specificity);
+  void (*installStorage)(void*, void*);
+
+  bool isSpecified() const { return state != PropertyState::NotSet; }
+  void reset(PropertyState newState, css::Specificity priority) const {
+    resetStorage(storage, newState, priority);
+  }
+  void install(VariableField source) const { installStorage(storage, source.storage); }
+};
+
+template <typename P>
+void ResetVariableField(void* storage, PropertyState state, css::Specificity specificity) {
+  static_cast<P*>(storage)->set(state, specificity);
+}
+
+template <typename P>
+void InstallVariableField(void* destination, void* source) {
+  *static_cast<P*>(destination) = std::move(*static_cast<P*>(source));
+}
+
+using VariableFieldAccessor = VariableField (*)(PropertyRegistry&);
+
+template <std::size_t Index>
+VariableField GetVariableField(PropertyRegistry& registry) {
+  auto fields = registry.allPropertiesMutable();
+  auto& property = std::get<Index>(fields);
+  using P = std::remove_reference_t<decltype(property)>;
+  return {property.name, property.state,        property.specificity,
+          &property,     ResetVariableField<P>, InstallVariableField<P>};
+}
+
+template <std::size_t... Index>
+constexpr auto VariableFieldAccessors(std::index_sequence<Index...>) {
+  return std::array<VariableFieldAccessor, sizeof...(Index)>{GetVariableField<Index>...};
+}
+
+constexpr auto kVariableFields =
+    VariableFieldAccessors(std::make_index_sequence<PropertyRegistry::numProperties()>());
+
+struct SelectedVariableField {
+  VariableFieldAccessor get;
+  VariableField field;
+};
+
+std::optional<SelectedVariableField> FindVariableField(PropertyRegistry& registry,
+                                                       std::string_view name) {
+  for (auto get : kVariableFields) {
+    VariableField field = get(registry);
+    if (field.name == name) {
+      return SelectedVariableField{get, field};
     }
-  });
-  return found;
+  }
+  return std::nullopt;
 }
 
 std::shared_ptr<const css::Declaration> PreviousPresentationVariable(
@@ -3650,19 +3696,18 @@ std::optional<ParseDiagnostic> PropertyRegistry::deferVariableDeclaration(
   // Use the actual property parser to identify all fields a shorthand can replace. A later
   // concrete declaration clears its marker only if it wins the ordinary cascade.
   const auto variable = std::make_shared<const css::Declaration>(declaration);
-  auto targetProperties = targets.allProperties();
-  auto local = allPropertiesMutable();
-  forEachProperty<0, numProperties()>([&](auto i) {
-    auto& property = std::get<i.value>(local);
-    if (std::get<i.value>(targetProperties).isSpecified()) {
-      const bool wins = !property.isSpecified() || property.specificity <= effective;
-      if (wins) {
-        property.set(PropertyState::PendingSubstitution, effective);
-      }
-      writeVariableAwareDeclaration(RcString(property.name), declaration, effective, presentation,
-                                    wins, variable);
+  for (auto get : kVariableFields) {
+    if (!get(targets).isSpecified()) {
+      continue;
     }
-  });
+    const auto property = get(*this);
+    const bool wins = !property.isSpecified() || property.specificity <= effective;
+    if (wins) {
+      property.reset(PropertyState::PendingSubstitution, effective);
+    }
+    writeVariableAwareDeclaration(RcString(property.name), declaration, effective, presentation,
+                                  wins, variable);
+  }
   for (const auto& [name, _] : targets.unparsedProperties) {
     const auto current = unparsedProperties.find(name);
     writeVariableAwareDeclaration(
@@ -3684,15 +3729,14 @@ void PropertyRegistry::discardSupersededVariableDeclarations() {
     if (!IsPendingVariable(item.second)) {
       return false;
     }
-    bool superseded = false;
-    ApplyToNamedProperty(*this, item.first, [&](auto, auto& property) {
-      if (!property.isSpecified() && item.second.specificity == css::Specificity()) {
-        // Removing a concrete inline value can uncover this authored presentation value.
-        property.set(PropertyState::PendingSubstitution, item.second.specificity);
-      }
-      superseded = property.state != PropertyState::PendingSubstitution;
-    });
-    return superseded;
+    const auto field = FindVariableField(*this, item.first);
+    if (!field) {
+      return false;
+    }
+    if (!field->field.isSpecified() && item.second.specificity == css::Specificity()) {
+      field->field.reset(PropertyState::PendingSubstitution, item.second.specificity);
+    }
+    return field->field.state != PropertyState::PendingSubstitution;
   });
 }
 
@@ -3733,8 +3777,6 @@ std::optional<FileOffset> PropertyRegistry::resolveVariableDeclarations(
 void PropertyRegistry::applyResolvedVariableGroup(const parser::UnparsedProperty& original,
                                                   const css::Declaration& declaration,
                                                   PropertyRegistry& resolved, bool parsed) {
-  auto resolvedProperties = resolved.allPropertiesMutable();
-
   // A shorthand may own several fields. Apply one expansion only to the fields it still owns.
   for (auto it = unparsedProperties.begin(); it != unparsedProperties.end();) {
     if (!IsPendingVariable(it->second) || it->second.specificity != original.specificity ||
@@ -3742,15 +3784,13 @@ void PropertyRegistry::applyResolvedVariableGroup(const parser::UnparsedProperty
       ++it;
       continue;
     }
-    const bool typed = ApplyToNamedProperty(*this, it->first, [&](auto i, auto& property) {
-      auto& value = std::get<i.value>(resolvedProperties);
+    if (const auto field = FindVariableField(*this, it->first)) {
+      const auto value = field->get(resolved);
       if (parsed && value.isSpecified()) {
-        property = std::move(value);
+        field->field.install(value);
       } else {
-        property.set(PropertyState::ExplicitUnset, original.specificity);
+        field->field.reset(PropertyState::ExplicitUnset, original.specificity);
       }
-    });
-    if (typed) {
       it = unparsedProperties.erase(it);
     } else {
       it->second.declaration = declaration;
@@ -4002,12 +4042,11 @@ bool PropertyRegistry::removePendingPresentationVariable(std::string_view name, 
   for (auto it = unparsedProperties.begin(); it != unparsedProperties.end();) {
     if (IsPendingPresentationVariable(it->second, name)) {
       if (clearMarkers) {
-        ApplyToNamedProperty(*this, it->first, [](auto, auto& property) {
-          if (property.state == PropertyState::PendingSubstitution &&
-              property.specificity == css::Specificity()) {
-            property.clear();
-          }
-        });
+        const auto field = FindVariableField(*this, it->first);
+        if (field && field->field.state == PropertyState::PendingSubstitution &&
+            field->field.specificity == css::Specificity()) {
+          field->field.reset(PropertyState::NotSet, css::Specificity());
+        }
       }
       it = unparsedProperties.erase(it);
       removed = true;
