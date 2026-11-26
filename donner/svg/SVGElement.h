@@ -851,6 +851,7 @@ protected:
    */
   void removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name);
 
+private:
   // The parser shares the attribute writers but has no previous render to invalidate.
   using StyleEditRouter = bool (*)(EntityHandle, std::string_view, std::string_view,
                                    std::string_view);
@@ -864,6 +865,7 @@ protected:
                                                         StyleEditRouter route);
   void removeAttributeWithRouter(const xml::XMLQualifiedNameRef& name, StyleEditRouter route);
 
+protected:
   /**
    * Acquire write access for creating an element in a document.
    *
