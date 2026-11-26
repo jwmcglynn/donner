@@ -85,6 +85,12 @@ std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& elem
 std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document,
                                                       bool includeUserAgent = false);
 
+/// Collect one document-local author rule and its declarations at a source byte offset.
+/// @param document SVG document to inspect.
+/// @param documentSourceOffset Offset inside the complete authored CSS rule.
+std::optional<SVGStylesheetRule> CollectStylesheetRuleAtSourceOffset(
+    const SVGDocument& document, std::size_t documentSourceOffset);
+
 /// Return true when an author stylesheet rule in \p document matches on tree position.
 ///
 /// Such a rule (`#layer rect`, `svg > rect`, `rect:first-child`) can start or stop matching when an

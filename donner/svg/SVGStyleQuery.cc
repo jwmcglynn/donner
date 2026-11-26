@@ -2,6 +2,7 @@
 
 #include <span>
 
+#include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
@@ -76,6 +77,35 @@ SVGStyleRuleAtSourceOffset ToPublicSourceRule(const components::StyleRuleAtSourc
   };
 }
 
+bool ContainsSourceOffset(const SourceRange& range, std::size_t offset) {
+  return range.start.offset && range.end.offset && *range.start.offset <= offset &&
+         offset < *range.end.offset;
+}
+
+std::optional<SVGStylesheetRule> FindProjectedRuleAtOffset(Registry& registry, std::size_t offset) {
+  const auto& styleSystem = components::StyleSystem();
+  for (auto sheets = registry.view<StylesheetComponent>(); const Entity entity : sheets) {
+    const auto& sheet = sheets.get<StylesheetComponent>(entity);
+    if (sheet.isUserAgentStylesheet || !sheet.isCssType()) {
+      continue;
+    }
+    const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
+    const auto location = node ? node->getNodeLocation() : std::nullopt;
+    if (!location || !ContainsSourceOffset(*location, offset)) {
+      continue;
+    }
+    const auto rules = sheet.stylesheet.rules();
+    for (std::size_t index = 0; index < rules.size(); ++index) {
+      const auto range =
+          styleSystem.mapStylesheetSourceRange(registry, entity, rules[index].ruleSourceRange);
+      if (range && ContainsSourceOffset(*range, offset)) {
+        return ToPublicStylesheetRule(registry, entity, index, sheet, rules[index]);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element) {
@@ -120,6 +150,23 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
     }
     return result;
   });
+}
+
+std::optional<SVGStylesheetRule> CollectStylesheetRuleAtSourceOffset(
+    const SVGDocument& document, std::size_t documentSourceOffset) {
+  return document.withReadAccess(
+      [&](DocumentReadAccess& access) -> std::optional<SVGStylesheetRule> {
+        Registry& registry = access.registry();
+        const auto found =
+            components::StyleSystem().findStyleRuleAtSourceOffset(registry, documentSourceOffset);
+        if (!found) {
+          return FindProjectedRuleAtOffset(registry, documentSourceOffset);
+        }
+        const auto& sheet = registry.get<StylesheetComponent>(found->stylesheetEntity);
+        auto rule = ToPublicStylesheetRule(registry, found->stylesheetEntity, found->ruleIndex,
+                                           sheet, sheet.stylesheet.rules()[found->ruleIndex]);
+        return rule.ruleSourceRange ? std::optional(std::move(rule)) : std::nullopt;
+      });
 }
 
 bool AuthorStyleDependsOnTreePosition(const SVGDocument& document) {
