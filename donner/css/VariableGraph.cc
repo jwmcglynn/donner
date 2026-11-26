@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "donner/base/SmallVector.h"
+#include "donner/css/VariableReference.h"
 
 namespace donner::css {
 namespace {
@@ -15,45 +16,6 @@ constexpr std::size_t kNoDepth = std::numeric_limits<std::size_t>::max();
 constexpr std::size_t kMaxNames = 65'536;
 constexpr std::size_t kMaxGraphWork = 16 * 1024 * 1024;
 constexpr std::size_t kMaxAggregateWork = 16 * 1024 * 1024;
-
-struct Reference {
-  std::string_view name;
-  std::optional<Values> fallback;
-};
-
-void SkipWhitespace(Values& values) {
-  while (!values.empty() && values.front().isToken<Token::Whitespace>()) {
-    values = values.subspan(1);
-  }
-}
-
-std::optional<Reference> ParseReference(const Function& function) {
-  Values args(function.values);
-  SkipWhitespace(args);
-  if (args.empty()) {
-    return std::nullopt;
-  }
-  const auto* ident = args.front().tryGetToken<Token::Ident>();
-  if (!ident || !std::string_view(ident->value).starts_with("--") || ident->value.size() == 2) {
-    return std::nullopt;
-  }
-  args = args.subspan(1);
-  SkipWhitespace(args);
-  Reference result{std::string_view(ident->value), std::nullopt};
-  if (!args.empty()) {
-    if (!args.front().isToken<Token::Comma>()) {
-      return std::nullopt;
-    }
-    result.fallback = args.subspan(1);
-    for (const auto& value : *result.fallback) {
-      const auto* delim = value.tryGetToken<Token::Delim>();
-      if (value.isToken<Token::Semicolon>() || (delim && delim->value == '!')) {
-        return std::nullopt;
-      }
-    }
-  }
-  return result;
-}
 
 bool ValidateSyntax(Values input, std::size_t& workLeft, bool& syntaxValid) {
   SmallVector<Values, 4> levels;
@@ -71,7 +33,7 @@ bool ValidateSyntax(Values input, std::size_t& workLeft, bool& syntaxValid) {
     const auto& value = rest.front();
     rest = rest.subspan(1);
     if (const auto* function = std::get_if<Function>(&value.value)) {
-      if (function->name.equalsLowercase("var") && !ParseReference(*function)) {
+      if (function->name.equalsLowercase("var") && !details::ParseVariableReference(*function)) {
         syntaxValid = false;
         return true;
       }
@@ -87,7 +49,7 @@ class SelectedReferenceScanner {
 public:
   explicit SelectedReferenceScanner(Values input) { levels_.emplace_back(input); }
 
-  std::optional<Reference> next(std::size_t& workLeft, bool& refused) {
+  std::optional<details::VariableReference> next(std::size_t& workLeft, bool& refused) {
     while (!levels_.empty()) {
       auto& rest = levels_.back();
       if (rest.empty()) {
@@ -103,7 +65,7 @@ public:
       rest = rest.subspan(1);
       if (const auto* function = std::get_if<Function>(&value.value)) {
         if (function->name.equalsLowercase("var")) {
-          return ParseReference(*function);
+          return details::ParseVariableReference(*function);
         }
         levels_.emplace_back(function->values);
       } else if (const auto* block = std::get_if<SimpleBlock>(&value.value)) {
@@ -241,7 +203,7 @@ private:
     }
   }
 
-  bool followReference(const Reference& reference) {
+  bool followReference(const details::VariableReference& reference) {
     const auto found = names_.find(reference.name);
     if (found == names_.end()) {
       if (!inherited_(reference.name)) {

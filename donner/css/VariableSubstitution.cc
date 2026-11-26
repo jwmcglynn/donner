@@ -4,16 +4,12 @@
 #include <utility>
 
 #include "donner/base/SmallVector.h"
+#include "donner/css/VariableReference.h"
 
 namespace donner::css {
 namespace {
 
 using Values = std::span<const ComponentValue>;
-
-struct Reference {
-  std::string_view name;
-  std::optional<Values> fallback;
-};
 
 void SkipWhitespace(Values& values) {
   while (!values.empty() && values.front().isToken<Token::Whitespace>()) {
@@ -21,7 +17,11 @@ void SkipWhitespace(Values& values) {
   }
 }
 
-std::optional<Reference> ParseReference(const Function& function) {
+}  // namespace
+
+namespace details {
+
+std::optional<VariableReference> ParseVariableReference(const Function& function) {
   Values args(function.values);
   SkipWhitespace(args);
   if (args.empty()) {
@@ -33,7 +33,7 @@ std::optional<Reference> ParseReference(const Function& function) {
   }
   args = args.subspan(1);
   SkipWhitespace(args);
-  Reference result{std::string_view(ident->value), std::nullopt};
+  VariableReference result{std::string_view(ident->value), std::nullopt};
   if (!args.empty()) {
     if (!args.front().isToken<Token::Comma>()) {
       return std::nullopt;
@@ -49,6 +49,10 @@ std::optional<Reference> ParseReference(const Function& function) {
   return result;
 }
 
+}  // namespace details
+
+namespace {
+
 VariableReferences Inspect(Values input, const std::function<void(std::string_view)>* visit) {
   VariableReferences status = VariableReferences::None;
   SmallVector<Values, 4> levels;
@@ -63,7 +67,7 @@ VariableReferences Inspect(Values input, const std::function<void(std::string_vi
     rest = rest.subspan(1);
     if (const auto* function = std::get_if<Function>(&value.value)) {
       if (function->name.equalsLowercase("var")) {
-        const auto ref = ParseReference(*function);
+        const auto ref = details::ParseVariableReference(*function);
         if (!ref) {
           return VariableReferences::Invalid;
         }
@@ -154,7 +158,7 @@ private:
   }
 
   VariableSubstitutionStatus reference(const Function& function, const Level& level) {
-    const auto ref = ParseReference(function);
+    const auto ref = details::ParseVariableReference(function);
     if (!ref || level.computed) {
       return VariableSubstitutionStatus::Invalid;
     }
