@@ -3310,11 +3310,11 @@ CustomPropertyWinner FindLocalCustomProperty(const Registry& registry, Entity tr
 
 constexpr std::size_t kMaximumStylesheetSourceIndices =
     xml::components::XMLDocumentContext::kDefaultMaximumSourceEditTreeNodes;
-constexpr std::size_t kMaximumStylesheetSourceIndexBytes = 16 * 1024 * 1024;
+constexpr std::size_t kMaximumStylesheetSourceIndexRetainedBytes = 16 * 1024 * 1024;
 
 struct StylesheetSourceIndexEntry {
   std::uint64_t stylesheetRevision = 0;
-  std::size_t sourceBytes = 0;
+  std::size_t retainedBytes = 0;
   std::optional<xml::XMLDecodedTextSourceMap> mapping;
 };
 
@@ -3322,7 +3322,7 @@ struct StylesheetSourceIndexCache {
   std::weak_ptr<xml::XMLSourceStore> source;
   std::uint64_t sourceVersion = 0;
   std::unordered_map<Entity, StylesheetSourceIndexEntry> entries;
-  std::size_t sourceBytes = 0;
+  std::size_t retainedBytes = 0;
   std::size_t builds = 0;
 
   void reset(const std::shared_ptr<xml::XMLSourceStore>& newSource,
@@ -3330,7 +3330,7 @@ struct StylesheetSourceIndexCache {
     source = newSource;
     sourceVersion = newSourceVersion;
     entries.clear();
-    sourceBytes = 0;
+    retainedBytes = 0;
   }
 };
 
@@ -3355,21 +3355,25 @@ const xml::XMLDecodedTextSourceMap* MapForStylesheet(Registry& registry, Entity 
     return existing->second.mapping ? &*existing->second.mapping : nullptr;
   }
   if (existing != cache.entries.end()) {
-    cache.sourceBytes -= existing->second.sourceBytes;
+    cache.retainedBytes -= existing->second.retainedBytes;
     cache.entries.erase(existing);
   }
 
-  if (cache.entries.size() >= kMaximumStylesheetSourceIndices ||
-      sheet.text.size() > kMaximumStylesheetSourceIndexBytes - cache.sourceBytes) {
+  if (cache.entries.size() >= kMaximumStylesheetSourceIndices) {
     return nullptr;
   }
   const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
   auto mapping = node ? node->decodedTextSourceMap(sheet.text) : std::nullopt;
   ++cache.builds;
-  cache.sourceBytes += sheet.text.size();
+  std::size_t retainedBytes = mapping ? mapping->retainedCapacityBytes() : 0;
+  if (retainedBytes > kMaximumStylesheetSourceIndexRetainedBytes - cache.retainedBytes) {
+    mapping.reset();
+    retainedBytes = 0;
+  }
+  cache.retainedBytes += retainedBytes;
   auto inserted =
       cache.entries
-          .emplace(entity, StylesheetSourceIndexEntry{sheet.contentRevision(), sheet.text.size(),
+          .emplace(entity, StylesheetSourceIndexEntry{sheet.contentRevision(), retainedBytes,
                                                       std::move(mapping)})
           .first;
   return inserted->second.mapping ? &*inserted->second.mapping : nullptr;

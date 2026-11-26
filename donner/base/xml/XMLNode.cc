@@ -4,6 +4,7 @@
 #include <array>
 #include <charconv>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -967,6 +968,17 @@ std::optional<SourceRange> XMLDecodedTextSourceMap::mapRange(const SourceRange& 
   const auto first = mapBoundary(*chunk, *start);
   const auto last = mapBoundary(*chunk, *end);
   return first && last ? std::optional(SourceRange{*first, *last}) : std::nullopt;
+}
+
+std::size_t XMLDecodedTextSourceMap::retainedCapacityBytes() const {
+  std::size_t bytes = chunks_.capacity() * sizeof(Chunk);
+  for (const Chunk& chunk : chunks_) {
+    if (chunk.runs.capacity() > (std::numeric_limits<std::size_t>::max() - bytes) / sizeof(Run)) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    bytes += chunk.runs.capacity() * sizeof(Run);
+  }
+  return bytes;
 }
 
 std::optional<XMLDecodedTextSourceMap> XMLNode::decodedTextSourceMap(
