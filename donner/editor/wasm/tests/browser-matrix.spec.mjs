@@ -2243,6 +2243,7 @@ test("completed drag frames reject a matching coordinate dispatched in the futur
     "a coordinate does not count before the matching input was dispatched",
   );
   stream.dispatchTimes[0] = 140;
+  presentation.pointerX += 1e-9;
   assert.deepEqual(metrics.completedDragFrames(stream, 1), [stream.frames[0]]);
 });
 

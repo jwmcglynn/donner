@@ -29,6 +29,7 @@
  */
 export const kReleaseFrameTimeoutMs = 20500;
 export const kPresentationSamplePollMs = 8;
+const kPointerMatchTolerance = 1e-6;
 
 /**
  * @typedef {{ inputRepresented: boolean, mouseDown: boolean, completedSerial: number,
@@ -201,6 +202,11 @@ function completesThisDrag(frame, stream, baselineSerial) {
   );
 }
 
+function matchesDispatchedPoint(point, presentation) {
+  return Math.abs(point.x - presentation.pointerX) <= kPointerMatchTolerance
+    && Math.abs(point.y - presentation.pointerY) <= kPointerMatchTolerance;
+}
+
 /**
  * For each dispatched input, the time from its dispatch to the first sampled frame that completed
  * it or a later input of the drag. An input no sampled frame completed has no latency.
@@ -213,7 +219,7 @@ export function dragInputLatencies(stream, baselineSerial) {
     const frame = stream.frames.find((sample) =>
       completesThisDrag(sample, stream, baselineSerial)
       && stream.dispatchPoints.findLastIndex((applied, appliedIndex) =>
-          applied.x === sample.presentation.pointerX && applied.y === sample.presentation.pointerY
+          matchesDispatchedPoint(applied, sample.presentation)
           && stream.dispatchTimes[appliedIndex] <= sample.presentation.completedAtMs
         ) >= index
       && sample.presentation.completedAtMs >= stream.dispatchTimes[index]
@@ -235,7 +241,7 @@ export function completedDragFrames(stream, baselineSerial) {
     if (
       completesThisDrag(frame, stream, baselineSerial)
       && stream.dispatchPoints.some((point, index) =>
-        point.x === frame.presentation.pointerX && point.y === frame.presentation.pointerY
+        matchesDispatchedPoint(point, frame.presentation)
           && stream.dispatchTimes[index] <= frame.presentation.completedAtMs
       )
     ) {
