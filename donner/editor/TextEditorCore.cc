@@ -1868,6 +1868,7 @@ void TextEditorCore::colorize(int fromLine, int lines) {
   colorRangeMax_ = std::max(colorRangeMax_, toLine);
   colorRangeMin_ = std::max(0, colorRangeMin_);
   colorRangeMax_ = std::max(colorRangeMin_, colorRangeMax_);
+  svgColorsDirty_ = true;
   checkComments_ = true;
 }
 
@@ -1875,21 +1876,40 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
   if (!colorizerEnabled_) {
     return;
   }
-  const int first = std::max(0, fromLine);
-  const int last = std::min(text_.getTotalLines(), toLine);
+  int first = std::max(0, fromLine);
+  int last = std::min(text_.getTotalLines(), toLine);
   if (first >= last) {
     return;
   }
   if (languageDefinition_.name == "SVG") {
-    colorizeSvgCss(first, last);
-  } else {
-    colorizeLanguageRange(first, last);
+    prepareSvgCssColors(first, last);
+  }
+  colorizeLanguageRange(first, last);
+}
+
+namespace {
+void SetLanguageColor(Glyph& glyph, ColorIndex color, bool preserveCss) {
+  if (!preserveCss || !glyph.hasCssColor) {
+    glyph.colorIndex = color;
   }
 }
 
+ColorIndex SourceIdentifierColor(const LanguageDefinition& language, std::string_view token) {
+  std::string name(token);
+  if (!language.caseSensitive) {
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  }
+  if (language.keywords.contains(name)) {
+    return ColorIndex::Keyword;
+  }
+  return language.identifiers.contains(name) ? ColorIndex::KnownIdentifier : ColorIndex::Identifier;
+}
+}  // namespace
+
 void TextEditorCore::colorizeLanguageRange(int fromLine, int toLine) {
+  const bool preserveCss = languageDefinition_.name == "SVG";
   std::string buffer;
-  std::string_view identifier;
 
   for (int i = fromLine; i < toLine; ++i) {
     Line& line = text_.getLineGlyphsMutable(i);
@@ -1898,7 +1918,7 @@ void TextEditorCore::colorizeLanguageRange(int fromLine, int toLine) {
     buffer.resize(line.size());
     for (size_t j = 0; j < line.size(); ++j) {
       buffer[j] = line[j].character;
-      line[j].colorIndex = ColorIndex::Default;
+      SetLanguageColor(line[j], ColorIndex::Default, preserveCss);
     }
 
     const char* current = buffer.data();
@@ -1917,27 +1937,14 @@ void TextEditorCore::colorizeLanguageRange(int fromLine, int toLine) {
       // Process token
       const size_t tokenLength = tokenEnd - tokenBegin;
       if (tokenColor == ColorIndex::Identifier) {
-        identifier = std::string_view(tokenBegin, tokenLength);
-
-        // Handle case sensitivity
-        std::string upperIdentifier;
-        if (!languageDefinition_.caseSensitive) {
-          upperIdentifier.resize(identifier.size());
-          std::transform(identifier.begin(), identifier.end(), upperIdentifier.begin(), ::toupper);
-          identifier = upperIdentifier;
-        }
-
-        if (languageDefinition_.keywords.count(std::string(identifier))) {
-          tokenColor = ColorIndex::Keyword;
-        } else if (languageDefinition_.identifiers.count(std::string(identifier))) {
-          tokenColor = ColorIndex::KnownIdentifier;
-        }
+        tokenColor =
+            SourceIdentifierColor(languageDefinition_, std::string_view(tokenBegin, tokenLength));
       }
 
       // Apply color to token
       const size_t offset = tokenBegin - buffer.data();
       for (size_t j = 0; j < tokenLength; ++j) {
-        line[offset + j].colorIndex = tokenColor;
+        SetLanguageColor(line[offset + j], tokenColor, preserveCss);
       }
 
       current = tokenEnd;
@@ -1960,7 +1967,10 @@ bool UpdateCssMembership(Line& line, std::size_t start, std::span<const CssSourc
         regionIndex < regions.size() && regions[regionIndex].startOffset <= start
             ? 1 + static_cast<unsigned char>(regions[regionIndex].kind)
             : 0;
-    changed |= glyph.cssRegionKind != kind;
+    if (glyph.cssRegionKind != kind) {
+      changed = true;
+      glyph.hasCssColor = false;
+    }
     glyph.cssRegionKind = kind;
     ++start;
   }
@@ -1968,7 +1978,7 @@ bool UpdateCssMembership(Line& line, std::size_t start, std::span<const CssSourc
 }
 
 void PaintCssSpan(TextBuffer& text, const std::vector<std::size_t>& lineStarts,
-                  const CssColorSpan& span) {
+                  const CssColorSpan& span, bool painted = true) {
   const auto afterStart = std::upper_bound(lineStarts.begin(), lineStarts.end(), span.startOffset);
   const auto first = static_cast<std::size_t>(afterStart - lineStarts.begin() - 1);
   for (std::size_t i = first; i < lineStarts.size() && lineStarts[i] < span.endOffset; ++i) {
@@ -1976,6 +1986,7 @@ void PaintCssSpan(TextBuffer& text, const std::vector<std::size_t>& lineStarts,
     const std::size_t begin = std::max(span.startOffset, lineStarts[i]) - lineStarts[i];
     const std::size_t end = std::min(line.size(), span.endOffset - lineStarts[i]);
     for (std::size_t column = begin; column < end; ++column) {
+      line[column].hasCssColor = painted;
       line[column].colorIndex = span.color;
     }
   }
@@ -1983,7 +1994,7 @@ void PaintCssSpan(TextBuffer& text, const std::vector<std::size_t>& lineStarts,
 
 }  // namespace
 
-void TextEditorCore::colorizeSvgCss(int fromLine, int toLine) {
+void TextEditorCore::prepareSvgCssColors(int& fromLine, int& toLine) {
   const std::string source = text_.getText();
   const auto regions = FindSvgCssSourceRegions(source);
   std::vector<std::size_t> lineStarts;
@@ -2000,13 +2011,42 @@ void TextEditorCore::colorizeSvgCss(int fromLine, int toLine) {
     start += line.size() + 1;
   }
 
-  colorizeLanguageRange(fromLine, toLine);
   const std::size_t first = lineStarts[fromLine];
   const std::size_t last = toLine == text_.getTotalLines() ? source.size() : lineStarts[toLine];
   for (const auto& region : regions) {
-    if (region.startOffset < last && first < region.endOffset) {
+    if (region.startOffset < region.endOffset && region.startOffset < last &&
+        first < region.endOffset) {
+      // Markup gaps such as comments may have replaced formerly painted CSS bytes.
+      PaintCssSpan(text_, lineStarts, {region.startOffset, region.endOffset, ColorIndex::Default},
+                   false);
+      const auto lineAt = [&](std::size_t offset) {
+        return static_cast<int>(std::upper_bound(lineStarts.begin(), lineStarts.end(), offset) -
+                                lineStarts.begin() - 1);
+      };
+      fromLine = std::min(fromLine, lineAt(region.startOffset));
+      toLine = std::max(toLine, lineAt(region.endOffset - 1) + 1);
       ClassifySvgCssRegion(source, region,
                            [&](CssColorSpan span) { PaintCssSpan(text_, lineStarts, span); });
+    }
+  }
+}
+
+void TextEditorCore::colorizePendingLines() {
+  colorRangeMax_ = std::min(colorRangeMax_, text_.getTotalLines());
+  if (colorRangeMin_ < colorRangeMax_) {
+    // Refresh the CSS overlay once per edit. Later XML batches preserve those glyph colors.
+    if (svgColorsDirty_ && languageDefinition_.name == "SVG") {
+      prepareSvgCssColors(colorRangeMin_, colorRangeMax_);
+      svgColorsDirty_ = false;
+    }
+    const int increment = (languageDefinition_.tokenize == nullptr) ? 10 : 10000;
+    const int to = std::min(colorRangeMin_ + increment, colorRangeMax_);
+    colorizeLanguageRange(colorRangeMin_, to);
+    colorRangeMin_ = to;
+
+    if (colorRangeMax_ == colorRangeMin_) {
+      colorRangeMin_ = std::numeric_limits<int>::max();
+      colorRangeMax_ = 0;
     }
   }
 }
@@ -2104,17 +2144,7 @@ void TextEditorCore::colorizeInternal() {
     checkComments_ = false;
   }
 
-  if (colorRangeMin_ < colorRangeMax_) {
-    const int increment = (languageDefinition_.tokenize == nullptr) ? 10 : 10000;
-    const int to = std::min(colorRangeMin_ + increment, colorRangeMax_);
-    colorizeRange(colorRangeMin_, to);
-    colorRangeMin_ = to;
-
-    if (colorRangeMax_ == colorRangeMin_) {
-      colorRangeMin_ = std::numeric_limits<int>::max();
-      colorRangeMax_ = 0;
-    }
-  }
+  colorizePendingLines();
 }
 
 // ---------------------------------------------------------------------------

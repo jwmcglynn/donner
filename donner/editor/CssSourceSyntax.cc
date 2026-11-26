@@ -72,7 +72,9 @@ public:
 
 private:
   void finishStyleText(std::size_t end) {
-    if (styleStart_ && *styleStart_ < end) {
+    if (styleStart_ && *styleStart_ < end &&
+        textRegions_ < xml::XMLParser::Options::kDefaultMaximumElements) {
+      ++textRegions_;
       regions_.push_back({*styleStart_, end, CssSourceRegionKind::Stylesheet, {}});
     }
     styleStart_.reset();
@@ -106,6 +108,14 @@ private:
   }
 
   void attributeValue(const XMLToken& token) {
+    constexpr auto limits = xml::XMLParser::Options{};
+    if (tagAttributes_ >= limits.maxAttributesPerElement ||
+        totalAttributes_ >= limits.maxTotalAttributes) {
+      attribute_ = {};
+      return;
+    }
+    ++tagAttributes_;
+    ++totalAttributes_;
     const auto range = QuotedValueRange(token, source_);
     if (!range || closing_) {
       return;
@@ -161,6 +171,7 @@ private:
     finishStyleText(TokenStart(token));
     closing_ = token.text(source_) == "</";
     tagDepth_ = changes_.size();
+    tagAttributes_ = 0;
     name_ = {};
     attribute_ = {};
     attributes_.clear();
@@ -215,6 +226,9 @@ private:
   std::optional<std::size_t> styleStart_;
   std::size_t tagDepth_ = 0;
   std::size_t skippedDepth_ = 0;
+  std::size_t tagAttributes_ = 0;
+  std::size_t totalAttributes_ = 0;
+  std::size_t textRegions_ = 0;
   bool closing_ = false;
   bool skipTag_ = false;
 };

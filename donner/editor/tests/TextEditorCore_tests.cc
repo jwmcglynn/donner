@@ -2846,4 +2846,27 @@ TEST_F(TextEditorCoreTests, FontFaceDescriptorsFollowTheirEnclosingRule) {
   EXPECT_EQ(ColorAtByteOffset(editor_, source.rfind("fill:")), ColorIndex::KnownIdentifier);
 }
 
+TEST_F(TextEditorCoreTests, LaterXmlColorBatchesReuseTheCssOverlay) {
+  // A language without a line tokenizer uses ten-line paint batches.
+  auto language = LanguageDefinition::SVG();
+  language.tokenize = nullptr;
+  editor_.setLanguageDefinition(language);
+  const std::string source =
+      "<svg>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n<g/>\n"
+      "<style>rect { fill: red }</style>\n</svg>";
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  const auto fill = source.find("fill");
+  const auto where = editor_.getCoordinatesAtByteOffset(fill);
+  auto& glyph =
+      editor_.buffer().getLineGlyphsMutable(where.line)[editor_.buffer().getCharacterIndex(where)];
+  ASSERT_EQ(glyph.colorIndex, ColorIndex::KnownIdentifier);
+  glyph.colorIndex = ColorIndex::UserFunction;
+  editor_.colorizeInternal();
+  EXPECT_EQ(glyph.colorIndex, ColorIndex::UserFunction);
+  editor_.applyExternalSourceEdit(fill, 4, "stroke");
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, fill), ColorIndex::KnownIdentifier);
+}
+
 }  // namespace donner::editor
