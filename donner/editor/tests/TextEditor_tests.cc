@@ -6271,6 +6271,7 @@ circle {fill:blue;}
 ellipse {fill:green;}
 </style>
 </svg>)svg";
+  editor.setWordWrapEnabled(false);
   editor.setText(authored);
   const std::string original = editor.getText();
   EditorApp app;
