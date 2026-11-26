@@ -769,6 +769,55 @@ std::optional<SourceRange> MapDecodedRange(std::string_view source, const Source
                                 rawStart);
 }
 
+std::optional<SourceRange> ProjectedRecordValueRange(std::string_view source,
+                                                     const XMLSourceStore& store,
+                                                     const ProjectedTextRecord& record) {
+  if (record.store.get() != &store) {
+    return std::nullopt;
+  }
+  const auto span = store.resolveSpan(record.span);
+  if (!span || span->start >= span->end || span->end > source.size()) {
+    return std::nullopt;
+  }
+  if (record.type == XMLNode::Type::CData) {
+    constexpr std::string_view open = "<![CDATA[";
+    constexpr std::string_view close = "]]>";
+    const auto raw = source.substr(span->start, span->end - span->start);
+    if (!raw.starts_with(open) || !raw.ends_with(close)) {
+      return std::nullopt;
+    }
+    return SourceRange{FileOffset::Offset(span->start + open.size()),
+                       FileOffset::Offset(span->end - close.size())};
+  }
+  return SourceRange{FileOffset::Offset(span->start), FileOffset::Offset(span->end)};
+}
+
+std::optional<SourceRange> MapProjectedRecords(const ProjectedTextRecordsComponent& records,
+                                               const XMLSourceStore& store,
+                                               std::string_view decoded, std::size_t start,
+                                               std::size_t end) {
+  const std::string_view source = store.source();
+  std::size_t position = 0;
+  std::optional<SourceRange> result;
+  for (const auto& record : records.records) {
+    const std::string_view value(record.value);
+    if (!decoded.substr(position).starts_with(value)) {
+      return std::nullopt;
+    }
+    if (start >= position && end - position <= value.size()) {
+      const auto authored = ProjectedRecordValueRange(source, store, record);
+      if (!authored) {
+        return std::nullopt;
+      }
+      result = MapDecodedRange(
+          source, *authored, value,
+          {FileOffset::Offset(start - position), FileOffset::Offset(end - position)});
+    }
+    position += value.size();
+  }
+  return position == decoded.size() ? result : std::nullopt;
+}
+
 }  // namespace
 
 std::optional<SourceRange> XMLNode::mapDecodedAttributeRange(
@@ -793,6 +842,23 @@ std::optional<SourceRange> XMLNode::mapDecodedTextRange(const SourceRange& decod
   const auto decoded = value();
   return decoded && location ? MapDecodedRange(store->source(), *location, *decoded, decodedRange)
                              : std::nullopt;
+}
+
+std::optional<SourceRange> XMLNode::mapProjectedTextRange(std::string_view decodedText,
+                                                          const SourceRange& decodedRange) const {
+  const auto* store = GetSourceStore(handle_);
+  const auto start = decodedRange.start.offset;
+  const auto end = decodedRange.end.offset;
+  if (!store || !start || !end || *start >= *end || *end > decodedText.size()) {
+    return std::nullopt;
+  }
+  const auto valueRange = getValueLocation();
+  if (const auto decoded = value();
+      valueRange && decoded && std::string_view(*decoded) == decodedText) {
+    return MapDecodedRange(store->source(), *valueRange, decodedText, decodedRange);
+  }
+  const auto* records = handle_.try_get<ProjectedTextRecordsComponent>();
+  return records ? MapProjectedRecords(*records, *store, decodedText, *start, *end) : std::nullopt;
 }
 
 void XMLNode::setAttributeSourceLocation(const XMLQualifiedNameRef& name, SourceRange fullRange,

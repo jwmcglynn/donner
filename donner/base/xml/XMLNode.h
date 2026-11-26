@@ -364,6 +364,16 @@ public:
   std::optional<SourceRange> mapDecodedTextRange(const SourceRange& decodedRange) const;
 
   /**
+   * Map a range within text projected onto this element from its original XML text children.
+   *
+   * @param decodedText Complete projected text, as seen by the consumer.
+   * @param decodedRange Half-open byte range within the projected text.
+   * @return Original source range, or nullopt if the range cannot be mapped exactly.
+   */
+  std::optional<SourceRange> mapProjectedTextRange(std::string_view decodedText,
+                                                   const SourceRange& decodedRange) const;
+
+  /**
    * Store source metadata for an attribute using the document source store.
    *
    * If the node is not source-backed, any existing attribute metadata for \p name is cleared.
