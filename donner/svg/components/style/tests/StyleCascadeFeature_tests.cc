@@ -311,6 +311,37 @@ TEST_F(StyleSystemTest, InvalidSubstitutedResourceOpacityShadowsPresentationValu
   EXPECT_EQ(floodOpacity->floodOpacity, 1.0);
 }
 
+TEST_F(StyleSystemTest, SubstitutedFilterKeepsPresentationUserUnits) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--radius:2">
+      <style>rect { filter:blur(var(--radius)); }</style>
+      <path id="direct" filter="blur(2)"/>
+      <path id="variable" filter="blur(var(--radius))"/>
+      <path id="inline" style="filter:blur(var(--radius))"/>
+      <rect id="rule"/>
+    </svg>)svg");
+  const auto direct = document.querySelector("#direct");
+  const auto variable = document.querySelector("#variable");
+  const auto inlineStyle = document.querySelector("#inline");
+  const auto rule = document.querySelector("#rule");
+  ASSERT_THAT(direct, testing::Optional(testing::_));
+  ASSERT_THAT(variable, testing::Optional(testing::_));
+  ASSERT_THAT(inlineStyle, testing::Optional(testing::_));
+  ASSERT_THAT(rule, testing::Optional(testing::_));
+  const auto* directStyle = ComputedFor(*direct).properties();
+  const auto* variableStyle = ComputedFor(*variable).properties();
+  const auto* inlineProperties = ComputedFor(*inlineStyle).properties();
+  const auto* ruleStyle = ComputedFor(*rule).properties();
+  ASSERT_THAT(directStyle, NotNull());
+  ASSERT_THAT(variableStyle, NotNull());
+  ASSERT_THAT(inlineProperties, NotNull());
+  ASSERT_THAT(ruleStyle, NotNull());
+  ASSERT_THAT(directStyle->filter.get(), testing::Optional(testing::SizeIs(1)));
+  EXPECT_THAT(variableStyle->filter.get(), Eq(directStyle->filter.get()));
+  EXPECT_THAT(inlineProperties->filter.get(), testing::Optional(testing::IsEmpty()));
+  EXPECT_THAT(ruleStyle->filter.get(), testing::Optional(testing::IsEmpty()));
+}
+
 TEST_F(StyleSystemTest, PresentationVariableEditsRetainOnlyTheCurrentAttribute) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" fill="green" style="--ink: red; --other: blue">
