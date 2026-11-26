@@ -30,6 +30,18 @@
 #include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_PROPERTY_MINSIZE 1
+#endif
+#endif
+
+// Keep the property parsers and variable bookkeeping compact in Apple native builds.
+#if defined(DONNER_APPLE_PROPERTY_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace donner::svg {
 
 namespace {
@@ -4283,4 +4295,9 @@ std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
 
 #if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
 #undef DONNER_APPLE_PENDING_PROPERTY_MINSIZE
+#endif
+
+#if defined(DONNER_APPLE_PROPERTY_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_PROPERTY_MINSIZE
 #endif
