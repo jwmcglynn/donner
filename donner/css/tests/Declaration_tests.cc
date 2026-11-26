@@ -480,6 +480,17 @@ TEST(MergeStyleDeclarations, ClosesEveryEofRecoveredConstructBeforeAnUpdate) {
       {R"(--note: var(--x, calc()", R"(--note: var(--x, calc()); opacity: .5)"},
       {R"(--note: outer([inner{value)", R"(--note: outer([inner{value}]); opacity: .5)"},
       {R"(--note: (value)", R"(--note: (value); opacity: .5)"},
+      {R"(--note: tail\)", R"(--note: tail\fffd; opacity: .5)"},
+      {R"(--note: #tone\)", R"(--note: #tone\fffd; opacity: .5)"},
+      {R"(--note: @rule\)", R"(--note: @rule\fffd; opacity: .5)"},
+      {R"(--note: 1unit\)", R"(--note: 1unit\fffd; opacity: .5)"},
+      {R"(--note: f(tail\)", R"(--note: f(tail\fffd); opacity: .5)"},
+      {R"(--note: url(path\)", R"(--note: url(path\fffd); opacity: .5)"},
+      {R"(--note: tail\\)", R"(--note: tail\\; opacity: .5)"},
+      {R"(--note: \)", "--note: \\\n; opacity: .5"},
+      {R"css(--note: url(a"b)css", R"css(--note: url(a"b); opacity: .5)css"},
+      {R"css(--note: url(a"b\)css", R"css(--note: url(a"b\fffd); opacity: .5)css"},
+      {R"css(--note: url(a"b))css", R"css(--note: url(a"b); opacity: .5)css"},
       {R"(--note: url(path)", R"(--note: url(path); opacity: .5)"},
       {R"(--note: "/*)", R"(--note: "/*"; opacity: .5)"},
       {"--note: 'tail\\", "--note: 'tail'; opacity: .5"},
@@ -494,11 +505,16 @@ TEST(MergeStyleDeclarations, ClosesEveryEofRecoveredConstructBeforeAnUpdate) {
     std::vector<std::string_view> spellings;
     const auto reparsed =
         parser::DeclarationListParser::ParseOnlyDeclarations(merged, nullptr, &spellings);
-    ASSERT_THAT(reparsed, testing::SizeIs(2));
-    ASSERT_THAT(spellings, testing::SizeIs(2));
-    EXPECT_EQ(reparsed[1].name, "opacity");
-    EXPECT_EQ(spellings[1], "opacity: .5");
-    EXPECT_EQ(reparsed[1].sourceOffset, FileOffset::Offset(merged.find("opacity: .5")));
+    constexpr std::string_view update = "opacity: .5";
+    const auto offset = testCase.merged.rfind(update);
+    const auto firstName = testCase.existing.starts_with(R"(--a\:b)") ? "--a:b" : "--note";
+    EXPECT_THAT(reparsed,
+                testing::ElementsAre(
+                    testing::Field("name", &Declaration::name, RcString(firstName)),
+                    testing::AllOf(testing::Field("name", &Declaration::name, RcString("opacity")),
+                                   testing::Field("sourceOffset", &Declaration::sourceOffset,
+                                                  FileOffset::Offset(offset)))));
+    EXPECT_THAT(spellings, testing::ElementsAre(testCase.merged.substr(0, offset - 2), update));
   }
 }
 

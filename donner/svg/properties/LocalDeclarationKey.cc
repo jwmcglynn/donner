@@ -89,6 +89,9 @@ private:
     }
   }
 
+  // An invalid URL has no semantic payload. Its authored closure only controls source edits.
+  void append(const css::Token::BadUrl&) {}
+
   void append(const css::Token& token) {
     fields(token.tokenIndex(), token.offset());
     token.visit([this](const auto& value) { this->append(value); });
