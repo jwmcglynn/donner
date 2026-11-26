@@ -61,6 +61,17 @@
 #include "donner/svg/components/style/StylePassScheduler.h"
 #include "donner/svg/components/text/TextComponent.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_STYLE_SYSTEM_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace donner::svg::components {
 
 namespace {
@@ -3612,3 +3623,8 @@ void StyleSystem::invalidateAll(EntityHandle handle) {
 }
 
 }  // namespace donner::svg::components
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_STYLE_SYSTEM_MINSIZE
+#endif
