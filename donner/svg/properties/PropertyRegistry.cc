@@ -3672,8 +3672,8 @@ void PropertyRegistry::writeVariableAwareDeclaration(
     if (presentation) {
       if (previous == unparsedProperties.end()) {
         unparsedProperties.emplace(
-            name, parser::UnparsedProperty{storedDeclaration(), specificity, {}, false, false,
-                                           variable});
+            name,
+            parser::UnparsedProperty{storedDeclaration(), specificity, {}, false, false, variable});
       } else {
         previous->second.presentationVariable = variable;
       }
@@ -3685,9 +3685,9 @@ void PropertyRegistry::writeVariableAwareDeclaration(
     presentationVariable = PreviousPresentationVariable(previous->second, specificity);
   }
   unparsedProperties.insert_or_assign(
-      name, parser::UnparsedProperty{storedDeclaration(), specificity,
-                                     std::move(presentationVariable), false, presentation,
-                                     variable});
+      name,
+      parser::UnparsedProperty{storedDeclaration(), specificity, std::move(presentationVariable),
+                               false, presentation, variable});
 }
 
 std::optional<ParseDiagnostic> PropertyRegistry::deferResourceColorVariable(
