@@ -221,8 +221,11 @@ public:
 
   /// Rank in normal precedence order, before reversal for important origin levels.
   constexpr std::uint16_t layerRank() const {
-    return NormalizeLayerOrder(specialValue(), static_cast<std::uint16_t>(priority_));
+    return NormalizeLayerOrder(specialValue(), static_cast<std::uint16_t>(priority_ >> 1));
   }
+
+  /// Whether the document supplies a nonzero layer rank for this declaration.
+  constexpr bool hasLayerRank() const { return (priority_ & 1u) == 0; }
 
   /// Spaceship operator.
   auto operator<=>(const Specificity& other) const {
@@ -241,7 +244,7 @@ public:
   const ABC& abc() const { return abc_; }
 
   /// Gets the special value of the specificity, defaults to \ref SpecialType::None.
-  constexpr SpecialType specialValue() const { return static_cast<SpecialType>(priority_ >> 16); }
+  constexpr SpecialType specialValue() const { return static_cast<SpecialType>(priority_ >> 17); }
 
   /// Whether this rank came from an inline style declaration, regardless of importance.
   bool isStyleAttribute() const {
@@ -267,7 +270,11 @@ private:
   }
 
   static constexpr std::uint32_t EncodePriority(SpecialType origin, std::uint16_t layerRank) {
-    return (static_cast<std::uint32_t>(origin) << 16) | NormalizeLayerOrder(origin, layerRank);
+    // The low bit gives inheritance a cheap zero-rank check. It cannot affect precedence
+    // because it differs only when the normalized 16-bit rank already differs.
+    return (static_cast<std::uint32_t>(origin) << 17) |
+           (static_cast<std::uint32_t>(NormalizeLayerOrder(origin, layerRank)) << 1) |
+           static_cast<std::uint32_t>(layerRank == 0);
   }
 
   /// Internal constructor for special values.
