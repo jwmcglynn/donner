@@ -1188,11 +1188,14 @@ TEST_P(StyleEditCorpusTest, ClassAndIdEditsMatchFullRebuild) {
   compare("set id", targets_.leaf, [](auto& e) { e.setId("corpus-edited-id"); });
 }
 
-TEST_P(StyleEditCorpusTest, InlineAndPresentationEditsMatchFullRebuild) {
+TEST_P(StyleEditCorpusTest, InlineAndFillEditsMatchFullRebuild) {
   compare("inline style", targets_.leaf,
           [](auto& e) { e.setStyle("fill:#196ab2;stroke:#9d412b"); });
   compare("update inline style", targets_.leaf, [](auto& e) { e.updateStyle("fill:#37c29a"); });
   compare("set fill", targets_.leaf, [](auto& e) { e.setAttribute("fill", "#357fb9"); });
+}
+
+TEST_P(StyleEditCorpusTest, RemovingAuthoredPresentationMatchesFullRebuild) {
   for (const auto& [attribute, index] : targets_.presentation) {
     compare(attribute, index,
             [&](auto& e) { e.removeAttribute(xml::XMLQualifiedNameRef(attribute)); });
