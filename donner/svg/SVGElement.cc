@@ -249,7 +249,10 @@ bool ComputeEditedFrameStyles(Registry& registry, ParseWarningSink& warningSink,
                               StylePassScheduler scheduler,
                               components::RenderTreeState::ComputeFrameStyles compute) {
   auto tentative = warningSink.remainingAllowance();
-  if (!compute(registry, tentative, scheduler, true)) {
+  const auto refused = [](const Registry& current) {
+    return current.ctx().get<components::StyleResourceBudget>().rejected();
+  };
+  if (!compute(registry, tentative, scheduler, refused)) {
     return false;
   }
   warningSink.merge(std::move(tentative));

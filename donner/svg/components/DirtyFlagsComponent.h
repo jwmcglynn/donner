@@ -112,9 +112,11 @@ struct RenderTreeState {
   /// Preparation counters for this document.
   Counters counters;
 
+  /// Checks whether the most recent style pass refused its allocation or work budget.
+  using StylePassRefused = bool (*)(const Registry&);
   /// The two style passes and shadow preparation of a rebuilt frame.
   using ComputeFrameStyles = bool (*)(Registry&, ParseWarningSink&, StylePassScheduler,
-                                      bool checkRejection);
+                                      StylePassRefused);
   /// An edited frame can stage its diagnostics until both selective passes finish.
   bool (*computeEditedFrameStyles)(Registry&, ParseWarningSink&, StylePassScheduler,
                                    ComputeFrameStyles) = nullptr;

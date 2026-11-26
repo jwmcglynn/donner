@@ -1805,9 +1805,9 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink,
 
   if (!tryRetainedUpdate(warningSink, scheduler)) {
     ++renderState.counters.fullRebuilds;
-    if (!rebuildComputedComponents(warningSink, scheduler)) {
+    if (!rebuildComputedComponents(renderState, warningSink, scheduler)) {
       renderState.needsFullStyleRecompute = true;
-      UTILS_RELEASE_ASSERT(rebuildComputedComponents(warningSink, scheduler));
+      std::ignore = rebuildComputedComponents(renderState, warningSink, scheduler);
     }
     registry_.clear<DirtyFlagsComponent>();
     renderState.needsFullRebuild = false;
@@ -1817,16 +1817,12 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink,
   renderState.computeEditedFrameStyles = nullptr;
 }
 
-bool RenderingContext::rebuildComputedComponents(ParseWarningSink& warningSink,
+bool RenderingContext::rebuildComputedComponents(RenderTreeState& renderState,
+                                                 ParseWarningSink& warningSink,
                                                  StylePassScheduler scheduler) {
-  auto& renderState = getRenderTreeState(registry_);
   ShadowTreeSystem::beginRebuild(registry_);
-  std::vector<Entity> shadowHosts;
-  auto shadowView = registry_.view<ComputedShadowTreeComponent>();
-  shadowHosts.reserve(shadowView.size());
-  for (const Entity entity : shadowView) {
-    shadowHosts.push_back(entity);
-  }
+  const auto shadowView = registry_.view<ComputedShadowTreeComponent>();
+  const std::vector<Entity> shadowHosts(shadowView.begin(), shadowView.end());
   for (const Entity entity : shadowHosts) {
     if (!registry_.valid(entity)) {
       continue;
@@ -1852,7 +1848,7 @@ bool RenderingContext::rebuildComputedComponents(ParseWarningSink& warningSink,
     renderState.needsFullStyleRecompute = true;
   }
 
-  return createComputedComponents(warningSink, scheduler);
+  return createComputedComponents(renderState, warningSink, scheduler);
 }
 
 bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink,
@@ -2268,11 +2264,11 @@ void ForgetMissingFallbackFontReport(Registry& registry) {
 namespace {
 
 bool ComputeFrameStyles(Registry& registry, ParseWarningSink& warningSink,
-                        StylePassScheduler scheduler, bool checkRejection) {
+                        StylePassScheduler scheduler, RenderTreeState::StylePassRefused refused) {
   StyleSystem styleSystem;
   using Restyle = StyleSystem::FullRestyle;
   styleSystem.computeAllStyles(registry, warningSink, Restyle::ComputeMissing, scheduler);
-  if (checkRejection && registry.ctx().get<StyleResourceBudget>().rejected()) {
+  if (refused && refused(registry)) {
     return false;
   }
 
@@ -2281,12 +2277,13 @@ bool ComputeFrameStyles(Registry& registry, ParseWarningSink& warningSink,
   PaintSystem().createShadowTrees(registry, warningSink);
   InstantiateMainShadowTrees(registry, warningSink);
   styleSystem.computeAllStyles(registry, warningSink, Restyle::ComputeMissing, scheduler);
-  return !checkRejection || !registry.ctx().get<StyleResourceBudget>().rejected();
+  return !refused || !refused(registry);
 }
 
 }  // namespace
 
-bool RenderingContext::createComputedComponents(ParseWarningSink& warningSink,
+bool RenderingContext::createComputedComponents(RenderTreeState& renderState,
+                                                ParseWarningSink& warningSink,
                                                 StylePassScheduler scheduler) {
   RestoreAnimationPresentation(registry_);
 
@@ -2298,7 +2295,6 @@ bool RenderingContext::createComputedComponents(ParseWarningSink& warningSink,
   // Stylesheet imports must be in place before any style is computed. Reloading them changes
   // which rules match anywhere in the document, so every cached style is discarded, including
   // styles that queries computed before the first render.
-  RenderTreeState& renderState = getRenderTreeState(registry_);
   const bool importsReloaded =
       registry_.ctx().get<components::ResourceManagerContext>().loadStylesheetImports(warningSink);
   if (importsReloaded) {
@@ -2318,7 +2314,7 @@ bool RenderingContext::createComputedComponents(ParseWarningSink& warningSink,
       return false;
     }
   } else {
-    std::ignore = ComputeFrameStyles(registry_, warningSink, scheduler, false);
+    std::ignore = ComputeFrameStyles(registry_, warningSink, scheduler, nullptr);
   }
 
   // After styles are computed, we can load fonts and other embedded resources.
