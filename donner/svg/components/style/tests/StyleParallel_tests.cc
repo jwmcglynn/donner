@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/tasks/TaskScheduler.h"
@@ -24,6 +25,7 @@
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/style/CustomPropertyMap.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/ParallelStylePass.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -97,6 +99,105 @@ void ExpectSame(const Frame& serial, const Frame& scheduled) {
     EXPECT_EQ(first.externalFill, second->externalFill);
     EXPECT_EQ(first.externalStroke, second->externalStroke);
   }
+}
+
+std::optional<RcString> CustomTone(const ComputedStyleComponent& component) {
+  if (!component.style || !component.style->customProperties) {
+    return std::nullopt;
+  }
+  const auto* value = component.style->customProperties->find("--tone");
+  if (!value || value->tokens().size() != 1 ||
+      !value->tokens().front().isToken<css::Token::Ident>()) {
+    return std::nullopt;
+  }
+  return value->tokens().front().get<css::Token>().get<css::Token::Ident>().value;
+}
+
+TEST(StyleParallel, CustomStorageReplaysInCanonicalOrderAcrossWidths) {
+  auto source = SiblingScene(1200);
+  source.insert(source.find("stroke: blue"), "--tone: red; ");
+  Frame serial = FirstFrame(source, {.workerCount = 0});
+  for (const auto& options : {tasks::TaskSchedulerOptions{.workerCount = 4},
+                              tasks::TaskSchedulerOptions{.workerCount = 0, .seed = 7}}) {
+    SCOPED_TRACE(testing::Message() << "workers=" << options.workerCount);
+    Frame scheduled = FirstFrame(source, options);
+    EXPECT_EQ(scheduled.scheduled, 1u);
+    const auto& metrics = scheduled.doc.registry().ctx().get<StyleCascadeMetrics>();
+    EXPECT_EQ(metrics.abandonedStylePasses, 1u);
+    EXPECT_THAT(scheduled.warnings, testing::IsEmpty());
+    ExpectSame(serial, scheduled);
+    for (std::string_view id : {"#r0", "#r600", "#r1199"}) {
+      SCOPED_TRACE(id);
+      const auto expected = serial.doc.querySelector(id);
+      const auto actual = scheduled.doc.querySelector(id);
+      ASSERT_THAT(expected, testing::Optional(testing::_));
+      ASSERT_THAT(actual, testing::Optional(testing::_));
+      EXPECT_THAT(CustomTone(expected->entityHandle().get<ComputedStyleComponent>()),
+                  testing::Optional(testing::Eq("red")));
+      EXPECT_THAT(CustomTone(actual->entityHandle().get<ComputedStyleComponent>()),
+                  testing::Optional(testing::Eq("red")));
+    }
+  }
+}
+
+TEST(StyleParallel, ScheduledRestyleSharesAnAlreadyPublishedCustomMap) {
+  auto source = SiblingScene(1200);
+  source.insert(source.find('>'), " style='--tone: red'");
+  ParseWarningSink warnings;
+  auto parse = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(parse.hasError(), testing::IsFalse());
+  auto document = std::move(parse).result();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  auto parent = document.querySelector("#parent");
+  const auto leaf = document.querySelector("#r1199");
+  ASSERT_THAT(parent, testing::Optional(testing::_));
+  ASSERT_THAT(leaf, testing::Optional(testing::_));
+  const auto original = document.svgElement().entityHandle().get<ComputedStyleComponent>().style;
+  ASSERT_THAT(original, testing::NotNull());
+  ASSERT_THAT(original->customProperties, testing::NotNull());
+
+  parent->setClassName("reviewed");
+  auto& metrics = document.registry().ctx().get<StyleCascadeMetrics>();
+  const auto scheduledBefore = metrics.scheduledPasses;
+  const auto abandonedBefore = metrics.abandonedStylePasses;
+  const auto replayedBefore = metrics.replayedSelectorTraces;
+  tasks::TaskScheduler scheduler({.workerCount = 4});
+  RendererUtils::prepareDocumentForRendering(document, false, warnings, &scheduler);
+  EXPECT_EQ(metrics.scheduledPasses - scheduledBefore, 1u);
+  EXPECT_EQ(metrics.abandonedStylePasses, abandonedBefore);
+  EXPECT_GT(metrics.replayedSelectorTraces, replayedBefore);
+  const auto final = leaf->entityHandle().get<ComputedStyleComponent>().style;
+  ASSERT_THAT(final, testing::NotNull());
+  EXPECT_THAT(final->customProperties, testing::Eq(original->customProperties));
+  EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
+}
+
+TEST(StyleParallel, UseCopiesInheritCustomValuesFromTheirOwnHosts) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs><g id="tile"><rect id="leaf" width="8" height="8"/></g></defs>
+      <use id="first" href="#tile" style="--tone: red"/>
+      <use id="second" href="#tile" style="--tone: blue"/>
+    </svg>)svg";
+  ParseWarningSink warnings;
+  auto parse = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(parse.hasError(), testing::IsFalse());
+  auto document = std::move(parse).result();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  const auto light = document.querySelector("#leaf");
+  ASSERT_THAT(light, testing::Optional(testing::_));
+  const auto& registry = std::as_const(document.registry());
+  std::vector<std::optional<RcString>> tones;
+  for (const auto& [copy, shadow] : registry.view<const ShadowEntityComponent>().each()) {
+    if (shadow.lightEntity == light->entityHandle().entity()) {
+      tones.push_back(CustomTone(registry.get<ComputedStyleComponent>(copy)));
+    }
+  }
+  EXPECT_THAT(tones, testing::UnorderedElementsAre(testing::Optional(testing::Eq("red")),
+                                                   testing::Optional(testing::Eq("blue"))));
+  EXPECT_THAT(CustomTone(light->entityHandle().get<ComputedStyleComponent>()),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
 }
 
 TEST(StyleParallel, WideSiblingsMatchSerialAtEachWidth) {

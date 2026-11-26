@@ -3545,6 +3545,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   if (kValidPresentationAttributes.contains(name)) {
     unparsedProperties.emplace(
         std::make_pair(declaration.name, parser::UnparsedProperty{declaration, specificity}));
+  } else if (name.size() > 2 && name.starts_with("--")) {
+    std::ignore = storeCustomProperty(declaration, specificity);
   } else {
     ParseDiagnostic err;
     err.reason = "Unknown property '" + declaration.name + "'";
@@ -3593,6 +3595,25 @@ bool PropertyRegistry::parseInlineResourceColor(
   refreshResourceColor(index);
   unparsedProperties.insert_or_assign(
       declaration.name, parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+  return true;
+}
+
+bool PropertyRegistry::storeCustomProperty(const css::Declaration& declaration,
+                                           css::Specificity specificity) {
+  const std::string_view name(declaration.name);
+  if (name.size() <= 2 || !name.starts_with("--")) {
+    return false;
+  }
+  if (declaration.important) {
+    specificity = css::Specificity::Important(specificity);
+  }
+  const auto previous = unparsedProperties.find(declaration.name);
+  if (previous == unparsedProperties.end()) {
+    unparsedProperties.emplace(declaration.name,
+                               parser::UnparsedProperty{declaration, specificity});
+  } else if (previous->second.specificity <= specificity) {
+    previous->second = parser::UnparsedProperty{declaration, specificity};
+  }
   return true;
 }
 

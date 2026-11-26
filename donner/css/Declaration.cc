@@ -51,6 +51,10 @@ std::string PropertyKey(const RcString& name) {
   return StringUtils::ToLowerAscii(name);
 }
 
+bool ReplacesStyleDeclaration(const Declaration& previous, const Declaration& next) {
+  return next.important || !previous.important || !std::string_view(next.name).starts_with("--");
+}
+
 }  // namespace
 
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
@@ -59,8 +63,11 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   std::unordered_map<std::string, size_t> updateIndexByName;
   updateIndexByName.reserve(updates.size());
   for (size_t i = 0; i < updates.size(); ++i) {
-    // Keep the last occurrence of each property name in the updates.
-    updateIndexByName[PropertyKey(updates[i].name)] = i;
+    // Custom properties retain importance before using source order.
+    const auto [it, inserted] = updateIndexByName.try_emplace(PropertyKey(updates[i].name), i);
+    if (!inserted && ReplacesStyleDeclaration(updates[it->second], updates[i])) {
+      it->second = i;
+    }
   }
 
   // Collect existing declarations not overridden by updates.
@@ -68,14 +75,14 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   merged.reserve(existing.size() + updateIndexByName.size());
 
   for (const auto& decl : existing) {
-    if (!updateIndexByName.contains(PropertyKey(decl.name))) {
+    const auto update = updateIndexByName.find(PropertyKey(decl.name));
+    if (update == updateIndexByName.end() ||
+        !ReplacesStyleDeclaration(decl, updates[update->second])) {
       merged.push_back(&decl);
     }
   }
 
-  // Add deduplicated updates in order (but only the last occurrence of each name).
-  // We need to preserve insertion order, so iterate updates and only emit if this index is the
-  // last for its name.
+  // Emit the selected occurrences in source order.
   for (size_t i = 0; i < updates.size(); ++i) {
     const std::string key = PropertyKey(updates[i].name);
     if (updateIndexByName[key] == i) {
