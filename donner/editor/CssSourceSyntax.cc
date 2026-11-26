@@ -332,8 +332,14 @@ ColorIndex TokenColor(const Token& token, CssState& state) {
   return StructuralColor(token, state);
 }
 
-void ClassifyRegion(std::string_view source, const CssSourceRegion& region,
-                    std::vector<CssColorSpan>& colors) {
+}  // namespace
+
+std::vector<CssSourceRegion> FindSvgCssSourceRegions(std::string_view source) {
+  return FindRegions(source);
+}
+
+void ClassifySvgCssRegion(std::string_view source, const CssSourceRegion& region,
+                          std::vector<CssColorSpan>& colors) {
   const std::string_view cssText =
       source.substr(region.startOffset, region.endOffset - region.startOffset);
   css::parser::details::Tokenizer tokenizer(cssText);
@@ -353,26 +359,6 @@ void ClassifyRegion(std::string_view source, const CssSourceRegion& region,
     consumed = end;
   }
   AppendColor(colors, region.startOffset + consumed, region.endOffset, ColorIndex::Comment);
-}
-
-bool Intersects(const CssSourceRegion& region, std::size_t start, std::size_t end) {
-  return region.startOffset < end && start < region.endOffset;
-}
-
-}  // namespace
-
-CssSourceClassification ClassifySvgCssSource(std::string_view source, std::size_t affectedStart,
-                                             std::size_t affectedEnd) {
-  CssSourceClassification result;
-  result.regions = FindRegions(source);
-  affectedStart = std::min(affectedStart, source.size());
-  affectedEnd = std::min(affectedEnd, source.size());
-  for (const CssSourceRegion& region : result.regions) {
-    if (Intersects(region, affectedStart, affectedEnd)) {
-      ClassifyRegion(source, region, result.colors);
-    }
-  }
-  return result;
 }
 
 }  // namespace donner::editor

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -1874,7 +1875,19 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
   if (!colorizerEnabled_) {
     return;
   }
+  const int first = std::max(0, fromLine);
+  const int last = std::min(text_.getTotalLines(), toLine);
+  if (first >= last) {
+    return;
+  }
+  if (languageDefinition_.name == "SVG") {
+    colorizeSvgCss(first, last);
+  } else {
+    colorizeLanguageRange(first, last);
+  }
+}
 
+void TextEditorCore::colorizeLanguageRange(int fromLine, int toLine) {
   std::string buffer;
   std::string_view identifier;
 
@@ -1935,33 +1948,74 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
       current = tokenEnd;
     }
   }
-
-  colorizeSvgCss(fromLine, endLine);
 }
 
-void TextEditorCore::colorizeSvgCss(int fromLine, int toLine) {
-  if (languageDefinition_.name != "SVG" || fromLine >= toLine) {
-    return;
-  }
-  const std::string source = text_.getText();
-  const std::size_t affectedStart = text_.getByteOffset(Coordinates(std::max(0, fromLine), 0));
-  const std::size_t affectedEnd = toLine >= text_.getTotalLines()
-                                      ? source.size()
-                                      : text_.getByteOffset(Coordinates(std::max(0, toLine), 0));
-  const CssSourceClassification classification =
-      ClassifySvgCssSource(source, affectedStart, affectedEnd);
-  for (const CssColorSpan& span : classification.colors) {
-    const Coordinates start = text_.getCoordinatesAtByteOffset(span.startOffset);
-    const Coordinates end = text_.getCoordinatesAtByteOffset(span.endOffset);
-    for (int lineNumber = start.line; lineNumber <= end.line; ++lineNumber) {
-      Line& line = text_.getLineGlyphsMutable(lineNumber);
-      const int first = lineNumber == start.line ? text_.getCharacterIndex(start) : 0;
-      const int last =
-          lineNumber == end.line ? text_.getCharacterIndex(end) : static_cast<int>(line.size());
-      for (int i = first; i < last; ++i) {
-        line[i].colorIndex = span.color;
-      }
+namespace {
+
+// Membership travels with glyphs through insertions and deletions. A markup edit may turn
+// later, untouched lines back into XML (or into CSS) without editing a byte on those lines.
+bool UpdateCssMembership(Line& line, std::size_t start, std::span<const CssSourceRegion> regions,
+                         std::size_t& regionIndex) {
+  bool changed = false;
+  for (auto& glyph : line) {
+    while (regionIndex < regions.size() && regions[regionIndex].endOffset <= start) {
+      ++regionIndex;
     }
+    const unsigned char kind =
+        regionIndex < regions.size() && regions[regionIndex].startOffset <= start
+            ? 1 + static_cast<unsigned char>(regions[regionIndex].kind)
+            : 0;
+    changed |= glyph.cssRegionKind != kind;
+    glyph.cssRegionKind = kind;
+    ++start;
+  }
+  return changed;
+}
+
+void PaintCssSpan(TextBuffer& text, const std::vector<std::size_t>& lineStarts,
+                  const CssColorSpan& span) {
+  const auto afterStart = std::upper_bound(lineStarts.begin(), lineStarts.end(), span.startOffset);
+  const auto first = static_cast<std::size_t>(afterStart - lineStarts.begin() - 1);
+  for (std::size_t i = first; i < lineStarts.size() && lineStarts[i] < span.endOffset; ++i) {
+    Line& line = text.getLineGlyphsMutable(static_cast<int>(i));
+    const std::size_t begin = std::max(span.startOffset, lineStarts[i]) - lineStarts[i];
+    const std::size_t end = std::min(line.size(), span.endOffset - lineStarts[i]);
+    for (std::size_t column = begin; column < end; ++column) {
+      line[column].colorIndex = span.color;
+    }
+  }
+}
+
+}  // namespace
+
+void TextEditorCore::colorizeSvgCss(int fromLine, int toLine) {
+  const std::string source = text_.getText();
+  const auto regions = FindSvgCssSourceRegions(source);
+  std::vector<std::size_t> lineStarts;
+  lineStarts.reserve(text_.getTotalLines());
+  std::size_t start = 0;
+  std::size_t regionIndex = 0;
+  for (int i = 0; i < text_.getTotalLines(); ++i) {
+    Line& line = text_.getLineGlyphsMutable(i);
+    lineStarts.push_back(start);
+    if (UpdateCssMembership(line, start, regions, regionIndex)) {
+      fromLine = std::min(fromLine, i);
+      toLine = std::max(toLine, i + 1);
+    }
+    start += line.size() + 1;
+  }
+
+  colorizeLanguageRange(fromLine, toLine);
+  const std::size_t first = lineStarts[fromLine];
+  const std::size_t last = toLine == text_.getTotalLines() ? source.size() : lineStarts[toLine];
+  std::vector<CssColorSpan> colors;
+  for (const auto& region : regions) {
+    if (region.startOffset < last && first < region.endOffset) {
+      ClassifySvgCssRegion(source, region, colors);
+    }
+  }
+  for (const auto& span : colors) {
+    PaintCssSpan(text_, lineStarts, span);
   }
 }
 

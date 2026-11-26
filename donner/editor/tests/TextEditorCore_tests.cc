@@ -2739,4 +2739,44 @@ TEST_F(TextEditorCoreTests, SvgColorizerReusesCssRegionsOutsideRequestedLines) {
   EXPECT_EQ(ColorAtByteOffset(editor_, secondProperty), ColorIndex::UserFunction);
 }
 
+TEST_F(TextEditorCoreTests, RemovingMultilineStyleRestoresXmlColorsBeyondTheEditedLine) {
+  const std::string original = R"(<svg><rect style="
+fill: red;
+opacity: 1;
+stroke: blue;
+" /></svg>)";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(original);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, original.find("stroke")), ColorIndex::KnownIdentifier);
+
+  const auto name = original.find("style");
+  editor_.applyExternalSourceEdit(name, 0, "data-");
+  editor_.colorizeInternal();
+  const std::string renamed = editor_.getText();
+  const auto stroke = renamed.find("stroke");
+  const ColorIndex afterEdit = ColorAtByteOffset(editor_, stroke);
+  TextEditorCore fresh;
+  fresh.setSvgLanguageDefinition();
+  fresh.setText(renamed);
+  fresh.colorizeInternal();
+  EXPECT_EQ(afterEdit, ColorAtByteOffset(fresh, stroke));
+  EXPECT_NE(afterEdit, ColorIndex::KnownIdentifier);
+
+  editor_.applyExternalSourceEdit(name, 5, "");
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, original.find("stroke")), ColorIndex::KnownIdentifier);
+}
+
+TEST_F(TextEditorCoreTests, CssColorsUseSourceBytesAcrossTabsAndUtf8) {
+  const std::string source = "<svg>\n\t<style>/* café */\n\t.été { fill: 12px }</style></svg>";
+  editor_.setSvgLanguageDefinition();
+  editor_.setText(source);
+  editor_.colorizeInternal();
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("café")), ColorIndex::Comment);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("été")), ColorIndex::Identifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("fill")), ColorIndex::KnownIdentifier);
+  EXPECT_EQ(ColorAtByteOffset(editor_, source.find("12px")), ColorIndex::Number);
+}
+
 }  // namespace donner::editor

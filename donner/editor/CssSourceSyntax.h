@@ -37,25 +37,12 @@ struct CssColorSpan {
   bool operator==(const CssColorSpan&) const = default;
 };
 
-/// Regions found in the full SVG source and color spans for the requested affected range.
-struct CssSourceClassification {
-  std::vector<CssSourceRegion> regions;  //!< Every CSS region, in source order.
-  std::vector<CssColorSpan> colors;      //!< Colors only for intersecting regions.
-};
+/// Locate every CSS-bearing region in SVG/XML source, in source order.
+/// @param source SVG/XML source bytes.
+std::vector<CssSourceRegion> FindSvgCssSourceRegions(std::string_view source);
 
-/**
- * Locate CSS with the XML tokenizer and classify selected regions with the CSS tokenizer.
- *
- * The XML scan is gap-free and always covers the full source so region boundaries remain correct
- * after malformed edits. Only a CSS region intersecting `[affectedStart, affectedEnd)` is passed
- * through the CSS tokenizer, allowing unchanged regions to keep their existing glyph colors.
- *
- * @param source SVG/XML source bytes.
- * @param affectedStart Inclusive start of the edited or requested byte range.
- * @param affectedEnd Exclusive end of the edited or requested byte range.
- */
-CssSourceClassification ClassifySvgCssSource(
-    std::string_view source, std::size_t affectedStart = 0,
-    std::size_t affectedEnd = std::numeric_limits<std::size_t>::max());
+/// Append the token colors for one CSS region, using absolute source byte offsets.
+void ClassifySvgCssRegion(std::string_view source, const CssSourceRegion& region,
+                          std::vector<CssColorSpan>& colors);
 
 }  // namespace donner::editor
