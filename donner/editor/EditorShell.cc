@@ -5784,12 +5784,15 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
 
 void EditorShell::recordPresentationIdentity(const FramePresentation* frame) {
 #ifdef DONNER_EDITOR_WGPU
-  window_.setPresentationFrameIdentity(frame != nullptr ? frame->frameId() : 0,
-                                       frame != nullptr ? frame->identity().captureId : 0,
-                                       frame != nullptr ? frame->identity().documentGeneration : 0,
-                                       frame != nullptr ? frame->identity().version : 0,
-                                       renderCoordinator_.frameRepresentsCurrentIntent(),
-                                       frame != nullptr ? frame->viewport().zoom : 0.0);
+  const PresentationInputIdentity inputIdentity =
+      renderCoordinator_.inputIdentityForPresentedFrame(frame);
+  window_.setPresentationFrameIdentity(
+      frame != nullptr ? frame->frameId() : 0, frame != nullptr ? frame->identity().captureId : 0,
+      frame != nullptr ? frame->identity().documentGeneration : 0,
+      frame != nullptr ? frame->identity().version : 0, inputIdentity.pointerPosition.x,
+      inputIdentity.pointerPosition.y, inputIdentity.mouseDown,
+      renderCoordinator_.frameRepresentsCurrentIntent(),
+      frame != nullptr ? frame->viewport().zoom : 0.0);
 #endif
 }
 
@@ -5911,13 +5914,19 @@ void EditorShell::renderRenderPanePresentation(
 #else
   const FramePresentationAdmission admit;
 #endif
+  const ImGuiIO& io = ImGui::GetIO();
+  const PresentationInputIdentity inputIdentity{
+      .pointerPosition = Vector2d(io.MousePos.x, io.MousePos.y),
+      .mouseDown = io.MouseDown[0],
+  };
   const auto frame =
       showSamplePicker_
           ? nullptr
           : renderCoordinator_.buildFramePresentation(
                 app_, selectTool_, presentedDocumentViewport, paneRect,
                 selectionChromeDetailForActiveTool(),
-                previewAllowsEditing(!contentOnlyCaptureThisFrame_ && !showSamplePicker_), admit);
+                previewAllowsEditing(!contentOnlyCaptureThisFrame_ && !showSamplePicker_), admit,
+                inputIdentity);
   const auto chipGesturePreview = frame != nullptr ? activeGesturePreview : std::nullopt;
 #ifndef DONNER_EDITOR_WGPU
   if (documentPresentationCompositor_ != nullptr && frame != nullptr) {

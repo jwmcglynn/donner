@@ -68,9 +68,18 @@ struct FramePresentationBuildResult {
   FramePresentationFailure failure = FramePresentationFailure::None;
 };
 
+/// Pointer/button state consumed while sealing one immutable presented frame.
+struct PresentationInputIdentity {
+  Vector2d pointerPosition;  //!< Logical screen position whose intent the frame represents.
+  bool mouseDown = false;    //!< Whether the primary button was held for that intent.
+};
+
 /// Input intent consumed once while sealing a frame; draw callbacks cannot consult it later.
 struct FramePresentationInput {
-  std::uint64_t frameId = 0;              //!< Nonzero identity of the UI frame being sealed.
+  std::uint64_t frameId = 0;                //!< Nonzero identity of the UI frame being sealed.
+  PresentationInputIdentity inputIdentity;  //!< Pointer/button state sealed with the frame.
+  /// Same-gesture input represented by retained resource pixels before live pointer projection.
+  std::optional<PresentationInputIdentity> representedResourceInputIdentity;
   ViewportState viewport;                 //!< Camera and pane geometry for this frame.
   Box2d paneClipRect;                     //!< Render-pane clip rectangle in logical pixels.
   std::vector<Entity> selection;          //!< Selected objects, in selection order.
@@ -145,6 +154,10 @@ public:
   }
   /// Frame identity shared by both GPU passes and any diagnostic capture.
   [[nodiscard]] std::uint64_t frameId() const { return frameId_; }
+  /// Pointer/button state sealed with this frame's pixels and poses.
+  [[nodiscard]] const PresentationInputIdentity& inputIdentity() const UTILS_LIFETIME_BOUND {
+    return inputIdentity_;
+  }
   /// Whether the frame selected the retained overview raster family.
   [[nodiscard]] bool usesOverviewRaster() const { return useOverview_; }
   /// Author-space coverage of the raster family chosen for this immutable frame.
@@ -229,6 +242,7 @@ private:
   bool retainDisplayedPoses(const FramePresentation* previous);
   bool chosenPosesHaveCoverage(const FramePresentationInput& input) const;
   void applyPointerIntent(const FramePresentationInput& input);
+  void resolveInputIdentity(const FramePresentationInput& input);
   void projectSelectionGeometry();
   void resolveSelectionBounds(const FramePresentationInput& input);
   void resolveTiles(const FramePresentationInput& input);
@@ -253,6 +267,7 @@ private:
   std::shared_ptr<const CapturedPresentation> selectionCapture_;
   std::shared_ptr<const CapturedPresentation> rasterCapture_;
   std::uint64_t frameId_ = 0;
+  PresentationInputIdentity inputIdentity_;
   PresentationIdentity identity_;
   ViewportState viewport_;
   Box2d paneClipRect_;

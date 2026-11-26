@@ -1053,11 +1053,21 @@ public:
   /// @param captureId Paired raster capture.
   /// @param documentGeneration Document lifetime captured by the renderer.
   /// @param frameVersion Committed document mutation version in the capture.
+  /// @param pointerX Logical pointer x sealed with the frame.
+  /// @param pointerY Logical pointer y sealed with the frame.
+  /// @param mouseDown Whether the primary button was held for the sealed frame.
   /// @param inputRepresented Whether pointer input is represented by the frame.
   /// @param viewportZoom Viewport zoom sealed with the frame.
   void setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
                                     std::uint64_t documentGeneration, std::uint64_t frameVersion,
+                                    double pointerX, double pointerY, bool mouseDown,
                                     bool inputRepresented, double viewportZoom);
+
+  /// Input stamp that the next submitted frame will carry; exposed for identity regressions.
+  [[nodiscard]] const internal::PresentationSubmissionQueue::Fence&
+  presentationInputStampForTesting() const {
+    return presentationInputStamp_;
+  }
 
   /// Last admitted presentation frame, independent of a backend device's submission serials.
   std::uint64_t presentationAdmissionSequence() const {

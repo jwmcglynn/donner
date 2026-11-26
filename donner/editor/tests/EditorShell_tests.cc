@@ -3211,6 +3211,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   window.setPresentationFrameIdentity(/*frameId=*/999, oldPresentation->captureId,
                                       oldPresentation->documentGeneration,
                                       oldPresentation->frameVersion,
+                                      /*pointerX=*/0.0, /*pointerY=*/0.0,
+                                      /*mouseDown=*/false,
                                       /*inputRepresented=*/true, /*viewportZoom=*/1.0);
   window.beginFrame();
   window.endFrame();

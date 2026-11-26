@@ -103,8 +103,11 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
         .extraEntities = input.activeDragPreview->extraEntities,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         .translation = input.activeDragPreview->translation,
+        .pointerDocumentPoint = input.activeDragPreview->pointerDocumentPoint,
+        .mouseDown = input.activeDragPreview->mouseDown,
         .documentFromCachedDocument = input.activeDragPreview->documentFromCachedDocument,
         .dragGeneration = input.activeDragPreview->dragGeneration,
+        .contentIdentity = input.activeDragPreview->contentIdentity,
         .forceLayerRasterization = decision.needsCompositedLayerCapture,
     };
   } else if (decision.needsCompositedPrewarm && input.selectedEntity != entt::null) {

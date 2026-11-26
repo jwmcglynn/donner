@@ -1349,8 +1349,11 @@ TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget
       .extraEntities = {r2Entity},
       .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
       .translation = Vector2d(16.0, 4.0),
+      .pointerDocumentPoint = Vector2d(31.0, 19.0),
+      .mouseDown = true,
       .documentFromCachedDocument = Transform2d::Translate(Vector2d(16.0, 4.0)),
       .dragGeneration = 17,
+      .contentIdentity = PresentationIdentity{.documentGeneration = 1, .version = 1},
   };
   asyncRenderer.requestRender(request);
 
@@ -1360,6 +1363,11 @@ TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget
   ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
   EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
             std::vector<Entity>{r2Entity});
+  EXPECT_EQ(result->compositedPreview->representedDragPreview->pointerDocumentPoint,
+            Vector2d(31.0, 19.0));
+  EXPECT_TRUE(result->compositedPreview->representedDragPreview->mouseDown);
+  EXPECT_TRUE(result->compositedPreview->representedDragPreview->contentIdentity.sameContent(
+      PresentationIdentity{.documentGeneration = 1, .version = 1}));
 
   const auto dragTileFor = [&](Entity entity) {
     return std::ranges::find_if(result->compositedPreview->tiles,
