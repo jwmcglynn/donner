@@ -905,7 +905,19 @@ TEST(EditorSyncTest, StructuredCssMovesDoNotTreatEntityEndAsADeclarationSeparato
               testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
   UndoStructuredCssForTest(app, sync, text);
   ASSERT_EQ(text.getText(), original);
+}
 
+TEST(EditorSyncTest, StructuredCssMovePreservesXmlEncodedCssSeparator) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<rect id="r" style="--x:&quot;x&quot;"/>
+<circle id="other" style="stroke:blue&#59;"/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController sync(original);
   const auto stroke = FindStructuredCssTarget(app, original, original.find("stroke:blue"));
   const auto anchor = FindStructuredCssTarget(app, original, original.find("--x:"));
   ASSERT_THAT(stroke, testing::Optional(testing::_));
