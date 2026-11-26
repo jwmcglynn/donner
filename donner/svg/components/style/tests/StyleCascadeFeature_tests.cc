@@ -277,6 +277,40 @@ TEST_F(StyleSystemTest, OrdinaryVariablesChooseTheWinningDeclarationBeforeSubsti
   EXPECT_THAT(opacity->getComputedStyle().opacity.get(), testing::Optional(Eq(1.0)));
 }
 
+TEST_F(StyleSystemTest, SelectedFallbackWhitespaceIsIgnoredAtDeclarationBoundaries) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" style="opacity:var(--missing, 0.5)"/>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  EXPECT_THAT(target->getComputedStyle().opacity.get(), testing::Optional(Eq(0.5)));
+}
+
+TEST_F(StyleSystemTest, InvalidSubstitutedResourceOpacityShadowsPresentationValue) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--bad:red">
+      <defs>
+        <linearGradient id="gradient">
+          <stop id="stop" stop-opacity="0.25" style="stop-opacity:var(--bad)"/>
+        </linearGradient>
+        <filter id="filter">
+          <feFlood id="flood" flood-opacity="0.375" style="flood-opacity:var(--bad)"/>
+        </filter>
+      </defs>
+    </svg>)svg");
+  const auto stop = document.querySelector("#stop");
+  const auto flood = document.querySelector("#flood");
+  ASSERT_THAT(stop, testing::Optional(testing::_));
+  ASSERT_THAT(flood, testing::Optional(testing::_));
+  const auto* stopOpacity = ComputedFor(*stop).resourceOpacities();
+  const auto* floodOpacity = ComputedFor(*flood).resourceOpacities();
+  ASSERT_THAT(stopOpacity, NotNull());
+  ASSERT_THAT(floodOpacity, NotNull());
+  EXPECT_EQ(stopOpacity->stopOpacity, 1.0);
+  EXPECT_EQ(floodOpacity->floodOpacity, 1.0);
+}
+
 TEST_F(StyleSystemTest, PresentationVariableEditsRetainOnlyTheCurrentAttribute) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" fill="green" style="--ink: red; --other: blue">

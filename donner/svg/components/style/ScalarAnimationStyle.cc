@@ -182,7 +182,7 @@ Property<double> ResourceOpacityBase(const Registry& registry, Entity source, bo
     return result;
   }
   const auto params = parser::PropertyParseFnParams::Create(
-      declaration, declared->second.specificity, parser::PropertyParseBehavior::AllowUserUnits);
+      declared->second, parser::PropertyParseBehavior::AllowUserUnits);
   if (auto error = Parse(
           params,
           [](const parser::PropertyParseFnParams& input) {

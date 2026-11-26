@@ -11,8 +11,11 @@ namespace {
 static constexpr css::Specificity kSpecificityPresentationAttribute =
     css::Specificity::FromABC(0, 0, 0);
 
-std::span<const css::ComponentValue> TrimTrailingWhitespace(
+std::span<const css::ComponentValue> TrimWhitespace(
     std::span<const css::ComponentValue> components) {
+  while (!components.empty() && components.front().isToken<css::Token::Whitespace>()) {
+    components = components.subspan(1);
+  }
   while (!components.empty() && components.back().isToken<css::Token::Whitespace>()) {
     components = components.subspan(0, components.size() - 1);
   }
@@ -26,7 +29,7 @@ PropertyParseFnParams PropertyParseFnParams::Create(const css::Declaration& decl
                                                     css::Specificity specificity,
                                                     PropertyParseBehavior parseBehavior) {
   PropertyParseFnParams params;
-  params.valueOrComponents = TrimTrailingWhitespace(declaration.values);
+  params.valueOrComponents = TrimWhitespace(declaration.values);
   params.parseBehavior = parseBehavior;
 
   // Detect CSS-wide keywords, see https://www.w3.org/TR/css-cascade-3/#defaulting-keywords.
