@@ -311,6 +311,22 @@ TEST_F(StyleSystemTest, InvalidSubstitutedResourceOpacityShadowsPresentationValu
   EXPECT_EQ(floodOpacity->floodOpacity, 1.0);
 }
 
+TEST_F(StyleSystemTest, DeferredTransformRetainsImportantPriorityAgainstVariables) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--offset:translate(20px)">
+      <rect id="important-concrete"
+            style="transform:translate(10px) !important;transform:var(--offset)"/>
+      <rect id="important-variable"
+            style="transform:translate(10px) !important;transform:var(--offset) !important"/>
+    </svg>)svg");
+  const auto concrete = document.querySelector("#important-concrete");
+  const auto variable = document.querySelector("#important-variable");
+  ASSERT_THAT(concrete, testing::Optional(testing::_));
+  ASSERT_THAT(variable, testing::Optional(testing::_));
+  EXPECT_THAT(concrete->cast<SVGRectElement>().transform(), Eq(Transform2d::Translate(10, 0)));
+  EXPECT_THAT(variable->cast<SVGRectElement>().transform(), Eq(Transform2d::Translate(20, 0)));
+}
+
 TEST_F(StyleSystemTest, SubstitutedFilterKeepsPresentationUserUnits) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" style="--radius:2">
