@@ -43,6 +43,13 @@ struct StyleComponent {
     }
     return result;
   }
+  /// Remove the prior variable when a typed presentation setter replaces it.
+  void discardPendingPresentationVariable(std::string_view name) {
+    if (properties_.discardPendingPresentationVariable(name)) {
+      refreshDeclarationHash();
+    }
+  }
+
   /// True when the most recent inline-style parse exceeded its resource budget.
   bool styleParseRejected = false;
 

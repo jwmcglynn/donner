@@ -48,6 +48,13 @@ PropertyParseFnParams PropertyParseFnParams::Create(const css::Declaration& decl
   return params;
 }
 
+PropertyParseFnParams PropertyParseFnParams::Create(const UnparsedProperty& property,
+                                                    PropertyParseBehavior parseBehavior) {
+  auto params = Create(property.declaration, property.specificity, parseBehavior);
+  params.invalidAtComputedValueOnError = property.substituted;
+  return params;
+}
+
 PropertyParseFnParams PropertyParseFnParams::CreateForAttribute(std::string_view value) {
   PropertyParseFnParams params;
   params.valueOrComponents = value;

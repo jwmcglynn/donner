@@ -41,6 +41,7 @@
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/CustomPropertyMap.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/ParallelStylePass.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
@@ -86,8 +87,16 @@ void Require(bool condition, std::source_location where = std::source_location::
 void AppendUseFixtures(std::string& svg, std::string_view tree) {
   const std::uint8_t choice = tree.empty() ? 0 : static_cast<std::uint8_t>(tree.front());
   const std::string_view resourceTag = choice & 1 ? "symbol" : "g";
-  svg += "<" + std::string(resourceTag) + R"( id="fuzz-resource"><rect class="cache-probe"/>)";
-  svg += "</" + std::string(resourceTag) + R"(></defs><use id="fuzz-use" href="#fuzz-resource"/>)";
+  svg += "<" + std::string(resourceTag) + R"( id="fuzz-resource"><rect class="cache-probe")";
+  if (choice & 4) {
+    svg += R"svg( fill="var(--ink, red)" style="--edge:var(--ink);stroke:var(--edge, blue)")svg";
+  }
+  svg += "/>";
+  svg += "</" + std::string(resourceTag) + R"(></defs><use id="fuzz-use" href="#fuzz-resource")";
+  if (choice & 4) {
+    svg += R"( style="--ink:green")";
+  }
+  svg += "/>";
   if (choice & 2) {
     svg += R"(<use id="fuzz-use-2" href="#fuzz-resource" fill="blue"/>)";
   }
@@ -191,6 +200,28 @@ std::optional<SVGDocument> Cascade(const std::string& svg, bool unindexed, bool 
   return document;
 }
 
+const components::CustomPropertyMap* ComputedCustomProperties(
+    const components::ComputedStyleComponent& computed) {
+  return computed.style ? computed.style->customProperties.get() : nullptr;
+}
+
+void RequireSameCustomProperties(const components::ComputedStyleComponent& left,
+                                 const components::ComputedStyleComponent& right) {
+  const auto* leftMap = ComputedCustomProperties(left);
+  const auto* rightMap = ComputedCustomProperties(right);
+  Require((leftMap == nullptr) == (rightMap == nullptr));
+  if (!leftMap) {
+    return;
+  }
+  const auto leftEntries = leftMap->entries();
+  const auto rightEntries = rightMap->entries();
+  Require(leftEntries.size() == rightEntries.size());
+  for (std::size_t i = 0; i < leftEntries.size(); ++i) {
+    Require(leftEntries[i].name == rightEntries[i].name);
+    Require(std::ranges::equal(leftEntries[i].value->tokens(), rightEntries[i].value->tokens()));
+  }
+}
+
 void RequireSameStylesAndRules(SVGDocument& left, SVGDocument& right) {
   Registry& leftRegistry = left.registry();
   Registry& rightRegistry = right.registry();
@@ -220,6 +251,7 @@ void RequireSameStylesAndRules(SVGDocument& left, SVGDocument& right) {
               (rightStyle->resourceOpacities() == nullptr));
       Require(leftStyle->resourceOpacities() == nullptr ||
               *leftStyle->resourceOpacities() == *rightStyle->resourceOpacities());
+      RequireSameCustomProperties(*leftStyle, *rightStyle);
       Require(leftStyle->externalFill == rightStyle->externalFill);
       Require(leftStyle->externalStroke == rightStyle->externalStroke);
     }

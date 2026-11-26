@@ -26,6 +26,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/DeclarationListParser.h"
+#include "donner/css/parser/ValueParser.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGStyleQuery.h"
@@ -42,12 +43,12 @@
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
-#include "donner/svg/components/style/CustomPropertyMap.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleAncestorFilter.h"
 #include "donner/svg/components/style/StyleComponent.h"
+#include "donner/svg/components/style/tests/StyleSystemTest.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::NotNull;
@@ -138,199 +139,6 @@ auto AuthoredMatchedRuleIs(std::size_t selectorEntryIndex, css::Specificity spec
 }
 
 }  // namespace
-
-class StyleSystemTest : public ::testing::Test {
-protected:
-  SVGDocument ParseSVG(std::string_view input) {
-    ParseWarningSink parseSink;
-    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink);
-    EXPECT_THAT(maybeResult, NoParseError());
-    return std::move(maybeResult).result();
-  }
-
-  SVGDocument ParseAndComputeStyles(std::string_view input) {
-    auto document = ParseSVG(input);
-    ParseWarningSink warningSink;
-    styleSystem.computeAllStyles(document.registry(), warningSink);
-    return document;
-  }
-
-  StyleSystem styleSystem;
-};
-
-namespace {
-
-std::optional<RcString> CustomIdent(const ComputedStyle& style, std::string_view name) {
-  const auto* value = style.customProperties ? style.customProperties->find(name) : nullptr;
-  if (!value || value->tokens().size() != 1 ||
-      !value->tokens().front().isToken<css::Token::Ident>()) {
-    return std::nullopt;
-  }
-  return value->tokens().front().get<css::Token>().get<css::Token::Ident>().value;
-}
-
-const ComputedStyleComponent& ComputedFor(const SVGElement& element) {
-  return element.entityHandle().get<ComputedStyleComponent>();
-}
-
-}  // namespace
-
-TEST_F(StyleSystemTest, CustomDeclarationsCascadeAndKeepRawTokens) {
-  auto document = ParseSVG(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg">
-      <style>
-        #target { --rank: id; --important: rule !important; --inline-rank: rule !important; }
-        rect { --rank: type; --order: first; --order: last; }
-      </style>
-      <g id="parent" style="--invalid: parent; --inherit: parent; --unset: parent">
-        <rect id="target" style="--normal:inline; --important:ignored; --inline-rank:inline !important;
-          --invalid:initial; --inherit:inherit; --unset:unset; --empty:; --raw:var(--normal);
-          --Name:Upper; --name:Lower; --: reserved"/>
-        <g id="shares"/>
-      </g>
-    </svg>)svg");
-  ParseWarningSink warnings;
-  styleSystem.computeAllStyles(document.registry(), warnings);
-  const auto target = document.querySelector("#target");
-  const auto parent = document.querySelector("#parent");
-  const auto shares = document.querySelector("#shares");
-  ASSERT_THAT(target, testing::Optional(testing::_));
-  ASSERT_THAT(parent, testing::Optional(testing::_));
-  ASSERT_THAT(shares, testing::Optional(testing::_));
-  const auto& targetStyle = ComputedFor(*target);
-  ASSERT_THAT(targetStyle.style, NotNull());
-  ASSERT_THAT(targetStyle.style->customProperties, NotNull());
-  const auto& computed = *targetStyle.style;
-  EXPECT_THAT(CustomIdent(computed, "--rank"), testing::Optional(Eq("id")));
-  EXPECT_THAT(CustomIdent(computed, "--order"), testing::Optional(Eq("last")));
-  EXPECT_THAT(CustomIdent(computed, "--normal"), testing::Optional(Eq("inline")));
-  EXPECT_THAT(CustomIdent(computed, "--important"), testing::Optional(Eq("rule")));
-  EXPECT_THAT(CustomIdent(computed, "--inline-rank"), testing::Optional(Eq("inline")));
-  EXPECT_THAT(CustomIdent(computed, "--inherit"), testing::Optional(Eq("parent")));
-  EXPECT_THAT(CustomIdent(computed, "--unset"), testing::Optional(Eq("parent")));
-  EXPECT_THAT(CustomIdent(computed, "--Name"), testing::Optional(Eq("Upper")));
-  EXPECT_THAT(CustomIdent(computed, "--name"), testing::Optional(Eq("Lower")));
-  EXPECT_THAT(computed.customProperties->find("--invalid"), testing::IsNull());
-  EXPECT_THAT(computed.customProperties->find("--"), testing::IsNull());
-  const auto* empty = computed.customProperties->find("--empty");
-  const auto* raw = computed.customProperties->find("--raw");
-  ASSERT_THAT(empty, NotNull());
-  ASSERT_THAT(raw, NotNull());
-  EXPECT_THAT(empty->tokens(), testing::IsEmpty());
-  ASSERT_THAT(raw->tokens(), testing::SizeIs(1u));
-  ASSERT_THAT(raw->tokens().front().is<css::Function>(), testing::IsTrue());
-  EXPECT_THAT(raw->tokens().front().get<css::Function>().name, Eq("var"));
-  EXPECT_THAT(computed.properties.unparsedProperties, testing::IsEmpty());
-  EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
-
-  const auto& parentStyle = ComputedFor(*parent);
-  const auto& sharedStyle = ComputedFor(*shares);
-  ASSERT_THAT(parentStyle.style, NotNull());
-  ASSERT_THAT(parentStyle.style->customProperties, NotNull());
-  ASSERT_THAT(sharedStyle.style, NotNull());
-  EXPECT_THAT(sharedStyle.style->customProperties, Eq(parentStyle.style->customProperties));
-}
-
-TEST_F(StyleSystemTest, CustomInlineCacheKeysAndEditsPreserveExactValues) {
-  auto document = ParseAndComputeStyles(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" style="--tone: parent">
-      <rect id="first" style="--tone: red !important"/>
-      <rect id="different" style="--tone: blue"/>
-      <rect id="same" style="--tone: red !important"/>
-    </svg>)svg");
-  auto first = document.querySelector("#first");
-  const auto different = document.querySelector("#different");
-  const auto same = document.querySelector("#same");
-  ASSERT_THAT(first, testing::Optional(testing::_));
-  ASSERT_THAT(different, testing::Optional(testing::_));
-  ASSERT_THAT(same, testing::Optional(testing::_));
-  const auto original = ComputedFor(*first).style;
-  ASSERT_THAT(original, NotNull());
-  ASSERT_THAT(ComputedFor(*different).style, NotNull());
-  EXPECT_THAT(ComputedFor(*same).style, Eq(original));
-  EXPECT_THAT(ComputedFor(*different).style, testing::Ne(original));
-  EXPECT_THAT(CustomIdent(*ComputedFor(*different).style, "--tone"), testing::Optional(Eq("blue")));
-
-  first->updateStyle("--tone: orange; --other: earlier !important; --other: later");
-  const auto updatedSource = first->getAttribute("style");
-  ASSERT_THAT(updatedSource, testing::Optional(testing::_));
-  auto reparsed = ParseAndComputeStyles(
-      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="element" style=")" +
-      std::string(std::string_view(*updatedSource)) + R"("/></svg>)");
-  const auto fromSource = reparsed.querySelector("#element");
-  ASSERT_THAT(fromSource, testing::Optional(testing::_));
-  ASSERT_THAT(ComputedFor(*fromSource).style, NotNull());
-  std::ignore = first->getComputedStyle();
-  const auto updated = ComputedFor(*first).style;
-  ASSERT_THAT(updated, NotNull());
-  EXPECT_THAT(CustomIdent(*updated, "--tone"), testing::Optional(Eq("red")));
-  EXPECT_THAT(CustomIdent(*updated, "--other"), testing::Optional(Eq("earlier")));
-  EXPECT_THAT(CustomIdent(*updated, "--tone"),
-              Eq(CustomIdent(*ComputedFor(*fromSource).style, "--tone")));
-  EXPECT_THAT(CustomIdent(*updated, "--other"),
-              Eq(CustomIdent(*ComputedFor(*fromSource).style, "--other")));
-
-  first->setStyle("--tone: inherit");
-  std::ignore = first->getComputedStyle();
-  ASSERT_THAT(ComputedFor(*first).style, NotNull());
-  EXPECT_THAT(CustomIdent(*ComputedFor(*first).style, "--tone"), testing::Optional(Eq("parent")));
-  EXPECT_THAT(CustomIdent(*ComputedFor(*first).style, "--other"), Eq(std::nullopt));
-  EXPECT_THAT(CustomIdent(*original, "--tone"), testing::Optional(Eq("red")));
-}
-
-TEST_F(StyleSystemTest, UpdatingInlineCustomPropertiesKeepsCaseAndImportantPriority) {
-  auto document = ParseSVG(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg">
-      <rect id="target" style="--Name: red !important; --name: blue"/>
-    </svg>)svg");
-  auto target = document.querySelector("#target");
-  ASSERT_THAT(target, testing::Optional(testing::_));
-
-  target->updateStyle("--Name: stale; --name: green !important; --name: also-stale");
-  std::ignore = target->getComputedStyle();
-  const auto first = ComputedFor(*target).style;
-  ASSERT_THAT(first, NotNull());
-  EXPECT_THAT(CustomIdent(*first, "--Name"), testing::Optional(Eq("red")));
-  EXPECT_THAT(CustomIdent(*first, "--name"), testing::Optional(Eq("green")));
-
-  target->updateStyle("--Name: gold !important");
-  std::ignore = target->getComputedStyle();
-  const auto second = ComputedFor(*target).style;
-  ASSERT_THAT(second, NotNull());
-  EXPECT_THAT(CustomIdent(*second, "--Name"), testing::Optional(Eq("gold")));
-  EXPECT_THAT(CustomIdent(*second, "--name"), testing::Optional(Eq("green")));
-
-  const auto source = target->getAttribute("style");
-  ASSERT_THAT(source, testing::Optional(testing::_));
-  EXPECT_THAT(std::string_view(*source),
-              testing::AllOf(testing::HasSubstr("--Name: gold !important"),
-                             testing::HasSubstr("--name: green !important"),
-                             testing::Not(testing::HasSubstr("stale"))));
-}
-
-TEST_F(StyleSystemTest, ImportedCustomDeclarationsKeepPriorityAndOrder) {
-  auto document = ParseSVG(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg">
-      <style id="sheet">rect { --chosen: local; --order: local }</style>
-      <rect id="target"/>
-    </svg>)svg");
-  const auto stylesheet = document.querySelector("#sheet");
-  const auto target = document.querySelector("#target");
-  ASSERT_THAT(stylesheet, testing::Optional(testing::_));
-  ASSERT_THAT(target, testing::Optional(testing::_));
-  ParseWarningSink warnings;
-  std::vector<css::Stylesheet> imported;
-  imported.push_back(css::CSS::ParseStylesheet(
-      "rect { --chosen: imported !important; --order: imported }", warnings));
-  stylesheet->entityHandle().get<StylesheetComponent>().setImportedStylesheets(std::move(imported),
-                                                                               1);
-  styleSystem.computeAllStyles(document.registry(), warnings);
-  const auto& computed = ComputedFor(*target);
-  ASSERT_THAT(computed.style, NotNull());
-  EXPECT_THAT(CustomIdent(*computed.style, "--chosen"), testing::Optional(Eq("imported")));
-  EXPECT_THAT(CustomIdent(*computed.style, "--order"), testing::Optional(Eq("local")));
-  EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
-}
 
 // --- Basic style computation ---
 

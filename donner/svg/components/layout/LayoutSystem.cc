@@ -112,6 +112,18 @@ PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
   return PreserveAspectRatio::Default();
 }
 
+parser::PropertyParseFnParams DeferredTransformParams(const parser::UnparsedProperty& property) {
+  if (property.substituted) {
+    return parser::PropertyParseFnParams::Create(property,
+                                                 parser::PropertyParseBehavior::AllowUserUnits);
+  }
+  parser::PropertyParseFnParams params;
+  params.valueOrComponents = property.declaration.values;
+  params.specificity = property.specificity;
+  params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
+  return params;
+}
+
 void ApplyUnparsedProperties(SizedElementProperties& properties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
                              ParseWarningSink& warningSink) {
@@ -119,9 +131,9 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
     const SizedElementPresentationAttributeParseFn* parseFn =
         kProperties.find(static_cast<std::string_view>(name));
     if (parseFn != nullptr) {
-      auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
-                                                   property.declaration, property.specificity,
-                                                   parser::PropertyParseBehavior::AllowUserUnits));
+      auto maybeError =
+          (*parseFn)(properties, parser::PropertyParseFnParams::Create(
+                                     property, parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError) {
         warningSink.add(std::move(maybeError.value()));
       }
@@ -784,10 +796,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   if (auto it = properties.find("transform"); it != properties.end()) {
     const parser::UnparsedProperty& property = it->second;
 
-    parser::PropertyParseFnParams params;
-    params.valueOrComponents = property.declaration.values;
-    params.specificity = property.specificity;
-    params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
+    const auto params = DeferredTransformParams(property);
 
     auto maybeError = Parse(
         params,

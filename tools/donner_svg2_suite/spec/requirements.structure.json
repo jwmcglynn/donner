@@ -81,7 +81,8 @@
         "png"
       ],
       "test_ids": [
-        "resvg/structure/use/from-defs"
+        "resvg/structure/use/from-defs",
+        "donner-svg2/structure/use/custom-property-fill"
       ],
       "review_state": "reviewed",
       "evidence_state": "covered-pass",

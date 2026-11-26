@@ -919,6 +919,32 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
   return trySetPresentationAttributeWithRouter(name, value, RouteStyleEdit);
 }
 
+namespace {
+
+bool HasVariableTransform(const ElementAnchor& handle, std::string_view name) {
+  if (name != "transform") {
+    return false;
+  }
+  const auto* style = handle.try_get<components::StyleComponent>();
+  return style && style->properties().hasPendingPresentationVariable(name);
+}
+
+void MarkPresentationVariableReplacement(const ElementAnchor& handle, DocumentWriteAccess& access,
+                                         std::string_view name, bool commonProperty,
+                                         bool previouslyVariableTransform) {
+  if (!commonProperty) {
+    if (auto* style = handle.try_get<components::StyleComponent>(access)) {
+      style->discardPendingPresentationVariable(name);
+    }
+  }
+  if (previouslyVariableTransform || HasVariableTransform(handle, name)) {
+    // The ordinary transform-only path does not redo the cascade.
+    MarkFullClassOrStyleEdit(handle);
+  }
+}
+
+}  // namespace
+
 ParseResult<bool> SVGElement::trySetPresentationAttributeWithRouter(std::string_view name,
                                                                     std::string_view value,
                                                                     StyleEditRouter route) {
@@ -942,6 +968,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttributeWithRouter(std::string_
     actualName = "transform";
   }
 
+  const bool previouslyVariableTransform = HasVariableTransform(handle_, actualName);
   // Try common CSS properties first (fill, stroke, opacity, transform, etc.).
   auto trySetResult = TrySetCommonPresentationAttribute(handle_, access, actualName, value);
 
@@ -962,6 +989,8 @@ ParseResult<bool> SVGElement::trySetPresentationAttributeWithRouter(std::string_
     handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
         *handle_.registry(), xml::XMLQualifiedName(RcString(name)), RcString(value));
 
+    MarkPresentationVariableReplacement(handle_, access, actualName, commonProperty,
+                                        previouslyVariableTransform);
     MarkPresentationAttributeDirty(handle_, elementType, name, actualName, commonProperty, route);
     return true;
   }

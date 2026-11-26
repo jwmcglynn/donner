@@ -47,6 +47,7 @@ enum class PropertyState {
                         *
                         * @see https://www.w3.org/TR/css-cascade-3/#inherit-initial
                         */
+  PendingSubstitution = 5,  //!< Specified winner awaiting custom-property substitution.
 };
 
 /**
@@ -287,6 +288,7 @@ std::ostream& operator<<(std::ostream& os, const Property<T, kCascade>& property
     case PropertyState::ExplicitInitial: os << " (explicit initial)"; break;
     case PropertyState::ExplicitUnset: os << " (explicit unset)"; break;
     case PropertyState::NotSet: os << " (not set)"; break;
+    case PropertyState::PendingSubstitution: os << " (pending substitution)"; break;
   }
 
   if (property.state != PropertyState::NotSet) {

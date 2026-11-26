@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <memory>
+
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseResult.h"
 #include "donner/css/Declaration.h"
@@ -22,6 +24,18 @@ struct UnparsedProperty {
 
   /// Specificity of the declaration.
   css::Specificity specificity;
+
+  /// A presentation value hidden by an inline declaration, needed if that inline value is reset.
+  std::shared_ptr<const css::Declaration> presentationVariable = nullptr;
+  /// Geometry parsing still needs to validate this substituted value.
+  bool substituted = false;
+
+  /// One unresolved declaration can own more than one longhand.
+  std::shared_ptr<const css::Declaration> variableSource = nullptr;
+
+  const css::Declaration& sourceDeclaration() const UTILS_LIFETIME_BOUND {
+    return variableSource ? *variableSource : declaration;
+  }
 };
 
 /**
@@ -54,6 +68,11 @@ struct PropertyParseFnParams {
       const css::Declaration& declaration, css::Specificity specificity,
       PropertyParseBehavior parseBehavior = PropertyParseBehavior::Default);
 
+  /// Build a deferred parse request without losing computed-value failure semantics.
+  static PropertyParseFnParams Create(
+      const UnparsedProperty& property,
+      PropertyParseBehavior parseBehavior = PropertyParseBehavior::Default);
+
   /**
    * Create a new \ref PropertyParseFnParams from a declaration and specificity.
    *
@@ -74,6 +93,8 @@ struct PropertyParseFnParams {
   /// For presentation attributes, values may be unitless, in which case they the spec says they are
   /// specified in "user units". See https://www.w3.org/TR/SVG2/types.html#syntax.
   PropertyParseBehavior parseBehavior = PropertyParseBehavior::Default;
+  /// A type failure resets the winning property instead of exposing a lower declaration.
+  bool invalidAtComputedValueOnError = false;
 
   /// Get the list of \ref css::ComponentValue for the property value.
   std::span<const css::ComponentValue> components() const;
@@ -112,6 +133,10 @@ std::optional<ParseDiagnostic> Parse(const PropertyParseFnParams& params,
 
   auto result = callbackFn(params);
   if (result.hasError()) {
+    if (params.invalidAtComputedValueOnError) {
+      destination->set(PropertyState::ExplicitUnset, params.specificity);
+      return std::nullopt;
+    }
     // If there is a parse error, the CSS specification requires user agents to ignore the
     // declaration, and not modify the existing value.
     // See https://www.w3.org/TR/CSS2/syndata.html#ignore.

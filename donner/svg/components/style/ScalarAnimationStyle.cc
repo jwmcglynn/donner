@@ -137,6 +137,7 @@ template <typename PropertyType>
 double BaseScalar(const PropertyType& property, const ScalarContext& context) {
   switch (property.state) {
     case PropertyState::NotSet:
+    case PropertyState::PendingSubstitution:
     case PropertyState::ExplicitUnset: return context.inherited ? context.parent : context.initial;
     case PropertyState::Inherit: return context.parent;
     case PropertyState::ExplicitInitial: return context.initial;
