@@ -111,8 +111,9 @@ inline std::size_t RelativeDeclarationOffset(FileOffset name, FileOffset point,
 inline void RecordAuthoredComponent(Declaration& declaration, const ComponentValue& component,
                                     std::size_t& bangStart) {
   const auto span = component.authoredRange();
-  declaration.authored.end =
-      span ? RelativeDeclarationOffset(declaration.sourceOffset, span->end) : 0;
+  declaration.authored.end = declaration.authored.end && span
+                                 ? RelativeDeclarationOffset(declaration.sourceOffset, span->end)
+                                 : 0;
   const auto* token = std::get_if<Token>(&component.value);
   const auto* delim = token ? token->tryGet<Token::Delim>() : nullptr;
   if (delim && delim->value == '!') {
