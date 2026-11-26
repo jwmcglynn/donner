@@ -1815,10 +1815,24 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "css_source_syntax",
+    srcs = ["CssSourceSyntax.cc"],
+    hdrs = ["CssSourceSyntax.h"],
+    deps = [
+        ":text_buffer",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/css/parser",
+        "//donner/svg/properties:property_parsing",
+    ],
+)
+
+donner_cc_library(
     name = "text_editor_core",
     srcs = ["TextEditorCore.cc"],
     hdrs = ["TextEditorCore.h"],
     deps = [
+        ":css_source_syntax",
         ":source_edit_intent",
         ":text_buffer",
         "//donner/base",

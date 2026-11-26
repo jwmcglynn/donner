@@ -766,6 +766,7 @@ private:
   bool checkComments_ = true;
 
   // Internal helpers.
+  void colorizeSvgCss(int fromLine, int toLine);
   void requestEnsureCursorVisible();
   void requestAutocomplete();
   void fireContentUpdate();

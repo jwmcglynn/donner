@@ -13,6 +13,7 @@
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
+#include "donner/editor/CssSourceSyntax.h"
 
 namespace donner::editor {
 
@@ -1932,6 +1933,34 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
       }
 
       current = tokenEnd;
+    }
+  }
+
+  colorizeSvgCss(fromLine, endLine);
+}
+
+void TextEditorCore::colorizeSvgCss(int fromLine, int toLine) {
+  if (languageDefinition_.name != "SVG" || fromLine >= toLine) {
+    return;
+  }
+  const std::string source = text_.getText();
+  const std::size_t affectedStart = text_.getByteOffset(Coordinates(std::max(0, fromLine), 0));
+  const std::size_t affectedEnd = toLine >= text_.getTotalLines()
+                                      ? source.size()
+                                      : text_.getByteOffset(Coordinates(std::max(0, toLine), 0));
+  const CssSourceClassification classification =
+      ClassifySvgCssSource(source, affectedStart, affectedEnd);
+  for (const CssColorSpan& span : classification.colors) {
+    const Coordinates start = text_.getCoordinatesAtByteOffset(span.startOffset);
+    const Coordinates end = text_.getCoordinatesAtByteOffset(span.endOffset);
+    for (int lineNumber = start.line; lineNumber <= end.line; ++lineNumber) {
+      Line& line = text_.getLineGlyphsMutable(lineNumber);
+      const int first = lineNumber == start.line ? text_.getCharacterIndex(start) : 0;
+      const int last =
+          lineNumber == end.line ? text_.getCharacterIndex(end) : static_cast<int>(line.size());
+      for (int i = first; i < last; ++i) {
+        line[i].colorIndex = span.color;
+      }
     }
   }
 }
