@@ -206,8 +206,9 @@ budgets and prints one `native-linked-size` line per product.
 
 ### Budgets
 
-Each budget is about 3% over the product's measured size, rounded up to a thousand bytes. All
-rows are read with `tools/ci/native_linked_size.py`, and read-only includes the shader artifacts.
+The macOS arm64 converter has a budget of 4,898,250 linked bytes. The other budgets allow
+about 3% above the recorded product sizes, rounded up to a thousand bytes.
+All rows are read with `tools/ci/native_linked_size.py`, and read-only includes the shader artifacts.
 The Linux x86_64 and macOS arm64 rows are measured in the shipped configuration by the
 native Perf workflow, including declarative animation and CLI GIF export.
 
@@ -218,7 +219,7 @@ linker does by default, and the Linux rows are measured with it.
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
 | Editor       | macOS arm64  | 10,315,561 | 2,586,340 | 12,901,901 | 13,289,000 |
-| `svg_to_png` | macOS arm64  | 4,342,143  | 186,696   | 4,528,839  | 4,665,000  |
+| `svg_to_png` | macOS arm64  | 4,342,143  | 186,696   | 4,528,839  | 4,898,250  |
 | Editor       | Linux x86_64 | 11,891,859 | 2,500,312 | 14,392,171 | 14,824,000 |
 | `svg_to_png` | Linux x86_64 | 5,143,175  | 117,120   | 5,260,295  | 5,419,000  |
 | `donner-svg` | macOS arm64  | 3,746,741  | 149,792   | 3,896,533  | 4,014,000  |

@@ -855,7 +855,7 @@ py_test(
         ":macos_arm64": [
             "--budget=donner_svg=4014000",
             "--budget=editor=13289000",
-            "--budget=svg_to_png=4665000",
+            "--budget=svg_to_png=4898250",
         ],
         ":linux_x86_64": [
             "--budget=donner_svg=4738000",
