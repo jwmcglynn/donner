@@ -3117,7 +3117,6 @@ bool StyleSystem::isStyleEditSubtreeBoundary(const Registry& registry, Entity en
     case ElementType::Pattern:
     case ElementType::RadialGradient:
     case ElementType::Stop:
-    case ElementType::Symbol:
     case ElementType::Text:
     case ElementType::TextPath:
     case ElementType::TSpan: return true;

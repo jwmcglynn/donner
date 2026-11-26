@@ -601,64 +601,56 @@ TEST(StyleInvalidationDifferential, PublicEditsMatchFullRestyle) {
     std::optional<std::size_t> affectedCount = std::nullopt;
   };
   const Edit edits[] = {
-      {"class-subject", R"(<style>.hot { fill: red }</style><rect id="target" width="8" height="8"/>)",
-       [](SVGElement& e) {
-    e.setClassName("hot"); }, false, 1},
+      {"class-subject",
+       R"(<style>.hot { fill: red }</style><rect id="target" width="8" height="8"/>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 1},
       {"class-attribute-order",
        R"(<style>[class="cold hot"] { fill: red }</style><rect id="target" class="hot cold" width="8" height="8"/>)",
-       [](SVGElement& e) {
-    e.setClassName("cold hot"); }, false, 1},
+       [](SVGElement& e) { e.setClassName("cold hot"); }, false, 1},
       {"class-inheritance",
        R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g>)",
-       [](SVGElement& e) {
-    e.setClassName("hot"); }, false, 2},
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
       {"class-following-sibling",
        R"(<style>.hot + .after rect { fill: red }</style><g><g id="target"/><g class="after"><rect width="8" height="8"/></g></g>)",
-       [](SVGElement& e) {
-    e.setClassName("hot"); }, false, 3},
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 3},
       {"class-filtered-nth-child",
        R"(<style>rect:nth-child(1 of :is(.hot)) { fill: red }</style><g><rect id="target" width="8" height="8"/><rect class="hot" x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) {
-    e.setClassName("hot"); }, false, 2},
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
       {"class-filtered-nth-last-child",
        R"(<style>rect:nth-last-child(1 of :is(.hot)) { fill: red }</style><g><rect class="hot" width="8" height="8"/><rect id="target" x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) {
-    e.setClassName("hot"); }, false, 2},
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
       {"style", R"(<rect id="target" width="8" height="8"/>)",
-       [](SVGElement& e) {
-    e.setStyle("fill: red"); }, false, 1},
+       [](SVGElement& e) { e.setStyle("fill: red"); }, false, 1},
       {"update-style",
        R"(<style>[style] + rect { fill: red }</style><g><g id="target"/><rect width="8" height="8"/></g>)",
-       [](SVGElement& e) {
-    e.updateStyle("fill: red"); }, false, 2},
+       [](SVGElement& e) { e.updateStyle("fill: red"); }, false, 2},
       {"presentation-attribute",
        R"(<style>[fill=red] + rect { fill: lime }</style><g><rect id="target" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) {
-    e.setAttribute("fill", "red"); }, false, 2},
+       [](SVGElement& e) { e.setAttribute("fill", "red"); }, false, 2},
       {"presentation-removal",
        R"(<style>[fill] + rect { fill: lime }</style><g><rect id="target" fill="red" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) {
-    e.removeAttribute("fill"); }, false, 2},
+       [](SVGElement& e) { e.removeAttribute("fill"); }, false, 2},
       {"ancestor-selector",
        R"(<style>g:has(.hot) { fill: red }</style><g><rect id="target" width="8" height="8"/></g>)",
-       [](SVGElement& e) {
-    e.setClassName("hot"); }, true},
+       [](SVGElement& e) { e.setClassName("hot"); }, true},
       {"resource-subtree",
-       R"(<defs><linearGradient id="paint"><stop id="target" stop-color="blue"/></linearGradient></defs><rect fill="url(#paint)" width="8" height="8"/>)",
-       [](SVGElement& e) {
-    e.setAttribute("stop-color", "red"); }, true},
+       R"svg(<defs><linearGradient id="paint"><stop id="target" stop-color="blue"/></linearGradient></defs><rect fill="url(#paint)" width="8" height="8"/>)svg",
+       [](SVGElement& e) { e.setAttribute("stop-color", "red"); }, true},
       {"remove-paint-reference",
-       R"(<defs><linearGradient id="paint"><stop stop-color="blue"/></linearGradient></defs><rect id="target" fill="url(#paint)" width="8" height="8"/>)",
-       [](SVGElement& e) {
-    e.setAttribute("fill", "red"); }, false, 1},
+       R"svg(<defs><linearGradient id="paint"><stop stop-color="blue"/></linearGradient></defs><rect id="target" fill="url(#paint)" width="8" height="8"/>)svg",
+       [](SVGElement& e) { e.setAttribute("fill", "red"); }, false, 1},
       {"id-reference",
        R"(<rect id="target" fill="red" width="8" height="8"/><use href="#target" x="8"/>)",
-       [](SVGElement& e) {
-    e.setId("other"); }, true},
+       [](SVGElement& e) { e.setId("other"); }, true},
+      {"uninstantiated-symbol",
+       R"(<style>.hot { fill: red }</style><symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol>)",
+       [](SVGElement& e) { e.setClassName("hot"); }, false, 1},
+      {"instantiated-symbol",
+       R"(<style>.hot { fill: red }</style><symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol><use href="#tile" width="8" height="8"/>)",
+       [](SVGElement& e) { e.setClassName("hot"); }},
       {"use-source",
        R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g><use href="#target" x="8"/>)",
-       [](SVGElement& e) {
-    e.setClassName("hot"); }},
+       [](SVGElement& e) { e.setClassName("hot"); }},
   };
   for (const auto& edit : edits) {
     SCOPED_TRACE(edit.name);

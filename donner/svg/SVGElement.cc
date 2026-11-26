@@ -1,8 +1,8 @@
 #include "donner/svg/SVGElement.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
-#include <iterator>
 #include <span>
 #include <vector>
 
@@ -334,17 +334,35 @@ void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute,
   propagateStyleDirtyToDescendants(handle);
 }
 
-std::vector<std::string_view> ChangedClassNames(const RcString& oldName, const RcString& newName) {
-  auto oldClasses = StringUtils::SplitAsciiWhitespace(oldName);
-  auto newClasses = StringUtils::SplitAsciiWhitespace(newName);
-  for (auto* tokens : {&oldClasses, &newClasses}) {
-    std::ranges::sort(*tokens);
-    const auto duplicates = std::ranges::unique(*tokens);
-    tokens->erase(duplicates.begin(), duplicates.end());
+// Most class lists have only a few names. Bound the pairwise token comparisons; an oversized
+// list uses the existing whole-document restyle.
+void MarkClassEdit(EntityHandle handle, const RcString& previous, const RcString& next) {
+  constexpr std::size_t kMaximumClassBytes = 4096;
+  constexpr std::size_t kMaximumClassTokens = 32;
+  if (previous.size() > kMaximumClassBytes || next.size() > kMaximumClassBytes) {
+    markNeedsFullStyleRecompute(handle);
+    MarkClassOrStyleEdit(handle, "class");
+    return;
   }
-  std::vector<std::string_view> changed;
-  std::ranges::set_symmetric_difference(oldClasses, newClasses, std::back_inserter(changed));
-  return changed;
+  const auto oldClasses = StringUtils::SplitAsciiWhitespace(previous);
+  const auto newClasses = StringUtils::SplitAsciiWhitespace(next);
+  if (oldClasses.size() + newClasses.size() > kMaximumClassTokens) {
+    markNeedsFullStyleRecompute(handle);
+    MarkClassOrStyleEdit(handle, "class");
+    return;
+  }
+  std::array<std::string_view, kMaximumClassTokens> changed;
+  std::size_t count = 0;
+  const auto addRemoved = [&](const auto& from, const auto& to) {
+    for (std::string_view token : from) {
+      if (std::ranges::find(to, token) == to.end()) {
+        changed[count++] = token;
+      }
+    }
+  };
+  addRemoved(oldClasses, newClasses);
+  addRemoved(newClasses, oldClasses);
+  MarkClassOrStyleEdit(handle, "class", std::span(changed.data(), count));
 }
 
 /// Dirty flags for an element whose compositing properties changed, see \ref markCompositingDirty.
@@ -839,9 +857,11 @@ void SVGElement::setClassName(std::string_view name) {
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("class"), next);
   // Initial parsing has no old computed styles or selector dependencies to route.
-  const auto changed =
-      hasOldStyles ? ChangedClassNames(previous, next) : std::vector<std::string_view>();
-  MarkClassOrStyleEdit(handle_, "class", changed);
+  if (hasOldStyles) {
+    MarkClassEdit(handle_, previous, next);
+  } else {
+    MarkClassOrStyleEdit(handle_, "class");
+  }
 }
 
 void SVGElement::setStyle(std::string_view style) {
