@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
@@ -665,6 +667,119 @@ TEST(StyleParallel, UseShadowTreesStayStableAcrossTheWorkerRegion) {
   EXPECT_GT(parallel.admitted, 1u);
   EXPECT_GT(parallel.traces, 1000u);
   ExpectSame(serial, parallel);
+}
+
+TEST(StyleParallel, RootPrefixIsNotARecordWitnessForPublishedRootFont) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>g { text-decoration-thickness: 1rem }</style>
+    <defs><g id="prefix"><svg id="root" font-size="36"/></g><g id="later"/></defs>
+  </svg>)",
+                                            warnings);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  auto document = std::move(parsed).result();
+  const auto prefix = document.querySelector("#prefix");
+  const auto root = document.querySelector("#root");
+  const auto later = document.querySelector("#later");
+  ASSERT_THAT(prefix, ::testing::Optional(::testing::_)) << "#prefix";
+  ASSERT_THAT(root, ::testing::Optional(::testing::_)) << "#root";
+  ASSERT_THAT(later, ::testing::Optional(::testing::_)) << "#later";
+  auto& registry = document.registry();
+  // A nested document root makes the first <g> a prepared ancestor of the root. The
+  // later <g> has the same tag and parent, but can use the now-published root font.
+  registry.ctx().get<SVGDocumentContext>().rootEntity = root->entityHandle().entity();
+  std::vector<Entity> entities;
+  const auto tree = registry.view<donner::components::TreeComponent>();
+  for (Entity entity : tree) {
+    entities.push_back(entity);
+  }
+
+  StyleSystem::PreparedBatch batch(registry, entities, 1);
+  ASSERT_TRUE(batch.prepareDocumentRoot()) << "prepare the nested document root";
+  auto* worker = batch.bindWorker();
+  ASSERT_THAT(worker, ::testing::NotNull()) << "bind the prepared batch worker";
+  const Entity laterEntity = later->entityHandle().entity();
+  ASSERT_TRUE(batch.compute(laterEntity, *worker)) << "compute the style for #later";
+  const auto& before = registry.get<ComputedStyleComponent>(prefix->entityHandle().entity());
+  const auto& after = registry.get<ComputedStyleComponent>(laterEntity);
+  ASSERT_THAT(before.style, ::testing::NotNull());
+  ASSERT_THAT(after.style, ::testing::NotNull());
+  const TextDecorationThickness prefixThickness{
+      TextDecorationThickness::Kind::Length,
+      Lengthd(FontMetrics().rootFontSize, Lengthd::Unit::Px)};
+  const TextDecorationThickness laterThickness{TextDecorationThickness::Kind::Length,
+                                               Lengthd(36, Lengthd::Unit::Px)};
+  EXPECT_THAT(before.properties()->textDecorationThickness.get(),
+              ::testing::Optional(::testing::Eq(prefixThickness)))
+      << "#prefix";
+  EXPECT_THAT(after.properties()->textDecorationThickness.get(),
+              ::testing::Optional(::testing::Eq(laterThickness)))
+      << "#later";
+}
+
+TEST(StyleParallel, ShadowReuseHonorsNegativeAncestorQueriesAndCacheControl) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>:not(.warm) > * > rect { fill: red }</style><defs><symbol id="tile">)";
+  for (int i = 0; i < 16; ++i) {
+    source += "<rect width='1' height='1'/>";
+  }
+  source += "</symbol></defs>";
+  for (int i = 0; i < 96; ++i) {
+    source +=
+        "<use href='#tile' id='u" + std::to_string(i) + (i % 2 == 0 ? "' class='warm'/>" : "'/>");
+  }
+  source += "</svg>";
+
+  const auto run = [&](std::size_t width, bool disableCache) -> std::optional<Frame> {
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    SCOPED_TRACE(::testing::Message() << "worker count " << width);
+    if (parsed.hasError()) {
+      ADD_FAILURE() << parsed.error().reason;
+      return std::nullopt;
+    }
+    auto document = std::move(parsed).result();
+    auto& registry = document.registry();
+    if (disableCache) {
+      registry.ctx().emplace<DisableMatchedPropertiesCacheForTesting>();
+    }
+    tasks::TaskScheduler scheduler({.workerCount = width});
+    RendererUtils::prepareDocumentForRendering(document, false, warnings, &scheduler);
+    const auto& metrics = registry.ctx().get<StyleCascadeMetrics>();
+    auto expectFill = [&](std::string_view selector, css::RGBA color) {
+      SCOPED_TRACE(selector);
+      const auto host = document.querySelector(selector);
+      ASSERT_THAT(host, ::testing::Optional(::testing::_));
+      const auto& shadow = host->entityHandle().get<ComputedShadowTreeComponent>();
+      ASSERT_THAT(shadow.mainBranch, ::testing::Optional(::testing::_));
+      ASSERT_THAT(shadow.mainBranch->shadowEntities, ::testing::SizeIs(::testing::Gt(1u)));
+      const auto& child =
+          registry.get<ComputedStyleComponent>(shadow.mainBranch->shadowEntities[1]);
+      ASSERT_THAT(child.style, ::testing::NotNull());
+      EXPECT_THAT(child.properties()->fill.get(),
+                  ::testing::Eq(PaintServer(PaintServer::Solid(css::Color(color)))));
+    };
+    expectFill("#u0", css::RGBA::RGB(0, 0, 0));
+    expectFill("#u1", css::RGBA::RGB(255, 0, 0));
+    return Frame{std::move(document),        metrics.counters,
+                 metrics.scheduledPasses,    metrics.replayedSelectorTraces,
+                 metrics.admittedStyleTasks, metrics.declinedStyleTasks,
+                 warnings.warnings()};
+  };
+  for (bool disableCache : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "cache disabled " << disableCache);
+    const auto serial = run(0, disableCache);
+    ASSERT_THAT(serial, ::testing::Optional(::testing::_)) << "serial frame";
+    const auto parallel = run(4, disableCache);
+    ASSERT_THAT(parallel, ::testing::Optional(::testing::_)) << "parallel frame";
+    EXPECT_GT(parallel->scheduled, 0u);
+    if (disableCache) {
+      EXPECT_EQ(parallel->counters.matchedPropertiesCacheHits, 0u);
+    } else {
+      EXPECT_GT(parallel->traces, 1000u);
+    }
+    ExpectSame(*serial, *parallel);
+  }
 }
 
 TEST(StyleParallel, DelayedParentPublishesBeforeChildAdmission) {

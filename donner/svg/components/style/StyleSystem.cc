@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -690,16 +691,23 @@ void InheritPreservingLocalValues(PropertyRegistry& properties, const PropertyRe
 }
 
 struct ShadowedElementAdapter {
-  ShadowedElementAdapter(const Registry& registry, Entity treeEntity, Entity dataEntity)
-      : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity) {}
+  ShadowedElementAdapter(const Registry& registry, Entity treeEntity, Entity dataEntity,
+                         bool* subjectOnly = nullptr, bool* tagOnly = nullptr)
+      : registry_(registry),
+        treeEntity_(treeEntity),
+        dataEntity_(dataEntity),
+        subjectOnly_(subjectOnly),
+        tagOnly_(tagOnly) {}
 
   bool operator==(const ShadowedElementAdapter& other) const {
+    observeOccurrence();
     return treeEntity_ == other.treeEntity_;
   }
 
   Entity entity() const { return treeEntity_; }
 
   std::optional<ShadowedElementAdapter> parentElement() const {
+    observeOccurrence();
     // A parentless element matches `:root`; see StyleParentElement for where the walk stops.
     const Entity target = StyleParentElement(registry_.get(), treeEntity_);
     return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
@@ -707,6 +715,7 @@ struct ShadowedElementAdapter {
 
   std::optional<ShadowedElementAdapter> firstChild(
       css::SelectorTraversalBudget* budget = nullptr) const {
+    observeOccurrence();
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).firstChild();
     return findElementSibling(target, true, budget);
@@ -714,6 +723,7 @@ struct ShadowedElementAdapter {
 
   std::optional<ShadowedElementAdapter> lastChild(
       css::SelectorTraversalBudget* budget = nullptr) const {
+    observeOccurrence();
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).lastChild();
     return findElementSibling(target, false, budget);
@@ -721,6 +731,7 @@ struct ShadowedElementAdapter {
 
   std::optional<ShadowedElementAdapter> previousSibling(
       css::SelectorTraversalBudget* budget = nullptr) const {
+    observeOccurrence();
     if (isShadowTreeRoot(treeEntity_)) {
       return std::nullopt;
     }
@@ -731,6 +742,7 @@ struct ShadowedElementAdapter {
 
   std::optional<ShadowedElementAdapter> nextSibling(
       css::SelectorTraversalBudget* budget = nullptr) const {
+    observeOccurrence();
     if (isShadowTreeRoot(treeEntity_)) {
       return std::nullopt;
     }
@@ -744,6 +756,7 @@ struct ShadowedElementAdapter {
   }
 
   bool isEmptyForSelector(css::SelectorTraversalBudget* budget) const {
+    observeOccurrence();
     return IsSelectorEmpty(registry_.get(), dataEntity_, budget);
   }
 
@@ -753,6 +766,7 @@ struct ShadowedElementAdapter {
   }
 
   RcString id() const {
+    observeOtherKey();
     if (const auto* component = registry_.get().try_get<IdComponent>(dataEntity_)) {
       return component->id();
     } else {
@@ -761,6 +775,7 @@ struct ShadowedElementAdapter {
   }
 
   RcString className() const {
+    observeOtherKey();
     if (const auto* component = registry_.get().try_get<ClassComponent>(dataEntity_)) {
       return component->className;
     } else {
@@ -769,6 +784,7 @@ struct ShadowedElementAdapter {
   }
 
   bool hasAttribute(const xml::XMLQualifiedNameRef& name) const {
+    observeOtherKey();
     if (const auto* component =
             registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->hasAttribute(name);
@@ -778,6 +794,7 @@ struct ShadowedElementAdapter {
   }
 
   std::optional<RcString> getAttribute(const xml::XMLQualifiedNameRef& name) const {
+    observeOtherKey();
     if (const auto* component =
             registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->getAttribute(name);
@@ -788,6 +805,7 @@ struct ShadowedElementAdapter {
 
   SmallVector<xml::XMLQualifiedNameRef, 1> findMatchingAttributes(
       const xml::XMLQualifiedNameRef& matcher) const {
+    observeOtherKey();
     if (const auto* component =
             registry_.get().try_get<donner::components::AttributesComponent>(dataEntity_)) {
       return component->findMatchingAttributes(matcher);
@@ -797,6 +815,18 @@ struct ShadowedElementAdapter {
   }
 
 private:
+  void observeOtherKey() const {
+    if (tagOnly_) {
+      *tagOnly_ = false;
+    }
+  }
+  void observeOccurrence() const {
+    observeOtherKey();
+    if (subjectOnly_) {
+      *subjectOnly_ = false;
+    }
+  }
+
   /**
    * Whether \p treeEntity is the root of an instantiated shadow tree. The main shadow root of a
    * `<use>` is attached under its host while a frame is built, but instanced content is not part
@@ -833,12 +863,15 @@ private:
   }
 
   ShadowedElementAdapter create(Entity newTreeEntity) const {
-    return ShadowedElementAdapter(registry_.get(), newTreeEntity, resolveData(newTreeEntity));
+    return ShadowedElementAdapter(registry_.get(), newTreeEntity, resolveData(newTreeEntity),
+                                  subjectOnly_, tagOnly_);
   }
 
   std::reference_wrapper<const Registry> registry_;
   Entity treeEntity_;
   Entity dataEntity_;
+  bool* subjectOnly_;
+  bool* tagOnly_;
 };
 
 /**
@@ -1436,6 +1469,14 @@ struct StyleSystem::RuleTrace {
                    trace->rootSlot ? trace->rootSlot->style.get() : nullptr, cache.evictionEpoch()};
   }
 
+  static void rememberCacheOutcome(RuleTrace* capture, RuleTrace* replay,
+                                   const MatchedPropertiesCache& cache) {
+    rememberHit(replay, cache);
+    if (capture) {
+      capture->cacheableStyle = true;
+    }
+  }
+
   static OrderedElementWarnings diagnosticsFor(RuleTrace* replay, ParseWarningSink& sink,
                                                ParseWarningSink* after) {
     return OrderedElementWarnings(sink, replay ? replay->diagnostics.get() : nullptr, after,
@@ -1516,6 +1557,46 @@ struct StyleSystem::RuleTrace {
     }
   };
 
+  template <typename Accept>
+  bool reuseTagMatches(StyleResourceBudget& budget, StyleCascadeCounters& counters,
+                       Accept&& accept) {
+    const auto* witness = tagWitness;
+    if (!witness ||
+        !budget.canReserveDeclarationWork(witness->work.applications, witness->work.components,
+                                          witness->work.bytes) ||
+        !budget.tryReplaySelectorWork(witness->work.rules, witness->work.traversal)) {
+      return false;
+    }
+    work = witness->work;
+    borrowedMatches = witness->recordedMatches();
+    count = witness->count;
+    complete = true;
+    counters.rulesTested += work.rules;
+    for (std::size_t i = 0; i < count; ++i) {
+      accept(recordedMatches()[i]);
+    }
+    return true;
+  }
+
+  template <typename Accept>
+  static bool reuseSelectorWork(RuleTrace* capture, RuleTrace* replay, Entity treeEntity,
+                                StyleResourceBudget& budget, StyleCascadeCounters& counters,
+                                StyleAncestorFilter* filter, const Accept& accept) {
+    if (replay && replay->replayMatches(budget, counters, accept)) {
+      replay->replayAncestorWork(filter, treeEntity, counters);
+      return true;
+    }
+    return capture && capture->reuseTagMatches(budget, counters, accept);
+  }
+
+  static std::pair<bool*, bool*> observation(RuleTrace* capture) {
+    if (!capture) {
+      return {};
+    }
+    return {capture->subjectOnly ? &capture->subjectOnly : nullptr,
+            capture->tagOnly ? &capture->tagOnly : nullptr};
+  }
+
   void append(Match match) {
     if (count < matches.size()) {
       matches[count++] = match;
@@ -1538,20 +1619,44 @@ struct StyleSystem::RuleTrace {
     }
     counters.rulesTested += work.rules;
     for (std::size_t i = 0; i < count; ++i) {
-      accept(matches[i]);
+      accept(recordedMatches()[i]);
     }
     return true;
   }
 
   std::array<Match, 4> matches{};
+  // Both traces stay in this batch until owner replay finishes.
+  const Match* borrowedMatches = nullptr;
+
+  const Match* recordedMatches() const {
+    return borrowedMatches ? borrowedMatches : matches.data();
+  }
   std::size_t count = 0;
   Work work{};
   ComputedStyleComponent* slot = nullptr;
-  ComputedStyleComponent original;
+  bool originalExternalFill = false;
+  bool originalExternalStroke = false;
+
+  void restoreOriginalSlot() const {
+    slot->style.reset();
+    slot->externalFill = originalExternalFill;
+    slot->externalStroke = originalExternalStroke;
+  }
   bool complete = false;
   bool replayed = false;
   bool priorHitReused = false;
   bool rootPrefix = false;
+  static constexpr std::uint32_t kNoBorrowedStyle = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t borrowedStyle = kNoBorrowedStyle;
+  bool publishSlot = true;
+  bool subjectOnly = false;
+  bool cacheableStyle = false;
+  bool tagOnly = false;
+  const RuleTrace* tagWitness = nullptr;
+  const xml::XMLQualifiedName* tag = nullptr;
+  ElementType tagElementType = ElementType::Unknown;
+  bool svgNamespace = false;
+  bool defaultTagStyle = false;
   bool filterSynchronized = false;
   std::uint64_t filterRejections = 0;
   std::uint64_t filterFalsePositives = 0;
@@ -1561,7 +1666,9 @@ struct StyleSystem::RuleTrace {
 
 /// Each entity's work has one dense slot. Both arrays are frozen while workers are running.
 struct StyleSystem::RuleTraces {
-  entt::sparse_set entities;
+  entt::sparse_set ownedIndex;
+  const entt::sparse_set* preparedIndex = nullptr;
+  const entt::sparse_set& entities() const { return preparedIndex ? *preparedIndex : ownedIndex; }
   std::vector<RuleTrace> entries;
 
   bool collectRootChain(const Registry& view, Entity entity, std::vector<Entity>& chain) {
@@ -1581,20 +1688,14 @@ struct StyleSystem::RuleTraces {
     return true;
   }
 
-  std::size_t finish(StyleCascadeMetrics& metrics) {
-    std::size_t accepted = 0;
-    for (const auto& trace : entries) {
-      accepted += trace.replayed;
-      metrics.preparedWarningPhases += trace.reusedWarningPhases;
-      metrics.reusedCanonicalHits += trace.priorHitReused;
-    }
+  void clear() {
     entries.clear();
-    entities.clear();
-    return accepted;
+    ownedIndex.clear();
   }
 
   RuleTrace* find(Entity entity) {
-    return entities.contains(entity) ? &entries[entities.index(entity)] : nullptr;
+    const auto& index = entities();
+    return index.contains(entity) ? &entries[index.index(entity)] : nullptr;
   }
 };
 
@@ -1627,12 +1728,23 @@ public:
   const ComputedStyleComponent& compute(Entity entity) {
     auto* trace = traces_ ? traces_->find(entity) : nullptr;
     auto& slot = trace ? *trace->slot : registry_.get_or_emplace<ComputedStyleComponent>(entity);
-    if (trace && !slot.style &&
-        (trace->usePriorHit(pass_, entity) || usePriorHitsWithParent(*trace, entity))) {
+    if (slot.style) {
       return slot;
     }
-    computePropertiesInto(registry_, entity, slot, pass_, warnings_, this, nullptr, nullptr, trace);
+    if (!trace || !(trace->usePriorHit(pass_, entity) || usePriorHitsWithParent(*trace, entity))) {
+      computePropertiesInto(registry_, entity, slot, pass_, warnings_, this, nullptr, nullptr,
+                            trace);
+    }
+    if (trace) {
+      countTrace(*trace);
+    }
     return slot;
+  }
+
+  std::size_t countRecordedWork(StyleCascadeMetrics& metrics) const {
+    metrics.preparedWarningPhases += reusedWarningPhases_;
+    metrics.reusedCanonicalHits += reusedCanonicalHits_;
+    return acceptedTraces_;
   }
 
   static void publishMissingParent(SerialCascade* serial, Entity parent, MatchedCacheState& state) {
@@ -1649,6 +1761,12 @@ public:
   void rejectExternalResource() { StyleSystem::rejectExternalHostResource(registry_); }
 
 private:
+  void countTrace(const RuleTrace& trace) {
+    acceptedTraces_ += trace.replayed;
+    reusedWarningPhases_ += trace.reusedWarningPhases;
+    reusedCanonicalHits_ += trace.priorHitReused;
+  }
+
   bool usePriorHitsWithParent(RuleTrace& child, Entity entity) {
     if (!child.hit || !child.hit->installed || !child.parentSlot || child.parentSlot->style) {
       return false;
@@ -1664,6 +1782,7 @@ private:
     child.replayAncestorWork(pass_.ancestorFilter, entity, pass_.counters);
     parent->replayAncestorWork(pass_.ancestorFilter, child.parentEntity, pass_.counters);
     parent->installPriorHit(pass_.counters);
+    countTrace(*parent);
     child.installPriorHit(pass_.counters);
     return true;
   }
@@ -1674,6 +1793,9 @@ private:
   CascadePass pass_;
   PassAncestorFilter ancestorFilter_;
   std::unique_ptr<CascadeAncestorFilter> testFilter_;
+  std::size_t acceptedTraces_ = 0;
+  std::size_t reusedWarningPhases_ = 0;
+  std::size_t reusedCanonicalHits_ = 0;
 };
 
 class StyleSystem::PreparationLease {
@@ -1689,9 +1811,26 @@ private:
   std::size_t bytes_;
 };
 
+namespace {
+struct ShadowStyleWitness {
+  Entity data = entt::null;
+  const xml::XMLQualifiedName* tag = nullptr;
+  const ComputedStyle* parent = nullptr;
+  bool noInheritPaint = false;
+};
+struct ShadowParentWitness {
+  Entity entity = entt::null;
+  const ComputedStyleComponent* style = nullptr;
+  bool noInheritPaint = false;
+};
+
+constexpr std::size_t kShadowStyleWitnesses = 64;
+}  // namespace
+
 std::size_t StyleSystem::PreparedBatch::workerReservationBytes() {
   return StagedRecords::kMaximumBytes + MatchedPropertiesCache::workerMetadataBytes() +
-         sizeof(WarningPage);
+         sizeof(WarningPage) + sizeof(ShadowParentWitness) +
+         kShadowStyleWitnesses * (sizeof(ShadowStyleWitness) + 2 * sizeof(void*));
 }
 
 class StyleSystem::PreparedBatch::Worker {
@@ -1707,7 +1846,9 @@ public:
         records_(lease_, firstRecord),
         pass_{budget_, counters_, cache_, 0, &records_},
         ancestorFilter_(registry, counters_, enableFilter),
-        testFilter_(MakeAncestorFilter(registry, counters_)) {
+        testFilter_(MakeAncestorFilter(registry, counters_)),
+        recordMemoEnabled_(!testFilter_ &&
+                           !registry.ctx().contains<DisableMatchedPropertiesCacheForTesting>()) {
     pass_.ancestorFilter = ancestorFilter_.get();
     pass_.testFilter = testFilter_.get();
   }
@@ -1723,6 +1864,207 @@ private:
   PassAncestorFilter ancestorFilter_;
   std::unique_ptr<CascadeAncestorFilter> testFilter_;
   std::shared_ptr<WarningPage> warnings_;
+  const bool recordMemoEnabled_;
+
+  struct ShadowMemo {
+    ShadowStyleWitness key;
+    const RuleTrace* trace = nullptr;
+  };
+  std::array<ShadowMemo, kShadowStyleWitnesses> shadowStyles_;
+
+  std::array<const RuleTrace*, kShadowStyleWitnesses> tagWitnesses_{};
+
+  static std::size_t tagBucket(const xml::XMLQualifiedName& tag) {
+    return std::hash<std::string_view>{}(std::string_view(tag.name)) % kShadowStyleWitnesses;
+  }
+
+  static bool defaultStyleInputs(const Registry& registry, Entity entity,
+                                 const StyleComponent* local) {
+    return (!local || local->hasEmptyDeclarations()) &&
+           !registry.any_of<StopComponent, FEFloodComponent, FEDropShadowComponent>(entity);
+  }
+
+  static bool sameParentStyle(const ComputedStyleComponent* parent, const RuleTrace& witness) {
+    const auto* previous = witness.parentSlot;
+    return parent && parent->style && previous && parent->style.get() == previous->style.get() &&
+           parent->externalFill == previous->externalFill &&
+           parent->externalStroke == previous->externalStroke;
+  }
+
+  bool reuseTagStyle(const Registry& registry, Entity entity, const StyleComponent* local,
+                     RuleTrace& trace) {
+    const auto* witness = trace.tagWitness;
+    if (!recordMemoEnabled_ || !witness || !witness->defaultTagStyle || !witness->needsRoot ||
+        !defaultStyleInputs(registry, entity, local)) {
+      return false;
+    }
+    const Entity parentEntity = registry.get<donner::components::TreeComponent>(entity).parent();
+    const auto* parent = registry.try_get<ComputedStyleComponent>(parentEntity);
+    if (!sameParentStyle(parent, *witness) ||
+        registry.all_of<DoNotInheritFillOrStrokeTag>(parentEntity) !=
+            registry.all_of<DoNotInheritFillOrStrokeTag>(witness->parentEntity)) {
+      return false;
+    }
+    const auto* document = registry.ctx().find<SVGDocumentContext>();
+    return document && document->rootEntity != entity &&
+           installWitness(*witness, parentEntity, *parent, trace);
+  }
+
+  void setupTagWitness(const Registry& registry, Entity entity, RuleTrace& trace) {
+    if (testFilter_) {
+      return;
+    }
+    const auto* type = registry.try_get<ElementTypeComponent>(entity);
+    if (!type) {
+      return;
+    }
+    trace.tag = &registry.get<donner::components::TreeComponent>(entity).tagName();
+    trace.tagElementType = type->type();
+    trace.svgNamespace = type->inSvgNamespace();
+    trace.tagOnly = true;
+    const auto* candidate = tagWitnesses_[tagBucket(*trace.tag)];
+    if (candidate && candidate->tagElementType == trace.tagElementType &&
+        candidate->svgNamespace == trace.svgNamespace && *candidate->tag == *trace.tag) {
+      trace.tagWitness = candidate;
+    }
+  }
+
+  void rememberTagWitness(const Registry& registry, Entity entity, const StyleComponent* local,
+                          RuleTrace& trace) {
+    if (trace.tagOnly && trace.complete && !trace.filterSynchronized && !trace.tagWitness) {
+      trace.defaultTagStyle = recordMemoEnabled_ && trace.cacheableStyle && !trace.diagnostics &&
+                              trace.slot->style &&
+                              trace.slot->properties()->unparsedProperties.empty() &&
+                              defaultStyleInputs(registry, entity, local);
+      tagWitnesses_[tagBucket(*trace.tag)] = &trace;
+    }
+  }
+
+  bool installShadowStyle(const ShadowStyleWitness& key, Entity parentEntity,
+                          const ComputedStyleComponent& parent, RuleTrace& trace) {
+    auto& entry = shadowStyles_[static_cast<std::uint32_t>(key.data) % shadowStyles_.size()];
+    const auto* previous = entry.trace;
+    if (!previous || entry.key.data != key.data || *entry.key.tag != *key.tag ||
+        entry.key.parent != key.parent || entry.key.noInheritPaint != key.noInheritPaint) {
+      return false;
+    }
+    return installWitness(*previous, parentEntity, parent, trace);
+  }
+
+  bool installWitness(const RuleTrace& previous, Entity parentEntity,
+                      const ComputedStyleComponent& parent, RuleTrace& trace) {
+    const auto& work = previous.work;
+    if (!budget_.tryReplayCacheHit(work.rules, work.applications, work.components, work.bytes,
+                                   work.traversal)) {
+      return false;
+    }
+    trace.parentSlot = &parent;
+    trace.parentEntity = parentEntity;
+    trace.rootSlot = previous.rootSlot;
+    trace.needsRoot = previous.needsRoot;
+    trace.needsParent = true;
+    trace.work = work;
+    trace.borrowedMatches = previous.recordedMatches();
+    trace.count = previous.count;
+    trace.complete = true;
+    if (trace.publishSlot) {
+      *trace.slot = *previous.slot;
+    } else {
+      trace.borrowedStyle = previous.slot->style->cachePlacement;
+    }
+    ++counters_.elementsCascaded;
+    counters_.rulesTested += work.rules;
+    counters_.rulesMatched += trace.count;
+    counters_.declarationsApplied += work.applications;
+    ++counters_.matchedPropertiesCacheHits;
+    counters_.declarationParsesSkipped += work.applications;
+    return true;
+  }
+
+  ShadowParentWitness lastParent_;
+
+  const ShadowParentWitness* readyShadowParent(const Registry& registry, Entity entity) {
+    if (lastParent_.style && lastParent_.entity == entity) {
+      return &lastParent_;
+    }
+    const auto* style = registry.try_get<ComputedStyleComponent>(entity);
+    if (!style || !style->style || style->externalFill || style->externalStroke) {
+      return nullptr;
+    }
+    lastParent_ = {entity, style, registry.all_of<DoNotInheritFillOrStrokeTag>(entity)};
+    return &lastParent_;
+  }
+
+  bool reuseShadowStyle(const Registry& registry, Entity entity, Entity data, RuleTrace& trace) {
+    if (!recordMemoEnabled_ || registry.all_of<ShadowTreeRootComponent>(entity)) {
+      return false;
+    }
+    const auto& tree = registry.get<donner::components::TreeComponent>(entity);
+    const auto* parent = readyShadowParent(registry, tree.parent());
+    if (!parent) {
+      return false;
+    }
+    trace.subjectOnly = true;
+    return installShadowStyle(
+        {data, &tree.tagName(), parent->style->style.get(), parent->noInheritPaint}, parent->entity,
+        *parent->style, trace);
+  }
+
+  void rememberShadowStyle(const Registry& registry, Entity entity, Entity data,
+                           const RuleTrace& trace) {
+    if (!trace.subjectOnly || !trace.cacheableStyle || !trace.complete || trace.diagnostics ||
+        trace.filterSynchronized || !trace.slot->style ||
+        !trace.slot->properties()->unparsedProperties.empty()) {
+      return;
+    }
+    const auto& tree = registry.get<donner::components::TreeComponent>(entity);
+    auto& entry = shadowStyles_[static_cast<std::uint32_t>(data) % shadowStyles_.size()];
+    entry = {{data, &tree.tagName(), trace.parentSlot->style.get(),
+              registry.all_of<DoNotInheritFillOrStrokeTag>(tree.parent())},
+             &trace};
+  }
+
+  bool hasAdmittedShadowInput(Entity data) const {
+    const auto& memo = shadowStyles_[static_cast<std::uint32_t>(data) % shadowStyles_.size()];
+    // This entry was recorded after local preflight. The light entity and its declaration
+    // component are immutable for this batch, so its local proof applies to another clone.
+    return memo.trace && memo.key.data == data;
+  }
+
+  const StyleComponent* localStyleForPreflight(const Registry& registry, Entity entity,
+                                               const ShadowEntityComponent* shadow) const {
+    if (!shadow) {
+      return registry.try_get<StyleComponent>(entity);
+    }
+    const Entity data = shadow->lightEntity;
+    // If reuse fails, ordinary style computation resolves its own local component.
+    return hasAdmittedShadowInput(data) ? nullptr : registry.try_get<StyleComponent>(data);
+  }
+
+  bool tryReuseStyle(const Registry& registry, Entity entity, const ShadowEntityComponent* shadow,
+                     const StyleComponent* local, RuleTrace& trace) {
+    // A root-prefix record may have been computed without the document root's font context.
+    if (trace.rootPrefix) {
+      return false;
+    }
+    if (shadow) {
+      return reuseShadowStyle(registry, entity, shadow->lightEntity, trace);
+    }
+    setupTagWitness(registry, entity, trace);
+    return reuseTagStyle(registry, entity, local, trace);
+  }
+
+  void rememberStyle(const Registry& registry, Entity entity, const ShadowEntityComponent* shadow,
+                     const StyleComponent* local, RuleTrace& trace) {
+    if (trace.rootPrefix) {
+      return;
+    }
+    if (shadow) {
+      rememberShadowStyle(registry, entity, shadow->lightEntity, trace);
+    } else {
+      rememberTagWitness(registry, entity, local, trace);
+    }
+  }
 
   WarningPage& warningPage() {
     if (!warnings_) {
@@ -1808,12 +2150,16 @@ struct StyleSystem::PreparedBatch::Impl {
 
   void restoreSlots(std::span<RuleTrace::CacheHit> hits = {}) {
     for (auto& trace : traces.entries) {
-      if (!hits.empty() && trace.complete && !trace.diagnostics && trace.slot->style) {
-        const auto index = trace.slot->style->cachePlacement;
+      const auto& style = trace.slot->style;
+      const auto index = style ? style->cachePlacement : trace.borrowedStyle;
+      if (!hits.empty() && trace.complete && !trace.diagnostics &&
+          index != RuleTrace::kNoBorrowedStyle) {
         UTILS_RELEASE_ASSERT(index < hits.size());
         trace.hit = &hits[index];
       }
-      *trace.slot = trace.original;
+      if (style) {
+        trace.restoreOriginalSlot();
+      }
     }
   }
 };
@@ -1831,7 +2177,7 @@ void WarmCascadeTypes() {
 
 StyleSystem::PreparedBatch::PreparedBatch(Registry& registry, std::span<const Entity> entities,
                                           std::size_t contexts, bool collectWarnings,
-                                          bool enableFilter)
+                                          bool enableFilter, const entt::sparse_set* preparedIndex)
     : impl_(std::make_unique<Impl>(registry, contexts)) {
   impl_->collectWarnings = collectWarnings;
   impl_->enableFilter = enableFilter;
@@ -1851,15 +2197,26 @@ StyleSystem::PreparedBatch::PreparedBatch(Registry& registry, std::span<const En
       DisableMatchedPropertiesCacheForTesting, UnindexedCascadeForTesting, ExternalUseStyleContext,
       StyleResourceBudget, StyleCascadeMetrics, MatchedPropertiesCache, CascadeAncestorFilters,
       UnfilteredCascadeForTesting>();
-  impl_->traces.entities.reserve(entities.size());
-  impl_->traces.entries.reserve(entities.size());
+  auto& traces = impl_->traces;
+  traces.preparedIndex = preparedIndex;
+  if (preparedIndex) {
+    UTILS_RELEASE_ASSERT(preparedIndex->data() == entities.data() &&
+                         preparedIndex->size() == entities.size());
+  } else {
+    traces.ownedIndex.reserve(entities.size());
+  }
+  traces.entries.reserve(entities.size());
   for (Entity entity : entities) {
-    auto& slot = registry.get<ComputedStyleComponent>(entity);
-    UTILS_RELEASE_ASSERT(!impl_->traces.entities.contains(entity) && !slot.style);
-    std::ignore = impl_->traces.entities.push(entity);
-    auto& trace = impl_->traces.entries.emplace_back();
+    auto& slot = registry.get_or_emplace<ComputedStyleComponent>(entity);
+    UTILS_RELEASE_ASSERT(!slot.style);
+    if (!preparedIndex) {
+      UTILS_RELEASE_ASSERT(!traces.ownedIndex.contains(entity));
+      std::ignore = traces.ownedIndex.push(entity);
+    }
+    auto& trace = traces.entries.emplace_back();
     trace.slot = &slot;
-    trace.original = slot;
+    trace.originalExternalFill = slot.externalFill;
+    trace.originalExternalStroke = slot.externalStroke;
   }
 }
 
@@ -1916,30 +2273,45 @@ bool StyleSystem::PreparedBatch::prepareDocumentRoot() {
 }
 
 bool StyleSystem::PreparedBatch::compute(Entity entity, Worker& worker) {
-  UTILS_RELEASE_ASSERT(impl_->traces.entities.contains(entity));
-  return computeAt(impl_->traces.entities.index(entity), entity, worker);
+  UTILS_RELEASE_ASSERT(impl_->traces.entities().contains(entity));
+  return computeAt(impl_->traces.entities().index(entity), entity, worker);
 }
 
-bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Worker& worker) {
+namespace {
+bool HasShallowLocalStyle(const StyleComponent* local) {
+  return !kNativeStyleStackAdmission || !local ||
+         std::ranges::all_of(local->properties().unparsedProperties, [](const auto& item) {
+           return RuleIndex::IsDeclarationShallowForParallelCascade(item.second.declaration);
+         });
+}
+}  // namespace
+
+bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Worker& worker,
+                                           bool publishSlot) {
   UTILS_RELEASE_ASSERT(!impl_->finished && worker.owner_ == this);
   if (impl_->abandoned.load(std::memory_order_relaxed)) {
     return false;
   }
-  if constexpr (kNativeStyleStackAdmission) {
-    const Registry& registry = impl_->registry;
-    const auto* local = registry.try_get<StyleComponent>(StyleDataEntity(registry, entity));
-    if (local && !std::ranges::all_of(local->properties().unparsedProperties, [](const auto& item) {
-          return RuleIndex::IsDeclarationShallowForParallelCascade(item.second.declaration);
-        })) {
-      // Decline before copying a deep local CSS tree.
-      impl_->abandoned.store(true, std::memory_order_relaxed);
-      return false;
-    }
+  const Registry& registry = impl_->registry;
+  const auto* shadow = registry.try_get<ShadowEntityComponent>(entity);
+  const auto* local = worker.localStyleForPreflight(registry, entity, shadow);
+  if (!HasShallowLocalStyle(local)) {
+    // Decline before copying a deep local CSS tree.
+    impl_->abandoned.store(true, std::memory_order_relaxed);
+    return false;
   }
   UTILS_RELEASE_ASSERT(index < impl_->traces.entries.size());
+  // The constructor validated the slots before the workers received this immutable index.
+  UTILS_RELEASE_ASSERT(impl_->traces.entities().data()[index] == entity);
   auto& trace = impl_->traces.entries[index];
-  UTILS_RELEASE_ASSERT(std::as_const(impl_->registry).try_get<ComputedStyleComponent>(entity) ==
-                       trace.slot);
+  // The root prefix can reach an element before traversal visits it.
+  if (trace.slot->style) {
+    return true;
+  }
+  trace.publishSlot = publishSlot;
+  if (worker.tryReuseStyle(registry, entity, shadow, local, trace)) {
+    return true;
+  }
   const auto firstWarning = worker.warnings_ ? worker.warnings_->count : 0;
   auto early = worker.sink(impl_->collectWarnings);
   auto late = worker.sink(impl_->collectWarnings);
@@ -1947,10 +2319,11 @@ bool StyleSystem::PreparedBatch::computeAt(std::size_t index, Entity entity, Wor
                         nullptr, &trace, &late);
   if (worker.budget_.rejected() || worker.records_.declined() ||
       !worker.keepWarnings(trace, firstWarning, early, late)) {
-    *trace.slot = trace.original;
+    trace.restoreOriginalSlot();
     impl_->abandoned.store(true, std::memory_order_relaxed);
     return false;
   }
+  worker.rememberStyle(registry, entity, shadow, local, trace);
   return true;
 }
 
@@ -1984,7 +2357,8 @@ std::size_t StyleSystem::PreparedBatch::commit(std::span<const Entity> requests,
     cascade.compute(entity);
   }
   impl_->finished = true;
-  return impl_->traces.finish(GetStyleCascadeMetrics(impl_->registry));
+  impl_->traces.clear();
+  return cascade.countRecordedWork(GetStyleCascadeMetrics(impl_->registry));
 }
 
 // All slots share the storage's ownership block. A cache eviction cannot uncharge a record
@@ -2201,14 +2575,15 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
                             declarations.admit(declaration, specificity, local, warningSink);
                           });
   };
-  if (replay && replay->replayMatches(styleBudget, counters, admitMatch)) {
-    replay->replayAncestorWork(ancestorFilter, treeEntity, counters);
+  if (RuleTrace::reuseSelectorWork(capture, replay, treeEntity, styleBudget, counters,
+                                   ancestorFilter, admitMatch)) {
     return;
   }
   AncestorFilterCheck filterCheck(ancestorFilter, treeEntity, counters);
   const RuleTrace::Capture recording(capture, styleBudget, filterCheck, counters);
-  const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
-  const RuleIndexElementView elementKeys(registry, treeEntity, dataEntity);
+  const auto [subjectOnly, tagOnly] = RuleTrace::observation(capture);
+  const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity, subjectOnly, tagOnly);
+  const RuleIndexElementView elementKeys(registry, treeEntity, dataEntity, tagOnly);
   const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
   CandidateListScope candidateScope;
   std::vector<std::uint32_t>& candidates = candidateScope.list();
@@ -2402,7 +2777,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   }
   if (TryInstallMatchedStyle(registry, pass.cache, parent, cacheKey, declarations.entries.size(),
                              styleBudget, counters, computedStyle, cacheState)) {
-    RuleTrace::rememberHit(replay, pass.cache);
+    RuleTrace::rememberCacheOutcome(capture, replay, pass.cache);
     return;
   }
 
@@ -2420,7 +2795,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   const std::size_t warningAttemptsAfterParent = late.warningAttempts();
   if (TryInstallLateMatchedStyle(registry, pass.cache, parent, cacheKey, warningBeforeParent,
                                  styleBudget, counters, computedStyle, cacheState)) {
-    RuleTrace::rememberHit(replay, pass.cache);
+    RuleTrace::rememberCacheOutcome(capture, replay, pass.cache);
     return;
   }
   if (deferMaterialization) {
@@ -2467,7 +2842,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   if (FinishMatchedCacheMiss(registry, pass.cache, cacheKey, fillState, strokeState,
                              warningBeforeParent, warningAttemptsAfterParent, late, styleBudget,
                              counters, computedStyle, cacheState)) {
-    RuleTrace::rememberHit(replay, pass.cache);
+    RuleTrace::rememberCacheOutcome(capture, replay, pass.cache);
   }
 }
 
