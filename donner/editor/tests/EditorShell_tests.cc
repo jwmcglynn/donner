@@ -8861,23 +8861,24 @@ ImVec2 RenderStructuredCssInspectorFrame(gui::EditorWindow& window, EditorShell&
 std::optional<ImVec2> FindInspectorMenuItem(gui::EditorWindow& window, EditorShell& shell,
                                             const char* label) {
   const ImGuiContext& context = *ImGui::GetCurrentContext();
-  if (context.OpenPopupStack.empty()) {
+  if (context.OpenPopupStack.empty() || context.OpenPopupStack.back().Window == nullptr) {
+    ADD_FAILURE() << "The CSS source button did not open an Inspector popup";
     return std::nullopt;
   }
   ImGuiWindow* popup = context.OpenPopupStack.back().Window;
-  if (!popup) {
-    return std::nullopt;
-  }
-  const ImGuiID item = popup->GetID(label);
+  // MenuItem uses a Selectable inside the item's label scope.
+  const ImGuiID item = ImHashStr("", 0, popup->GetID(label));
   const auto rect = popup->InnerRect;
-  const float x = (rect.Min.x + rect.Max.x) * 0.5f;
-  for (float y = rect.Min.y + 2.0f; y < rect.Max.y; y += 3.0f) {
+  const float x = rect.Min.x + rect.GetWidth() / 3.0f;
+  for (float y = rect.Min.y + 1.0f; y < rect.Max.y; y += 2.0f) {
     const ImVec2 pointer{x, y};
     std::ignore = RenderStructuredCssInspectorFrame(window, shell, pointer, false);
     if (context.HoveredId == item) {
       return pointer;
     }
   }
+  ADD_FAILURE() << "Inspector menu item was not hoverable: " << label << " in " << rect.GetWidth()
+                << " x " << rect.GetHeight() << " popup";
   return std::nullopt;
 }
 
@@ -8886,7 +8887,9 @@ void ClickStructuredCssInspectorItem(gui::EditorWindow& window, EditorShell& she
   const ImVec2 button = RenderStructuredCssInspectorFrame(window, shell, {5.0f, 5.0f}, false);
   std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, false);
   std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, true);
-  std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, false);
+  for (int i = 0; i < 4; ++i) {
+    std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, false);
+  }
   const auto position = FindInspectorMenuItem(window, shell, item);
   ASSERT_THAT(position, testing::Optional(testing::_)) << item;
   std::ignore = RenderStructuredCssInspectorFrame(window, shell, *position, true);
