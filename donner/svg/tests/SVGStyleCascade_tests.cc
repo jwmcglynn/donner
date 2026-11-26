@@ -607,6 +607,12 @@ TEST(SVGStyleCascadeTests, AuthorStyleDependsOnTreePositionReportsDescendantSele
   EXPECT_TRUE(AuthorStyleDependsOnTreePosition(doc));
 }
 
+auto OptionalAuthoredSourceRangeIs(std::size_t start, std::size_t end) {
+  return Optional(
+      testing::AllOf(testing::Field("start", &SourceRange::start, FileOffset::Offset(start)),
+                     testing::Field("end", &SourceRange::end, FileOffset::Offset(end))));
+}
+
 TEST(SVGStyleCascadeTests, CustomPropertySourceBatchSharesCascadeAndPreservesRequestOrder) {
   auto doc = instantiateSubtree(R"svg(
     <style><![CDATA[
@@ -630,9 +636,7 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceBatchSharesCascadeAndPreservesReq
   EXPECT_FALSE(batch.budgetExceeded);
   const auto atName = [&](std::string_view authored) {
     const auto start = doc.source().find(authored);
-    return Optional(testing::AllOf(
-        testing::Field("start", &SourceRange::start, FileOffset::Offset(start)),
-        testing::Field("end", &SourceRange::end, FileOffset::Offset(start + authored.size()))));
+    return OptionalAuthoredSourceRangeIs(start, start + authored.size());
   };
   const auto missing = testing::Eq(std::nullopt);
   const auto expectedDeclarations =
@@ -709,10 +713,7 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceChargesEncodedInlineOwnerOnlyOnce
     const auto offset = document.source().find(encodedName);
     if (!batch.declarations.empty()) {
       EXPECT_THAT(batch.declarations.front(),
-                  Optional(testing::AllOf(
-                      testing::Field("start", &SourceRange::start, FileOffset::Offset(offset)),
-                      testing::Field("end", &SourceRange::end,
-                                     FileOffset::Offset(offset + encodedName.size())))));
+                  OptionalAuthoredSourceRangeIs(offset, offset + encodedName.size()));
     }
     if (batch.work > 0) {
       const auto rejected = FindCustomPropertyDeclarations(*target, names, batch.work - 1);
