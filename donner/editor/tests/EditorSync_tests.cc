@@ -880,6 +880,36 @@ TEST(EditorSyncTest, StructuredCssMoveReencodesForTheDestinationAttributeQuote) 
   EXPECT_EQ(text.getText(), original);
 }
 
+TEST(EditorSyncTest, StructuredCssEmptyValueHasAnEditableInsertionPoint) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>rect { --accent: ; fill:var(--accent,red); }</style>
+<rect id="r" style="--other: ;"/>
+</svg>)svg";
+  const auto check = [&](std::string_view name) {
+    TextEditor text;
+    text.setText(authored);
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto start = original.find(name);
+    const auto target = FindStructuredCssTarget(app, original, start);
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_THAT(target->value,
+                testing::Optional(SourceByteRange{start + name.size(), start + name.size()}));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::ReplaceValue, " blue"));
+    std::string expected = original;
+    expected.insert(start + name.size(), " blue");
+    EXPECT_EQ(app.document().document().source(), expected);
+    EXPECT_EQ(text.getText(), expected);
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+  };
+  check("--accent:");
+  check("--other:");
+}
+
 TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";

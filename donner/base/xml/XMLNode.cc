@@ -933,11 +933,31 @@ std::optional<FileOffset> XMLDecodedTextSourceMap::mapBoundary(const Chunk& chun
   return std::nullopt;
 }
 
+std::optional<SourceRange> XMLDecodedTextSourceMap::mapInsertion(std::size_t offset) const {
+  const auto chunk = std::ranges::lower_bound(chunks_, offset, {}, &Chunk::decodedEnd);
+  if (chunk == chunks_.end() || offset < chunk->decodedStart) {
+    return std::nullopt;
+  }
+  const auto point = mapBoundary(*chunk, offset);
+  if (!point) {
+    return std::nullopt;
+  }
+  const auto next = std::next(chunk);
+  if (next != chunks_.end() && next->decodedStart == offset &&
+      mapBoundary(*next, offset) != point) {
+    return std::nullopt;
+  }
+  return SourceRange{*point, *point};
+}
+
 std::optional<SourceRange> XMLDecodedTextSourceMap::mapRange(const SourceRange& range) const {
   const auto start = range.start.offset;
   const auto end = range.end.offset;
-  if (!start || !end || *end <= *start) {
+  if (!start || !end || *end < *start) {
     return std::nullopt;
+  }
+  if (*start == *end) {
+    return mapInsertion(*start);
   }
   const auto chunk = std::ranges::upper_bound(chunks_, *start, {}, &Chunk::decodedEnd);
   if (chunk == chunks_.end() || *start < chunk->decodedStart || *end > chunk->decodedEnd) {

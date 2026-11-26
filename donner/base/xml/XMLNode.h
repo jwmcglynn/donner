@@ -53,6 +53,7 @@ private:
                 std::string_view decoded, std::size_t start);
   static void addDecodedRuns(Chunk& chunk, std::string_view raw, std::string_view decoded,
                              std::size_t sourceStart);
+  std::optional<SourceRange> mapInsertion(std::size_t offset) const;
   static std::optional<FileOffset> mapBoundary(const Chunk& chunk, std::size_t offset);
 
   std::vector<Chunk> chunks_;

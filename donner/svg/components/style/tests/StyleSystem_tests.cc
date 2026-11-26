@@ -510,6 +510,9 @@ TEST_F(StyleSystemTest, StylesheetSourceIndexKeepsEncodedAndCDataChunksDistinct)
   EXPECT_THAT(MapStylesheetSourceRange(*rules[0].stylesheetElement,
                                        {rules[0].ruleCssRange->start, rules[1].ruleCssRange->end}),
               testing::Eq(std::nullopt));
+  EXPECT_THAT(MapStylesheetSourceRange(*rules[0].stylesheetElement,
+                                       {rules[0].ruleCssRange->end, rules[0].ruleCssRange->end}),
+              testing::Eq(std::nullopt));
   EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 1);
 
   auto stylesheet = rules[0].stylesheetElement;

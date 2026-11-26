@@ -3350,7 +3350,7 @@ std::optional<SourceRange> MapEmbeddedStylesheetRange(Registry& registry, Entity
   }
   const auto start = cssRange.start.offset;
   const auto end = cssRange.end.offset;
-  if (!start || !end || *end <= *start || *end > sheet->text.size()) {
+  if (!start || !end || *end < *start || *end > sheet->text.size()) {
     return std::nullopt;
   }
   const auto* mapping = MapForStylesheet(registry, stylesheetEntity, *sheet);
