@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -92,6 +93,17 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
 /// @param document SVG document to inspect.
 /// @return True when any author stylesheet rule depends on tree position.
 bool AuthorStyleDependsOnTreePosition(const SVGDocument& document);
+
+/// Find the source span of the declaration supplying a custom property to this element.
+///
+/// The name is case sensitive. Missing or invalid values and winners without document-local
+/// source return no span. An inherited value points to the declaration that supplied it.
+///
+/// @param element Concrete SVG element whose cascade supplies the value.
+/// @param name Decoded CSS custom-property identifier, including its two leading hyphens.
+/// @return Half-open source byte range of the authored declaration name.
+std::optional<SourceRange> FindCustomPropertyDeclaration(const SVGElement& element,
+                                                         std::string_view name);
 
 /// Find the author stylesheet rule at \p documentSourceOffset.
 ///

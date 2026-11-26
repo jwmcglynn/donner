@@ -346,6 +346,24 @@ public:
       const XMLQualifiedNameRef& name) const;
 
   /**
+   * Map a half-open byte range in an attribute's decoded value to its original source.
+   *
+   * @param name Attribute to map.
+   * @param decodedRange Byte range in the decoded attribute value.
+   * @return Original source range, or nullopt when the range cannot be mapped exactly.
+   */
+  std::optional<SourceRange> mapDecodedAttributeRange(const XMLQualifiedNameRef& name,
+                                                      const SourceRange& decodedRange) const;
+
+  /**
+   * Map a half-open byte range in a text or CDATA node's decoded value to source.
+   *
+   * @param decodedRange Byte range in the decoded node value.
+   * @return Original source range, or nullopt when it cannot be mapped exactly.
+   */
+  std::optional<SourceRange> mapDecodedTextRange(const SourceRange& decodedRange) const;
+
+  /**
    * Store source metadata for an attribute using the document source store.
    *
    * If the node is not source-backed, any existing attribute metadata for \p name is cleared.

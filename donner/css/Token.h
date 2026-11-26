@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -65,7 +66,7 @@ struct Token {
     explicit Ident(RcString value) : value(std::move(value)) {}
 
     /// Equality operator.
-    bool operator==(const Ident& other) const = default;
+    bool operator==(const Ident& other) const { return value == other.value; }
 
     /**
      * Ostream output operator.
@@ -82,7 +83,8 @@ struct Token {
       return os << "Ident(" << obj.value << ")";
     }
 
-    RcString value;  ///< Identifier value.
+    RcString value;                      ///< Identifier value.
+    std::uint32_t sourceByteLength = 0;  ///< Raw identifier span, or zero when unavailable.
   };
 
   /**

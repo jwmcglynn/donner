@@ -1,6 +1,7 @@
 #include "donner/svg/SVGStyleQuery.h"
 
 #include <span>
+#include <tuple>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -119,6 +120,18 @@ bool AuthorStyleDependsOnTreePosition(const SVGDocument& document) {
 
     return false;
   });
+}
+
+std::optional<SourceRange> FindCustomPropertyDeclaration(const SVGElement& element,
+                                                         std::string_view name) {
+  return element.withWriteAccess(
+      [&](DocumentWriteAccess&, EntityHandle handle) -> std::optional<SourceRange> {
+        if (!handle || name.size() <= 2 || !name.starts_with("--")) {
+          return std::nullopt;
+        }
+        std::ignore = element.getComputedStyle();
+        return components::StyleSystem().findCustomPropertyDeclaration(handle, name);
+      });
 }
 
 std::optional<SVGStyleRuleAtSourceOffset> FindStyleRuleAtSourceOffset(

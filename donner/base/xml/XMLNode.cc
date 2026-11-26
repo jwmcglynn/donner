@@ -1,12 +1,15 @@
 #include "donner/base/xml/XMLNode.h"
 
 #include <algorithm>
+#include <charconv>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <type_traits>
 #include <utility>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/Utf8.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLNodeTypeComponent.h"
@@ -649,6 +652,138 @@ std::optional<XMLAttributeSourceLocation> XMLNode::getAttributeSourceLocation(
       .valueRange = *valueRange,
       .quote = anchors->quote,
   };
+}
+
+namespace {
+
+std::optional<char32_t> DecodeSourceCharacterReference(std::string_view text) {
+  if (text == "&amp;") {
+    return U'&';
+  }
+  if (text == "&apos;") {
+    return U'\'';
+  }
+  if (text == "&quot;") {
+    return U'"';
+  }
+  if (text == "&lt;") {
+    return U'<';
+  }
+  if (text == "&gt;") {
+    return U'>';
+  }
+  if (!text.starts_with("&#")) {
+    return std::nullopt;
+  }
+  text.remove_prefix(2);
+  text.remove_suffix(1);
+  const bool hex = text.starts_with('x');
+  if (hex) {
+    text.remove_prefix(1);
+  }
+  std::uint32_t value = 0;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), value, hex ? 16 : 10);
+  if (result.ec != std::errc() || result.ptr != text.data() + text.size() || value > 0x10ffff ||
+      (value >= 0xd800 && value <= 0xdfff)) {
+    return std::nullopt;
+  }
+  return static_cast<char32_t>(value);
+}
+
+std::optional<SourceRange> MapDecodedRange(std::string_view source, const SourceRange& authored,
+                                           std::string_view decoded,
+                                           const SourceRange& decodedRange) {
+  const auto start = decodedRange.start.offset;
+  const auto end = decodedRange.end.offset;
+  if (!start || !end || *start > *end || *end > decoded.size() || !authored.start.offset ||
+      !authored.end.offset) {
+    return std::nullopt;
+  }
+  const std::size_t rawStart = *authored.start.offset;
+  const std::size_t rawEnd = *authored.end.offset;
+  if (rawStart > rawEnd || rawEnd > source.size()) {
+    return std::nullopt;
+  }
+  const auto raw = source.substr(rawStart, rawEnd - rawStart);
+  const auto makeRange = [&](std::size_t first, std::size_t last) {
+    return SourceRange{FileOffset::Offset(rawStart + first), FileOffset::Offset(rawStart + last)};
+  };
+  if (raw == decoded) {
+    return makeRange(*start, *end);
+  }
+
+  std::optional<std::size_t> mappedStart;
+  std::optional<std::size_t> mappedEnd;
+  std::size_t rawOffset = 0;
+  std::size_t decodedOffset = 0;
+  for (;;) {
+    if (decodedOffset == *start) {
+      mappedStart = rawOffset;
+    }
+    if (decodedOffset == *end) {
+      mappedEnd = rawOffset;
+    }
+    if (rawOffset == raw.size()) {
+      break;
+    }
+
+    const auto remaining = raw.substr(rawOffset);
+    if (remaining.front() != '&') {
+      if (decodedOffset == decoded.size() || remaining.front() != decoded[decodedOffset]) {
+        return std::nullopt;
+      }
+      ++rawOffset;
+      ++decodedOffset;
+      continue;
+    }
+
+    const auto semicolon = remaining.find(';');
+    if (semicolon == std::string_view::npos) {
+      return std::nullopt;
+    }
+    const auto codepoint = DecodeSourceCharacterReference(remaining.substr(0, semicolon + 1));
+    if (!codepoint) {
+      return std::nullopt;
+    }
+    char utf8[4];
+    const auto* utf8End = Utf8::Append(*codepoint, utf8);
+    const std::string_view translated(utf8, utf8End - utf8);
+    if (!decoded.substr(decodedOffset).starts_with(translated)) {
+      return std::nullopt;
+    }
+    rawOffset += semicolon + 1;
+    decodedOffset += translated.size();
+  }
+  if (decodedOffset != decoded.size() || !mappedStart || !mappedEnd) {
+    return std::nullopt;
+  }
+  return makeRange(*mappedStart, *mappedEnd);
+}
+
+}  // namespace
+
+std::optional<SourceRange> XMLNode::mapDecodedAttributeRange(
+    const XMLQualifiedNameRef& name, const SourceRange& decodedRange) const {
+  const auto decoded = getAttribute(name);
+  const auto location = getAttributeSourceLocation(name);
+  const auto* store = GetSourceStore(handle_);
+  return decoded && location && store
+             ? MapDecodedRange(store->source(), location->valueRange, *decoded, decodedRange)
+             : std::nullopt;
+}
+
+std::optional<SourceRange> XMLNode::mapDecodedTextRange(const SourceRange& decodedRange) const {
+  const auto* store = GetSourceStore(handle_);
+  if (!store || (type() != Type::Data && type() != Type::CData)) {
+    return std::nullopt;
+  }
+  auto location = getValueLocation();
+  if (!location && type() == Type::Data) {
+    location = getNodeLocation();
+  }
+  const auto decoded = value();
+  return decoded && location ? MapDecodedRange(store->source(), *location, *decoded, decodedRange)
+                             : std::nullopt;
 }
 
 void XMLNode::setAttributeSourceLocation(const XMLQualifiedNameRef& name, SourceRange fullRange,

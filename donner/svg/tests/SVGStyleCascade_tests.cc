@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string_view>
 #include <vector>
 
 #include "donner/svg/SVGDocument.h"
@@ -17,6 +18,65 @@ namespace {
 
 using css::Color;
 using css::RGBA;
+
+TEST(SVGStyleCascadeTests, CustomPropertySourceUsesNormalAndImportantLayerWinners) {
+  auto doc = instantiateSubtree(R"svg(
+    <style><![CDATA[
+      @layer base, theme;
+      @layer base { #parent { --normal: red; --priority: green !important; } }
+      @layer theme {
+        g { --n\6frmal: blue; --priority: red !important; }
+        rect { --normal: inherit; --priority: unset; fill: var(--normal); }
+      }
+    ]]></style>
+    <g id="parent"><rect id="target"/></g>
+  )svg");
+  const auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+
+  const auto normal = FindCustomPropertyDeclaration(*target, "--normal");
+  ASSERT_THAT(normal, Optional(testing::_));
+  EXPECT_EQ(normal->start, FileOffset::Offset(doc.source().find(R"(--n\6frmal)")));
+  EXPECT_EQ(normal->end, FileOffset::Offset(doc.source().find(R"(--n\6frmal)") + 10));
+  const auto priority = FindCustomPropertyDeclaration(*target, "--priority");
+  ASSERT_THAT(priority, Optional(testing::_));
+  EXPECT_EQ(priority->start, FileOffset::Offset(doc.source().find("--priority: green")));
+  EXPECT_EQ(priority->end, FileOffset::Offset(doc.source().find("--priority: green") + 10));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--Normal"), testing::Eq(std::nullopt));
+}
+
+TEST(SVGStyleCascadeTests, CustomPropertySourceMapsInlineXmlReferencesAndLiveEdits) {
+  auto doc = instantiateSubtree(R"svg(
+    <style>rect { --t&#111;ne: red; --blocked: blue; --cycle: red; }</style>
+    <rect id="target" style="--other: &amp;; --t&#111;n&#x65;: blue; --blocked: initial;
+        --cycle: var(--cycle); fill: var(--tone)" />
+  )svg");
+  const auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  constexpr std::string_view authoredName = "--t&#111;n&#x65;";
+  const auto before = FindCustomPropertyDeclaration(*target, "--tone");
+  ASSERT_THAT(before, Optional(testing::_));
+  const auto start = doc.source().find(authoredName);
+  EXPECT_EQ(before->start, FileOffset::Offset(start));
+  EXPECT_EQ(before->end, FileOffset::Offset(start + authoredName.size()));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--blocked"), testing::Eq(std::nullopt));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--cycle"), testing::Eq(std::nullopt));
+
+  const auto result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + authoredName.size())},
+      .replacement = "--Tone",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(result.applied);
+  const auto after = FindCustomPropertyDeclaration(*target, "--tone");
+  ASSERT_THAT(after, Optional(testing::_));
+  EXPECT_EQ(after->start, FileOffset::Offset(doc.source().find("--t&#111;ne: red")));
+  EXPECT_EQ(after->end, FileOffset::Offset(doc.source().find("--t&#111;ne: red") + 11));
+  const auto uppercase = FindCustomPropertyDeclaration(*target, "--Tone");
+  ASSERT_THAT(uppercase, Optional(testing::_));
+  EXPECT_EQ(uppercase->start, FileOffset::Offset(doc.source().find("--Tone: blue")));
+  EXPECT_EQ(uppercase->end, FileOffset::Offset(doc.source().find("--Tone: blue") + 6));
+}
 
 TEST(SVGStyleCascadeTests, LayerPrecedenceComputesCustomValuesBeforeInheritance) {
   auto doc = instantiateSubtree(R"(

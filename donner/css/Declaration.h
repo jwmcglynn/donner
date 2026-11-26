@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstddef>
+#include <cstdint>
 #include <ostream>
 #include <span>
 #include <string>
@@ -95,6 +96,8 @@ struct Declaration {
   SourceRange sourceRange;
   /// Serialized declaration bytes, computed once by the parser for cascade-work accounting.
   std::size_t sourceByteSize = 0;
+  /// Byte length of the authored identifier, including CSS escapes. Zero means unavailable.
+  std::uint32_t nameSourceByteLength = 0;
   bool important = false;  ///< Whether the declaration ends with `!important`.
   /// Syntax classification of the values at construction or parser finalization.
   VariableReferences variableReferences = VariableReferences::None;

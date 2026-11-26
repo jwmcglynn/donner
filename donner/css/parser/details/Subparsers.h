@@ -127,6 +127,7 @@ std::optional<Declaration> consumeDeclarationGeneric(
   }
 
   Declaration declaration(std::move(ident.value), {}, offset);
+  declaration.nameSourceByteLength = ident.sourceByteLength;
 
   bool lastWasImportantBang = false;
   bool hitNonWhitespace = false;

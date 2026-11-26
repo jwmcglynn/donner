@@ -757,6 +757,10 @@ public:
    */
   std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle) const;
 
+  /// Look up source provenance for an already-computed custom value.
+  std::optional<SourceRange> findCustomPropertyDeclaration(EntityHandle handle,
+                                                           std::string_view name) const;
+
   /**
    * Find the author stylesheet rule at \p documentSourceOffset.
    *
