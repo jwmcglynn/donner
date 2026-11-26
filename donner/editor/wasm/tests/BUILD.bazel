@@ -881,6 +881,7 @@ js_test(
         "//:.github/workflows/editor_wasm.yml",
         "//:.github/workflows/perf.yml",
         "//:MODULE.bazel",
+        "//build_defs:ci_darwin.bzl",
         "//donner/editor:AsyncRenderer.cc",
         "//donner/editor:AsyncRenderer.h",
         "//donner/editor:EditorShell.cc",
