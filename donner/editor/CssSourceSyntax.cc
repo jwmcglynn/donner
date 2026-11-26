@@ -12,6 +12,7 @@
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLTokenizer.h"
 #include "donner/css/FontFace.h"
+#include "donner/css/parser/details/ComponentValueParser.h"
 #include "donner/css/parser/details/Tokenizer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
@@ -259,6 +260,7 @@ struct CssState {
   CssMode mode;
   bool rootDeclarationList = false;
   std::vector<BlockKind> blocks;
+  std::size_t skippedBlocks = 0;
   std::string atRuleName;
   bool classNameNext = false;
   int parenthesisDepth = 0;
@@ -299,6 +301,11 @@ ColorIndex IdentColor(const Token::Ident& ident, CssState& state) {
 }
 
 void OpenBlock(CssState& state) {
+  if (state.blocks.size() ==
+      css::parser::details::ComponentValueParsingContext::kMaximumNestingDepth) {
+    state.skippedBlocks = 1;
+    return;
+  }
   BlockKind block = BlockKind::RuleList;
   if (state.mode == CssMode::SelectorPrelude) {
     block = BlockKind::Declarations;
@@ -393,7 +400,19 @@ std::optional<ColorIndex> LiteralTokenColor(const Token& token) {
   return std::nullopt;
 }
 
+ColorIndex SkipNestedBlockToken(const Token& token, CssState& state) {
+  if (token.is<Token::CurlyBracket>()) {
+    ++state.skippedBlocks;
+  } else if (token.is<Token::CloseCurlyBracket>()) {
+    --state.skippedBlocks;
+  }
+  return ColorIndex::ErrorMarker;
+}
+
 ColorIndex TokenColor(const Token& token, CssState& state) {
+  if (state.skippedBlocks != 0) {
+    return SkipNestedBlockToken(token, state);
+  }
   if (const auto color = NestedStringColor(token, state)) {
     return *color;
   }
