@@ -2229,10 +2229,12 @@ test("completed drag frames reject a matching coordinate dispatched in the futur
   };
   const stream = {
     startedAtMs: 100,
+    pressDispatchedAtMs: 110,
     finishedAtMs: 250,
     dispatchTimes: [200],
     dispatchPoints: [{ x: 2, y: 3 }],
     frames: [{ frame: 1, atMs: 150, presentation }],
+    start: { x: 0, y: 0 },
     end: { x: 2, y: 3 },
     releasedAtMs: 240,
     releaseFrame: null,
@@ -2245,6 +2247,50 @@ test("completed drag frames reject a matching coordinate dispatched in the futur
   stream.dispatchTimes[0] = 140;
   presentation.pointerX += 1e-9;
   assert.deepEqual(metrics.completedDragFrames(stream, 1), [stream.frames[0]]);
+});
+
+test("held drag motion includes its dispatched press and a later represented move", async () => {
+  const metrics = await import("./drag-input-stream.mjs");
+  const presentation = (serial, point) => ({
+    frame: serial,
+    atMs: serial * 10,
+    presentation: {
+      completedSerial: serial,
+      completedAtMs: serial * 10,
+      inputRepresented: true,
+      mouseDown: true,
+      pointerX: point.x,
+      pointerY: point.y,
+      viewportZoom: 1,
+    },
+  });
+  const stream = {
+    startedAtMs: 10,
+    pressDispatchedAtMs: 15,
+    finishedAtMs: 40,
+    dispatchTimes: [20],
+    dispatchPoints: [{ x: 12, y: 13 }],
+    frames: [presentation(2, { x: 10, y: 11 }), presentation(3, { x: 12, y: 13 })],
+    start: { x: 10, y: 11 },
+    end: { x: 12, y: 13 },
+    releasedAtMs: 40,
+    releaseFrame: null,
+  };
+  const completed = metrics.completedDragFrames(stream, 1);
+  const pressOnly = metrics.completedDragFrames({
+    ...stream,
+    dispatchTimes: [],
+    dispatchPoints: [],
+    frames: stream.frames.slice(0, 1),
+  }, 1);
+  assert.equal(metrics.heldDragPositionCount(pressOnly), 1, "a press without displayed motion fails");
+  const latePress = metrics.completedDragFrames({ ...stream, pressDispatchedAtMs: 21 }, 1);
+  assert.equal(
+    metrics.heldDragPositionCount(latePress),
+    1,
+    "a press stamped after its presented completion cannot establish motion",
+  );
+  assert.equal(metrics.heldDragPositionCount(completed), 2);
 });
 
 test("the drag sampler observes the drag until the one release stall guard", async () => {

@@ -40,9 +40,10 @@ const kPointerMatchTolerance = 1e-6;
  *   selectedCount?: number, dragging?: boolean, workerMs?: number, completedResults?: number,
  *   readbackCount?: unknown, readbackPollIterations?: unknown,
  *   presentation?: DragPresentation }} DragFrame One sampled editor frame.
- * @typedef {{ startedAtMs: number, finishedAtMs: number, dispatchTimes: number[],
+ * @typedef {{ startedAtMs: number, pressDispatchedAtMs: number, finishedAtMs: number,
+ *   dispatchTimes: number[],
  *   dispatchPoints: Array<{ x: number, y: number }>, frames: DragFrame[],
- *   end: { x: number, y: number }, releasedAtMs: number,
+ *   start: { x: number, y: number }, end: { x: number, y: number }, releasedAtMs: number,
  *   releaseFrame: DragPresentation | null }} DragStream One drag's dispatched inputs, sampled
  *   frames, mouse-up time, and its release frame if that completed by the release deadline.
  */
@@ -122,6 +123,7 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
   const startedAtMs = performance.now();
   observe();
   observeCompletion();
+  const pressDispatchedAtMs = performance.now();
   dispatch("mousedown", start.x, start.y, 1);
   let end = start;
   let releasedAtMs = 0;
@@ -173,10 +175,12 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
   }
   const stream = {
     startedAtMs,
+    pressDispatchedAtMs,
     finishedAtMs: performance.now(),
     dispatchTimes,
     dispatchPoints,
     frames,
+    start,
     end,
     releasedAtMs,
     releaseFrame,
@@ -240,10 +244,13 @@ export function completedDragFrames(stream, baselineSerial) {
   for (const frame of stream.frames) {
     if (
       completesThisDrag(frame, stream, baselineSerial)
-      && stream.dispatchPoints.some((point, index) =>
-        matchesDispatchedPoint(point, frame.presentation)
-          && stream.dispatchTimes[index] <= frame.presentation.completedAtMs
-      )
+      && ((frame.presentation.mouseDown
+          && stream.pressDispatchedAtMs <= frame.presentation.completedAtMs
+          && matchesDispatchedPoint(stream.start, frame.presentation))
+        || stream.dispatchPoints.some((point, index) =>
+          matchesDispatchedPoint(point, frame.presentation)
+            && stream.dispatchTimes[index] <= frame.presentation.completedAtMs
+        ))
     ) {
       completions.set(frame.presentation.completedSerial, frame);
     }
