@@ -3,9 +3,11 @@
 
 #include <cstddef>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Specificity.h"
@@ -282,8 +284,14 @@ private:
       std::size_t index;
       CandidateCursor<T> candidates;
     };
-    std::vector<Frame> frames;
-    frames.push_back({startIndex, std::move(initial)});
+    // Keep short selectors inline, with at most 256 bytes of cursor payload per call.
+    // Keep vector's alignment and exception-safe spill for unusual public adapters.
+    using Frames =
+        std::conditional_t<sizeof(Frame) <= 128 && alignof(Frame) <= alignof(std::max_align_t) &&
+                               std::is_nothrow_move_constructible_v<Frame>,
+                           SmallVector<Frame, 2>, std::vector<Frame>>;
+    Frames frames;
+    frames.emplace_back(Frame{startIndex, std::move(initial)});
     SelectorMatchOptions<T> compoundOptions = options;
     // Nested :is/:not/nth selector arguments are ordinary selectors, not relative lists.
     compoundOptions.relativeToElement = nullptr;
@@ -306,8 +314,8 @@ private:
       const std::size_t next = forward ? frame.index + 1 : frame.index - 1;
       const Combinator combinator =
           forward ? entries[next].combinator : entries[frame.index].combinator;
-      frames.push_back(
-          {next, CandidateCursor<T>(candidate, combinator, forward, options.traversalBudget)});
+      frames.emplace_back(
+          Frame{next, CandidateCursor<T>(candidate, combinator, forward, options.traversalBudget)});
     }
     return false;
   }

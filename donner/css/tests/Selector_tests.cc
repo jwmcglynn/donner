@@ -77,6 +77,32 @@ protected:
   }
 };
 
+TEST_F(SelectorTests, LongChainBacktracksAcrossANearerMatchingAncestor) {
+  FakeElement root("root");
+  FakeElement outer("a");
+  FakeElement inner("a");
+  FakeElement parent("b");
+  FakeElement leaf("c");
+  root.appendChild(outer);
+  outer.appendChild(inner);
+  inner.appendChild(parent);
+  parent.appendChild(leaf);
+
+  auto parsed = SelectorParser::Parse("root > a b > c");
+  ASSERT_THAT(parsed, NoParseError());
+  SelectorTraversalBudget budget(6);
+  SelectorMatchOptions<FakeElement> options;
+  options.traversalBudget = &budget;
+  EXPECT_THAT(parsed.result().matches(leaf, options).matched, testing::IsTrue());
+  EXPECT_EQ(budget.steps(), 6u);
+
+  SelectorTraversalBudget limited(5);
+  options.traversalBudget = &limited;
+  EXPECT_THAT(parsed.result().matches(leaf, options).matched, testing::IsFalse());
+  EXPECT_THAT(limited.rejected(), testing::IsTrue());
+  EXPECT_EQ(limited.steps(), 5u);
+}
+
 TEST_F(SelectorTests, HasRelativeSiblingArguments) {
   FakeElement parent("parent");
   FakeElement anchor("anchor");
