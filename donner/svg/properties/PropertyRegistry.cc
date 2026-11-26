@@ -3815,9 +3815,7 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   // Only store unparsed properties if they are valid presentation attribute names.
   if (kValidPresentationAttributes.contains(name)) {
     storeDeferredProperty(declaration, specificity);
-  } else if (name.size() > 2 && name.starts_with("--")) {
-    std::ignore = storeCustomProperty(declaration, specificity);
-  } else {
+  } else if (!storeCustomProperty(declaration, specificity)) {
     ParseDiagnostic err;
     err.reason = "Unknown property '" + declaration.name + "'";
     err.range.start = declaration.sourceOffset;
