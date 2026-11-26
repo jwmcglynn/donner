@@ -118,10 +118,6 @@ bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& na
                          std::string_view value) {
   if (name == xml::XMLQualifiedNameRef("id")) {
     element.setId(value);
-  } else if (name == xml::XMLQualifiedNameRef("class")) {
-    element.setClassName(value);
-  } else if (name == xml::XMLQualifiedNameRef("style")) {
-    element.setStyle(value);
   } else if (IsUseHrefAttribute(element.entityHandle(), name)) {
     // The stored attribute feeds `[href]` selectors; retargeting itself needs no restyle.
     if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(
@@ -322,9 +318,11 @@ bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
   return true;
 }
 
-void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute,
-                          std::span<const std::string_view> changedClasses = {}) {
-  if (TryNarrowStyleEdit(handle, attribute, changedClasses)) {
+using TryStyleEdit = bool (*)(EntityHandle, std::string_view, std::string_view, std::string_view);
+
+void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute, TryStyleEdit route,
+                          std::string_view previous = {}, std::string_view next = {}) {
+  if (route && route(handle, attribute, previous, next)) {
     return;
   }
   markNeedsFullStyleRecompute(handle);
@@ -336,20 +334,20 @@ void MarkClassOrStyleEdit(EntityHandle handle, std::string_view attribute,
 
 // Most class lists have only a few names. Bound the pairwise token comparisons; an oversized
 // list uses the existing whole-document restyle.
-void MarkClassEdit(EntityHandle handle, const RcString& previous, const RcString& next) {
+bool RouteStyleEdit(EntityHandle handle, std::string_view attribute, std::string_view previous,
+                    std::string_view next) {
+  if (attribute != "class") {
+    return TryNarrowStyleEdit(handle, attribute);
+  }
   constexpr std::size_t kMaximumClassBytes = 4096;
   constexpr std::size_t kMaximumClassTokens = 32;
   if (previous.size() > kMaximumClassBytes || next.size() > kMaximumClassBytes) {
-    markNeedsFullStyleRecompute(handle);
-    MarkClassOrStyleEdit(handle, "class");
-    return;
+    return false;
   }
   const auto oldClasses = StringUtils::SplitAsciiWhitespace(previous);
   const auto newClasses = StringUtils::SplitAsciiWhitespace(next);
   if (oldClasses.size() + newClasses.size() > kMaximumClassTokens) {
-    markNeedsFullStyleRecompute(handle);
-    MarkClassOrStyleEdit(handle, "class");
-    return;
+    return false;
   }
   std::array<std::string_view, kMaximumClassTokens> changed;
   std::size_t count = 0;
@@ -362,7 +360,7 @@ void MarkClassEdit(EntityHandle handle, const RcString& previous, const RcString
   };
   addRemoved(oldClasses, newClasses);
   addRemoved(newClasses, oldClasses);
-  MarkClassOrStyleEdit(handle, "class", std::span(changed.data(), count));
+  return TryNarrowStyleEdit(handle, "class", std::span(changed.data(), count));
 }
 
 /// Dirty flags for an element whose compositing properties changed, see \ref markCompositingDirty.
@@ -429,9 +427,10 @@ parser::PropertyParseFnParams ElementAttributeParams(ElementType elementType, st
   return params;
 }
 
-void MarkSelectorSensitivePresentationEdit(EntityHandle handle, std::string_view name) {
+void MarkSelectorSensitivePresentationEdit(EntityHandle handle, std::string_view name,
+                                           TryStyleEdit route) {
   if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*handle.registry(), name) &&
-      !TryNarrowStyleEdit(handle, name)) {
+      (!route || !route(handle, name, {}, {}))) {
     markNeedsFullStyleRecompute(handle);
   }
 }
@@ -447,25 +446,25 @@ void MarkSelectorSensitivePresentationEdit(EntityHandle handle, std::string_view
  */
 void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType,
                                     std::string_view name, std::string_view actualName,
-                                    bool commonProperty) {
+                                    bool commonProperty, TryStyleEdit route) {
   if (actualName == "transform") {
     // The value is stored as an attribute, and attributes are a live selector input:
     // `[transform]`, `[transform="..."]` and combinators keyed on them can change matches.
     // Preserve the ordinary transform-only path when no stylesheet uses the attribute.
-    MarkSelectorSensitivePresentationEdit(handle, name);
+    MarkSelectorSensitivePresentationEdit(handle, name, route);
     components::LayoutSystem().invalidate(handle);
     markDirty(handle, components::DirtyFlagsComponent::RenderInstance);
     propagateWorldTransformDirtyToDescendants(handle);
   } else if (actualName == "opacity" && elementType != ElementType::Stop) {
     // Preserve the compositing-only path when no stylesheet selects on the attribute.
-    MarkSelectorSensitivePresentationEdit(handle, name);
+    MarkSelectorSensitivePresentationEdit(handle, name, route);
     markCompositingDirty(handle);
   } else {
     // For CSS properties (fill, stroke, etc.) and element-specific attributes (cx, cy, r, d,
     // etc.), mark style cascade + shape dirty.
     if (commonProperty &&
-        !(elementType == ElementType::Use && IsUseGeometryAttribute(actualName)) &&
-        TryNarrowStyleEdit(handle, name)) {
+        !(elementType == ElementType::Use && IsUseGeometryAttribute(actualName)) && route &&
+        route(handle, name, {}, {})) {
       markDirty(handle, components::DirtyFlagsComponent::Shape);
       return;
     }
@@ -492,7 +491,8 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
  *   element-specific attribute like `cx`, whose state the caller resets instead.
  */
 bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAccess& access,
-                                   ElementType elementType, std::string_view name) {
+                                   ElementType elementType, std::string_view name,
+                                   TryStyleEdit route) {
   using Clear = PropertyRegistry::PresentationAttributeClear;
   if (!PropertyRegistry::isPresentationAttributeName(name)) {
     return false;
@@ -501,32 +501,13 @@ bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAcc
   const Clear result = style ? style->clearPresentationAttribute(name)
                              : PropertyRegistry().clearPresentationAttribute(name);
   if (result == Clear::Cleared) {
-    MarkPresentationAttributeDirty(handle, elementType, name, name, true);
+    MarkPresentationAttributeDirty(handle, elementType, name, name, true, route);
   } else if (result == Clear::NotSet) {
     // The attribute may still be present, overridden by `style` or holding a value that did not
     // parse, so a stylesheet selecting on it must re-match.
-    MarkSelectorSensitivePresentationEdit(handle, name);
+    MarkSelectorSensitivePresentationEdit(handle, name, route);
   }
   return result != Clear::NotStored;
-}
-
-/**
- * Remove the attribute \p name from \p element's style: the declarations it made when it is a
- * presentation attribute stored in the element's style, which is a no-op when it declared none,
- * otherwise a reset of the element state it set and a full restyle.
- */
-void RemovePresentationAttribute(SVGElement& element, const ElementAnchor& handle,
-                                 DocumentWriteAccess& access,
-                                 const xml::XMLQualifiedNameRef& name) {
-  // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
-  const bool presentation = name.namespacePrefix.empty();
-  if (presentation && RemovePresentationDeclaration(handle, access, element.type(), name.name)) {
-    return;
-  }
-  if (presentation) {
-    [[maybe_unused]] auto trySetResult = element.trySetPresentationAttribute(name.name, "initial");
-  }
-  markNeedsFullStyleRecompute(handle);
 }
 
 /// The shadow-root check is defense in depth: real shadow entities have no element type.
@@ -841,10 +822,15 @@ RcString SVGElement::className() const {
 }
 
 void SVGElement::setClassName(std::string_view name) {
+  setClassNameWithRouter(name, RouteStyleEdit);
+}
+
+void SVGElement::setClassNameWithRouter(std::string_view name, StyleEditRouter route) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   const auto* state = handle_.registry()->ctx().find<components::RenderTreeState>();
-  const bool hasOldStyles = state && state->hasBeenBuilt && !state->needsFullStyleRecompute;
+  const bool hasOldStyles =
+      route && state && state->hasBeenBuilt && !state->needsFullStyleRecompute;
   const RcString previous = hasOldStyles ? className() : RcString();
   const RcString next(name);
   if (!name.empty()) {
@@ -856,32 +842,37 @@ void SVGElement::setClassName(std::string_view name) {
 
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("class"), next);
-  // Initial parsing has no old computed styles or selector dependencies to route.
-  if (hasOldStyles) {
-    MarkClassEdit(handle_, previous, next);
-  } else {
-    MarkClassOrStyleEdit(handle_, "class");
-  }
+  MarkClassOrStyleEdit(handle_, "class", hasOldStyles ? route : nullptr, previous, next);
 }
 
 void SVGElement::setStyle(std::string_view style) {
+  setStyleWithRouter(style, RouteStyleEdit);
+}
+
+void SVGElement::setStyleWithRouter(std::string_view style, StyleEditRouter route) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::StyleComponent>(access).setStyle(style);
 
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
-  MarkClassOrStyleEdit(handle_, "style");
+  MarkClassOrStyleEdit(handle_, "style", route);
 }
 
 void SVGElement::updateStyle(std::string_view style) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   components::StyleSystem().updateStyle(handle_, style);
-  MarkClassOrStyleEdit(handle_, "style");
+  MarkClassOrStyleEdit(handle_, "style", RouteStyleEdit);
 }
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
                                                           std::string_view value) {
+  return trySetPresentationAttributeWithRouter(name, value, RouteStyleEdit);
+}
+
+ParseResult<bool> SVGElement::trySetPresentationAttributeWithRouter(std::string_view name,
+                                                                    std::string_view value,
+                                                                    StyleEditRouter route) {
   // A rejected probe must leave the currently presented animation untouched.
   DocumentWriteAccess probeAccess = handle_.writeAccess();
   DocumentMutationBatch mutation(probeAccess.documentState(), true);
@@ -922,7 +913,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
         *handle_.registry(), xml::XMLQualifiedName(RcString(name)), RcString(value));
 
-    MarkPresentationAttributeDirty(handle_, elementType, name, actualName, commonProperty);
+    MarkPresentationAttributeDirty(handle_, elementType, name, actualName, commonProperty, route);
     return true;
   }
 
@@ -985,6 +976,12 @@ void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_
 std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
     const xml::XMLQualifiedNameRef& name, std::string_view value,
     bool* consumedAsPresentationAttribute) {
+  return setAttributeWithRouter(name, value, consumedAsPresentationAttribute, RouteStyleEdit);
+}
+
+std::optional<ParseDiagnostic> SVGElement::setAttributeWithRouter(
+    const xml::XMLQualifiedNameRef& name, std::string_view value,
+    bool* consumedAsPresentationAttribute, StyleEditRouter route) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   if (consumedAsPresentationAttribute != nullptr) {
@@ -992,6 +989,14 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
   }
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
+  if (name == xml::XMLQualifiedNameRef("class")) {
+    setClassNameWithRouter(value, route);
+    return std::nullopt;
+  }
+  if (name == xml::XMLQualifiedNameRef("style")) {
+    setStyleWithRouter(value, route);
+    return std::nullopt;
+  }
   if (SetCoreXMLAttribute(*this, name, value)) {
     return std::nullopt;
   }
@@ -1013,7 +1018,7 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
   // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
   // Only parse empty namespaces for now.
   if (name.namespacePrefix.empty()) {
-    auto trySetResult = trySetPresentationAttribute(name.name, value);
+    auto trySetResult = trySetPresentationAttributeWithRouter(name.name, value, route);
     const bool attributeWasSet = trySetResult.hasResult() && trySetResult.result();
     if (consumedAsPresentationAttribute != nullptr) {
       *consumedAsPresentationAttribute = attributeWasSet;
@@ -1051,6 +1056,11 @@ void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
 }
 
 void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name) {
+  removeAttributeWithRouter(name, RouteStyleEdit);
+}
+
+void SVGElement::removeAttributeWithRouter(const xml::XMLQualifiedNameRef& name,
+                                           StyleEditRouter route) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   // TODO: Namespace support for these attributes
@@ -1058,9 +1068,9 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
   if (name == xml::XMLQualifiedNameRef("id")) {
     setId("");
   } else if (name == xml::XMLQualifiedNameRef("class")) {
-    setClassName("");
+    setClassNameWithRouter("", route);
   } else if (name == xml::XMLQualifiedNameRef("style")) {
-    setStyle("");
+    setStyleWithRouter("", route);
   } else if (components::IsConditionalProcessingAttribute(name)) {
     if (auto* conditional = handle_.try_get<components::ConditionalProcessingComponent>(access)) {
       (void)components::RemoveConditionalProcessingAttribute(*conditional, name);
@@ -1071,8 +1081,12 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
     markConditionalProcessingChanged(handle_);
   } else if (RemoveLineCoordinateAttribute(handle_, name) ||
              RemoveConvolveOrderAttribute(handle_, name)) {
-  } else {
-    RemovePresentationAttribute(*this, handle_, access, name);
+  } else if (!name.namespacePrefix.empty()) {
+    markNeedsFullStyleRecompute(handle_);
+  } else if (!RemovePresentationDeclaration(handle_, access, type(), name.name, route)) {
+    // Element-specific attributes reset their typed state and require a full restyle.
+    std::ignore = trySetPresentationAttributeWithRouter(name.name, "initial", route);
+    markNeedsFullStyleRecompute(handle_);
   }
 
   // Remove any storage for this attribute.
