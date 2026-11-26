@@ -987,7 +987,7 @@ bool WasPresentationAttributeSet(const ParseResult<bool>& result) {
   return result.hasResult() && result.result();
 }
 
-void MarkSettledTransform(EntityHandle handle, std::string_view name) {
+void MarkSettledTransform(const ElementAnchor& handle, std::string_view name) {
   if (name == "transform") {
     // XML-sourced transforms must reraster filtered layers at their settled position.
     markDirty(handle, components::DirtyFlagsComponent::Paint);
