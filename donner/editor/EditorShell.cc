@@ -8369,10 +8369,11 @@ std::optional<int> EditorShell::selectedElementSourceLine() const {
 }
 
 std::optional<StyleFocus> EditorShell::styleFocusAtSourceOffset(std::size_t sourceOffset) const {
-  std::optional<StyleFocus> styleFocus =
-      ComputeStyleFocusAtSourceOffset(app_.document().document(), sourceOffset);
+  std::optional<StyleFocus> styleFocus = ComputeStyleFocusAtSourceOffset(
+      app_.document().document(), sourceOffset, app_.selectedElements());
   if (!styleFocus.has_value() && sourceOffset > 0) {
-    styleFocus = ComputeStyleFocusAtSourceOffset(app_.document().document(), sourceOffset - 1);
+    styleFocus = ComputeStyleFocusAtSourceOffset(app_.document().document(), sourceOffset - 1,
+                                                 app_.selectedElements());
   }
 
   return styleFocus;
@@ -9380,7 +9381,7 @@ void EditorShell::applySourcePartition(FocusPartition partition) {
     partition.hidden.clear();
   }
 
-  textEditor_.setFocusPartition(partition);
+  textEditor_.setSourceFocusPartition(std::move(partition));
 }
 
 bool EditorShell::sourcePaneAwaitsDocumentEdits() const {

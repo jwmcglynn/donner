@@ -162,12 +162,16 @@ TEST_F(CssImportTest, ImportedCustomPropertyWinnerHasNoDocumentLocation) {
   ASSERT_THAT(element, Optional(testing::_));
   EXPECT_THAT(fill(document), Optional(kGreen));
   EXPECT_THAT(stroke(document), Optional(kRed));
-  EXPECT_THAT(FindCustomPropertyDeclaration(*element, "--tone"), testing::Eq(std::nullopt));
-  const auto local = FindCustomPropertyDeclaration(*element, "--local");
-  ASSERT_THAT(local, Optional(testing::_));
+  const std::vector<std::string_view> names{"--tone", "--local", "--tone", "--missing"};
+  const auto batch = FindCustomPropertyDeclarations(*element, names, 1024 * 1024);
+  ASSERT_TRUE(batch.complete);
+  EXPECT_FALSE(batch.budgetExceeded);
   const auto start = document.source().find("--local: red");
-  EXPECT_EQ(local->start, FileOffset::Offset(start));
-  EXPECT_EQ(local->end, FileOffset::Offset(start + 7));
+  const auto local = Optional(
+      testing::AllOf(testing::Field("start", &SourceRange::start, FileOffset::Offset(start)),
+                     testing::Field("end", &SourceRange::end, FileOffset::Offset(start + 7))));
+  const auto missing = testing::Eq(std::nullopt);
+  EXPECT_THAT(batch.declarations, testing::ElementsAre(missing, local, missing, missing));
 }
 
 TEST_F(CssImportTest, LayerStatementEstablishesOrderBeforeImports) {

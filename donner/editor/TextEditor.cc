@@ -2840,6 +2840,27 @@ void TextEditor::resetReferenceRopesForPartition(const FocusPartition& partition
   }
 }
 
+void TextEditor::setSourceFocusPartition(FocusPartition partition) {
+  std::vector<SourcePoint*> endpoints;
+  endpoints.reserve(partition.referenceLinks.size() * 2);
+  for (auto& link : partition.referenceLinks) {
+    endpoints.push_back(&link.from);
+    endpoints.push_back(&link.to);
+  }
+  std::ranges::sort(endpoints, {},
+                    [](const SourcePoint* point) { return std::pair{point->line, point->column}; });
+  int line = -1;
+  TextBuffer::LineColumnCursor cursor;
+  for (auto* point : endpoints) {
+    if (point->line != line) {
+      line = point->line;
+      cursor = {};
+    }
+    point->column = text_.getCharacterColumn(line, point->column, cursor);
+  }
+  setFocusPartition(partition);
+}
+
 void TextEditor::setFocusPartition(const FocusPartition& partition) {
   if (!FocusPartitionsEqual(focusPartition_, partition)) {
     visualLayoutMaxColumns_ = 0;

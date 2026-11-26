@@ -58,7 +58,9 @@ struct ComponentValueParsingContext {
 
   [[nodiscard]] RecursionGuard addLevel() { return RecursionGuard(*this); }
 
-  [[nodiscard]] bool hitLimit() const { return depth_ > 64; }
+  static constexpr int kMaximumNestingDepth = 64;
+
+  [[nodiscard]] bool hitLimit() const { return depth_ > kMaximumNestingDepth; }
 
   [[nodiscard]] bool reserveValue() {
     if (resourceLimitExceeded_ || componentValues_ >= kMaximumComponentValues) {

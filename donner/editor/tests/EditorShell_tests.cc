@@ -4929,6 +4929,41 @@ TEST(EditorShellTest, ValidStyleSourceEditRequestsCanvasRenderWithoutCanvasClick
               testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
 }
 
+TEST(EditorShellTest, DrawsInheritedCssVariableAndPaintServerRopesInSourcePane) {
+  constexpr std::string_view svg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">
+<defs><linearGradient id="spectrum"><stop stop-color="gold"/></linearGradient></defs>
+<g style="--Ink: indigo">
+  <rect id="tile" width="70" height="70"
+        fill="url(#spectrum)" stroke="var(--Ink)"/>
+</g>
+</svg>)SVG";
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(svg, "reference-ropes.svg"));
+  ASSERT_TRUE(shell.valid());
+  auto& app = EditorShellTestAccess::App(shell);
+  const auto tile = app.document().document().querySelector("#tile");
+  ASSERT_THAT(tile, testing::Optional(testing::_));
+  std::ignore = tile->getComputedStyle();
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  EditorShellTestAccess::SetSourceFocusMode(shell, true);
+  app.setSelection(*tile);
+  EditorShellTestAccess::HighlightSelectionSourceIfNeeded(shell);
+  window.beginFrame();
+  auto& io = ImGui::GetIO();
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  EditorShellTestAccess::RenderSourcePane(shell, 0.0f, 440.0f, 600.0f, io.Fonts->Fonts[0]);
+  window.endFrame();
+  const auto& ropes = EditorShellTestAccess::Source(shell).lastSourceRopeCost();
+  EXPECT_EQ(ropes.candidateCount, 2);
+  EXPECT_EQ(ropes.drawnCount, 2);
+}
+
 TEST(EditorShellTest, TypingStylesheetColorKeepsSourceFocusAndReferenceRopes) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {

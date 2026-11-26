@@ -740,6 +740,8 @@ public:
   /// Return and clear the last clicked source style decoration chip id.
   [[nodiscard]] std::optional<std::size_t> takeClickedSourceStyleChipId();
 
+  /// Install a parser-produced partition whose endpoint columns are UTF-8 byte indices.
+  void setSourceFocusPartition(FocusPartition partition);
   /// Install a source-focus partition. Hidden lines are folded from the view only.
   void setFocusPartition(const FocusPartition& partition);
   /// Clear source-focus mode and reveal every line.

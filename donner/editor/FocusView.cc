@@ -15,9 +15,13 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/StringUtils.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/css/parser/DeclarationListParser.h"
+#include "donner/css/parser/ValueParser.h"
+#include "donner/editor/CssSourceReference.h"
 #include "donner/editor/ReferenceFanout.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGStyleQuery.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 namespace {
@@ -30,6 +34,7 @@ struct ByteRange {
 struct FragmentReference {
   std::string fragmentId;
   std::optional<std::size_t> sourceOffset;
+  bool url = false;
 };
 
 struct FocusCssRule {
@@ -41,6 +46,7 @@ struct ElementReferenceLink {
   std::size_t fromOffset = 0;
   svg::SVGElement referenced;
   bool reverseReference = false;
+  bool targetId = false;
 };
 
 struct ElementReferenceLinkKey {
@@ -92,7 +98,18 @@ private:
   bool rejected_ = false;
 };
 
+struct FocusVariableUse {
+  std::string name;
+  std::size_t sourceOffset;
+};
+
+struct ElementVariableUses {
+  svg::SVGElement element;
+  std::vector<FocusVariableUse> uses;
+};
+
 struct FocusElementCollection {
+  std::vector<LineRange> declarationLines;
   std::vector<svg::SVGElement> elements;
   std::vector<ElementReferenceLink> links;
   std::vector<FocusCssRule> cssRules;
@@ -100,6 +117,9 @@ struct FocusElementCollection {
   std::unordered_set<Entity> visitedElements;
   std::unordered_set<ElementReferenceLinkKey, ElementReferenceLinkKeyHash> elementReferenceKeys;
   std::unordered_set<FocusReferenceLink, FocusReferenceLinkHash> cssLinkKeys;
+  std::vector<ElementVariableUses> variableGroups;
+  std::unordered_map<Entity, std::size_t> variableGroupIndices;
+  std::size_t variableUseCount = 0;
   FocusTraversalBudget traversalBudget;
 };
 
@@ -289,53 +309,61 @@ void AppendFragmentReference(std::vector<FragmentReference>* references,
   });
 }
 
-void AppendUrlFragmentReferences(std::string_view value, std::optional<std::size_t> valueOffset,
-                                 std::vector<FragmentReference>* references) {
-  std::size_t searchPos = 0;
-  while (searchPos < value.size()) {
-    const std::size_t urlPos = value.find("url(", searchPos);
-    if (urlPos == std::string_view::npos) {
-      return;
-    }
+using CssRangeMap = std::function<std::optional<SourceRange>(const SourceRange&)>;
+using VariableLinkSink =
+    std::function<void(const svg::SVGElement&, std::string_view, const SourceRange&)>;
 
-    std::size_t index = urlPos + 4;
-    while (index < value.size() && StringUtils::IsAsciiWhitespace(value[index])) {
-      ++index;
-    }
+void AppendParsedReferences(std::span<const css::ComponentValue> values, std::string_view cssText,
+                            const CssRangeMap& project, const svg::SVGElement* element,
+                            const VariableLinkSink& variableLink,
+                            std::vector<FragmentReference>* references,
+                            bool inspectAuthoredFallbacks = false) {
+  std::function<std::optional<bool>(std::string_view)> hasValue;
+  if (!inspectAuthoredFallbacks) {
+    hasValue = [element](std::string_view name) {
+      return element ? svg::HasPreparedCustomPropertyValue(*element, name) : std::nullopt;
+    };
+  }
+  VisitCssSourceReferences(
+      values, cssText,
+      [&](const CssSourceReference& ref) {
+        if (references->size() >= kMaximumFocusReferenceLinks) {
+          return false;
+        }
+        const auto location = project(ref.spelling);
+        if (ref.kind == CssSourceReference::Kind::FragmentUrl) {
+          references->push_back(
+              {std::string(ref.name), location ? location->start.offset : std::nullopt, true});
+        } else if (location && variableLink && element) {
+          variableLink(*element, ref.name, *location);
+        }
+        return true;
+      },
+      hasValue);
+}
 
-    char quote = '\0';
-    if (index < value.size() && (value[index] == '\'' || value[index] == '"')) {
-      quote = value[index];
-      ++index;
-      while (index < value.size() && StringUtils::IsAsciiWhitespace(value[index])) {
-        ++index;
-      }
+void AppendAttributeCssReferences(const xml::XMLNode& node, const xml::XMLQualifiedNameRef& attr,
+                                  std::string_view value, const svg::SVGElement& element,
+                                  const VariableLinkSink& variables,
+                                  std::vector<FragmentReference>* out) {
+  // Both var() and url() require a literal function-opening parenthesis.
+  if (value.find('(') == std::string_view::npos) {
+    return;
+  }
+  const auto project = [&](const SourceRange& local) {
+    return node.mapDecodedAttributeRange(attr, local);
+  };
+  if (!attr.namespacePrefix.empty()) {
+    return;
+  }
+  if (attr.name == "style") {
+    for (const auto& declaration :
+         css::parser::DeclarationListParser::ParseOnlyDeclarations(value)) {
+      AppendParsedReferences(declaration.values, value, project, &element, variables, out);
     }
-
-    if (index >= value.size() || value[index] != '#') {
-      searchPos = index;
-      continue;
-    }
-
-    const std::size_t fragmentStart = index + 1;
-    std::size_t fragmentEnd = fragmentStart;
-    while (fragmentEnd < value.size()) {
-      const char ch = value[fragmentEnd];
-      if ((quote != '\0' && ch == quote) ||
-          (quote == '\0' && (ch == ')' || StringUtils::IsAsciiWhitespace(ch)))) {
-        break;
-      }
-      ++fragmentEnd;
-    }
-
-    std::optional<std::size_t> sourceOffset;
-    if (valueOffset.has_value()) {
-      sourceOffset = *valueOffset + index;
-    }
-
-    AppendFragmentReference(references, value.substr(fragmentStart, fragmentEnd - fragmentStart),
-                            sourceOffset);
-    searchPos = fragmentEnd;
+  } else if (svg::PropertyRegistry::isPresentationAttributeName(attr.name)) {
+    AppendParsedReferences(css::parser::ValueParser::Parse(value), value, project, &element,
+                           variables, out);
   }
 }
 
@@ -364,7 +392,8 @@ void AppendHrefFragmentReference(std::string_view value, std::optional<std::size
 }
 
 std::vector<FragmentReference> ReferencedFragments(std::string_view source,
-                                                   const svg::SVGElement& element) {
+                                                   const svg::SVGElement& element,
+                                                   const VariableLinkSink& variables = {}) {
   std::vector<FragmentReference> result;
   std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.entityHandle());
   if (!xmlNode.has_value()) {
@@ -386,7 +415,7 @@ std::vector<FragmentReference> ReferencedFragments(std::string_view source,
     }
 
     const std::string_view value = *attrValue;
-    AppendUrlFragmentReferences(value, valueOffset, &result);
+    AppendAttributeCssReferences(*xmlNode, attrName, value, element, variables, &result);
     if (attrName.name == "href") {
       AppendHrefFragmentReference(value, valueOffset, &result);
     }
@@ -404,14 +433,44 @@ std::optional<std::size_t> SelectorLinkSourceOffset(std::string_view source,
   return std::nullopt;
 }
 
-void AppendCssFragmentReferences(std::string_view source, ByteRange range,
-                                 std::vector<FragmentReference>* references) {
-  if (range.start > source.size() || range.end > source.size() || range.end < range.start) {
+void AppendRuleReferences(const svg::SVGStylesheetRule& rule, const svg::SVGElement* element,
+                          const VariableLinkSink& variables,
+                          std::vector<FragmentReference>* references) {
+  if (!rule.stylesheetElement || rule.isUserAgentStylesheet) {
     return;
   }
+  const auto& owner = *rule.stylesheetElement;
+  const RcString text = owner.textContent();
+  const auto project = [&](const SourceRange& local) {
+    return svg::MapStylesheetSourceRange(owner, local);
+  };
+  for (const auto& declaration : rule.declarations) {
+    AppendParsedReferences(declaration.declaration.values, text, project, element, variables,
+                           references);
+  }
+}
 
-  AppendUrlFragmentReferences(source.substr(range.start, range.end - range.start), range.start,
-                              references);
+std::vector<FragmentReference> RuleReferencesAtOffset(const svg::SVGDocument& document,
+                                                      std::size_t sourceOffset) {
+  std::vector<FragmentReference> references;
+  if (const auto parsed = svg::CollectStylesheetRuleAtSourceOffset(document, sourceOffset)) {
+    AppendRuleReferences(*parsed, nullptr, {}, &references);
+  }
+  return references;
+}
+
+void AppendMatchedRuleReferences(const svg::SVGMatchedStyleRule& match,
+                                 const svg::SVGElement& element,
+                                 std::vector<FragmentReference>* references,
+                                 const VariableLinkSink& variables = {}) {
+  if (!match.stylesheetElement || !match.ruleCssRange) {
+    return;
+  }
+  if (const auto rule = svg::GetAuthoredStylesheetRule(*match.stylesheetElement, match.ruleIndex)) {
+    if (rule->ruleCssRange == match.ruleCssRange) {
+      AppendRuleReferences(*rule, &element, variables, references);
+    }
+  }
 }
 
 FocusLinkSourceMode ChildLinkSourceMode(FocusLinkSourceMode mode) {
@@ -435,7 +494,8 @@ void AppendReferencedFragmentsInSubtree(std::string_view source, const svg::SVGE
                                         FocusLinkSourceMode linkSourceMode,
                                         std::vector<FragmentReference>* references,
                                         FocusTraversalBudget* budget = nullptr,
-                                        std::size_t depth = 0) {
+                                        std::size_t depth = 0,
+                                        const VariableLinkSink& variables = {}) {
   if (depth > kMaximumFocusTraversalDepth) {
     if (budget != nullptr) {
       budget->reject();
@@ -448,13 +508,17 @@ void AppendReferencedFragmentsInSubtree(std::string_view source, const svg::SVGE
   if (references->size() >= kMaximumFocusReferenceLinks) {
     return;
   }
-  AppendFragmentReferences(ReferencedFragments(source, root), linkSourceMode, references);
+  AppendFragmentReferences(
+      ReferencedFragments(
+          source, root,
+          linkSourceMode == FocusLinkSourceMode::None ? VariableLinkSink{} : variables),
+      linkSourceMode, references);
 
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
     AppendReferencedFragmentsInSubtree(source, current, ChildLinkSourceMode(linkSourceMode),
-                                       references, budget, depth + 1u);
+                                       references, budget, depth + 1u, variables);
     if ((budget != nullptr && budget->rejected()) ||
         references->size() >= kMaximumFocusReferenceLinks) {
       return;
@@ -566,7 +630,7 @@ void AppendMatchedCssFragmentReferencesInSubtree(std::string_view source,
       const std::optional<ByteRange> ruleRange =
           ResolveSourceRange(source, *matchedRule.ruleSourceRange);
       if (ruleRange.has_value()) {
-        AppendCssFragmentReferences(source, *ruleRange, references);
+        AppendMatchedRuleReferences(matchedRule, root, references);
       }
     }
   }
@@ -668,7 +732,7 @@ bool MatchedCssReferencesAnyFragmentId(std::string_view source, const svg::SVGEl
     }
 
     std::vector<FragmentReference> references;
-    AppendCssFragmentReferences(source, *ruleRange, &references);
+    AppendMatchedRuleReferences(matchedRule, element, &references);
     if (ReferencesAnyFragmentId(references, fragmentIds)) {
       return true;
     }
@@ -780,7 +844,8 @@ bool AddFocusElement(const svg::SVGElement& element, FocusElementCollection* res
 }
 
 void AddElementReferenceLink(std::size_t fromOffset, const svg::SVGElement& referenced,
-                             bool reverseReference, FocusElementCollection* result) {
+                             bool reverseReference, FocusElementCollection* result,
+                             bool targetId = false) {
   if (!HasLiveSvgTreeComponents(referenced)) {
     return;
   }
@@ -803,6 +868,7 @@ void AddElementReferenceLink(std::size_t fromOffset, const svg::SVGElement& refe
         .fromOffset = fromOffset,
         .referenced = referenced,
         .reverseReference = reverseReference,
+        .targetId = targetId,
     });
   }
 }
@@ -836,7 +902,19 @@ void AppendElementReferenceLinks(std::string_view source,
       continue;
     }
 
-    std::optional<std::size_t> targetOffset = ReferenceLinkTargetOffset(source, link.referenced);
+    std::optional<std::size_t> targetOffset;
+    if (link.targetId) {
+      if (const auto node = xml::XMLNode::TryCast(link.referenced.entityHandle())) {
+        const auto id = SafeId(link.referenced);
+        const SourceRange name{FileOffset::Offset(0), FileOffset::Offset(id.size())};
+        if (const auto mapped =
+                node->mapDecodedAttributeRange(xml::XMLQualifiedNameRef("id"), name)) {
+          targetOffset = mapped->start.offset;
+        }
+      }
+    } else {
+      targetOffset = ReferenceLinkTargetOffset(source, link.referenced);
+    }
     if (!targetOffset.has_value() || link.fromOffset > source.size()) {
       continue;
     }
@@ -973,6 +1051,72 @@ void AddMatchedCssRule(std::string_view source, Registry& registry,
   result->cssRules.push_back(*cssRule);
 }
 
+VariableLinkSink VariableLinksForFocus(std::string_view source, FocusElementCollection* result,
+                                       FocusLinkSourceMode mode = FocusLinkSourceMode::All) {
+  if (mode == FocusLinkSourceMode::None) {
+    return {};
+  }
+  return [source, result](const svg::SVGElement& element, std::string_view name,
+                          const SourceRange& use) {
+    const auto from = ResolveSourceRange(source, use);
+    if (!from || !result->traversalBudget.consume(name.size() + 1)) {
+      return;
+    }
+    if (result->variableUseCount >= kMaximumFocusReferenceLinks) {
+      result->traversalBudget.reject();
+      return;
+    }
+    const auto [it, inserted] = result->variableGroupIndices.try_emplace(
+        element.unsafeEntityHandle().entity(), result->variableGroups.size());
+    if (inserted) {
+      result->variableGroups.push_back({element, {}});
+    }
+    result->variableGroups[it->second].uses.push_back({std::string(name), from->start});
+    ++result->variableUseCount;
+  };
+}
+
+void ResolveVariableGroup(std::string_view source, const std::vector<std::size_t>& lineStarts,
+                          const ElementVariableUses& group, FocusElementCollection& result) {
+  std::vector<std::string_view> names;
+  names.reserve(group.uses.size());
+  for (const auto& use : group.uses) {
+    names.push_back(use.name);
+  }
+  const auto remaining = kMaximumFocusTraversalWork - result.traversalBudget.work();
+  const auto batch = svg::FindCustomPropertyDeclarations(group.element, names, remaining);
+  if (!result.traversalBudget.consume(batch.work) || batch.budgetExceeded) {
+    result.traversalBudget.reject();
+    return;
+  }
+  if (!batch.complete) {
+    return;
+  }
+  for (std::size_t i = 0; i < group.uses.size(); ++i) {
+    if (!batch.declarations[i]) {
+      continue;
+    }
+    const auto target = ResolveSourceRange(source, *batch.declarations[i]);
+    if (target) {
+      AddSourceReferenceLink({PointForOffset(lineStarts, group.uses[i].sourceOffset),
+                              PointForOffset(lineStarts, target->start)},
+                             &result);
+      AppendFocusLineRange(&result.declarationLines, RangeToLines(lineStarts, *target),
+                           &result.traversalBudget);
+    }
+  }
+}
+
+void ResolveVariableLinks(std::string_view source, const std::vector<std::size_t>& lineStarts,
+                          FocusElementCollection& result) {
+  for (const auto& group : result.variableGroups) {
+    if (result.traversalBudget.rejected()) {
+      break;
+    }
+    ResolveVariableGroup(source, lineStarts, group, result);
+  }
+}
+
 void AppendMatchedCssRulesInSubtree(std::string_view source,
                                     const std::vector<std::size_t>& lineStarts,
                                     const svg::SVGElement& root, FocusElementCollection* result,
@@ -1020,7 +1164,8 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
       }
 
       std::vector<FragmentReference> ruleReferences;
-      AppendCssFragmentReferences(source, *ruleRange, &ruleReferences);
+      AppendMatchedRuleReferences(matchedRule, root, &ruleReferences,
+                                  VariableLinksForFocus(source, result, linkSourceMode));
       AppendFragmentReferences(std::move(ruleReferences), linkSourceMode, references);
     }
   }
@@ -1058,7 +1203,7 @@ void AppendReverseAttributeReferences(std::string_view source, const svg::SVGEle
 
     if (reference.sourceOffset.has_value()) {
       AddElementReferenceLink(*reference.sourceOffset, targetElement, /*reverseReference=*/true,
-                              result);
+                              result, reference.url);
     }
     AddFocusElement(root, result);
     MarkReverseExpandableIfResource(root, reverseExpandableEntities);
@@ -1106,7 +1251,7 @@ void AppendReverseCssReferences(std::string_view source, const std::vector<std::
       }
 
       std::vector<FragmentReference> references;
-      AppendCssFragmentReferences(source, *ruleRange, &references);
+      AppendMatchedRuleReferences(matchedRule, root, &references);
 
       bool referencesTarget = false;
       for (const FragmentReference& reference : references) {
@@ -1117,7 +1262,7 @@ void AppendReverseCssReferences(std::string_view source, const std::vector<std::
         referencesTarget = true;
         if (reference.sourceOffset.has_value()) {
           AddElementReferenceLink(*reference.sourceOffset, targetElement,
-                                  /*reverseReference=*/true, result);
+                                  /*reverseReference=*/true, result, reference.url);
         }
       }
 
@@ -1218,7 +1363,7 @@ void AppendReverseCssReferenceElements(std::string_view source, const svg::SVGEl
       }
 
       std::vector<FragmentReference> references;
-      AppendCssFragmentReferences(source, *ruleRange, &references);
+      AppendMatchedRuleReferences(matchedRule, root, &references);
       if (std::ranges::any_of(references, [targetId](const FragmentReference& reference) {
             return reference.fragmentId == targetId;
           })) {
@@ -1281,7 +1426,8 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
                                    &visitedCssRules, linkSourceMode, &references,
                                    &result.traversalBudget);
     AppendReferencedFragmentsInSubtree(document.source(), current, linkSourceMode, &references,
-                                       &result.traversalBudget);
+                                       &result.traversalBudget, 0,
+                                       VariableLinksForFocus(document.source(), &result));
     if (result.traversalBudget.rejected()) {
       break;
     }
@@ -1305,7 +1451,7 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
             std::ranges::find(reverseProcessedIds, reference.fragmentId) !=
             reverseProcessedIds.end();
         AddElementReferenceLink(*reference.sourceOffset, referenced->second, reverseReference,
-                                &result);
+                                &result, reference.url);
       }
 
       AddFocusElement(referenced->second, &result);
@@ -1498,6 +1644,116 @@ std::vector<LineRange> HiddenLineRanges(int lineCount, const std::vector<LineRan
   return result;
 }
 
+std::optional<SourceRange> ReferenceSpellingAt(const svg::SVGStyleElement& owner,
+                                               const SourceRange& spelling, std::size_t offset) {
+  const auto mapped = svg::MapStylesheetSourceRange(owner, spelling);
+  return mapped && mapped->start.offset && mapped->end.offset && *mapped->start.offset <= offset &&
+                 offset < *mapped->end.offset
+             ? mapped
+             : std::nullopt;
+}
+
+// A reference under the caret has its own destination even if the rule has no
+// renderable matches, or the reverse links for a broad selector were suppressed.
+void AppendReferenceUnderCaret(const svg::SVGStylesheetRule& rule, const svg::SVGDocument& document,
+                               std::size_t offset, const svg::SVGElement* subject,
+                               FocusElementCollection& out) {
+  if (!rule.stylesheetElement) {
+    return;
+  }
+  const auto& owner = *rule.stylesheetElement;
+  const auto text = owner.textContent();
+  const auto project = [&](const SourceRange& spelling) -> std::optional<SourceRange> {
+    return ReferenceSpellingAt(owner, spelling, offset);
+  };
+  std::vector<FragmentReference> fragments;
+  for (const auto& declaration : rule.declarations) {
+    AppendParsedReferences(declaration.declaration.values, text, project, subject,
+                           VariableLinksForFocus(document.source(), &out), &fragments,
+                           /*inspectAuthoredFallbacks=*/subject == nullptr);
+  }
+  std::erase_if(fragments, [](const auto& ref) { return !ref.sourceOffset; });
+  if (fragments.empty()) {
+    return;
+  }
+  std::vector<svg::SVGElement> elements;
+  AppendDocumentElements(document.svgElement(), &elements, &out.traversalBudget);
+  const auto byId = BuildElementByIdIndex(elements, &out.traversalBudget);
+  if (out.traversalBudget.rejected()) {
+    return;
+  }
+  for (const auto& ref : fragments) {
+    if (const auto it = byId.find(ref.fragmentId); it != byId.end()) {
+      AddFocusElement(it->second, &out);
+      AddElementReferenceLink(*ref.sourceOffset, it->second, false, &out, true);
+    }
+  }
+}
+
+const svg::SVGElement* SelectedRuleSubject(const svg::SVGDocument& document,
+                                           const svg::SVGStyleRuleAtSourceOffset& rule,
+                                           std::span<const svg::SVGElement> selection) {
+  if (selection.size() != 1 ||
+      selection.front().unsafeEntityHandle().registry() !=
+          document.svgElement().entityHandle().registry() ||
+      !IsRenderedStyleTarget(selection.front())) {
+    return nullptr;
+  }
+  for (const auto& match : svg::CollectMatchedStyleRules(selection.front())) {
+    if (MatchesStyleSourceRule(match, rule)) {
+      return &selection.front();
+    }
+  }
+  return nullptr;
+}
+
+FocusElementCollection CollectRuleFocusContext(const svg::SVGDocument& document, std::size_t offset,
+                                               const svg::SVGStyleRuleAtSourceOffset& rule,
+                                               std::span<const svg::SVGElement> selection,
+                                               const std::vector<svg::SVGElement>& impacted,
+                                               const std::vector<std::size_t>& lineStarts) {
+  if (!impacted.empty() && !IsLargeReverseReferenceFanout(impacted.size())) {
+    return CollectFocusElements(document, impacted, RuleReferencesAtOffset(document, offset),
+                                lineStarts);
+  }
+  FocusElementCollection result;
+  if (const auto parsed = svg::CollectStylesheetRuleAtSourceOffset(document, offset)) {
+    AppendReferenceUnderCaret(*parsed, document, offset,
+                              SelectedRuleSubject(document, rule, selection), result);
+  }
+  return result;
+}
+
+void AppendFocusedRuleContext(std::string_view source, const std::vector<std::size_t>& lineStarts,
+                              FocusElementCollection& focusElements, FocusPartition& partition) {
+  for (const svg::SVGElement& element : focusElements.elements) {
+    if (std::optional<ByteRange> elementRange = NodeRange(source, element)) {
+      AppendFocusLineRange(&partition.referenceColor, RangeToLines(lineStarts, *elementRange),
+                           &focusElements.traversalBudget);
+    }
+
+    std::ignore = AddAncestorTagLineRanges(source, lineStarts, element, &partition,
+                                           /*required=*/false, &focusElements.traversalBudget);
+  }
+
+  for (const FocusCssRule& cssRule : focusElements.cssRules) {
+    AppendFocusLineRange(&partition.referenceColor, RangeToLines(lineStarts, cssRule.ruleRange),
+                         &focusElements.traversalBudget);
+    if (cssRule.stylesheetNodeRange.has_value()) {
+      AddNodeTagLineRanges(source, lineStarts, *cssRule.stylesheetNodeRange, &partition,
+                           &focusElements.traversalBudget);
+    }
+  }
+  partition.referenceColor.insert(partition.referenceColor.end(),
+                                  focusElements.declarationLines.begin(),
+                                  focusElements.declarationLines.end());
+  partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
+                                  focusElements.cssLinks.end());
+
+  AppendElementReferenceLinks(source, lineStarts, focusElements.links, &partition,
+                              &focusElements.traversalBudget);
+}
+
 }  // namespace
 
 FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
@@ -1539,6 +1795,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   FocusPartition partition;
   FocusElementCollection focusElements =
       CollectFocusElements(document, std::move(initialElements), {}, *lineStarts);
+  ResolveVariableLinks(source, *lineStarts, focusElements);
 
   for (std::size_t i = 0; i < focusElements.elements.size(); ++i) {
     std::optional<ByteRange> elementRange = NodeRange(source, focusElements.elements[i]);
@@ -1567,6 +1824,9 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
     }
   }
 
+  partition.referenceColor.insert(partition.referenceColor.end(),
+                                  focusElements.declarationLines.begin(),
+                                  focusElements.declarationLines.end());
   partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
                                   focusElements.cssLinks.end());
 
@@ -1588,8 +1848,9 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   return partition;
 }
 
-std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument& document,
-                                                          std::size_t sourceOffset) {
+std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(
+    const svg::SVGDocument& document, std::size_t sourceOffset,
+    std::span<const svg::SVGElement> selection) {
   // Hold a scoped read access for the whole analysis so the nested SVGElement / EntityHandle reads
   // below are valid under ThreadingMode::ConcurrentDom (read access is reentrant per thread).
   [[maybe_unused]] const svg::DocumentReadAccess focusReadAccess = document.readAccess();
@@ -1630,12 +1891,10 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   const bool suppressReverseReferenceExpansion =
       IsLargeReverseReferenceFanout(impactedElements.size());
 
-  std::vector<FragmentReference> cssReferences;
-  AppendCssFragmentReferences(source, *ruleRange, &cssReferences);
-  FocusElementCollection focusElements;
-  if (!suppressReverseReferenceExpansion) {
-    focusElements = CollectFocusElements(document, impactedElements, cssReferences, *lineStarts);
-  }
+  auto focusElements = CollectRuleFocusContext(document, sourceOffset, *sourceRule, selection,
+                                               impactedElements, *lineStarts);
+
+  ResolveVariableLinks(source, *lineStarts, focusElements);
 
   FocusPartition partition;
   AppendFocusLineRange(&partition.fullColor, RangeToLines(*lineStarts, *ruleRange),
@@ -1652,31 +1911,7 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
                                 &focusElements.traversalBudget);
   }
 
-  if (!suppressReverseReferenceExpansion) {
-    for (const svg::SVGElement& element : focusElements.elements) {
-      if (std::optional<ByteRange> elementRange = NodeRange(source, element)) {
-        AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, *elementRange),
-                             &focusElements.traversalBudget);
-      }
-
-      std::ignore = AddAncestorTagLineRanges(source, *lineStarts, element, &partition,
-                                             /*required=*/false, &focusElements.traversalBudget);
-    }
-
-    for (const FocusCssRule& cssRule : focusElements.cssRules) {
-      AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, cssRule.ruleRange),
-                           &focusElements.traversalBudget);
-      if (cssRule.stylesheetNodeRange.has_value()) {
-        AddNodeTagLineRanges(source, *lineStarts, *cssRule.stylesheetNodeRange, &partition,
-                             &focusElements.traversalBudget);
-      }
-    }
-    partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
-                                    focusElements.cssLinks.end());
-
-    AppendElementReferenceLinks(source, *lineStarts, focusElements.links, &partition,
-                                &focusElements.traversalBudget);
-  }
+  AppendFocusedRuleContext(source, *lineStarts, focusElements, partition);
 
   Normalize(&partition.fullColor);
   Normalize(&partition.referenceColor);

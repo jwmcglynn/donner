@@ -221,11 +221,25 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "css_source_reference",
+    srcs = ["CssSourceReference.cc"],
+    hdrs = ["CssSourceReference.h"],
+    deps = [
+        "//donner/base",
+        "//donner/css",
+        "//donner/css/parser",
+    ],
+)
+
+donner_cc_library(
     name = "focus_view",
     srcs = ["FocusView.cc"],
     hdrs = ["FocusView.h"],
     deps = [
+        ":css_source_reference",
         ":reference_fanout",
+        "//donner/css/parser",
+        "//donner/svg/properties:property_parsing",
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",

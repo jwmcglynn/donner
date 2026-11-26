@@ -5,6 +5,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -558,6 +560,14 @@ struct StyleRuleAtSourceOffset {
   bool operator==(const StyleRuleAtSourceOffset& other) const = default;
 };
 
+/// Internal result of one aggregate custom-property provenance query.
+struct CustomPropertyDeclarationBatchResult {
+  std::vector<std::optional<SourceRange>> declarations;
+  std::size_t work = 0;
+  bool budgetExceeded = false;
+  bool complete = false;
+};
+
 /**
  * Computes stylesheet information for elements, applying the CSS cascade and inheritance rules.
  *
@@ -767,6 +777,12 @@ public:
                                                       const SourceRange& cssRange) const;
 
   /// Look up source provenance for an already-computed custom value.
+  static std::optional<bool> preparedCustomPropertyHasValue(EntityHandle handle,
+                                                            std::string_view name);
+  /// Maximum defensive work accepted by the legacy one-name query.
+  static constexpr std::size_t kMaximumCustomPropertyDeclarationQueryWork = 16 * 1024 * 1024;
+  CustomPropertyDeclarationBatchResult findCustomPropertyDeclarations(
+      EntityHandle handle, std::span<const std::string_view> names, std::size_t maxWork) const;
   std::optional<SourceRange> findCustomPropertyDeclaration(EntityHandle handle,
                                                            std::string_view name) const;
 

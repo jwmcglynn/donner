@@ -3215,18 +3215,95 @@ struct CustomPropertyWinner {
   Entity sheetEntity = entt::null;
 };
 
-void ConsiderCustomProperty(CustomPropertyWinner& winner, std::string_view name,
-                            const css::Declaration& declaration, css::Specificity priority,
-                            Entity sheetEntity) {
-  if (std::string_view(declaration.name) != name ||
-      declaration.variableReferences == css::VariableReferences::Invalid) {
+// Allow a full source-focus partition to resolve its retained endpoints in one batch.
+constexpr std::size_t kMaximumCustomPropertyQueryNames = 1024;
+constexpr std::size_t kMaximumCustomPropertyQueryInputBytes = 64 * 1024;
+
+class CustomPropertyProvenanceWork {
+public:
+  explicit CustomPropertyProvenanceWork(std::size_t maximum) : maximum_(maximum) {}
+
+  bool consume(std::size_t amount) {
+    if (exceeded_ || amount > maximum_ - work_) {
+      refuse();
+      return false;
+    }
+    work_ += amount;
+    return true;
+  }
+
+  void refuse() {
+    work_ = maximum_;
+    exceeded_ = true;
+  }
+
+  std::size_t remaining() const { return maximum_ - work_; }
+  std::size_t work() const { return work_; }
+  bool exceeded() const { return exceeded_; }
+
+private:
+  std::size_t maximum_;
+  std::size_t work_ = 0;
+  bool exceeded_ = false;
+};
+
+struct CustomPropertyQueryEntry {
+  std::string_view name;
+  std::vector<std::size_t> outputs;
+  CustomPropertyWinner winner;
+  std::optional<SourceRange> declaration;
+  bool resolved = false;
+};
+
+bool ChargeDeclarationScan(CustomPropertyProvenanceWork& work,
+                           const css::Declaration& declaration) {
+  return work.consume(1) && work.consume(declaration.values.size()) &&
+         work.consume(declaration.sourceByteSize);
+}
+
+bool ChargeStylesheetLayerInputs(const css::Stylesheet& sheet, CustomPropertyProvenanceWork& work) {
+  if (!work.consume(1) || !work.consume(sheet.imports().size())) {
+    return false;
+  }
+  const auto* layers = sheet.layers();
+  return !layers || (work.consume(layers->nodes.size()) && work.consume(layers->events.size()) &&
+                     work.consume(layers->fontFaceLayers.size()));
+}
+
+bool ChargeStylesheetComponentLayerInputs(const StylesheetComponent& sheet,
+                                          CustomPropertyProvenanceWork& work) {
+  if (!work.consume(1) || !work.consume(sheet.importOrigins.size()) ||
+      !ChargeStylesheetLayerInputs(sheet.stylesheet, work)) {
+    return false;
+  }
+  return std::ranges::all_of(sheet.importedStylesheets, [&](const css::Stylesheet& imported) {
+    return ChargeStylesheetLayerInputs(imported, work);
+  });
+}
+
+bool ChargeLayerInputs(const Registry& registry, CustomPropertyProvenanceWork& work) {
+  if (!work.consume(registry.storage<Entity>()->size())) {
+    return false;
+  }
+  for (auto view = registry.view<const StylesheetComponent>(); const Entity entity : view) {
+    const auto& sheet = view.get<const StylesheetComponent>(entity);
+    if (!ChargeStylesheetComponentLayerInputs(sheet, work)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void ConsiderCustomProperty(CustomPropertyQueryEntry& entry, const css::Declaration& declaration,
+                            css::Specificity priority, Entity sheetEntity) {
+  if (entry.resolved || declaration.variableReferences == css::VariableReferences::Invalid) {
     return;
   }
   if (declaration.important) {
     priority = css::Specificity::Important(priority);
   }
-  if (!winner.declaration || winner.specificity <= priority) {
-    winner = {&declaration, priority, entt::null, sheetEntity};
+  if (!entry.winner.declaration || entry.winner.specificity <= priority) {
+    entry.winner = {&declaration, priority, entt::null, sheetEntity};
   }
 }
 
@@ -3234,17 +3311,56 @@ struct CustomPropertySearch {
   const ShadowedElementAdapter& adapter;
   const RuleIndexElementView& keys;
   const DocumentLayerOrder* layers;
-  StyleResourceBudget& budget;
+  CustomPropertyProvenanceWork& work;
   bool unindexed;
-  std::string_view name;
-  CustomPropertyWinner winner;
+  std::span<CustomPropertyQueryEntry> entries;
+  const std::unordered_map<std::string_view, std::size_t>& entriesByName;
   std::vector<std::uint32_t> candidates;
-  StyleCascadeCounters counters;
+
+  bool chargeCandidateCollection(std::span<const css::SelectorRule> rules, const RuleIndex& index) {
+    return work.consume(1) && work.consume(unindexed ? rules.size() : index.entryCount()) &&
+           work.consume(keys.className().size()) && work.consume(keys.attributeCount());
+  }
+
+  std::optional<MatchedSelectorEntry> match(const css::SelectorRule& rule, const RuleIndex& index,
+                                            std::uint32_t position) {
+    if (!work.consume(1)) {
+      return std::nullopt;
+    }
+    css::SelectorTraversalBudget traversal(work.remaining());
+    const auto result =
+        MatchSelectorRule(rule, adapter, &traversal, unindexed ? nullptr : &index, position);
+    if (traversal.rejected()) {
+      work.refuse();
+      return std::nullopt;
+    }
+    if (!work.consume(traversal.steps())) {
+      return std::nullopt;
+    }
+    return result;
+  }
+
+  bool scanDeclarations(const css::SelectorRule& rule, css::Specificity priority,
+                        Entity sourceEntity) {
+    for (const css::Declaration& declaration : rule.declarations) {
+      if (!ChargeDeclarationScan(work, declaration)) {
+        return false;
+      }
+      const auto found = entriesByName.find(std::string_view(declaration.name));
+      if (found != entriesByName.end()) {
+        ConsiderCustomProperty(entries[found->second], declaration, priority, sourceEntity);
+      }
+    }
+    return true;
+  }
 
   bool visit(const css::Stylesheet& sheet, const RuleIndex& index, bool userAgent,
              Entity sourceEntity) {
     const RuleLayerRanks ranks(layers, userAgent, sheet);
     const auto rules = sheet.rules();
+    if (!chargeCandidateCollection(rules, index)) {
+      return false;
+    }
     CollectCandidateRules(rules, index, keys, unindexed, candidates);
     for (const auto position : candidates) {
       const auto& rule = rules[position];
@@ -3252,40 +3368,51 @@ struct CustomPropertySearch {
       if (!rank) {
         continue;
       }
-      if (!budget.reserveRuleElementMatch()) {
+      const auto matched = match(rule, index, position);
+      if (work.exceeded()) {
         return false;
       }
-      const auto match = MatchCascadeCandidate(rule, adapter, budget.selectorTraversal(), nullptr,
-                                               index, position, unindexed);
-      if (!match) {
+      if (!matched) {
         continue;
       }
-      const auto priority = CascadeSpecificity(match->specificity.withLayerRank(*rank), userAgent);
-      AdmitRuleDeclarations(rule, priority, budget, counters,
-                            [&](const css::Declaration& declaration, css::Specificity specificity) {
-                              ConsiderCustomProperty(winner, name, declaration, specificity,
-                                                     sourceEntity);
-                            });
+      const auto priority =
+          CascadeSpecificity(matched->specificity.withLayerRank(*rank), userAgent);
+      if (!scanDeclarations(rule, priority, sourceEntity)) {
+        return false;
+      }
     }
-    return !budget.rejected();
+    return true;
   }
 };
 
-CustomPropertyWinner FindLocalCustomProperty(const Registry& registry, Entity treeEntity,
-                                             Entity dataEntity, std::string_view name,
-                                             const DocumentLayerOrder* layers,
-                                             StyleResourceBudget& budget) {
+bool FindLocalCustomProperties(
+    const Registry& registry, Entity treeEntity, Entity dataEntity,
+    const DocumentLayerOrder* layers, std::span<CustomPropertyQueryEntry> entries,
+    const std::unordered_map<std::string_view, std::size_t>& entriesByName,
+    CustomPropertyProvenanceWork& work) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
   const RuleIndexElementView keys(registry, treeEntity, dataEntity);
   CustomPropertySearch search{
-      adapter, keys, layers, budget, registry.ctx().contains<UnindexedCascadeForTesting>(),
-      name,    {},   {},     {}};
+      adapter, keys,          layers, work, registry.ctx().contains<UnindexedCascadeForTesting>(),
+      entries, entriesByName, {}};
   if (const auto* style = registry.try_get<StyleComponent>(dataEntity)) {
     const auto& properties = style->properties().unparsedProperties;
-    if (const auto local = properties.find(RcString(name)); local != properties.end()) {
-      search.winner = {&local->second.declaration, local->second.specificity, dataEntity};
+    for (auto& entry : entries) {
+      if (entry.resolved || !work.consume(1)) {
+        if (work.exceeded()) {
+          return false;
+        }
+        continue;
+      }
+      if (const auto local = properties.find(RcString(entry.name)); local != properties.end()) {
+        if (!ChargeDeclarationScan(work, local->second.declaration)) {
+          return false;
+        }
+        entry.winner = {&local->second.declaration, local->second.specificity, dataEntity};
+      }
     }
   }
+  bool complete = true;
   VisitCascadeStylesheets(
       registry, layers, [&](const StylesheetComponent& stylesheet, Entity sheetEntity) {
         if (!IsApplicableStylesheet(registry, stylesheet, sheetEntity, dataEntity)) {
@@ -3295,12 +3422,13 @@ CustomPropertyWinner FindLocalCustomProperty(const Registry& registry, Entity tr
                                   const RuleIndex& index, bool userAgent) {
           return search.visit(sheet, index, userAgent, entt::null);
         };
-        return VisitCascadeImports(stylesheet, layers, imported) &&
-               search.visit(stylesheet.stylesheet, stylesheet.ruleIndex,
-                            stylesheet.isUserAgentStylesheet,
-                            stylesheet.isUserAgentStylesheet ? entt::null : sheetEntity);
+        complete = VisitCascadeImports(stylesheet, layers, imported) &&
+                   search.visit(stylesheet.stylesheet, stylesheet.ruleIndex,
+                                stylesheet.isUserAgentStylesheet,
+                                stylesheet.isUserAgentStylesheet ? entt::null : sheetEntity);
+        return complete;
       });
-  return search.winner;
+  return complete;
 }
 
 struct StylesheetSourceIndexCache {
@@ -3376,14 +3504,174 @@ std::optional<SourceRange> MapCustomPropertyWinner(Registry& registry,
              : std::nullopt;
 }
 
-bool CanTraceCustomProperty(const Registry& registry, EntityHandle handle, std::string_view name) {
-  if (!HasCurrentSourceProjection(registry)) {
+using CustomPropertyEntryIndex = std::unordered_map<std::string_view, std::size_t>;
+
+enum class CustomPropertyQueryStatus {
+  Complete,
+  Unavailable,
+  BudgetExceeded,
+};
+
+bool AllCustomPropertyEntriesResolved(std::span<const CustomPropertyQueryEntry> entries) {
+  return std::ranges::all_of(entries, &CustomPropertyQueryEntry::resolved);
+}
+
+bool BuildCustomPropertyQueryEntries(std::span<const std::string_view> names,
+                                     CustomPropertyProvenanceWork& work,
+                                     std::vector<CustomPropertyQueryEntry>& entries,
+                                     CustomPropertyEntryIndex& entriesByName) {
+  std::size_t inputBytes = 0;
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    const std::string_view name = names[i];
+    if (name.size() > kMaximumCustomPropertyQueryInputBytes - inputBytes || !work.consume(1) ||
+        !work.consume(name.size())) {
+      work.refuse();
+      return false;
+    }
+    inputBytes += name.size();
+    if (name.size() <= 2 || !name.starts_with("--")) {
+      continue;
+    }
+    const auto [found, inserted] = entriesByName.try_emplace(name, entries.size());
+    if (inserted) {
+      entries.push_back(CustomPropertyQueryEntry{.name = name});
+    }
+    entries[found->second].outputs.push_back(i);
+  }
+  return true;
+}
+
+CustomPropertyQueryStatus PrepareCustomPropertyQueryEntries(
+    EntityHandle handle, std::span<CustomPropertyQueryEntry> entries,
+    CustomPropertyProvenanceWork& work) {
+  if (!handle || !HasCurrentSourceProjection(*handle.registry())) {
+    return CustomPropertyQueryStatus::Unavailable;
+  }
+  Registry& registry = *handle.registry();
+  const auto* documentBudget = registry.ctx().find<StyleResourceBudget>();
+  const auto* computed = handle.try_get<ComputedStyleComponent>();
+  if ((documentBudget && documentBudget->rejected()) || !computed || !computed->style) {
+    return CustomPropertyQueryStatus::Unavailable;
+  }
+  const auto& prepared = computed->style->customProperties;
+  for (auto& entry : entries) {
+    if (!work.consume(1)) {
+      return CustomPropertyQueryStatus::BudgetExceeded;
+    }
+    entry.resolved = !prepared || !prepared->find(entry.name);
+  }
+  return CustomPropertyQueryStatus::Complete;
+}
+
+void ResetCustomPropertyWinners(std::span<CustomPropertyQueryEntry> entries) {
+  for (auto& entry : entries) {
+    if (!entry.resolved) {
+      entry.winner = {};
+    }
+  }
+}
+
+void ApplyCustomPropertyWinners(std::span<CustomPropertyQueryEntry> entries) {
+  for (auto& entry : entries) {
+    if (entry.resolved) {
+      continue;
+    }
+    using Action = CustomPropertyMap::Action;
+    const auto action = entry.winner.declaration ? CustomPropertyAction(*entry.winner.declaration)
+                                                 : Action::Inherit;
+    if (action == Action::Set) {
+      entry.resolved = true;
+    } else if (action == Action::Initial) {
+      entry.winner = {};
+      entry.resolved = true;
+    }
+  }
+}
+
+void StopCustomPropertyInheritanceAtExternalRoot(const Registry& registry, Entity current,
+                                                 std::span<CustomPropertyQueryEntry> entries) {
+  if (AllCustomPropertyEntriesResolved(entries) || !ExternalRootContext(registry, current)) {
+    return;
+  }
+  for (auto& entry : entries) {
+    entry.resolved = true;
+    entry.winner = {};
+  }
+}
+
+CustomPropertyQueryStatus ResolveCustomPropertyAncestor(
+    Registry& registry, Entity& current, const DocumentLayerOrder* layers,
+    std::span<CustomPropertyQueryEntry> entries, const CustomPropertyEntryIndex& entriesByName,
+    CustomPropertyProvenanceWork& work) {
+  if (!work.consume(1)) {
+    return CustomPropertyQueryStatus::BudgetExceeded;
+  }
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+  if (!tree) {
+    return CustomPropertyQueryStatus::Unavailable;
+  }
+  const auto* shadow = registry.try_get<ShadowEntityComponent>(current);
+  const Entity dataEntity = shadow ? shadow->lightEntity : current;
+  ResetCustomPropertyWinners(entries);
+  if (!FindLocalCustomProperties(registry, current, dataEntity, layers, entries, entriesByName,
+                                 work)) {
+    return work.exceeded() ? CustomPropertyQueryStatus::BudgetExceeded
+                           : CustomPropertyQueryStatus::Unavailable;
+  }
+  ApplyCustomPropertyWinners(entries);
+  StopCustomPropertyInheritanceAtExternalRoot(registry, current, entries);
+  current = tree->parent();
+  return CustomPropertyQueryStatus::Complete;
+}
+
+CustomPropertyQueryStatus ResolveCustomPropertyQueryEntries(
+    Registry& registry, Entity start, std::span<CustomPropertyQueryEntry> entries,
+    const CustomPropertyEntryIndex& entriesByName, CustomPropertyProvenanceWork& work) {
+  if (AllCustomPropertyEntriesResolved(entries)) {
+    return CustomPropertyQueryStatus::Complete;
+  }
+  if (!ChargeLayerInputs(registry, work)) {
+    return CustomPropertyQueryStatus::BudgetExceeded;
+  }
+  const auto layers = DocumentLayerOrder::Build(registry);
+  for (Entity current = start;
+       current != entt::null && !AllCustomPropertyEntriesResolved(entries);) {
+    const auto status = ResolveCustomPropertyAncestor(registry, current, layers.get(), entries,
+                                                      entriesByName, work);
+    if (status != CustomPropertyQueryStatus::Complete) {
+      return status;
+    }
+  }
+  return CustomPropertyQueryStatus::Complete;
+}
+
+bool ChargeCustomPropertySourceMapping(const Registry& registry, const CustomPropertyWinner& winner,
+                                       CustomPropertyProvenanceWork& work) {
+  if (!work.consume(1) || !work.consume(winner.declaration->nameSourceByteLength)) {
     return false;
   }
-  const auto* budget = registry.ctx().find<StyleResourceBudget>();
-  const auto* computed = handle.try_get<ComputedStyleComponent>();
-  return !(budget && budget->rejected()) && computed && computed->style &&
-         computed->style->customProperties && computed->style->customProperties->find(name);
+  if (winner.sheetEntity == entt::null) {
+    return true;
+  }
+  const auto* sheet = registry.try_get<StylesheetComponent>(winner.sheetEntity);
+  return !sheet || work.consume(sheet->text.size());
+}
+
+bool MapCustomPropertyQueryEntries(Registry& registry, std::span<CustomPropertyQueryEntry> entries,
+                                   std::span<std::optional<SourceRange>> declarations,
+                                   CustomPropertyProvenanceWork& work) {
+  for (auto& entry : entries) {
+    if (entry.winner.declaration) {
+      if (!ChargeCustomPropertySourceMapping(registry, entry.winner, work)) {
+        return false;
+      }
+      entry.declaration = MapCustomPropertyWinner(registry, entry.winner);
+    }
+    for (const std::size_t output : entry.outputs) {
+      declarations[output] = entry.declaration;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -3400,42 +3688,73 @@ std::optional<SourceRange> StyleSystem::mapStylesheetSourceRange(
   return MapEmbeddedStylesheetRange(registry, stylesheetEntity, cssRange);
 }
 
-std::optional<SourceRange> StyleSystem::findCustomPropertyDeclaration(EntityHandle handle,
-                                                                      std::string_view name) const {
-  Registry& registry = *handle.registry();
-  if (!CanTraceCustomProperty(registry, handle, name)) {
+std::optional<bool> StyleSystem::preparedCustomPropertyHasValue(EntityHandle handle,
+                                                                std::string_view name) {
+  if (!handle || !HasCurrentSourceProjection(*handle.registry())) {
     return std::nullopt;
   }
-  const auto layers = DocumentLayerOrder::Build(registry);
-  StyleResourceBudget budget;
-  for (Entity current = handle.entity(); current != entt::null;) {
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-    if (!tree) {
-      return std::nullopt;
-    }
-    const auto* shadow = registry.try_get<ShadowEntityComponent>(current);
-    const Entity dataEntity = shadow ? shadow->lightEntity : current;
-    const auto winner =
-        FindLocalCustomProperty(registry, current, dataEntity, name, layers.get(), budget);
-    if (budget.rejected()) {
-      return std::nullopt;
-    }
-    using Action = CustomPropertyMap::Action;
-    const auto action =
-        winner.declaration ? CustomPropertyAction(*winner.declaration) : Action::Inherit;
-    if (action == Action::Set) {
-      return MapCustomPropertyWinner(registry, winner);
-    }
-    // An explicit initial value cannot supply the selected computed token sequence.
-    if (action == Action::Initial) {
-      return std::nullopt;
-    }
-    if (ExternalRootContext(registry, current)) {
-      return std::nullopt;
-    }
-    current = tree->parent();
+  const auto* budget = handle.registry()->ctx().find<StyleResourceBudget>();
+  const auto* computed = handle.try_get<ComputedStyleComponent>();
+  if ((budget && budget->rejected()) || !computed || !computed->style) {
+    return std::nullopt;
   }
-  return std::nullopt;
+  const auto& map = computed->style->customProperties;
+  return map && map->find(name);
+}
+
+CustomPropertyDeclarationBatchResult StyleSystem::findCustomPropertyDeclarations(
+    EntityHandle handle, std::span<const std::string_view> names, std::size_t maxWork) const {
+  CustomPropertyDeclarationBatchResult result;
+  CustomPropertyProvenanceWork work(maxWork);
+  if (names.size() > kMaximumCustomPropertyQueryNames) {
+    work.refuse();
+    result.work = work.work();
+    result.budgetExceeded = true;
+    return result;
+  }
+  result.declarations.resize(names.size());
+  if (names.empty()) {
+    result.complete = true;
+    return result;
+  }
+  std::vector<CustomPropertyQueryEntry> entries;
+  entries.reserve(names.size());
+  CustomPropertyEntryIndex entriesByName;
+  entriesByName.reserve(names.size());
+  if (!BuildCustomPropertyQueryEntries(names, work, entries, entriesByName)) {
+    result.work = work.work();
+    result.budgetExceeded = true;
+    return result;
+  }
+  if (entries.empty()) {
+    result.work = work.work();
+    result.complete = true;
+    return result;
+  }
+  const auto prepared = PrepareCustomPropertyQueryEntries(handle, entries, work);
+  const auto resolved = prepared == CustomPropertyQueryStatus::Complete
+                            ? ResolveCustomPropertyQueryEntries(*handle.registry(), handle.entity(),
+                                                                entries, entriesByName, work)
+                            : prepared;
+  const bool mapped =
+      resolved == CustomPropertyQueryStatus::Complete &&
+      MapCustomPropertyQueryEntries(*handle.registry(), entries, result.declarations, work);
+  result.work = work.work();
+  result.budgetExceeded = resolved == CustomPropertyQueryStatus::BudgetExceeded || work.exceeded();
+  result.complete = mapped;
+  if (!mapped) {
+    result.declarations.assign(names.size(), std::nullopt);
+  }
+  return result;
+}
+
+std::optional<SourceRange> StyleSystem::findCustomPropertyDeclaration(EntityHandle handle,
+                                                                      std::string_view name) const {
+  const std::array names{name};
+  auto result =
+      findCustomPropertyDeclarations(handle, names, kMaximumCustomPropertyDeclarationQueryWork);
+  return result.complete && !result.declarations.empty() ? result.declarations.front()
+                                                         : std::nullopt;
 }
 
 std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(

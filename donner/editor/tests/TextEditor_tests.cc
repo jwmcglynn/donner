@@ -3223,6 +3223,26 @@ TEST_F(TextEditorTests, FocusHiddenPlaceholderExpansionRejectsInvalidRows) {
             (std::vector<LineRange>{LineRange{.startLine = 1, .endLine = 2}}));
 }
 
+TEST_F(TextEditorTests, AuthoredReferenceEndpointsResolveTabsAndMultibyteText) {
+  editor.setText("\t漢é var(--Ink)\n漢\t--Ink: red");
+  editor.setSourceFocusPartition(FocusPartition{
+      .referenceLinks = {{{0, 11}, {1, 4}}},
+  });
+  EXPECT_THAT(ActiveFocusPartition().referenceLinks,
+              ElementsAre(FocusReferenceLinkIs({0, 9}, {1, 2})));
+}
+
+TEST_F(TextEditorTests, AuthoredReferencesRetainOrderAcrossSharedAndUnsortedEndpoints) {
+  editor.setText("漢\talpha beta\nλ gamma");
+  editor.setSourceFocusPartition(FocusPartition{
+      .referenceLinks = {{{1, 3}, {0, 10}}, {{0, 10}, {0, 4}}, {{0, 4}, {1, 3}}},
+  });
+  EXPECT_THAT(
+      ActiveFocusPartition().referenceLinks,
+      ElementsAre(FocusReferenceLinkIs({1, 2}, {0, 8}), FocusReferenceLinkIs({0, 8}, {0, 2}),
+                  FocusReferenceLinkIs({0, 2}, {1, 2})));
+}
+
 TEST_F(TextEditorTests, CursorInsideFocusRangeTracksVisibleFocusBrightnessLines) {
   editor.setText("root\nreference\ntarget\nclosing\nhidden");
   editor.setFocusPartition(FocusPartition{

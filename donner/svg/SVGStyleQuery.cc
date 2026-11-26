@@ -1,5 +1,6 @@
 #include "donner/svg/SVGStyleQuery.h"
 
+#include <array>
 #include <span>
 
 #include "donner/base/xml/XMLNode.h"
@@ -108,6 +109,27 @@ std::optional<SVGStylesheetRule> FindProjectedRuleAtOffset(Registry& registry, s
 
 }  // namespace
 
+std::optional<SVGStylesheetRule> GetAuthoredStylesheetRule(const SVGStyleElement& owner,
+                                                           std::size_t index) {
+  return owner.withReadAccess(
+      [&](DocumentReadAccess& access, EntityHandle handle) -> std::optional<SVGStylesheetRule> {
+        const auto* sheet = handle.try_get<StylesheetComponent>();
+        if (!sheet || sheet->isUserAgentStylesheet || !sheet->isCssType() ||
+            index >= sheet->stylesheet.rules().size()) {
+          return std::nullopt;
+        }
+        return ToPublicStylesheetRule(access.registry(), handle.entity(), index, *sheet,
+                                      sheet->stylesheet.rules()[index]);
+      });
+}
+
+std::optional<bool> HasPreparedCustomPropertyValue(const SVGElement& element,
+                                                   std::string_view name) {
+  return element.withReadAccess([&](DocumentReadAccess&, EntityHandle handle) {
+    return components::StyleSystem::preparedCustomPropertyHasValue(handle, name);
+  });
+}
+
 std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element) {
   return element.withReadAccess([](DocumentReadAccess&, EntityHandle handle) {
     if (!handle) {
@@ -197,15 +219,27 @@ std::optional<SourceRange> MapStylesheetSourceRange(const SVGStyleElement& style
   });
 }
 
+SVGCustomPropertyDeclarationBatch FindCustomPropertyDeclarations(
+    const SVGElement& element, std::span<const std::string_view> names, std::size_t maxWork) {
+  return element.withReadAccess([&](DocumentReadAccess&, EntityHandle handle) {
+    auto internal =
+        components::StyleSystem().findCustomPropertyDeclarations(handle, names, maxWork);
+    return SVGCustomPropertyDeclarationBatch{
+        .declarations = std::move(internal.declarations),
+        .work = internal.work,
+        .budgetExceeded = internal.budgetExceeded,
+        .complete = internal.complete,
+    };
+  });
+}
+
 std::optional<SourceRange> FindCustomPropertyDeclaration(const SVGElement& element,
                                                          std::string_view name) {
-  return element.withReadAccess(
-      [&](DocumentReadAccess&, EntityHandle handle) -> std::optional<SourceRange> {
-        if (!handle || name.size() <= 2 || !name.starts_with("--")) {
-          return std::nullopt;
-        }
-        return components::StyleSystem().findCustomPropertyDeclaration(handle, name);
-      });
+  const std::array names{name};
+  auto result = FindCustomPropertyDeclarations(
+      element, names, components::StyleSystem::kMaximumCustomPropertyDeclarationQueryWork);
+  return result.complete && !result.declarations.empty() ? result.declarations.front()
+                                                         : std::nullopt;
 }
 
 std::optional<SVGStyleRuleAtSourceOffset> FindStyleRuleAtSourceOffset(
