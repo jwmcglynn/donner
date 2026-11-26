@@ -9,6 +9,7 @@
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/xml/XMLEscape.h"
+#include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLTokenizer.h"
 #include "donner/css/FontFace.h"
 #include "donner/css/parser/details/Tokenizer.h"
@@ -156,16 +157,47 @@ private:
     }
   }
 
+  void beginTag(const XMLToken& token) {
+    finishStyleText(TokenStart(token));
+    closing_ = token.text(source_) == "</";
+    tagDepth_ = changes_.size();
+    name_ = {};
+    attribute_ = {};
+    attributes_.clear();
+    skipTag_ =
+        skippedDepth_ != 0 ||
+        (!closing_ && elements_.size() >= xml::XMLParser::Options::kDefaultMaximumNestingDepth);
+  }
+
+  // Over-depth content keeps ordinary XML coloring. Count its nesting without allocating
+  // frames or namespace bindings, then resume at the next sibling in the enclosing SVG.
+  void skipMarkup(const XMLToken& token) {
+    if (token.type != XMLTokenType::TagClose && token.type != XMLTokenType::TagSelfClose) {
+      return;
+    }
+    if (token.type == XMLTokenType::TagClose) {
+      if (closing_) {
+        --skippedDepth_;
+      } else {
+        ++skippedDepth_;
+      }
+    }
+    skipTag_ = false;
+    if (skippedDepth_ == 0 && !elements_.empty() && elements_.back().stylesheet) {
+      styleStart_ = TokenEnd(token);
+    }
+  }
+
   void accept(const XMLToken& token) {
+    if (token.type == XMLTokenType::TagOpen) {
+      beginTag(token);
+      return;
+    }
+    if (skipTag_) {
+      skipMarkup(token);
+      return;
+    }
     switch (token.type) {
-      case XMLTokenType::TagOpen:
-        finishStyleText(TokenStart(token));
-        closing_ = token.text(source_) == "</";
-        tagDepth_ = changes_.size();
-        name_ = {};
-        attribute_ = {};
-        attributes_.clear();
-        break;
       case XMLTokenType::TagName: name_ = token.text(source_); break;
       case XMLTokenType::AttributeName: attribute_ = token.text(source_); break;
       case XMLTokenType::AttributeValue: attributeValue(token); break;
@@ -182,7 +214,9 @@ private:
   std::vector<CssSourceRegion> regions_, attributes_;
   std::optional<std::size_t> styleStart_;
   std::size_t tagDepth_ = 0;
+  std::size_t skippedDepth_ = 0;
   bool closing_ = false;
+  bool skipTag_ = false;
 };
 
 std::vector<CssSourceRegion> FindRegions(std::string_view source) {
