@@ -34,6 +34,9 @@ public:
   /// @return Original source range when the boundaries have exact authored locations.
   std::optional<SourceRange> mapRange(const SourceRange& range) const;
 
+  /// Allocated vector-capacity bytes retained by this mapping, excluding allocator overhead.
+  std::size_t retainedCapacityBytes() const;
+
 private:
   friend class XMLNode;
 
