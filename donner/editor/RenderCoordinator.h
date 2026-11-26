@@ -513,7 +513,7 @@ public:
   std::shared_ptr<const FramePresentation> buildFramePresentation(
       EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
       SelectionChromeDetail detail, bool includeChrome = true,
-      FramePresentationAdmission admit = {});
+      FramePresentationAdmission admit = {}, PresentationInputIdentity inputIdentity = {});
   /// Last installed immutable frame, retained for diagnostics and render callbacks.
   [[nodiscard]] std::shared_ptr<const FramePresentation> framePresentation() const {
     return framePresentation_;
@@ -603,7 +603,8 @@ private:
                                     const std::vector<Entity>& selection);
   FramePresentationInput makeFrameInput(EditorApp& app, SelectTool& tool,
                                         const ViewportState& viewport, const Box2d& paneClipRect,
-                                        SelectionChromeDetail detail, bool includeChrome);
+                                        SelectionChromeDetail detail, bool includeChrome,
+                                        PresentationInputIdentity inputIdentity);
   void refreshLivePathCapture(EditorApp& app, FramePresentationInput& input);
   void recordFramePresentationCost(const FramePresentationInput& input, const SelectTool& tool,
                                    double elapsedMs);

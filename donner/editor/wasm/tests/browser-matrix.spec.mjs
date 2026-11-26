@@ -2123,9 +2123,9 @@ async function sampleScriptedDrag({
         held = true;
         schedule(laggingFrame, frameEveryMs);
         if (presentationOnlyHeldBurst) {
-          schedule(() => complete({ x: pointer.x + 1, y: pointer.y }, true, false, 1.5, false), 99);
+          schedule(() => complete({ x: pointer.x + 1, y: pointer.y }, true, true, 1.5, false), 99);
           schedule(
-            () => complete({ x: pointer.x + 1, y: pointer.y + 1 }, true, false, 1.5, false),
+            () => complete({ x: pointer.x + 1, y: pointer.y + 1 }, true, true, 1.5, false),
             107,
           );
         }
@@ -2214,11 +2214,6 @@ test("the drag sampler retains presentation completions between animation frames
     2,
     "both held presentations published between rAF callbacks remain measurable",
   );
-  assert.ok(
-    completed.filter((frame) => frame.presentation.mouseDown)
-      .every((frame) => !frame.presentation.inputRepresented),
-    "completed held positions need not have caught up to the latest queued input",
-  );
 });
 
 test("completed drag frames reject a matching coordinate dispatched in the future", async () => {
@@ -2226,7 +2221,7 @@ test("completed drag frames reject a matching coordinate dispatched in the futur
   const presentation = {
     completedSerial: 2,
     completedAtMs: 150,
-    inputRepresented: false,
+    inputRepresented: true,
     mouseDown: true,
     pointerX: 2,
     pointerY: 3,

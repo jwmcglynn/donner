@@ -2309,15 +2309,16 @@ void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
 #ifdef DONNER_EDITOR_WGPU
 void EditorWindow::setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
                                                 std::uint64_t documentGeneration,
-                                                std::uint64_t frameVersion, bool inputRepresented,
-                                                double viewportZoom) {
+                                                std::uint64_t frameVersion, double pointerX,
+                                                double pointerY, bool mouseDown,
+                                                bool inputRepresented, double viewportZoom) {
   presentationFrameId_ = frameId;
   presentationCaptureId_ = captureId;
   presentationInputStamp_ = {.frameId = frameId,
                              .captureId = captureId,
-                             .pointerX = ImGui::GetIO().MousePos.x,
-                             .pointerY = ImGui::GetIO().MousePos.y,
-                             .mouseDown = ImGui::GetIO().MouseDown[0],
+                             .pointerX = pointerX,
+                             .pointerY = pointerY,
+                             .mouseDown = mouseDown,
                              .inputRepresented = inputRepresented,
                              .viewportZoom = viewportZoom};
   presentationDocumentIdentity_ = {.documentGeneration = documentGeneration,

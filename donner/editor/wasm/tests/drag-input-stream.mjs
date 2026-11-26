@@ -185,10 +185,9 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
 }
 
 /**
- * Whether a sampled frame completed after this drag began. Callers separately match its pointer
- * to an input dispatched before the completion. The inputRepresented field says whether the
- * presentation caught up to the latest input, so it stays false when a fast held drag completes
- * an earlier dispatched position while newer inputs are queued.
+ * Whether a sampled frame completed after this drag began and independently claims that its sealed
+ * pointer/button input is represented by the pixels. Callers separately match that pointer to an
+ * input dispatched before the completion.
  * @param {DragFrame} frame Sampled frame.
  * @param {DragStream} stream The drag's stream.
  * @param {number} baselineSerial Completed serial before the drag started.
@@ -196,7 +195,8 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
  */
 function completesThisDrag(frame, stream, baselineSerial) {
   return Boolean(
-    frame.presentation?.completedSerial > baselineSerial
+    frame.presentation?.inputRepresented
+      && frame.presentation.completedSerial > baselineSerial
       && frame.presentation.completedAtMs >= stream.startedAtMs,
   );
 }

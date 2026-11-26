@@ -82,6 +82,33 @@ void ExpectRectAt(const FramePresentation& frame, double x) {
   EXPECT_NEAR(quad->topLeft.y, 10.0 * 1.93, 1e-8);
 }
 
+TEST(FramePresentationTest, SealsInputIdentityWithThePresentedPixels) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kRect), IsTrue());
+  app.setSelection(*app.document().document().querySelector("#rect"));
+  SelectTool tool;
+  const auto capture = Capture(app, 1);
+  ASSERT_THAT(capture, Ne(nullptr));
+  const auto resources = FramePresentationTestAccess::resources(
+      capture, {RectTile(capture->selection().front(), 10.0, 0.0)});
+  auto input = Input(app, tool, 1);
+  input.inputIdentity = {
+      .pointerPosition = Vector2d(12.0, 34.0),
+      .mouseDown = true,
+  };
+
+  const auto frame = FramePresentation::Build(resources, input).frame;
+  ASSERT_THAT(frame, Ne(nullptr));
+  input.inputIdentity = {
+      .pointerPosition = Vector2d(91.0, 92.0),
+      .mouseDown = false,
+  };
+
+  EXPECT_DOUBLE_EQ(frame->inputIdentity().pointerPosition.x, 12.0);
+  EXPECT_DOUBLE_EQ(frame->inputIdentity().pointerPosition.y, 34.0);
+  EXPECT_THAT(frame->inputIdentity().mouseDown, IsTrue());
+}
+
 TEST(FramePresentationTest, SecondDragAndLateRasterShareOnePose) {
   EditorApp app;
   ASSERT_THAT(app.loadFromString(kRect), IsTrue());

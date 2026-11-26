@@ -460,6 +460,7 @@ FramePresentationBuildResult FramePresentation::Build(
 void FramePresentation::initialize(const FramePresentationInput& input, bool useOverview) {
   identity_ = rasterCapture_->identity();
   frameId_ = input.frameId;
+  inputIdentity_ = input.inputIdentity;
   viewport_ = input.viewport;
   paneClipRect_ = input.paneClipRect;
   documentClipRect_ = PresentedImageClipRect(input.paneClipRect, input.viewport.imageScreenRect());

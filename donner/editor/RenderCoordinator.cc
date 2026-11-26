@@ -1461,17 +1461,16 @@ PresentationIdentity RenderCoordinator::currentPresentationIdentity(const Editor
           .presentationEpoch = presentationEpoch_};
 }
 
-FramePresentationInput RenderCoordinator::makeFrameInput(EditorApp& app, SelectTool& tool,
-                                                         const ViewportState& viewport,
-                                                         const Box2d& paneClipRect,
-                                                         SelectionChromeDetail detail,
-                                                         bool includeChrome) {
+FramePresentationInput RenderCoordinator::makeFrameInput(
+    EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
+    SelectionChromeDetail detail, bool includeChrome, PresentationInputIdentity inputIdentity) {
   auto desired = compositedPresentation_.activePreviewForPresentation(tool.activeDragPreview());
   if (desired.has_value()) {
     desired->contentIdentity.presentationEpoch = presentationEpoch_;
   }
   FramePresentationInput input{
       .frameId = nextPresentationFrameId_++,
+      .inputIdentity = inputIdentity,
       .viewport = viewport,
       .paneClipRect = paneClipRect,
       .selection = selectedPresentationEntities(app),
@@ -1717,7 +1716,8 @@ void RenderCoordinator::retireIncompatibleTextFrame(const FramePresentationInput
 
 std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentation(
     EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
-    SelectionChromeDetail detail, bool includeChrome, FramePresentationAdmission admit) {
+    SelectionChromeDetail detail, bool includeChrome, FramePresentationAdmission admit,
+    PresentationInputIdentity inputIdentity) {
   auto& cost = lastFrameCostBreakdown_.overlay;
   const auto live = tool.activeDragPreview();
   cost.hasLiveDragPreview = live.has_value();
@@ -1738,7 +1738,8 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
     return framePresentation_;
   }
   const auto buildStart = std::chrono::steady_clock::now();
-  auto input = makeFrameInput(app, tool, viewport, paneClipRect, detail, includeChrome);
+  auto input =
+      makeFrameInput(app, tool, viewport, paneClipRect, detail, includeChrome, inputIdentity);
   if (const auto selectedSource = FramePresentation::CaptureForFrame(resources, input)) {
     refreshFrameSelectionCapture(app, selectedSource, input.selection);
   }
