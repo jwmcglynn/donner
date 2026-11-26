@@ -3325,7 +3325,9 @@ std::optional<SourceRange> MapStylesheetText(const xml::XMLNode& node, std::stri
     }
     offset += chunk->size();
   }
-  return std::nullopt;
+  return offset == 0
+             ? node.mapProjectedTextRange(css, {FileOffset::Offset(start), FileOffset::Offset(end)})
+             : std::nullopt;
 }
 
 bool HasCurrentSourceProjection(const Registry& registry) {

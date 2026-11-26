@@ -153,11 +153,11 @@ TEST_F(CssImportTest, ImportIsFetchedAndPrecedesLocalRules) {
 
 TEST_F(CssImportTest, ImportedCustomPropertyWinnerHasNoDocumentLocation) {
   respond("theme.css", "rect { --tone: green !important; --local: green; }");
-  SVGDocument document = parse(R"(
+  SVGDocument document = parse(R"svg(
     <style>@import 'theme.css'; rect { --tone: red; --local: red; }</style>
-    <rect id="r" style="fill: var(--tone); stroke: var(--local)" /
-                               >) ");
-      prepare(document);
+    <rect id="r" style="fill: var(--tone); stroke: var(--local)" />
+  )svg");
+  prepare(document);
   const auto element = document.querySelector("#r");
   ASSERT_THAT(element, Optional(testing::_));
   EXPECT_THAT(fill(document), Optional(kGreen));
