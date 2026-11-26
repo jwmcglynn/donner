@@ -454,13 +454,15 @@ void CaptureProjectedText(EntityHandle child, EntityHandle parent) {
   }
   // The record takes ownership before clearing the child's source metadata.
   const SourceAnchorSpan anchors = *std::exchange(source->anchorSpan, std::nullopt);
-  const auto valueAnchors = std::exchange(source->valueSpan, std::nullopt);
+  const auto type = child.get<XMLNodeTypeComponent>().type();
+  const auto valueAnchors =
+      type == XMLNode::Type::CData ? std::exchange(source->valueSpan, std::nullopt) : std::nullopt;
   const auto position = std::lower_bound(
       records.records.begin(), records.records.end(), span->start,
       [](const auto& record, std::size_t start) { return record.range.start < start; });
   const std::size_t index = std::distance(records.records.begin(), position);
   records.records.emplace(position, store, budget, anchors, valueAnchors, *span, child.entity(),
-                          child.get<XMLNodeTypeComponent>().type(), value);
+                          type, value);
   UpdateProjectionPrefix(records, index);
 }
 
