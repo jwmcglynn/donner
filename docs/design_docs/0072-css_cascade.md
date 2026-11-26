@@ -158,11 +158,10 @@ same harness, machine class and method. Each goal names the counter or timer tha
 - **Speedup where it pays.** With four scheduler workers and shared computed styles, the target
   for first-frame style time on the bootstrap-icons sprite (5,137 elements) and the synthetic
   `<use>` document (4,425 elements) is at most half of the same build's serial time. See
-  [Native Calibration](#native-calibration) for the measured Arm shortfall.
+  [Native Calibration](#native-calibration) for the optimized native measurements.
 - **No cost where it does not.** Passes below the 1,000-node threshold run serially. The splash
   and tiger should stay within 2 percent with a scheduler present in quiet-machine perf runs.
-  The Arm splash sample exceeds the guard. The Apple small-scene guard still needs a quiet
-  measurement. See [Native Calibration](#native-calibration).
+  The quiet same-build measurements meet the guard. See [Native Calibration](#native-calibration).
 - **Bit-identical.** Computed styles, matched-rule lists, warnings and budget outcomes are the
   same at 0, 1, 2, 4 and 8 workers and under the scheduler's seeded-schedule mode, enforced by the
   differential tests.
@@ -435,12 +434,16 @@ Part C estimate: 13.5 engineering days.
   - [x] Compare the corpus across serial, fixed-seed, and 1-, 2-, 4-, and 8-worker schedules.
         Match styles, ordered diagnostics, logical work, budget outcomes and record sharing.
         Repeat the fixed seed to check physical work counters.
-- [ ] Milestone D3: Threshold and grain calibration (1 day). After D2.
+- [x] Milestone D3: Threshold and grain calibration (1 day). After D2.
   - [x] Compare admission cutoffs and sample a warmed native task on Arm Linux and Apple arm64.
         Retain the current cutoff and grain. See [Native Calibration](#native-calibration).
   - [x] Declare and qualify the 64 KiB non-waiting client allowance for native release builds.
         See [Scheduler Stack Admission](#scheduler-stack-admission).
-  - [ ] Meet the remaining speedup target and verify small-document timing on quiet hosts.
+  - [x] Let the document owner drain bounded ready ranges within the current style scope.
+        See [Sharing Ready Ranges](#sharing-ready-ranges).
+  - [x] Verify the large-scene median speedup against both serial baselines on Arm Linux and
+        Apple arm64. See [Native Calibration](#native-calibration).
+  - [x] Verify the same-build small-document timing guard on quiet hosts.
 
 Part D estimate: 9 engineering days.
 
@@ -2051,19 +2054,67 @@ nodes per work unit and a local queue of 32 on the main thread
 ([StaticPrefList.yaml](https://github.com/mozilla-firefox/firefox/blob/main/modules/libpref/init/StaticPrefList.yaml)),
 for a browser's per-node cost. Donner uses a grain of 64. Each schedulable node contributes
 one unit to its subtree's weight. The traversal splits sibling ranges when their combined
-subtree weights reach the grain. The owner's local-work quota is the planned node count divided by `(workers + 1)`.
+subtree weights reach the grain. On the ordinary range path, the owner's local-work quota is the
+planned node count divided by `(workers + 1)`. See [Sharing Ready Ranges](#sharing-ready-ranges)
+for the bounded frontier path.
+
+### Sharing Ready Ranges
+
+A full missing-style pass can share the ready main roots, or the children of a single root
+after publishing it. Each subtree in that frontier has at most 64 nodes. The owner groups
+siblings up to the usual grain and keeps at most 128 descriptors. It uses this path only when
+there are at least two and at most 12 chunks per participant, counting the owner.
+A production chunk therefore contains at most 127 nodes. The existing range path handles
+narrow, oversized, dirty, and seeded passes.
+
+The owner claims its first chunk before offering at most one drainer per worker. Each
+queued drainer claims at most 12 chunks from the scope's cursor. It completes each claimed
+subtree locally. A rejected enqueue leaves the descriptors available to the owner. A
+drainer checks stack headroom and binds its own preparation context before computing.
+The owner uses the existing scope join after draining available ranges. The last main
+participant hands off to the offscreen phase. Owner replay still commits requests in their
+original order. The native `style_parallel_tests` suite exercises both frontier shapes,
+real workers, exhausted external task capacity, the chunk envelope, and serial parity.
 
 ### Native Calibration
 
-Same-binary checks of the default path compare four workers with serial. On Arm Linux the
-sprite goes from 8.233 to 5.768 ms (0.701×) and synthetic use from 5.402 to 4.920 ms (0.911×),
-both above 0.50×. On Apple arm64 the sprite goes from 2.548 to 1.016 ms (0.399×) and use
-from 1.722 to 0.843 ms (0.490×), both meeting the target. Splash and tiger each dispatch zero
-tasks. In the same-binary Arm check splash changes from 1.746 to 1.789 ms (+2.46%) and tiger
-from 0.901 to 0.877 ms (−2.66%). The Arm splash exceeds the 2% guard. The Apple splash measures
-1.076× serial under load with zero dispatch, so Apple's quiet small-scene guard remains open.
-A quiet comparison against unmodified main also remains open.
-See [D1b qualification](https://github.com/jwmcglynn/donner/pull/2765).
+The production owner-drain comparison uses ten alternating optimized groups on each
+platform. Each run reports the median of nine first-frame style samples. The table compares
+four workers with the same candidate's serial run and also gives the serial timing for the
+[stack-admission baseline](https://github.com/jwmcglynn/donner/pull/2769). Each group includes
+a duplicate four-worker candidate arm as an A/A control. The fixed cohort retains all groups.
+The fixtures are the [bootstrap-icons sprite](../../third_party/bootstrap-icons/bootstrap-icons.svg)
+and the synthetic `<use>` scene generated by
+[`MakeUseInstancesDocument`](../../donner/benchmarks/CssCascadeScenes.cc) with 200 instances,
+20 symbol children, and 20 rules.
+Arm Linux uses five NUMA-local cores, with 2.88–44.01% unrelated CPU use over individual runs.
+Apple arm64 runs under host load with one-minute load averages of 43.76–51.70.
+
+| Platform and fixture | Baseline serial | Candidate serial → four workers | Candidate ratio |
+| --- | ---: | ---: | ---: |
+| Arm Linux, sprite | 8.8645 ms | 8.9155 → 4.1160 ms | 0.4617× |
+| Arm Linux, synthetic `<use>` | 5.9220 ms | 5.9695 → 2.8295 ms | 0.4740× |
+| Apple arm64, sprite | 2.6060 ms | 2.5505 → 0.6515 ms | 0.2554× |
+| Apple arm64, synthetic `<use>` | 1.9605 ms | 1.9260 → 0.5035 ms | 0.2614× |
+
+Paired ratio medians on Arm Linux are 0.4648× for the sprite (95% interval
+0.4096–0.4904×) and 0.4708× for `<use>` (0.4527–0.5127×). On Apple arm64 they
+are 0.2548× for the sprite (0.2337–0.2737×) and 0.2612× for `<use>`
+(0.2485–0.2743×). The Arm `<use>` interval extends above 0.50×. The prespecified
+ratio of medians meets the target. The sprite admits 63 tasks and replays 5,137 traces
+through the ordinary range path. The `<use>` fixture admits four drainers and replays
+4,200 traces. Both fixtures complete without rollback.
+
+A separate quiet same-build test records 12 paired groups per platform on the
+[splash](../../donner_splash.svg) and
+[tiger](../../donner/svg/renderer/testdata/Ghostscript_Tiger.svg), with a live four-worker
+scheduler and with zero workers. Both fixtures dispatch zero tasks. The upper 95% limits
+for the live/zero ratio are 1.0056 for splash and 1.0038 for tiger on Arm Linux, and
+1.0019 and 1.0012 on Apple arm64. All are within the 2% guard. The exercise controls for
+scheduler presence within one executable. The independent executable comparison with the
+stack-admission baseline does not establish a 2% bound on absolute small-scene cost.
+See [the initial scheduling qualification](https://github.com/jwmcglynn/donner/pull/2765)
+for the earlier traversal's measurements.
 
 The cutoff curve compares 4,096 with 1,000 using the median paired change in first-frame style
 time. Each optimized native diagnostic binary runs the same inputs with four workers. A duplicate
@@ -2143,6 +2194,14 @@ builds and the Apple arm64 SDK libc++ release build. Other native Linux and Appl
 apply the same admission threshold. Debug and sanitizer tests exercise admission and
 rollback with their own frame layouts. The ordinary serial caller retains its existing
 stack contract.
+
+The ready-frontier drainer adds no recursion. Linux Arm and Darwin Arm release compiler
+layouts show at most 96 bytes rounded for its queued entry, 256 bytes for the common walk,
+and 48 bytes for an inline offscreen handoff after the last main chunk returns. The owner
+path reports a deepest frame slot at 744 bytes. Reserving one additional KiB for the
+frontier traversal in the cumulative estimate brings it to 61 KiB, below the 64 KiB
+allowance above the separate reporting reserve. The native style test runs a queued
+drainer on a 128 KiB worker through a four-level selector on both frontier shapes.
 
 Run the **release cascade frame check** with the normal native CI toolchain and runner
 options. It catches individual emitted frames above 8 KiB in the selected translation
