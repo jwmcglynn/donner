@@ -32,6 +32,7 @@
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/resources/SubDocumentAdmission.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -378,14 +379,16 @@ TEST(RetainedRenderTreeUpdateTest, PairedPathGrowthAndShrinkageKeepsCanonicalBud
 
   constexpr std::string_view small = "M2 2 H10 V10 Z";
   constexpr std::string_view large = "M2 2 H4 V4 H6 V6 H8 V8 H10 V10 H12 V12 H14 V14 Z";
+  constexpr std::string_view smallRight = "M22 2 H30 V10 Z";
+  constexpr std::string_view largeRight = "M22 2 H24 V4 H26 V6 H28 V8 H30 V10 H32 V12 H34 V14 Z";
   const auto source = [&](bool growFirstInFullPass) {
     const std::string grow = "<path id='grow' fill='red' d='" + std::string(small) + "'/>";
     const std::string shrink =
-        "<path id='shrink' fill='blue' transform='translate(20)' d='" + std::string(large) + "'/>";
+        "<path id='shrink' fill='blue' d='" + std::string(largeRight) + "'/>";
     return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24">
                            <style>.grow { d: ")") +
-           std::string(large) + R"(" } .shrink { d: ")" + std::string(small) + R"(" }</style>)" +
-           (growFirstInFullPass ? shrink + grow : grow + shrink) + "</svg>";
+           std::string(large) + R"(" } .shrink { d: ")" + std::string(smallRight) +
+           R"(" }</style>)" + (growFirstInFullPass ? shrink + grow : grow + shrink) + "</svg>";
   };
 
   for (const bool useLocalLimit : {false, true}) {
@@ -459,6 +462,48 @@ TEST(RetainedRenderTreeUpdateTest, PairedPathGrowthAndShrinkageKeepsCanonicalBud
       EXPECT_EQ(otherRetained.retainedBytes(), otherBytes);
     }
   }
+}
+
+TEST(RetainedRenderTreeUpdateTest, ExhaustedCloneShapeWorkFallsBackThroughHitTesting) {
+  using components::AnimationResourceBudget;
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="24">
+      <style>.wide { width: 18px }</style>
+      <defs><rect id="leaf" width="6" height="12" fill="red"/></defs>
+      <use id="instance" href="#leaf" x="30"/>
+    </svg>)svg";
+  auto retained = Parse(source);
+  auto reference = Parse(source);
+  DisableRetainedUpdates(reference);
+  DriverRenderer actual;
+  DriverRenderer expected;
+  actual.draw(retained);
+  expected.draw(reference);
+  const Vector2d addedPoint(42, 6);
+  DonnerController actualHit(retained);
+  DonnerController expectedHit(reference);
+  EXPECT_THAT(actualHit.findIntersecting(addedPoint), Eq(std::nullopt));
+  const auto before = ReadCounters(retained);
+  for (SVGDocument* document : {&retained, &reference}) {
+    Element(*document, "#leaf").setClassName("wide");
+    auto& work = document->unsafeRegistry().ctx().get<AnimationResourceBudget>();
+    ASSERT_TRUE(work.reserveContextualWork(work.remainingContextualWork()));
+    EXPECT_EQ(work.remainingContextualWork(), 0u);
+  }
+  const auto hit = actualHit.findIntersecting(addedPoint);
+  const auto expectedEntity = expectedHit.findIntersecting(addedPoint);
+  ASSERT_THAT(hit, Optional(testing::_));
+  ASSERT_THAT(expectedEntity, Optional(testing::_));
+  EXPECT_THAT(hit->id(), Eq("instance"));
+  EXPECT_THAT(hit->id(), Eq(expectedEntity->id()));
+  const auto after = ReadCounters(retained);
+  EXPECT_EQ(after.retainedUpdates, before.retainedUpdates);
+  EXPECT_EQ(after.fullRebuilds - before.fullRebuilds, 1u);
+  actual.draw(retained);
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(actual.takeSnapshot(), expected.takeSnapshot(),
+                                       "clone-width-context-work",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RetainedRenderTreeUpdateTest, DormantAndMountedSymbolsSeeLocalSourcePaintEdits) {

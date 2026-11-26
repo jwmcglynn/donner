@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_map>
 
@@ -60,6 +61,8 @@ public:
   struct PathStaging {
     void* context;
     void (*write)(void*, Entity, ComputedPathComponent*);
+    bool (*admitContextualWork)(void*, std::size_t);
+    void (*decline)(void*);
   };
   const PathStaging* pathStaging = nullptr;
 
@@ -69,8 +72,10 @@ public:
     std::size_t bytes;
   };
 
-  /// Admit the actual growth of all changed paths before releasing any previous reservation.
-  [[nodiscard]] bool tryReplacePaths(std::span<const PathReplacement> replacements) {
+  /// Admit actual growth before replacing paths. Entities must be unique.
+  /// The returned shrink stays charged until the caller drops the old payloads.
+  [[nodiscard]] std::optional<std::size_t> tryReplacePaths(
+      std::span<const PathReplacement> replacements) {
     std::size_t growth = 0;
     std::size_t shrink = 0;
     for (const auto& replacement : replacements) {
@@ -84,7 +89,7 @@ public:
     }
     if (retainedBytes_ > limits_.maximumBytes || growth > limits_.maximumBytes - retainedBytes_ ||
         (family_ && !family_->tryReserveRetainedGeometry(growth))) {
-      return false;
+      return std::nullopt;
     }
     for (const auto& replacement : replacements) {
       if (replacement.bytes == 0) {
@@ -93,11 +98,16 @@ public:
         reservations_[replacement.entity] = replacement.bytes;
       }
     }
-    retainedBytes_ = retainedBytes_ + growth - shrink;
+    retainedBytes_ += growth;
+    return shrink;
+  }
+
+  /// Refund the previous path payloads only after they leave the registry.
+  void finishPathReplacements(std::size_t shrink) {
+    retainedBytes_ -= shrink;
     if (family_) {
       family_->release(DocumentResourceFamilyBudget::Kind::Geometry, shrink);
     }
-    return true;
   }
 
   /// Replace one entity's geometry reservation, releasing bytes when it shrinks.

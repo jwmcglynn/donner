@@ -259,14 +259,30 @@ Lengthd::Extent ShapeLengthExtent(std::string_view name) {
   return Lengthd::Extent::Mixed;
 }
 
+const GeometryPreparationResourceBudget::PathStaging* CurrentPathStaging(EntityHandle handle) {
+  const auto* budget = handle.registry()->ctx().find<GeometryPreparationResourceBudget>();
+  return budget ? budget->pathStaging : nullptr;
+}
+
 bool ReserveShapeStyleWork(EntityHandle handle, const ComputedStyleComponent& style) {
   auto* budget = handle.registry()->ctx().find<AnimationResourceBudget>();
   const auto bytes = style.properties()->complexPropertyBytes();
-  return budget && bytes <= AnimationResourceBudget::kMaximumContextualWork / 6 &&
-         budget->reserveContextualWork(bytes * 6);
+  const bool bounded = budget && bytes <= AnimationResourceBudget::kMaximumContextualWork / 6;
+  if (const auto* staging = CurrentPathStaging(handle)) {
+    if (!bounded) {
+      staging->decline(staging->context);
+      return false;
+    }
+    return staging->admitContextualWork(staging->context, bytes * 6);
+  }
+  return bounded && budget->reserveContextualWork(bytes * 6);
 }
 
 bool ReserveShapeRecipeWork(EntityHandle handle, const ComputedStyleComponent& style) {
+  if (const auto* staging = CurrentPathStaging(handle)) {
+    staging->decline(staging->context);
+    return false;
+  }
   auto* budget = handle.registry()->ctx().find<AnimationResourceBudget>();
   if (!budget) {
     return false;
@@ -1098,24 +1114,46 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
 
 namespace {
 
+bool SamePreparedPath(const ComputedPathComponent* old, const ComputedPathComponent* next) {
+  if (!old || !next) {
+    return old == next;
+  }
+  return old->spline == next->spline && old->sourcePathData == next->sourcePathData;
+}
+
 class PreparedRetainedPaths {
 public:
-  explicit PreparedRetainedPaths(Registry& registry) : registry_(registry) {}
+  explicit PreparedRetainedPaths(Registry& registry)
+      : registry_(registry), contextualBudget_(registry.ctx().find<AnimationResourceBudget>()) {}
+
+  void decline() { declined_ = true; }
+
+  bool admitContextualWork(std::size_t work) {
+    if (declined_ || !contextualBudget_ ||
+        work > contextualBudget_->remainingContextualWork() - contextualWork_) {
+      decline();
+      return false;
+    }
+    contextualWork_ += work;
+    return true;
+  }
 
   void stage(Entity entity, ComputedPathComponent* path) {
     if (declined_) {
       return;
     }
     const auto* old = registry_.try_get<ComputedPathComponent>(entity);
-    if ((!old && !path) || (old && path && old->spline == path->spline &&
-                            old->sourcePathData == path->sourcePathData)) {
+    if (SamePreparedPath(old, path)) {
       return;
     }
     const auto bytes = path ? path->spline.retainedBytes() : std::optional<std::size_t>(0);
     constexpr std::size_t kMaximumStagedBytes = 1024 * 1024;
     constexpr std::size_t kMaximumStagedPaths = 512;
     if (!bytes || *bytes > kMaximumStagedBytes - stagedBytes_ ||
-        updates_.size() == kMaximumStagedPaths) {
+        updates_.size() == kMaximumStagedPaths ||
+        std::ranges::find(charges_, entity,
+                          &GeometryPreparationResourceBudget::PathReplacement::entity) !=
+            charges_.end()) {
       declined_ = true;
       return;
     }
@@ -1125,8 +1163,18 @@ public:
   }
 
   bool commit(GeometryPreparationResourceBudget& budget) {
-    if (declined_ || (!charges_.empty() && !budget.tryReplacePaths(charges_))) {
+    if (declined_) {
       return false;
+    }
+    const auto shrink =
+        charges_.empty() ? std::optional<std::size_t>(0) : budget.tryReplacePaths(charges_);
+    if (!shrink) {
+      return false;
+    }
+    // The contextual work allowance belongs to serialized preparation; all stage admissions
+    // succeeded against this same counter and no other consumer runs between them and commit.
+    if (contextualWork_ != 0) {
+      UTILS_RELEASE_ASSERT(contextualBudget_->reserveContextualWork(contextualWork_));
     }
     for (std::size_t i = 0; i < charges_.size(); ++i) {
       const Entity entity = charges_[i].entity;
@@ -1141,11 +1189,14 @@ public:
         registry_.remove<ComputedPathComponent>(entity);
       }
     }
+    budget.finishPathReplacements(*shrink);
     return true;
   }
 
 private:
   Registry& registry_;
+  AnimationResourceBudget* contextualBudget_;
+  std::size_t contextualWork_ = 0;
   std::size_t stagedBytes_ = 0;
   bool declined_ = false;
   std::vector<GeometryPreparationResourceBudget::PathReplacement> charges_;
@@ -1160,9 +1211,14 @@ bool ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entit
   auto& budget = ComputedPathBudget(EntityHandle(registry, entities.front()));
   PreparedRetainedPaths prepared(registry);
   const GeometryPreparationResourceBudget::PathStaging staging{
-      &prepared, [](void* context, Entity entity, ComputedPathComponent* path) {
+      &prepared,
+      [](void* context, Entity entity, ComputedPathComponent* path) {
         static_cast<PreparedRetainedPaths*>(context)->stage(entity, path);
-      }};
+      },
+      [](void* context, std::size_t work) {
+        return static_cast<PreparedRetainedPaths*>(context)->admitContextualWork(work);
+      },
+      [](void* context) { static_cast<PreparedRetainedPaths*>(context)->decline(); }};
   UTILS_RELEASE_ASSERT(!budget.pathStaging);
   budget.pathStaging = &staging;
   for (Entity entity : entities) {
