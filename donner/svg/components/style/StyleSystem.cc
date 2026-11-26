@@ -14,6 +14,7 @@
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -44,6 +45,7 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/CustomPropertyMap.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
@@ -3383,6 +3385,161 @@ bool RequiresFullStyleBudgetReplay(const Registry& registry) {
 }
 
 }  // namespace
+
+bool StyleSystem::computeEditedFrameStyles(Registry& registry, ParseWarningSink& warnings,
+                                           StylePassScheduler scheduler,
+                                           RenderTreeState::ComputeFrameStyles compute) {
+  auto tentative = warnings.remainingAllowance();
+  const auto rejected = [](const Registry& current) {
+    return current.ctx().get<StyleResourceBudget>().rejected();
+  };
+  if (!compute(registry, tentative, scheduler, rejected)) {
+    return false;
+  }
+  warnings.merge(std::move(tentative));
+  return true;
+}
+
+namespace {
+
+bool CanScanStylesheetEdit(const Registry& registry, const RenderTreeState* state,
+                           std::size_t removedCount, std::size_t addedCount) {
+  constexpr std::size_t kMaximumRulesPerEdit = 32;
+  return state && state->hasBeenBuilt && !state->needsFullRebuild &&
+         !state->needsFullStyleRecompute && !RequiresFullStyleBudgetReplay(registry) &&
+         removedCount <= kMaximumRulesPerEdit && addedCount <= kMaximumRulesPerEdit &&
+         registry.view<const ComputedStyleComponent>().size() <=
+             StyleSystem::PreparedBatch::kMaximumElements;
+}
+
+bool MatchChangedRules(const Registry& registry, std::span<const css::SelectorRule> rules,
+                       StyleResourceBudget& budget, std::vector<Entity>& matches) {
+  if (rules.empty()) {
+    return true;
+  }
+  const RuleIndex index(rules);
+  std::vector<std::uint32_t> candidates;
+  auto view =
+      registry.view<const ComputedStyleComponent, const donner::components::TreeComponent>();
+  for (const Entity entity : view) {
+    const Entity source = StyleDataEntity(registry, entity);
+    const RuleIndexElementView keys(registry, entity, source);
+    CollectCandidateRules(rules, index, keys, false, candidates);
+    const ShadowedElementAdapter adapter(registry, entity, source);
+    for (const auto candidate : candidates) {
+      if (!budget.reserveRuleElementMatch()) {
+        return false;
+      }
+      if (MatchSelectorRule(rules[candidate], adapter, &budget.selectorTraversal())) {
+        matches.push_back(entity);
+        break;
+      }
+      if (budget.rejected()) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool CrossesStyleEditBoundary(const Registry& registry, Entity entity) {
+  using Tree = donner::components::TreeComponent;
+  for (Entity current = entity; current != entt::null;
+       current = registry.get<Tree>(current).parent()) {
+    const Entity source = StyleDataEntity(registry, current);
+    if (StyleSystem::isStyleEditSubtreeBoundary(registry, source) ||
+        registry.all_of<ExternalUseComponent>(source)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ExpandChangedStyleSubtrees(Registry& registry, std::vector<Entity>& affected) {
+  using Tree = donner::components::TreeComponent;
+  std::unordered_set<Entity> seen;
+  std::erase_if(affected, [&](Entity entity) { return !seen.insert(entity).second; });
+  if (std::ranges::any_of(
+          affected, [&](Entity entity) { return CrossesStyleEditBoundary(registry, entity); })) {
+    return false;
+  }
+  for (std::size_t i = 0; i < affected.size(); ++i) {
+    const Entity entity = affected[i];
+    const Entity source = StyleDataEntity(registry, entity);
+    if (StyleSystem::isStyleEditSubtreeBoundary(registry, source)) {
+      return false;
+    }
+    for (Entity child = registry.get<Tree>(entity).firstChild(); child != entt::null;
+         child = registry.get<Tree>(child).nextSibling()) {
+      if (seen.insert(child).second) {
+        affected.push_back(child);
+      }
+    }
+  }
+  return ShadowTreeSystem::appendStyleOccurrences(registry, affected);
+}
+
+}  // namespace
+
+void StyleSystem::markEditedStyleTargets(Registry& registry, std::span<const Entity> affected,
+                                         ApplyRetainedStyle applyRetained) {
+  if (affected.empty()) {
+    return;
+  }
+  auto& state = registry.ctx().get<RenderTreeState>();
+  std::vector<uint32_t> oldOrder;
+  oldOrder.reserve(affected.size());
+  for (Entity entity : affected) {
+    const auto order = StyleSystem::retainedStyleOrder(registry, entity);
+    if (!order) {
+      break;
+    }
+    oldOrder.push_back(*order);
+  }
+  const bool retainable = applyRetained && oldOrder.size() == affected.size();
+  if (retainable) {
+    state.applyLiveStyleUpdate = applyRetained;
+  }
+  constexpr uint16_t kNarrowed = DirtyFlagsComponent::Style | DirtyFlagsComponent::RenderInstance |
+                                 DirtyFlagsComponent::NarrowedStyle;
+  const uint16_t flags = retainable ? kNarrowed : DirtyFlagsComponent::StyleCascade;
+  for (std::size_t i = 0; i < affected.size(); ++i) {
+    const EntityHandle node(registry, affected[i]);
+    StyleSystem().invalidateComputed(node);
+    node.remove<ComputedStopComponent>();
+    auto& dirty = node.get_or_emplace<DirtyFlagsComponent>();
+    // A computed-style read between edits can materialize the intermediate style.
+    // Compare against the last prepared frame's order, recorded by the first edit.
+    if (retainable && !dirty.test(DirtyFlagsComponent::NarrowedStyle)) {
+      dirty.narrowedStyleOrder = oldOrder[i];
+    }
+    dirty.mark(flags);
+  }
+  state.computeEditedFrameStyles = StyleSystem::computeEditedFrameStyles;
+}
+
+bool StyleSystem::invalidateStylesheetRules(Registry& registry,
+                                            std::span<const css::SelectorRule> removed,
+                                            std::span<const css::SelectorRule> added,
+                                            ApplyRetainedStyle applyRetained) {
+  auto* state = registry.ctx().find<RenderTreeState>();
+  if (!CanScanStylesheetEdit(registry, state, removed.size(), added.size())) {
+    return false;
+  }
+  const auto* existing = registry.ctx().find<StyleResourceBudget>();
+  StyleResourceBudget scan(existing ? existing->limits() : StyleResourceBudget::Limits());
+  std::vector<Entity> affected;
+  if (!MatchChangedRules(registry, removed, scan, affected) ||
+      !MatchChangedRules(registry, added, scan, affected) ||
+      !ExpandChangedStyleSubtrees(registry, affected)) {
+    return false;
+  }
+  if (auto* cache = registry.ctx().find<MatchedPropertiesCache>()) {
+    cache->clear();
+  }
+  markEditedStyleTargets(registry, affected, applyRetained);
+  return true;
+}
 
 std::uint8_t StyleSystem::styleEditDependencies(const Registry& registry,
                                                 std::string_view attribute,

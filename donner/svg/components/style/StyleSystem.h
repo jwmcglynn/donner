@@ -22,7 +22,8 @@
 
 namespace donner::css {
 struct Declaration;
-}
+struct SelectorRule;
+}  // namespace donner::css
 
 namespace donner::svg::components {
 
@@ -812,6 +813,24 @@ public:
   ///   fallback values.
   /// @param parent Computed declarations inherited from the referencing element.
   static void inheritExternalParent(PropertyRegistry& properties, const PropertyRegistry& parent);
+
+  /// Runs one selective frame against a tentative warning sink, returning false on budget refusal.
+  static bool computeEditedFrameStyles(
+      Registry& registry, ParseWarningSink& warningSink, StylePassScheduler scheduler,
+      bool (*compute)(Registry&, ParseWarningSink&, StylePassScheduler, bool (*)(const Registry&)));
+
+  using ApplyRetainedStyle = bool (*)(Registry&, ParseWarningSink&, StylePassScheduler);
+
+  /// Mark an admitted list of edited styles, recording the last rendered order when available.
+  static void markEditedStyleTargets(Registry& registry, std::span<const Entity> affected,
+                                     ApplyRetainedStyle applyRetained);
+
+  /// Schedule a bounded selective style pass for the union of old and new rule matches.
+  /// Returns false without clearing or marking styles when the caller must fully restyle.
+  static bool invalidateStylesheetRules(Registry& registry,
+                                        std::span<const css::SelectorRule> removed,
+                                        std::span<const css::SelectorRule> added,
+                                        ApplyRetainedStyle applyRetained);
 
   /**
    * Returns true if any stylesheet loaded into \p registry contains an attribute selector that

@@ -860,6 +860,9 @@ public:
    */
   static bool isPresentationAttributeName(std::string_view name);
 
+  /// Whether an authored stylesheet value may retain its original tokens and source offsets.
+  static bool retainsDeclarationSource(std::string_view name);
+
   /**
    * Returns true if a presentation attribute participates in inheritance.
    *

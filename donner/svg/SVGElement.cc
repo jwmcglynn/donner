@@ -246,24 +246,9 @@ void propagateStyleDirtyToDescendants(EntityHandle handle) {
   });
 }
 
-bool ComputeEditedFrameStyles(Registry& registry, ParseWarningSink& warningSink,
-                              StylePassScheduler scheduler,
-                              components::RenderTreeState::ComputeFrameStyles compute) {
-  auto tentative = warningSink.remainingAllowance();
-  const auto refused = [](const Registry& current) {
-    return current.ctx().get<components::StyleResourceBudget>().rejected();
-  };
-  if (!compute(registry, tentative, scheduler, refused)) {
-    return false;
-  }
-  warningSink.merge(std::move(tentative));
-  return true;
-}
-
 // A narrow pass must collect every affected element before removing any old style records.
 bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
                         std::span<const std::string_view> changedClasses = {}) {
-  using components::DirtyFlagsComponent;
   using components::SelectorDependency;
   using components::StyleSystem;
   using Tree = donner::components::TreeComponent;
@@ -323,35 +308,7 @@ bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
                                                        SelectorDependency::FollowingSiblings)))) {
     return false;
   }
-  std::vector<uint32_t> oldOrder;
-  oldOrder.reserve(affected.size());
-  for (Entity entity : affected) {
-    const auto order = StyleSystem::retainedStyleOrder(registry, entity);
-    if (!order) {
-      break;
-    }
-    oldOrder.push_back(*order);
-  }
-  const bool retainable = oldOrder.size() == affected.size();
-  if (retainable) {
-    registry.ctx().get<components::RenderTreeState>().applyLiveStyleUpdate =
-        components::ApplyLiveStyleUpdate;
-  }
-  constexpr uint16_t kNarrowed = DirtyFlagsComponent::Style | DirtyFlagsComponent::RenderInstance |
-                                 DirtyFlagsComponent::NarrowedStyle;
-  const uint16_t flags = retainable ? kNarrowed : DirtyFlagsComponent::StyleCascade;
-  for (std::size_t i = 0; i < affected.size(); ++i) {
-    const EntityHandle node(registry, affected[i]);
-    invalidateComputedStyle(node);
-    auto& dirty = node.get_or_emplace<DirtyFlagsComponent>();
-    // A computed-style read between edits can materialize the intermediate style.
-    // Compare against the last prepared frame's order, recorded by the first edit.
-    if (retainable && !dirty.test(DirtyFlagsComponent::NarrowedStyle)) {
-      dirty.narrowedStyleOrder = oldOrder[i];
-    }
-    dirty.mark(flags);
-  }
-  state->computeEditedFrameStyles = ComputeEditedFrameStyles;
+  StyleSystem::markEditedStyleTargets(registry, affected, components::ApplyLiveStyleUpdate);
   return true;
 }
 
