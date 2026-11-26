@@ -284,6 +284,28 @@ INSTANTIATE_TEST_SUITE_P(
         Load("Descendant1000x100", Document::Descendant, {1003, 1913, 1010, 1018, 0, 0})),
     CaseName);
 
+TEST(CssCascadeStyleEditTest, CountsOnlyPreparedFramesInTheSelectedDirection) {
+  const auto measurement = MeasureStyleEdit(
+      MakeSharedUseEditDocument(), StyleEditScenario::SharedUseClass,
+      OneDirection({.warmup = 1, .measured = 4}, RecordedRepetitions::Even), false);
+  ASSERT_THAT(measurement, ::testing::Optional(::testing::_));
+  EXPECT_EQ(measurement->setup.samples, 2u);
+  EXPECT_EQ(measurement->style.samples, 2u);
+  EXPECT_EQ(measurement->nullFrame.samples, 2u);
+  ASSERT_THAT(measurement->renderWork, ::testing::Optional(::testing::_));
+  EXPECT_EQ(measurement->renderWork->fullRebuilds + measurement->renderWork->retainedUpdates, 1u);
+}
+
+TEST(CssCascadeStyleEditTest, RejectsAnEditThatLeavesVisiblePaintUnchanged) {
+  std::string source = MakeSharedUseEditDocument();
+  const auto newFill = source.find("#654321");
+  ASSERT_NE(newFill, std::string::npos);
+  source.replace(newFill, 7, "#123456");
+  EXPECT_THAT(MeasureStyleEdit(source, StyleEditScenario::SharedUseClass,
+                               OneDirection(kEditRepetitions, RecordedRepetitions::Even), false),
+              ::testing::Eq(std::nullopt));
+}
+
 const CascadeEditTarget kSplashTarget = SplashEditTarget();
 const CascadeEditTarget kSyntheticTarget = SyntheticEditTarget();
 const CascadeEditTarget kIconsTarget = BootstrapIconsEditTarget();

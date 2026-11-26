@@ -158,7 +158,7 @@ struct CascadeEditTarget {
   std::string classB;    ///< Class written on even repetitions.
 };
 
-/// The first `.cls-71` path of the splash document, toggled between `cls-71` and `cls-88`.
+/// The splash path #Shine_glow, toggled between cls-71 and cls-88.
 CascadeEditTarget SplashEditTarget();
 /// Element `#e1000` of \ref MakeSyntheticDocument, toggled between `c3` and `c7`.
 CascadeEditTarget SyntheticEditTarget();
@@ -246,6 +246,15 @@ struct CascadeMeasurement {
   /// Scheduled work in the last measured load. Physical task and hit counts can vary.
   ScheduledWork scheduled;
 
+  /// Frame preparation path of a measured style edit.
+  struct RenderWork {
+    std::uint64_t fullRebuilds = 0;
+    std::uint64_t retainedUpdates = 0;
+    std::uint64_t shadowTreeTeardowns = 0;
+    bool operator==(const RenderWork&) const = default;
+  };
+  std::optional<RenderWork> renderWork;
+
   /// Parse time for load cases, or the edit or source-edit call for edit and keystroke cases.
   TimingSummary setup;
   TimingSummary nullFrame;  ///< Frame drawn with \ref NullRenderer.
@@ -262,6 +271,18 @@ struct CascadeMeasurement {
 
 /// Print the style work of a measurement, for test failure output.
 std::ostream& operator<<(std::ostream& os, const CascadeMeasurement& measurement);
+
+/// Fixed edit scenarios with independently verified resolved fill.
+enum class StyleEditScenario {
+  SplashClass,     ///< #Shine_glow changes from a radial gradient to solid white.
+  SplashSolid,     ///< Inline fill on a path with solid paint before and after.
+  SpriteClass,     ///< Class on the original sprite path, with no displayed symbols.
+  SpriteFill,      ///< A path in the first bootstrap icon, drawn by one preview instance.
+  SharedUseClass,  ///< A class edit on one light element drawn by many use instances.
+};
+
+/// Visible use copies of one rect and an unrelated copy that does not share its class.
+std::string MakeSharedUseEditDocument();
 
 /// Which repetitions after the warmup a measurement records.
 enum class RecordedRepetitions {
@@ -283,6 +304,19 @@ struct CascadeRepetitions {
 constexpr CascadeRepetitions kLoadRepetitions{.warmup = 0, .measured = 9};
 /// Edits on one loaded document: the first of 19 repetitions is discarded.
 constexpr CascadeRepetitions kEditRepetitions{.warmup = 1, .measured = 18};
+
+/**
+ * Measure a style edit in one direction after verifying the initial, forward and undo fills.
+ * @param source SVG source of the selected scenario.
+ * @param scenario Fixed input and edit to exercise.
+ * @param repetitions Repetitions selecting the forward or undo direction.
+ * @param withRenderer Also record the default renderer's frame using a separate document.
+ * @return The measurement, or nullopt if the fixture, paint transitions or selection are invalid.
+ */
+std::optional<CascadeMeasurement> MeasureStyleEdit(std::string_view source,
+                                                   StyleEditScenario scenario,
+                                                   CascadeRepetitions repetitions,
+                                                   bool withRenderer);
 /// Source keystrokes on one loaded document: the first two of 20 repetitions are discarded.
 constexpr CascadeRepetitions kKeystrokeRepetitions{.warmup = 2, .measured = 18};
 

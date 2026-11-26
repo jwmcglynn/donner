@@ -11,6 +11,7 @@
 #include "donner/base/Utils.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/SVGUseElement.h"
 #include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -98,6 +99,7 @@ struct Repetition {
   double styleMs = 0;
   StyleCascadeCounters counters;
   std::size_t distinctComputedStyleRecords = 0;
+  std::optional<CascadeMeasurement::RenderWork> renderWork;
 };
 
 /// Collects repetitions after the warmup and summarizes them.
@@ -115,9 +117,11 @@ public:
     const bool stableWork = allowPhysicalVariation_ ? sample.counters.sameLogicalWork(counters_)
                                                     : sample.counters == counters_;
     if (!setupMs_.empty() &&
-        (!stableWork || sample.distinctComputedStyleRecords != distinctComputedStyleRecords_)) {
+        (!stableWork || sample.distinctComputedStyleRecords != distinctComputedStyleRecords_ ||
+         sample.renderWork != renderWork_)) {
       stable_ = false;
     }
+    renderWork_ = sample.renderWork;
     counters_ = sample.counters;
     distinctComputedStyleRecords_ = sample.distinctComputedStyleRecords;
     setupMs_.push_back(sample.setupMs);
@@ -139,6 +143,7 @@ public:
     if (!rendererFrameMs_.empty()) {
       result.rendererFrame = SummarizeTimings(rendererFrameMs_);
     }
+    result.renderWork = renderWork_;
     result.counters = counters_;
     result.distinctComputedStyleRecords = distinctComputedStyleRecords_;
     result.countersStable = stable_;
@@ -165,6 +170,7 @@ private:
   std::vector<double> styleMs_;
   std::vector<double> rendererFrameMs_;
   StyleCascadeCounters counters_;
+  std::optional<CascadeMeasurement::RenderWork> renderWork_;
   std::size_t distinctComputedStyleRecords_ = 0;
   bool stable_ = true;
 };
@@ -179,11 +185,17 @@ bool CountersNotBefore(const StyleCascadeCounters& after, const StyleCascadeCoun
 
 /// Time \p step and the frame drawn after it, and the style work done during both.
 Repetition TimeStepAndFrame(SVGDocument& document, svg::RendererInterface& renderer,
-                            const std::function<void()>& step) {
-  const StyleCascadeSample before = CaptureStyleCascade(document);
+                            const std::function<void()>& step, bool frameOnly = false) {
+  StyleCascadeSample before = frameOnly ? StyleCascadeSample{} : CaptureStyleCascade(document);
   const auto stepStart = Clock::now();
   step();
-  const auto frameStart = Clock::now();
+  const auto stepEnd = Clock::now();
+  svg::internal::RenderingFrameWork renderBefore;
+  if (frameOnly) {
+    renderBefore = svg::internal::CaptureRenderingFrameWork(document);
+    before = {renderBefore.styleCascade, renderBefore.styleTime, 0};
+  }
+  const auto frameStart = frameOnly ? Clock::now() : stepEnd;
   renderer.draw(document);
   const auto frameEnd = Clock::now();
   const StyleCascadeSample after = CaptureStyleCascade(document);
@@ -191,23 +203,35 @@ Repetition TimeStepAndFrame(SVGDocument& document, svg::RendererInterface& rende
   UTILS_RELEASE_ASSERT_MSG(
       CountersNotBefore(after.counters, before.counters) && after.styleTime >= before.styleTime,
       "Style cascade counters went backwards between two captures");
+  std::optional<CascadeMeasurement::RenderWork> renderWork;
+  if (frameOnly) {
+    const auto afterRender = svg::internal::CaptureRenderingFrameWork(document);
+    renderWork = CascadeMeasurement::RenderWork{
+        afterRender.fullRebuilds - renderBefore.fullRebuilds,
+        afterRender.retainedUpdates - renderBefore.retainedUpdates,
+        afterRender.shadowTreeTeardowns - renderBefore.shadowTreeTeardowns};
+  }
   return Repetition{
-      .setupMs = ElapsedMs(frameStart - stepStart),
+      .setupMs = ElapsedMs(stepEnd - stepStart),
       .frameMs = ElapsedMs(frameEnd - frameStart),
       .styleMs = ElapsedMs(after.styleTime - before.styleTime),
       .counters = after.counters - before.counters,
       .distinctComputedStyleRecords = after.distinctComputedStyleRecords,
+      .renderWork = renderWork,
   };
 }
 
 /// Builds the step applied to a loaded document before each frame, or nullopt without a target.
 using MakeStep = std::function<std::optional<std::function<void(int)>>(SVGDocument&)>;
 
+using PrepareEditDocument = std::function<void(SVGDocument&)>;
+
 /// Measure the frame after a repeated step on a loaded document, one document per renderer.
 std::optional<CascadeMeasurement> MeasureFramesAfterStep(std::string_view source,
                                                          const MakeStep& makeStep,
                                                          CascadeRepetitions repetitions,
-                                                         bool withRenderer, bool disableCache) {
+                                                         bool withRenderer, bool disableCache,
+                                                         const PrepareEditDocument& prepare = {}) {
   RepetitionLog log(repetitions);
   for (const bool useRenderer : {false, true}) {
     if (useRenderer && !withRenderer) {
@@ -226,6 +250,9 @@ std::optional<CascadeMeasurement> MeasureFramesAfterStep(std::string_view source
     } else {
       renderer = std::make_unique<NullRenderer>();
     }
+    if (prepare) {
+      prepare(*document);
+    }
     renderer->draw(*document);
     std::optional<std::function<void(int)>> step = makeStep(*document);
     if (!step) {
@@ -233,7 +260,7 @@ std::optional<CascadeMeasurement> MeasureFramesAfterStep(std::string_view source
     }
     for (int repetition = 0; repetition < log.total(); ++repetition) {
       const Repetition sample =
-          TimeStepAndFrame(*document, *renderer, [&] { (*step)(repetition); });
+          TimeStepAndFrame(*document, *renderer, [&] { (*step)(repetition); }, bool(prepare));
       if (useRenderer) {
         log.recordRendererFrame(repetition, sample.frameMs);
       } else {
@@ -293,7 +320,7 @@ std::string MakeRepeatedClassTokensDocument(int ruleCount, int tokenCount) {
 }
 
 CascadeEditTarget SplashEditTarget() {
-  return {".cls-71", "cls-71", "cls-88"};
+  return {"#Shine_glow", "cls-71", "cls-88"};
 }
 
 CascadeEditTarget SyntheticEditTarget() {
@@ -480,6 +507,151 @@ std::optional<CascadeMeasurement> MeasureCascadeLoad(std::string_view source,
   auto result = log.summarize();
   result.scheduled = scheduled;
   return result;
+}
+
+namespace {
+
+using ExpectedFill = std::variant<css::RGBA, std::string_view>;
+
+struct StyleEditSpec {
+  CascadeEditTarget target;
+  CascadeEdit edit;
+  std::size_t visibleCopies;
+  ExpectedFill from;
+  ExpectedFill to;
+};
+
+StyleEditSpec EditSpec(StyleEditScenario scenario) {
+  switch (scenario) {
+    case StyleEditScenario::SplashClass:
+      return {SplashEditTarget(), CascadeEdit::Class, 1, std::string_view("#radial-gradient-3"),
+              css::RGBA(255, 255, 255, 255)};
+    case StyleEditScenario::SplashSolid:
+      return {{"#Shine-2 > path", "", ""},
+              CascadeEdit::Style,
+              1,
+              css::RGBA(18, 52, 86, 255),
+              css::RGBA(101, 67, 33, 255)};
+    case StyleEditScenario::SpriteClass:
+      return {BootstrapIconsEditTarget(), CascadeEdit::Class, 0, {}, {}};
+    case StyleEditScenario::SpriteFill:
+      return {BootstrapIconsEditTarget(), CascadeEdit::Fill, 1, css::RGBA(18, 52, 86, 255),
+              css::RGBA(101, 67, 33, 255)};
+    case StyleEditScenario::SharedUseClass:
+      return {{"#edited", "a", "b"},
+              CascadeEdit::Class,
+              32,
+              css::RGBA(18, 52, 86, 255),
+              css::RGBA(101, 67, 33, 255)};
+  }
+  UTILS_UNREACHABLE();
+}
+
+void PrepareStyleEdit(SVGDocument& document, StyleEditScenario scenario) {
+  if (scenario == StyleEditScenario::SpriteFill) {
+    auto preview = svg::SVGUseElement::Create(document);
+    preview.setHref("#0-circle");
+    preview.setAttribute("width", "16");
+    preview.setAttribute("height", "16");
+    document.svgElement().appendChild(preview);
+  }
+  if (scenario == StyleEditScenario::SplashSolid || scenario == StyleEditScenario::SpriteFill) {
+    const auto spec = EditSpec(scenario);
+    if (auto editor = CascadeEditor::Create(document, spec.target, spec.edit)) {
+      editor->apply(1);
+    }
+  }
+}
+
+bool CheckRenderedFill(SVGDocument& document, const StyleEditSpec& spec,
+                       const ExpectedFill& expected) {
+  const auto target = document.querySelector(spec.target.selector);
+  if (!target) {
+    return false;
+  }
+  svg::internal::VisibleFillCount observed;
+  if (const auto* selector = std::get_if<std::string_view>(&expected)) {
+    const auto paintServer = document.querySelector(*selector);
+    if (!paintServer) {
+      return false;
+    }
+    observed = svg::internal::CountVisibleFills(document, *target, std::cref(*paintServer));
+  } else {
+    observed = svg::internal::CountVisibleFills(document, *target, std::get<css::RGBA>(expected));
+  }
+  return observed.instances == spec.visibleCopies && observed.matching == spec.visibleCopies;
+}
+
+bool CheckEditResult(SVGDocument& document, const StyleEditSpec& spec, int repetition) {
+  if (spec.visibleCopies != 0) {
+    return CheckRenderedFill(document, spec, repetition == 0 ? spec.to : spec.from);
+  }
+  const auto target = document.querySelector(spec.target.selector);
+  const std::string& expected = repetition == 0 ? spec.target.classB : spec.target.classA;
+  return target && target->className() == expected;
+}
+
+bool ValidateStyleEdit(std::string_view source, StyleEditScenario scenario,
+                       const StyleEditSpec& spec) {
+  auto document = ParseCascadeDocument(source);
+  if (!document) {
+    return false;
+  }
+  PrepareStyleEdit(*document, scenario);
+  auto editor = CascadeEditor::Create(*document, spec.target, spec.edit);
+  if (!editor) {
+    return false;
+  }
+  NullRenderer renderer;
+  renderer.draw(*document);
+  if (spec.visibleCopies > 0 && !CheckRenderedFill(*document, spec, spec.from)) {
+    return false;
+  }
+  for (int repetition : {0, 1}) {
+    editor->apply(repetition);
+    renderer.draw(*document);
+    if (!CheckEditResult(*document, spec, repetition)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+std::string MakeSharedUseEditDocument() {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="140" height="8">
+  <style>.a { fill: #123456; } .b { fill: #654321; }</style>
+  <defs>
+    <rect id="edited" class="a" width="3" height="4"/>
+    <rect id="unrelated" fill="green" width="3" height="4"/>
+  </defs>
+  <use href="#unrelated" x="132"/>)";
+  for (int i = 0; i < 32; ++i) {
+    source += "<use href=\"#edited\" x=\"" + std::to_string(i * 4) + "\"/>";
+  }
+  return source + "</svg>";
+}
+
+std::optional<CascadeMeasurement> MeasureStyleEdit(std::string_view source,
+                                                   StyleEditScenario scenario,
+                                                   CascadeRepetitions repetitions,
+                                                   bool withRenderer) {
+  const auto spec = EditSpec(scenario);
+  if (repetitions.recorded == RecordedRepetitions::All || repetitions.measured < 2 ||
+      !ValidateStyleEdit(source, scenario, spec)) {
+    return std::nullopt;
+  }
+  return MeasureFramesAfterStep(
+      source,
+      [&](SVGDocument& document) -> std::optional<std::function<void(int)>> {
+        if (auto editor = CascadeEditor::Create(document, spec.target, spec.edit)) {
+          return [editor = *editor](int repetition) mutable { editor.apply(repetition); };
+        }
+        return std::nullopt;
+      },
+      repetitions, withRenderer, false,
+      [scenario](SVGDocument& document) { PrepareStyleEdit(document, scenario); });
 }
 
 std::optional<CascadeMeasurement> MeasureCascadeEdit(std::string_view source,
