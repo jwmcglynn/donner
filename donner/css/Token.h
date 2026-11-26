@@ -341,6 +341,9 @@ struct Token {
    * will tokenize as a \ref Function instead.
    */
   struct BadUrl {
+    /// True if the invalid URL ended at EOF instead of its closing parenthesis.
+    bool closedAtEof = false;
+
     /// Equality operator.
     bool operator==(const BadUrl&) const { return true; }
 

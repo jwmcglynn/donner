@@ -2675,18 +2675,23 @@ bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
   const std::string_view existingStyle =
       existingStyleValue.has_value() ? std::string_view(*existingStyleValue) : std::string_view();
 
+  std::vector<std::string_view> existingSpellings, updateSpellings;
   css::parser::DeclarationListParser::SecurityStats existingStats;
   css::parser::DeclarationListParser::SecurityStats updateStats;
   const std::vector<css::Declaration> existingDeclarations =
-      css::parser::DeclarationListParser::ParseOnlyDeclarations(existingStyle, &existingStats);
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(existingStyle, &existingStats,
+                                                                &existingSpellings);
   const std::vector<css::Declaration> updateDeclarations =
-      css::parser::DeclarationListParser::ParseOnlyDeclarations(style, &updateStats);
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(style, &updateStats,
+                                                                &updateSpellings);
   if (existingStats.rejected || updateStats.rejected) {
     return false;
   }
-  const std::string mergedStyle =
-      css::mergeStyleDeclarations(existingDeclarations, updateDeclarations);
-  if (!candidate.setStyle(mergedStyle)) {
+  const std::string mergedStyle = css::mergeStyleDeclarations(
+      existingDeclarations, updateDeclarations, existingSpellings, updateSpellings);
+  // Apply the update in authored order so an invalid later value leaves its last accepted
+  // predecessor in effect. The merged pass refreshes offsets in the complete attribute.
+  if (!candidate.updateStyle(style) || !candidate.updateStyle(mergedStyle)) {
     return false;
   }
 

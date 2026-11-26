@@ -18,10 +18,12 @@
 
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
-#include "donner/editor/ImGuiIncludes.h"
-#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/StructuredCssEdit.h"
+
+// ImGui internals drive the simulated mouse and keyboard input.
+#include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 
 namespace donner::editor {
 

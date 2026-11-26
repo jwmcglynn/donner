@@ -263,7 +263,8 @@ including tests and review fixes. "After" names the milestones that must land fi
     average 5.8 to 8.1, six alternating runs) 0.87, 3.95, 8.51 and 1.32 ms (from 2.55, 20.17, 8.86
     and 1.44 ms). The differential test, the fuzzer and the Wasm size checks pass: the renderer's
     Wasm is 2,340,052 bytes raw and 925,917 gzipped (ceilings 2,500,000 and 1,020,000), the editor's
-    10,623,727 and 3,385,346 (ceilings 10,880,000 and 3,570,000).
+    10,623,727 and 3,385,346 (A3 ceilings 10,880,000 and 3,570,000). For C1, the raw editor
+    Wasm ceiling is 11,424,000 bytes.
 - [x] Milestone A4: Matcher constant factors. The independent acceptance threshold is a 5%
   median improvement in candidate match time.
   - [x] Keep the inline cursor stack for short selector chains ([#2779](https://github.com/jwmcglynn/donner/pull/2779)).

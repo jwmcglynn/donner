@@ -95,14 +95,10 @@ const StyleCascadeCounters& Counters(SVGDocument& document) {
   return document.registry().ctx().get<StyleCascadeMetrics>().counters;
 }
 
-void ExpectSameStyleOutputs(SVGDocument& actual, SVGDocument& reference) {
-  EXPECT_THAT(PositionedStyles(actual), ElementsAreArray(PositionedStyles(reference)));
-  EXPECT_THAT(MatchedRules(actual), ElementsAreArray(MatchedRules(reference)));
-}
-
-/// Compare candidate selection where both documents have performed the same edits and passes.
+/// Expect \p indexed, which uses the rule index, to compute what \p unindexed computes.
 void ExpectSameCascade(SVGDocument& indexed, SVGDocument& unindexed) {
-  ExpectSameStyleOutputs(indexed, unindexed);
+  EXPECT_THAT(PositionedStyles(indexed), ElementsAreArray(PositionedStyles(unindexed)));
+  EXPECT_THAT(MatchedRules(indexed), ElementsAreArray(MatchedRules(unindexed)));
   EXPECT_EQ(Counters(indexed).rulesMatched, Counters(unindexed).rulesMatched);
   EXPECT_EQ(Counters(indexed).declarationsApplied, Counters(unindexed).declarationsApplied);
 }
@@ -112,6 +108,11 @@ SVGDocument ParseSource(std::string_view source) {
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_THAT(parsed, NoParseError());
   return std::move(parsed.result());
+}
+
+void ExpectSameStyleOutputs(SVGDocument& actual, SVGDocument& reference) {
+  EXPECT_THAT(PositionedStyles(actual), ::testing::ElementsAreArray(PositionedStyles(reference)));
+  EXPECT_THAT(MatchedRules(actual), ::testing::ElementsAreArray(MatchedRules(reference)));
 }
 
 TEST(MatchedPropertiesCache, SharedRecordStaysImmutableWhenOneHolderRestyles) {
@@ -1598,7 +1599,7 @@ TEST(StyleIndexDifferential, SourceRuleEditMatchesOldAndNewSubtreesAndUseInstanc
               testing::Eq(untouched.get()));
   ExpectSameStyleOutputs(actual, expected);
   EXPECT_THAT(PositionedRenderInstances(actual),
-              ElementsAreArray(PositionedRenderInstances(expected)));
+              ::testing::ElementsAreArray(PositionedRenderInstances(expected)));
   editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
                                        "stylesheet_rule_source_edit",
                                        editor::tests::PixelmatchIdentityParams());
@@ -1864,10 +1865,10 @@ TEST(StyleIndexDifferential, SourceRuleEditAfterRefusalReplaysCanonicalFrame) {
   const auto replayed = PrepareFirstFrameWithDiagnostics(actual);
   EXPECT_THAT(replayed.counters.fullClears, testing::Eq(1u));
   EXPECT_THAT(replayed.styleBudgetRejected, testing::IsFalse());
-  EXPECT_THAT(replayed.warnings, ElementsAreArray(fresh.warnings));
+  EXPECT_THAT(replayed.warnings, ::testing::ElementsAreArray(fresh.warnings));
   ExpectSameStyleOutputs(actual, expected);
   EXPECT_THAT(PositionedRenderInstances(actual),
-              ElementsAreArray(PositionedRenderInstances(expected)));
+              ::testing::ElementsAreArray(PositionedRenderInstances(expected)));
 }
 
 TEST(StyleIndexDifferential, StylesheetEditsReplaceAncestorHashes) {
