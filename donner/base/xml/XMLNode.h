@@ -49,6 +49,8 @@ private:
 
   void addChunk(std::string_view source, const std::optional<SourceRange>& authored,
                 std::string_view decoded, std::size_t start);
+  static void addDecodedRuns(Chunk& chunk, std::string_view raw, std::string_view decoded,
+                             std::size_t sourceStart);
   static std::optional<FileOffset> mapBoundary(const Chunk& chunk, std::size_t offset);
 
   std::vector<Chunk> chunks_;
@@ -705,6 +707,11 @@ protected:
   std::optional<XMLNode> toOptionalNode(Entity entity) const;
 
   /// The underlying ECS Entity for this element, which holds all data.
+  std::optional<XMLDecodedTextSourceMap> attachedDecodedTextSourceMap(
+      std::string_view source, std::string_view decodedText) const;
+  std::optional<XMLDecodedTextSourceMap> projectedDecodedTextSourceMap(
+      const XMLSourceStore& store, std::string_view decodedText) const;
+
   EntityHandle handle_;
 };
 

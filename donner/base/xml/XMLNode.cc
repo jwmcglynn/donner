@@ -885,6 +885,12 @@ void XMLDecodedTextSourceMap::addChunk(std::string_view source,
     return;
   }
 
+  addDecodedRuns(chunk, raw, decoded, sourceStart);
+}
+
+void XMLDecodedTextSourceMap::addDecodedRuns(Chunk& chunk, std::string_view raw,
+                                             std::string_view decoded, std::size_t sourceStart) {
+  const auto start = chunk.decodedStart;
   std::size_t rawPos = 0;
   std::size_t decodedPos = 0;
   while (rawPos < raw.size()) {
@@ -948,16 +954,33 @@ std::optional<XMLDecodedTextSourceMap> XMLNode::decodedTextSourceMap(
   if (!store) {
     return std::nullopt;
   }
+  if (firstChild()) {
+    return attachedDecodedTextSourceMap(store->source(), decodedText);
+  }
 
+  const auto valueRange = getValueLocation();
+  if (const auto decoded = value();
+      valueRange && decoded && std::string_view(*decoded) == decodedText) {
+    XMLDecodedTextSourceMap mapping;
+    mapping.addChunk(store->source(), valueRange, decodedText, 0);
+    return mapping;
+  }
+  return projectedDecodedTextSourceMap(*store, decodedText);
+}
+
+std::optional<XMLDecodedTextSourceMap> XMLNode::attachedDecodedTextSourceMap(
+    std::string_view source, std::string_view decodedText) const {
   XMLDecodedTextSourceMap mapping;
-  const auto source = store->source();
   std::size_t offset = 0;
   for (auto child = firstChild(); child; child = child->nextSibling()) {
     if (child->type() != Type::Data && child->type() != Type::CData) {
       continue;
     }
     const auto decoded = child->value();
-    if (!decoded || !decodedText.substr(offset).starts_with(*decoded)) {
+    if (!decoded) {
+      continue;
+    }
+    if (!decodedText.substr(offset).starts_with(*decoded)) {
       return std::nullopt;
     }
     auto authored = child->getValueLocation();
@@ -967,17 +990,14 @@ std::optional<XMLDecodedTextSourceMap> XMLNode::decodedTextSourceMap(
     mapping.addChunk(source, authored, *decoded, offset);
     offset += decoded->size();
   }
-  if (offset != 0) {
-    return offset == decodedText.size() ? std::optional(std::move(mapping)) : std::nullopt;
-  }
+  return offset == decodedText.size() ? std::optional(std::move(mapping)) : std::nullopt;
+}
 
-  const auto valueRange = getValueLocation();
-  if (const auto decoded = value();
-      valueRange && decoded && std::string_view(*decoded) == decodedText) {
-    mapping.addChunk(source, valueRange, decodedText, 0);
-    return mapping;
-  }
-
+std::optional<XMLDecodedTextSourceMap> XMLNode::projectedDecodedTextSourceMap(
+    const XMLSourceStore& store, std::string_view decodedText) const {
+  XMLDecodedTextSourceMap mapping;
+  const auto source = store.source();
+  std::size_t offset = 0;
   const auto* records = handle_.try_get<ProjectedTextRecordsComponent>();
   if (!records) {
     return std::nullopt;
@@ -987,7 +1007,7 @@ std::optional<XMLDecodedTextSourceMap> XMLNode::decodedTextSourceMap(
     if (!decodedText.substr(offset).starts_with(decoded)) {
       return std::nullopt;
     }
-    mapping.addChunk(source, ProjectedRecordValueRange(source, *store, record), decoded, offset);
+    mapping.addChunk(source, ProjectedRecordValueRange(source, store, record), decoded, offset);
     offset += decoded.size();
   }
   return offset == decodedText.size() ? std::optional(std::move(mapping)) : std::nullopt;
