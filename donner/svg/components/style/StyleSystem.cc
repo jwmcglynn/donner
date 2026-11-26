@@ -2900,12 +2900,9 @@ void StyleSystem::resolveRelativeFontProperties(const Registry& registry, Entity
   return true;
 }
 
-bool StyleSystem::resolveComputedVariables(ComputedStyle& record,
-                                           const ComputedStyleComponent* parent, CascadePass& pass,
-                                           ParseWarningSink& warnings) {
-  if (!computeCustomProperties(record, parent, pass, warnings)) {
-    return false;
-  }
+[[gnu::noinline]] bool StyleSystem::resolvePendingVariables(ComputedStyle& record,
+                                                            CascadePass& pass,
+                                                            ParseWarningSink& warnings) {
   if (!record.properties.hasPendingVariableDeclarations()) {
     return true;
   }
@@ -3008,7 +3005,9 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
     return;
   }
   record = declarations.finishMaterialization(styleComponent, early, std::move(record));
-  if (!resolveComputedVariables(*record, cacheState.parentStyle, pass, late)) {
+  if (!computeCustomProperties(*record, cacheState.parentStyle, pass, late) ||
+      (record->properties.mayHaveVariableInputs() &&
+       !resolvePendingVariables(*record, pass, late))) {
     return;
   }
   PropertyRegistry& properties = record->properties;

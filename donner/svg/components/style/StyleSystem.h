@@ -875,8 +875,8 @@ private:
   static bool computeCustomProperties(ComputedStyle& record, const ComputedStyleComponent* parent,
                                       CascadePass& pass, ParseWarningSink& warnings);
 
-  static bool resolveComputedVariables(ComputedStyle& record, const ComputedStyleComponent* parent,
-                                       CascadePass& pass, ParseWarningSink& warnings);
+  static bool resolvePendingVariables(ComputedStyle& record, CascadePass& pass,
+                                      ParseWarningSink& warnings);
 
   static void computePropertiesInto(const Registry& registry, Entity entity,
                                     ComputedStyleComponent& computedStyle, CascadePass& pass,
