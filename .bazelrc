@@ -421,6 +421,9 @@ build --test_env=DONNER_RENDERER_TEST_VERBOSE
 # Coverage builds
 coverage --config=coverage
 coverage --combined_report=lcov
+# Parallel workers can execute the same instrumented function. Count every visit safely,
+# including when ThreadSanitizer observes the coverage instrumentation itself.
+coverage --copt=-fprofile-update=atomic
 coverage --instrumentation_filter="-test_utils$,//donner[:/]"
 coverage --test_tag_filters=-fuzz_target,-lint,-manual,-perf,-ci-remote-gpu
 # Continue past build/analysis failures so coverage is collected from all tests
