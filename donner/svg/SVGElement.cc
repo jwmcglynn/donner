@@ -988,7 +988,7 @@ namespace {
 }
 
 [[gnu::always_inline]] inline void MarkSettledTransform(const ElementAnchor& handle,
-                                                         std::string_view name) {
+                                                        std::string_view name) {
   if (name == "transform") {
     // XML-sourced transforms must reraster filtered layers at their settled position.
     markDirty(handle, components::DirtyFlagsComponent::Paint);
