@@ -277,20 +277,21 @@ including tests and review fixes. "After" names the milestones that must land fi
   - [ ] Resolve pseudo-class names to an enumeration at parse time.
   - Done when: each kept change shows a median improvement of at least 5 percent in candidate
     match time on the benchmark; a change that does not is dropped.
-- [ ] Milestone A5: Narrowed invalidation for single-element edits (9.5 days). After A2.
+- [x] Milestone A5: Narrowed invalidation for single-element edits (9.5 days). After A2.
+  - [Selector dependencies](https://github.com/jwmcglynn/donner/pull/2768),
+    [edit routing](https://github.com/jwmcglynn/donner/pull/2774),
+    [retained preparation](https://github.com/jwmcglynn/donner/pull/2775), and
+    [measurement harness](https://github.com/jwmcglynn/donner/pull/2773).
   - [x] Compute a `SelectorDependencySummary` per stylesheet at parse time, including the
         directional dependencies of filtered `:nth-child` and `:nth-last-child` selectors.
-  - [ ] Route class, `style`/`updateStyle` and eligible presentation-attribute writes through
-        the summary and mark affected entities for the existing selective style pass. Preserve
-        full invalidation for id and reference changes.
-  - [ ] Restyle the `<use>` shadow instances of a written element.
-  - [ ] Make a style-only change eligible for the retained update (`FlagsAreRetainable` in
-        `RetainedRenderTreeUpdate.cc`) and recompute the style-derived components of the
-        restyled entities, falling back to the full rebuild where they cannot be recomputed
-        locally (see [Retained Update](#retained-update-for-style-only-changes)).
-  - [ ] Add the narrow-versus-full differential edit test, comparing computed styles, render-tree
-        and resolved-reference state, and rendered output, and asserting the retained-update and
-        full-rebuild counters.
+  - [x] Route class, inline style and eligible presentation-attribute writes through the selector
+        summary and a selective cascade. Preserve full id and reference invalidation.
+  - [x] Restyle eligible same-document `<use>` occurrences through a bounded index.
+  - [x] Retain prepared style-only frames when layout and shape updates are local, with a full
+        rebuild fallback for nonlocal work.
+  - [x] Compare selective and full preparation in the targeted and sampled differential tests.
+  - [x] Qualify the named splash and original sprite edit times on the selected implementation
+        (see [Style Edit Measurements](#style-edit-measurements)).
   - Done when: the edit goals are met, the differential edit test is green on all three
     comparisons for every edit routed to the narrowed path, and every eligible edit in it took
     the retained update.
@@ -1323,10 +1324,9 @@ positions so that a later change can narrow it with the same lookups.
   pseudo-class sits in a compound left of a sibling combinator. The summary records each name in
   an `of S` filter with these directions, including names nested in `:is()`, `:where()` and
   `:not()` inside `S`.
-- The `<use>` and resource shadow instances whose `ShadowEntityComponent::lightEntity` is a dirty
-  entity are dirtied too, because they read the light element's attributes. This needs a reverse
-  map from light entity to shadow entities, maintained by `ShadowTreeSystem` when it creates and
-  tears down clones.
+- Eligible same-document `<use>` occurrences of a dirty light element are marked too, because
+  they read its attributes and selectors. Resource shadow branches or incomplete occurrence
+  information can require a full preparation.
 
 Every affected entity is restyled by the existing selective pass in `computeAllStyles`. Taking
 `RenderingContext::tryRetainedUpdate` instead of the full rebuild needs more than the routing
@@ -1342,22 +1342,18 @@ test, with its render-side comparisons, shows them local:
 
 - `id` writes (`SVGElement::setId`), which re-target `href` and `url(#id)` references;
 - any write to an element that is, or is inside, a paint server, `<marker>`, `<clipPath>`,
-  `<mask>`, `<filter>` or `<symbol>`, since its effect reaches the elements that reference it;
+  `<mask>` or `<filter>`, since its effect reaches the elements that reference it;
 - writes that set `needsFullStyleRecompute` for reasons other than selectors today
   (element-specific attributes on lines, convolve matrices, conditional processing, `<use>`
   geometry);
 - any write to a text content element or inside one (`<text>`, `<tspan>`, `<textPath>`), since
   restyling a span invalidates its text root's layout.
 
-The narrowed path starts with `class`, `style` and presentation-attribute writes on elements
-outside those resource subtrees, plus their `<use>` instances through the reverse map.
-
-**Why presentation attributes request a full restyle today is not stated in the code.** The
-plausible dependents are `<use>` instances (covered by the reverse map), paint servers and
-gradient stops (`ComputedStopComponent`), and text layout. Milestone A5 starts by running the
-differential edit test with the current full restyle replaced by the narrowed set on the whole
-corpus, and keeps the full restyle for any attribute whose narrowed result differs until the
-missing dependent is identified.
+Class, inline style and eligible presentation attributes outside these subtrees can use the
+narrowed style path. An edit inside a `<symbol>` can also narrow its cascade, while its frame
+rebuilds the symbol's prepared components and any instances. The
+[style edit differential tests](#style-edit-verification) compare the narrowed result with a
+full style and render rebuild across the sampled document corpus.
 
 **Stylesheet edits.** Loading imports keeps the full restyle, now one cascade per frame. Rule
 edits restyle only the elements the changed rules match; see
@@ -1365,44 +1361,92 @@ edits restyle only the elements the changed rules match; see
 
 #### Retained Update for Style-Only Changes
 
-Removing `needsFullStyleRecompute` alone does not reach the retained path. `PlanRetainedUpdate`
-asks `FlagsAreRetainable` (`donner/svg/renderer/RetainedRenderTreeUpdate.cc`) about every dirty
-entity, and it refuses `DirtyFlagsComponent::Style` unless `Compositing` is also set: today the
-only style change known to be local is an `opacity` write (`markCompositingDirty`). A class edit
-marked `Style` alone would still send `RenderingContext::ensureComputedComponents` down the full
-rebuild, which tears down and re-instantiates every shadow tree. When the retained path does run,
-`ApplyRetainedUpdate` re-runs the selective restyle and recomputes layout for entities flagged
-`Layout`, and the next instantiation rebuilds the render instances (`needsInstanceRebuild`), which
-re-resolves fill, stroke, clip, mask and marker references from the new computed styles. Every
-other computed component that `createComputedComponents` builds from a computed style is not
-touched, so A5 adds:
+A selective cascade and a retained render-tree update have separate admission checks. A class,
+inline style or supported presentation-attribute edit always considers the written element.
+Selector dependencies add the affected sibling branches, and inheritance adds each affected
+element's descendants. For an eligible same-document `<use>`, a bounded index groups existing
+shadow occurrences by their light entity. The index is built on the first edit that needs it and
+invalidated when shadow trees change. An incomplete index or an unsupported occurrence keeps the
+conservative path.
 
-- **A narrowed-style flag.** The router marks every entity it restyles with `Style` and
-  `RenderInstance` plus a new `DirtyFlagsComponent::NarrowedStyle` bit, and `FlagsAreRetainable`
-  accepts `Style` when either `Compositing` or `NarrowedStyle` is set. Other writers that set
-  `Style` keep today's refusal.
-- **Per-entity recomputation.** For each entity carrying `NarrowedStyle`, after the selective
-  restyle, `ApplyRetainedUpdate` recomputes its layout (`LayoutSystem::recomputeInvalidatedLayout`)
-  and its computed path (`ShapeSystem::createComputedPathIfShape`), since geometry properties and
-  `display` and `visibility` can come from a class.
-- **Fallback for dependents that are not per-entity.** Styled paint trees, nested marker trees,
-  filters, gradient stops and text layout are built by whole-document steps
-  (`InstantiateStyledPaintTrees`, `InstantiateNestedMarkerTrees`, `FilterSystem`, `PaintSystem`,
-  `TextSystem`). The plan therefore declines when a restyled entity is, or is inside, a text
-  element, or when its computed style references a paint server, marker, clip path, mask or
-  filter. That check runs both before the restyle and after it. The router performs the first
-  one when it marks the entity, while the old computed style still exists (marking removes it),
-  and sets `NarrowedStyle` only when it passes; `ApplyRetainedUpdate` performs the second on the
-  new computed style. When the post-restyle check fails, `tryRetainedUpdate`
-  returns false and the frame takes the full rebuild, whose selective pass restyles the same
-  dirty entities again. The edit's result is then exactly today's.
-- **Shadow instances.** The `<use>` instances of a restyled light element are restyled through
-  the reverse map and carry `NarrowedStyle` themselves; `ChangeStaysLocal` keeps refusing the own
-  changes it refuses today (transform, compositing, shadow tree) on shadow sources, which a class
-  edit does not make.
+Before discarding an affected style, the edit records whether it has local paint and geometry and
+saves its prepared display, visibility, overflow and blend-mode values. The first edit in a batch
+keeps that reference even if an intermediate computed-style read occurs. The next frame checks
+the newly computed styles against those values. That check declines changes requiring resources,
+text layout, external use context, symbol preparation or ordering changes. A successful retained
+update recomputes affected layout and paths, keeps existing shadow occurrences, and rebuilds render
+instances from the updated computed components. A refused geometry reservation also takes the
+full rebuild.
 
-Making more dependents local (per-entity styled paint trees, for example) is future work; each
-needs its own differential edit cases first.
+The full render rebuild can still use a selective cascade. It refreshes style-derived resources
+and shadow trees even when most light styles remain valid. A refused style pass discards its
+tentative warnings and replays preparation in the normal full-pass order. ID and reference
+mutations continue to use the full invalidation path.
+
+#### Style Edit Measurements
+
+Run the benchmark with `bazel run -c opt //donner/benchmarks:css_cascade_perf_bench -- --mode=style-edits`.
+Each row starts from a prepared document and alternates a DOM edit with its undo, recording nine
+samples per direction after warmup. The edit-call timer ends before the next draw. The style timer
+counts work during the normal null-backend draw, which also reports complete frame preparation
+and the full-rebuild, retained-update and shadow-teardown counts. A separate prepared document
+records the default raster frame. The raster number includes its own preparation and drawing.
+
+The named splash class edit changes `#Shine_glow` from `cls-71` to `cls-88`, resolving the fill from
+`url(#radial-gradient-3)` to white. The original sprite edit changes the first `symbol > path`
+between `a` and `b` in the unmodified sprite. A separate sprite preview adds one visible
+`<use>` and changes the same path's fill. The benchmark checks the resulting prepared fills on the
+visible edits and the class values on the original sprite whose symbols are undisplayed.
+
+The optimized Arm Linux and Apple silicon comparisons each run nine matched groups of the
+baseline, candidate, and a repeat of the candidate. All 27 runs per platform contribute.
+Unrelated activity on the selected Arm core ranges from 0.24 to 0.54 percent.
+Apple idle samples around individual runs range from 80 to 90 percent. The table shows
+median forward-edit times in milliseconds. The baseline predates selective edit routing.
+[Baseline revision](https://github.com/jwmcglynn/donner/commit/6810ac5fa9225d4b13a3a769a8c3592e3cbc3265),
+[measured candidate](https://github.com/jwmcglynn/donner/commit/4963901c409f386ddc1b9afb3cb641dc38746de0), and
+[landed benchmark harness](https://github.com/jwmcglynn/donner/commit/9867ac39a462723f34eb253b538338ba21580184).
+
+| Platform | Edit | DOM call | Style | Null frame | Raster frame | Elements cascaded | Candidate frame |
+| -------- | ---- | -------: | ----: | ---------: | -----------: | ----------------: | --------------- |
+| Arm Linux | Splash `#Shine_glow` class | 0.287 → 0.242 | 2.006 → 0.332 | 4.754 → 2.806 | 123.221 → 119.940 | 622 → 176 | Full rebuild, 38 shadow teardowns |
+| Arm Linux | Splash solid inline fill | 0.301 → 0.115 | 2.106 → 0.008 | 5.005 → 0.323 | 124.272 → 118.514 | 622 → 1 | Retained, 0 shadow teardowns |
+| Arm Linux | Original sprite class | 1.404 → 1.419 | 8.944 → 0.015 | 12.989 → 4.048 | 13.129 → 3.970 | 5,137 → 1 | Full rebuild, 0 shadow teardowns |
+| Arm Linux | Sprite preview fill | 1.439 → 1.378 | 9.038 → 0.037 | 14.548 → 4.817 | 14.930 → 5.381 | 5,141 → 4 | Full rebuild, 1 shadow teardown |
+| Arm Linux | 32 shared use copies | 0.013 → 0.019 | 0.100 → 0.037 | 0.390 → 0.164 | 0.491 → 0.250 | 72 → 33 | Retained, 0 shadow teardowns |
+| Apple silicon | Splash `#Shine_glow` class | 0.023 → 0.027 | 0.493 → 0.103 | 1.269 → 0.935 | 31.916 → 31.497 | 622 → 176 | Full rebuild, 38 shadow teardowns |
+| Apple silicon | Splash solid inline fill | 0.020 → 0.020 | 0.402 → 0.001 | 1.024 → 0.069 | 31.957 → 30.929 | 622 → 1 | Retained, 0 shadow teardowns |
+| Apple silicon | Original sprite class | 0.111 → 0.119 | 2.135 → 0.001 | 2.916 → 0.805 | 2.875 → 0.801 | 5,137 → 1 | Full rebuild, 0 shadow teardowns |
+| Apple silicon | Sprite preview fill | 0.112 → 0.118 | 2.150 → 0.003 | 3.014 → 0.906 | 3.019 → 0.936 | 5,141 → 4 | Full rebuild, 1 shadow teardown |
+| Apple silicon | 32 shared use copies | 0.002 → 0.005 | 0.028 → 0.012 | 0.107 → 0.047 | 0.136 → 0.076 | 72 → 33 | Retained, 0 shadow teardowns |
+
+On Arm Linux, undo style medians are 0.338 ms for the named splash and 0.015 ms for the original sprite.
+The maximum run median across both directions and these two cases is 0.393 ms.
+On Apple silicon, undo style medians are 0.076 ms for the named splash and 0.001 ms for the original sprite.
+The maximum run median across both directions and these two cases is 0.120 ms.
+
+The repeated-candidate style medians for these two edits differ by at most 0.020 ms
+from their candidate medians. The raster frame includes the cost of drawing the whole
+scene, which dominates the splash result.
+
+The named splash and original sprite meet the 1 ms next-frame style target in both directions.
+The gradient transition and both sprite controls use the full render rebuild. The solid splash
+edit and shared-use control take the retained update. The shared-use row recomputes the edited
+source and its 32 visible copies while keeping the unrelated shadow tree.
+
+#### Style Edit Verification
+
+`//donner/svg/renderer/tests:style_index_differential_tests` compares public edits against an
+independent document forced through a full style and render rebuild. The sampled corpus has 1,827
+inputs and three scenarios per input. There are 5,478 executed cases from 1,826 parsed documents
+and three skips for the same unparseable document. A stable 32-bit FNV-1a hash of each corpus name
+selects the starting point for one authored leaf, a class-bearing element when present, and one
+removal target per existing presentation attribute. The test compares computed styles, render
+reference state, and 48×48 raster output. The targeted retained tests in
+`//donner/svg/renderer/tests:retained_render_tree_update_tests` exercise route counts and clone
+identity as well as rendering parity. A separate instrumented run of the sampled workloads
+records 31,111 edited frames, including 9,652 retained updates. In the 32-shard ASan/UBSan run,
+the longest case completes in 8.604 seconds.
 
 ### Ancestor Bloom Filter
 
