@@ -1613,6 +1613,14 @@ public:
     return shell.lastConvertTextError_;
   }
 
+  static void RenderStructuredCssInspector(EditorShell& shell) {
+    shell.renderStructuredCssInspector();
+  }
+
+  static void DispatchInspectorSourceEdit(EditorShell& shell) {
+    shell.dispatchInspectorSourceEdit();
+  }
+
   static ImVec2 SourceLinePoint(const EditorShell& shell, int line, bool gutter) {
     const auto& source = shell.textEditor_;
     return {source.uiCursorPos_.x + source.textStart_ +
@@ -8825,6 +8833,109 @@ ellipse {fill:green;}
   frame(to, false);
   EXPECT_EQ(source.getText(), original);
   EXPECT_FALSE(source.canUndo());
+}
+
+namespace {
+
+ImVec2 RenderStructuredCssInspectorFrame(gui::EditorWindow& window, EditorShell& shell,
+                                         ImVec2 mouse, bool pressed) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, pressed);
+  window.beginFrame();
+  ImGui::SetNextWindowPos({20.0f, 20.0f}, ImGuiCond_Always);
+  ImGui::SetNextWindowSize({220.0f, 100.0f}, ImGuiCond_Always);
+  ImGui::Begin("Structured CSS inspector fixture", nullptr,
+               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+  EditorShellTestAccess::RenderStructuredCssInspector(shell);
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  ImGui::End();
+  window.endFrame();
+  return {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f};
+}
+
+std::optional<ImVec2> FindInspectorMenuItem(gui::EditorWindow& window, EditorShell& shell,
+                                            const char* label) {
+  const ImGuiContext& context = *ImGui::GetCurrentContext();
+  if (context.OpenPopupStack.empty()) {
+    return std::nullopt;
+  }
+  ImGuiWindow* popup = context.OpenPopupStack.back().Window;
+  if (!popup) {
+    return std::nullopt;
+  }
+  const ImGuiID item = popup->GetID(label);
+  const auto rect = popup->InnerRect;
+  const float x = (rect.Min.x + rect.Max.x) * 0.5f;
+  for (float y = rect.Min.y + 2.0f; y < rect.Max.y; y += 3.0f) {
+    const ImVec2 pointer{x, y};
+    std::ignore = RenderStructuredCssInspectorFrame(window, shell, pointer, false);
+    if (context.HoveredId == item) {
+      return pointer;
+    }
+  }
+  return std::nullopt;
+}
+
+void ClickStructuredCssInspectorItem(gui::EditorWindow& window, EditorShell& shell,
+                                     const char* item) {
+  const ImVec2 button = RenderStructuredCssInspectorFrame(window, shell, {5.0f, 5.0f}, false);
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, false);
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, true);
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, false);
+  const auto position = FindInspectorMenuItem(window, shell, item);
+  ASSERT_THAT(position, testing::Optional(testing::_)) << item;
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, *position, true);
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, *position, false);
+}
+
+}  // namespace
+
+TEST(EditorShellTest, StructuredCssInspectorClickMovesEncodedRuleAndUndoRestoresPaint) {
+  constexpr std::string_view authored =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30">
+<style>
+rect { --label:'A &amp; B'; fill:red; }
+/* separator */
+rect { fill:blue; }
+</style>
+<rect id="target" width="30" height="30"/>
+</svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(authored, "rules.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  ImGui::GetIO().ConfigInputTrickleEventQueue = false;
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  const std::string original = source.getText();
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(original.find("rect { --label")));
+  ClickStructuredCssInspectorItem(window, shell, "Mark CSS item to move");
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(original.find("rect { fill:blue")));
+  ClickStructuredCssInspectorItem(window, shell, "Move marked item after");
+  EXPECT_THAT(source.getText(),
+              testing::HasSubstr(
+                  "rect { fill:blue; }\n/* separator */\nrect { --label:'A &amp; B'; fill:red; }"));
+
+  auto& app = EditorShellTestAccess::App(shell);
+  ASSERT_EQ(app.document().document().source(), source.getText());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
+  RunShellFrame(window, shell);
+  EXPECT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
+            app.document().currentFrameVersion());
+
+  source.undo();
+  EditorShellTestAccess::DispatchInspectorSourceEdit(shell);
+  EXPECT_EQ(source.getText(), original);
+  EXPECT_EQ(app.document().document().source(), original);
+  EXPECT_FALSE(source.canUndo());
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255)))));
 }
 
 TEST(EditorShellTest, SourceFontShortcutsResizeTextAndPreserveCanvasZoomAndSelection) {

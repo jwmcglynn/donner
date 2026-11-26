@@ -1094,6 +1094,7 @@ donner_cc_test(
     deps = [
         ":bitmap_golden_compare",
         "//donner/editor:attribute_writeback",
+        "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",

@@ -4185,6 +4185,7 @@ void EditorShell::renderStructuredCssContextMenu() {
 
 void EditorShell::renderStructuredCssInspector() {
   if (ImGui::Button("CSS source")) {
+    setSourcePaneVisible(true);
     ImGui::OpenPopup("##inspectorCssSource");
   }
   if (!ImGui::BeginPopup("##inspectorCssSource")) {
@@ -4193,10 +4194,20 @@ void EditorShell::renderStructuredCssInspector() {
   const auto offset = textEditor_.getByteOffsetAtCoordinates(textEditor_.getCursorPosition());
   if (const auto target = FindStructuredCssTarget(app_, textEditor_.getText(), offset)) {
     renderStructuredCssActions(*target);
+    dispatchInspectorSourceEdit();
   } else {
     ImGui::TextDisabled("Place the source cursor on a CSS rule or declaration.");
   }
   ImGui::EndPopup();
+}
+
+void EditorShell::dispatchInspectorSourceEdit() {
+  if (!textEditor_.isTextChanged()) {
+    return;
+  }
+  const auto before = app_.document().currentFrameVersion();
+  documentSyncController_.dispatchCurrentSourceEdit(app_, textEditor_);
+  requestRenderForAcceptedSourceEdit(before);
 }
 
 void EditorShell::renderStructuredCssMoveActions(const StructuredCssTarget& target) {

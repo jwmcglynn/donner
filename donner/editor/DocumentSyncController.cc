@@ -435,6 +435,11 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
   }
 }
 
+void DocumentSyncController::dispatchCurrentSourceEdit(EditorApp& app, TextEditor& textEditor) {
+  textDispatchThrottled_ = false;
+  handleTextEdits(app, textEditor, 0.0f);
+}
+
 std::optional<float> DocumentSyncController::nextTextSyncWakeSeconds() const {
   if (!textDispatchThrottled_) {
     return std::nullopt;

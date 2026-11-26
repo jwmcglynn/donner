@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLTokenizer.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/editor/EditorApp.h"
@@ -30,9 +31,41 @@ bool Contains(SourceByteRange range, std::size_t offset) {
   return range.start <= offset && offset < range.end;
 }
 
+bool AppendDecoded(std::string& destination, std::string_view decoded,
+                   const std::optional<SourceRange>& range, char suffix = '\0') {
+  const auto offsets = ByteRange(range, decoded.size());
+  if (!offsets) {
+    return false;
+  }
+  destination = decoded.substr(offsets->start, offsets->end - offsets->start);
+  if (suffix) {
+    destination += suffix;
+  }
+  return true;
+}
+
+StructuredCssSourceEncoding EmbeddedEncoding(const svg::SVGStyleElement& stylesheet,
+                                             std::string_view source, SourceByteRange item) {
+  const auto node = xml::XMLNode::TryCast(stylesheet.entityHandle());
+  const auto owner = node ? ByteRange(node->getNodeLocation(), source.size()) : std::nullopt;
+  if (!owner || item.start < owner->start || item.end > owner->end) {
+    return StructuredCssSourceEncoding::Unmapped;
+  }
+  const auto raw = source.substr(owner->start, owner->end - owner->start);
+  bool cdata = false;
+  xml::Tokenize(raw, [&](const xml::XMLToken& token) {
+    const auto range = ByteRange(token.range, raw.size());
+    if (token.type == xml::XMLTokenType::CData && range) {
+      cdata |= range->start <= item.start - owner->start && item.end - owner->start <= range->end;
+    }
+  });
+  return cdata ? StructuredCssSourceEncoding::CData : StructuredCssSourceEncoding::Text;
+}
+
 template <typename Mapper>
-void AddDeclarationTarget(const css::Declaration& declaration, std::string_view source,
-                          std::size_t offset, StructuredCssTarget& target, Mapper map) {
+void AddDeclarationTarget(const css::Declaration& declaration, std::string_view decoded,
+                          std::string_view source, std::size_t offset, StructuredCssTarget& target,
+                          Mapper map) {
   const auto extent = map(declaration.authoredDeclarationRange());
   if (!extent) {
     return;
@@ -43,6 +76,11 @@ void AddDeclarationTarget(const css::Declaration& declaration, std::string_view 
   }
   target.declarationNeedsSeparator = removable.end == extent->end;
   if (Contains(removable, offset)) {
+    const char semicolon = removable.end != extent->end ? ';' : '\0';
+    if (!AppendDecoded(target.decodedMoveText, decoded, declaration.authoredDeclarationRange(),
+                       semicolon)) {
+      target.encoding = StructuredCssSourceEncoding::Unmapped;
+    }
     target.declaration = removable;
     target.name = map(declaration.authoredNameRange());
     target.value = map(declaration.authoredValueRange());
@@ -60,8 +98,9 @@ void AddDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view 
                              source.size())
                  : std::nullopt;
   };
+  const auto decoded = rule.stylesheetElement->textContent();
   for (const auto& entry : rule.declarations) {
-    AddDeclarationTarget(entry.declaration, source, offset, target, map);
+    AddDeclarationTarget(entry.declaration, decoded, source, offset, target, map);
   }
 }
 
@@ -80,6 +119,12 @@ std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRu
                              .selectionOffset = offset,
                              .generation = generation,
                              .sourceVersion = sourceVersion};
+  if (stylesheetRule.stylesheetElement) {
+    if (AppendDecoded(target.decodedMoveText, stylesheetRule.stylesheetElement->textContent(),
+                      stylesheetRule.ruleCssRange)) {
+      target.encoding = EmbeddedEncoding(*stylesheetRule.stylesheetElement, source, *rule);
+    }
+  }
   AddDeclarationTargets(stylesheetRule, source, offset, target);
   return target;
 }
@@ -104,6 +149,7 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
   }
   StructuredCssTarget target{.rule = *valueRange,
                              .insertDeclaration = valueRange->end,
+                             .encoding = StructuredCssSourceEncoding::Attribute,
                              .attributeQuote = attribute->quote,
                              .inlineStyle = true,
                              .selectionOffset = offset,
@@ -115,7 +161,7 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
                  : std::nullopt;
   };
   for (const auto& declaration : declarations) {
-    AddDeclarationTarget(declaration, source, offset, target, map);
+    AddDeclarationTarget(declaration, *value, source, offset, target, map);
   }
   return target;
 }
@@ -232,11 +278,30 @@ bool IsCDataContent(std::string_view bytes) {
   return complete;
 }
 
-bool CanTransferLiteral(std::string_view bytes, const StructuredCssTarget& destination) {
-  // Moving independently projected spans must not reinterpret XML entities or delimiters.
-  return bytes.find_first_of("<&") == std::string_view::npos && IsCDataContent(bytes) &&
-         (!destination.attributeQuote ||
-          bytes.find(destination.attributeQuote) == std::string_view::npos);
+bool SameEncoding(const StructuredCssTarget& from, const StructuredCssTarget& destination) {
+  return from.encoding == destination.encoding && from.attributeQuote == destination.attributeQuote;
+}
+
+std::optional<RcString> EncodeMovedCss(const StructuredCssTarget& from,
+                                       const StructuredCssTarget& destination,
+                                       std::string_view original) {
+  using Encoding = StructuredCssSourceEncoding;
+  if (from.encoding == Encoding::Unmapped || destination.encoding == Encoding::Unmapped) {
+    return std::nullopt;
+  }
+  if (SameEncoding(from, destination)) {
+    return RcString(original);
+  }
+  switch (destination.encoding) {
+    case Encoding::Attribute:
+      return xml::EscapeAttributeValue(from.decodedMoveText, destination.attributeQuote);
+    case Encoding::Text: return xml::EscapeTextContent(from.decodedMoveText);
+    case Encoding::CData:
+      return IsCDataContent(from.decodedMoveText) ? std::optional(RcString(from.decodedMoveText))
+                                                  : std::nullopt;
+    case Encoding::Unmapped: return std::nullopt;
+  }
+  return std::nullopt;
 }
 
 SourceByteRange Between(SourceByteRange first, SourceByteRange second) {
@@ -278,15 +343,15 @@ std::string TransferSeparator(std::string_view source, SourceByteRange destinati
   return "\n" + std::string(indentation);
 }
 
-std::string TransferText(std::string_view source, SourceByteRange from, SourceByteRange to,
+std::string TransferText(std::string_view source, std::string_view moved, SourceByteRange to,
                          bool declaration, bool after) {
   std::string bytes;
   const auto separator = TransferSeparator(source, to);
   if (after) {
     bytes = declaration && !EndsInSemicolon(source, to) ? ";" + separator : separator;
   }
-  bytes += Slice(source, from);
-  if (declaration && !EndsInSemicolon(source, from)) {
+  bytes += moved;
+  if (declaration && !moved.ends_with(';')) {
     bytes += ';';
   }
   if (!after) {
@@ -299,7 +364,8 @@ std::optional<CssReplacement> PlanTransfer(std::string_view source, const Struct
                                            const StructuredCssTarget& destination,
                                            SourceByteRange item, SourceByteRange anchor,
                                            std::size_t insertion, bool after) {
-  if (!CanTransferLiteral(Slice(source, item), destination)) {
+  const auto encoded = EncodeMovedCss(from, destination, Slice(source, item));
+  if (!encoded) {
     return std::nullopt;
   }
   const auto gap = Between(item, anchor);
@@ -308,11 +374,11 @@ std::optional<CssReplacement> PlanTransfer(std::string_view source, const Struct
     return std::nullopt;
   }
   const bool declaration = from.declaration.has_value();
-  if (adjacent &&
+  if (adjacent && SameEncoding(from, destination) &&
       (!declaration || (EndsInSemicolon(source, item) && EndsInSemicolon(source, anchor)))) {
     return SwapAdjacent(source, item, anchor, gap);
   }
-  const auto bytes = TransferText(source, item, anchor, declaration, after);
+  const auto bytes = TransferText(source, *encoded, anchor, declaration, after);
   return CutAndInsert(source, item, insertion, bytes);
 }
 

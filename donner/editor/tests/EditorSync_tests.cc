@@ -9,6 +9,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/SelectTool.h"
@@ -815,6 +816,74 @@ TEST(EditorSyncTest, StructuredCssDeclarationMoveSeparatesAnUnterminatedDestinat
   ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/true));
   EXPECT_THAT(text.getText(),
               testing::HasSubstr("rect {  /* keep */ } circle {stroke:black; fill:red;}"));
+  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
+  text.undo();
+  EXPECT_EQ(text.getText(), original);
+}
+
+TEST(EditorSyncTest, StructuredCssMovePreservesEntitySpellingWithinAnInlineStyle) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<rect id="r" style="--a:'&lt;A &amp; B&gt;'; /* keep */ fill:red;"/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  DocumentSyncController controller(original);
+  const auto from = FindStructuredCssTarget(app, original, original.find("--a:"));
+  const auto to = FindStructuredCssTarget(app, original, original.find("fill:red"));
+  ASSERT_THAT(from, testing::Optional(testing::_));
+  ASSERT_THAT(to, testing::Optional(testing::_));
+  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/true));
+  EXPECT_THAT(text.getText(), testing::HasSubstr("fill:red; /* keep */ --a:'&lt;A &amp; B&gt;';"));
+  controller.dispatchCurrentSourceEdit(app, text);
+  EXPECT_EQ(app.document().document().source(), text.getText());
+  text.undo();
+  controller.dispatchCurrentSourceEdit(app, text);
+  EXPECT_EQ(app.document().document().source(), original);
+  EXPECT_FALSE(text.canUndo());
+}
+
+TEST(EditorSyncTest, StructuredCssMoveReencodesCDataIntoPlainStylesheetText) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style><![CDATA[#r { --a: 'A & <B>'; }]]></style>
+<style>#other {fill:red;}</style>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  const auto from = FindStructuredCssTarget(app, original, original.find("#r {"));
+  const auto to = FindStructuredCssTarget(app, original, original.find("#other {"));
+  ASSERT_THAT(from, testing::Optional(testing::_));
+  ASSERT_THAT(to, testing::Optional(testing::_));
+  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+  EXPECT_THAT(
+      text.getText(),
+      testing::HasSubstr("<style>#r { --a: 'A &amp; &lt;B&gt;'; } #other {fill:red;}</style>"));
+  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
+  text.undo();
+  EXPECT_EQ(text.getText(), original);
+}
+
+TEST(EditorSyncTest, StructuredCssMoveReencodesForTheDestinationAttributeQuote) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<rect style="--a:'A &amp; B';"/>
+<circle style='fill:red;'/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  const auto from = FindStructuredCssTarget(app, original, original.find("--a:"));
+  const auto to = FindStructuredCssTarget(app, original, original.find("fill:red"));
+  ASSERT_THAT(from, testing::Optional(testing::_));
+  ASSERT_THAT(to, testing::Optional(testing::_));
+  ASSERT_TRUE(MoveStructuredCss(app, text, *from, *to, /*after=*/false));
+  EXPECT_THAT(text.getText(), testing::HasSubstr("style='--a:&apos;A &amp; B&apos;; fill:red;'"));
   EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
   text.undo();
   EXPECT_EQ(text.getText(), original);

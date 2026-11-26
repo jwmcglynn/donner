@@ -13,6 +13,9 @@ namespace donner::editor {
 class EditorApp;
 class TextEditor;
 
+/// XML source representation of the authored CSS item.
+enum class StructuredCssSourceEncoding : std::uint8_t { Text, CData, Attribute, Unmapped };
+
 /// Exact selection and edit boundaries for a source-backed CSS rule or declaration.
 struct StructuredCssTarget {
   SourceByteRange rule;                        ///< Complete qualified rule.
@@ -22,8 +25,10 @@ struct StructuredCssTarget {
   std::optional<SourceByteRange> value;        ///< Authored property value.
   std::optional<SourceByteRange> priority;     ///< Authored importance annotation.
   std::size_t insertDeclaration = 0;  ///< Position directly before the rule's closing brace.
-  char attributeQuote = '\0';         ///< Original delimiter for an inline style attribute.
-  bool inlineStyle = false;           ///< The selected declaration belongs to a style attribute.
+  StructuredCssSourceEncoding encoding = StructuredCssSourceEncoding::Unmapped;  ///< Context.
+  std::string decodedMoveText;  ///< Original CSS token bytes before XML encoding.
+  char attributeQuote = '\0';   ///< Original delimiter for an inline style attribute.
+  bool inlineStyle = false;     ///< The selected declaration belongs to a style attribute.
   bool declarationNeedsSeparator = false;  ///< Last declaration has no terminating semicolon.
   std::size_t selectionOffset = 0;         ///< Original hit that resolves the same parsed target.
   std::uint64_t generation = 0;            ///< Document generation at selection.
