@@ -633,9 +633,10 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceBatchSharesCascadeAndPreservesReq
         testing::Field("end", &SourceRange::end, FileOffset::Offset(start + authored.size()))));
   };
   const auto missing = testing::Eq(std::nullopt);
-  EXPECT_THAT(batch.declarations,
-              testing::ElementsAre(atName(R"(--t\6fne)"), atName("--priority"), atName("--local"),
-                                   missing, atName(R"(--t\6fne)"), missing));
+  const auto expectedDeclarations =
+      testing::ElementsAre(atName(R"(--t\6fne)"), atName("--priority"), atName("--local"), missing,
+                           atName(R"(--t\6fne)"), missing);
+  EXPECT_THAT(batch.declarations, expectedDeclarations);
   EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--tone"), atName(R"(--t\6fne)"));
 
   std::size_t separateWork = 0;
@@ -652,7 +653,7 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceBatchSharesCascadeAndPreservesReq
   EXPECT_TRUE(exact.complete);
   EXPECT_FALSE(exact.budgetExceeded);
   EXPECT_EQ(exact.work, batch.work);
-  EXPECT_EQ(exact.declarations, batch.declarations);
+  EXPECT_THAT(exact.declarations, expectedDeclarations);
   const auto refused = FindCustomPropertyDeclarations(*target, names, batch.work - 1);
   EXPECT_FALSE(refused.complete);
   EXPECT_TRUE(refused.budgetExceeded);
