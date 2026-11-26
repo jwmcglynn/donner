@@ -709,8 +709,10 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceChargesEncodedInlineOwnerOnlyOnce
     const auto offset = document.source().find(encodedName);
     if (!batch.declarations.empty()) {
       EXPECT_THAT(batch.declarations.front(),
-                  Optional(SourceRange{FileOffset::Offset(offset),
-                                       FileOffset::Offset(offset + encodedName.size())}));
+                  Optional(testing::AllOf(
+                      testing::Field("start", &SourceRange::start, FileOffset::Offset(offset)),
+                      testing::Field("end", &SourceRange::end,
+                                     FileOffset::Offset(offset + encodedName.size())))));
     }
     if (batch.work > 0) {
       const auto rejected = FindCustomPropertyDeclarations(*target, names, batch.work - 1);
