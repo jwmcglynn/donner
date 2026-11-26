@@ -3546,6 +3546,17 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseResourceColor(
   return error;
 }
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_PENDING_PROPERTY_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace {
 
 bool IsPendingVariable(const parser::UnparsedProperty& value) {
@@ -3813,6 +3824,10 @@ void PropertyRegistry::applyResolvedVariableGroup(const parser::UnparsedProperty
   }
 }
 
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 void PropertyRegistry::storeDeferredProperty(const css::Declaration& declaration,
                                              css::Specificity specificity) {
   const auto [previous, inserted] = unparsedProperties.try_emplace(
@@ -3825,6 +3840,10 @@ void PropertyRegistry::storeDeferredProperty(const css::Declaration& declaration
     }
   }
 }
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 std::optional<ParseDiagnostic> PropertyRegistry::parseVariableDeclaration(
     const css::Declaration& declaration, css::Specificity specificity) {
@@ -3839,6 +3858,10 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseVariableDeclaration(
   error.range.start = declaration.sourceOffset;
   return error;
 }
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute pop
+#endif
 
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                                css::Specificity specificity) {
@@ -4049,6 +4072,10 @@ bool PropertyRegistry::discardPendingPresentationVariable(std::string_view name)
   return removePendingPresentationVariable(name, false);
 }
 
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 bool PropertyRegistry::removePendingPresentationVariable(std::string_view name, bool clearMarkers) {
   bool removed = false;
   for (auto it = unparsedProperties.begin(); it != unparsedProperties.end();) {
@@ -4073,6 +4100,10 @@ bool PropertyRegistry::removePendingPresentationVariable(std::string_view name, 
   }
   return removed;
 }
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute pop
+#endif
 
 PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearPresentationAttribute(
     std::string_view name) {
@@ -4394,3 +4425,7 @@ std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
 }
 
 }  // namespace donner::svg
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#undef DONNER_APPLE_PENDING_PROPERTY_MINSIZE
+#endif
