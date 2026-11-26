@@ -104,8 +104,17 @@ bool ValidLayerEvents(const css::StylesheetLayers& syntax, std::size_t importCou
   return nextImport == importCount;
 }
 
+bool ValidFontFaceLayers(const css::Stylesheet& sheet, const css::StylesheetLayers& syntax) {
+  return syntax.fontFaceLayers.empty() ||
+         (syntax.fontFaceLayers.size() == sheet.fontFaces().size() &&
+          std::ranges::all_of(syntax.fontFaceLayers, [&](css::LayerId layer) {
+            return layer == css::kUnlayered || layer < syntax.nodes.size();
+          }));
+}
+
 bool ValidLayerMetadata(const css::Stylesheet& sheet, const css::StylesheetLayers& syntax) {
   return ValidLayerNodes(syntax.nodes) && ValidLayerEvents(syntax, sheet.imports().size()) &&
+         ValidFontFaceLayers(sheet, syntax) &&
          std::ranges::all_of(sheet.imports(), [&](const css::ImportRule& import) {
            return import.layer == css::kUnlayered || import.layer < syntax.nodes.size();
          });
@@ -366,6 +375,10 @@ DocumentLayerOrder::SheetRanks DocumentLayerOrder::ranksFor(const css::Styleshee
   }
   const auto& mapping = found->second;
   return {mapping.base, mapping.bySheetId};
+}
+
+std::vector<Entity> DocumentLayerOrder::StylesheetsInDocumentOrder(const Registry& registry) {
+  return SheetOrder(registry);
 }
 
 std::span<const Entity> DocumentLayerOrder::stylesheets() const {

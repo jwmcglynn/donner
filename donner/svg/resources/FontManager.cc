@@ -546,6 +546,50 @@ void FontManager::addFontFace(const css::FontFace& face) {
   clearLentSetCaches();
 }
 
+bool FontManager::synchronizeLayeredResourceFaces(std::span<const css::FontFace> registered,
+                                                  std::span<const std::size_t> order) {
+  std::vector<std::string> keys;
+  keys.reserve(order.size());
+  for (std::size_t index : order) {
+    keys.push_back(css::FontFaceIdentityKey(registered[index]));
+  }
+  if (layeredResourceKeys_ == keys) {
+    return false;
+  }
+
+  const auto erase = [&](const std::string& identity) {
+    if (const auto found = faceEntities_.find(identity); found != faceEntities_.end()) {
+      if (registry_.valid(found->second)) {
+        registry_.destroy(found->second);
+      }
+      faceEntities_.erase(found);
+    }
+  };
+  if (layeredResourceKeys_) {
+    for (const auto& identity : *layeredResourceKeys_) {
+      erase(identity);
+    }
+  } else {
+    // Discard earlier resource-backed registrations when a live edit first adds a layer.
+    for (const auto& face : registered) {
+      erase(css::FontFaceIdentityKey(face));
+    }
+  }
+  registeredFamiliesLower_.clear();
+  for (const auto& [_, item] : registry_.view<const FontFaceComponent>().each()) {
+    registeredFamiliesLower_.insert(StringUtils::ToLowerAscii(item.face.familyName));
+  }
+  cache_.clear();
+  clearLentSetCaches();
+
+  for (std::size_t index : order) {
+    addFontFace(registered[index]);
+  }
+  layeredResourceKeys_ = std::move(keys);
+  familySelectionRevision_ = ++fontResourceRevision_;
+  return true;
+}
+
 size_t FontManager::numFaces() const {
   size_t count = 0;
   for (const Entity entity : registry_.view<FontFaceComponent>()) {

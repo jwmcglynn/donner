@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <span>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
@@ -38,6 +39,9 @@ public:
 
   /// Returns ranks for a single author stylesheet occurrence.
   SheetRanks ranksFor(const css::Stylesheet& sheet) const UTILS_LIFETIME_BOUND;
+
+  /// Attached sheets in source order, including on the frame after the last layer is removed.
+  static std::vector<Entity> StylesheetsInDocumentOrder(const Registry& registry);
 
   /// Author and UA sheets in live tree order when layering is active.
   std::span<const Entity> stylesheets() const UTILS_LIFETIME_BOUND;
