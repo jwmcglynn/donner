@@ -84,7 +84,10 @@ TEST(SVGStyleCascadeTests, CustomPropertySourceMapsInlineXmlReferencesAndLiveEdi
   ASSERT_THAT(stylesheet, Optional(testing::_));
   const auto projected =
       MapStylesheetSourceRange(*stylesheet, {FileOffset::Offset(7), FileOffset::Offset(13)});
-  EXPECT_EQ(projected, after);
+  EXPECT_THAT(projected,
+              Optional(testing::AllOf(
+                  testing::Field("start", &SourceRange::start, testing::Eq(after->start)),
+                  testing::Field("end", &SourceRange::end, testing::Eq(after->end)))));
   const auto uppercase = FindCustomPropertyDeclaration(*target, "--Tone");
   ASSERT_THAT(uppercase, Optional(testing::_));
   EXPECT_EQ(uppercase->start, FileOffset::Offset(doc.source().find("--Tone: blue")));
