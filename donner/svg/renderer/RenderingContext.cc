@@ -1863,9 +1863,11 @@ bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink,
     return false;
   }
 
+  if (!ApplyRetainedUpdate(registry_, *plan, warningSink, scheduler)) {
+    return false;
+  }
   ++renderState.counters.retainedUpdates;
   renderState.counters.retargetedUses += plan->retargetedUses.size();
-  ApplyRetainedUpdate(registry_, *plan, warningSink, scheduler);
   registry_.clear<DirtyFlagsComponent>();
   // The instances still describe the previous frame; the next instantiation rebuilds them.
   renderState.needsInstanceRebuild = true;

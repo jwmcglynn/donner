@@ -2567,6 +2567,7 @@ donner_cc_library(
 donner_cc_test(
     name = "retained_render_tree_update_tests",
     srcs = ["RetainedRenderTreeUpdate_tests.cc"],
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     opens_gpu_device = True,
     # Unsharded, the base target took up to 36 s of its 60 s `size = "small"` limit under ASan on
     # the hosted nightly runner. Sharding restores headroom; the variants inherit the shard count.
@@ -2588,6 +2589,7 @@ donner_cc_test(
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/text:text_tier_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

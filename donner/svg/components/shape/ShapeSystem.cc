@@ -1086,6 +1086,29 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
   }
 }
 
+void ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entity> entities,
+                                       ParseWarningSink& warningSink) {
+  for (Entity entity : entities) {
+    EntityHandle handle(registry, entity);
+    const auto& style = handle.get<ComputedStyleComponent>();
+    ForEachShape<AllShapes>([&]<typename Shape>() {
+      if (const auto* shape = handle.try_get<Shape>()) {
+        const FontMetrics metrics = fontMetricsForElement(registry, style, entity);
+        createComputedShapeWithStyle(handle, *shape, style, metrics, warningSink);
+        return true;
+      }
+      return false;
+    });
+  }
+  for (Entity entity : entities) {
+    EntityHandle handle(registry, entity);
+    if (auto* instance = handle.try_get<ComputedInstanceGeometryComponent>()) {
+      instance->prepared = false;
+    }
+    instantiateShadowComputedPath(handle, warningSink);
+  }
+}
+
 std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
   const Transform2d outerEntityFromWorld =
       LayoutSystem().getEntityFromWorldTransform(handle).inverse();
