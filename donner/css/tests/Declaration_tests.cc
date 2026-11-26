@@ -502,11 +502,16 @@ TEST(MergeStyleDeclarations, ClosesEveryEofRecoveredConstructBeforeAnUpdate) {
     std::vector<std::string_view> spellings;
     const auto reparsed =
         parser::DeclarationListParser::ParseOnlyDeclarations(merged, nullptr, &spellings);
-    ASSERT_THAT(reparsed, testing::SizeIs(2));
-    ASSERT_THAT(spellings, testing::SizeIs(2));
-    EXPECT_EQ(reparsed[1].name, "opacity");
-    EXPECT_EQ(spellings[1], "opacity: .5");
-    EXPECT_EQ(reparsed[1].sourceOffset, FileOffset::Offset(merged.find("opacity: .5")));
+    constexpr std::string_view update = "opacity: .5";
+    const auto offset = testCase.merged.rfind(update);
+    const auto firstName = testCase.existing.starts_with(R"(--a\:b)") ? "--a:b" : "--note";
+    EXPECT_THAT(reparsed,
+                testing::ElementsAre(
+                    testing::Field("name", &Declaration::name, RcString(firstName)),
+                    testing::AllOf(testing::Field("name", &Declaration::name, RcString("opacity")),
+                                   testing::Field("sourceOffset", &Declaration::sourceOffset,
+                                                  FileOffset::Offset(offset)))));
+    EXPECT_THAT(spellings, testing::ElementsAre(testCase.merged.substr(0, offset - 2), update));
   }
 }
 
