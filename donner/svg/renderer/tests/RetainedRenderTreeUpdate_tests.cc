@@ -14,6 +14,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -25,11 +26,18 @@
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/resources/SubDocumentAdmission.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -37,11 +45,14 @@
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/ExternalUseSpriteScene.h"
 #include "donner/svg/renderer/tests/SpriteFieldScene.h"
+#include "donner/svg/text/tests/TextTierTestUtils.h"
 
 namespace donner::svg::tests {
 namespace {
 
 using components::RenderTreeState;
+using testing::Eq;
+using testing::Optional;
 
 constexpr int kFrames = 4;
 
@@ -188,6 +199,383 @@ TEST(RetainedRenderTreeUpdateTest, SymbolViewportsMatchFullRebuild) {
                                      ExpectedPath::Retained, "symbol-use");
 }
 
+TEST(RetainedRenderTreeUpdateTest, PaintEditsRestyleOnlyAffectedNestedUseOccurrences) {
+  using components::ComputedStyleComponent;
+  using components::RenderingInstanceComponent;
+  using components::ShadowEntityComponent;
+  using components::StyleCascadeMetrics;
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="48">
+      <style>.hot { fill: red }</style>
+      <g id="tile">
+        <rect id="edited" width="10" height="10"/>
+        <rect id="sibling" x="12" width="10" height="10"/>
+      </g>
+      <defs><g id="wrapper"><use href="#tile"/></g></defs>
+      <use id="host" href="#tile" x="24"/>
+      <use href="#wrapper" x="52"/>
+    </svg>)svg";
+  SVGDocument retained = Parse(source);
+  SVGDocument reference = Parse(source);
+  DisableRetainedUpdates(reference);
+  DriverRenderer actual;
+  DriverRenderer expected;
+  actual.draw(retained);
+  expected.draw(reference);
+
+  const auto edited = retained.querySelector("#edited");
+  const auto sibling = retained.querySelector("#sibling");
+  ASSERT_THAT(edited, Optional(testing::_));
+  ASSERT_THAT(sibling, Optional(testing::_));
+  const Registry& view = retained.unsafeRegistry();
+  const Entity editedEntity = edited->entityHandle().entity();
+  const Entity siblingEntity = sibling->entityHandle().entity();
+  std::vector<Entity> editedCopies;
+  std::vector<Entity> siblingCopies;
+  for (const auto& [entity, occurrence] : view.view<const ShadowEntityComponent>().each()) {
+    if (occurrence.lightEntity == editedEntity) {
+      editedCopies.push_back(entity);
+    } else if (occurrence.lightEntity == siblingEntity) {
+      siblingCopies.push_back(entity);
+    }
+  }
+  ASSERT_THAT(editedCopies, testing::SizeIs(2u));
+  ASSERT_THAT(siblingCopies, testing::SizeIs(2u));
+  std::vector<std::shared_ptr<const components::ComputedStyle>> siblingRecords;
+  for (Entity entity : siblingCopies) {
+    siblingRecords.push_back(view.get<ComputedStyleComponent>(entity).style);
+  }
+  const auto before = ReadCounters(retained);
+  const auto cascadedBefore = view.ctx().get<StyleCascadeMetrics>().counters.elementsCascaded;
+  const auto editSource = [](SVGDocument& document) {
+    Element(document, "#edited").setClassName("hot");
+  };
+  const auto editHost = [](SVGDocument& document) {
+    Element(document, "#host").setStyle("fill: blue");
+  };
+  const auto drawEditedFrame = [&](const auto& edit, std::string_view label) {
+    edit(retained);
+    edit(reference);
+    reference.unsafeRegistry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+    actual.draw(retained);
+    expected.draw(reference);
+    editor::tests::CompareBitmapToBitmap(actual.takeSnapshot(), expected.takeSnapshot(), label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+  drawEditedFrame(editSource, "retained-nested-use-leaf");
+  EXPECT_EQ(view.ctx().get<StyleCascadeMetrics>().counters.elementsCascaded - cascadedBefore, 3u);
+  const auto red = PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)));
+  for (Entity copy : editedCopies) {
+    const auto* style = view.try_get<ComputedStyleComponent>(copy);
+    ASSERT_THAT(style, testing::NotNull());
+    ASSERT_THAT(style->style, testing::NotNull());
+    EXPECT_THAT(style->properties()->fill.get(), Optional(Eq(PaintServer(red))));
+    const auto* instance = view.try_get<RenderingInstanceComponent>(copy);
+    ASSERT_THAT(instance, testing::NotNull());
+    EXPECT_THAT(instance->resolvedFill, testing::VariantWith<PaintServer::Solid>(Eq(red)));
+  }
+  for (std::size_t i = 0; i < siblingCopies.size(); ++i) {
+    const auto* style = view.try_get<ComputedStyleComponent>(siblingCopies[i]);
+    ASSERT_THAT(style, testing::NotNull());
+    EXPECT_THAT(style->style, Eq(siblingRecords[i]));
+  }
+
+  drawEditedFrame(editHost, "retained-use-host-inheritance");
+  const auto pixels = actual.takeSnapshot();
+  ASSERT_THAT(pixels.dimensions, Eq(Vector2i(96, 48)));
+  const std::size_t pixelOffset = 5 * pixels.rowBytes + 4 * 40;
+  ASSERT_THAT(pixels.pixels, testing::SizeIs(testing::Ge(pixelOffset + 4)));
+  const auto blue = pixels.pixels.begin() + static_cast<std::ptrdiff_t>(pixelOffset);
+  EXPECT_THAT(std::ranges::subrange(blue, blue + 4), testing::ElementsAre(0, 0, 255, 255));
+  const auto after = ReadCounters(retained);
+  EXPECT_EQ(after.retainedUpdates - before.retainedUpdates, 2u);
+  EXPECT_EQ(after.fullRebuilds, before.fullRebuilds);
+  EXPECT_EQ(after.shadowTreeTeardowns, before.shadowTreeTeardowns);
+}
+
+TEST(RetainedRenderTreeUpdateTest, GradientPaintTransitionUsesTheFullRebuild) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="24">
+      <defs><linearGradient id="gradient"><stop stop-color="red"/><stop offset="1"
+        stop-color="blue"/></linearGradient></defs>
+      <rect id="target" width="16" height="16" style="fill: url(#gradient)"/>
+    </svg>)svg";
+  const auto edit = [](SVGDocument& document, int frame) {
+    Element(document, "#target").setStyle(frame % 2 ? "fill: white" : "fill: url(#gradient)");
+  };
+  ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::FullRebuild, "gradient-to-solid");
+}
+
+TEST(RetainedRenderTreeUpdateTest, EquivalentZeroOriginsAndPaintWritersStayRetained) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="24">
+      <style>.authored { transform-origin: 0px 0%; fill: blue }</style>
+      <rect id="target" width="16" height="16" fill="red"/>
+    </svg>)svg";
+  const auto edit = [](SVGDocument& document, int frame) {
+    auto target = Element(document, "#target");
+    switch (frame) {
+      case 1: target.setAttribute("fill", "green"); break;
+      case 2: target.setClassName("authored"); break;
+      case 3: target.setStyle("fill: gray"); break;
+      case 4: target.updateStyle("fill: cyan"); break;
+    }
+  };
+  ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::Retained,
+                                     "retained-paint-writers");
+}
+
+TEST(RetainedRenderTreeUpdateTest, ChangedTransformOriginUsesTheFullRebuild) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="24">
+      <style>.centered { transform-origin: 50% 50% }</style>
+      <rect id="target" width="8" height="8" transform="rotate(15)" fill="red"/>
+    </svg>)svg";
+  const auto edit = [](SVGDocument& document, int frame) {
+    Element(document, "#target").setClassName(frame % 2 ? "centered" : "");
+  };
+  ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::FullRebuild,
+                                     "style-origin-change");
+}
+
+TEST(RetainedRenderTreeUpdateTest, LocalStylesRecomputeRectAndPathGeometry) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="64">
+      <style>
+        .narrow { font-size: 12px }
+        .wide { font-size: 24px }
+        .pathLeft { d: "M0 32 H16 V40 H0 Z"; }
+        .pathRight { d: "M24 32 H40 V40 H24 Z"; }
+      </style>
+      <g id="group" class="narrow"><rect width="1em" height="16" fill="red"/></g>
+      <path id="path" class="pathLeft" d="M0 32 H8 V40 H0 Z" fill="blue"/>
+    </svg>)svg";
+  const auto edit = [](SVGDocument& document, int frame) {
+    Element(document, "#group").setClassName(frame % 2 ? "wide" : "narrow");
+    Element(document, "#path").setClassName(frame % 2 ? "pathRight" : "pathLeft");
+  };
+  ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::Retained,
+                                     "retained-style-geometry");
+}
+
+TEST(RetainedRenderTreeUpdateTest, GeometryAndOrderStylesUseTheFullRebuild) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="24">
+      <style>.changed { width: 16px; display: none } .wide { width: 24px }</style>
+      <rect id="target" width="8" height="12" fill="red"/>
+    </svg>)svg";
+  const auto edit = [](SVGDocument& document, int frame) {
+    Element(document, "#target").setClassName(frame % 2 ? "changed" : "wide");
+  };
+  ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::FullRebuild,
+                                     "style-geometry-and-order");
+}
+
+TEST(RetainedRenderTreeUpdateTest, PairedPathGrowthAndShrinkageKeepsCanonicalBudgetOrder) {
+  using components::DocumentResourceFamilyBudget;
+  using components::DocumentResourceFamilyContext;
+  using components::GeometryPreparationResourceBudget;
+  using Kind = DocumentResourceFamilyBudget::Kind;
+
+  constexpr std::string_view small = "M2 2 H10 V10 Z";
+  constexpr std::string_view large = "M2 2 H4 V4 H6 V6 H8 V8 H10 V10 H12 V12 H14 V14 Z";
+  constexpr std::string_view smallRight = "M22 2 H30 V10 Z";
+  constexpr std::string_view largeRight = "M22 2 H24 V4 H26 V6 H28 V8 H30 V10 H32 V12 H34 V14 Z";
+  const auto source = [&](bool growFirstInFullPass) {
+    const std::string grow = "<path id='grow' fill='red' d='" + std::string(small) + "'/>";
+    const std::string shrink =
+        "<path id='shrink' fill='blue' d='" + std::string(largeRight) + "'/>";
+    return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24">
+                           <style>.grow { d: ")") +
+           std::string(large) + R"(" } .shrink { d: ")" + std::string(smallRight) +
+           R"(" }</style>)" + (growFirstInFullPass ? shrink + grow : grow + shrink) + "</svg>";
+  };
+
+  for (const bool useLocalLimit : {false, true}) {
+    for (const bool growFirstInFullPass : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "local limit " << useLocalLimit << ", grow first " << growFirstInFullPass);
+      const auto input = source(growFirstInFullPass);
+      auto calibration = Parse(input);
+      DriverRenderer probe;
+      probe.draw(calibration);
+      const auto pathBytes = calibration.unsafeRegistry()
+                                 .ctx()
+                                 .get<GeometryPreparationResourceBudget>()
+                                 .retainedBytes();
+      ASSERT_GT(pathBytes, 0u);
+
+      auto retained = Parse(input);
+      auto reference = Parse(input);
+      DisableRetainedUpdates(reference);
+      DriverRenderer actual;
+      DriverRenderer expected;
+      const auto drawInitial = [&](SVGDocument& document, DriverRenderer& renderer) {
+        auto& context = document.unsafeRegistry().ctx();
+        const auto family = context.get<DocumentResourceFamilyContext>().budget;
+        if (useLocalLimit) {
+          context.erase<GeometryPreparationResourceBudget>();
+          context.emplace<GeometryPreparationResourceBudget>(
+              family, GeometryPreparationResourceBudget::Limits{.maximumBytes = pathBytes});
+        }
+        renderer.draw(document);
+        return family;
+      };
+      const auto retainedFamily = drawInitial(retained, actual);
+      const auto referenceFamily = drawInitial(reference, expected);
+      GeometryPreparationResourceBudget otherRetained(retainedFamily);
+      GeometryPreparationResourceBudget otherReference(referenceFamily);
+      const auto otherBytes =
+          useLocalLimit ? std::size_t{64} : retainedFamily->availableBytes(Kind::Geometry);
+      ASSERT_EQ(retainedFamily->availableBytes(Kind::Geometry),
+                referenceFamily->availableBytes(Kind::Geometry));
+      ASSERT_TRUE(otherRetained.reserve(Entity{1}, otherBytes));
+      ASSERT_TRUE(otherReference.reserve(Entity{1}, otherBytes));
+      const auto before = ReadCounters(retained);
+
+      for (SVGDocument* document : {&retained, &reference}) {
+        // The two narrowed paths are collected in reverse dirty insertion order.
+        Element(*document, "#shrink").setClassName("shrink");
+        Element(*document, "#grow").setClassName("grow");
+      }
+      actual.draw(retained);
+      expected.draw(reference);
+      editor::tests::CompareBitmapToBitmap(actual.takeSnapshot(), expected.takeSnapshot(),
+                                           "retained-path-budget-order",
+                                           editor::tests::PixelmatchIdentityParams());
+
+      const auto after = ReadCounters(retained);
+      EXPECT_EQ(after.retainedUpdates, before.retainedUpdates);
+      EXPECT_EQ(after.fullRebuilds - before.fullRebuilds, 1u);
+      const auto& actualBudget =
+          retained.unsafeRegistry().ctx().get<GeometryPreparationResourceBudget>();
+      const auto& expectedBudget =
+          reference.unsafeRegistry().ctx().get<GeometryPreparationResourceBudget>();
+      EXPECT_EQ(actualBudget.rejected(), growFirstInFullPass);
+      EXPECT_EQ(actualBudget.rejected(), expectedBudget.rejected());
+      EXPECT_EQ(actualBudget.retainedBytes(), expectedBudget.retainedBytes());
+      EXPECT_EQ(retainedFamily->securityStats().rejectedReservations,
+                referenceFamily->securityStats().rejectedReservations);
+      EXPECT_EQ(
+          retainedFamily->securityStats().retainedBytes[static_cast<std::size_t>(Kind::Geometry)],
+          otherBytes + actualBudget.retainedBytes());
+      EXPECT_EQ(otherRetained.retainedBytes(), otherBytes);
+    }
+  }
+}
+
+TEST(RetainedRenderTreeUpdateTest, ExhaustedCloneShapeWorkFallsBackThroughHitTesting) {
+  using components::AnimationResourceBudget;
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="24">
+      <style>.wide { width: 18px }</style>
+      <defs><rect id="leaf" width="6" height="12" fill="red"/></defs>
+      <use id="instance" href="#leaf" x="30"/>
+    </svg>)svg";
+  auto retained = Parse(source);
+  auto reference = Parse(source);
+  DisableRetainedUpdates(reference);
+  DriverRenderer actual;
+  DriverRenderer expected;
+  actual.draw(retained);
+  expected.draw(reference);
+  const Vector2d addedPoint(42, 6);
+  DonnerController actualHit(retained);
+  DonnerController expectedHit(reference);
+  EXPECT_THAT(actualHit.findIntersecting(addedPoint), Eq(std::nullopt));
+  const auto before = ReadCounters(retained);
+  for (SVGDocument* document : {&retained, &reference}) {
+    Element(*document, "#leaf").setClassName("wide");
+    auto& work = document->unsafeRegistry().ctx().get<AnimationResourceBudget>();
+    ASSERT_TRUE(work.reserveContextualWork(work.remainingContextualWork()));
+    EXPECT_EQ(work.remainingContextualWork(), 0u);
+  }
+  const auto hit = actualHit.findIntersecting(addedPoint);
+  const auto expectedEntity = expectedHit.findIntersecting(addedPoint);
+  ASSERT_THAT(hit, Optional(testing::_));
+  ASSERT_THAT(expectedEntity, Optional(testing::_));
+  EXPECT_THAT(hit->id(), Eq("instance"));
+  EXPECT_THAT(hit->id(), Eq(expectedEntity->id()));
+  const auto after = ReadCounters(retained);
+  EXPECT_EQ(after.retainedUpdates, before.retainedUpdates);
+  EXPECT_EQ(after.fullRebuilds - before.fullRebuilds, 1u);
+  actual.draw(retained);
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(actual.takeSnapshot(), expected.takeSnapshot(),
+                                       "clone-width-context-work",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RetainedRenderTreeUpdateTest, DormantAndMountedSymbolsSeeLocalSourcePaintEdits) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="24">
+      <defs><symbol id="badge" viewBox="0 0 16 16">
+        <rect id="target" width="16" height="16" fill="red"/>
+      </symbol></defs>
+    </svg>)svg";
+  auto retained = Parse(source);
+  auto reference = Parse(source);
+  DisableRetainedUpdates(reference);
+  DriverRenderer actual;
+  DriverRenderer expected;
+  actual.draw(retained);
+  expected.draw(reference);
+  const auto appendBadge = [](SVGDocument& document) {
+    auto use = SVGUseElement::Create(document);
+    use.setHref(RcString("#badge"));
+    use.setAttribute("width", "16");
+    use.setAttribute("height", "16");
+    document.svgElement().appendChild(use);
+  };
+  for (SVGDocument* document : {&retained, &reference}) {
+    Element(*document, "#target").setStyle("fill: blue");
+  }
+  actual.draw(retained);
+  expected.draw(reference);
+  for (SVGDocument* document : {&retained, &reference}) {
+    appendBadge(*document);
+  }
+  actual.draw(retained);
+  expected.draw(reference);
+  const auto blue = actual.takeSnapshot();
+  editor::tests::CompareBitmapToBitmap(blue, expected.takeSnapshot(), "first-dormant-symbol-use",
+                                       editor::tests::PixelmatchIdentityParams());
+  const auto before = ReadCounters(retained);
+
+  for (SVGDocument* document : {&retained, &reference}) {
+    Element(*document, "#target").setStyle("fill: green");
+  }
+  reference.unsafeRegistry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+  actual.draw(retained);
+  expected.draw(reference);
+  const auto green = actual.takeSnapshot();
+  editor::tests::CompareBitmapToBitmap(green, expected.takeSnapshot(), "mounted-symbol-use-edit",
+                                       editor::tests::PixelmatchIdentityParams());
+  ASSERT_THAT(blue.pixels, testing::SizeIs(testing::Ge(4u)));
+  ASSERT_THAT(green.pixels, testing::SizeIs(testing::Ge(4u)));
+  EXPECT_THAT(std::ranges::subrange(blue.pixels.begin(), blue.pixels.begin() + 4),
+              testing::ElementsAre(0, 0, 255, 255));
+  EXPECT_THAT(std::ranges::subrange(green.pixels.begin(), green.pixels.begin() + 4),
+              testing::ElementsAre(0, 128, 0, 255));
+  const auto after = ReadCounters(retained);
+  EXPECT_EQ(after.retainedUpdates, before.retainedUpdates);
+  EXPECT_EQ(after.fullRebuilds - before.fullRebuilds, 1u);
+}
+
+TEST(RetainedRenderTreeUpdateTest, OffscreenUsePaintMatchesFullRebuild) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="24">
+      <defs><rect id="target" width="16" height="16" fill="white"/>
+        <mask id="mask"><use href="#target"/></mask></defs>
+      <rect width="24" height="24" fill="red" mask="url(#mask)"/>
+    </svg>)svg";
+  const auto edit = [](SVGDocument& document, int frame) {
+    Element(document, "#target").setStyle(frame % 2 ? "fill: black" : "fill: white");
+  };
+  ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::FullRebuild,
+                                     "offscreen-use-paint");
+}
+
 TEST(RetainedRenderTreeUpdateTest, MovingAClonedSourceTakesTheFullRebuild) {
   // Shadow trees copy their source's transform when they are created.
   ExpectSourceFramesMatchFullRebuild(kNestedScene, MoveElement("#tile"), ExpectedPath::FullRebuild,
@@ -280,6 +668,64 @@ constexpr std::string_view kTextScene = R"svg(
     <text font-size="10"><textPath href="#curve">Along a path</textPath></text>
     <path id="visible-curve" d="M10 90 L86 90" stroke="black"/>
   </svg>)svg";
+
+TEST(RetainedRenderTreeUpdateTest, ClassGeometryEditRepositionsAnExternalTextPath) {
+  DONNER_SKIP_UNLESS_TEXT_BUILT_IN();
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="64">
+      <style>.moved { d: "M8 46 H88" }</style>
+      <defs><path id="curve" d="M8 20 H88"/></defs>
+      <text id="label" font-size="14"><textPath href="#curve">Donner</textPath></text>
+    </svg>)svg";
+  auto retained = Parse(source);
+  auto reference = Parse(source);
+  DisableRetainedUpdates(reference);
+  DriverRenderer actual;
+  DriverRenderer expected;
+  actual.draw(retained);
+  expected.draw(reference);
+  const auto before = ReadCounters(retained);
+  const auto initial = actual.takeSnapshot();
+  const auto label = retained.querySelector("#label");
+  ASSERT_THAT(label, Optional(testing::_));
+  const auto text = label->cast<SVGTextContentElement>();
+  ASSERT_THAT(text.getNumberOfChars(), Eq(6));
+  const double initialY = text.getStartPositionOfChar(0).y;
+
+  Element(retained, "#curve").setClassName("moved");
+  Element(reference, "#curve").setClassName("moved");
+  reference.unsafeRegistry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+  actual.draw(retained);
+  expected.draw(reference);
+  const auto updated = actual.takeSnapshot();
+  editor::tests::CompareBitmapToBitmap(updated, expected.takeSnapshot(), "external-text-path-d",
+                                       editor::tests::PixelmatchIdentityParams());
+  ASSERT_THAT(text.getNumberOfChars(), Eq(6));
+  EXPECT_GT(text.getStartPositionOfChar(0).y, initialY + 20.0);
+  EXPECT_THAT(updated.pixels, testing::Not(Eq(initial.pixels)));
+  RecordProperty("renderedCharacters", static_cast<int>(text.getNumberOfChars()));
+  const auto after = ReadCounters(retained);
+  EXPECT_EQ(after.retainedUpdates, before.retainedUpdates);
+  EXPECT_EQ(after.fullRebuilds - before.fullRebuilds, 1u);
+}
+
+TEST(RetainedRenderTreeUpdateTest, IntermediateStyleReadKeepsThePreparedFrameOrder) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="24">
+      <style>.hidden { display: none }</style>
+      <rect id="target" width="16" height="16" fill="red"/>
+    </svg>)svg";
+  const auto edit = [](SVGDocument& document, int frame) {
+    auto target = Element(document, "#target");
+    const bool hidden = frame % 2 == 1;
+    target.setClassName(hidden ? "hidden" : "");
+    ASSERT_THAT(target.getComputedStyle().display.get(),
+                Optional(hidden ? Display::None : Display::Inline));
+    target.setStyle(frame % 2 == 1 ? "fill: green" : "fill: red");
+  };
+  ExpectSourceFramesMatchFullRebuild(source, edit, ExpectedPath::FullRebuild,
+                                     "prepared-order-across-style-read");
+}
 
 TEST(RetainedRenderTreeUpdateTest, TextNextToATextPathTakesTheFullRebuild) {
   // A <textPath> follows its path's transform, so moves in its document keep the full rebuild.

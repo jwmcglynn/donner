@@ -594,64 +594,65 @@ auto PositionedRenderInstances(SVGDocument& document) {
 }
 
 TEST(StyleInvalidationDifferential, PublicEditsMatchFullRestyle) {
+  enum class FrameRoute { Retained, FullFrame, FullStyle };
   struct Edit {
     std::string_view name;
     std::string_view contents;
     void (*apply)(SVGElement&);
-    bool fullStyleFallback = false;
+    FrameRoute route;
     std::optional<std::size_t> affectedCount = std::nullopt;
   };
   const Edit edits[] = {
       {"class-subject",
        R"(<style>.hot { fill: red }</style><rect id="target" width="8" height="8"/>)",
-       [](SVGElement& e) { e.setClassName("hot"); }, false, 1},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::Retained, 1},
       {"class-attribute-order",
        R"(<style>[class="cold hot"] { fill: red }</style><rect id="target" class="hot cold" width="8" height="8"/>)",
-       [](SVGElement& e) { e.setClassName("cold hot"); }, false, 1},
+       [](SVGElement& e) { e.setClassName("cold hot"); }, FrameRoute::Retained, 1},
       {"class-inheritance",
        R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g>)",
-       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::Retained, 2},
       {"class-following-sibling",
        R"(<style>.hot + .after rect { fill: red }</style><g><g id="target"/><g class="after"><rect width="8" height="8"/></g></g>)",
-       [](SVGElement& e) { e.setClassName("hot"); }, false, 3},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::Retained, 3},
       {"class-filtered-nth-child",
        R"(<style>rect:nth-child(1 of :is(.hot)) { fill: red }</style><g><rect id="target" width="8" height="8"/><rect class="hot" x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::Retained, 2},
       {"class-filtered-nth-last-child",
        R"(<style>rect:nth-last-child(1 of :is(.hot)) { fill: red }</style><g><rect class="hot" width="8" height="8"/><rect id="target" x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) { e.setClassName("hot"); }, false, 2},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::Retained, 2},
       {"style", R"(<rect id="target" width="8" height="8"/>)",
-       [](SVGElement& e) { e.setStyle("fill: red"); }, false, 1},
+       [](SVGElement& e) { e.setStyle("fill: red"); }, FrameRoute::Retained, 1},
       {"update-style",
        R"(<style>[style] + rect { fill: red }</style><g><g id="target"/><rect width="8" height="8"/></g>)",
-       [](SVGElement& e) { e.updateStyle("fill: red"); }, false, 2},
+       [](SVGElement& e) { e.updateStyle("fill: red"); }, FrameRoute::Retained, 2},
       {"presentation-attribute",
        R"(<style>[fill=red] + rect { fill: lime }</style><g><rect id="target" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) { e.setAttribute("fill", "red"); }, false, 2},
+       [](SVGElement& e) { e.setAttribute("fill", "red"); }, FrameRoute::Retained, 2},
       {"presentation-removal",
        R"(<style>[fill] + rect { fill: lime }</style><g><rect id="target" fill="red" width="8" height="8"/><rect x="8" width="8" height="8"/></g>)",
-       [](SVGElement& e) { e.removeAttribute("fill"); }, false, 2},
+       [](SVGElement& e) { e.removeAttribute("fill"); }, FrameRoute::Retained, 2},
       {"ancestor-selector",
        R"(<style>g:has(.hot) { fill: red }</style><g><rect id="target" width="8" height="8"/></g>)",
-       [](SVGElement& e) { e.setClassName("hot"); }, true},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::FullStyle},
       {"resource-subtree",
        R"svg(<defs><linearGradient id="paint"><stop id="target" stop-color="blue"/></linearGradient></defs><rect fill="url(#paint)" width="8" height="8"/>)svg",
-       [](SVGElement& e) { e.setAttribute("stop-color", "red"); }, true},
+       [](SVGElement& e) { e.setAttribute("stop-color", "red"); }, FrameRoute::FullStyle},
       {"remove-paint-reference",
        R"svg(<defs><linearGradient id="paint"><stop stop-color="blue"/></linearGradient></defs><rect id="target" fill="url(#paint)" width="8" height="8"/>)svg",
-       [](SVGElement& e) { e.setAttribute("fill", "red"); }, false, 1},
+       [](SVGElement& e) { e.setAttribute("fill", "red"); }, FrameRoute::FullFrame, 1},
       {"id-reference",
        R"(<rect id="target" fill="red" width="8" height="8"/><use href="#target" x="8"/>)",
-       [](SVGElement& e) { e.setId("other"); }, true},
+       [](SVGElement& e) { e.setId("other"); }, FrameRoute::FullStyle},
       {"uninstantiated-symbol",
        R"(<style>.hot { fill: red }</style><symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol>)",
-       [](SVGElement& e) { e.setClassName("hot"); }, false, 1},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::FullFrame, 1},
       {"instantiated-symbol",
        R"(<style>.hot { fill: red }</style><symbol id="tile"><path id="target" d="M0 0H8V8H0Z"/></symbol><use href="#tile" width="8" height="8"/>)",
-       [](SVGElement& e) { e.setClassName("hot"); }},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::FullFrame, 3},
       {"use-source",
        R"(<style>.hot { fill: red }</style><g id="target"><rect width="8" height="8"/></g><use href="#target" x="8"/>)",
-       [](SVGElement& e) { e.setClassName("hot"); }},
+       [](SVGElement& e) { e.setClassName("hot"); }, FrameRoute::Retained, 4},
   };
   for (const auto& edit : edits) {
     SCOPED_TRACE(edit.name);
@@ -669,9 +670,13 @@ TEST(StyleInvalidationDifferential, PublicEditsMatchFullRestyle) {
     }
     auto& narrowState = narrow.registry().ctx().get<RenderTreeState>();
     auto& fullState = full.registry().ctx().get<RenderTreeState>();
-    EXPECT_EQ(narrowState.needsFullStyleRecompute, edit.fullStyleFallback);
+    const bool expectFullStyle = edit.route == FrameRoute::FullStyle;
+    const bool expectRetained = edit.route == FrameRoute::Retained;
+    EXPECT_EQ(narrowState.needsFullStyleRecompute, expectFullStyle);
+    fullState.retainedUpdatesEnabled = false;
     fullState.needsFullStyleRecompute = true;
     const auto before = narrowState.counters;
+    const auto referenceBefore = fullState.counters;
     const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
     const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
 
@@ -681,9 +686,12 @@ TEST(StyleInvalidationDifferential, PublicEditsMatchFullRestyle) {
     EXPECT_THAT(narrowPass.warnings, ElementsAreArray(fullPass.warnings));
     EXPECT_THAT(PositionedRenderInstances(narrow),
                 ElementsAreArray(PositionedRenderInstances(full)));
-    EXPECT_EQ(narrowState.counters.fullRebuilds - before.fullRebuilds, 1u);
-    EXPECT_EQ(narrowState.counters.retainedUpdates - before.retainedUpdates, 0u);
-    EXPECT_EQ(narrowPass.counters.fullClears, edit.fullStyleFallback ? 1u : 0u);
+    EXPECT_EQ(narrowState.counters.fullRebuilds - before.fullRebuilds, expectRetained ? 0u : 1u);
+    EXPECT_EQ(narrowState.counters.retainedUpdates - before.retainedUpdates,
+              expectRetained ? 1u : 0u);
+    EXPECT_EQ(fullState.counters.fullRebuilds - referenceBefore.fullRebuilds, 1u);
+    EXPECT_EQ(fullState.counters.retainedUpdates - referenceBefore.retainedUpdates, 0u);
+    EXPECT_EQ(narrowPass.counters.fullClears, expectFullStyle ? 1u : 0u);
     EXPECT_EQ(fullPass.counters.fullClears, 1u);
     if (edit.affectedCount) {
       EXPECT_EQ(narrowPass.counters.elementsCascaded, *edit.affectedCount);

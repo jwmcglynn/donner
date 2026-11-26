@@ -1424,6 +1424,7 @@ TEST_F(RenderingContextTest, ShadowTreeRootIsTheOnlyElementOfItsTree) {
         title:nth-child(2) { stroke-width: 3 }
         title:nth-last-child(1) { stroke-opacity: 0.5 }
         desc:nth-last-of-type(1) { fill-opacity: 0.5 }
+        #other-restyle { fill: blue }
       </style>
       <defs>
         <rect id="unused" width="1" height="1"/>
@@ -1488,10 +1489,22 @@ TEST_F(RenderingContextTest, ShadowTreeRootIsTheOnlyElementOfItsTree) {
   expectRootRule("first frame");
 
   const auto& counters = registry.ctx().get<RenderTreeState>().counters;
+  auto other = document.querySelector("#other");
+  ASSERT_THAT(other, Optional(testing::_));
   const auto fullRebuilds = counters.fullRebuilds;
-  document.querySelector("#other")->setClassName("edited");
+  const auto classUpdates = counters.retainedUpdates;
+  other->setClassName("edited");
   ctx.instantiateRenderTree(false, warningSink_);
-  ASSERT_GT(counters.fullRebuilds, fullRebuilds);
+  EXPECT_EQ(counters.fullRebuilds, fullRebuilds);
+  EXPECT_EQ(counters.retainedUpdates, classUpdates + 1);
+  expectRootRule("retained class edit");
+
+  // An ID edit still restyles the document and rebuilds its shadow instances.
+  other->setId("other-restyle");
+  ctx.instantiateRenderTree(false, warningSink_);
+  ASSERT_EQ(counters.fullRebuilds, fullRebuilds + 1);
+  EXPECT_THAT(other->getComputedStyle().fill.get(),
+              Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))))));
   expectRootRule("full restyle");
 
   const auto retainedUpdates = counters.retainedUpdates;

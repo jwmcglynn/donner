@@ -53,6 +53,7 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry);
  * @param registry Document registry.
  * @param plan The plan returned by \ref PlanRetainedUpdate for the current dirty set.
  * @param warningSink Sink to collect warnings.
+ * @param scheduler Scheduler available for the style pass.
  */
 void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
                          ParseWarningSink& warningSink, StylePassScheduler scheduler = {});

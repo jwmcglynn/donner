@@ -81,6 +81,17 @@ public:
   static void beginRebuild(Registry& registry);
 
   /**
+   * Include the live in-document copies of affected sources and their shadow descendants. The
+   * caller validates the selector dependency and old computed style of every returned entity before
+   * it removes any computed styles.
+   * @param registry Document registry, held for mutation.
+   * @param entities Affected light entities. Shadow entities are appended on success.
+   * @return False if an affected source reaches an unsupported or incomplete branch.
+   */
+  [[nodiscard]] static bool appendStyleOccurrences(Registry& registry,
+                                                   std::vector<Entity>& entities);
+
+  /**
    * Constructor.
    *
    * @param sizedElementHandler Optional callback for handling sized elements in shadow trees.

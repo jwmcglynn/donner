@@ -1,11 +1,13 @@
 #include "donner/svg/renderer/RetainedRenderTreeUpdate.h"
 
+#include <algorithm>
 #include <unordered_set>
 #include <utility>
 
 #include "donner/base/RcString.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -16,10 +18,24 @@
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/graph/Reference.h"
+
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_PREPARATION_MINSIZE 1
+#endif
+#endif
+
+// Keep the frame preparation paths compact in Apple native products. Shape math and drawing
+// remain in their own translation units under their existing optimization policies.
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 namespace donner::svg::components {
 namespace {
@@ -91,11 +107,16 @@ bool Has(uint16_t flags, uint16_t flag) {
   return (flags & flag) != 0;
 }
 
-/// Whether \p flags only name changes a retained update applies; a style change is only known to
-/// be local when it is a compositing change.
+/// Whether \p flags only name changes a retained update applies.
+template <bool LiveStyle>
 bool FlagsAreRetainable(uint16_t flags) {
-  return (flags & ~kRetainedFlags) == 0 &&
-         (!Has(flags, DirtyFlagsComponent::Style) || Has(flags, DirtyFlagsComponent::Compositing));
+  constexpr uint16_t supported =
+      LiveStyle ? kRetainedFlags | DirtyFlagsComponent::NarrowedStyle : kRetainedFlags;
+  constexpr uint16_t localStyle =
+      LiveStyle ? DirtyFlagsComponent::Compositing | DirtyFlagsComponent::NarrowedStyle
+                : DirtyFlagsComponent::Compositing;
+  return (flags & ~supported) == 0 &&
+         (!Has(flags, DirtyFlagsComponent::Style) || Has(flags, localStyle));
 }
 
 /// Whether no computed component reads the changed inputs of \p entity.
@@ -110,9 +131,10 @@ bool ChangeStaysLocal(const Registry& registry, Entity entity, uint16_t flags,
 }
 
 /// Check one dirty entity against the retained-update rules, adding its work to \p plan.
+template <bool LiveStyle>
 bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
                      const DocumentFacts& facts, RetainedUpdatePlan& plan) {
-  if (!FlagsAreRetainable(flags) || !ChangeStaysLocal(registry, entity, flags, facts)) {
+  if (!FlagsAreRetainable<LiveStyle>(flags) || !ChangeStaysLocal(registry, entity, flags, facts)) {
     return false;
   }
   if (Has(flags, DirtyFlagsComponent::Layout)) {
@@ -137,17 +159,18 @@ bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
   return true;
 }
 
-}  // namespace
-
-std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
+template <bool LiveStyle>
+std::optional<RetainedUpdatePlan> PlanRetainedUpdateImpl(Registry& registry) {
   if (!DocumentAllowsRetainedUpdate(registry)) {
     return std::nullopt;
   }
   // Refuse any other change before scanning the document's shadow trees, which only an element's
   // own change needs.
+  constexpr uint16_t supported =
+      LiveStyle ? kRetainedFlags | DirtyFlagsComponent::NarrowedStyle : kRetainedFlags;
   bool ownChanges = false;
   for (const auto& [entity, dirty] : registry.view<const DirtyFlagsComponent>().each()) {
-    if ((dirty.flags & ~kRetainedFlags) != 0) {
+    if ((dirty.flags & ~supported) != 0) {
       return std::nullopt;
     }
     ownChanges |= Has(dirty.flags, kOwnChangeFlags);
@@ -155,11 +178,17 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
   const DocumentFacts facts = CollectDocumentFacts(registry, ownChanges);
   RetainedUpdatePlan plan;
   for (const auto& [entity, dirty] : registry.view<const DirtyFlagsComponent>().each()) {
-    if (!PlanDirtyEntity(registry, entity, dirty.flags, facts, plan)) {
+    if (!PlanDirtyEntity<LiveStyle>(registry, entity, dirty.flags, facts, plan)) {
       return std::nullopt;
     }
   }
   return plan;
+}
+
+}  // namespace
+
+std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
+  return PlanRetainedUpdateImpl<false>(registry);
 }
 
 void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
@@ -181,6 +210,101 @@ void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
   }
 }
 
+namespace {
+
+bool GeometryBudgetAllowsRetainedStyle(const Registry& registry) {
+  if (const auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>();
+      budget && (budget->rejected() || budget->limits().maximumBytes !=
+                                           GeometryPreparationResourceBudget::kMaximumBytes)) {
+    return false;
+  }
+  const auto* family = registry.ctx().find<DocumentResourceFamilyContext>();
+  if (!family || !family->budget) {
+    return true;
+  }
+  const DocumentResourceFamilyBudget::Limits defaults;
+  const auto& limits = family->budget->limits();
+  return limits.geometryBytes == defaults.geometryBytes &&
+         limits.maximumTotalRetainedBytes == defaults.maximumTotalRetainedBytes &&
+         family->budget->canReserve(DocumentResourceFamilyBudget::Kind::Geometry, 0);
+}
+
+bool CollectNarrowedStyleEntities(const Registry& registry, std::vector<Entity>& narrowed) {
+  constexpr uint16_t kNarrowedFlags =
+      DirtyFlagsComponent::NarrowedStyle | DirtyFlagsComponent::Style |
+      DirtyFlagsComponent::RenderInstance | DirtyFlagsComponent::ReferencedContent;
+  for (const auto& [entity, dirty] : registry.view<const DirtyFlagsComponent>().each()) {
+    if (dirty.test(DirtyFlagsComponent::NarrowedStyle)) {
+      if (!dirty.test(DirtyFlagsComponent::Style) || (dirty.flags & ~kNarrowedFlags) != 0 ||
+          registry.all_of<ViewBoxComponent>(entity)) {
+        return false;
+      }
+      narrowed.push_back(entity);
+    }
+  }
+  return true;
+}
+
+bool RecomputeLiveStyles(Registry& registry, ParseWarningSink& warningSink,
+                         StylePassScheduler scheduler) {
+  std::vector<Entity> narrowed;
+  if (!CollectNarrowedStyleEntities(registry, narrowed)) {
+    return false;
+  }
+  if (narrowed.empty()) {
+    StyleSystem().computeAllStyles(registry, warningSink,
+                                   StyleSystem::FullRestyle::DiscardAndRecompute, scheduler);
+    return true;
+  }
+  if (!GeometryBudgetAllowsRetainedStyle(registry)) {
+    return false;
+  }
+  auto tentativeWarnings = warningSink.remainingAllowance();
+  StyleSystem().computeAllStyles(registry, tentativeWarnings,
+                                 StyleSystem::FullRestyle::DiscardAndRecompute, scheduler);
+  const bool stillLocal = std::ranges::all_of(narrowed, [&](Entity entity) {
+    return StyleSystem::retainedStyleOrder(registry, entity) ==
+           registry.get<DirtyFlagsComponent>(entity).narrowedStyleOrder;
+  });
+  const bool styleRefused = registry.ctx().get<StyleResourceBudget>().rejected();
+  if (!stillLocal || styleRefused) {
+    // Warning-free light styles can feed the full render rebuild directly. If a style
+    // diagnostic or refusal occurred, recompute it in the normal full-pass order.
+    if (tentativeWarnings.warningAttempts() || styleRefused) {
+      registry.ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+    }
+    return false;
+  }
+  const bool styleDiagnostics = tentativeWarnings.warningAttempts() != 0;
+  for (Entity entity : narrowed) {
+    LayoutSystem().recomputeInvalidatedLayout(EntityHandle(registry, entity), tentativeWarnings);
+  }
+  if (!ShapeSystem().recomputeStyledPaths(registry, narrowed, tentativeWarnings)) {
+    registry.ctx().get<RenderTreeState>().needsFullStyleRecompute |= styleDiagnostics;
+    return false;
+  }
+  warningSink.merge(std::move(tentativeWarnings));
+  return true;
+}
+
+}  // namespace
+
+bool ApplyLiveStyleUpdate(Registry& registry, ParseWarningSink& warningSink,
+                          StylePassScheduler scheduler) {
+  auto plan = PlanRetainedUpdateImpl<true>(registry);
+  if (!plan || (plan->restyle && !RecomputeLiveStyles(registry, warningSink, scheduler))) {
+    return false;
+  }
+  plan->restyle = false;
+  ApplyRetainedUpdate(registry, *plan, warningSink, scheduler);
+  auto& state = registry.ctx().get<RenderTreeState>();
+  ++state.counters.retainedUpdates;
+  state.counters.retargetedUses += plan->retargetedUses.size();
+  registry.clear<DirtyFlagsComponent>();
+  state.needsInstanceRebuild = true;
+  return true;
+}
+
 void AttachExternalUse(Registry& registry, Entity entity, const RcString& href,
                        ParseWarningSink& warningSink) {
   const Reference ref(href);
@@ -196,3 +320,7 @@ void AttachExternalUse(Registry& registry, Entity entity, const RcString& href,
 }
 
 }  // namespace donner::svg::components
+
+#if defined(DONNER_APPLE_PREPARATION_MINSIZE)
+#pragma clang attribute pop
+#endif

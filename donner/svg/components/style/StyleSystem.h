@@ -713,8 +713,10 @@ public:
    *
    * @param handle Entity handle to update.
    * @param style CSS style string to merge, e.g. "fill: red; opacity: 0.5".
+   * @param invalidateCachedStyle False when the caller needs the old style for edit routing.
+   * @return Whether a style was successfully merged.
    */
-  void updateStyle(EntityHandle handle, std::string_view style);
+  bool updateStyle(EntityHandle handle, std::string_view style, bool invalidateCachedStyle = true);
 
   /**
    * Collect stylesheet rules that match \p handle using the same selector matching and specificity
@@ -805,6 +807,9 @@ public:
 
   /// Whether this element can be restyled without rebuilding resource or text subtrees.
   static bool isStyleEditSubtreeBoundary(const Registry& registry, Entity entity);
+
+  /// Comparable order inputs for local geometry and paint, or nullopt for a nonlocal style.
+  static std::optional<uint32_t> retainedStyleOrder(const Registry& registry, Entity entity);
 
   /**
    * Invalidate the full style and reparse attributes.

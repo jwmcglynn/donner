@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <span>
 #include <unordered_map>
 
 #include "donner/base/EcsRegistry.h"
@@ -52,6 +54,50 @@ public:
     other.retainedBytes_ = 0;
   }
   GeometryPreparationResourceBudget& operator=(GeometryPreparationResourceBudget&&) = delete;
+
+  /// Byte charge of one actually prepared replacement. Zero removes an old path's charge.
+  struct PathReplacement {
+    Entity entity;
+    std::size_t bytes;
+  };
+
+  /// Admit actual growth before replacing paths. Entities must be unique.
+  /// The returned shrink stays charged until the caller drops the old payloads.
+  [[nodiscard]] std::optional<std::size_t> tryReplacePaths(
+      std::span<const PathReplacement> replacements) {
+    std::size_t growth = 0;
+    std::size_t shrink = 0;
+    for (const auto& replacement : replacements) {
+      const auto found = reservations_.find(replacement.entity);
+      const std::size_t old = found == reservations_.end() ? 0 : found->second;
+      if (replacement.bytes > old) {
+        growth += replacement.bytes - old;
+      } else {
+        shrink += old - replacement.bytes;
+      }
+    }
+    if (retainedBytes_ > limits_.maximumBytes || growth > limits_.maximumBytes - retainedBytes_ ||
+        (family_ && !family_->tryReserveRetainedGeometry(growth))) {
+      return std::nullopt;
+    }
+    for (const auto& replacement : replacements) {
+      if (replacement.bytes == 0) {
+        reservations_.erase(replacement.entity);
+      } else {
+        reservations_[replacement.entity] = replacement.bytes;
+      }
+    }
+    retainedBytes_ += growth;
+    return shrink;
+  }
+
+  /// Refund the previous path payloads only after they leave the registry.
+  void finishPathReplacements(std::size_t shrink) {
+    retainedBytes_ -= shrink;
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::Geometry, shrink);
+    }
+  }
 
   /// Replace one entity's geometry reservation, releasing bytes when it shrinks.
   /// @param entity Owner of the prepared geometry.

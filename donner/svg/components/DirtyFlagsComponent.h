@@ -46,6 +46,9 @@ struct DirtyFlagsComponent {
     /// redone.
     ReferencedContent = 1 << 11,
 
+    /// Old style order is recorded and the live renderer can verify the narrowed style.
+    NarrowedStyle = 1 << 12,
+
     /// Compound flag: style change that may affect paint, filter, and render instance.
     StyleCascade = Style | Paint | Filter | RenderInstance,
     /// Compound flag: layout change that affects transforms and render instance.
@@ -54,7 +57,8 @@ struct DirtyFlagsComponent {
     All = 0xFFFF,
   };
 
-  uint16_t flags = Flags::None;  //!< Bitfield of dirty flags.
+  uint16_t flags = Flags::None;     //!< Bitfield of dirty flags.
+  uint32_t narrowedStyleOrder = 0;  //!< Old nonlocal style inputs, valid with NarrowedStyle.
 
   /// Mark additional flags as dirty.
   void mark(uint16_t f) { flags |= f; }
@@ -120,6 +124,20 @@ struct RenderTreeState {
   /// An edited frame can stage its diagnostics until both selective passes finish.
   bool (*computeEditedFrameStyles)(Registry&, ParseWarningSink&, StylePassScheduler,
                                    ComputeFrameStyles) = nullptr;
+  /// Installed by live style edits that can use the retained renderer.
+  bool (*applyLiveStyleUpdate)(Registry&, ParseWarningSink&, StylePassScheduler) = nullptr;
+  /// Clears the live style occurrence index on shadow publication or removal.
+  void (*invalidateStyleOccurrences)(Registry&) = nullptr;
 };
+
+/**
+ * Apply the live style portion of a retained update. Live DOM edits install this callback.
+ * @param registry Document registry.
+ * @param warningSink Destination for accepted diagnostics.
+ * @param scheduler Scheduler available to the style pass.
+ * @return False if the frame requires the full render-tree rebuild.
+ */
+[[nodiscard]] bool ApplyLiveStyleUpdate(Registry& registry, ParseWarningSink& warningSink,
+                                        StylePassScheduler scheduler);
 
 }  // namespace donner::svg::components

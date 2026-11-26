@@ -40,6 +40,7 @@
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -2468,11 +2469,12 @@ void StyleSystem::computePreparedStyle(const Registry& registry, Entity entity,
   }
 }
 
-void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
+bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
+                              bool invalidateCachedStyle) {
   auto& styleComponent = handle.get_or_emplace<StyleComponent>();
   StyleComponent candidate = styleComponent;
   if (!candidate.updateStyle(style)) {
-    return;
+    return false;
   }
 
   // Merge the new style string with the existing style attribute.
@@ -2489,7 +2491,7 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
   const std::vector<css::Declaration> updateDeclarations =
       css::parser::DeclarationListParser::ParseOnlyDeclarations(style, &updateStats);
   if (existingStats.rejected || updateStats.rejected) {
-    return;
+    return false;
   }
   const std::string mergedStyle =
       css::mergeStyleDeclarations(existingDeclarations, updateDeclarations);
@@ -2498,7 +2500,10 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
                           RcString(mergedStyle));
   styleComponent = std::move(candidate);
 
-  invalidateComputed(handle);
+  if (invalidateCachedStyle) {
+    invalidateComputed(handle);
+  }
+  return true;
 }
 
 std::size_t StyleSystem::CandidateListCapacityForTesting() {
@@ -3126,6 +3131,80 @@ bool StyleSystem::isStyleEditSubtreeBoundary(const Registry& registry, Entity en
   }();
   const auto* type = registry.try_get<ElementTypeComponent>(entity);
   return type && type->inSvgNamespace() && boundaries[static_cast<std::size_t>(type->type())];
+}
+
+namespace {
+
+bool StyleEditTouchesNonlocalSource(const Registry& registry, Entity entity) {
+  using Tree = donner::components::TreeComponent;
+  for (Entity current = entity; current != entt::null;
+       current = registry.get<Tree>(current).parent()) {
+    const Entity source = StyleDataEntity(registry, current);
+    const auto* type = registry.try_get<ElementTypeComponent>(source);
+    if (StyleSystem::isStyleEditSubtreeBoundary(registry, source) ||
+        (type && type->type() == ElementType::Symbol) ||
+        registry.all_of<ExternalUseComponent>(source)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool HasLocalDeferredStyleGeometry(const PropertyRegistry& style, ElementType type) {
+  if (type == ElementType::SVG || (type == ElementType::Use && !style.unparsedProperties.empty())) {
+    return false;
+  }
+  constexpr std::string_view kGeometryNames[] = {"d", "width", "height", "x",  "y",  "cx", "cy",
+                                                 "r", "rx",    "ry",     "x1", "x2", "y1", "y2"};
+  return std::ranges::all_of(style.unparsedProperties, [&](const auto& entry) {
+    return std::ranges::find(kGeometryNames, std::string_view(entry.first)) !=
+           std::end(kGeometryNames);
+  });
+}
+
+bool HasLocalStyleTransform(const PropertyRegistry& style) {
+  const auto origin = style.transformOrigin.get();
+  // The SVG user-agent sheet explicitly sets 0 0. Units do not change a zero-length origin.
+  return origin && origin->x.value == 0 && origin->y.value == 0 &&
+         style.vectorEffect.get() == VectorEffect::None && style.isolation.get() == Isolation::Auto;
+}
+
+bool HasLocalStylePaint(const PropertyRegistry& style) {
+  const auto localPaint = [](const auto& paint) {
+    return !paint || paint->template is<PaintServer::None>() ||
+           paint->template is<PaintServer::Solid>();
+  };
+  return localPaint(style.fill.get()) && localPaint(style.stroke.get());
+}
+
+bool HasStyleResourceEffects(const PropertyRegistry& style) {
+  return style.clipPath.get() || style.mask.get() || style.markerStart.get() ||
+         style.markerMid.get() || style.markerEnd.get() ||
+         (style.filter.value && !style.filter.value->empty());
+}
+
+}  // namespace
+
+std::optional<uint32_t> StyleSystem::retainedStyleOrder(const Registry& registry, Entity entity) {
+  const auto* computed = registry.try_get<ComputedStyleComponent>(entity);
+  if (!computed || !computed->style || computed->externalFill || computed->externalStroke ||
+      StyleEditTouchesNonlocalSource(registry, entity)) {
+    return std::nullopt;
+  }
+
+  const auto& style = *computed->properties();
+  const auto* type = registry.try_get<ElementTypeComponent>(StyleDataEntity(registry, entity));
+  if (!HasLocalDeferredStyleGeometry(style, type ? type->type() : ElementType::Unknown) ||
+      !HasLocalStyleTransform(style) || !HasLocalStylePaint(style) ||
+      HasStyleResourceEffects(style)) {
+    return std::nullopt;
+  }
+
+  // Compare order and visibility inputs without retaining the old computed style.
+  return static_cast<uint32_t>(*style.display.get()) |
+         (static_cast<uint32_t>(*style.visibility.get()) << 8) |
+         (static_cast<uint32_t>(*style.overflow.get()) << 16) |
+         (static_cast<uint32_t>(*style.mixBlendMode.get()) << 24);
 }
 
 void StyleSystem::invalidateComputed(EntityHandle handle) {

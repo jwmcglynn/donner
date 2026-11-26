@@ -1858,6 +1858,9 @@ bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink,
       renderState.needsFullRebuild || renderState.needsFullStyleRecompute) {
     return false;
   }
+  if (const auto apply = renderState.applyLiveStyleUpdate) {
+    return apply(registry_, warningSink, scheduler);
+  }
   const std::optional<RetainedUpdatePlan> plan = PlanRetainedUpdate(registry_);
   if (!plan) {
     return false;

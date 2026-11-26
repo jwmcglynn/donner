@@ -8,6 +8,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
@@ -21,6 +22,65 @@
 namespace donner::svg::components {
 
 namespace {
+
+// A null copy marks a source copied into an offscreen or otherwise unsupported branch.
+struct StyleOccurrence {
+  Entity light;
+  Entity copy;
+};
+
+struct StyleOccurrences {
+  std::vector<StyleOccurrence> byLight;
+  std::size_t cloneCount = 0;
+  bool complete = false;
+};
+
+bool AddStyleOccurrences(const Registry& registry,
+                         const ComputedShadowTreeComponent::BranchStorage& branch, bool retainable,
+                         StyleOccurrences& result) {
+  if (branch.shadowEntities.size() > result.cloneCount - result.byLight.size()) {
+    return false;
+  }
+  for (Entity entity : branch.shadowEntities) {
+    const auto* shadow = registry.try_get<ShadowEntityComponent>(entity);
+    if (!shadow || !registry.valid(shadow->lightEntity)) {
+      return false;
+    }
+    result.byLight.push_back({shadow->lightEntity, retainable ? entity : entt::null});
+  }
+  return true;
+}
+
+StyleOccurrences IndexStyleOccurrences(const Registry& registry, std::size_t cloneCount) {
+  StyleOccurrences result;
+  result.cloneCount = cloneCount;
+  if (cloneCount > ShadowTreeResourceBudget::kMaximumGeneratedEntities) {
+    return result;
+  }
+  result.byLight.reserve(cloneCount);
+  for (const auto& [host, shadow] : registry.view<const ComputedShadowTreeComponent>().each()) {
+    const auto* type = registry.try_get<ElementTypeComponent>(host);
+    const bool use = type && type->type() == ElementType::Use;
+    if (shadow.mainBranch && !AddStyleOccurrences(registry, *shadow.mainBranch, use, result)) {
+      return result;
+    }
+    for (const auto& branch : shadow.branches) {
+      if (!AddStyleOccurrences(registry, branch, false, result)) {
+        return result;
+      }
+    }
+  }
+  result.complete = result.byLight.size() == cloneCount;
+  std::ranges::sort(result.byLight, {}, &StyleOccurrence::light);
+  return result;
+}
+
+void InvalidateStyleOccurrenceIndex(Registry& registry) {
+  if (auto* frame = registry.ctx().find<RenderTreeState>();
+      frame && frame->invalidateStyleOccurrences) {
+    frame->invalidateStyleOccurrences(registry);
+  }
+}
 
 void ReleaseShadowGeometry(Registry& registry, Entity entity) {
   if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
@@ -215,6 +275,7 @@ bool ShadowTreeResourceBudget::reserve(std::size_t generatedEntities, std::size_
 }
 
 void ShadowTreeSystem::beginRebuild(Registry& registry) {
+  InvalidateStyleOccurrenceIndex(registry);
   if (registry.ctx().contains<ShadowTreeResourceBudget>()) {
     registry.ctx().get<ShadowTreeResourceBudget>().reset();
   } else {
@@ -222,7 +283,90 @@ void ShadowTreeSystem::beginRebuild(Registry& registry) {
   }
 }
 
+namespace {
+
+std::optional<std::vector<Entity>> StyleOccurrenceRoots(const StyleOccurrences& index,
+                                                        const std::vector<Entity>& entities) {
+  std::vector<Entity> copies;
+  for (Entity entity : entities) {
+    for (auto it = std::ranges::lower_bound(index.byLight, entity, {}, &StyleOccurrence::light);
+         it != index.byLight.end() && it->light == entity; ++it) {
+      if (it->copy == entt::null) {
+        return std::nullopt;
+      }
+      copies.push_back(it->copy);
+    }
+  }
+  return copies;
+}
+
+bool CollectStyleOccurrenceSubtrees(const Registry& registry, const std::vector<Entity>& entities,
+                                    std::vector<Entity> copies, std::size_t maximumCopies,
+                                    std::vector<Entity>& affected) {
+  using Tree = donner::components::TreeComponent;
+  std::unordered_set<Entity> seen(entities.begin(), entities.end());
+  while (!copies.empty()) {
+    const Entity entity = copies.back();
+    copies.pop_back();
+    if (!seen.insert(entity).second) {
+      continue;
+    }
+    const auto* shadow = registry.try_get<ShadowEntityComponent>(entity);
+    const auto* tree = registry.try_get<Tree>(entity);
+    if (!shadow || !tree || affected.size() == maximumCopies) {
+      return false;
+    }
+    affected.push_back(entity);
+    for (Entity child = tree->firstChild(); child != entt::null;
+         child = registry.get<Tree>(child).nextSibling()) {
+      copies.push_back(child);
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+bool ShadowTreeSystem::appendStyleOccurrences(Registry& registry, std::vector<Entity>& entities) {
+  const std::size_t cloneCount = registry.view<const ShadowEntityComponent>().size();
+  if (cloneCount == 0 && registry.view<const ComputedShadowTreeComponent>().empty()) {
+    return true;
+  }
+  auto* frame = registry.ctx().find<RenderTreeState>();
+  if (!frame) {
+    frame = &registry.ctx().emplace<RenderTreeState>();
+  }
+  if (!frame->invalidateStyleOccurrences) {
+    registry.ctx().erase<StyleOccurrences>();
+    frame->invalidateStyleOccurrences = [](Registry& state) {
+      state.ctx().erase<StyleOccurrences>();
+    };
+  }
+  auto* index = registry.ctx().find<StyleOccurrences>();
+  if (!index || index->cloneCount != cloneCount) {
+    index = &registry.ctx().insert_or_assign(IndexStyleOccurrences(registry, cloneCount));
+  }
+  if (!index->complete) {
+    return false;
+  }
+  auto copies = StyleOccurrenceRoots(*index, entities);
+  if (!copies) {
+    return false;
+  }
+  if (copies->empty()) {
+    return true;
+  }
+  std::vector<Entity> affected;
+  if (!CollectStyleOccurrenceSubtrees(registry, entities, std::move(*copies), cloneCount,
+                                      affected)) {
+    return false;
+  }
+  entities.insert(entities.end(), affected.begin(), affected.end());
+  return true;
+}
+
 void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent& shadow) {
+  InvalidateStyleOccurrenceIndex(registry);
   // TODO(jwmcglynn): Ideally TreeComponents should automatically cleanup when the Entity is
   // deleted.
   struct TeardownFrame {
@@ -334,6 +478,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
     return std::nullopt;
   }
 
+  InvalidateStyleOccurrenceIndex(registry);
   RecursionGuard guard;
   Entity shadowEntity = createShadowAndChildren(registry, branchType, storage, guard, entity,
                                                 lightTarget, shadowHostParents, warningSink);

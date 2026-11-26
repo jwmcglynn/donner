@@ -117,6 +117,14 @@ public:
    */
   void instantiateAllComputedPaths(Registry& registry, ParseWarningSink& warningSink);
 
+  /// Recompute the prepared authored and instance paths whose styles changed in a retained edit.
+  /// @param registry Document registry with freshly computed styles.
+  /// @param entities Entities selected by the retained update plan.
+  /// @param warningSink Destination for geometry diagnostics.
+  /// @return False when the prepared paths cannot be committed without the full shape pass.
+  [[nodiscard]] bool recomputeStyledPaths(Registry& registry, std::span<const Entity> entities,
+                                          ParseWarningSink& warningSink);
+
   /**
    * Get the bounds for the given entity in the entity's local space, if it has a shape component.
    *

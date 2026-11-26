@@ -31,6 +31,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/LineComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -316,10 +317,39 @@ bool TryNarrowStyleEdit(EntityHandle handle, std::string_view attribute,
     }
   }
 
+  const std::size_t directCount = affected.size();
+  if (!components::ShadowTreeSystem::appendStyleOccurrences(registry, affected) ||
+      (affected.size() != directCount && (relations & (SelectorDependency::PrecedingSiblings |
+                                                       SelectorDependency::FollowingSiblings)))) {
+    return false;
+  }
+  std::vector<uint32_t> oldOrder;
+  oldOrder.reserve(affected.size());
   for (Entity entity : affected) {
-    const EntityHandle node(registry, entity);
+    const auto order = StyleSystem::retainedStyleOrder(registry, entity);
+    if (!order) {
+      break;
+    }
+    oldOrder.push_back(*order);
+  }
+  const bool retainable = oldOrder.size() == affected.size();
+  if (retainable) {
+    registry.ctx().get<components::RenderTreeState>().applyLiveStyleUpdate =
+        components::ApplyLiveStyleUpdate;
+  }
+  constexpr uint16_t kNarrowed = DirtyFlagsComponent::Style | DirtyFlagsComponent::RenderInstance |
+                                 DirtyFlagsComponent::NarrowedStyle;
+  const uint16_t flags = retainable ? kNarrowed : DirtyFlagsComponent::StyleCascade;
+  for (std::size_t i = 0; i < affected.size(); ++i) {
+    const EntityHandle node(registry, affected[i]);
     invalidateComputedStyle(node);
-    markDirty(node, DirtyFlagsComponent::StyleCascade);
+    auto& dirty = node.get_or_emplace<DirtyFlagsComponent>();
+    // A computed-style read between edits can materialize the intermediate style.
+    // Compare against the last prepared frame's order, recorded by the first edit.
+    if (retainable && !dirty.test(DirtyFlagsComponent::NarrowedStyle)) {
+      dirty.narrowedStyleOrder = oldOrder[i];
+    }
+    dirty.mark(flags);
   }
   state->computeEditedFrameStyles = ComputeEditedFrameStyles;
   return true;
@@ -449,6 +479,18 @@ void MarkSelectorSensitivePresentationEdit(EntityHandle handle, std::string_view
  * @param actualName The presentation attribute it maps to (`gradientTransform` maps to
  *   `transform`).
  */
+bool RouteCommonPresentationStyleEdit(EntityHandle handle, std::string_view name, bool useGeometry,
+                                      bool commonProperty, TryStyleEdit route) {
+  if (!commonProperty || useGeometry || !route || !route(handle, name, {})) {
+    return false;
+  }
+  auto& dirty = handle.get<components::DirtyFlagsComponent>();
+  if (!dirty.test(components::DirtyFlagsComponent::NarrowedStyle)) {
+    dirty.mark(components::DirtyFlagsComponent::Shape);
+  }
+  return true;
+}
+
 void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType,
                                     std::string_view name, std::string_view actualName,
                                     bool commonProperty, TryStyleEdit route) {
@@ -468,8 +510,7 @@ void MarkPresentationAttributeDirty(EntityHandle handle, ElementType elementType
     // For CSS properties (fill, stroke, etc.) and element-specific attributes (cx, cy, r, d,
     // etc.), mark style cascade + shape dirty.
     const bool useGeometry = elementType == ElementType::Use && IsUseGeometryAttribute(actualName);
-    if (commonProperty && !useGeometry && route && route(handle, name, {})) {
-      markDirty(handle, components::DirtyFlagsComponent::Shape);
+    if (RouteCommonPresentationStyleEdit(handle, name, useGeometry, commonProperty, route)) {
       return;
     }
     markNeedsFullStyleRecompute(handle);
@@ -867,8 +908,8 @@ void SVGElement::setStyleWithRouter(std::string_view style, StyleEditRouter rout
 
 void SVGElement::updateStyle(std::string_view style) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
-  components::StyleSystem().updateStyle(handle_, style);
-  if (!RouteStyleEdit(handle_, "style", {})) {
+  if (components::StyleSystem().updateStyle(handle_, style, false) &&
+      !RouteStyleEdit(handle_, "style", {})) {
     MarkFullClassOrStyleEdit(handle_);
   }
 }

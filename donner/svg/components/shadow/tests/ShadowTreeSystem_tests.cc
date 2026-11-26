@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <sstream>
 
 #include "donner/base/ParseWarningSink.h"
@@ -516,6 +517,72 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceMirrorsChildrenInNonNestedBranch) {
   EXPECT_FALSE(result.has_value());
   ASSERT_TRUE(shadow.mainBranch.has_value());
   EXPECT_GE(shadow.mainBranch->shadowEntities.size(), 3u);
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
+TEST_F(ShadowTreeSystemTest, RetainedStyleOccurrencesFollowNestedUsesAndBranchReplacement) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="target"><rect id="leaf" width="10" height="10"/></g>
+      <g id="nested"><use href="#target"/></g>
+      <use id="host" href="#nested"/>
+      <mask id="mask"/>
+    </svg>
+  )");
+  const auto nested = document.querySelector("#nested");
+  const auto target = document.querySelector("#target");
+  const auto leaf = document.querySelector("#leaf");
+  const auto use = document.querySelector("#host");
+  const auto mask = document.querySelector("#mask");
+  ASSERT_THAT(nested, Optional(testing::_));
+  ASSERT_THAT(target, Optional(testing::_));
+  ASSERT_THAT(leaf, Optional(testing::_));
+  ASSERT_THAT(use, Optional(testing::_));
+  ASSERT_THAT(mask, Optional(testing::_));
+
+  auto& registry = document.registry();
+  const auto host = use->entityHandle();
+  const auto offscreenHost = mask->entityHandle();
+  auto& main = registry.emplace<ComputedShadowTreeComponent>(host.entity());
+  auto& offscreen = registry.emplace<ComputedShadowTreeComponent>(offscreenHost.entity());
+
+  ShadowTreeSystem system;
+  ParseWarningSink warnings;
+  EXPECT_THAT(
+      system.populateInstance(host, main, ShadowBranchType::Main, nested->entityHandle().entity(),
+                              RcString("#nested"), warnings),
+      Eq(std::nullopt));
+  ASSERT_THAT(main.mainBranch, Optional(testing::_));
+
+  const std::vector light{target->entityHandle().entity(), leaf->entityHandle().entity()};
+  std::vector expected = light;
+  for (Entity copy : main.mainBranch->shadowEntities) {
+    const auto source = registry.get<ShadowEntityComponent>(copy).lightEntity;
+    if (std::ranges::find(light, source) != light.end()) {
+      expected.push_back(copy);
+    }
+  }
+  ASSERT_THAT(expected, SizeIs(4u));
+  auto entities = light;
+  ASSERT_TRUE(ShadowTreeSystem::appendStyleOccurrences(registry, entities));
+  EXPECT_THAT(entities, testing::UnorderedElementsAreArray(expected));
+
+  EXPECT_THAT(
+      system.populateInstance(offscreenHost, offscreen, ShadowBranchType::OffscreenMask,
+                              target->entityHandle().entity(), RcString("#target"), warnings),
+      Optional(0u));
+  entities = light;
+  EXPECT_FALSE(ShadowTreeSystem::appendStyleOccurrences(registry, entities));
+  EXPECT_THAT(entities, testing::ElementsAreArray(light));
+
+  system.teardown(registry, offscreen);
+  ASSERT_TRUE(ShadowTreeSystem::appendStyleOccurrences(registry, entities));
+  EXPECT_THAT(entities, testing::UnorderedElementsAreArray(expected));
+
+  registry.remove<ShadowEntityComponent>(main.mainBranch->shadowEntities.back());
+  entities = light;
+  EXPECT_FALSE(ShadowTreeSystem::appendStyleOccurrences(registry, entities));
+  EXPECT_THAT(entities, testing::ElementsAreArray(light));
   EXPECT_THAT(warnings.warnings(), IsEmpty());
 }
 
