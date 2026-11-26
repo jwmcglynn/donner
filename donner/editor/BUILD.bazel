@@ -479,6 +479,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "structured_css_edit",
+    srcs = ["StructuredCssEdit.cc"],
+    hdrs = ["StructuredCssEdit.h"],
+    deps = [
+        ":editor_app",
+        ":flash_decorations",
+        ":text_editor",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "source_structural_move",
     srcs = ["SourceStructuralMove.cc"],
     hdrs = ["SourceStructuralMove.h"],
@@ -1295,6 +1307,7 @@ donner_cc_library(
         ":source_diagnostics_panel",
         ":source_selection",
         ":source_structural_move",
+        ":structured_css_edit",
         ":style_source_annotations",
         ":text_editor",
         ":text_format_bar_presenter",

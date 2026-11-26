@@ -4123,7 +4123,8 @@ void TextEditor::processReplace(const std::string& findWord, const std::string& 
   } while (replaceAll && textLoc != std::string::npos);
 }
 
-void TextEditor::render(std::string_view title, const ImVec2& size, bool showBorder) {
+void TextEditor::render(std::string_view title, const ImVec2& size, bool showBorder,
+                        const std::function<void()>& extraContextMenu) {
   // TODO: std::string operator+ with string_view is not supported.
   // Avoid this alloc.
   const std::string titleStr{title};
@@ -4205,6 +4206,9 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
       if (ImGui::Selectable("Paste")) {
         paste();
       }
+    }
+    if (extraContextMenu) {
+      extraContextMenu();
     }
     if (sourceFocusModeContextMenuVisible_) {
       ImGui::Separator();

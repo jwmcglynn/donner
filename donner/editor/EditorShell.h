@@ -48,6 +48,7 @@
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/SourceDiagnosticsPanel.h"
 #include "donner/editor/SourceStructuralMove.h"
+#include "donner/editor/StructuredCssEdit.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TextFormatBarPresenter.h"
@@ -556,6 +557,7 @@ private:
   /// Selects every selectable element on the canvas via the shared `setSelection()` path, so the
   /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
   void selectAllCanvasElements();
+  void renderStructuredCssContextMenu();
   void renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight, float paneWidth,
                         ImFont* codeFont);
   void requestRenderForAcceptedSourceEdit(std::uint64_t documentVersionBeforeTextSync);

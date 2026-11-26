@@ -4172,6 +4172,45 @@ void EditorShell::requestRenderForAcceptedSourceEdit(std::uint64_t documentVersi
   }
 }
 
+void EditorShell::renderStructuredCssContextMenu() {
+  const auto offset = textEditor_.getByteOffsetAtCoordinates(textEditor_.getCursorPosition());
+  const auto target = FindStructuredCssTarget(app_, textEditor_.getText(), offset);
+  if (!target || !ImGui::BeginMenu("CSS")) {
+    return;
+  }
+
+  const auto select = [&](const char* label, std::optional<SourceByteRange> range) {
+    if (ImGui::MenuItem(label, nullptr, false, range.has_value()) && range) {
+      textEditor_.selectAndFocus(textEditor_.getCoordinatesAtByteOffset(range->start),
+                                 textEditor_.getCoordinatesAtByteOffset(range->end));
+    }
+  };
+  const auto edit = [&](const char* label, StructuredCssOperation operation,
+                        std::string_view replacement, bool enabled = true) {
+    if (ImGui::MenuItem(label, nullptr, false, enabled)) {
+      if (ApplyStructuredCssEdit(app_, textEditor_, *target, operation, replacement)) {
+        window_.wakeEventLoop();
+      }
+    }
+  };
+  select("Select rule", target->rule);
+  select("Edit selector", target->selector);
+  edit("Add rule after", StructuredCssOperation::InsertRule, "selector { }");
+  edit("Remove rule", StructuredCssOperation::RemoveRule, {});
+  ImGui::Separator();
+  select("Select declaration", target->declaration);
+  select("Edit property name", target->name);
+  select("Edit value", target->value);
+  edit("Add !important", StructuredCssOperation::AddImportant, {},
+       target->value.has_value() && !target->priority);
+  edit("Remove !important", StructuredCssOperation::RemoveImportant, {},
+       target->priority.has_value());
+  edit("Add declaration", StructuredCssOperation::InsertDeclaration, "fill: currentColor;");
+  edit("Remove declaration", StructuredCssOperation::RemoveDeclaration, {},
+       target->declaration.has_value());
+  ImGui::EndMenu();
+}
+
 void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight,
                                    float paneWidth, ImFont* codeFont) {
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
@@ -4191,8 +4230,8 @@ void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float p
   ImGui::PushFont(codeFont);
   textEditor_.setSourceFocusModeContextMenu(sourceFocusMode_);
   updateSourceStyleDecorations();
-  textEditor_.render("##source",
-                     ImVec2(0.0f, diagnosticsHeight > 0.0f ? -diagnosticsHeight : 0.0f));
+  textEditor_.render("##source", ImVec2(0.0f, diagnosticsHeight > 0.0f ? -diagnosticsHeight : 0.0f),
+                     /*showBorder=*/false, [this] { renderStructuredCssContextMenu(); });
   updateSourceStructuralDrag();
   applySourceStyleDecorationChipClick();
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {

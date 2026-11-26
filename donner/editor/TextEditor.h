@@ -300,7 +300,8 @@ public:
   /// @param title ImGui identifier for the editor region.
   /// @param size Requested child size; ImGui uses available space for zero dimensions.
   /// @param showBorder Whether ImGui draws a border around the child.
-  void render(std::string_view title, const ImVec2& size = ImVec2(), bool showBorder = false);
+  void render(std::string_view title, const ImVec2& size = ImVec2(), bool showBorder = false,
+              const std::function<void()>& extraContextMenu = {});
 
   /**
    * Replace the entire buffer with new text.

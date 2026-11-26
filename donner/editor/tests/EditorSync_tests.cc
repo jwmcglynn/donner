@@ -15,6 +15,8 @@
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/SourceSync.h"
+#include "donner/editor/StructuredCssEdit.h"
+#include "donner/editor/TextEditor.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/editor/ViewportSvgExport.h"
@@ -651,6 +653,73 @@ TEST(EditorSyncTest, DeleteWritebackReparseRefreshesFollowingElementLocation) {
             "<rect id=\"b\" x=\"40\" y=\"10\" width=\"10\" height=\"10\"/>");
   EXPECT_LT(updatedSecondLocation->start.offset.value(),
             originalSecondLocation->start.offset.value());
+}
+
+TEST(EditorSyncTest, StructuredCssChangeUsesOneSourceIntentAndOneUndo) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>rect { fill : /* keep */ red; stroke:black }</style>
+<rect id="r" width="10" height="10"/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  std::string previous = text.getText();
+  const std::string original = previous;
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  const auto red = original.find("red;");
+  const auto target = FindStructuredCssTarget(app, original, red);
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_TRUE(
+      ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::ReplaceValue, "blue"));
+  std::string expected = original;
+  expected.replace(red, 3, "blue");
+  EXPECT_EQ(text.getText(), expected);
+  EXPECT_FALSE(
+      ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::RemoveDeclaration));
+
+  std::optional<std::string> writeback;
+  auto intent = text.takePendingSourceEditIntents();
+  ASSERT_THAT(intent, testing::SizeIs(1));
+  EXPECT_EQ(intent.front().offset, red);
+  EXPECT_TRUE(
+      DispatchSourceEditIntents(app, intent, expected, &previous, &writeback).dispatchedMutation);
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_EQ(app.document().document().source(), expected);
+
+  text.undo();
+  EXPECT_EQ(text.getText(), original);
+  EXPECT_FALSE(text.canUndo());
+  intent = text.takePendingSourceEditIntents();
+  ASSERT_THAT(intent, testing::SizeIs(1));
+  EXPECT_TRUE(
+      DispatchSourceEditIntents(app, intent, original, &previous, &writeback).dispatchedMutation);
+  EXPECT_EQ(app.document().document().source(), original);
+}
+
+TEST(EditorSyncTest, StructuredCssMoveLeavesTheSeparatorInPlace) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>rect { fill:red; /* separator */ stroke:black; }</style>
+<rect id="r" width="10" height="10"/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+  const auto fill = FindStructuredCssTarget(app, original, original.find("fill:"));
+  const auto stroke = FindStructuredCssTarget(app, original, original.find("stroke:"));
+  ASSERT_THAT(fill, testing::Optional(testing::_));
+  ASSERT_THAT(stroke, testing::Optional(testing::_));
+  ASSERT_TRUE(MoveStructuredCssBefore(app, text, *stroke, *fill));
+  std::string expected = original;
+  const auto start = expected.find("fill:");
+  const auto end = expected.find("black;") + std::string_view("black;").size();
+  expected.replace(start, end - start, "stroke:black; /* separator */ fill:red;");
+  EXPECT_EQ(text.getText(), expected);
+  EXPECT_THAT(text.takePendingSourceEditIntents(), testing::SizeIs(1));
+  text.undo();
+  EXPECT_EQ(text.getText(), original);
+  EXPECT_FALSE(text.canUndo());
 }
 
 TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand) {

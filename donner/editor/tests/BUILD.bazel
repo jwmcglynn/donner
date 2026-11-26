@@ -1098,6 +1098,8 @@ donner_cc_test(
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
         "//donner/editor:source_sync",
+        "//donner/editor:structured_css_edit",
+        "//donner/editor:text_editor",
         "//donner/editor:text_patch",
         "//donner/editor:viewport_svg_export",
         "//donner/svg",
