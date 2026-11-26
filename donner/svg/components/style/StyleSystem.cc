@@ -2990,9 +2990,8 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
   //      flagging it leaves the entity with no computed style at all, which later passes that
   //      walk ComputedStyleComponent would then skip or dereference.
   //
-  // Mutations whose effect is not local to specific entities (stylesheet edits, class/id/attribute
-  // writes that feed selectors, structural changes) cannot express themselves through per-entity
-  // flags at all, and must instead request RenderTreeState::needsFullStyleRecompute.
+  // Writers that cannot bound the affected entities, such as stylesheet or structural edits,
+  // instead request RenderTreeState::needsFullStyleRecompute.
   if (hasBeenBuilt && hasDirtyEntities && !needsFullStyleRecompute) {
     computeDirtyStyles(registry, warningSink, scheduler);
   } else {
@@ -3075,15 +3074,23 @@ bool StyleSystem::anyStylesheetUsesAttributeInSelector(Registry& registry,
   return false;
 }
 
+namespace {
+
+bool RequiresFullStyleBudgetReplay(const Registry& registry) {
+  const auto* budget = registry.ctx().find<StyleResourceBudget>();
+  const auto* metrics = registry.ctx().find<StyleCascadeMetrics>();
+  return (budget && (budget->rejected() || budget->limits() != StyleResourceBudget::Limits())) ||
+         (metrics && metrics->counters.budgetRejections != 0);
+}
+
+}  // namespace
+
 std::uint8_t StyleSystem::styleEditDependencies(const Registry& registry,
                                                 std::string_view attribute,
                                                 std::span<const std::string_view> changedClasses) {
-  const auto* budget = registry.ctx().find<StyleResourceBudget>();
-  const auto* metrics = registry.ctx().find<StyleCascadeMetrics>();
-  if ((budget && (budget->rejected() || budget->limits() != StyleResourceBudget::Limits())) ||
-      (metrics && metrics->counters.budgetRejections != 0)) {
-    // Refused work can leave fallback values in retained records. Under a caller-supplied
-    // ceiling, preserve the full pass's original admission order, including new refusals.
+  if (RequiresFullStyleBudgetReplay(registry)) {
+    // Prior refusals can leave fallback values. A custom budget can also change admission order
+    // during a narrow pass even when the previous full pass succeeded.
     return SelectorDependency::Ancestors;
   }
   std::uint8_t relations = 0;
@@ -3107,24 +3114,18 @@ std::uint8_t StyleSystem::styleEditDependencies(const Registry& registry,
 }
 
 bool StyleSystem::isStyleEditSubtreeBoundary(const Registry& registry, Entity entity) {
+  static constexpr auto boundaries = [] {
+    std::array<bool, kElementTypeCount> result{};
+    for (ElementType type :
+         {ElementType::ClipPath, ElementType::Filter, ElementType::LinearGradient,
+          ElementType::Marker, ElementType::Mask, ElementType::Pattern, ElementType::RadialGradient,
+          ElementType::Stop, ElementType::Text, ElementType::TextPath, ElementType::TSpan}) {
+      result[static_cast<std::size_t>(type)] = true;
+    }
+    return result;
+  }();
   const auto* type = registry.try_get<ElementTypeComponent>(entity);
-  if (!type || !type->inSvgNamespace()) {
-    return false;
-  }
-  switch (type->type()) {
-    case ElementType::ClipPath:
-    case ElementType::Filter:
-    case ElementType::LinearGradient:
-    case ElementType::Marker:
-    case ElementType::Mask:
-    case ElementType::Pattern:
-    case ElementType::RadialGradient:
-    case ElementType::Stop:
-    case ElementType::Text:
-    case ElementType::TextPath:
-    case ElementType::TSpan: return true;
-    default: return false;
-  }
+  return type && type->inSvgNamespace() && boundaries[static_cast<std::size_t>(type->type())];
 }
 
 void StyleSystem::invalidateComputed(EntityHandle handle) {
