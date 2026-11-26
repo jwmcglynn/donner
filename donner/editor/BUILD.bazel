@@ -486,6 +486,8 @@ donner_cc_library(
         ":editor_app",
         ":flash_decorations",
         ":text_editor",
+        "//donner/base/xml",
+        "//donner/css/parser",
         "//donner/svg",
     ],
 )

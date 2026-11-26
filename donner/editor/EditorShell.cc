@@ -4193,11 +4193,13 @@ void EditorShell::renderStructuredCssContextMenu() {
       }
     }
   };
-  select("Select rule", target->rule);
-  select("Edit selector", target->selector);
-  edit("Add rule after", StructuredCssOperation::InsertRule, "selector { }");
-  edit("Remove rule", StructuredCssOperation::RemoveRule, {});
-  ImGui::Separator();
+  if (!target->inlineStyle) {
+    select("Select rule", target->rule);
+    select("Edit selector", target->selector);
+    edit("Add rule after", StructuredCssOperation::InsertRule, "selector { }");
+    edit("Remove rule", StructuredCssOperation::RemoveRule, {});
+    ImGui::Separator();
+  }
   select("Select declaration", target->declaration);
   select("Edit property name", target->name);
   select("Edit value", target->value);
@@ -4237,7 +4239,7 @@ void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float p
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
     toggleSourceFocusMode();
   }
-  if (!sourceStructuralDragElement_.has_value()) {
+  if (!sourceStructuralDragElement_.has_value() && !sourceCssDragTarget_) {
     syncSelectionFromSourceCursorIfNeeded();
   }
   const std::optional<std::uint64_t> sourceHoveredDiagnostic =
@@ -8411,7 +8413,43 @@ std::vector<svg::SVGElement> EditorShell::combinedSourcePreviewElements() const 
   return elements;
 }
 
+void EditorShell::updateCssSourceStructuralDrag(std::string_view source) {
+  const auto from = *sourceCssDragTarget_;
+  const auto fromRange = from.declaration.value_or(from.rule);
+  auto drop = textEditor_.takeSourceGutterDropTarget();
+  const auto position = drop ? drop : textEditor_.sourceGutterDragTarget();
+  if (!position) {
+    return;
+  }
+  const std::size_t lineStart =
+      textEditor_.getByteOffsetAtCoordinates(Coordinates{position->line, 0});
+  const auto offset = FirstSourceContentOffset(source, lineStart);
+  const auto target = FindStructuredCssTarget(app_, source, offset);
+  const bool after = offset > fromRange.start;
+  const bool valid = target && CanMoveStructuredCss(app_, source, from, *target, after);
+  auto insertion = offset;
+  if (target) {
+    const auto range = target->declaration.value_or(target->rule);
+    insertion = after ? range.end : range.start;
+  }
+  textEditor_.setSourceStructuralMoveDecoration(TextEditor::SourceStructuralMoveDecoration{
+      .elementRange = fromRange,
+      .insertionOffset = insertion,
+      .valid = valid,
+      .message = valid ? "Move CSS item" : "Drop next to a CSS item in the same block",
+  });
+  if (drop) {
+    if (valid) {
+      const bool moved = MoveStructuredCss(app_, textEditor_, from, *target, after);
+      (void)moved;
+    }
+    clearSourceStructuralDrag();
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::clearSourceStructuralDrag() {
+  sourceCssDragTarget_.reset();
   sourceStructuralDragElement_.reset();
   sourceStructuralMoveTarget_.reset();
   sourceStructuralMovePlan_.reset();
@@ -8451,6 +8489,12 @@ void EditorShell::updateSourceStructuralDrag() {
     }
     const std::size_t lineStart =
         textEditor_.getByteOffsetAtCoordinates(Coordinates{*startedLine, 0});
+    sourceCssDragTarget_ =
+        FindStructuredCssTarget(app_, source, FirstSourceContentOffset(source, lineStart));
+    if (sourceCssDragTarget_) {
+      updateCssSourceStructuralDrag(source);
+      return;
+    }
     sourceStructuralDragElement_ = FindElementNearSourceOffset(
         app_.document().document(), source, FirstSourceContentOffset(source, lineStart));
     if (!sourceStructuralDragElement_.has_value() ||
@@ -8459,6 +8503,11 @@ void EditorShell::updateSourceStructuralDrag() {
       textEditor_.cancelSourceGutterDrag();
       return;
     }
+  }
+
+  if (sourceCssDragTarget_) {
+    updateCssSourceStructuralDrag(source);
+    return;
   }
 
   const auto evaluateDragTarget = [&](const Coordinates& dragTarget) {

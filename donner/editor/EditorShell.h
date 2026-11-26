@@ -861,6 +861,7 @@ private:
       const std::vector<svg::SVGElement>& elements) const;
   [[nodiscard]] std::vector<svg::SVGElement> referenceHighlightElements() const;
   [[nodiscard]] std::vector<svg::SVGElement> combinedSourcePreviewElements() const;
+  void updateCssSourceStructuralDrag(std::string_view source);
   void updateSourceStructuralDrag();
   void clearSourceStructuralDrag();
   void updateSourceHoverPreview();
@@ -958,6 +959,7 @@ private:
   TextEditor textEditor_;
   int sourceFontSizePercent_ = 100;
   SourceDiagnosticsPanel sourceDiagnosticsPanel_;
+  std::optional<StructuredCssTarget> sourceCssDragTarget_;
   std::optional<svg::SVGElement> sourceStructuralDragElement_;
   std::optional<svg::SVGElement> sourceStructuralMoveTarget_;
   std::optional<SourceStructuralMovePlan> sourceStructuralMovePlan_;

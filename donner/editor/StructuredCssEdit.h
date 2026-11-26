@@ -21,7 +21,8 @@ struct StructuredCssTarget {
   std::optional<SourceByteRange> name;         ///< Authored property name.
   std::optional<SourceByteRange> value;        ///< Authored property value.
   std::optional<SourceByteRange> priority;     ///< Authored importance annotation.
-  std::size_t insertDeclaration = 0;       ///< Position directly before the rule's closing brace.
+  std::size_t insertDeclaration = 0;  ///< Position directly before the rule's closing brace.
+  bool inlineStyle = false;           ///< The selected declaration belongs to a style attribute.
   bool declarationNeedsSeparator = false;  ///< Last declaration has no terminating semicolon.
   std::size_t selectionOffset = 0;         ///< Original hit that resolves the same parsed target.
   std::uint64_t generation = 0;            ///< Document generation at selection.
@@ -61,13 +62,23 @@ std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::
 bool ApplyStructuredCssEdit(EditorApp& app, TextEditor& editor, const StructuredCssTarget& target,
                             StructuredCssOperation operation, std::string_view replacement = {});
 
-/// Move a rule before another rule, or a declaration before a declaration in the same rule.
+/// Check whether two revision-bound CSS targets can be reordered.
+/// @param app Active editor document.
+/// @param source Current source pane contents.
+/// @param from Dragged CSS item.
+/// @param destination Adjacent destination in the same container.
+/// @param after Insert after rather than before the destination.
+bool CanMoveStructuredCss(EditorApp& app, std::string_view source, const StructuredCssTarget& from,
+                          const StructuredCssTarget& destination, bool after);
+
+/// Move a CSS item across an adjacent sibling in the same CSS container.
 /// @param app Active editor document.
 /// @param editor Source editor receiving the move as one undoable intent.
-/// @param from Revision-bound source target.
-/// @param before Revision-bound destination target.
-/// @return True if the targets share a CSS container and the source changed.
-bool MoveStructuredCssBefore(EditorApp& app, TextEditor& editor, const StructuredCssTarget& from,
-                             const StructuredCssTarget& before);
+/// @param from Dragged CSS item.
+/// @param destination Adjacent destination in the same container.
+/// @param after Insert after rather than before the destination.
+/// @return True when the source changed.
+bool MoveStructuredCss(EditorApp& app, TextEditor& editor, const StructuredCssTarget& from,
+                       const StructuredCssTarget& destination, bool after);
 
 }  // namespace donner::editor

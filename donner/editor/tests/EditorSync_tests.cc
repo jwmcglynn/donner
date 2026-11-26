@@ -696,6 +696,39 @@ TEST(EditorSyncTest, StructuredCssChangeUsesOneSourceIntentAndOneUndo) {
   EXPECT_EQ(app.document().document().source(), original);
 }
 
+TEST(EditorSyncTest, StructuredCssInlineTargetMapsEncodedNameAndPriority) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<rect id="r" style="--t&#111;ne : /* keep */ red  !important; fill:var(--tone)"/>
+</svg>)svg";
+  TextEditor text;
+  text.setText(authored);
+  const std::string original = text.getText();
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(original));
+
+  const auto target = FindStructuredCssTarget(app, original, original.find("red "));
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  EXPECT_TRUE(target->inlineStyle);
+  ASSERT_THAT(target->name, testing::Optional(testing::_));
+  EXPECT_EQ(original.substr(target->name->start, target->name->end - target->name->start),
+            "--t&#111;ne");
+  EXPECT_FALSE(ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::RemoveRule));
+  ASSERT_TRUE(ApplyStructuredCssEdit(app, text, *target, StructuredCssOperation::RemoveImportant));
+  std::string expected = original;
+  expected.erase(expected.find("!important"), std::string_view("!important").size());
+  EXPECT_EQ(text.getText(), expected);
+  std::string previous = original;
+  std::optional<std::string> writeback;
+  const auto intents = text.takePendingSourceEditIntents();
+  ASSERT_THAT(intents, testing::SizeIs(1));
+  EXPECT_TRUE(
+      DispatchSourceEditIntents(app, intents, expected, &previous, &writeback).dispatchedMutation);
+  EXPECT_EQ(app.document().document().source(), expected);
+  text.undo();
+  EXPECT_EQ(text.getText(), original);
+  EXPECT_FALSE(text.canUndo());
+}
+
 TEST(EditorSyncTest, StructuredCssMoveLeavesTheSeparatorInPlace) {
   constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
 <style>rect { fill:red; /* separator */ stroke:black; }</style>
@@ -710,7 +743,7 @@ TEST(EditorSyncTest, StructuredCssMoveLeavesTheSeparatorInPlace) {
   const auto stroke = FindStructuredCssTarget(app, original, original.find("stroke:"));
   ASSERT_THAT(fill, testing::Optional(testing::_));
   ASSERT_THAT(stroke, testing::Optional(testing::_));
-  ASSERT_TRUE(MoveStructuredCssBefore(app, text, *stroke, *fill));
+  ASSERT_TRUE(MoveStructuredCss(app, text, *stroke, *fill, /*after=*/false));
   std::string expected = original;
   const auto start = expected.find("fill:");
   const auto end = expected.find("black;") + std::string_view("black;").size();
