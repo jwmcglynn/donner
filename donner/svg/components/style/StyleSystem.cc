@@ -3308,13 +3308,30 @@ CustomPropertyWinner FindLocalCustomProperty(const Registry& registry, Entity tr
   return search.winner;
 }
 
+constexpr std::size_t kMaximumStylesheetSourceIndices =
+    xml::components::XMLDocumentContext::kDefaultMaximumSourceEditTreeNodes;
+constexpr std::size_t kMaximumStylesheetSourceIndexBytes = 16 * 1024 * 1024;
+
+struct StylesheetSourceIndexEntry {
+  std::uint64_t stylesheetRevision = 0;
+  std::size_t sourceBytes = 0;
+  std::optional<xml::XMLDecodedTextSourceMap> mapping;
+};
+
 struct StylesheetSourceIndexCache {
   std::weak_ptr<xml::XMLSourceStore> source;
   std::uint64_t sourceVersion = 0;
-  std::uint64_t stylesheetRevision = 0;
-  Entity entity = entt::null;
-  std::optional<xml::XMLDecodedTextSourceMap> mapping;
+  std::unordered_map<Entity, StylesheetSourceIndexEntry> entries;
+  std::size_t sourceBytes = 0;
   std::size_t builds = 0;
+
+  void reset(const std::shared_ptr<xml::XMLSourceStore>& newSource,
+             std::uint64_t newSourceVersion) {
+    source = newSource;
+    sourceVersion = newSourceVersion;
+    entries.clear();
+    sourceBytes = 0;
+  }
 };
 
 StylesheetSourceIndexCache& SourceIndexCache() {
@@ -3328,17 +3345,34 @@ const xml::XMLDecodedTextSourceMap* MapForStylesheet(Registry& registry, Entity 
   const auto& source = document->sourceStoreHolder->store;
   auto& cache = SourceIndexCache();
   const auto version = source->sourceVersion();
-  if (cache.source.lock() != source || cache.sourceVersion != version ||
-      cache.stylesheetRevision != sheet.contentRevision() || cache.entity != entity) {
-    const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
-    cache.source = source;
-    cache.sourceVersion = version;
-    cache.stylesheetRevision = sheet.contentRevision();
-    cache.entity = entity;
-    cache.mapping = node ? node->decodedTextSourceMap(sheet.text) : std::nullopt;
-    ++cache.builds;
+  if (cache.source.lock() != source || cache.sourceVersion != version) {
+    cache.reset(source, version);
   }
-  return cache.mapping ? &*cache.mapping : nullptr;
+
+  auto existing = cache.entries.find(entity);
+  if (existing != cache.entries.end() &&
+      existing->second.stylesheetRevision == sheet.contentRevision()) {
+    return existing->second.mapping ? &*existing->second.mapping : nullptr;
+  }
+  if (existing != cache.entries.end()) {
+    cache.sourceBytes -= existing->second.sourceBytes;
+    cache.entries.erase(existing);
+  }
+
+  if (cache.entries.size() >= kMaximumStylesheetSourceIndices ||
+      sheet.text.size() > kMaximumStylesheetSourceIndexBytes - cache.sourceBytes) {
+    return nullptr;
+  }
+  const auto node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
+  auto mapping = node ? node->decodedTextSourceMap(sheet.text) : std::nullopt;
+  ++cache.builds;
+  cache.sourceBytes += sheet.text.size();
+  auto inserted =
+      cache.entries
+          .emplace(entity, StylesheetSourceIndexEntry{sheet.contentRevision(), sheet.text.size(),
+                                                      std::move(mapping)})
+          .first;
+  return inserted->second.mapping ? &*inserted->second.mapping : nullptr;
 }
 
 bool HasCurrentSourceProjection(const Registry& registry) {
