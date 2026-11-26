@@ -28,6 +28,7 @@
  * reads which inputs completed.
  */
 export const kReleaseFrameTimeoutMs = 20500;
+export const kPresentationSamplePollMs = 8;
 
 /**
  * @typedef {{ inputRepresented: boolean, mouseDown: boolean, completedSerial: number,
@@ -48,11 +49,12 @@ export const kReleaseFrameTimeoutMs = 20500;
 /**
  * Press, drag and release in the page, sampling the editor's frame statistics.
  * @param {{ start: { x: number, y: number }, direction: number,
- *   releaseFrameTimeoutMs: number }} options Where the drag starts, the signed fraction of its
+ *   releaseFrameTimeoutMs: number, presentationSamplePollMs: number }} options Where the drag
+ *   starts, the signed fraction of its
  *   120 by 72 pixel travel, and `kReleaseFrameTimeoutMs`.
  * @returns {Promise<DragStream>}
  */
-export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs }) {
+export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs, presentationSamplePollMs }) {
   const state = window;
   const canvas = document.querySelector("canvas#canvas");
   const dispatch = (type, x, y, buttons) => {
@@ -75,6 +77,7 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
   let previousFrame = state.__donnerFrameLoopStats?.renderedFrames ?? 0;
   let observing = true;
   let sampleId = 0;
+  let sampleTimeoutId = 0;
   // Samples the current frame when it differs from the last sample. The stream keeps at most 256
   // samples before the final one, which follows the release wait, so it holds the release frame
   // whenever that completed in time.
@@ -108,8 +111,16 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
     sample(false);
     if (observing) sampleId = requestAnimationFrame(observe);
   };
+  // GPU submission completion is not synchronized to animation frames. In particular, Firefox can
+  // publish two completed held-drag presentations between successive rAF callbacks. Poll the
+  // bounded completion snapshot as well so a later completion cannot erase evidence of the first.
+  const observeCompletion = () => {
+    sample(false);
+    if (observing) sampleTimeoutId = setTimeout(observeCompletion, presentationSamplePollMs);
+  };
   const startedAtMs = performance.now();
   observe();
+  observeCompletion();
   dispatch("mousedown", start.x, start.y, 1);
   let end = start;
   let releasedAtMs = 0;
@@ -156,6 +167,7 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
     }
     observing = false;
     cancelAnimationFrame(sampleId);
+    clearTimeout(sampleTimeoutId);
     sample(true);
   }
   const stream = {
@@ -173,7 +185,10 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
 }
 
 /**
- * Whether a sampled frame is a completed frame of this drag that represents one of its inputs.
+ * Whether a sampled frame completed after this drag began. Callers separately match its pointer
+ * to an input dispatched before the completion. The inputRepresented field says whether the
+ * presentation caught up to the latest input, so it stays false when a fast held drag completes
+ * an earlier dispatched position while newer inputs are queued.
  * @param {DragFrame} frame Sampled frame.
  * @param {DragStream} stream The drag's stream.
  * @param {number} baselineSerial Completed serial before the drag started.
@@ -181,8 +196,7 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
  */
 function completesThisDrag(frame, stream, baselineSerial) {
   return Boolean(
-    frame.presentation?.inputRepresented
-      && frame.presentation.completedSerial > baselineSerial
+    frame.presentation?.completedSerial > baselineSerial
       && frame.presentation.completedAtMs >= stream.startedAtMs,
   );
 }

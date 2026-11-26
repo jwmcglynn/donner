@@ -22,6 +22,7 @@ import {
   completedDragFrames,
   dragInputLatencies,
   heldDragPositionCount,
+  kPresentationSamplePollMs,
   kReleaseFrameTimeoutMs,
   streamDragInputs,
 } from "./drag-input-stream.mjs";
@@ -481,6 +482,7 @@ async function streamDragToIdle(page: Page, start: { x: number; y: number }, dir
   const stream = await page.evaluate(streamDragInputs, {
     start,
     direction,
+    presentationSamplePollMs: kPresentationSamplePollMs,
     releaseFrameTimeoutMs: kReleaseFrameTimeoutMs,
   });
   await expect.poll(async () => (await snapshot(page)).interaction, {

@@ -851,6 +851,7 @@ js_test(
         "//:.github/workflows/editor_wasm.yml",
         "//:.github/workflows/perf.yml",
         "//:MODULE.bazel",
+        "//build_defs:ci_darwin.bzl",
         "//donner/editor/wasm:BUILD.bazel",
         "//donner/gpu/browser:library_donner_gpu.js",
         "//tools:run-browser-ci.sh",
