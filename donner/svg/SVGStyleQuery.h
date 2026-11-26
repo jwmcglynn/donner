@@ -15,6 +15,7 @@ namespace donner::svg {
 
 class SVGDocument;
 class SVGElement;
+class SVGStyleElement;
 
 /// Diagnostic record for one stylesheet rule that matched an element.
 struct SVGMatchedStyleRule {
@@ -96,12 +97,10 @@ bool AuthorStyleDependsOnTreePosition(const SVGDocument& document);
 
 /// Map a contiguous stylesheet-local CSS byte range into the original SVG source.
 ///
-/// @param document Document owning the stylesheet.
-/// @param stylesheetEntity Entity of the embedded SVG `<style>` node.
+/// @param stylesheet Embedded SVG stylesheet owning this range.
 /// @param cssRange Half-open byte range in the stylesheet's decoded CSS.
 /// @return Original document range, or nullopt for stale, source-less, or discontinuous text.
-std::optional<SourceRange> MapStylesheetSourceRange(const SVGDocument& document,
-                                                    Entity stylesheetEntity,
+std::optional<SourceRange> MapStylesheetSourceRange(const SVGStyleElement& stylesheet,
                                                     const SourceRange& cssRange);
 
 /// Find the source span of the declaration supplying a custom property to this element.

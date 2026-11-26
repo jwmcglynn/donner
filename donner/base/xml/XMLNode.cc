@@ -53,6 +53,7 @@ struct ProjectedTextRecord {
   std::shared_ptr<XMLSourceStore> store;
   std::shared_ptr<ProjectionRecordBudget> budget;
   SourceAnchorSpan span;
+  std::optional<SourceAnchorSpan> valueSpan;
   ResolvedSourceSpan range;
   std::size_t prefixEnd = 0;
   Entity originalNode;
@@ -61,11 +62,13 @@ struct ProjectedTextRecord {
 
   ProjectedTextRecord(std::shared_ptr<XMLSourceStore> sourceStore,
                       std::shared_ptr<ProjectionRecordBudget> recordBudget,
-                      SourceAnchorSpan sourceSpan, ResolvedSourceSpan sourceRange, Entity node,
-                      XMLNode::Type nodeType, RcString text)
+                      SourceAnchorSpan sourceSpan, std::optional<SourceAnchorSpan> payloadSpan,
+                      ResolvedSourceSpan sourceRange, Entity node, XMLNode::Type nodeType,
+                      RcString text)
       : store(std::move(sourceStore)),
         budget(std::move(recordBudget)),
         span(sourceSpan),
+        valueSpan(payloadSpan),
         range(sourceRange),
         originalNode(node),
         type(nodeType),
@@ -80,6 +83,7 @@ struct ProjectedTextRecord {
     std::swap(store, other.store);
     std::swap(budget, other.budget);
     std::swap(span, other.span);
+    std::swap(valueSpan, other.valueSpan);
     std::swap(range, other.range);
     std::swap(prefixEnd, other.prefixEnd);
     std::swap(originalNode, other.originalNode);
@@ -91,6 +95,10 @@ struct ProjectedTextRecord {
     if (store) {
       store->invalidateAnchor(span.start);
       store->invalidateAnchor(span.end);
+      if (valueSpan) {
+        store->invalidateAnchor(valueSpan->start);
+        store->invalidateAnchor(valueSpan->end);
+      }
     }
     if (budget) {
       --budget->liveRecords;
@@ -444,15 +452,17 @@ void CaptureProjectedText(EntityHandle child, EntityHandle parent) {
   if (budget->liveBytes > maximumBytes || value.size() > maximumBytes - budget->liveBytes) {
     return;
   }
-  // Transfer the existing anchors. Clearing the child retires its other source anchors;
-  // parent destruction or record invalidation retires this pair exactly once.
+  // The record takes ownership before clearing the child's source metadata.
   const SourceAnchorSpan anchors = *std::exchange(source->anchorSpan, std::nullopt);
+  const auto type = child.get<XMLNodeTypeComponent>().type();
+  const auto valueAnchors =
+      type == XMLNode::Type::CData ? std::exchange(source->valueSpan, std::nullopt) : std::nullopt;
   const auto position = std::lower_bound(
       records.records.begin(), records.records.end(), span->start,
       [](const auto& record, std::size_t start) { return record.range.start < start; });
   const std::size_t index = std::distance(records.records.begin(), position);
-  records.records.emplace(position, store, budget, anchors, *span, child.entity(),
-                          child.get<XMLNodeTypeComponent>().type(), value);
+  records.records.emplace(position, store, budget, anchors, valueAnchors, *span, child.entity(),
+                          type, value);
   UpdateProjectionPrefix(records, index);
 }
 
@@ -775,19 +785,12 @@ std::optional<SourceRange> ProjectedRecordValueRange(std::string_view source,
   if (record.store.get() != &store) {
     return std::nullopt;
   }
-  const auto span = store.resolveSpan(record.span);
-  if (!span || span->start >= span->end || span->end > source.size()) {
+  if (record.type == XMLNode::Type::CData && !record.valueSpan) {
     return std::nullopt;
   }
-  if (record.type == XMLNode::Type::CData) {
-    constexpr std::string_view open = "<![CDATA[";
-    constexpr std::string_view close = "]]>";
-    const auto raw = source.substr(span->start, span->end - span->start);
-    if (!raw.starts_with(open) || !raw.ends_with(close)) {
-      return std::nullopt;
-    }
-    return SourceRange{FileOffset::Offset(span->start + open.size()),
-                       FileOffset::Offset(span->end - close.size())};
+  const auto span = store.resolveSpan(record.valueSpan.value_or(record.span));
+  if (!span || span->start > span->end || span->end > source.size()) {
+    return std::nullopt;
   }
   return SourceRange{FileOffset::Offset(span->start), FileOffset::Offset(span->end)};
 }

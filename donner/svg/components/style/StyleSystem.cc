@@ -2666,9 +2666,6 @@ bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
                               bool invalidateCachedStyle) {
   auto& styleComponent = handle.get_or_emplace<StyleComponent>();
   StyleComponent candidate = styleComponent;
-  if (!candidate.updateStyle(style)) {
-    return false;
-  }
 
   // Merge the new style string with the existing style attribute.
   auto& attributes = handle.get_or_emplace<donner::components::AttributesComponent>();
@@ -2688,6 +2685,9 @@ bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
   }
   const std::string mergedStyle =
       css::mergeStyleDeclarations(existingDeclarations, updateDeclarations);
+  if (!candidate.setStyle(mergedStyle)) {
+    return false;
+  }
 
   attributes.setAttribute(*handle.registry(), xml::XMLQualifiedName("style"),
                           RcString(mergedStyle));
