@@ -960,6 +960,43 @@ TEST(EditorSyncTest, StructuredCssEmptyValueHasAnEditableInsertionPoint) {
   check("--other:");
 }
 
+TEST(EditorSyncTest, StructuredCssAppendClosesRecoveredInlineValuesAndUndoesOnce) {
+  const auto check = [](std::string_view tail, std::string_view closedTail) {
+    const std::string prefix =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" style="stroke:blue&#59; --note: )svg";
+    constexpr std::string_view end = R"svg("/></svg>)svg";
+    TextEditor text;
+    text.setText(prefix + std::string(tail) + std::string(end));
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    // Choose the earlier declaration to ensure appending still repairs the final declaration.
+    const auto target = FindStructuredCssTarget(app, original, original.find("stroke:"));
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "fill: red;"));
+    const std::string expected =
+        prefix + std::string(closedTail) + "; fill: red;" + std::string(end) + "\n";
+    EXPECT_EQ(text.getText(), expected);
+    EXPECT_EQ(app.document().document().source(), expected);
+    const auto fill = FindStructuredCssTarget(app, expected, expected.find("fill:"));
+    ASSERT_THAT(fill, testing::Optional(testing::_));
+    EXPECT_THAT(fill->name, testing::Optional(SourceByteRange{expected.find("fill:"),
+                                                              expected.find("fill:") + 4}));
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().fill.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+    EXPECT_EQ(app.document().document().source(), original);
+  };
+  check("var(--x, calc(", "var(--x, calc())");
+  check("var(--x, [&quot;text&#92;", "var(--x, [&quot;text&quot;])");
+  check("value/* comment", "value/* comment*/");
+}
+
 TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";

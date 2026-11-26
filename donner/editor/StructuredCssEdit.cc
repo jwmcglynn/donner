@@ -5,6 +5,7 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLTokenizer.h"
+#include "donner/css/Declaration.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -129,7 +130,7 @@ std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRu
   }
   StructuredCssTarget target{.rule = *rule,
                              .selector = *selector,
-                             .insertDeclaration = rule->end - 1,
+                             .insertDeclaration = {rule->end - 1, rule->end - 1},
                              .selectionOffset = offset,
                              .generation = generation,
                              .sourceVersion = sourceVersion};
@@ -141,6 +142,33 @@ std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRu
   }
   AddDeclarationTargets(stylesheetRule, source, offset, target);
   return target;
+}
+
+template <typename Mapper>
+bool PrepareInlineDeclarationInsertion(const css::Declaration& last, std::string_view spelling,
+                                       std::string_view value, StructuredCssTarget& target,
+                                       Mapper map) {
+  if (*last.sourceOffset.offset + spelling.size() != value.size()) {
+    return true;
+  }
+  const auto closure = css::closeStyleDeclarationAtEof(last, spelling);
+  if (closure.suffix.empty()) {
+    return true;
+  }
+  if (closure.removeTrailingEscape) {
+    const auto escape =
+        map(SourceRange{FileOffset::Offset(value.size() - 1), FileOffset::Offset(value.size())});
+    if (!escape || escape->end != target.insertDeclaration.end) {
+      return false;
+    }
+    target.insertDeclaration = *escape;
+  }
+  const auto encoded = xml::EscapeAttributeValue(closure.suffix, target.attributeQuote);
+  if (!encoded) {
+    return false;
+  }
+  target.declarationInsertionPrefix = *encoded;
+  return true;
 }
 
 std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& document,
@@ -156,13 +184,14 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
     return std::nullopt;
   }
   css::parser::DeclarationListParser::SecurityStats stats;
+  std::vector<std::string_view> authoredSpellings;
   const auto declarations =
-      css::parser::DeclarationListParser::ParseOnlyDeclarations(*value, &stats);
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(*value, &stats, &authoredSpellings);
   if (stats.rejected) {
     return std::nullopt;
   }
   StructuredCssTarget target{.rule = *valueRange,
-                             .insertDeclaration = valueRange->end,
+                             .insertDeclaration = {valueRange->end, valueRange->end},
                              .encoding = StructuredCssSourceEncoding::Attribute,
                              .attributeQuote = attribute->quote,
                              .inlineStyle = true,
@@ -176,6 +205,11 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
   };
   for (const auto& declaration : declarations) {
     AddDeclarationTarget(declaration, *value, offset, target, map);
+  }
+  if (!declarations.empty() &&
+      !PrepareInlineDeclarationInsertion(declarations.back(), authoredSpellings.back(), *value,
+                                         target, map)) {
+    return std::nullopt;
   }
   return target;
 }
@@ -219,9 +253,10 @@ std::optional<CssReplacement> MakeReplacement(const StructuredCssTarget& target,
       }
       return CssReplacement{{target.value->end, target.value->end}, " !important"};
     case Operation::InsertDeclaration: {
-      std::string bytes = target.declarationNeedsSeparator ? "; " : " ";
+      std::string bytes = target.declarationInsertionPrefix;
+      bytes += target.declarationNeedsSeparator ? "; " : " ";
       bytes.append(replacement);
-      return CssReplacement{{target.insertDeclaration, target.insertDeclaration}, std::move(bytes)};
+      return CssReplacement{target.insertDeclaration, std::move(bytes)};
     }
     case Operation::InsertRule:
       return CssReplacement{{target.rule.end, target.rule.end}, "\n" + std::string(replacement)};

@@ -136,7 +136,7 @@ bool HasDanglingEscape(std::string_view spelling) {
 }
 
 bool CloseRecoveredString(std::span<const ComponentValue> values, const Declaration& declaration,
-                          std::string_view spelling, std::string& result) {
+                          std::string_view spelling, StyleDeclarationEofClosure& result) {
   if (values.size() < 2) {
     return false;
   }
@@ -147,46 +147,47 @@ bool CloseRecoveredString(std::span<const ComponentValue> values, const Declarat
     return false;
   }
   if (HasDanglingEscape(spelling)) {
-    result.pop_back();
+    result.removeTrailingEscape = true;
   }
-  result += *quote;
+  result.suffix += *quote;
   return true;
 }
 
 // At EOF the name scanner decodes an incomplete escape as U+FFFD. Spell it explicitly
 // before a following semicolon or implicit closer can become the escaped character.
-bool FinishUnterminatedEscape(const Token* token, std::string_view spelling, std::string& result) {
+bool FinishUnterminatedEscape(const Token* token, std::string_view spelling,
+                              StyleDeclarationEofClosure& result) {
   if (!token || !HasDanglingEscape(spelling)) {
     return false;
   }
   if (const auto* delim = token->tryGet<Token::Delim>(); delim && delim->value == '\\') {
-    result += '\n';  // Preserve a standalone reverse-solidus delimiter as an invalid escape.
+    result.suffix += '\n';  // Preserve a standalone reverse-solidus delimiter as an invalid escape.
   } else {
-    result += "fffd";
+    result.suffix += "fffd";
   }
   return true;
 }
 
 bool CloseRecoveredToken(std::span<const ComponentValue> values, const Declaration& declaration,
-                         std::string_view spelling, std::string& result) {
+                         std::string_view spelling, StyleDeclarationEofClosure& result) {
   const auto* token = std::get_if<Token>(&values.back().value);
   const auto* error = token ? token->tryGet<Token::ErrorToken>() : nullptr;
   if (!error) {
     const bool repaired = FinishUnterminatedEscape(token, spelling, result);
     const auto* badUrl = token ? token->tryGet<Token::BadUrl>() : nullptr;
     if (badUrl && badUrl->closedAtEof) {
-      result += ')';
+      result.suffix += ')';
       return true;
     }
     return repaired;
   }
   switch (error->type) {
-    case Token::ErrorToken::Type::EofInComment: result += "*/"; return true;
+    case Token::ErrorToken::Type::EofInComment: result.suffix += "*/"; return true;
     case Token::ErrorToken::Type::EofInUrl:
       if (HasDanglingEscape(spelling)) {
-        result += "fffd";
+        result.suffix += "fffd";
       }
-      result += ')';
+      result.suffix += ')';
       return true;
     case Token::ErrorToken::Type::EofInString:
       return CloseRecoveredString(values, declaration, spelling, result);
@@ -199,7 +200,7 @@ bool CloseRecoveredToken(std::span<const ComponentValue> values, const Declarati
 // byte-for-byte authored.
 bool CloseRecoveredConstructs(std::span<const ComponentValue> values,
                               const Declaration& declaration, std::string_view spelling,
-                              std::string& result) {
+                              StyleDeclarationEofClosure& result) {
   if (values.empty()) {
     return false;
   }
@@ -210,7 +211,7 @@ bool CloseRecoveredConstructs(std::span<const ComponentValue> values,
   if (const auto* function = std::get_if<Function>(&value)) {
     bool repaired = CloseRecoveredConstructs(function->values, declaration, spelling, result);
     if (function->closedAtEof) {
-      result += ')';
+      result.suffix += ')';
       repaired = true;
     }
     return repaired;
@@ -219,11 +220,11 @@ bool CloseRecoveredConstructs(std::span<const ComponentValue> values,
   bool repaired = CloseRecoveredConstructs(block.values, declaration, spelling, result);
   if (block.closedAtEof) {
     if (block.associatedToken == Token::indexOf<Token::CurlyBracket>()) {
-      result += '}';
+      result.suffix += '}';
     } else if (block.associatedToken == Token::indexOf<Token::SquareBracket>()) {
-      result += ']';
+      result.suffix += ']';
     } else {
-      result += ')';
+      result.suffix += ')';
     }
     repaired = true;
   }
@@ -231,6 +232,13 @@ bool CloseRecoveredConstructs(std::span<const ComponentValue> values,
 }
 
 }  // namespace
+
+StyleDeclarationEofClosure closeStyleDeclarationAtEof(const Declaration& declaration,
+                                                      std::string_view spelling) {
+  StyleDeclarationEofClosure closure;
+  CloseRecoveredConstructs(declaration.values, declaration, spelling, closure);
+  return closure;
+}
 
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
                                    std::span<const Declaration> updates,
@@ -244,8 +252,11 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   const auto append = [&](const Declaration& declaration,
                           std::span<const std::string_view> spellings, std::size_t i) {
     if (precedingAuthored) {
-      CloseRecoveredConstructs(precedingAuthored->values, *precedingAuthored, precedingSpelling,
-                               result);
+      const auto closure = closeStyleDeclarationAtEof(*precedingAuthored, precedingSpelling);
+      if (closure.removeTrailingEscape) {
+        result.pop_back();
+      }
+      result += closure.suffix;
     }
     if (!result.empty()) {
       result += "; ";
