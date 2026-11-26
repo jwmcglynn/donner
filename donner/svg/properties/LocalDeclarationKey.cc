@@ -157,14 +157,12 @@ private:
   void append(const FileOffset::LineInfo& value) { appendMembers<2>(value); }
   void append(const SourceRange& value) { appendMembers<2>(value); }
   void append(const css::Function& value) {
-    const auto& [name, values, offset, sourceBytes] = value;
-    (void)sourceBytes;
-    fields(name, values, offset);
+    // EOF closure affects source-preserving edits, not the function's computed value.
+    fields(value.name, value.values, value.sourceOffset);
   }
   void append(const css::SimpleBlock& value) {
-    const auto& [token, values, offset, sourceBytes] = value;
-    (void)sourceBytes;
-    fields(token, values, offset);
+    // EOF closure affects source-preserving edits, not the block's computed value.
+    fields(value.associatedToken, value.values, value.sourceOffset);
   }
   void append(const css::ComponentValue& value) { appendMembers<1>(value); }
   void append(const css::Declaration& value) {
