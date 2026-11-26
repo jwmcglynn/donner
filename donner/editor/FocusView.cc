@@ -544,11 +544,14 @@ bool ContainsSourceOffset(const SourceRange& range, std::size_t offset) {
 void EmitIndexedReference(const IndexedCssReference& ref, const svg::SVGElement* subject,
                           const VariableLinkSink& variables,
                           std::vector<FragmentReference>* fragments,
-                          std::optional<std::size_t> caret) {
+                          std::optional<std::size_t> caret, FocusTraversalBudget& budget) {
   if (caret && (!ref.location || !ContainsSourceOffset(*ref.location, *caret))) {
     return;
   }
   if (ref.kind == IndexedCssReference::Kind::Url) {
+    if (!budget.consume(ref.name.size())) {
+      return;
+    }
     fragments->push_back(
         {ref.name, ref.location ? ref.location->start.offset : std::nullopt, true});
   } else if (ref.location && variables && subject) {
@@ -568,7 +571,7 @@ void AppendIndexedRuleReferences(const IndexedCssRule& indexed, const svg::SVGEl
     }
     const auto& reference = indexed.references[i];
     if (reference.kind != IndexedCssReference::Kind::Fallback) {
-      EmitIndexedReference(reference, subject, variables, fragments, caret);
+      EmitIndexedReference(reference, subject, variables, fragments, caret, budget);
     } else if (!FallbackIsActive(reference, subject, allFallbacks)) {
       i = reference.fallbackEnd;
       continue;

@@ -1991,7 +1991,7 @@ TEST(FocusViewTest, OversizedSelectionReportsElementTruncationAndRetainsBoundedS
 }
 
 }  // namespace
-TEST(FocusViewTest, RepeatedRuleMatchesReuseNoReferenceWork) {
+TEST(FocusViewTest, RepeatedRuleMatchesReuseParsingAndChargeCopiedUrlNames) {
   const auto work = [](std::size_t count, std::string_view value) {
     std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>rect { --tokens: ";
     source += value;
@@ -2018,6 +2018,12 @@ TEST(FocusViewTest, RepeatedRuleMatchesReuseNoReferenceWork) {
   const auto extraWithFiveMatches = work(5, "0 1 2 3 4 5") - work(5, "0");
   EXPECT_GT(extraWithTwoMatches, 0u);
   EXPECT_EQ(extraWithFiveMatches, extraWithTwoMatches);
+
+  constexpr std::string_view shortUrl = "url(#a)";
+  constexpr std::string_view longUrl = "url(#watercolor)";
+  const auto urlWorkWithTwoMatches = work(2, longUrl) - work(2, shortUrl);
+  const auto urlWorkWithFiveMatches = work(5, longUrl) - work(5, shortUrl);
+  EXPECT_GE(urlWorkWithFiveMatches, urlWorkWithTwoMatches + 3 * (longUrl.size() - shortUrl.size()));
 }
 
 TEST(FocusViewTest, IndexedFallbacksUseEachSubjectAndRefreshOnSourceEdit) {
