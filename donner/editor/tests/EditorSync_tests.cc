@@ -962,6 +962,7 @@ TEST(EditorSyncTest, StructuredCssEmptyValueHasAnEditableInsertionPoint) {
 
 TEST(EditorSyncTest, StructuredCssAppendClosesRecoveredInlineValuesAndUndoesOnce) {
   const auto check = [](std::string_view tail, std::string_view closedTail) {
+    SCOPED_TRACE(tail);
     const std::string prefix =
         R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" style="stroke:blue&#59; --note: )svg";
     constexpr std::string_view end = R"svg("/></svg>)svg";
@@ -977,13 +978,13 @@ TEST(EditorSyncTest, StructuredCssAppendClosesRecoveredInlineValuesAndUndoesOnce
     ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
                                        StructuredCssOperation::InsertDeclaration, "fill: red;"));
     const std::string expected =
-        prefix + std::string(closedTail) + "; fill: red;" + std::string(end) + "\n";
+        prefix + std::string(closedTail) + "; fill: red;" + std::string(end);
     EXPECT_EQ(text.getText(), expected);
     EXPECT_EQ(app.document().document().source(), expected);
-    const auto fill = FindStructuredCssTarget(app, expected, expected.find("fill:"));
+    const std::size_t fillOffset = expected.find("fill:");
+    const auto fill = FindStructuredCssTarget(app, expected, fillOffset);
     ASSERT_THAT(fill, testing::Optional(testing::_));
-    EXPECT_THAT(fill->name, testing::Optional(SourceByteRange{expected.find("fill:"),
-                                                              expected.find("fill:") + 4}));
+    EXPECT_THAT(fill->name, testing::Optional(testing::FieldsAre(fillOffset, fillOffset + 4)));
     const auto rect = app.document().document().querySelector("#r");
     ASSERT_THAT(rect, testing::Optional(testing::_));
     EXPECT_THAT(rect->getComputedStyle().fill.get(),
@@ -993,6 +994,7 @@ TEST(EditorSyncTest, StructuredCssAppendClosesRecoveredInlineValuesAndUndoesOnce
     EXPECT_EQ(app.document().document().source(), original);
   };
   check("var(--x, calc(", "var(--x, calc())");
+  check("var(--x, calc(1px))", "var(--x, calc(1px))");
   check("var(--x, [&quot;text&#92;", "var(--x, [&quot;text&quot;])");
   check("value/* comment", "value/* comment*/");
 }

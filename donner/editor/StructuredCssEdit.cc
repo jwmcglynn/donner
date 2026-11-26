@@ -152,6 +152,9 @@ bool PrepareInlineDeclarationInsertion(const css::Declaration& last, std::string
   if (*last.sourceOffset.offset + spelling.size() != value.size()) {
     return true;
   }
+  // The final spelling excludes an explicit semicolon. A recovered value may lack a mapped
+  // authored range, so use the parser's terminator instead of the selected declaration's range.
+  target.declarationNeedsSeparator = true;
   const auto closure = css::closeStyleDeclarationAtEof(last, spelling);
   if (closure.suffix.empty()) {
     return true;
