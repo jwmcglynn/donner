@@ -44,6 +44,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/CustomPropertyMap.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
@@ -1072,6 +1073,59 @@ bool CanInheritPaint(const Registry& registry, Entity parent,
          !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
 }
 
+// Authored custom names sort before the supported element-specific property names.
+bool HasLocalCustomProperties(const PropertyRegistry& properties) {
+  const auto& deferred = properties.unparsedProperties;
+  return !deferred.empty() && std::string_view(deferred.begin()->first).starts_with("--");
+}
+
+CustomPropertyMap::Action CustomPropertyAction(const css::Declaration& declaration) {
+  using Action = CustomPropertyMap::Action;
+  const auto params = parser::PropertyParseFnParams::Create(declaration, css::Specificity(),
+                                                            parser::PropertyParseBehavior::Default);
+  switch (params.explicitState) {
+    case PropertyState::ExplicitInitial: return Action::Initial;
+    case PropertyState::Inherit: return Action::Inherit;
+    case PropertyState::ExplicitUnset: return Action::Unset;
+    default: return Action::Set;
+  }
+}
+
+[[gnu::noinline]] void ResolveCustomProperties(ComputedStyle& record,
+                                               StyleSystem::CascadePass& pass) {
+  auto& deferred = record.properties.unparsedProperties;
+  const auto& account = pass.budget.retainedStyleBytes();
+  SmallVector<CustomPropertyMap::Change, 4> changes;
+  bool refused = pass.budget.rejected();
+  for (auto it = deferred.begin();
+       it != deferred.end() && std::string_view(it->first).starts_with("--");
+       it = deferred.erase(it)) {
+    if (refused) {
+      continue;
+    }
+    const auto action = CustomPropertyAction(it->second.declaration);
+    auto tokens = action == CustomPropertyMap::Action::Set
+                      ? TokenSequence::Create(account, it->second.declaration.values)
+                      : nullptr;
+    refused = action == CustomPropertyMap::Action::Set && !tokens;
+    if (!refused) {
+      changes.push_back({it->first, action, std::move(tokens)});
+    }
+  }
+  if (!refused) {
+    auto result = CustomPropertyMap::Overlay(account, record.customProperties,
+                                             std::span(changes.data(), changes.size()));
+    if (result) {
+      record.customProperties = std::move(*result);
+      return;
+    }
+  }
+  // An unavailable override must not expose the inherited value it replaced.
+  record.customProperties.reset();
+  pass.cache.clear();
+  pass.budget.noteRetainedCustomPropertyRefusal();
+}
+
 void RetainComputedRecord(StyleSystem::CascadePass& pass, ComputedStyle& record,
                           ComputedStyleComponent& computedStyle,
                           const ComputedResourceOpacities& resourceOpacities) {
@@ -1091,6 +1145,7 @@ void RetainComputedRecord(StyleSystem::CascadePass& pass, ComputedStyle& record,
     computedStyle.externalFill = false;
     computedStyle.externalStroke = false;
     record.properties = PropertyRegistry();
+    record.customProperties.reset();
     record.resourceOpacities = ComputedResourceOpacities();
   }
 }
@@ -2441,6 +2496,7 @@ std::shared_ptr<const ComputedStyle> StyleSystem::StagedRecords::retain(Computed
   auto& staged = (*page)[count % Storage::kPerPage].emplace();
   staged.cachePlacement = firstRecord_ + static_cast<std::uint32_t>(count);
   staged.properties = std::move(record.properties);
+  staged.customProperties = std::move(record.customProperties);
   staged.resourceOpacities = record.resourceOpacities;
   ++storage_->count;
   storage_->storageBytes += pageBytes + *payload;
@@ -2547,6 +2603,19 @@ struct StyleSystem::PendingStyleDeclarations {
     }
     auto record = materialize(local, sink);
     ApplyAnimatedStyle(registry, dataEntity, record->properties);
+    return record;
+  }
+
+  std::shared_ptr<ComputedStyle> finishMaterialization(const Registry& registry, Entity dataEntity,
+                                                       const StyleComponent* local,
+                                                       ParseWarningSink& sink,
+                                                       std::shared_ptr<ComputedStyle> record) {
+    if (record) {
+      return record;
+    }
+    const auto attempts = sink.warningAttempts();
+    record = materializeWithAnimation(registry, dataEntity, local, sink, false);
+    UTILS_RELEASE_ASSERT(sink.warningAttempts() == attempts);
     return record;
   }
 
@@ -2747,6 +2816,23 @@ void StyleSystem::resolveRelativeFontProperties(const Registry& registry, Entity
   properties.resolveFontStretch(parentFontStretch);
 }
 
+[[gnu::always_inline]] inline bool StyleSystem::computeCustomProperties(
+    ComputedStyle& record, const ComputedStyleComponent* parent, CascadePass& pass) {
+  if (parent && parent->style && parent->style->customProperties) {
+    record.customProperties = parent->style->customProperties;
+  }
+  if (!HasLocalCustomProperties(record.properties)) {
+    return true;
+  }
+  if (pass.staging) {
+    // Retained maps and token sequences are charged in canonical document order.
+    pass.staging->declined_ = true;
+    return false;
+  }
+  ResolveCustomProperties(record, pass);
+  return true;
+}
+
 void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
                                         ComputedStyleComponent& computedStyle, CascadePass& pass,
                                         ParseWarningSink& warningSink, SerialCascade* serial,
@@ -2807,11 +2893,10 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
     RuleTrace::rememberCacheOutcome(capture, replay, pass.cache);
     return;
   }
-  if (deferMaterialization) {
-    const auto attempts = early.warningAttempts();
-    record =
-        declarations.materializeWithAnimation(registry, dataEntity, styleComponent, early, false);
-    UTILS_RELEASE_ASSERT(early.warningAttempts() == attempts);
+  record = declarations.finishMaterialization(registry, dataEntity, styleComponent, early,
+                                              std::move(record));
+  if (!computeCustomProperties(*record, cacheState.parentStyle, pass)) {
+    return;
   }
   PropertyRegistry& properties = record->properties;
   ApplyContextualFontSize(registry, animationBudget, dataEntity, cacheState.parentStyle,

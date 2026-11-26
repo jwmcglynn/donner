@@ -439,6 +439,9 @@ public:
     return true;
   }
 
+  /// Stop admitting style work after canonical custom-property storage was refused.
+  void noteRetainedCustomPropertyRefusal() { rejected_ = true; }
+
   /// Return whether bytes fit without changing counters or refusal state.
   [[nodiscard]] bool canRetainComputedStyle(std::size_t byteCount) const {
     return byteCount == 0 || (!rejected_ && retainedStyleBytes_->canReserve(byteCount));
@@ -847,6 +850,10 @@ private:
                                 PropertyRegistry& properties);
   static void resolveRelativeFontProperties(const Registry& registry, Entity parent,
                                             PropertyRegistry& properties);
+  /// Inherit the parent's map and resolve local values in canonical order.
+  static bool computeCustomProperties(ComputedStyle& record, const ComputedStyleComponent* parent,
+                                      CascadePass& pass);
+
   static void computePropertiesInto(const Registry& registry, Entity entity,
                                     ComputedStyleComponent& computedStyle, CascadePass& pass,
                                     ParseWarningSink& warningSink, SerialCascade* serial,

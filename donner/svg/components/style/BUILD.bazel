@@ -32,6 +32,28 @@ cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "custom_property_map",
+    srcs = ["CustomPropertyMap.cc"],
+    hdrs = ["CustomPropertyMap.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/css",
+    ],
+)
+
+donner_cc_test(
+    name = "custom_property_map_tests",
+    srcs = ["tests/CustomPropertyMap_tests.cc"],
+    deps = [
+        ":components",
+        ":custom_property_map",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Simple-selector lookup and name comparison shared by the per-stylesheet selector caches.
 donner_cc_library(
     name = "selector_walk",
@@ -150,6 +172,7 @@ donner_perf_sensitive_cc_library(
     ],
     deps = [
         ":components",
+        ":custom_property_map",
         ":matched_properties_cache",
         ":rule_index",
         ":style_ancestor_filter",
@@ -266,9 +289,11 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":custom_property_map",
         ":style_ancestor_filter",
         ":style_system",
         "//donner/base:base_test_utils",
+        "//donner/css",
         "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/animation:components",
         "//donner/svg/components/shadow:shadow_tree_system",
@@ -281,6 +306,7 @@ donner_cc_test(
     name = "style_parallel_tests",
     srcs = ["tests/StyleParallel_tests.cc"],
     deps = [
+        ":custom_property_map",
         ":style_system",
         "//donner/base:stall_guard",
         "//donner/base/tasks:task_scheduler",

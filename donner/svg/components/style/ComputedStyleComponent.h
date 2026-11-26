@@ -16,6 +16,7 @@
 namespace donner::svg::components {
 
 class StyleResourceBudget;
+class CustomPropertyMap;
 
 /** Shared retained-byte account for immutable computed-style records in one document. */
 class RetainedStyleBytes {
@@ -140,7 +141,9 @@ struct ComputedStyle {
 
   /** Copy style values without copying the source record's lifetime charge. */
   ComputedStyle(const ComputedStyle& other)
-      : properties(other.properties), resourceOpacities(other.resourceOpacities) {}
+      : properties(other.properties),
+        resourceOpacities(other.resourceOpacities),
+        customProperties(other.customProperties) {}
   ComputedStyle& operator=(const ComputedStyle&) = delete;
   ComputedStyle(ComputedStyle&&) = delete;
   ComputedStyle& operator=(ComputedStyle&&) = delete;
@@ -152,6 +155,8 @@ struct ComputedStyle {
   std::uint32_t cachePlacement = 0;
   /// Absent for manually constructed styles; the cascade always populates it.
   std::optional<ComputedResourceOpacities> resourceOpacities;
+  /// Null when no computed custom values are present. Shared maps own their own charges.
+  std::shared_ptr<const CustomPropertyMap> customProperties;
 
 private:
   friend class StyleResourceBudget;

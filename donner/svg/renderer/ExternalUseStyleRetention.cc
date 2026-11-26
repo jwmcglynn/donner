@@ -56,6 +56,7 @@ struct OccurrenceInputs {
     // Records never change once stored, so the same record has the same values.
     return current &&
            (parent == current || (parent->properties == current->properties &&
+                                  parent->customProperties == current->customProperties &&
                                   parent->resourceOpacities == current->resourceOpacities)) &&
            hostFontKey == occurrence.hostFontKey && IsProvablySamePaint(fill, occurrence.fill) &&
            IsProvablySamePaint(stroke, occurrence.stroke);

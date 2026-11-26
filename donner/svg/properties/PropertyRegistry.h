@@ -750,6 +750,10 @@ public:
   std::optional<ParseDiagnostic> parseProperty(const css::Declaration& declaration,
                                                css::Specificity specificity);
 
+  /// Store a winning custom declaration for computed-style resolution after inheritance.
+  /// @return True if the name belongs to a custom property.
+  bool storeCustomProperty(const css::Declaration& declaration, css::Specificity specificity);
+
   /**
    * Parse a SVG style attribute, and set the parsed values on this PropertyRegistry. Does not
    * clear existing properties, new ones are applied additively.
