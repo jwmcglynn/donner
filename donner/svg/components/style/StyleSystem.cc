@@ -3300,7 +3300,10 @@ public:
     for (const auto& [index, priority] : priorities_) {
       sorted.emplace_back(priority, index);
     }
-    std::ranges::sort(sorted);
+    // Rank and source position already break ties. Heap sort keeps this infrequent
+    // sort bounded while avoiding a separate introsort instantiation for font faces.
+    std::ranges::make_heap(sorted);
+    std::ranges::sort_heap(sorted);
     std::vector<std::size_t> result;
     result.reserve(sorted.size());
     for (const auto& [_, index] : sorted) {

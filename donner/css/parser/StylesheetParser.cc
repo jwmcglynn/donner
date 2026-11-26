@@ -17,6 +17,13 @@
 #include "donner/css/parser/RuleParser.h"
 #include "donner/css/parser/SelectorParser.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_LAYER_PARSER_MINSIZE 1
+#endif
+#endif
+
 namespace donner::css::parser {
 
 namespace {
@@ -562,6 +569,10 @@ std::span<const ComponentValue> TrimLayerWhitespace(std::span<const ComponentVal
   return values;
 }
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 bool IsLayerIdent(const RcString& name) {
   constexpr std::array<std::string_view, 5> kReserved{"initial", "inherit", "unset", "revert",
                                                       "revert-layer"};
@@ -609,6 +620,10 @@ std::optional<std::vector<LayerPath>> ParseLayerNames(std::span<const ComponentV
     values = values.subspan(length + 1);
   }
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
 
 /// The URL of an `@import` target: a `<string>`, an unquoted `url()` token, or `url(<string>)`.
 std::optional<RcString> ImportTargetUrl(const ComponentValue& value) {
@@ -778,6 +793,10 @@ struct StylesheetParseState {
   bool sawImport = false;
 };
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 void RecordLayerEvent(StylesheetParseState& state, LayerEvent event) {
   if (state.layers.events.empty()) {
     // Plain import-only sheets can keep the order implicit in imports(). Once a layer needs
@@ -852,6 +871,10 @@ void WarnLayerLimit(const AtRule& atRule, ParseWarningSink& warningSink) {
   });
 }
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
                       ParseWarningSink& warningSink) {
   if (!state.importsAllowed) {
@@ -885,6 +908,10 @@ void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
   state.imports.push_back(ImportRule{
       .url = std::move(parsed.url), .sourceOffset = atRule.sourceOffset, .layer = layer});
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 SimpleBlock* CurlyBlock(ComponentValue& value) {
   auto* block = std::get_if<SimpleBlock>(&value.value);
@@ -922,8 +949,16 @@ std::optional<QualifiedRule> TakeNestedQualifiedRule(std::span<ComponentValue> v
   return std::nullopt;
 }
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 void HandleRule(std::string_view source, Rule& rule, StylesheetParseState& state,
                 ParseWarningSink& warningSink, LayerId parent);
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 void HandleLayerBody(std::string_view source, SimpleBlock& block, StylesheetParseState& state,
                      ParseWarningSink& warningSink, LayerId parent) {
@@ -1004,6 +1039,11 @@ void HandleLayerRule(std::string_view source, AtRule& rule, StylesheetParseState
     HandleLayerBody(source, *rule.block, state, warningSink, ids->front());
   }
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_LAYER_PARSER_MINSIZE
+#endif
 
 void HandleAtRule(std::string_view source, AtRule& atRule, StylesheetParseState& state,
                   ParseWarningSink& warningSink, LayerId parent) {

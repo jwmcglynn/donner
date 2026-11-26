@@ -15,6 +15,17 @@
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/StylesheetImportLoader.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_LAYER_BUILD_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_LAYER_BUILD_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace donner::svg::components {
 namespace {
 
@@ -359,6 +370,11 @@ std::unique_ptr<DocumentLayerOrder> DocumentLayerOrder::Build(const Registry& re
   order->data_->freezeRanks();
   return order;
 }
+
+#if defined(DONNER_APPLE_LAYER_BUILD_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_LAYER_BUILD_MINSIZE
+#endif
 
 bool DocumentLayerOrder::allowsImportsOf(const css::Stylesheet& sheet) const {
   return !data_->blockedImports.contains(&sheet);
