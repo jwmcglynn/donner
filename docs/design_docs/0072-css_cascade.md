@@ -1385,7 +1385,19 @@ mutations continue to use the full invalidation path.
 
 #### Style Edit Measurements
 
-Run the benchmark with `bazel run -c opt //donner/benchmarks:css_cascade_perf_bench -- --mode=style-edits`.
+The measured renderer and benchmark were developed on separate branches. To reproduce the
+candidate from a clone that contains both commits, choose an unused worktree path and run:
+
+```sh
+git worktree add --detach ../donner-style-edit-candidate 4963901c409f386ddc1b9afb3cb641dc38746de0
+cd ../donner-style-edit-candidate
+git cherry-pick --no-commit eae5b1145a45e2b3110e0e2cea2915364b2e1dbd
+bazel run -c opt //donner/benchmarks:css_cascade_perf_bench -- --mode=style-edits
+```
+
+For the baseline, run the same Bazel command in a separate worktree at the benchmark commit
+`eae5b1145a45e2b3110e0e2cea2915364b2e1dbd`, which already includes the harness on the baseline
+renderer.
 Each row starts from a prepared document and alternates a DOM edit with its undo, recording nine
 samples per direction after warmup. The edit-call timer ends before the next draw. The style timer
 counts work during the normal null-backend draw, which also reports complete frame preparation
