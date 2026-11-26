@@ -3079,8 +3079,11 @@ std::uint8_t StyleSystem::styleEditDependencies(const Registry& registry,
                                                 std::string_view attribute,
                                                 std::span<const std::string_view> changedClasses) {
   const auto* budget = registry.ctx().find<StyleResourceBudget>();
-  if (budget && budget->rejected()) {
-    // Retained records may include fallback values from a partially completed cascade.
+  const auto* metrics = registry.ctx().find<StyleCascadeMetrics>();
+  if ((budget && (budget->rejected() || budget->limits() != StyleResourceBudget::Limits())) ||
+      (metrics && metrics->counters.budgetRejections != 0)) {
+    // Refused work can leave fallback values in retained records. Under a caller-supplied
+    // ceiling, preserve the full pass's original admission order, including new refusals.
     return SelectorDependency::Ancestors;
   }
   std::uint8_t relations = 0;

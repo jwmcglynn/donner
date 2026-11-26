@@ -99,6 +99,9 @@ public:
     std::size_t externalMeasureEntities = kMaximumRuleElementMatches;
     /// Maximum path bytes retained per frame by external-use content measured for host effects.
     std::size_t externalMeasureGeometryBytes = kMaximumExternalMeasureGeometryBytes;
+
+    /// Compare every work and retained-resource ceiling.
+    bool operator==(const Limits&) const = default;
   };
 
   /**

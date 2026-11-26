@@ -980,7 +980,7 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))));
 }
 
-TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
+TEST_F(SVGElementTests, ClassMutationInvalidatesFollowingSelectorSubject) {
   auto doc = parseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <style>
@@ -993,8 +993,8 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
 
   auto first = doc.querySelector("#first");
   auto second = doc.querySelector("#second");
-  ASSERT_TRUE(first.has_value());
-  ASSERT_TRUE(second.has_value());
+  ASSERT_THAT(first, Optional(testing::_));
+  ASSERT_THAT(second, Optional(testing::_));
 
   components::StyleSystem styleSystem;
   {
@@ -1012,13 +1012,15 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
 
   const auto* initialComputed =
       second->entityHandle().try_get<components::ComputedStyleComponent>();
-  ASSERT_NE(initialComputed, nullptr);
+  ASSERT_THAT(initialComputed, testing::NotNull());
   ASSERT_THAT(initialComputed->properties(), testing::NotNull());
   EXPECT_EQ(initialComputed->properties()->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))));
 
   first->setClassName("");
-  EXPECT_TRUE(renderState.needsFullStyleRecompute);
+  EXPECT_FALSE(renderState.needsFullStyleRecompute);
+  EXPECT_THAT(second->entityHandle().try_get<components::ComputedStyleComponent>(),
+              testing::IsNull());
 
   {
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
@@ -1027,7 +1029,7 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
 
   const auto* updatedComputed =
       second->entityHandle().try_get<components::ComputedStyleComponent>();
-  ASSERT_NE(updatedComputed, nullptr);
+  ASSERT_THAT(updatedComputed, testing::NotNull());
   ASSERT_THAT(updatedComputed->properties(), testing::NotNull());
   EXPECT_EQ(updatedComputed->properties()->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0))));
@@ -1202,7 +1204,9 @@ TEST_F(SVGElementTests, PresentationProbeTransformRetainsSelectorInvalidation) {
   EXPECT_THAT(element->trySetPresentationAttribute("transform", "translate(7 9)"),
               ParseResultIs(true));
   EXPECT_THAT(element->getAttribute("transform"), Optional(RcString("translate(7 9)")));
-  EXPECT_TRUE(document.registry().ctx().get<components::RenderTreeState>().needsFullStyleRecompute);
+  EXPECT_FALSE(renderState.needsFullStyleRecompute);
+  EXPECT_THAT(element->entityHandle().try_get<components::ComputedStyleComponent>(),
+              testing::IsNull());
   styles.computeAllStyles(document.registry(), warnings);
   EXPECT_THAT(element->getComputedStyle().fill.get(),
               Optional(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));

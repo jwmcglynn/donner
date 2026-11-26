@@ -737,6 +737,44 @@ TEST(StyleInvalidationDifferential, LaterUseReadsPreviouslyRestyledSymbol) {
                                        "later-use", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(StyleInvalidationDifferential, LimitedPassPreservesNewRefusalAndWarnings) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>
+        .hot { fill: not-a-color; }
+        .hot { stroke: red; }
+        .distal { fill: lime; }
+      </style>
+      <rect class="distal" id="distal" width="8" height="8"/>
+      <rect id="target" x="8" width="8" height="8"/>
+    </svg>)svg";
+  SVGDocument measurement = ParseSource(kSource);
+  const auto base = PrepareFirstFrameWithDiagnostics(measurement);
+  StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = base.counters.rulesTested;
+
+  SVGDocument narrow = ParseSource(kSource);
+  SVGDocument full = ParseSource(kSource);
+  for (SVGDocument* document : {&narrow, &full}) {
+    document->registry().ctx().emplace<StyleResourceBudget>(limits);
+    const auto before = PrepareFirstFrameWithDiagnostics(*document);
+    EXPECT_EQ(before.counters.budgetRejections, 0u);
+    auto target = document->querySelector("#target");
+    ASSERT_THAT(target, ::testing::Optional(::testing::_));
+    target->setClassName("hot");
+  }
+  EXPECT_TRUE(narrow.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute);
+  full.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute = true;
+  const auto narrowPass = PrepareFirstFrameWithDiagnostics(narrow);
+  const auto fullPass = PrepareFirstFrameWithDiagnostics(full);
+  EXPECT_GT(fullPass.counters.budgetRejections, 0u);
+  EXPECT_GT(fullPass.warningAttempts, 0u);
+  EXPECT_EQ(narrowPass.counters.budgetRejections, fullPass.counters.budgetRejections);
+  EXPECT_EQ(narrowPass.warningAttempts, fullPass.warningAttempts);
+  EXPECT_THAT(narrowPass.warnings, ElementsAreArray(fullPass.warnings));
+  EXPECT_THAT(narrowPass.styles, ElementsAreArray(fullPass.styles));
+}
+
 CascadePassSnapshot ForceFullRestyleWithDiagnostics(SVGDocument& document) {
   Registry& registry = document.registry();
   const StyleCascadeCounters before = Counters(document);
@@ -1003,7 +1041,7 @@ std::vector<CorpusDocument> CorpusDocumentsExceptTheSprite() {
 /// Two draws on independent documents. The reference rebuilds its styles and render tree even
 /// when the tested mutation would normally take the retained path.
 void CompareAfterCorpusEdit(SVGDocument& actual, SVGDocument& reference, Renderer& renderer,
-                            Renderer& referenceRenderer) {
+                            Renderer& referenceRenderer, std::string_view artifactName) {
   auto& state = reference.registry().ctx().get<RenderTreeState>();
   state.retainedUpdatesEnabled = false;
   state.needsFullStyleRecompute = true;
@@ -1020,7 +1058,7 @@ void CompareAfterCorpusEdit(SVGDocument& actual, SVGDocument& reference, Rendere
     EXPECT_THAT(observed.dimensions, ::testing::Eq(expected.dimensions));
     EXPECT_THAT(observed.pixels, ElementsAreArray(expected.pixels));
   } else {
-    editor::tests::CompareBitmapToBitmap(observed, expected, "corpus_style_edit",
+    editor::tests::CompareBitmapToBitmap(observed, expected, artifactName,
                                          editor::tests::PixelmatchIdentityParams());
   }
 }
@@ -1101,7 +1139,16 @@ protected:
                  << GetParam().name << ", " << operation << ", target " << index);
     edit(elements_[index]);
     edit(mirrors_[index]);
-    CompareAfterCorpusEdit(*actual_, *reference_, renderer_, referenceRenderer_);
+    std::string artifactName = GetParam().name + "_" + std::string(operation) + "_" +
+                               std::to_string(index) + "_" + std::to_string(editOrdinal_++);
+    for (char& ch : artifactName) {
+      constexpr std::string_view kSafe =
+          "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+      if (!kSafe.contains(ch)) {
+        ch = '_';
+      }
+    }
+    CompareAfterCorpusEdit(*actual_, *reference_, renderer_, referenceRenderer_, artifactName);
   }
 
   CorpusEditTargets targets_;
@@ -1110,6 +1157,7 @@ private:
   std::optional<SVGDocument> actual_, reference_;
   std::vector<SVGElement> elements_, mirrors_;
   Renderer renderer_, referenceRenderer_;
+  std::size_t editOrdinal_ = 0;
 };
 
 TEST_P(StyleEditCorpusTest, ClassAndIdEditsMatchFullRebuild) {
