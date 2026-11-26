@@ -71,6 +71,10 @@ public:
   static SVGUnknownElement CreateUnknownOn(EntityHandle handle,
                                            const xml::XMLQualifiedNameRef& tagName);
 
+  /// Wrap an existing style element without changing its contents or identity.
+  /// @param handle Internal handle of the stylesheet owner.
+  static std::optional<SVGStyleElement> TryWrapStyle(EntityHandle handle);
+
 private:
   /**
    * Index in \ref AllSVGElements of the enabled element type that \p tagName names.

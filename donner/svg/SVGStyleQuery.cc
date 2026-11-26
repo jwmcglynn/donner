@@ -3,6 +3,7 @@
 #include <span>
 
 #include "donner/base/xml/XMLNode.h"
+#include "donner/svg/ElementFactory.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
@@ -15,8 +16,7 @@ namespace {
 using components::StylesheetComponent;
 
 std::optional<SVGStyleElement> EmbeddedStylesheet(Registry& registry, Entity entity) {
-  return SVGElement::CreateFromEntityHandle(EntityHandle(registry, entity))
-      .tryCast<SVGStyleElement>();
+  return details::ElementFactory::TryWrapStyle(EntityHandle(registry, entity));
 }
 
 SVGMatchedStyleRule ToPublicMatchedRule(Registry& registry,

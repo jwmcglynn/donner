@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "donner/base/CompileTimeMap.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 
 namespace donner::svg::details {
 
@@ -32,6 +33,12 @@ constexpr auto kExperimentalTypes = MakeExperimentalFlags(AllSVGElements{});
 SVGUnknownElement ElementFactory::CreateUnknownOn(EntityHandle handle,
                                                   const xml::XMLQualifiedNameRef& tagName) {
   return SVGUnknownElement::CreateOn(handle, tagName);
+}
+
+std::optional<SVGStyleElement> ElementFactory::TryWrapStyle(EntityHandle handle) {
+  const auto* type = handle.try_get<components::ElementTypeComponent>();
+  return type && type->type() == ElementType::Style ? std::optional(SVGStyleElement(handle))
+                                                    : std::nullopt;
 }
 
 std::optional<std::size_t> ElementFactory::FindType(std::string_view tagName,
