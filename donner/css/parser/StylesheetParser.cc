@@ -1289,7 +1289,10 @@ std::optional<RuleWindow> LocateEditWindow(std::span<const SelectorRule> rules, 
   while (last + 1 < rules.size() && end > *rules[last].ruleSourceRange.end.offset) {
     ++last;
   }
-  return RuleWindow{first, last, std::min(start, *rules[first].ruleSourceRange.start.offset),
+  const std::size_t ruleStart = *rules[first].ruleSourceRange.start.offset;
+  // A prefix edit may be inside a comment. Begin at the sheet boundary until a retained rule
+  // provides a verified token boundary.
+  return RuleWindow{first, last, start < ruleStart ? 0 : ruleStart,
                     std::max(end, *rules[last].ruleSourceRange.end.offset)};
 }
 

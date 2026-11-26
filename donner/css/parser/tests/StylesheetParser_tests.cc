@@ -974,6 +974,26 @@ TEST(StylesheetTextEdit, RebasedTypedValuesEqualAFullParse) {
   EXPECT_EQ(updated->securityStats().componentValues, full.securityStats().componentValues);
 }
 
+TEST(StylesheetTextEdit, LeadingCommentEditKeepsCommentedRulesInactive) {
+  constexpr std::string_view before = "/* outer /* quiet */ rect { fill: red; }";
+  constexpr std::string_view replacement = "circle { fill: blue; } /*";
+  const std::size_t start = before.find("/*", 2);
+  std::string after(before);
+  after.replace(start, 2, replacement);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto updated =
+      StylesheetParser::TryReparseTextEdit(original, before, after, {start, 2, replacement.size()});
+  ASSERT_THAT(updated, testing::Optional(testing::_));
+  const Stylesheet full = StylesheetParser::Parse(after, warnings);
+  ASSERT_THAT(full.rules(), testing::SizeIs(1));
+  ASSERT_THAT(updated->rules(), testing::SizeIs(1));
+  EXPECT_EQ(updated->rules().front().ruleSourceRange, full.rules().front().ruleSourceRange);
+  EXPECT_EQ(updated->rules().front().selectorSourceRange, full.rules().front().selectorSourceRange);
+  EXPECT_THAT(updated->rules().front().declarations,
+              ElementsAreArray(full.rules().front().declarations));
+}
+
 TEST(StylesheetTextEdit, UnterminatedRuleFallsBack) {
   constexpr std::string_view before = "rect{fill:red} circle{fill:blue}";
   const std::size_t start = before.find('}');
