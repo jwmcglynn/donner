@@ -3645,7 +3645,7 @@ std::optional<SelectedVariableField> FindVariableField(PropertyRegistry& registr
 
 std::shared_ptr<const css::Declaration> PreviousPresentationVariable(
     const parser::UnparsedProperty& previous, css::Specificity specificity) {
-  if (specificity.isStyleAttribute() && previous.specificity == css::Specificity() &&
+  if (specificity.isStyleAttribute() && previous.variableFromPresentation &&
       IsPendingVariable(previous)) {
     return previous.variableSource;
   }
@@ -3672,7 +3672,8 @@ void PropertyRegistry::writeVariableAwareDeclaration(
     if (presentation) {
       if (previous == unparsedProperties.end()) {
         unparsedProperties.emplace(
-            name, parser::UnparsedProperty{storedDeclaration(), specificity, {}, false, variable});
+            name, parser::UnparsedProperty{storedDeclaration(), specificity, {}, false, false,
+                                           variable});
       } else {
         previous->second.presentationVariable = variable;
       }
@@ -3685,7 +3686,8 @@ void PropertyRegistry::writeVariableAwareDeclaration(
   }
   unparsedProperties.insert_or_assign(
       name, parser::UnparsedProperty{storedDeclaration(), specificity,
-                                     std::move(presentationVariable), false, variable});
+                                     std::move(presentationVariable), false, presentation,
+                                     variable});
 }
 
 std::optional<ParseDiagnostic> PropertyRegistry::deferResourceColorVariable(
@@ -3741,6 +3743,22 @@ std::optional<ParseDiagnostic> PropertyRegistry::deferVariableDeclaration(
   return std::nullopt;
 }
 
+namespace {
+
+bool ParseExpandedVariable(PropertyRegistry& properties, const css::Declaration& declaration,
+                           const parser::UnparsedProperty& winner) {
+  if (winner.variableFromPresentation && RequiresCssLengthUnits(declaration.name)) {
+    const auto* parse = kProperties.find(declaration.name);
+    UTILS_RELEASE_ASSERT(parse);
+    return !(*parse)(properties, parser::PropertyParseFnParams::Create(
+                                     declaration, winner.specificity,
+                                     parser::PropertyParseBehavior::AllowUserUnits));
+  }
+  return !properties.parseProperty(declaration, winner.specificity);
+}
+
+}  // namespace
+
 bool PropertyRegistry::hasPendingVariableDeclarations() const {
   if (!mayHaveVariableInputs_) {
     return false;
@@ -3789,7 +3807,7 @@ std::optional<FileOffset> PropertyRegistry::resolveVariableDeclarations(
       declaration.values = std::move(expanded.values);
     }
     PropertyRegistry resolved;
-    const bool parsed = !resolved.parseProperty(declaration, original.specificity);
+    const bool parsed = ParseExpandedVariable(resolved, declaration, original);
     if (!parsed) {
       declaration = VariableUnset(original.sourceDeclaration());
     }
@@ -4025,6 +4043,7 @@ void PropertyRegistry::clearStyleAttributeProperties() {
                     css::Specificity(),
                     {},
                     false,
+                    true,
                     base};
       ++it;
     } else {
@@ -4060,7 +4079,7 @@ PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearResourceColo
 namespace {
 
 bool IsPendingPresentationVariable(const parser::UnparsedProperty& entry, std::string_view name) {
-  return IsPendingVariable(entry) && entry.specificity == css::Specificity() &&
+  return entry.variableFromPresentation && IsPendingVariable(entry) &&
          entry.sourceDeclaration().name == name;
 }
 
@@ -4094,7 +4113,7 @@ bool PropertyRegistry::removePendingPresentationVariable(std::string_view name, 
       if (clearMarkers) {
         const auto field = FindVariableField(*this, it->first);
         if (field && field->field.state == PropertyState::PendingSubstitution &&
-            field->field.specificity == css::Specificity()) {
+            field->field.specificity == it->second.specificity) {
           field->field.reset(PropertyState::NotSet, css::Specificity());
         }
       }

@@ -252,6 +252,9 @@ std::optional<std::string> PropertyRegistry::encodeDeclarationKey(std::size_t ma
     if (entry.substituted) {
       key.fields(std::uint8_t{254}, true, name);
     }
+    if (entry.variableFromPresentation) {
+      key.fields(std::uint8_t{254}, std::uint8_t{2}, name);
+    }
   }
   return std::move(key).finish();
 }
