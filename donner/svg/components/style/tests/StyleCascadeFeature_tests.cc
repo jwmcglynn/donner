@@ -427,6 +427,59 @@ TEST_F(StyleSystemTest, ResourceColorVariablesKeepAuthoredPresentationOrigins) {
   color(css::RGBA::RGB(255, 0, 0));
 }
 
+TEST_F(StyleSystemTest, SubstitutedRectangleGeometryKeepsPresentationUnits) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--wide:18">
+      <style>.stylesheet { width: var(--wide); }</style>
+      <rect id="direct" width="18" height="10"/>
+      <rect id="variable" width="var(--wide)" height="10"/>
+      <rect id="strict" class="stylesheet" height="10"/>
+    </svg>)svg");
+  const auto direct = document.querySelector("#direct");
+  auto variable = document.querySelector("#variable");
+  const auto strict = document.querySelector("#strict");
+  ASSERT_THAT(direct, testing::Optional(testing::_));
+  ASSERT_THAT(variable, testing::Optional(testing::_));
+  ASSERT_THAT(strict, testing::Optional(testing::_));
+  const auto directRect = direct->cast<SVGRectElement>();
+  const auto variableRect = variable->cast<SVGRectElement>();
+  ASSERT_EQ(directRect.computedWidth().value, 18.0);
+  EXPECT_EQ(variableRect.computedWidth().value, directRect.computedWidth().value);
+  EXPECT_EQ(strict->cast<SVGRectElement>().computedWidth().value, 0.0);
+
+  variable->setAttribute("width", "6");
+  EXPECT_EQ(variableRect.computedWidth().value, 6.0);
+  variable->setAttribute("width", "var(--wide)");
+  EXPECT_EQ(variableRect.computedWidth().value, 18.0);
+  variable->removeAttribute("width");
+  EXPECT_EQ(variableRect.computedWidth().value, 0.0);
+}
+
+TEST_F(StyleSystemTest, TransformVariableEditsRefreshImmediateGeometry) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--position:translate(20px)">
+      <rect id="target" width="10" height="10" transform="var(--position)"/>
+    </svg>)svg");
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto rectangle = target->cast<SVGRectElement>();
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(20, 0)));
+  target->removeAttribute("transform");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d()));
+
+  target->setAttribute("transform", "translate(7)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(7, 0)));
+  target->setAttribute("transform", "var(--position)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(20, 0)));
+  target->setAttribute("transform", "translate(9)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(9, 0)));
+
+  target->setStyle("transform:var(--position)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(20, 0)));
+  target->setStyle("");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(9, 0)));
+}
+
 TEST_F(StyleSystemTest, InvalidSubstitutedWidthDoesNotExposeAnEarlierValue) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" style="--wide:18px; --invalid:red">
