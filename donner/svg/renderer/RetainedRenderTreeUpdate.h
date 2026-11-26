@@ -54,11 +54,9 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry);
  * @param plan The plan returned by \ref PlanRetainedUpdate for the current dirty set.
  * @param warningSink Sink to collect warnings.
  * @param scheduler Scheduler available for the style pass.
- * @return False when a speculative restyle requires the ordinary full rebuild.
  */
-[[nodiscard]] bool ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
-                                       ParseWarningSink& warningSink,
-                                       StylePassScheduler scheduler = {});
+void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
+                         ParseWarningSink& warningSink, StylePassScheduler scheduler = {});
 
 /**
  * Give an external `<use>` the document its reference names, as an \ref ExternalUseComponent.

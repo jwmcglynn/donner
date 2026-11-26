@@ -35,8 +35,7 @@ constexpr uint16_t kMoveFlags = DirtyFlagsComponent::Layout | DirtyFlagsComponen
 /// Every change a retained update can apply.
 constexpr uint16_t kRetainedFlags =
     kMoveFlags | DirtyFlagsComponent::Style | DirtyFlagsComponent::Compositing |
-    DirtyFlagsComponent::ShadowTree | DirtyFlagsComponent::ReferencedContent |
-    DirtyFlagsComponent::NarrowedStyle;
+    DirtyFlagsComponent::ShadowTree | DirtyFlagsComponent::ReferencedContent;
 
 /// Changes to an element's own inputs, as opposed to an ancestor's transform.
 constexpr uint16_t kOwnChangeFlags = DirtyFlagsComponent::Transform |
@@ -96,10 +95,15 @@ bool Has(uint16_t flags, uint16_t flag) {
 }
 
 /// Whether \p flags only name changes a retained update applies.
+template <bool LiveStyle>
 bool FlagsAreRetainable(uint16_t flags) {
-  return (flags & ~kRetainedFlags) == 0 &&
-         (!Has(flags, DirtyFlagsComponent::Style) ||
-          Has(flags, DirtyFlagsComponent::Compositing | DirtyFlagsComponent::NarrowedStyle));
+  constexpr uint16_t supported =
+      LiveStyle ? kRetainedFlags | DirtyFlagsComponent::NarrowedStyle : kRetainedFlags;
+  constexpr uint16_t localStyle =
+      LiveStyle ? DirtyFlagsComponent::Compositing | DirtyFlagsComponent::NarrowedStyle
+                : DirtyFlagsComponent::Compositing;
+  return (flags & ~supported) == 0 &&
+         (!Has(flags, DirtyFlagsComponent::Style) || Has(flags, localStyle));
 }
 
 /// Whether no computed component reads the changed inputs of \p entity.
@@ -114,9 +118,10 @@ bool ChangeStaysLocal(const Registry& registry, Entity entity, uint16_t flags,
 }
 
 /// Check one dirty entity against the retained-update rules, adding its work to \p plan.
+template <bool LiveStyle>
 bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
                      const DocumentFacts& facts, RetainedUpdatePlan& plan) {
-  if (!FlagsAreRetainable(flags) || !ChangeStaysLocal(registry, entity, flags, facts)) {
+  if (!FlagsAreRetainable<LiveStyle>(flags) || !ChangeStaysLocal(registry, entity, flags, facts)) {
     return false;
   }
   if (Has(flags, DirtyFlagsComponent::Layout)) {
@@ -141,18 +146,15 @@ bool PlanDirtyEntity(const Registry& registry, Entity entity, uint16_t flags,
   return true;
 }
 
-}  // namespace
-
-std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
+template <bool LiveStyle>
+std::optional<RetainedUpdatePlan> PlanRetainedUpdateImpl(Registry& registry) {
   if (!DocumentAllowsRetainedUpdate(registry)) {
     return std::nullopt;
   }
   // Refuse any other change before scanning the document's shadow trees, which only an element's
   // own change needs.
-  const auto* state = registry.ctx().find<RenderTreeState>();
-  const uint16_t supported = state && state->applyLiveStyleUpdate
-                                 ? kRetainedFlags
-                                 : kRetainedFlags & ~DirtyFlagsComponent::NarrowedStyle;
+  constexpr uint16_t supported =
+      LiveStyle ? kRetainedFlags | DirtyFlagsComponent::NarrowedStyle : kRetainedFlags;
   bool ownChanges = false;
   for (const auto& [entity, dirty] : registry.view<const DirtyFlagsComponent>().each()) {
     if ((dirty.flags & ~supported) != 0) {
@@ -163,26 +165,26 @@ std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
   const DocumentFacts facts = CollectDocumentFacts(registry, ownChanges);
   RetainedUpdatePlan plan;
   for (const auto& [entity, dirty] : registry.view<const DirtyFlagsComponent>().each()) {
-    if (!PlanDirtyEntity(registry, entity, dirty.flags, facts, plan)) {
+    if (!PlanDirtyEntity<LiveStyle>(registry, entity, dirty.flags, facts, plan)) {
       return std::nullopt;
     }
   }
   return plan;
 }
 
-bool ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
+}  // namespace
+
+std::optional<RetainedUpdatePlan> PlanRetainedUpdate(Registry& registry) {
+  return PlanRetainedUpdateImpl<false>(registry);
+}
+
+void ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
                          ParseWarningSink& warningSink, StylePassScheduler scheduler) {
   // With the render tree built and no whole-tree restyle requested, this is the selective pass:
   // it restyles only the entities flagged Style.
   if (plan.restyle) {
-    if (const auto apply = registry.ctx().get<RenderTreeState>().applyLiveStyleUpdate) {
-      if (!apply(registry, warningSink, scheduler)) {
-        return false;
-      }
-    } else {
-      StyleSystem().computeAllStyles(registry, warningSink,
-                                     StyleSystem::FullRestyle::DiscardAndRecompute, scheduler);
-    }
+    StyleSystem().computeAllStyles(registry, warningSink,
+                                   StyleSystem::FullRestyle::DiscardAndRecompute, scheduler);
   }
   for (const Entity entity : plan.layoutEntities) {
     LayoutSystem().recomputeInvalidatedLayout(EntityHandle(registry, entity), warningSink);
@@ -193,7 +195,6 @@ bool ApplyRetainedUpdate(Registry& registry, const RetainedUpdatePlan& plan,
     AttachExternalUse(registry, entity,
                       registry.get<ShadowTreeComponent>(entity).mainHref().value(), warningSink);
   }
-  return true;
 }
 
 namespace {
@@ -231,10 +232,8 @@ bool CollectNarrowedStyleEntities(const Registry& registry, std::vector<Entity>&
   return true;
 }
 
-}  // namespace
-
-bool ApplyLiveStyleUpdate(Registry& registry, ParseWarningSink& warningSink,
-                          StylePassScheduler scheduler) {
+bool RecomputeLiveStyles(Registry& registry, ParseWarningSink& warningSink,
+                         StylePassScheduler scheduler) {
   std::vector<Entity> narrowed;
   if (!CollectNarrowedStyleEntities(registry, narrowed)) {
     return false;
@@ -272,6 +271,24 @@ bool ApplyLiveStyleUpdate(Registry& registry, ParseWarningSink& warningSink,
     return false;
   }
   warningSink.merge(std::move(tentativeWarnings));
+  return true;
+}
+
+}  // namespace
+
+bool ApplyLiveStyleUpdate(Registry& registry, ParseWarningSink& warningSink,
+                          StylePassScheduler scheduler) {
+  auto plan = PlanRetainedUpdateImpl<true>(registry);
+  if (!plan || (plan->restyle && !RecomputeLiveStyles(registry, warningSink, scheduler))) {
+    return false;
+  }
+  plan->restyle = false;
+  ApplyRetainedUpdate(registry, *plan, warningSink, scheduler);
+  auto& state = registry.ctx().get<RenderTreeState>();
+  ++state.counters.retainedUpdates;
+  state.counters.retargetedUses += plan->retargetedUses.size();
+  registry.clear<DirtyFlagsComponent>();
+  state.needsInstanceRebuild = true;
   return true;
 }
 

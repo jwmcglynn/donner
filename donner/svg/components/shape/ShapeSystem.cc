@@ -259,30 +259,14 @@ Lengthd::Extent ShapeLengthExtent(std::string_view name) {
   return Lengthd::Extent::Mixed;
 }
 
-const GeometryPreparationResourceBudget::PathStaging* CurrentPathStaging(EntityHandle handle) {
-  const auto* budget = handle.registry()->ctx().find<GeometryPreparationResourceBudget>();
-  return budget ? budget->pathStaging : nullptr;
-}
-
 bool ReserveShapeStyleWork(EntityHandle handle, const ComputedStyleComponent& style) {
   auto* budget = handle.registry()->ctx().find<AnimationResourceBudget>();
   const auto bytes = style.properties()->complexPropertyBytes();
-  const bool bounded = budget && bytes <= AnimationResourceBudget::kMaximumContextualWork / 6;
-  if (const auto* staging = CurrentPathStaging(handle)) {
-    if (!bounded) {
-      staging->decline(staging->context);
-      return false;
-    }
-    return staging->admitContextualWork(staging->context, bytes * 6);
-  }
-  return bounded && budget->reserveContextualWork(bytes * 6);
+  return budget && bytes <= AnimationResourceBudget::kMaximumContextualWork / 6 &&
+         budget->reserveContextualWork(bytes * 6);
 }
 
 bool ReserveShapeRecipeWork(EntityHandle handle, const ComputedStyleComponent& style) {
-  if (const auto* staging = CurrentPathStaging(handle)) {
-    staging->decline(staging->context);
-    return false;
-  }
   auto* budget = handle.registry()->ctx().find<AnimationResourceBudget>();
   if (!budget) {
     return false;
@@ -340,18 +324,18 @@ bool SampleShapeProperty(EntityHandle handle, const Properties& bases,
   return true;
 }
 
-template <typename Component, typename Computed>
+template <typename Component, typename Computed, typename Output>
 auto EffectiveShapeProperties(EntityHandle handle, const Component& shape,
                               const ComputedStyleComponent& style, const FontMetrics& metrics,
-                              ParseWarningSink& warningSink)
+                              ParseWarningSink& warningSink, Output& output)
     -> std::optional<decltype(shape.properties)> {
   if (handle.all_of<ShadowEntityComponent>() && !handle.all_of<Computed>() &&
-      !ReserveShapeStyleWork(handle, style)) {
+      !output.admitStyleWork(handle, style)) {
     return std::nullopt;
   }
   Computed computed(shape.properties, style.properties()->unparsedProperties, warningSink);
   auto bases = computed.properties;
-  if (HasContextualShapeLengths(handle) && ReserveShapeRecipeWork(handle, style)) {
+  if (HasContextualShapeLengths(handle) && output.admitRecipeWork(handle, style)) {
     auto properties = shape.properties;
     auto source = bases.allProperties();
     auto destination = properties.allProperties();
@@ -373,10 +357,12 @@ auto EffectiveShapeProperties(EntityHandle handle, const Component& shape,
   return result;
 }
 
+template <typename Output>
 LineComponent EffectiveLine(EntityHandle handle, const LineComponent& line,
-                            const ComputedStyleComponent& style, const FontMetrics& metrics) {
+                            const ComputedStyleComponent& style, const FontMetrics& metrics,
+                            Output& output) {
   LineComponent result = line;
-  if (!HasContextualShapeLengths(handle) || !ReserveShapeRecipeWork(handle, style)) {
+  if (!HasContextualShapeLengths(handle) || !output.admitRecipeWork(handle, style)) {
     return result;
   }
   using Field = Lengthd LineComponent::*;
@@ -398,7 +384,7 @@ LineComponent EffectiveLine(EntityHandle handle, const LineComponent& line,
   return result;
 }
 
-GeometryPreparationResourceBudget& ComputedPathBudget(EntityHandle handle) {
+bool ReserveComputedPathPayload(EntityHandle handle, const Path& path) {
   auto& registryContext = handle.registry()->ctx();
   if (!registryContext.contains<GeometryPreparationResourceBudget>()) {
     std::shared_ptr<DocumentResourceFamilyBudget> family;
@@ -408,19 +394,16 @@ GeometryPreparationResourceBudget& ComputedPathBudget(EntityHandle handle) {
     registryContext.emplace<GeometryPreparationResourceBudget>(std::move(family));
   }
 
-  return registryContext.get<GeometryPreparationResourceBudget>();
+  const std::optional<std::size_t> retainedBytes = path.retainedBytes();
+  return retainedBytes.has_value() &&
+         registryContext.get<GeometryPreparationResourceBudget>().reserve(handle.entity(),
+                                                                          *retainedBytes);
 }
 
 void RemoveComputedPath(EntityHandle handle) {
-  auto* budget = handle.registry()->ctx().find<GeometryPreparationResourceBudget>();
-  if (budget && budget->pathStaging) {
-    const auto& staging = *budget->pathStaging;
-    staging.write(staging.context, handle.entity(), nullptr);
-    return;
-  }
   handle.remove<ComputedPathComponent>();
-  if (auto* current = handle.registry()->ctx().find<GeometryPreparationResourceBudget>()) {
-    current->release(handle.entity());
+  if (auto* budget = handle.registry()->ctx().find<GeometryPreparationResourceBudget>()) {
+    budget->release(handle.entity());
   }
 }
 
@@ -461,14 +444,7 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
 /// left behind - only a parse of path data may leave a key that matches a path-data string.
 ComputedPathComponent* emplaceComputedPathIfChanged(
     EntityHandle handle, Path newPath, std::optional<RcString> sourcePathData = std::nullopt) {
-  auto& budget = ComputedPathBudget(handle);
-  if (const auto* staging = budget.pathStaging) {
-    ComputedPathComponent path{std::move(newPath), std::nullopt, std::move(sourcePathData)};
-    staging->write(staging->context, handle.entity(), &path);
-    return nullptr;
-  }
-  const auto retainedBytes = newPath.retainedBytes();
-  if (!retainedBytes || !budget.reserve(handle.entity(), *retainedBytes)) {
+  if (!ReserveComputedPathPayload(handle, newPath)) {
     RemoveComputedPath(handle);
     return nullptr;
   }
@@ -1020,39 +996,6 @@ EntityHandle ShapeSystem::geometryHandle(EntityHandle instance) {
              : instance;
 }
 
-void ShapeSystem::instantiateShadowComputedPath(EntityHandle handle,
-                                                ParseWarningSink& warningSink) {
-  const auto* shadow = handle.try_get<ShadowEntityComponent>();
-  const auto* style = handle.try_get<ComputedStyleComponent>();
-  if (!shadow || !style || !style->properties()) {
-    return;
-  }
-  const EntityHandle light(*handle.registry(), shadow->lightEntity);
-  if (!light.any_of<CircleComponent, EllipseComponent, LineComponent, RectComponent>()) {
-    if (handle.all_of<ComputedInstanceGeometryComponent>()) {
-      RemoveComputedPath(handle);
-      handle.remove<ComputedInstanceGeometryComponent, ComputedCircleComponent,
-                    ComputedEllipseComponent, ComputedRectComponent>();
-    }
-    return;
-  }
-  auto& prepared = handle.get_or_emplace<ComputedInstanceGeometryComponent>();
-  if (prepared.prepared) {
-    return;
-  }
-  prepared.prepared = true;
-  handle.remove<ComputedCircleComponent, ComputedEllipseComponent, ComputedRectComponent>();
-  const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
-  ForEachShape<entt::type_list<CircleComponent, EllipseComponent, LineComponent, RectComponent>>(
-      [&]<typename Shape>() {
-        if (const auto* component = light.try_get<Shape>()) {
-          createComputedShapeWithStyle(handle, *component, *style, metrics, warningSink);
-          return true;
-        }
-        return false;
-      });
-}
-
 void ShapeSystem::instantiateShadowComputedPaths(Registry& registry,
                                                  std::span<const Entity> entities,
                                                  ParseWarningSink& warningSink) {
@@ -1110,138 +1053,6 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
   for (Entity entity : registry.view<ShadowEntityComponent, ComputedStyleComponent>()) {
     instantiateShadowComputedPath(EntityHandle(registry, entity), warningSink);
   }
-}
-
-namespace {
-
-bool SamePreparedPath(const ComputedPathComponent* old, const ComputedPathComponent* next) {
-  if (!old || !next) {
-    return old == next;
-  }
-  return old->spline == next->spline && old->sourcePathData == next->sourcePathData;
-}
-
-class PreparedRetainedPaths {
-public:
-  explicit PreparedRetainedPaths(Registry& registry)
-      : registry_(registry), contextualBudget_(registry.ctx().find<AnimationResourceBudget>()) {}
-
-  void decline() { declined_ = true; }
-
-  bool admitContextualWork(std::size_t work) {
-    if (declined_ || !contextualBudget_ ||
-        work > contextualBudget_->remainingContextualWork() - contextualWork_) {
-      decline();
-      return false;
-    }
-    contextualWork_ += work;
-    return true;
-  }
-
-  void stage(Entity entity, ComputedPathComponent* path) {
-    if (declined_) {
-      return;
-    }
-    const auto* old = registry_.try_get<ComputedPathComponent>(entity);
-    if (SamePreparedPath(old, path)) {
-      return;
-    }
-    const auto bytes = path ? path->spline.retainedBytes() : std::optional<std::size_t>(0);
-    constexpr std::size_t kMaximumStagedBytes = 1024 * 1024;
-    constexpr std::size_t kMaximumStagedPaths = 512;
-    if (!bytes || *bytes > kMaximumStagedBytes - stagedBytes_ ||
-        updates_.size() == kMaximumStagedPaths ||
-        std::ranges::find(charges_, entity,
-                          &GeometryPreparationResourceBudget::PathReplacement::entity) !=
-            charges_.end()) {
-      declined_ = true;
-      return;
-    }
-    stagedBytes_ += *bytes;
-    charges_.push_back({entity, *bytes});
-    updates_.push_back(path ? std::optional(std::move(*path)) : std::nullopt);
-  }
-
-  bool commit(GeometryPreparationResourceBudget& budget) {
-    if (declined_) {
-      return false;
-    }
-    const auto shrink =
-        charges_.empty() ? std::optional<std::size_t>(0) : budget.tryReplacePaths(charges_);
-    if (!shrink) {
-      return false;
-    }
-    // The contextual work allowance belongs to serialized preparation; all stage admissions
-    // succeeded against this same counter and no other consumer runs between them and commit.
-    if (contextualWork_ != 0) {
-      UTILS_RELEASE_ASSERT(contextualBudget_->reserveContextualWork(contextualWork_));
-    }
-    for (std::size_t i = 0; i < charges_.size(); ++i) {
-      const Entity entity = charges_[i].entity;
-      if (auto& update = updates_[i]) {
-        auto* existing = registry_.try_get<ComputedPathComponent>(entity);
-        if (existing && existing->spline == update->spline) {
-          existing->sourcePathData = std::move(update->sourcePathData);
-        } else {
-          registry_.emplace_or_replace<ComputedPathComponent>(entity, std::move(*update));
-        }
-      } else {
-        registry_.remove<ComputedPathComponent>(entity);
-      }
-    }
-    budget.finishPathReplacements(*shrink);
-    return true;
-  }
-
-private:
-  Registry& registry_;
-  AnimationResourceBudget* contextualBudget_;
-  std::size_t contextualWork_ = 0;
-  std::size_t stagedBytes_ = 0;
-  bool declined_ = false;
-  std::vector<GeometryPreparationResourceBudget::PathReplacement> charges_;
-  std::vector<std::optional<ComputedPathComponent>> updates_;
-};
-
-}  // namespace
-
-bool ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entity> entities,
-                                       ParseWarningSink& warningSink) {
-  UTILS_RELEASE_ASSERT(!entities.empty());
-  auto& budget = ComputedPathBudget(EntityHandle(registry, entities.front()));
-  PreparedRetainedPaths prepared(registry);
-  const GeometryPreparationResourceBudget::PathStaging staging{
-      &prepared,
-      [](void* context, Entity entity, ComputedPathComponent* path) {
-        static_cast<PreparedRetainedPaths*>(context)->stage(entity, path);
-      },
-      [](void* context, std::size_t work) {
-        return static_cast<PreparedRetainedPaths*>(context)->admitContextualWork(work);
-      },
-      [](void* context) { static_cast<PreparedRetainedPaths*>(context)->decline(); }};
-  UTILS_RELEASE_ASSERT(!budget.pathStaging);
-  budget.pathStaging = &staging;
-  for (Entity entity : entities) {
-    EntityHandle handle(registry, entity);
-    const auto& style = handle.get<ComputedStyleComponent>();
-    ForEachShape<AllShapes>([&]<typename Shape>() {
-      if (const auto* shape = handle.try_get<Shape>()) {
-        const FontMetrics metrics = fontMetricsForElement(registry, style, entity);
-        createComputedShapeWithStyle(handle, *shape, style, metrics, warningSink);
-        return true;
-      }
-      return false;
-    });
-  }
-  for (Entity entity : entities) {
-    EntityHandle handle(registry, entity);
-    if (auto* instance = handle.try_get<ComputedInstanceGeometryComponent>()) {
-      instance->prepared = false;
-    }
-    instantiateShadowComputedPath(handle, warningSink);
-  }
-  budget.pathStaging = nullptr;
-  return prepared.commit(budget);
 }
 
 std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
@@ -1463,13 +1274,31 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
   return accumulator.result();
 }
 
-ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
-    EntityHandle handle, const CircleComponent& circle, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+namespace {
+
+struct PublishedShapePaths {
+  static bool admitStyleWork(EntityHandle handle, const ComputedStyleComponent& style) {
+    return ReserveShapeStyleWork(handle, style);
+  }
+  static bool admitRecipeWork(EntityHandle handle, const ComputedStyleComponent& style) {
+    return ReserveShapeRecipeWork(handle, style);
+  }
+  static ComputedPathComponent* set(EntityHandle handle, Path path,
+                                    std::optional<RcString> sourcePathData = std::nullopt) {
+    return emplaceComputedPathIfChanged(handle, std::move(path), std::move(sourcePathData));
+  }
+  static void erase(EntityHandle handle) { RemoveComputedPath(handle); }
+};
+
+template <typename Output>
+ComputedPathComponent* PrepareShapePath(EntityHandle handle, const CircleComponent& circle,
+                                        const ComputedStyleComponent& style,
+                                        const FontMetrics& fontMetrics,
+                                        ParseWarningSink& warningSink, Output& output) {
   const auto effective = EffectiveShapeProperties<CircleComponent, ComputedCircleComponent>(
-      handle, circle, style, fontMetrics, warningSink);
+      handle, circle, style, fontMetrics, warningSink, output);
   if (!effective) {
-    RemoveComputedPath(handle);
+    output.erase(handle);
     return nullptr;
   }
 
@@ -1483,20 +1312,22 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (radius > 0.0) {
     Path path = PathBuilder().addCircle(center, radius).build();
 
-    return emplaceComputedPathIfChanged(handle, std::move(path));
+    return output.set(handle, std::move(path));
   } else {
-    RemoveComputedPath(handle);
+    output.erase(handle);
     return nullptr;
   }
 }
 
-ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
-    EntityHandle handle, const EllipseComponent& ellipse, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+template <typename Output>
+ComputedPathComponent* PrepareShapePath(EntityHandle handle, const EllipseComponent& ellipse,
+                                        const ComputedStyleComponent& style,
+                                        const FontMetrics& fontMetrics,
+                                        ParseWarningSink& warningSink, Output& output) {
   const auto effective = EffectiveShapeProperties<EllipseComponent, ComputedEllipseComponent>(
-      handle, ellipse, style, fontMetrics, warningSink);
+      handle, ellipse, style, fontMetrics, warningSink, output);
   if (!effective) {
-    RemoveComputedPath(handle);
+    output.erase(handle);
     return nullptr;
   }
 
@@ -1511,17 +1342,19 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (radius.x > 0.0 && radius.y > 0.0) {
     Path path = PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
 
-    return emplaceComputedPathIfChanged(handle, std::move(path));
+    return output.set(handle, std::move(path));
   } else {
-    RemoveComputedPath(handle);
+    output.erase(handle);
     return nullptr;
   }
 }
 
-ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
-    EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
-  const LineComponent effective = EffectiveLine(handle, line, style, fontMetrics);
+template <typename Output>
+ComputedPathComponent* PrepareShapePath(EntityHandle handle, const LineComponent& line,
+                                        const ComputedStyleComponent& style,
+                                        const FontMetrics& fontMetrics,
+                                        ParseWarningSink& warningSink, Output& output) {
+  const LineComponent effective = EffectiveLine(handle, line, style, fontMetrics, output);
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d start(effective.x1.toPixels(viewport, fontMetrics, Lengthd::Extent::X),
@@ -1530,12 +1363,14 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
                      effective.y2.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
 
   Path path = PathBuilder().moveTo(start).lineTo(end).build();
-  return emplaceComputedPathIfChanged(handle, std::move(path));
+  return output.set(handle, std::move(path));
 }
 
-ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
-    EntityHandle handle, const PathComponent& path, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+template <typename Output>
+ComputedPathComponent* PrepareShapePath(EntityHandle handle, const PathComponent& path,
+                                        const ComputedStyleComponent& style,
+                                        const FontMetrics& fontMetrics,
+                                        ParseWarningSink& warningSink, Output& output) {
   Property<RcString> actualD = path.d;
   const auto& properties = style.properties()->unparsedProperties;
   if (auto it = properties.find("d"); it != properties.end()) {
@@ -1553,7 +1388,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   }
 
   if (path.splineOverride) {
-    return emplaceComputedPathIfChanged(handle, path.splineOverride.value());
+    return output.set(handle, path.splineOverride.value());
   } else if (actualD.isSpecified()) {
     // `Property::get()` hands back a fresh optional, so this has to be a value rather than a
     // reference into a temporary. Copying an RcString shares its buffer.
@@ -1585,19 +1420,20 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
         cacheKey = pathData;
       }
 
-      return emplaceComputedPathIfChanged(handle, std::move(maybePath.result()),
-                                          std::move(cacheKey));
+      return output.set(handle, std::move(maybePath.result()), std::move(cacheKey));
     }
   }
 
   // Failed: Could not parse path
-  RemoveComputedPath(handle);
+  output.erase(handle);
   return nullptr;
 }
 
-ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
-    EntityHandle handle, const PolyComponent& poly, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+template <typename Output>
+ComputedPathComponent* PrepareShapePath(EntityHandle handle, const PolyComponent& poly,
+                                        const ComputedStyleComponent& style,
+                                        const FontMetrics& fontMetrics,
+                                        ParseWarningSink& warningSink, Output& output) {
   PathBuilder builder;
 
   if (!poly.points.empty()) {
@@ -1612,16 +1448,18 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     builder.closePath();
   }
 
-  return emplaceComputedPathIfChanged(handle, builder.build());
+  return output.set(handle, builder.build());
 }
 
-ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
-    EntityHandle handle, const RectComponent& rect, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+template <typename Output>
+ComputedPathComponent* PrepareShapePath(EntityHandle handle, const RectComponent& rect,
+                                        const ComputedStyleComponent& style,
+                                        const FontMetrics& fontMetrics,
+                                        ParseWarningSink& warningSink, Output& output) {
   const auto effective = EffectiveShapeProperties<RectComponent, ComputedRectComponent>(
-      handle, rect, style, fontMetrics, warningSink);
+      handle, rect, style, fontMetrics, warningSink, output);
   if (!effective) {
-    RemoveComputedPath(handle);
+    output.erase(handle);
     return nullptr;
   }
 
@@ -1643,19 +1481,245 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
       // Success: Draw a rect with rounded corners.
       Path path = PathBuilder().addRoundedRect(Box2d(pos, pos + size), radius.x, radius.y).build();
 
-      return emplaceComputedPathIfChanged(handle, std::move(path));
+      return output.set(handle, std::move(path));
 
     } else {
       // Success: Draw a rect with sharp corners
       Path path = PathBuilder().addRect(Box2d(pos, pos + size)).build();
 
-      return emplaceComputedPathIfChanged(handle, std::move(path));
+      return output.set(handle, std::move(path));
     }
   }
 
   // Failed: Invalid width or height, don't generate a path.
-  RemoveComputedPath(handle);
+  output.erase(handle);
   return nullptr;
+}
+
+template <typename Output>
+void PrepareShadowPath(EntityHandle handle, ParseWarningSink& warningSink, Output& output) {
+  const auto* shadow = handle.try_get<ShadowEntityComponent>();
+  const auto* style = handle.try_get<ComputedStyleComponent>();
+  if (!shadow || !style || !style->properties()) {
+    return;
+  }
+  const EntityHandle light(*handle.registry(), shadow->lightEntity);
+  if (!light.any_of<CircleComponent, EllipseComponent, LineComponent, RectComponent>()) {
+    if (handle.all_of<ComputedInstanceGeometryComponent>()) {
+      output.erase(handle);
+      handle.remove<ComputedInstanceGeometryComponent, ComputedCircleComponent,
+                    ComputedEllipseComponent, ComputedRectComponent>();
+    }
+    return;
+  }
+  auto& prepared = handle.get_or_emplace<ComputedInstanceGeometryComponent>();
+  if (prepared.prepared) {
+    return;
+  }
+  prepared.prepared = true;
+  handle.remove<ComputedCircleComponent, ComputedEllipseComponent, ComputedRectComponent>();
+  const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
+  ForEachShape<entt::type_list<CircleComponent, EllipseComponent, LineComponent, RectComponent>>(
+      [&]<typename Shape>() {
+        if (const auto* component = light.try_get<Shape>()) {
+          PrepareShapePath(handle, *component, *style, metrics, warningSink, output);
+          return true;
+        }
+        return false;
+      });
+}
+
+bool SamePreparedPath(const ComputedPathComponent* old, const ComputedPathComponent* next) {
+  if (!old || !next) {
+    return old == next;
+  }
+  return old->spline == next->spline && old->sourcePathData == next->sourcePathData;
+}
+
+class PreparedRetainedPaths {
+public:
+  explicit PreparedRetainedPaths(Registry& registry)
+      : registry_(registry), contextualBudget_(registry.ctx().find<AnimationResourceBudget>()) {}
+
+  void decline() { declined_ = true; }
+
+  bool admitContextualWork(std::size_t work) {
+    if (declined_ || !contextualBudget_ ||
+        work > contextualBudget_->remainingContextualWork() - contextualWork_) {
+      decline();
+      return false;
+    }
+    contextualWork_ += work;
+    return true;
+  }
+
+  bool admitStyleWork(EntityHandle, const ComputedStyleComponent& style) {
+    const auto bytes = style.properties()->complexPropertyBytes();
+    if (bytes > AnimationResourceBudget::kMaximumContextualWork / 6) {
+      decline();
+      return false;
+    }
+    return admitContextualWork(bytes * 6);
+  }
+
+  bool admitRecipeWork(EntityHandle, const ComputedStyleComponent&) {
+    decline();
+    return false;
+  }
+
+  ComputedPathComponent* set(EntityHandle handle, Path spline,
+                             std::optional<RcString> sourcePathData = std::nullopt) {
+    ComputedPathComponent prepared{std::move(spline), std::nullopt, std::move(sourcePathData)};
+    stage(handle.entity(), &prepared);
+    return nullptr;
+  }
+
+  void erase(EntityHandle handle) { stage(handle.entity(), nullptr); }
+
+  void stage(Entity entity, ComputedPathComponent* path) {
+    if (declined_) {
+      return;
+    }
+    const auto* old = registry_.try_get<ComputedPathComponent>(entity);
+    if (SamePreparedPath(old, path)) {
+      return;
+    }
+    const auto bytes = path ? path->spline.retainedBytes() : std::optional<std::size_t>(0);
+    constexpr std::size_t kMaximumStagedBytes = 1024 * 1024;
+    constexpr std::size_t kMaximumStagedPaths = 512;
+    if (!bytes || *bytes > kMaximumStagedBytes - stagedBytes_ ||
+        updates_.size() == kMaximumStagedPaths ||
+        std::ranges::find(charges_, entity,
+                          &GeometryPreparationResourceBudget::PathReplacement::entity) !=
+            charges_.end()) {
+      declined_ = true;
+      return;
+    }
+    stagedBytes_ += *bytes;
+    charges_.push_back({entity, *bytes});
+    updates_.push_back(path ? std::optional(std::move(*path)) : std::nullopt);
+  }
+
+  bool commit(GeometryPreparationResourceBudget& budget) {
+    if (declined_) {
+      return false;
+    }
+    const auto shrink =
+        charges_.empty() ? std::optional<std::size_t>(0) : budget.tryReplacePaths(charges_);
+    if (!shrink) {
+      return false;
+    }
+    // The contextual work allowance belongs to serialized preparation; all stage admissions
+    // succeeded against this same counter and no other consumer runs between them and commit.
+    if (contextualWork_ != 0) {
+      UTILS_RELEASE_ASSERT(contextualBudget_->reserveContextualWork(contextualWork_));
+    }
+    for (std::size_t i = 0; i < charges_.size(); ++i) {
+      const Entity entity = charges_[i].entity;
+      if (auto& update = updates_[i]) {
+        auto* existing = registry_.try_get<ComputedPathComponent>(entity);
+        if (existing && existing->spline == update->spline) {
+          existing->sourcePathData = std::move(update->sourcePathData);
+        } else {
+          registry_.emplace_or_replace<ComputedPathComponent>(entity, std::move(*update));
+        }
+      } else {
+        registry_.remove<ComputedPathComponent>(entity);
+      }
+    }
+    budget.finishPathReplacements(*shrink);
+    return true;
+  }
+
+private:
+  Registry& registry_;
+  AnimationResourceBudget* contextualBudget_;
+  std::size_t contextualWork_ = 0;
+  std::size_t stagedBytes_ = 0;
+  bool declined_ = false;
+  std::vector<GeometryPreparationResourceBudget::PathReplacement> charges_;
+  std::vector<std::optional<ComputedPathComponent>> updates_;
+};
+
+}  // namespace
+
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+    EntityHandle handle, const CircleComponent& circle, const ComputedStyleComponent& style,
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+  PublishedShapePaths output;
+  return PrepareShapePath(handle, circle, style, fontMetrics, warningSink, output);
+}
+
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+    EntityHandle handle, const EllipseComponent& ellipse, const ComputedStyleComponent& style,
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+  PublishedShapePaths output;
+  return PrepareShapePath(handle, ellipse, style, fontMetrics, warningSink, output);
+}
+
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+    EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+  PublishedShapePaths output;
+  return PrepareShapePath(handle, line, style, fontMetrics, warningSink, output);
+}
+
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+    EntityHandle handle, const PathComponent& path, const ComputedStyleComponent& style,
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+  PublishedShapePaths output;
+  return PrepareShapePath(handle, path, style, fontMetrics, warningSink, output);
+}
+
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+    EntityHandle handle, const PolyComponent& poly, const ComputedStyleComponent& style,
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+  PublishedShapePaths output;
+  return PrepareShapePath(handle, poly, style, fontMetrics, warningSink, output);
+}
+
+ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
+    EntityHandle handle, const RectComponent& rect, const ComputedStyleComponent& style,
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+  PublishedShapePaths output;
+  return PrepareShapePath(handle, rect, style, fontMetrics, warningSink, output);
+}
+
+void ShapeSystem::instantiateShadowComputedPath(EntityHandle handle,
+                                                ParseWarningSink& warningSink) {
+  PublishedShapePaths output;
+  PrepareShadowPath(handle, warningSink, output);
+}
+
+bool ShapeSystem::recomputeStyledPaths(Registry& registry, std::span<const Entity> entities,
+                                       ParseWarningSink& warningSink) {
+  auto& context = registry.ctx();
+  if (!context.contains<GeometryPreparationResourceBudget>()) {
+    const auto* family = context.find<DocumentResourceFamilyContext>();
+    context.emplace<GeometryPreparationResourceBudget>(family ? family->budget : nullptr);
+  }
+  auto& budget = context.get<GeometryPreparationResourceBudget>();
+  PreparedRetainedPaths output(registry);
+  for (Entity entity : entities) {
+    EntityHandle handle(registry, entity);
+    const auto& style = handle.get<ComputedStyleComponent>();
+    ForEachShape<AllShapes>([&]<typename Shape>() {
+      if (const auto* shape = handle.try_get<Shape>()) {
+        const FontMetrics metrics = fontMetricsForElement(registry, style, entity);
+        PrepareShapePath(handle, *shape, style, metrics, warningSink, output);
+        return true;
+      }
+      return false;
+    });
+  }
+  for (Entity entity : entities) {
+    EntityHandle handle(registry, entity);
+    if (auto* instance = handle.try_get<ComputedInstanceGeometryComponent>()) {
+      instance->prepared = false;
+    }
+    PrepareShadowPath(handle, warningSink, output);
+  }
+  return output.commit(budget);
 }
 
 ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::string_view name,

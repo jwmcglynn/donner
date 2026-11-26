@@ -1858,16 +1858,17 @@ bool RenderingContext::tryRetainedUpdate(ParseWarningSink& warningSink,
       renderState.needsFullRebuild || renderState.needsFullStyleRecompute) {
     return false;
   }
+  if (const auto apply = renderState.applyLiveStyleUpdate) {
+    return apply(registry_, warningSink, scheduler);
+  }
   const std::optional<RetainedUpdatePlan> plan = PlanRetainedUpdate(registry_);
   if (!plan) {
     return false;
   }
 
-  if (!ApplyRetainedUpdate(registry_, *plan, warningSink, scheduler)) {
-    return false;
-  }
   ++renderState.counters.retainedUpdates;
   renderState.counters.retargetedUses += plan->retargetedUses.size();
+  ApplyRetainedUpdate(registry_, *plan, warningSink, scheduler);
   registry_.clear<DirtyFlagsComponent>();
   // The instances still describe the previous frame; the next instantiation rebuilds them.
   renderState.needsInstanceRebuild = true;

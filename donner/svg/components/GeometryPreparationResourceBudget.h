@@ -12,8 +12,6 @@
 
 namespace donner::svg::components {
 
-struct ComputedPathComponent;
-
 /** Owns the current computed-path reservation for one document registry. */
 class GeometryPreparationResourceBudget {
 public:
@@ -56,15 +54,6 @@ public:
     other.retainedBytes_ = 0;
   }
   GeometryPreparationResourceBudget& operator=(GeometryPreparationResourceBudget&&) = delete;
-
-  /// Destination for paths built by one retained style pass. The owner clears it before replay.
-  struct PathStaging {
-    void* context;
-    void (*write)(void*, Entity, ComputedPathComponent*);
-    bool (*admitContextualWork)(void*, std::size_t);
-    void (*decline)(void*);
-  };
-  const PathStaging* pathStaging = nullptr;
 
   /// Byte charge of one actually prepared replacement. Zero removes an old path's charge.
   struct PathReplacement {
