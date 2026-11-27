@@ -9,10 +9,10 @@ import shutil
 from urllib.parse import unquote, urlsplit
 from zipfile import ZipFile
 
-from verify_unified_tests import BROWSER_PACKAGE, EDITOR_BROWSER, editor_browser_cases
+from verify_unified_tests import HOSTED_EDITOR_BROWSER_NAMES, editor_browser_cases
 
 PACKAGE = "//donner/editor/wasm/tests:"
-HOSTED = {PACKAGE + "hosted_" + label.removeprefix(BROWSER_PACKAGE) for label in EDITOR_BROWSER}
+HOSTED = {PACKAGE + "hosted_" + name for name in HOSTED_EDITOR_BROWSER_NAMES}
 QUARANTINE = PACKAGE + "hosted_firefox_quarantine_report"
 RESIDENCY = {PACKAGE + "hosted_chromium_editor_startup_test", PACKAGE + "hosted_firefox_editor_compatibility_test"}
 BUDGETS = {"//donner/svg/renderer/wasm:hosted_wasm_size_tests_report",

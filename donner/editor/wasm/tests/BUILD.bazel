@@ -35,6 +35,7 @@ eslint_bin.eslint_test(
         "//donner/editor/wasm:catalog-fonts.js",
         "//donner/editor/wasm:editor-abort-diagnostics.js",
         "//donner/editor/wasm:editor-bootstrap.js",
+        "//donner/editor/wasm:editor-jspi.js",
         "//donner/editor/wasm:enable-threads.js",
         "//donner/editor/wasm:packaged-resource-loader.js",
         "//donner/gpu/browser:library_donner_gpu.js",
@@ -369,6 +370,15 @@ editor_browser_test(
     project = "chromium-default",
     sources = [":editor_browser_startup_sources"],
     specs = ["boot-presentation.spec.ts", "browser-backend-selection.spec.ts"],
+)
+
+editor_browser_test(
+    name = "chromium_editor_jspi_startup_test",
+    package = "//donner/editor/wasm:_wasm_web_package_for_jspi_startup",
+    project = "chromium-default",
+    remote_only = True,
+    sources = [":editor_browser_startup_sources"],
+    specs = ["boot-presentation.spec.ts", "jspi-capability.spec.ts"],
 )
 
 editor_browser_test(

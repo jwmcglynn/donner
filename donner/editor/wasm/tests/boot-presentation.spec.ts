@@ -149,7 +149,21 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         const state = window as BootWindow;
         const probe = state.__bootPresentationProbe;
         if (probe) probe.running = false;
+        const packageTransfers = [
+          ...performance.getEntriesByType("navigation"),
+          ...performance.getEntriesByType("resource"),
+        ].flatMap((entry) => {
+          const url = new URL(entry.name);
+          if (url.origin !== location.origin) return [];
+          const timing = entry as PerformanceResourceTiming;
+          return [{
+            path: url.pathname,
+            transferBytes: timing.transferSize,
+            encodedBodyBytes: timing.encodedBodySize,
+          }];
+        });
         return {
+          packageTransfers,
           samples: probe?.samples ?? [],
           visibility: probe?.visibility ?? [],
           framesAwaitingPresentedFrame: state.__donnerFramesAwaitingPresentedFrame,

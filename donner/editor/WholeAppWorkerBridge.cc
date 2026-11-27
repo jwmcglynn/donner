@@ -648,6 +648,31 @@ void RunPresentationProgress(void* token) {
   }
 }
 
+#ifdef DONNER_EDITOR_JSPI
+enum class BrowserManagedFrame : std::uint32_t { Driven, Event, Proxied };
+
+// clang-format off
+EM_JS(void, ScheduleBrowserManagedFrame, (unsigned int generation, unsigned int kind), {
+  setTimeout(() => {
+    Promise.resolve(_donner_browser_managed_frame(generation, kind)).catch(abort);
+  }, 0);
+});
+
+EM_JS(void, StartBrowserManagedFrameDriver, (unsigned int generation, int useRaf), {
+  const schedule = useRaf
+    ? (tick) => requestAnimationFrame(tick)
+    : (tick) => setTimeout(tick, 16);
+  const tick = () => {
+    // The next tick cannot enter the editor before the current Wasm promise settles.
+    Promise.resolve(_donner_browser_managed_frame(generation, 0)).then((active) => {
+      if (active) schedule(tick);
+    }).catch(abort);
+  };
+  schedule(tick);
+});
+// clang-format on
+#endif
+
 void PostEventFrame(std::uint32_t generation);
 
 void RunEventFrame(void* token) {
@@ -673,7 +698,11 @@ void ScheduleEventFrame(void* token) {
   FrameDriverState& state = Driver();
   const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
   if (state.eventWake.isCurrent(generation)) {
+#ifdef DONNER_EDITOR_JSPI
+    ScheduleBrowserManagedFrame(generation, static_cast<unsigned>(BrowserManagedFrame::Event));
+#else
     emscripten_async_call(&RunEventFrame, token, 0);
+#endif
   } else {
     state.eventWake.cancel(generation);
   }
@@ -720,13 +749,39 @@ void ScheduleProxiedFrame(void* token) {
   const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
   if (state.admission.isCurrent(generation)) {
     // Rendering inside the SDK's unbounded queue drain can starve GPU notifications.
+#ifdef DONNER_EDITOR_JSPI
+    ScheduleBrowserManagedFrame(generation, static_cast<unsigned>(BrowserManagedFrame::Proxied));
+#else
     emscripten_async_call(&RunProxiedFrame, token, 0);
+#endif
   } else {
     CompleteProxiedFrame(generation);
   }
 }
 
 }  // namespace
+
+#ifdef DONNER_EDITOR_JSPI
+extern "C" EMSCRIPTEN_KEEPALIVE bool donner_browser_managed_frame(std::uint32_t generation,
+                                                                  std::uint32_t kind) {
+  if (!pthread_equal(Driver().appThread, pthread_self())) {
+    return false;
+  }
+  void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+  switch (static_cast<BrowserManagedFrame>(kind)) {
+    case BrowserManagedFrame::Driven: RunDrivenFrame(token); break;
+    case BrowserManagedFrame::Event: RunEventFrame(token); break;
+    case BrowserManagedFrame::Proxied:
+      if (Driver().pendingFrames.load(std::memory_order_acquire) == 0) {
+        return false;
+      }
+      RunProxiedFrame(token);
+      break;
+    default: return false;
+  }
+  return Driver().admission.isCurrent(generation);
+}
+#endif
 
 /// Browser main-thread tick. Returns false to retire an obsolete main-thread rAF loop.
 extern "C" EMSCRIPTEN_KEEPALIVE bool donner_whole_app_vsync_tick(std::uint32_t generation) {
@@ -797,7 +852,9 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
   (void)state.eventWake.start();
   (void)state.progressAdmission.start();
   state.eventDeferred = false;
+#ifndef DONNER_EDITOR_JSPI
   void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+#endif
   if (!forceProxiedFrames && WorkerRequestAnimationFrameAvailable()) {
     // Emscripten's `fps == 0` path selects EM_TIMING_RAF, whose scheduler calls
     // `globalThis.requestAnimationFrame` when it exists. Nothing else to do.
@@ -805,8 +862,13 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
     // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'worker-raf'; });
     // clang-format on
+#ifdef DONNER_EDITOR_JSPI
+    StartBrowserManagedFrameDriver(generation, /*useRaf=*/true);
+    emscripten_exit_with_live_runtime();
+#else
     emscripten_set_main_loop_arg(&RunDrivenFrame, token, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
+#endif
     return state.driver;
   }
 
@@ -819,8 +881,13 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
     // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'set-timeout'; });
     // clang-format on
+#ifdef DONNER_EDITOR_JSPI
+    StartBrowserManagedFrameDriver(generation, /*useRaf=*/false);
+    emscripten_exit_with_live_runtime();
+#else
     emscripten_set_main_loop_arg(&RunDrivenFrame, token, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
+#endif
     return state.driver;
   }
 
@@ -872,8 +939,12 @@ void NotifyFrameFinished() {
   const std::uint32_t generation = state.eventWake.generation();
   if (state.eventDeferred && generation && state.canRunFrame(state.userData)) {
     state.eventDeferred = false;
+#ifdef DONNER_EDITOR_JSPI
+    ScheduleBrowserManagedFrame(generation, static_cast<unsigned>(BrowserManagedFrame::Event));
+#else
     void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
     emscripten_async_call(&RunEventFrame, token, 0);
+#endif
   }
 }
 
