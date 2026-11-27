@@ -580,11 +580,14 @@ void AppendIndexedRuleReferences(const IndexedCssRule& indexed, const svg::SVGEl
     const auto& reference = indexed.references[i];
     if (reference.kind != IndexedCssReference::Kind::Fallback) {
       EmitIndexedReference(reference, subject, variables, fragments, caret, budget);
-    } else if (!FallbackIsActive(reference, subject, allFallbacks)) {
-      i = reference.fallbackEnd;
+      ++i;
       continue;
     }
-    ++i;
+    // A cached rule is shared, but fallback availability is a lookup on each subject.
+    if (subject && !budget.consume(reference.name.size())) {
+      return;
+    }
+    i = FallbackIsActive(reference, subject, allFallbacks) ? i + 1 : reference.fallbackEnd;
   }
 }
 

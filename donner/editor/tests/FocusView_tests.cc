@@ -2062,6 +2062,41 @@ TEST(FocusViewTest, ReverseAttributeScansChargeBytesBeforeParsing) {
   }
 }
 
+TEST(FocusViewTest, CachedFallbackLookupsChargeNameBytesForEachSubject) {
+  const auto work = [](std::string_view name, std::size_t count) {
+    std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>rect { fill: var(";
+    source += name;
+    source += ", url(#paint)); }</style><defs><linearGradient id='paint'/></defs><g>";
+    for (std::size_t i = 0; i < count; ++i) {
+      source += "<rect/>";
+    }
+    source += "</g></svg>";
+    EditorApp app;
+    EXPECT_THAT(app.loadFromString(source), testing::IsTrue());
+    auto& document = app.document().document();
+    const auto group = document.querySelector("g");
+    EXPECT_THAT(group, testing::Optional(testing::_));
+    if (!group) {
+      return std::size_t{};
+    }
+    for (auto child = group->firstChild(); child; child = child->nextSibling()) {
+      std::ignore = child->getComputedStyle();
+    }
+    const std::array selection{*group};
+    const auto summary = ComputeReferenceHighlightSummary(document, selection);
+    EXPECT_THAT(summary.resourceLimitExceeded, testing::IsFalse());
+    EXPECT_THAT(FocusElementIds(summary.referencedElements), ElementsAre("paint"));
+    return summary.traversalWork;
+  };
+
+  constexpr std::string_view shortName = "--ink";
+  constexpr std::string_view longName = "--watercolor";
+  const auto shortSingle = work(shortName, 1);
+  const auto longSingle = work(longName, 1);
+  EXPECT_GE(work(longName, 2) + shortSingle,
+            work(shortName, 2) + longSingle + longName.size() - shortName.size());
+}
+
 TEST(FocusViewTest, IndexedFallbacksUseEachSubjectAndRefreshOnSourceEdit) {
   constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
 <style>rect { fill:var(--ink, var(--second, url(#paint))); }</style>
