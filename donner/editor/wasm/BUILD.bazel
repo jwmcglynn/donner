@@ -30,6 +30,23 @@ config_setting(
     },
 )
 
+bool_flag(
+    name = "browser_managed_suspension",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "browser_managed_suspension_enabled",
+    constraint_values = ["@platforms//os:emscripten"],
+    flag_values = {":browser_managed_suspension": "True"},
+)
+
+# The package assembler runs in the host configuration, outside the Wasm compiler transition.
+config_setting(
+    name = "browser_managed_suspension_package",
+    flag_values = {":browser_managed_suspension": "True"},
+)
+
 _EDITOR_WASM_BINARY_DEPS = [
     "//donner/editor:editor_shell",
     "//donner/editor:editor_splash",
@@ -118,12 +135,17 @@ _EDITOR_LINKOPTS = [
     "-sSTACK_SIZE=1048576",
     "-sUSE_PTHREADS=1",
     "-sENVIRONMENT=web,worker",
-    # Geode's synchronous WebGPU bridge yields while creating devices and
-    # waiting for mapped buffers.
-    "-sASYNCIFY",
-    # Browser runtime device requests and mapped-buffer readback can suspend from the full
-    # EditorShell frame stack. The 4 KiB default overflows; 16 KiB retains measured headroom.
-    "-sASYNCIFY_STACK_SIZE=16384",
+] + select({
+    ":browser_managed_suspension_enabled": [
+        "-sJSPI=1",
+        "-sJSPI_EXPORTS=['donner_browser_managed_frame']",
+    ],
+    "//conditions:default": [
+        # Synchronous WebGPU initialization and readback can suspend from the full editor stack.
+        "-sASYNCIFY",
+        "-sASYNCIFY_STACK_SIZE=16384",
+    ],
+}) + [
     # Linear memory is FIXED: `INITIAL_MEMORY` with `ALLOW_MEMORY_GROWTH=0`.
     # Growth is not a slow path here, it is the crash.
     #
@@ -332,15 +354,32 @@ js_run_binary(
     use_execroot_entry_point = False,
 )
 
+# Check actual worker Promise suspension before loading the optional editor package.
+genrule(
+    name = "browser_managed_suspension_index",
+    srcs = ["index.html"],
+    outs = ["browser_managed_suspension/index.html"],
+    cmd = """
+        test "$$(grep -Fc 'src="editor-bootstrap.js"' $(location index.html))" -eq 1 &&
+        sed 's/src="editor-bootstrap.js"/src="editor-jspi.js"/' $(location index.html) > $@
+    """,
+    visibility = ["//visibility:private"],
+)
+
 web_package(
     name = "wasm_web_package",
     srcs = [
         "editor.css",
         "editor-bootstrap.js",
-        "index.html",
         ":minified_static_javascript",
         "//:donner_icon.svg",
-    ],
+    ] + select({
+        ":browser_managed_suspension_package": [
+            ":browser_managed_suspension_index",
+            "editor-jspi.js",
+        ],
+        "//conditions:default": ["index.html"],
+    }),
     asset_trees = [
         "//donner/editor:editor_web_resource_bundle",
         "//third_party/google_fonts:google_fonts_woff2_assets",
@@ -365,6 +404,15 @@ editor_wasm_geode_transitioned_target(
         "wasm",
     ],
     visibility = ["//donner/editor/wasm/tests:__pkg__", "//tools/ci:__pkg__"],
+)
+
+editor_wasm_geode_transitioned_target(
+    name = "_wasm_web_package_for_jspi_startup",
+    browser_backend = True,
+    browser_managed_suspension = True,
+    dep = ":wasm_web_package",
+    tags = ["manual", "wasm"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
 no_rust_dependency_audit_test(

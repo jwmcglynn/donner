@@ -309,6 +309,48 @@ concrete per surface:
 Everything past this point is either an expensive source refactor (ranked below)
 or a deliberate feature removal (operator decision, surfaced not taken).
 
+## Editor Wasm suspension
+
+The threaded editor can yield to the browser while GPU work finishes. The default
+web package uses Emscripten Asyncify, which instruments C++ calls so the browser
+can suspend and resume them. The editor also supports a smaller, opt-in build
+that delegates suspension to the browser's WebAssembly JavaScript Promise
+Integration (JSPI) implementation. Both builds retain the editor's rendering
+features. Choose one package for a deployment.
+
+```sh
+bazel build --config=editor-wasm \
+  --//donner/editor/wasm:browser_managed_suspension=true \
+  //donner/editor/wasm:wasm_web_package
+```
+
+The opt-in package checks a real suspending Wasm import and promise-returning
+export in a shared-memory worker before requesting the editor module or glue.
+The timer probe does not depend on visible animation frames. A browser that
+cannot complete the check gets instructions to use
+the standard package. Each build is self-contained and a startup requests one
+flavor.
+
+Timer and animation-frame callbacks start a new JavaScript stack. Scheduled
+editor work in the JSPI build enters through a named promise-returning Wasm
+export, so the existing overdue confirmation can wait without trapping. The
+worker frame driver schedules its next tick after the promise settles.
+Generation and admission checks still guard queued events and shutdown.
+Presentation keeps the original fence deadline.
+
+To qualify the optional build, pass the same flag to the existing
+`//donner/editor/wasm/tests:chromium_editor_startup_test`,
+`//donner/editor/wasm/tests:chromium_editor_smoke_test`,
+`//donner/editor/wasm/tests:ci_darwin_perf_browser_responsiveness_perf_test_firefox_dpr1`,
+and `//donner/editor/wasm/tests:webkit_editor_carousel_test` targets. Startup
+checks that missing suspension support requests neither editor Wasm nor glue.
+Firefox checks held motion, pixel transfer, and a new frame after delayed
+completion releases. Chromium smoke covers shutdown while raster work is
+held. The affected graph also runs
+`//donner/editor/wasm/tests:ci_darwin_chromium_editor_jspi_startup_test` against the
+opt-in package and asserts the expected bootstrap is served. Default
+publication uses the standard package.
+
 ## Ranked opportunities
 
 Done:

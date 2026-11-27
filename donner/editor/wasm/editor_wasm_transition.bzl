@@ -4,13 +4,19 @@ load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 
 load("//build_defs:wasm_profiles.bzl", "WASM_OPTION_INPUTS", "WASM_OPTION_OUTPUTS", "wasm_profile_options")
 
+_BROWSER_MANAGED_SUSPENSION = "//donner/editor/wasm:browser_managed_suspension"
+
 def _editor_wasm_geode_transition_impl(settings, attr):
-    return wasm_profile_options(settings, "editor-wasm", attr.browser_backend)
+    options = wasm_profile_options(settings, "editor-wasm", attr.browser_backend)
+    options[_BROWSER_MANAGED_SUSPENSION] = (
+        attr.browser_managed_suspension or settings[_BROWSER_MANAGED_SUSPENSION]
+    )
+    return options
 
 _editor_wasm_geode_transition = transition(
     implementation = _editor_wasm_geode_transition_impl,
-    inputs = WASM_OPTION_INPUTS,
-    outputs = WASM_OPTION_OUTPUTS,
+    inputs = WASM_OPTION_INPUTS + [_BROWSER_MANAGED_SUSPENSION],
+    outputs = WASM_OPTION_OUTPUTS + [_BROWSER_MANAGED_SUSPENSION],
 )
 
 def _editor_wasm_geode_transitioned_target_impl(ctx):
@@ -28,6 +34,8 @@ editor_wasm_geode_transitioned_target = rule(
         # Whether the package selects the browser backend for headless work; see
         # //donner/svg/renderer/geode:browser_backend.
         "browser_backend": attr.bool(default = False),
+        # Select the optional package for a specific browser test in the unified graph.
+        "browser_managed_suspension": attr.bool(default = False),
         "dep": attr.label(
             cfg = _editor_wasm_geode_transition,
             mandatory = True,

@@ -86,6 +86,12 @@ donner_cc_library(
         "FrameCallbackAdmission.h",
         "WholeAppWorkerBridge.h",
     ],
+    local_defines = select({
+        "//donner/editor/wasm:browser_managed_suspension_enabled": [
+            "DONNER_EDITOR_JSPI",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         ":whole_app_worker_config",
         "//donner/base:asyncify_suspend_probe",

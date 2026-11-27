@@ -131,6 +131,7 @@ ARCHIVE = BROWSER_PACKAGE + "mac_browser_archive_tests"
 HEADED = {BROWSER_PACKAGE + "animation_preview_browser_test", BROWSER_PACKAGE + "canvas_snapshot_browser_test"}
 EDITOR_BROWSER = {BROWSER_PACKAGE + name for name in (
     "chromium_editor_smoke_test", "chromium_editor_presentation_test", "chromium_editor_startup_test",
+    "chromium_editor_jspi_startup_test",
     "firefox_editor_compatibility_test", "webkit_editor_carousel_test",
     "chromium_composited_invariants_test", "firefox_composited_invariants_test",
 )}

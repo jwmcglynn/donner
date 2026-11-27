@@ -19,6 +19,29 @@ Build the complete bundle with:
 bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 ```
 
+## Optional browser-managed suspension package
+
+Build a smaller, separately served editor package using the browser's
+WebAssembly JavaScript Promise Integration (JSPI).
+
+```sh
+bazel build --config=editor-wasm \
+  --//donner/editor/wasm:browser_managed_suspension=true \
+  //donner/editor/wasm:wasm_web_package
+```
+
+The optional package checks shared-memory worker support and performs real
+Promise suspension and resumption from worker callbacks before fetching the
+editor glue or module. Serve it with the same cross-origin isolation headers
+as the standard package. A browser that fails the check gets an unsupported
+message and should use the standard package built without the flag.
+
+Each build emits one complete package. Serve the optional and standard builds
+as distinct artifacts if both are offered. The standard build uses Asyncify
+and is the compatibility choice for browsers without JSPI.
+
+## Serving either package
+
 Serve the complete output directory, preserving its layout. The bootstrap captures
 its own package URL, so a versioned subdirectory also works. Font requests never
 use an SVG document URL or an external font service. Serve TTF as `font/ttf`, OTF as
