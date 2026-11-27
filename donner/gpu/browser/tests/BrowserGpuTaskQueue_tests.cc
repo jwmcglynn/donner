@@ -1,5 +1,6 @@
 #include "donner/gpu/browser/BrowserGpuTaskQueue.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -74,9 +75,9 @@ TEST(BrowserGpuTaskQueueTest, BoundedBatchKeepsOlderWorkAheadOfReentrantAppend) 
   queue.enqueue(b);
   EXPECT_EQ(queue.executeBatchWhile([](std::size_t) { return false; }), 0u);
   EXPECT_EQ(queue.executeBatchWhile([](std::size_t count) { return count < 1; }), 1u);
-  EXPECT_EQ(calls, (std::vector<int>{1}));
+  EXPECT_THAT(calls, testing::ElementsAre(1));
   EXPECT_EQ(queue.executeBatch(), 2u);
-  EXPECT_EQ(calls, (std::vector<int>{1, 2, 3}));
+  EXPECT_THAT(calls, testing::ElementsAre(1, 2, 3));
   EXPECT_TRUE(queue.empty());
 }
 
