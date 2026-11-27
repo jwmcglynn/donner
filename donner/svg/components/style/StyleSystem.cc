@@ -3436,6 +3436,9 @@ const xml::XMLDecodedTextSourceMap* MapForStylesheet(Registry& registry, Entity 
                                                      const StylesheetComponent& sheet,
                                                      StylesheetSourceMapMode mode) {
   const auto* document = registry.ctx().find<xml::components::XMLDocumentContext>();
+  if (!document || !document->sourceStoreHolder->store) {
+    return nullptr;
+  }
   const auto& source = document->sourceStoreHolder->store;
   auto& cache = SourceIndexCache();
   const auto version = source->sourceVersion();
