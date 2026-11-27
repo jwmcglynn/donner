@@ -6,6 +6,166 @@ Donner implements CSS3 in its own CSS library, \ref donner::css. The library has
 
 \ref donner::css::CSS provides a high-level API for parsing CSS constructs. It is implemented on top of lower-level parser APIs that give finer-grained control over parsing and more detailed error handling.
 
+## SVG Cascade Runtime
+
+The SVG runtime applies parsed CSS through \ref donner::svg::components::StyleSystem. The cascade
+uses this pipeline:
+
+1. `StylesheetComponent` owns each parsed sheet, resolved imports, a `RuleIndex` keyed by the
+   subject selector, and a `SelectorDependencySummary` used for invalidation.
+2. `DocumentLayerOrder` combines the layer streams of applicable sheets and imports in document
+   order. It supplies the rank used by \ref donner::css::Specificity.
+3. `StyleSystem::applyStylesheetRules` collects indexed candidates and charges each rule-element
+   test before matching. `StyleAncestorFilter` can reject a candidate without a selector walk.
+   Successful selector matches are counted separately, and their declarations are admitted in
+   cascade order.
+4. The matched-properties cache shares immutable computed-style records when the matched rules,
+   local declarations, parent and root inputs are identical.
+5. Custom properties are computed and inherited before declarations containing `var()` are
+   substituted and parsed into typed SVG properties.
+
+The unindexed and unfiltered modes are test-only differential paths. Production callers use the
+indexed, filtered cascade.
+
+### Custom properties and var substitution
+
+Names beginning with `--` cascade as untyped token sequences. Computed custom-property maps and
+their token sequences are immutable and shared; retained allocations are charged to the document
+style budget until the last holder releases them.
+
+Donner supports the static-name CSS syntax `var(--name[, fallback])` in stylesheet declarations,
+inline style and presentation attributes, including shorthands. Resolution is iterative. It
+follows the dependency branch selected by substitution, marks an actual selected cycle
+guaranteed-invalid, and permits a dependent declaration to choose its fallback. An invalid or
+over-limit expansion publishes no partial token sequence.
+
+Ordinary typed properties that contain `var()` remain pending until the custom-property map is
+complete. The substituted component values are then parsed with the property's normal grammar;
+failure makes that winning declaration invalid at computed-value time.
+
+### Cascade layers
+
+Stylesheets retain named, dotted, nested and anonymous `@layer` statements and blocks. Layered
+`@import` rules participate at their declared position in the document layer stream. Normal
+declarations use first-layer-to-last-layer precedence, while important declarations reverse that
+order. Unlayered author declarations outrank normal layered declarations, and presentation
+attributes remain below author rules. Inline style keeps its existing author-inline precedence.
+
+Layer order is recomputed when stylesheet contents, imports or document order change. The same
+frozen order is shared by serial and prepared parallel cascade work.
+
+### Incremental source editing and invalidation
+
+`SVGDocument::applySourceEdit` projects XML edits into stylesheet-local offsets.
+`StylesheetComponent::applyTextEdit` reparses and splices a verified rule window; edits that cannot
+be mapped or resynchronized use a full stylesheet parse. `SelectorDependencySummary` and the old
+and new rule windows identify affected elements. `StyleSystem::computeStylesFor` recomputes that
+set, while structural or otherwise unbounded changes request a full style pass.
+See \ref StructuredSourceEditing "Structured Source Editing" for the XML edit transaction and
+source-provenance model shared by stylesheet edits.
+
+The source editor uses XML regions to locate CSS and applies the CSS tokenizer to every byte of
+style elements, style attributes and presentation values. Completion preserves XML completion and
+uses the same property metadata and source-derived custom names. See
+\ref EditorSourceFocus "Source Focus" for source-to-style mapping and selection behavior.
+
+### Parallel cascade
+
+Large eligible passes use `StyleSystem::PreparedBatch` and `StylePassScheduler`. Workers read a
+const registry, own budget shares, warning buffers, ancestor filters and matched-style caches, and
+write only preallocated result slots. The document owner publishes parents and commits results in
+document order. Unsupported inputs, budget pressure or insufficient work fall back to the serial
+path. Native Linux and Apple admission requires 64 KiB of live client-stack headroom above the
+scheduler's separate 32 KiB reporting reserve; it does not allocate a fixed 64 KiB stack. Other
+platforms remain serial for this path. See \ref Multithreading "Multithreading" for document
+access and registry ownership outside the style pass.
+
+## Public API and Ownership
+
+The public `donner/css` representation exposes layer and variable metadata needed by embedders:
+
+- \ref donner::css::Declaration retains component values and variable-reference classification.
+- \ref donner::css::SelectorRule carries its sheet-local layer identifier.
+- \ref donner::css::Stylesheet exposes imports and the parsed layer table.
+- \ref donner::css::Specificity carries origin, importance and document-layer priority.
+- `InspectVariableReferences`, `VisitVariableReferences`, `SubstituteVariables` and
+  `ResolveVariableDefinitions` operate on borrowed component-value spans. Referenced storage must
+  outlive the call.
+
+The core SVG document and element mutation semantics are unchanged. Public source tooling in
+`SVGStyleQuery.h` exposes source-backed matched rules, exact stylesheet-range mapping and bounded
+custom-property provenance. `FindCustomPropertyDeclarations` charges aggregate work supplied by
+the caller, and `VisitAuthoredStylesheetDeclarations` borrows its views only for the callback.
+`ElementFactory::TryWrapStyle` wraps an existing embedded stylesheet without mutation.
+
+Rule indexes, invalidation summaries, custom-property maps, cascade budgets, counters and caches
+remain internal components. `StyleCascadeMetrics` provides cumulative logical-work counters and
+style time for diagnostics and benchmarks.
+
+## Safety and Resource Limits
+
+CSS and SVG text are untrusted input. Parsing, substitution, matching and retention fail closed at
+document or value boundaries; a refusal never exposes partial substituted output.
+
+| Resource | Current limit |
+| --- | ---: |
+| One substituted value | 65,536 component values and 1 MiB source text |
+| One stylesheet | 4,096 layers, nested at most 32 deep |
+| One document layer order | 16,384 layer nodes |
+| One import pass | depth 16, 64 loads and 2 MiB imported CSS text |
+| Rule-element candidates admitted per style pass | 1,048,576 |
+| Matched declaration applications admitted per style pass | 1,048,576 |
+| Aggregate declaration work | 16,777,216 component units and 16 MiB source text |
+| Retained complex property data | 64 MiB per style budget, also charged to its document family |
+
+The resource loader remains the trust boundary for external imports. It controls reachable URLs;
+secure processing modes and the editor do not provide an external loader. Import cycles, invalid
+UTF-8, disallowed media types and exhausted fetch budgets are diagnosed and skipped.
+
+## Performance and Observability
+
+The rule index, ancestor filter, immutable records and matched-properties cache reduce ordinary
+work without changing computed results. `StyleCascadeCounters::rulesTested` counts admitted
+rule-element candidates; `rulesMatched` counts successful selector matches; and
+`declarationsApplied` counts separately admitted declaration applications. Aggregate generated
+component and byte work use independent counters. Retained maps, token sequences and complex
+properties instead use lifetime byte accounts shared by their holders and document family.
+
+Selective source edits expose the same logical counters as full passes, making differential tests
+and benchmarks compare work as well as values. Avoiding constant overhead on ordinary documents
+that do not use custom properties or layers remains an accepted optimization area; changes must
+preserve imports, inheritance, cache identity, mutation invalidation and every resource limit.
+
+The shipped editor Wasm package is limited to 11,424,000 raw bytes and 3,570,000 gzip bytes by
+`//donner/editor/wasm:wasm_geode_package_size_tests`.
+
+## Testing and Validation
+
+The main verification targets are:
+
+- `//donner/css:css_tests` for specificity, declarations, cycles, selected fallbacks and bounded
+  substitution.
+- `//donner/css/parser:parser_tests` and `//donner/css/parser:stylesheet_parser_fuzzer` for
+  stylesheet, import and layer grammar.
+- `//donner/svg/components/style:style_system_tests` and `style_cascade_feature_tests` for the SVG
+  cascade, inheritance, custom properties, layers and resource accounting.
+- `//donner/svg/components/style:style_parallel_tests` and
+  `ci_tsan_style_parallel_tests` for serial equivalence, publication order and races.
+- `//donner/svg/renderer/tests:style_index_differential_tests` for indexed/unindexed, filtered and
+  fresh-cascade equivalence across the style-edit corpora.
+- `//donner/benchmarks:css_cascade_perf_tests` for stable cascade counters and performance
+  reporting.
+- `//donner/editor/wasm:wasm_geode_package_size_tests` for browser payload and structural limits.
+
+Add conformance cases at the lowest layer that owns the guarantee, and add an SVG computed-style
+companion when token substitution alone does not prove inheritance or neighboring declarations.
+
+## Current Limitations
+
+The cascade does not implement `env()`, typed `attr()`, dynamic variable names such as
+`var(var(...))`, SMIL animation of custom properties, conditional `@import` evaluation, or the
+`revert-layer` keyword. Unsupported conditional imports are diagnosed and ignored.
+
 ## Stylesheet Imports
 
 CSS `@import` is supported in SVG `<style>` elements. Loading is split between the CSS library and
@@ -33,7 +193,7 @@ Conditions are decided as follows:
 | No condition, or the media query `all` | Loaded |
 | Other media query lists | Ignored with a warning, matching how `@media` blocks are ignored |
 | `supports(...)` | Ignored with a warning, matching how `@supports` blocks are ignored |
-| `layer` or `layer(name)` | Ignored with a warning: cascade layers are unsupported, and loading the sheet unlayered would give it the wrong precedence |
+| `layer` or `layer(name)` | Loaded into the anonymous or named cascade layer at the import's position |
 | After another rule, malformed, or with an empty target | Ignored with a warning |
 
 Diagnostics use static text and never repeat the target URL.
