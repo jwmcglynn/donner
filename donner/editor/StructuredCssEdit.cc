@@ -1,6 +1,7 @@
 #include "donner/editor/StructuredCssEdit.h"
 
 #include <algorithm>
+#include <ranges>
 
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLEscape.h"
@@ -106,37 +107,42 @@ void AddDeclarationTarget(const css::Declaration& declaration, std::string_view 
 
 bool IsCssTrivia(std::string_view text);
 
-std::optional<SourceByteRange> EmbeddedDeclarationBody(std::string_view css) {
+std::size_t StartAfterLastSemicolon(const css::SimpleBlock& block, std::size_t bodyStart) {
+  for (const auto& value : block.values | std::views::reverse) {
+    if (value.isToken<css::Token::Semicolon>()) {
+      const auto& token = std::get<css::Token>(value.value);
+      return *token.offset().offset + token.sourceByteLength();
+    }
+  }
+  return bodyStart;
+}
+
+template <typename Mapper>
+void PrepareEmbeddedDeclarationInsertion(std::string_view css, std::size_t offset,
+                                         const svg::SVGStylesheetRule& rule,
+                                         StructuredCssTarget& target, Mapper map) {
   const auto parsed = css::parser::RuleParser::ParseRule(css);
   const auto* qualified = parsed ? std::get_if<css::QualifiedRule>(&parsed->value) : nullptr;
   if (!qualified || qualified->block.closedAtEof || !qualified->block.sourceOffset.offset ||
       qualified->block.sourceByteLength < 2) {
-    return std::nullopt;
-  }
-  const auto start = *qualified->block.sourceOffset.offset;
-  const auto end = start + qualified->block.sourceByteLength;
-  return end == css.size() ? std::optional(SourceByteRange{start + 1, end - 1}) : std::nullopt;
-}
-
-template <typename Mapper>
-void PrepareEmbeddedDeclarationInsertion(std::string_view body, std::size_t bodyOffset,
-                                         StructuredCssTarget& target, Mapper map) {
-  css::parser::DeclarationListParser::SecurityStats stats;
-  std::vector<std::string_view> spellings;
-  const auto declarations =
-      css::parser::DeclarationListParser::ParseOnlyDeclarations(body, &stats, &spellings);
-  if (stats.rejected) {
     return;
   }
-  std::size_t tail = 0;
-  target.declarationNeedsSeparator = false;
-  if (!declarations.empty()) {
-    const auto end = *declarations.back().sourceOffset.offset + spellings.back().size();
-    target.declarationNeedsSeparator = end == body.size();
-    tail = target.declarationNeedsSeparator ? end : end + 1;
+  const auto start = *qualified->block.sourceOffset.offset;
+  if (start + qualified->block.sourceByteLength != css.size()) {
+    return;
   }
-  const bool beforeTail = !IsCssTrivia(body.substr(tail));
-  const auto point = FileOffset::Offset(bodyOffset + (beforeTail ? tail : body.size()));
+  const auto tail = StartAfterLastSemicolon(qualified->block, start + 1);
+  const auto closingBrace = css.size() - 1;
+  const auto finalDeclaration = rule.declarations.empty()
+                                    ? std::nullopt
+                                    : rule.declarations.back().declaration.sourceOffset.offset;
+  // The declaration parser can discard tokens after the last delimiter. If it retained a
+  // declaration there, finish it at the outer closing brace; otherwise preserve the trailing
+  // tokens by inserting before them.
+  target.declarationNeedsSeparator = finalDeclaration && *finalDeclaration >= offset + tail;
+  const bool beforeTail =
+      !target.declarationNeedsSeparator && !IsCssTrivia(css.substr(tail, closingBrace - tail));
+  const auto point = FileOffset::Offset(offset + (beforeTail ? tail : closingBrace));
   target.insertDeclaration = map(SourceRange{point, point});
   target.declarationInsertionBeforeTail = beforeTail;
 }
@@ -165,10 +171,7 @@ void AddEmbeddedDeclarationTargets(const svg::SVGStylesheetRule& rule, std::stri
   }
   const std::string_view css =
       std::string_view(decoded).substr(cssRange->start, cssRange->end - cssRange->start);
-  if (const auto body = EmbeddedDeclarationBody(css)) {
-    PrepareEmbeddedDeclarationInsertion(css.substr(body->start, body->end - body->start),
-                                        cssRange->start + body->start, target, map);
-  }
+  PrepareEmbeddedDeclarationInsertion(css, cssRange->start, rule, target, map);
 }
 
 std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRule& stylesheetRule,
@@ -599,7 +602,11 @@ bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEd
     // Only the add action needs the parsed body. Selection and gutter drag use the cached ranges.
     const auto prepared = FindStructuredCssTargetInternal(app, source, target.selectionOffset,
                                                           /*prepareInsertion=*/true);
-    const auto edit = prepared ? MakeReplacement(*prepared, operation, replacement) : std::nullopt;
+    if (!prepared || prepared->generation != target.generation ||
+        prepared->sourceVersion != target.sourceVersion) {
+      return false;
+    }
+    const auto edit = MakeReplacement(*prepared, operation, replacement);
     return edit && ApplyReplacement(app, sync, editor, source, *edit, target.sourceVersion);
   }
   const auto edit = MakeReplacement(target, operation, replacement);
