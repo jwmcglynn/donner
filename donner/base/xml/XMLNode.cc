@@ -952,6 +952,17 @@ std::optional<SourceRange> XMLDecodedTextSourceMap::mapInsertion(std::size_t off
   return SourceRange{*point, *point};
 }
 
+std::size_t XMLDecodedTextSourceMap::retainedCapacityBytes() const {
+  std::size_t bytes = chunks_.capacity() * sizeof(Chunk);
+  for (const Chunk& chunk : chunks_) {
+    if (chunk.runs.capacity() > (std::numeric_limits<std::size_t>::max() - bytes) / sizeof(Run)) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    bytes += chunk.runs.capacity() * sizeof(Run);
+  }
+  return bytes;
+}
+
 std::optional<SourceRange> XMLDecodedTextSourceMap::mapRange(const SourceRange& range) const {
   const auto start = range.start.offset;
   const auto end = range.end.offset;

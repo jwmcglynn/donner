@@ -186,6 +186,7 @@ void PopulateSelectorRuleSourceRanges(std::string_view str, const QualifiedRule&
   const std::size_t selectorEnd = TrimEnd(str, selectorStart, *blockStart);
   const std::size_t ruleEnd = FindMatchingRuleEnd(str, *blockStart);
 
+  selectorRule->blockClosedAtEof = qualifiedRule.block.closedAtEof;
   selectorRule->selectorSourceRange = MakeSourceRange(selectorStart, selectorEnd);
   selectorRule->ruleSourceRange = MakeSourceRange(selectorStart, ruleEnd);
   selectorRule->selectorEntrySourceRanges = SplitSelectorEntryRanges(
@@ -1302,7 +1303,8 @@ bool MatchesOldBoundaries(const ParsedEditWindow& before, std::span<const Select
     return false;
   }
   for (std::size_t i = 0; i < previous.size(); ++i) {
-    if (rules[i].ruleSourceRange != previous[i].ruleSourceRange ||
+    if (rules[i].blockClosedAtEof != previous[i].blockClosedAtEof ||
+        rules[i].ruleSourceRange != previous[i].ruleSourceRange ||
         rules[i].selectorSourceRange != previous[i].selectorSourceRange ||
         rules[i].selectorEntrySourceRanges != previous[i].selectorEntrySourceRanges ||
         rules[i].declarations != previous[i].declarations) {

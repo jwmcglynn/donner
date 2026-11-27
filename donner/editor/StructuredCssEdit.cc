@@ -1,11 +1,14 @@
 #include "donner/editor/StructuredCssEdit.h"
 
 #include <algorithm>
+#include <ranges>
 
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLTokenizer.h"
+#include "donner/css/Declaration.h"
 #include "donner/css/parser/DeclarationListParser.h"
+#include "donner/css/parser/RuleParser.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SourceSync.h"
@@ -102,8 +105,58 @@ void AddDeclarationTarget(const css::Declaration& declaration, std::string_view 
   }
 }
 
-void AddDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view source,
-                           std::size_t offset, StructuredCssTarget& target) {
+bool IsCssTrivia(std::string_view text);
+
+std::size_t StartAfterLastSemicolon(const css::SimpleBlock& block, std::size_t bodyStart) {
+  for (const auto& value : block.values | std::views::reverse) {
+    if (value.isToken<css::Token::Semicolon>()) {
+      const auto& token = std::get<css::Token>(value.value);
+      return *token.offset().offset + token.sourceByteLength();
+    }
+  }
+  return bodyStart;
+}
+
+std::optional<std::size_t> EmbeddedBodyStart(const css::SimpleBlock& block, std::size_t cssSize) {
+  if (block.closedAtEof || !block.sourceOffset.offset || block.sourceByteLength < 2) {
+    return std::nullopt;
+  }
+  const auto start = *block.sourceOffset.offset;
+  return start + block.sourceByteLength == cssSize ? std::optional(start + 1) : std::nullopt;
+}
+
+template <typename Mapper>
+void PrepareEmbeddedDeclarationInsertion(std::string_view css, std::size_t offset,
+                                         const svg::SVGStylesheetRule& rule,
+                                         StructuredCssTarget& target, Mapper map) {
+  const auto parsed = css::parser::RuleParser::ParseRule(css);
+  const auto* qualified = parsed ? std::get_if<css::QualifiedRule>(&parsed->value) : nullptr;
+  const auto start = qualified ? EmbeddedBodyStart(qualified->block, css.size()) : std::nullopt;
+  if (!start) {
+    return;
+  }
+  const auto tail = StartAfterLastSemicolon(qualified->block, *start);
+  const auto closingBrace = css.size() - 1;
+  if (tail > closingBrace) {
+    return;
+  }
+  const auto finalDeclaration = rule.declarations.empty()
+                                    ? std::nullopt
+                                    : rule.declarations.back().declaration.sourceOffset.offset;
+  // The declaration parser can discard tokens after the last delimiter. If it retained a
+  // declaration there, finish it at the outer closing brace; otherwise preserve the trailing
+  // tokens by inserting before them.
+  target.declarationNeedsSeparator = finalDeclaration && *finalDeclaration >= offset + tail;
+  const bool beforeTail =
+      !target.declarationNeedsSeparator && !IsCssTrivia(css.substr(tail, closingBrace - tail));
+  const auto point = FileOffset::Offset(offset + (beforeTail ? tail : closingBrace));
+  target.insertDeclaration = map(SourceRange{point, point});
+  target.declarationInsertionBeforeTail = beforeTail;
+}
+
+void AddEmbeddedDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view source,
+                                   std::size_t offset, StructuredCssTarget& target,
+                                   bool prepareInsertion) {
   if (!rule.stylesheetElement) {
     return;
   }
@@ -116,20 +169,30 @@ void AddDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view 
   for (const auto& entry : rule.declarations) {
     AddDeclarationTarget(entry.declaration, decoded, offset, target, map);
   }
+  if (!prepareInsertion) {
+    return;
+  }
+  const auto cssRange = ByteRange(rule.ruleCssRange, decoded.size());
+  if (!cssRange) {
+    return;
+  }
+  const std::string_view css =
+      std::string_view(decoded).substr(cssRange->start, cssRange->end - cssRange->start);
+  PrepareEmbeddedDeclarationInsertion(css, cssRange->start, rule, target, map);
 }
 
 std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRule& stylesheetRule,
                                                       std::string_view source, std::size_t offset,
                                                       std::uint64_t generation,
-                                                      std::uint64_t sourceVersion) {
+                                                      std::uint64_t sourceVersion,
+                                                      bool prepareInsertion) {
   const auto rule = ByteRange(stylesheetRule.ruleSourceRange, source.size());
   const auto selector = ByteRange(stylesheetRule.selectorSourceRange, source.size());
-  if (!rule || !selector || !Contains(*rule, offset) || source[rule->end - 1] != '}') {
+  if (!rule || !selector || stylesheetRule.blockClosedAtEof || !Contains(*rule, offset)) {
     return std::nullopt;
   }
   StructuredCssTarget target{.rule = *rule,
                              .selector = *selector,
-                             .insertDeclaration = rule->end - 1,
                              .selectionOffset = offset,
                              .generation = generation,
                              .sourceVersion = sourceVersion};
@@ -139,8 +202,80 @@ std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRu
       target.encoding = EmbeddedEncoding(*stylesheetRule.stylesheetElement, source, *rule);
     }
   }
-  AddDeclarationTargets(stylesheetRule, source, offset, target);
+  AddEmbeddedDeclarationTargets(stylesheetRule, source, offset, target, prepareInsertion);
   return target;
+}
+
+template <typename Mapper>
+bool InsertBeforeDiscardedCss(std::string_view value, std::size_t start,
+                              StructuredCssTarget& target, Mapper map) {
+  if (IsCssTrivia(value.substr(start))) {
+    return true;
+  }
+  const auto point = FileOffset::Offset(start);
+  const auto insertion = map(SourceRange{point, point});
+  if (!insertion) {
+    return false;
+  }
+  target.insertDeclaration = *insertion;
+  target.declarationInsertionBeforeTail = true;
+  target.declarationNeedsSeparator = false;
+  return true;
+}
+
+template <typename Mapper>
+void PrepareRecoveredDeclarationMove(const css::Declaration& declaration, std::string_view spelling,
+                                     const css::StyleDeclarationEofClosure& closure,
+                                     StructuredCssTarget& target, Mapper map) {
+  const auto start = declaration.sourceOffset;
+  const auto end = FileOffset::Offset(*start.offset + spelling.size());
+  const auto span = map(SourceRange{start, end});
+  if (!span || span->end != target.rule.end || !Contains(*span, target.selectionOffset)) {
+    return;
+  }
+  // A recovered value can lack an authored end. The declaration-list parser still supplies
+  // the complete spelling, so the move can consume the recovered tail at its mapped XML range.
+  target.name = map(declaration.authoredNameRange());
+  if (closure.removeTrailingEscape) {
+    spelling.remove_suffix(1);
+  }
+  target.declaration = *span;
+  target.decodedMoveText.assign(spelling);
+  target.decodedMoveText += closure.suffix;
+  target.declarationClosedForMove = true;
+}
+
+template <typename Mapper>
+bool PrepareInlineDeclarationInsertion(const css::Declaration& last, std::string_view spelling,
+                                       std::string_view value, StructuredCssTarget& target,
+                                       Mapper map) {
+  const std::size_t end = *last.sourceOffset.offset + spelling.size();
+  if (end < value.size()) {
+    // The retained spelling is bounded by an actual declaration-list semicolon.
+    return InsertBeforeDiscardedCss(value, end + 1, target, map);
+  }
+  // The final spelling excludes an explicit semicolon. A recovered value may lack a mapped
+  // authored range, so use the parser's terminator instead of the selected declaration's range.
+  target.declarationNeedsSeparator = true;
+  const auto closure = css::closeStyleDeclarationAtEof(last, spelling);
+  if (closure.suffix.empty()) {
+    return true;
+  }
+  if (closure.removeTrailingEscape) {
+    const auto escape =
+        map(SourceRange{FileOffset::Offset(value.size() - 1), FileOffset::Offset(value.size())});
+    if (!escape || escape->end != target.rule.end) {
+      return false;
+    }
+    target.insertDeclaration = *escape;
+  }
+  const auto encoded = xml::EscapeAttributeValue(closure.suffix, target.attributeQuote);
+  if (!encoded) {
+    return false;
+  }
+  target.declarationInsertionPrefix = *encoded;
+  PrepareRecoveredDeclarationMove(last, spelling, closure, target, map);
+  return true;
 }
 
 std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& document,
@@ -156,13 +291,14 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
     return std::nullopt;
   }
   css::parser::DeclarationListParser::SecurityStats stats;
+  std::vector<std::string_view> authoredSpellings;
   const auto declarations =
-      css::parser::DeclarationListParser::ParseOnlyDeclarations(*value, &stats);
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(*value, &stats, &authoredSpellings);
   if (stats.rejected) {
     return std::nullopt;
   }
   StructuredCssTarget target{.rule = *valueRange,
-                             .insertDeclaration = valueRange->end,
+                             .insertDeclaration = SourceByteRange{valueRange->end, valueRange->end},
                              .encoding = StructuredCssSourceEncoding::Attribute,
                              .attributeQuote = attribute->quote,
                              .inlineStyle = true,
@@ -176,6 +312,14 @@ std::optional<StructuredCssTarget> FindInlineTarget(const svg::SVGDocument& docu
   };
   for (const auto& declaration : declarations) {
     AddDeclarationTarget(declaration, *value, offset, target, map);
+  }
+  const bool insertionReady =
+      declarations.empty()
+          ? InsertBeforeDiscardedCss(*value, 0, target, map)
+          : PrepareInlineDeclarationInsertion(declarations.back(), authoredSpellings.back(), *value,
+                                              target, map);
+  if (!insertionReady) {
+    return std::nullopt;
   }
   return target;
 }
@@ -205,6 +349,25 @@ bool AllowsEdit(const StructuredCssTarget& target, StructuredCssOperation operat
           operation != Operation::InsertRule);
 }
 
+std::optional<CssReplacement> InsertDeclaration(const StructuredCssTarget& target,
+                                                std::string_view replacement) {
+  if (!target.insertDeclaration) {
+    return std::nullopt;
+  }
+  const bool beforeTail = target.declarationInsertionBeforeTail;
+  std::string bytes = target.declarationInsertionPrefix;
+  if (target.declarationNeedsSeparator) {
+    bytes += "; ";
+  } else if (!beforeTail || target.insertDeclaration->start != target.rule.start) {
+    bytes += ' ';
+  }
+  bytes.append(replacement);
+  if (beforeTail && !replacement.ends_with(';')) {
+    bytes += ';';
+  }
+  return CssReplacement{*target.insertDeclaration, std::move(bytes)};
+}
+
 std::optional<CssReplacement> MakeReplacement(const StructuredCssTarget& target,
                                               StructuredCssOperation operation,
                                               std::string_view replacement) {
@@ -218,11 +381,7 @@ std::optional<CssReplacement> MakeReplacement(const StructuredCssTarget& target,
         return std::nullopt;
       }
       return CssReplacement{{target.value->end, target.value->end}, " !important"};
-    case Operation::InsertDeclaration: {
-      std::string bytes = target.declarationNeedsSeparator ? "; " : " ";
-      bytes.append(replacement);
-      return CssReplacement{{target.insertDeclaration, target.insertDeclaration}, std::move(bytes)};
-    }
+    case Operation::InsertDeclaration: return InsertDeclaration(target, replacement);
     case Operation::InsertRule:
       return CssReplacement{{target.rule.end, target.rule.end}, "\n" + std::string(replacement)};
     default: break;
@@ -313,7 +472,7 @@ std::optional<RcString> EncodeMovedCss(const StructuredCssTarget& from,
   if (from.encoding == Encoding::Unmapped || destination.encoding == Encoding::Unmapped) {
     return std::nullopt;
   }
-  if (SameEncoding(from, destination)) {
+  if (SameEncoding(from, destination) && !from.declarationClosedForMove) {
     return RcString(original);
   }
   switch (destination.encoding) {
@@ -343,16 +502,16 @@ CssReplacement SwapAdjacent(std::string_view source, SourceByteRange item, Sourc
   return {{left.start, right.end}, std::move(bytes)};
 }
 
-CssReplacement CutAndInsert(std::string_view source, SourceByteRange from, std::size_t insertion,
-                            std::string_view bytes) {
-  if (insertion < from.start) {
+CssReplacement CutAndInsert(std::string_view source, SourceByteRange from,
+                            SourceByteRange insertion, std::string_view bytes) {
+  if (insertion.start < from.start) {
     std::string replacement(bytes);
-    replacement += source.substr(insertion, from.start - insertion);
-    return {{insertion, from.end}, std::move(replacement)};
+    replacement += source.substr(insertion.end, from.start - insertion.end);
+    return {{insertion.start, from.end}, std::move(replacement)};
   }
-  std::string replacement(source.substr(from.end, insertion - from.end));
+  std::string replacement(source.substr(from.end, insertion.start - from.end));
   replacement += bytes;
-  return {{from.start, insertion}, std::move(replacement)};
+  return {{from.start, insertion.end}, std::move(replacement)};
 }
 
 std::string TransferSeparator(std::string_view source, SourceByteRange destination) {
@@ -374,7 +533,13 @@ std::string TransferText(std::string_view source, std::string_view moved, Source
   const auto separator = TransferSeparator(source, to);
   std::string bytes;
   if (after) {
-    bytes = declaration && !destination.declarationIncludesSemicolon ? ";" + separator : separator;
+    if (destination.declarationClosedForMove) {
+      bytes = destination.declarationInsertionPrefix;
+    }
+    if (declaration && !destination.declarationIncludesSemicolon) {
+      bytes += ';';
+    }
+    bytes += separator;
   }
   bytes += moved;
   if (declaration && !from.declarationIncludesSemicolon) {
@@ -389,7 +554,7 @@ std::string TransferText(std::string_view source, std::string_view moved, Source
 std::optional<CssReplacement> PlanTransfer(std::string_view source, const StructuredCssTarget& from,
                                            const StructuredCssTarget& destination,
                                            SourceByteRange item, SourceByteRange anchor,
-                                           std::size_t insertion, bool after) {
+                                           SourceByteRange insertion, bool after) {
   const auto encoded = EncodeMovedCss(from, destination, Slice(source, item));
   if (!encoded) {
     return std::nullopt;
@@ -426,17 +591,20 @@ std::optional<CssReplacement> PlanMove(EditorApp& app, std::string_view source,
   if (Overlap(item, anchor)) {
     return std::nullopt;
   }
-  const auto insertion = after ? anchor.end : anchor.start;
-  if (insertion == item.start || insertion == item.end) {
+  const auto position = after ? anchor.end : anchor.start;
+  const SourceByteRange insertion = after && destination.declarationClosedForMove
+                                        ? *destination.insertDeclaration
+                                        : SourceByteRange{position, position};
+  if (position == item.start || position == item.end) {
     return std::nullopt;
   }
   return PlanTransfer(source, from, destination, item, anchor, insertion, after);
 }
 
-}  // namespace
-
-std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
-                                                           std::size_t offset) {
+std::optional<StructuredCssTarget> FindStructuredCssTargetInternal(EditorApp& app,
+                                                                   std::string_view source,
+                                                                   std::size_t offset,
+                                                                   bool prepareInsertion) {
   if (!app.hasDocument() || !app.structuredEditingEnabled() ||
       app.document().hasPendingMutations()) {
     return std::nullopt;
@@ -451,7 +619,33 @@ std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::
   if (!stylesheetRule) {
     return FindInlineTarget(document, source, offset, generation);
   }
-  return MakeEmbeddedTarget(*stylesheetRule, source, offset, generation, document.sourceVersion());
+  return MakeEmbeddedTarget(*stylesheetRule, source, offset, generation, document.sourceVersion(),
+                            prepareInsertion);
+}
+
+std::optional<StructuredCssTarget> PrepareDeclarationInsertion(EditorApp& app,
+                                                               std::string_view source,
+                                                               const StructuredCssTarget& target) {
+  auto prepared = FindStructuredCssTargetInternal(app, source, target.selectionOffset,
+                                                  /*prepareInsertion=*/true);
+  if (!prepared || prepared->generation != target.generation ||
+      prepared->sourceVersion != target.sourceVersion || prepared->rule != target.rule ||
+      !prepared->insertDeclaration) {
+    return std::nullopt;
+  }
+  return prepared;
+}
+
+}  // namespace
+
+std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
+                                                           std::size_t offset) {
+  return FindStructuredCssTargetInternal(app, source, offset, /*prepareInsertion=*/false);
+}
+
+bool CanInsertStructuredCssDeclaration(EditorApp& app, std::string_view source,
+                                       const StructuredCssTarget& target) {
+  return PrepareDeclarationInsertion(app, source, target).has_value();
 }
 
 bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
@@ -460,6 +654,12 @@ bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEd
   const std::string source = editor.getText();
   if (!IsCurrent(app, source, target)) {
     return false;
+  }
+  if (operation == StructuredCssOperation::InsertDeclaration && !target.inlineStyle) {
+    // Only the add action needs the parsed body. Selection and gutter drag use the cached ranges.
+    const auto prepared = PrepareDeclarationInsertion(app, source, target);
+    const auto edit = prepared ? MakeReplacement(*prepared, operation, replacement) : std::nullopt;
+    return edit && ApplyReplacement(app, sync, editor, source, *edit, target.sourceVersion);
   }
   const auto edit = MakeReplacement(target, operation, replacement);
   return edit && ApplyReplacement(app, sync, editor, source, *edit, target.sourceVersion);

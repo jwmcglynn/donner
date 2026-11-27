@@ -24,6 +24,8 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/base/xml/XMLSourceStore.h"
+#include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/css/parser/ValueParser.h"
@@ -489,6 +491,115 @@ TEST_F(StyleSystemTest, StylesheetSourceIndexBuildsOnceForManyAnnotatedRanges) {
   ASSERT_THAT(shifted.back().ruleSourceRange, testing::Optional(testing::_));
   EXPECT_EQ(*shifted.back().ruleSourceRange->start.offset, *oldRange->start.offset + 6);
   EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2);
+}
+
+TEST_F(StyleSystemTest, StylesheetSourceIndexCachesEverySheetAcrossElementAnnotations) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.hit { fill: red; }</style>
+      <style>.hit { stroke: blue; }</style>
+      <rect id="first" class="hit"/>
+      <rect id="second" class="hit"/>
+    </svg>
+  )");
+  auto first = document.querySelector("#first");
+  auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
+  const auto starts = StyleSystem::StylesheetSourceIndexBuildsForTesting();
+
+  const auto authoredMatches = [&](const SVGElement& element) {
+    std::vector<MatchedStyleRule> authored;
+    for (const auto& match : styleSystem.collectMatchedStyleRules(element.entityHandle())) {
+      if (match.ruleSourceRange) {
+        authored.push_back(match);
+      }
+    }
+    return AuthoredMatchedRuleSummaries(document.source(), authored);
+  };
+  const auto expected = ElementsAre(
+      AuthoredMatchedRuleIs(0u, css::Specificity::FromABC(0, 1, 0), ".hit",
+                            ".hit { stroke: blue; }"),
+      AuthoredMatchedRuleIs(0u, css::Specificity::FromABC(0, 1, 0), ".hit", ".hit { fill: red; }"));
+
+  EXPECT_THAT(authoredMatches(*first), expected);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2);
+  EXPECT_THAT(authoredMatches(*second), expected);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2)
+      << "the second element must reuse both stylesheet indices instead of evicting A with B";
+}
+
+TEST_F(StyleSystemTest, StylesheetSourceIndexBudgetKeepsStandaloneMappingExact) {
+  std::string encodedText;
+  for (std::size_t i = 0; i < 128; ++i) {
+    encodedText += "&amp;";
+  }
+  const std::string firstRule = ".hit { --encoded: '" + encodedText + "'; fill: red; }";
+  const std::string secondRule = ".hit { --encoded: '" + encodedText + "'; stroke: blue; }";
+  const std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style id='first-sheet'>" +
+                             firstRule + "</style><style id='second-sheet'>" + secondRule +
+                             "</style><rect id='first' class='hit'/><rect id='second' "
+                             "class='hit'/></svg>";
+  auto document = ParseSVG(source);
+  auto* context = document.registry().ctx().find<xml::components::XMLDocumentContext>();
+  ASSERT_THAT(context, NotNull());
+  auto limits = context->sourceStoreHolder->store->resourceLimits();
+  limits.maximumSourceSize = source.size();
+  ASSERT_TRUE(context->sourceStoreHolder->store->setResourceLimits(limits));
+
+  auto first = document.querySelector("#first");
+  auto second = document.querySelector("#second");
+  auto firstSheetElement = document.querySelector("#first-sheet");
+  auto secondSheetElement = document.querySelector("#second-sheet");
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
+  ASSERT_THAT(firstSheetElement, testing::Optional(testing::_));
+  ASSERT_THAT(secondSheetElement, testing::Optional(testing::_));
+  auto firstSheet = firstSheetElement->tryCast<SVGStyleElement>();
+  auto secondSheet = secondSheetElement->tryCast<SVGStyleElement>();
+  ASSERT_THAT(firstSheet, testing::Optional(testing::_));
+  ASSERT_THAT(secondSheet, testing::Optional(testing::_));
+  const auto& firstComponent =
+      document.registry().get<StylesheetComponent>(firstSheet->unsafeEntityHandle().entity());
+  const auto& secondComponent =
+      document.registry().get<StylesheetComponent>(secondSheet->unsafeEntityHandle().entity());
+  ASSERT_THAT(firstComponent.stylesheet.rules(), testing::SizeIs(1));
+  ASSERT_THAT(secondComponent.stylesheet.rules(), testing::SizeIs(1));
+  const SourceRange firstRange = firstComponent.stylesheet.rules()[0].ruleSourceRange;
+  const SourceRange secondRange = secondComponent.stylesheet.rules()[0].ruleSourceRange;
+  const auto starts = StyleSystem::StylesheetSourceIndexBuildsForTesting();
+
+  const auto mapRule = [&](const SVGStyleElement& sheet, const SourceRange& range) {
+    const auto mapped = MapStylesheetSourceRange(sheet, range);
+    EXPECT_THAT(mapped, testing::Optional(testing::_));
+    return mapped ? std::string(SourceSlice(document.source(), *mapped)) : std::string();
+  };
+  EXPECT_EQ(mapRule(*firstSheet, firstRange), firstRule);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 1)
+      << "a cold exact lookup must return the over-budget map it just constructed";
+
+  const auto boundedRanges = [](const std::vector<MatchedStyleRule>& matches) {
+    std::vector<bool> ranges;
+    for (const auto& match : matches) {
+      if (!match.isUserAgentStylesheet) {
+        ranges.push_back(match.ruleSourceRange.has_value());
+      }
+    }
+    return ranges;
+  };
+  EXPECT_THAT(boundedRanges(styleSystem.collectMatchedStyleRules(first->entityHandle())),
+              ElementsAre(false, false));
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2);
+  EXPECT_THAT(boundedRanges(styleSystem.collectMatchedStyleRules(second->entityHandle())),
+              ElementsAre(false, false));
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 2)
+      << "bounded annotations must cache both refusals instead of rebuilding per element";
+
+  EXPECT_EQ(mapRule(*firstSheet, firstRange), firstRule);
+  EXPECT_EQ(mapRule(*firstSheet, firstRange), firstRule);
+  EXPECT_EQ(StyleSystem::StylesheetSourceIndexBuildsForTesting(), starts + 3);
+  EXPECT_EQ(mapRule(*secondSheet, secondRange), secondRule);
+  EXPECT_EQ(mapRule(*firstSheet, firstRange), firstRule);
 }
 
 TEST_F(StyleSystemTest, StylesheetSourceIndexKeepsEncodedAndCDataChunksDistinct) {

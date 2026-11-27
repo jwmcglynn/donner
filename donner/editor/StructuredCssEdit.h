@@ -25,11 +25,14 @@ struct StructuredCssTarget {
   std::optional<SourceByteRange> name;         ///< Authored property name.
   std::optional<SourceByteRange> value;        ///< Authored property value.
   std::optional<SourceByteRange> priority;     ///< Authored importance annotation.
-  std::size_t insertDeclaration = 0;  ///< Position directly before the rule's closing brace.
+  std::optional<SourceByteRange> insertDeclaration;  ///< Insertion point or trailing escape.
+  bool declarationInsertionBeforeTail = false;       ///< Keep discarded trailing source separate.
+  std::string declarationInsertionPrefix;            ///< XML-encoded CSS EOF closers.
   StructuredCssSourceEncoding encoding = StructuredCssSourceEncoding::Unmapped;  ///< Context.
   std::string decodedMoveText;  ///< Original CSS token bytes before XML encoding.
   char attributeQuote = '\0';   ///< Original delimiter for an inline style attribute.
   bool inlineStyle = false;     ///< The selected declaration belongs to a style attribute.
+  bool declarationClosedForMove = false;      ///< Repaired CSS must be encoded at the destination.
   bool declarationIncludesSemicolon = false;  ///< Selected bytes include a CSS separator.
   bool declarationNeedsSeparator = false;     ///< Last declaration has no terminating semicolon.
   std::size_t selectionOffset = 0;  ///< Original hit that resolves the same parsed target.
@@ -59,6 +62,13 @@ enum class StructuredCssOperation {
 /// @param offset Byte position that identifies the target.
 std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
                                                            std::size_t offset);
+
+/// Check whether a declaration can be inserted at the current parsed source boundary.
+/// @param app Active editor document.
+/// @param source Current source pane contents.
+/// @param target Previously resolved, revision-bound CSS target.
+bool CanInsertStructuredCssDeclaration(EditorApp& app, std::string_view source,
+                                       const StructuredCssTarget& target);
 
 /// Apply one CSS operation as one document command and one document undo step.
 /// @param app Active editor document.

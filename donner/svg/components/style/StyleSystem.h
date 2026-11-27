@@ -763,6 +763,9 @@ public:
    *
    * Only rules of each `<style>` element's own stylesheet are reported; rules loaded through
    * `@import` have no document source and are not indexed by \ref MatchedStyleRule::ruleIndex.
+   * Match collection is complete, but source-range projection is resource-bounded. A matched rule
+   * can therefore retain its stylesheet-local CSS ranges while its document source ranges are
+   * absent. Individual source mapping through \ref mapStylesheetSourceRange remains exact.
    *
    * @param handle Entity handle to trace stylesheet matches for.
    * @return Matched stylesheet rules in cascade scan order.

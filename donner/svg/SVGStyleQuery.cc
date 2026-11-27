@@ -46,6 +46,7 @@ SVGStylesheetRule ToPublicStylesheetRule(Registry& registry, Entity stylesheetEn
     return components::StyleSystem().mapStylesheetSourceRange(registry, stylesheetEntity, range);
   };
   SVGStylesheetRule result{
+      .blockClosedAtEof = rule.blockClosedAtEof,
       .isUserAgentStylesheet = stylesheet.isUserAgentStylesheet,
       .stylesheetEntity = stylesheetEntity,
       .ruleIndex = ruleIndex,

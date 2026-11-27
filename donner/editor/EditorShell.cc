@@ -4255,7 +4255,8 @@ void EditorShell::renderStructuredCssActions(const StructuredCssTarget& target) 
        target.value.has_value() && !target.priority);
   edit("Remove !important", StructuredCssOperation::RemoveImportant, {},
        target.priority.has_value());
-  edit("Add declaration", StructuredCssOperation::InsertDeclaration, "fill: currentColor;");
+  edit("Add declaration", StructuredCssOperation::InsertDeclaration, "fill: currentColor;",
+       CanInsertStructuredCssDeclaration(app_, textEditor_.getText(), target));
   edit("Remove declaration", StructuredCssOperation::RemoveDeclaration, {},
        target.declaration.has_value());
   renderStructuredCssMoveActions(target);

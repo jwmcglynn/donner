@@ -150,6 +150,19 @@ struct DeclarationOrAtRule {
   }
 };
 
+/// The source edit that makes an implicitly closed declaration safe to extend.
+struct StyleDeclarationEofClosure {
+  bool removeTrailingEscape = false;  ///< Drop a reverse solidus ignored at string EOF.
+  std::string suffix;                 ///< Explicit closers in innermost-to-outermost order.
+};
+
+/// Finish the trailing constructs recovered at EOF before adding another declaration.
+/// @param declaration Parsed declaration whose trailing constructs were recovered.
+/// @param spelling Authored declaration text through EOF, starting at its source offset.
+/// @return The minimal trailing edit, empty when no recovery is needed.
+StyleDeclarationEofClosure closeStyleDeclarationAtEof(const Declaration& declaration,
+                                                      std::string_view spelling);
+
 /**
  * Merge two sets of CSS declarations, where \p updates override declarations in \p existing that
  * have the same property name (case-insensitive). Unrelated existing declarations are preserved.

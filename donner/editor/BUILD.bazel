@@ -504,6 +504,7 @@ donner_cc_library(
         ":text_editor",
         ":undo_timeline",
         "//donner/base/xml",
+        "//donner/css",
         "//donner/css/parser",
         "//donner/svg",
     ],

@@ -907,6 +907,42 @@ TEST(EditorSyncTest, StructuredCssMovesDoNotTreatEntityEndAsADeclarationSeparato
   ASSERT_EQ(text.getText(), original);
 }
 
+TEST(EditorSyncTest, StructuredCssMoveRepairsInlineEofBeforeAddingSeparators) {
+  const auto check = [](std::string_view body, std::string_view item, std::string_view anchor,
+                        bool after, std::string_view expected) {
+    SCOPED_TRACE(body);
+    TextEditor text;
+    text.setText(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg">)svg") +
+                 std::string(body) + "</svg>");
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto from = FindStructuredCssTarget(app, original, original.find(item));
+    const auto to = FindStructuredCssTarget(app, original, original.find(anchor));
+    ASSERT_THAT(from, testing::Optional(testing::_));
+    ASSERT_THAT(to, testing::Optional(testing::_));
+    ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, after));
+    EXPECT_THAT(text.getText(), testing::HasSubstr(expected));
+    EXPECT_EQ(app.document().document().source(), text.getText());
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().fill.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+    EXPECT_EQ(app.document().document().source(), original);
+  };
+  check(R"svg(<rect id="r" style="fill:red; --x:foo\"/>)svg", "--x:", "fill:red",
+        /*after=*/false, R"(--x:foo\fffd; fill:red;)");
+  check(R"svg(<rect id="r" style="fill:red; --x:'x&#92;"/>)svg", "fill:red", "--x:",
+        /*after=*/true, R"(--x:'x'; fill:red;)");
+  check(R"svg(<rect id="r" style="--x:'x&#92;"/><style>#r {fill:red;}</style>)svg",
+        "--x:", "fill:red", /*after=*/false, R"(#r {--x:'x'; fill:red;})");
+  check(R"svg(<style>#r {fill:red;}</style><rect id="r" style="--x:'x&#92;"/>)svg", "fill:red",
+        "--x:", /*after=*/true, R"(--x:'x'; fill:red;)");
+}
+
 TEST(EditorSyncTest, StructuredCssMovePreservesXmlEncodedCssSeparator) {
   constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
 <rect id="r" style="--x:&quot;x&quot;"/>
@@ -958,6 +994,142 @@ TEST(EditorSyncTest, StructuredCssEmptyValueHasAnEditableInsertionPoint) {
   };
   check("--accent:");
   check("--other:");
+}
+
+TEST(EditorSyncTest, StructuredCssAppendClosesRecoveredInlineValuesAndUndoesOnce) {
+  const auto check = [](std::string_view tail, std::string_view closedTail) {
+    SCOPED_TRACE(tail);
+    const std::string prefix =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" style="stroke:blue&#59; --note: )svg";
+    constexpr std::string_view end = R"svg("/></svg>)svg";
+    TextEditor text;
+    text.setText(prefix + std::string(tail) + std::string(end));
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    // Choose the earlier declaration to ensure appending still repairs the final declaration.
+    const auto target = FindStructuredCssTarget(app, original, original.find("stroke:"));
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "fill: red;"));
+    const std::string expected =
+        prefix + std::string(closedTail) + "; fill: red;" + std::string(end);
+    EXPECT_EQ(text.getText(), expected);
+    EXPECT_EQ(app.document().document().source(), expected);
+    const std::size_t fillOffset = expected.find("fill:");
+    const auto fill = FindStructuredCssTarget(app, expected, fillOffset);
+    ASSERT_THAT(fill, testing::Optional(testing::_));
+    EXPECT_THAT(fill->name, testing::Optional(testing::FieldsAre(fillOffset, fillOffset + 4)));
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().fill.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+    EXPECT_EQ(app.document().document().source(), original);
+  };
+  check("var(--x, calc(", "var(--x, calc())");
+  check("var(--x, calc(1px))", "var(--x, calc(1px))");
+  check("var(--x, [&quot;text&#92;", "var(--x, [&quot;text&quot;])");
+  check("value/* comment", "value/* comment*/");
+}
+
+TEST(EditorSyncTest, StructuredCssInsertsBeforeDiscardedInlineTail) {
+  const auto check = [](std::string_view value, std::string_view editedValue) {
+    SCOPED_TRACE(value);
+    constexpr std::string_view prefix =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" style=")svg";
+    constexpr std::string_view suffix = R"svg("/></svg>)svg";
+    TextEditor text;
+    text.setText(std::string(prefix) + std::string(value) + std::string(suffix));
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto target = FindStructuredCssTarget(app, original, prefix.size());
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "stroke: red"));
+    const std::string expected =
+        std::string(prefix) + std::string(editedValue) + std::string(suffix);
+    EXPECT_EQ(text.getText(), expected);
+    EXPECT_EQ(app.document().document().source(), expected);
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().stroke.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+  };
+  check("fill:red&#59; /* pending", "fill:red&#59; stroke: red; /* pending");
+  check("/* pending", "stroke: red;/* pending");
+  check("fill:red; invalid calc(", "fill:red; stroke: red; invalid calc(");
+}
+
+TEST(EditorSyncTest, StructuredCssInsertsBeforeDiscardedEmbeddedTail) {
+  const auto check = [](std::string_view styleText, std::string_view editedStyleText) {
+    SCOPED_TRACE(styleText);
+    constexpr std::string_view prefix = R"svg(<svg xmlns="http://www.w3.org/2000/svg"><style>)svg";
+    constexpr std::string_view suffix = R"svg(</style><rect id="r"/></svg>)svg";
+    TextEditor text;
+    text.setText(std::string(prefix) + std::string(styleText) + std::string(suffix));
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto target = FindStructuredCssTarget(app, original, original.find("rect"));
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    EXPECT_TRUE(CanInsertStructuredCssDeclaration(app, original, *target));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "stroke: red"));
+    const std::string expected =
+        std::string(prefix) + std::string(editedStyleText) + std::string(suffix);
+    EXPECT_EQ(text.getText(), expected);
+    EXPECT_EQ(app.document().document().source(), expected);
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().stroke.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+    EXPECT_EQ(app.document().document().source(), original);
+  };
+  check("rect { fill:red; invalid }", "rect { fill:red; stroke: red; invalid }");
+  check("rect { invalid fn(a;b) }", "rect { stroke: red; invalid fn(a;b) }");
+  check("rect &#123; fill:red&#59; invalid &#125;",
+        "rect &#123; fill:red&#59; stroke: red; invalid &#125;");
+  check("<![CDATA[rect { --note:{a;b}; invalid fn(a;b) }]]>",
+        "<![CDATA[rect { --note:{a;b}; stroke: red; invalid fn(a;b) }]]>");
+}
+
+TEST(EditorSyncTest, StructuredCssDoesNotUseInnerBraceAsTheRuleInsertionPoint) {
+  const auto check = [](std::string_view closingBrace) {
+    TextEditor text;
+    text.setText(
+        std::string(
+            R"svg(<svg xmlns="http://www.w3.org/2000/svg"><style>rect { --note: {value})svg") +
+        std::string(closingBrace) + "</style><rect/></svg>");
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto target = FindStructuredCssTarget(app, original, original.find("--note:"));
+    if (closingBrace.empty()) {
+      EXPECT_FALSE(target.has_value());
+      EXPECT_EQ(app.document().document().source(), original);
+      EXPECT_FALSE(app.canUndo());
+      return;
+    }
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "fill: red;"));
+    EXPECT_THAT(text.getText(), testing::HasSubstr("rect { --note: {value}; fill: red;}"));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+  };
+  check("");
+  check("}");
 }
 
 TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand) {
