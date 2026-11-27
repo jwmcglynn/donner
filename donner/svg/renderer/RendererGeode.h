@@ -425,6 +425,10 @@ public:
   void drawImage(const ImageResource& image, const ImageParams& params) override;
   bool drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
                            double opacity = 1.0, bool pixelated = false) override;
+  std::optional<bool> copyTextureDamagePatch(const RenderViewport& viewport,
+                                             const RendererTextureSnapshot& previous,
+                                             const RendererTextureSnapshot& patch,
+                                             const Vector2i& offset) override;
   void drawText(Registry& registry, const components::ComputedTextComponent& text,
                 const TextParams& params) override;
 
@@ -741,6 +745,27 @@ public:
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override { return true; }
 
 private:
+  /// Updates renderer and device state before selecting the frame encoder.
+  /// @param viewport The requested frame size and scale.
+  bool prepareFrameResources(const RenderViewport& viewport);
+
+  /// Resolves a premultiplied source that may be copied in the target format.
+  /// @param snapshot Immutable tile payload.
+  /// @param device Device responsible for the destination.
+  /// @param format Expected destination format.
+  const gpu::Texture* damagePatchCopySource(const RendererTextureSnapshot& snapshot,
+                                            const gpu::Device& device,
+                                            gpu::TextureFormat format) const;
+
+  /// Records two copies without an intervening framebuffer pass.
+  /// @param previous Existing tile texture.
+  /// @param patch Replacement texture.
+  /// @param tile Full copy extent.
+  /// @param size Patch copy extent.
+  /// @param offset Destination texel of the patch.
+  bool recordDamagePatchCopies(const gpu::Texture& previous, const gpu::Texture& patch,
+                               const Vector2i& tile, const Vector2i& size, const Vector2i& offset);
+
   RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose,
                 std::function<void()> constructionHook);
 

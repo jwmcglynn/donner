@@ -46,15 +46,12 @@ struct HeldFrame {
 /// construction and destruction are absent too: they ride along with the next round trip, and the
 /// 10 still held after a frame's last round trip go in one more batch when the worker parks.
 constexpr HeldFrame kHeldFrames[] = {
-    // The first held frame creates five resources the later ones take from the pool: a uniform
-    // arena buffer for the layer tile draws (`RendererGeode::drawTextureSnapshot`), a batch
-    // uniform for the tile's target size, and a clip mask, a mask capture and a mask content
-    // texture of the tile's size, which no earlier frame used. Each held frame also creates two
-    // render targets and the views its passes need. Owned blit textures reuse their default
-    // source views, avoiding repeated creation and deferred destruction of transient views.
-    {12.0, {.resourceCreation = 24, .resourceSharing = 2, .commandBatch = 6}, 10},
-    {24.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
-    {36.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
+    // The first held frame also allocates the mask and crop resources used by later frames.
+    // The copy-only reconstruction takes neither a target view nor the source views for the
+    // old four-strip draw and the patch draw.
+    {12.0, {.resourceCreation = 21, .resourceSharing = 2, .commandBatch = 6}, 10},
+    {24.0, {.resourceCreation = 17, .resourceSharing = 2, .commandBatch = 6}, 10},
+    {36.0, {.resourceCreation = 17, .resourceSharing = 2, .commandBatch = 6}, 10},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {
@@ -98,6 +95,8 @@ TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseli
     ASSERT_EQ(after.fastPathFrames - before.fastPathFrames, 1u)
         << "the held move must be a fast-path frame for its round trips to be the fast path's";
     ASSERT_FALSE(context.device->isDeviceLost());
+    EXPECT_THAT(compositor.lastRenderFrameStats().damagePatchTileCount, testing::Eq(1))
+        << "the moved face stays in the clipped owner's damage patch";
     // Calls still held after the frame's last round trip go in one round trip of their own when
     // the worker parks, rather than waiting for the next frame.
     std::cout << "held move x=" << frame.x

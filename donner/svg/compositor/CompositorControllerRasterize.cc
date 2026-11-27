@@ -157,6 +157,10 @@ std::optional<DamagePatchRect> ComputeDamagePatchRect(const Box2d& damageBoundsC
 bool ComposeDamagePatch(RendererInterface& offscreen, const RendererTextureSnapshot& previous,
                         const RendererTextureSnapshot& patch, const RenderViewport& viewport,
                         const Vector2i& ownerSize, const DamagePatchRect& rect) {
+  if (const auto copied = offscreen.copyTextureDamagePatch(viewport, previous, patch,
+                                                           Vector2i(rect.left, rect.top))) {
+    return *copied;
+  }
   offscreen.beginFrame(viewport);
   offscreen.setPaint(PaintParams{});
   offscreen.setTransform(Transform2d());
