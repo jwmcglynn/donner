@@ -5,6 +5,7 @@
 
 #include <array>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -123,6 +124,39 @@ MATCHER_P4(FilterDropShadowIs, offsetX, offsetY, stdDeviation, color, "") {
 }
 
 }  // namespace
+
+TEST(PropertyRegistryTest, KeywordValuesExposeSupportedSpellings) {
+  EXPECT_THAT(PropertyRegistry::keywordValues("stroke-linecap"),
+              testing::ElementsAre("butt", "round", "square"));
+  EXPECT_THAT(PropertyRegistry::keywordValues("font-size"), testing::Contains("larger"));
+  EXPECT_THAT(PropertyRegistry::keywordValues("font-weight"), testing::Contains("bolder"));
+  EXPECT_THAT(PropertyRegistry::keywordValues("cursor"), testing::Contains("crosshair"));
+  EXPECT_THAT(PropertyRegistry::keywordValues("fill"),
+              testing::ElementsAre("none", "context-fill", "context-stroke"));
+  EXPECT_THAT(PropertyRegistry::keywordValues("stroke"),
+              testing::ElementsAreArray(PropertyRegistry::keywordValues("fill")));
+  EXPECT_THAT(PropertyRegistry::keywordValues("white-space"), testing::Contains("pre-wrap"));
+  EXPECT_THAT(PropertyRegistry::keywordValues("word-wrap"), testing::Contains("anywhere"));
+  EXPECT_THAT(PropertyRegistry::keywordValues("opacity"), testing::IsEmpty());
+  EXPECT_THAT(PropertyRegistry::keywordValues("--custom"), testing::IsEmpty());
+  EXPECT_THAT(PropertyRegistry::keywordValues("unknown"), testing::IsEmpty());
+}
+
+TEST(PropertyRegistryTest, EveryAdvertisedKeywordParsesForItsProperty) {
+  std::size_t advertised = 0;
+  for (std::string_view name : PropertyRegistry::propertyNames()) {
+    for (std::string_view keyword : PropertyRegistry::keywordValues(name)) {
+      SCOPED_TRACE(std::string(name) + ": " + std::string(keyword));
+      const auto declarations =
+          css::CSS::ParseStyleAttribute(std::string(name) + ": " + std::string(keyword));
+      ASSERT_THAT(declarations, testing::SizeIs(1));
+      PropertyRegistry properties;
+      EXPECT_THAT(properties.parseProperty(declarations.front(), Specificity()), Eq(std::nullopt));
+      ++advertised;
+    }
+  }
+  EXPECT_GT(advertised, 100u);
+}
 
 TEST(PropertyRegistry, Set) {
   PropertyRegistry registry;

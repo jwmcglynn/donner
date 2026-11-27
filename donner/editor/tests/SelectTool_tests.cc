@@ -364,6 +364,8 @@ TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
   EXPECT_TRUE(tool.dragHasVisualChange());
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.x, 35.0);
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.y, 20.0);
+  EXPECT_EQ(tool.activeDragPreview()->pointerDocumentPoint, Vector2d(50.0, 35.0));
+  EXPECT_TRUE(tool.activeDragPreview()->mouseDown);
   // DOM is source of truth during drag - `onMouseMove` queues a
   // `SetTransformCommand` on every move even on the composited path.
   // The compositor's fast path detects the pure-translation delta and

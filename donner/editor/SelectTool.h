@@ -44,6 +44,10 @@ public:
     std::vector<Entity> extraEntities;
     /// Current drag translation in document coordinates.
     Vector2d translation = Vector2d::Zero();
+    /// Pointer position that produced this preview, in document coordinates.
+    Vector2d pointerDocumentPoint = Vector2d::Zero();
+    /// Button state represented by this preview.
+    bool mouseDown = true;
     /// Current affine transform from the cached document placement to
     /// the active preview placement.
     Transform2d documentFromCachedDocument = Transform2d();
@@ -307,6 +311,8 @@ private:
     PresentationIdentity contentIdentity;
     /// Current drag delta in document coordinates, used for compositor preview.
     Vector2d currentDocumentDelta = Vector2d::Zero();
+    /// Current pointer in document coordinates, paired with the preview transform.
+    Vector2d currentDocumentPoint = Vector2d::Zero();
     /// Current affine transform from the gesture-start document geometry
     /// to the active preview geometry.
     Transform2d currentDocumentFromStartDocument = Transform2d();
@@ -314,6 +320,8 @@ private:
     /// queued, overlay geometry is captured in this document frame rather than the pointer's
     /// current preview frame.
     Vector2d committedDocumentDelta = Vector2d::Zero();
+    /// Pointer paired with \ref committedDocumentDelta.
+    Vector2d committedDocumentPoint = Vector2d::Zero();
     Transform2d committedDocumentFromStartDocument = Transform2d();
     /// Document frame version at which committedDocumentFromStartDocument was observed. A version
     /// advance proves that the previous queued drag transform reached the DOM even if another

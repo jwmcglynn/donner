@@ -812,11 +812,14 @@ std::optional<std::size_t> ResourceManagerContext::registerStylesheetFontFace(
 
 void ResourceManagerContext::setLayeredStylesheetFontOrder(
     std::vector<std::size_t> authorOrder, std::optional<std::uint64_t> documentRevision) {
-  const std::unordered_set<std::size_t> authored(authorOrder.begin(), authorOrder.end());
+  std::vector<bool> authored(fontFaces_.size());
+  for (const std::size_t index : authorOrder) {
+    authored[index] = true;
+  }
   std::vector<std::size_t> order;
   order.reserve(programmaticFontFaces_.size() + authorOrder.size());
   for (std::size_t index : programmaticFontFaces_) {
-    if (!authored.contains(index)) {
+    if (!authored[index]) {
       order.push_back(index);
     }
   }

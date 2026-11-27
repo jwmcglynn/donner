@@ -766,6 +766,10 @@ private:
   bool checkComments_ = true;
 
   // Internal helpers.
+  void colorizePendingLines();
+  void colorizeLanguageRange(int fromLine, int toLine);
+  void prepareSvgCssColors(int& fromLine, int& toLine);
+  bool svgColorsDirty_ = true;
   void requestEnsureCursorVisible();
   void requestAutocomplete();
   void fireContentUpdate();

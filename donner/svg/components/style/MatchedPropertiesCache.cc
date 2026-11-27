@@ -14,7 +14,8 @@ void Combine(std::size_t& hash, std::size_t value) {
 
 void HashSpecificity(std::size_t& hash, css::Specificity specificity) {
   Combine(hash, static_cast<std::size_t>(specificity.specialValue()));
-  if (const auto rank = specificity.layerRank()) {
+  if (specificity.hasLayerRank()) {
+    const auto rank = specificity.layerRank();
     Combine(hash, rank);
   }
   Combine(hash, specificity.abc().a);

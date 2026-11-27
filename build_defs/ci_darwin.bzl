@@ -21,6 +21,10 @@ _SPECIAL = {
     "donner/editor/wasm/tests": {
         "diagnostics": ["chromium_context_lifecycle_diagnostic"],
         "fresh": ["mac_browser_archive_tests"],
+        "remote_performance": [
+            "browser_responsiveness_perf_test_firefox",
+            "browser_responsiveness_perf_test_firefox_dpr1",
+        ],
     },
     "donner/gpu/metal/tests": {
         "qualification": [
@@ -50,8 +54,8 @@ def _runs_in_native_lane(tags):
         return True
     return not any([tag in tags for tag in ["requires_shader_validation", "requires_metal_toolchain"]])
 
-def _variant(ci, name, source, profile, run, gpu, prefix, extra_tags):
-    tags = list(source.get("tags", []))
+def _variant(ci, name, source, profile, run, gpu, prefix, extra_tags, excluded_tags = []):
+    tags = [tag for tag in source.get("tags", []) if tag not in excluded_tags]
     attrs = {
         "name": prefix + name,
         "dep": ":" + name,
@@ -83,6 +87,9 @@ def declare_darwin_variants(ci):
             _variant(ci, name, source, "ordinary", True, True, "ci_darwin_qualify_", ["external", "no-cache"])
         if name in special.get("diagnostics", []):
             _variant(ci, name, source, "ordinary", True, True, "ci_darwin_diagnostic_", ["external", "no-cache"])
+        if name in special.get("remote_performance", []):
+            # The hosted target stays exclusive; remote TestRunner gives each manual wrapper an isolated GPU worker.
+            _variant(ci, name, source, "desktop", True, True, "ci_darwin_perf_", ["external", "no-cache"], ["exclusive"])
         if "manual" in tags or source["kind"] in ["test_suite", "package_group", "toolchain_type"]:
             continue
         if LINUX_ONLY_TAG in tags:

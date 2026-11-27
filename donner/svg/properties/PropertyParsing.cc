@@ -53,6 +53,9 @@ PropertyParseFnParams PropertyParseFnParams::Create(const css::Declaration& decl
 
 PropertyParseFnParams PropertyParseFnParams::Create(const UnparsedProperty& property,
                                                     PropertyParseBehavior parseBehavior) {
+  if (property.variableFromPresentation) {
+    parseBehavior = PropertyParseBehavior::AllowUserUnits;
+  }
   auto params = Create(property.declaration, property.specificity, parseBehavior);
   params.invalidAtComputedValueOnError = property.substituted;
   return params;
