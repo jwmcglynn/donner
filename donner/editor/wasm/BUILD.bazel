@@ -8,11 +8,11 @@ load("//tools/http:serve_http.bzl", "serve_http")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 load(
     ":editor_wasm_transition.bzl",
-    "browser_managed_wasm",
     "editor_wasm_config_probe",
     "editor_wasm_geode_only_guard",
     "editor_wasm_geode_transitioned_target",
     "editor_wasm_runtime_options_probe",
+    "editor_suspension_wasm",
 )
 load(":web_package.bzl", "web_package")
 
@@ -373,8 +373,16 @@ genrule(
     visibility = ["//visibility:private"],
 )
 
-browser_managed_wasm(
+editor_suspension_wasm(
     name = "_browser_managed_wasm",
+    browser_managed_suspension = True,
+    dep = ":wasm",
+    visibility = ["//visibility:private"],
+)
+
+editor_suspension_wasm(
+    name = "_asyncify_wasm",
+    browser_managed_suspension = False,
     dep = ":wasm",
     visibility = ["//visibility:private"],
 )
@@ -403,7 +411,7 @@ web_package(
     srcs = _WEB_PACKAGE_COMMON + ["index.html", "editor-jspi.js"],
     out = "wasm_web_package",
     asset_trees = _WEB_PACKAGE_ASSETS,
-    asyncify_runtime = ":wasm",
+    asyncify_runtime = ":_asyncify_wasm",
     tags = _WEB_PACKAGE_TAGS,
     target_compatible_with = _WEB_PACKAGE_COMPATIBILITY,
     wasm_deps = [":_browser_managed_wasm"],
@@ -424,7 +432,7 @@ web_package(
     asset_trees = _WEB_PACKAGE_ASSETS,
     tags = _WEB_PACKAGE_TAGS,
     target_compatible_with = _WEB_PACKAGE_COMPATIBILITY,
-    wasm_deps = [":wasm"],
+    wasm_deps = [":_asyncify_wasm"],
 )
 
 alias(
