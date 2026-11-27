@@ -16,10 +16,10 @@ REVISIONS = {
 }
 ORDER = ("control", "trial", "trial", "control")
 LABEL_PREFIX = "//donner/editor/wasm/tests:"
-TARGETS = tuple(
-    LABEL_PREFIX + prefix + "browser_responsiveness_perf_test_" + browser
-    for prefix in ("", "ci_darwin_perf_")
-    for browser in ("firefox", "chromium")
+TARGETS = (
+    LABEL_PREFIX + "browser_responsiveness_perf_test_firefox",
+    LABEL_PREFIX + "browser_responsiveness_perf_test_chromium",
+    LABEL_PREFIX + "ci_darwin_perf_browser_responsiveness_perf_test_firefox",
 )
 COMMON_FLAGS = (
     "--config=ci",
