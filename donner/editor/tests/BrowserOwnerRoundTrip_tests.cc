@@ -44,16 +44,17 @@ struct HeldFrame {
 /// explain why. Ownership, loss and completion queries are absent: the browser side publishes
 /// that state, so a held frame reads it without a round trip. Buffer writes, bind group
 /// construction and destruction are absent too: they ride along with the next round trip, and the
-/// 19 still held after a frame's last round trip go in one more batch when the worker parks.
+/// 10 still held after a frame's last round trip go in one more batch when the worker parks.
 constexpr HeldFrame kHeldFrames[] = {
     // The first held frame creates five resources the later ones take from the pool: a uniform
     // arena buffer for the layer tile draws (`RendererGeode::drawTextureSnapshot`), a batch
     // uniform for the tile's target size, and a clip mask, a mask capture and a mask content
     // texture of the tile's size, which no earlier frame used. Each held frame also creates two
-    // render targets and the texture views its passes and composites name.
-    {12.0, {.resourceCreation = 36, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
-    {24.0, {.resourceCreation = 31, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
-    {36.0, {.resourceCreation = 30, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 19},
+    // render targets and the views its passes need. Owned blit textures reuse their default
+    // source views, avoiding repeated creation and deferred destruction of transient views.
+    {12.0, {.resourceCreation = 24, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 10},
+    {24.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 10},
+    {36.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 10},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {
