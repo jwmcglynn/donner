@@ -142,7 +142,8 @@ void PrepareEmbeddedDeclarationInsertion(std::string_view body, std::size_t body
 }
 
 void AddEmbeddedDeclarationTargets(const svg::SVGStylesheetRule& rule, std::string_view source,
-                                   std::size_t offset, StructuredCssTarget& target) {
+                                   std::size_t offset, StructuredCssTarget& target,
+                                   bool prepareInsertion) {
   if (!rule.stylesheetElement) {
     return;
   }
@@ -154,6 +155,9 @@ void AddEmbeddedDeclarationTargets(const svg::SVGStylesheetRule& rule, std::stri
   const auto decoded = rule.stylesheetElement->textContent();
   for (const auto& entry : rule.declarations) {
     AddDeclarationTarget(entry.declaration, decoded, offset, target, map);
+  }
+  if (!prepareInsertion) {
+    return;
   }
   const auto cssRange = ByteRange(rule.ruleCssRange, decoded.size());
   if (!cssRange) {
@@ -170,7 +174,8 @@ void AddEmbeddedDeclarationTargets(const svg::SVGStylesheetRule& rule, std::stri
 std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRule& stylesheetRule,
                                                       std::string_view source, std::size_t offset,
                                                       std::uint64_t generation,
-                                                      std::uint64_t sourceVersion) {
+                                                      std::uint64_t sourceVersion,
+                                                      bool prepareInsertion) {
   const auto rule = ByteRange(stylesheetRule.ruleSourceRange, source.size());
   const auto selector = ByteRange(stylesheetRule.selectorSourceRange, source.size());
   if (!rule || !selector || stylesheetRule.blockClosedAtEof || !Contains(*rule, offset)) {
@@ -187,7 +192,7 @@ std::optional<StructuredCssTarget> MakeEmbeddedTarget(const svg::SVGStylesheetRu
       target.encoding = EmbeddedEncoding(*stylesheetRule.stylesheetElement, source, *rule);
     }
   }
-  AddEmbeddedDeclarationTargets(stylesheetRule, source, offset, target);
+  AddEmbeddedDeclarationTargets(stylesheetRule, source, offset, target, prepareInsertion);
   return target;
 }
 
@@ -554,10 +559,10 @@ std::optional<CssReplacement> PlanMove(EditorApp& app, std::string_view source,
   return PlanTransfer(source, from, destination, item, anchor, insertion, after);
 }
 
-}  // namespace
-
-std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
-                                                           std::size_t offset) {
+std::optional<StructuredCssTarget> FindStructuredCssTargetInternal(EditorApp& app,
+                                                                   std::string_view source,
+                                                                   std::size_t offset,
+                                                                   bool prepareInsertion) {
   if (!app.hasDocument() || !app.structuredEditingEnabled() ||
       app.document().hasPendingMutations()) {
     return std::nullopt;
@@ -572,7 +577,15 @@ std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::
   if (!stylesheetRule) {
     return FindInlineTarget(document, source, offset, generation);
   }
-  return MakeEmbeddedTarget(*stylesheetRule, source, offset, generation, document.sourceVersion());
+  return MakeEmbeddedTarget(*stylesheetRule, source, offset, generation, document.sourceVersion(),
+                            prepareInsertion);
+}
+
+}  // namespace
+
+std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
+                                                           std::size_t offset) {
+  return FindStructuredCssTargetInternal(app, source, offset, /*prepareInsertion=*/false);
 }
 
 bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
@@ -581,6 +594,13 @@ bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEd
   const std::string source = editor.getText();
   if (!IsCurrent(app, source, target)) {
     return false;
+  }
+  if (operation == StructuredCssOperation::InsertDeclaration && !target.inlineStyle) {
+    // Only the add action needs the parsed body. Selection and gutter drag use the cached ranges.
+    const auto prepared = FindStructuredCssTargetInternal(app, source, target.selectionOffset,
+                                                          /*prepareInsertion=*/true);
+    const auto edit = prepared ? MakeReplacement(*prepared, operation, replacement) : std::nullopt;
+    return edit && ApplyReplacement(app, sync, editor, source, *edit, target.sourceVersion);
   }
   const auto edit = MakeReplacement(target, operation, replacement);
   return edit && ApplyReplacement(app, sync, editor, source, *edit, target.sourceVersion);
