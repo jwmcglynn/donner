@@ -2034,7 +2034,7 @@ TEST(FocusViewTest, ReverseAttributeScansChargeBytesBeforeParsing) {
         R"svg(/><rect fill="url(#paint)"/></svg>)svg";
     EditorApp app;
     EXPECT_TRUE(app.loadFromString(source));
-    const auto& document = app.document().document();
+    auto& document = app.document().document();
     const auto paint = document.querySelector("#paint");
     EXPECT_THAT(paint, testing::Optional(testing::_));
     if (!paint) {
