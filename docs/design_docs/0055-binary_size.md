@@ -331,6 +331,13 @@ worker frame driver schedules its next tick after the promise settles.
 Generation and admission checks still guard queued events and shutdown.
 Presentation keeps the original fence deadline.
 
+A WebGPU queue completion or buffer mapping can settle only after its browser
+event loop gets a turn. Both runtime choices currently preserve the C++ caller's
+stack across those waits. A portable path without stack suspension would return
+a pending operation to the event loop and resume from its completion, retaining
+the resource handle, deadline and cancellation state. Renderer shutdown likewise
+needs to retain the worker's owner until the worker acknowledges exit.
+
 The package size check applies the Wasm and JavaScript ceilings to each
 runtime, bounds one runtime plus its shared assets, and separately bounds
 the full dual-runtime installation. A single-runtime installation can also

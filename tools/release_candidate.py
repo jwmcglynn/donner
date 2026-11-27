@@ -615,6 +615,18 @@ def _verify_editor_dialog_script(root: Path, commit: str, expected: dict[str, st
         raise ValueError("editor dialog script differs from the selected source")
 
 
+def _verify_dual_editor_files(expected: dict[str, str], index: bytes, selector: bytes) -> None:
+    for name, data in (("index.html", index), ("editor-jspi.js", selector)):
+        digest = hashlib.sha256(data).hexdigest()
+        if any(expected.get(f"{tree}/{name}") != digest for tree in ("site", "deploy")):
+            raise ValueError("editor runtime selector or index differs from the selected source")
+    for glue in ("editor.js", "editor-asyncify.js"):
+        if not expected.get("site/" + glue) or expected["site/" + glue] != expected.get("deploy/" + glue):
+            raise ValueError("editor deployed runtime glue differs from the retained copy")
+    if expected["site/editor.wasm"] == expected["site/editor-asyncify.wasm"]:
+        raise ValueError("editor runtime modules must be distinct")
+
+
 def _editor_runtime_modules(root: Path, commit: str, expected: dict[str, str]) -> tuple[str, ...]:
     """Bind the runtime inventory to the default index in the selected source revision."""
     names = ("index.html", "editor-jspi.js")
@@ -630,15 +642,7 @@ def _editor_runtime_modules(root: Path, commit: str, expected: dict[str, str]) -
     if "editor-jspi.js" not in objects:
         raise ValueError("missing editor runtime selector in the selected source")
     selector = subprocess.check_output([*git, objects["editor-jspi.js"]])
-    for name, data in (("index.html", index), ("editor-jspi.js", selector)):
-        digest = hashlib.sha256(data).hexdigest()
-        if any(expected.get(f"{tree}/{name}") != digest for tree in ("site", "deploy")):
-            raise ValueError("editor runtime selector or index differs from the selected source")
-    for glue in ("editor.js", "editor-asyncify.js"):
-        if not expected.get("site/" + glue) or expected["site/" + glue] != expected.get("deploy/" + glue):
-            raise ValueError("editor deployed runtime glue differs from the retained copy")
-    if expected["site/editor.wasm"] == expected["site/editor-asyncify.wasm"]:
-        raise ValueError("editor runtime modules must be distinct")
+    _verify_dual_editor_files(expected, index, selector)
     return ("editor.wasm", "editor-asyncify.wasm")
 
 
