@@ -742,14 +742,16 @@ TEST(CompositorGeodeSplashTest, DamageMaskProofMatchesFullMaskAndRejectsUnsafeCa
     const Entity last = ownerInstance.subtreeLastEntity;
     RenderViewport viewport;
     viewport.size = Vector2d(24, 24);
-    const Transform2d surface = Transform2d::Translate(-test.left, -20);
+    const Transform2d patchFromCanvas = Transform2d::Translate(-test.left, -20);
     MaskProofRenderer normalRenderer;
     MaskProofRenderer provingRenderer;
     RendererDriver normal(normalRenderer);
     RendererDriver proving(provingRenderer);
     proving.setDamageMaskElisionEnabled(true);
-    ASSERT_TRUE(normal.drawEntityRangeInterruptibly(registry, first, last, viewport, surface, {}));
-    ASSERT_TRUE(proving.drawEntityRangeInterruptibly(registry, first, last, viewport, surface, {}));
+    ASSERT_TRUE(
+        normal.drawEntityRangeInterruptibly(registry, first, last, viewport, patchFromCanvas, {}));
+    ASSERT_TRUE(
+        proving.drawEntityRangeInterruptibly(registry, first, last, viewport, patchFromCanvas, {}));
     EXPECT_GT(normalRenderer.maskPasses, 0);
     EXPECT_EQ(provingRenderer.maskPasses, test.elides ? 0 : normalRenderer.maskPasses);
     editor::tests::CompareBitmapToBitmap(provingRenderer.takeSnapshot(),
