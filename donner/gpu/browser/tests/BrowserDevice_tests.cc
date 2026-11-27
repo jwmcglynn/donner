@@ -715,6 +715,21 @@ TEST(BrowserDevice, RecordsEveryBufferOfASpanAndSubmitsThemTogether) {
                                     "submitCommandBuffers serial=1 count=2"));
 }
 
+TEST(BrowserDevice, RefusedFinalBufferFinishDoesNotSubmit) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  auto target = fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  auto view = fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+  fixture.bridge->failOperation = "endCommandBuffer";
+  fixture.bridge->failStatus = BridgeStatus::Failed;
+  fixture.bridge->beforeSubmit = [] { ADD_FAILURE() << "refused finish must not reach submit"; };
+  EXPECT_THAT(fixture.device->submit(RecordClearPass(*fixture.device, view.result())),
+              IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_THAT(fixture.device->lastSubmittedSerial(), 0u);
+}
+
 TEST(BrowserDevice, DropsTheFinishedBuffersOfASpanRefusedPartway) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

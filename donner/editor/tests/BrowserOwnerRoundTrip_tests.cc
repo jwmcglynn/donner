@@ -52,9 +52,9 @@ constexpr HeldFrame kHeldFrames[] = {
     // texture of the tile's size, which no earlier frame used. Each held frame also creates two
     // render targets and the views its passes need. Owned blit textures reuse their default
     // source views, avoiding repeated creation and deferred destruction of transient views.
-    {12.0, {.resourceCreation = 24, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 10},
-    {24.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 10},
-    {36.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6, .queueSubmit = 3}, 10},
+    {12.0, {.resourceCreation = 24, .resourceSharing = 2, .commandBatch = 6}, 10},
+    {24.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
+    {36.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {
@@ -133,8 +133,9 @@ std::map<std::string, BridgeDispatch> ReadBridgeDispatch(const std::string& sour
       dispatch.kind = match[1];
     }
     // A command batch is how a recording travels, whether a method queues into it or sends it.
-    dispatch.recorded =
-        body.find("queueCommand(") != std::string::npos || dispatch.kind == "CommandBatch";
+    dispatch.recorded = body.find("queueCommand(") != std::string::npos ||
+                        body.find("return flushCommands(submissionSerial)") != std::string::npos ||
+                        dispatch.kind == "CommandBatch";
     methods[(*it)[1]] = dispatch;
   }
   return methods;

@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "donner/gpu/browser/BrowserBridge.h"
@@ -125,6 +126,7 @@ public:
                                     const BrowserCopyRegion& region) override;
   BridgeStatus endCommandBuffer(uint64_t submissionSerial) override;
   BridgeStatus submitCommandBuffers(uint64_t submissionSerial) override;
+  BridgeStatus finishAndSubmitCommandBuffers(uint64_t submissionSerial) override;
 
   BridgeStatus mapBufferAsync(BrowserObjectId mappingId, BrowserObjectId bufferId,
                               uint64_t offsetBytes, uint64_t byteCount) override;
@@ -157,7 +159,7 @@ private:
                          const BrowserDeferredCalls::HeldCallFactory& makeHeld,
                          std::size_t payloadBytes = 0);
   BridgeStatus queueCommand(const char* operation, std::function<BridgeStatus()> command);
-  BridgeStatus flushCommands();
+  BridgeStatus flushCommands(std::optional<uint64_t> finalSubmission = std::nullopt);
   std::vector<PendingCommand> pendingCommands_;
 
   /// The handle this bridge names its logical device by in every library call.
