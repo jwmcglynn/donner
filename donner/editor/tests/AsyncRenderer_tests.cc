@@ -4324,7 +4324,7 @@ TEST(AsyncRendererTest, SelectedSplashStylesheetSourceEditMatchesFreshCompositor
   const auto selected = app.document().document().querySelector("#Donner_D");
   ASSERT_TRUE(selected.has_value());
   const auto cachedStyleProbe = app.document().document().querySelector("#Cached_Style_Probe");
-  ASSERT_TRUE(cachedStyleProbe.has_value());
+  ASSERT_THAT(cachedStyleProbe, ::testing::Optional(::testing::_));
   app.setSelection(*selected);
   const Entity entity = selected->unsafeEntityHandle().entity();
   ASSERT_NE(cachedStyleProbe->unsafeEntityHandle().entity(), entity);
