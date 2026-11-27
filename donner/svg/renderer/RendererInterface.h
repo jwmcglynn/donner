@@ -1463,6 +1463,23 @@ public:
     return false;
   }
 
+  /// Rebuilds the offscreen frame by copying a retained tile and overwriting its damage region.
+  /// Returns nullopt if unsupported, and false when an admitted copy failed.
+  /// @param viewport Viewport of the entire target tile.
+  /// @param previous Immutable previous contents of that tile.
+  /// @param patch Immutable replacement rectangle in tile pixels.
+  /// @param offset Integer position of the patch's top-left texel in the tile.
+  virtual std::optional<bool> copyTextureDamagePatch(const RenderViewport& viewport,
+                                                     const RendererTextureSnapshot& previous,
+                                                     const RendererTextureSnapshot& patch,
+                                                     const Vector2i& offset) {
+    (void)viewport;
+    (void)previous;
+    (void)patch;
+    (void)offset;
+    return std::nullopt;
+  }
+
   /**
    * Draws pre-shaped text with the provided paint parameters.
    */

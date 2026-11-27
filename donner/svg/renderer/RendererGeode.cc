@@ -8889,14 +8889,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  bool prepareOwnedFrameTarget() {
+  bool prepareOwnedFrameTarget(gpu::TextureUsage additionalUsage) {
     if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
       target = gpu::Texture();
       return false;
     }
 
-    const bool canReuseTargets =
-        ownedTarget.isValid() && targetWidth == pixelWidth && targetHeight == pixelHeight;
+    const bool canReuseTargets = ownedTarget.isValid() && targetWidth == pixelWidth &&
+                                 targetHeight == pixelHeight &&
+                                 additionalUsage == gpu::TextureUsage::None;
     if (!canReuseTargets) {
       retireOwnedTargetAtFrameBoundary();
       gpu::Result<gpu::Texture> created =
@@ -8905,7 +8906,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
               gpu::Extent2d{static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight)},
               textureFormat,
               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
-                  gpu::TextureUsage::Sampled});
+                  gpu::TextureUsage::Sampled | additionalUsage});
       if (!created.hasResult()) {
         target = gpu::Texture();
         return false;
@@ -8919,7 +8920,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return true;
   }
 
-  bool prepareFrameTarget() {
+  bool prepareFrameTarget(gpu::TextureUsage additionalUsage = gpu::TextureUsage::None) {
     if (!device || device->isDeviceLost() || !pipeline || !gradientPipeline || !imagePipeline ||
         pixelWidth <= 0 || pixelHeight <= 0) {
       retireOwnedTargetAtFrameBoundary();
@@ -8929,7 +8930,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (hostTarget.isValid()) {
       return prepareHostFrameTarget();
     }
-    return prepareOwnedFrameTarget();
+    return prepareOwnedFrameTarget(additionalUsage);
   }
 
   void createFrameEncoder() {
@@ -9515,17 +9516,21 @@ int RendererGeode::height() const {
   return impl_->pixelHeight;
 }
 
-void RendererGeode::beginFrame(const RenderViewport& viewport) {
+bool RendererGeode::prepareFrameResources(const RenderViewport& viewport) {
   impl_->resetForBeginFrame(viewport);
   impl_->captureOffscreenCounterOwner();
   if (impl_->device) {
     impl_->device->drainFencedTextureBackings();
     if (impl_->device->pendingFencedTextureBackings() != 0) {
       impl_->frameRecordingAbandoned = true;
-      return;
+      return false;
     }
   }
-  if (impl_->prepareFrameTarget()) {
+  return true;
+}
+
+void RendererGeode::beginFrame(const RenderViewport& viewport) {
+  if (prepareFrameResources(viewport) && impl_->prepareFrameTarget()) {
     impl_->createFrameEncoder();
   }
 }
@@ -10708,6 +10713,90 @@ bool RendererGeodeTextureSnapshot::canSampleWith(const geode::GeodeDevice& devic
   return backing_ != nullptr && backing_->exported.isValid() &&
          IsSnapshotFormat(backing_->exported.descriptor().format) &&
          gpu::HasAllFlags(backing_->exported.descriptor().usage, gpu::TextureUsage::Sampled);
+}
+
+/// Resolves a premultiplied source that may be copied on this device in the target format.
+/// @param snapshot Immutable tile payload.
+/// @param device Device responsible for the destination.
+/// @param format Expected destination format.
+const gpu::Texture* RendererGeode::damagePatchCopySource(const RendererTextureSnapshot& snapshot,
+                                                         const gpu::Device& device,
+                                                         gpu::TextureFormat format) const {
+  if (snapshot.backend() != RendererTextureSnapshotBackend::Geode ||
+      snapshot.alphaType() != AlphaType::Premultiplied) {
+    return nullptr;
+  }
+  const auto& geode = static_cast<const RendererGeodeTextureSnapshot&>(snapshot);
+  if (!geode.backing_) {
+    return nullptr;
+  }
+  const gpu::Texture* texture = geode.runtimeTexture();
+  if (texture == nullptr || texture->deviceId() != device.deviceId() ||
+      geode.runtimeFormat() != format) {
+    return nullptr;
+  }
+  auto descriptor = device.textureDescriptor(*texture);
+  if (descriptor.hasError() ||
+      !gpu::HasAllFlags(descriptor.result().usage, gpu::TextureUsage::CopySrc)) {
+    return nullptr;
+  }
+  return texture;
+}
+
+namespace {
+
+/// Whether a nonempty patch at the given offset is within the tile in both axes.
+bool DamagePatchFits(const Vector2i& tile, const Vector2i& patch, const Vector2i& offset) {
+  return patch.x > 0 && patch.y > 0 && patch.x <= tile.x && patch.y <= tile.y && offset.x >= 0 &&
+         offset.y >= 0 && offset.x <= tile.x - patch.x && offset.y <= tile.y - patch.y;
+}
+
+}  // namespace
+
+std::optional<bool> RendererGeode::copyTextureDamagePatch(const RenderViewport& viewport,
+                                                          const RendererTextureSnapshot& previous,
+                                                          const RendererTextureSnapshot& patch,
+                                                          const Vector2i& offset) {
+  const auto tile = CheckedViewportPixels(viewport);
+  const Vector2i patchSize = patch.dimensions();
+  if (!impl_->device || impl_->hostTarget.isValid() || !tile || previous.dimensions() != *tile ||
+      !DamagePatchFits(*tile, patchSize, offset)) {
+    return std::nullopt;
+  }
+  auto& device = impl_->device->runtimeDevice();
+  const gpu::Texture* oldTexture = damagePatchCopySource(previous, device, impl_->textureFormat);
+  const gpu::Texture* patchTexture = damagePatchCopySource(patch, device, impl_->textureFormat);
+  if (!oldTexture || !patchTexture) {
+    return std::nullopt;
+  }
+  if (!prepareFrameResources(viewport) || !impl_->prepareFrameTarget(gpu::TextureUsage::CopyDst)) {
+    endFrame();
+    return false;
+  }
+  const bool copied = recordDamagePatchCopies(*oldTexture, *patchTexture, *tile, patchSize, offset);
+  endFrame();
+  return copied && !impl_->frameRecordingAbandoned;
+}
+
+bool RendererGeode::recordDamagePatchCopies(const gpu::Texture& previous, const gpu::Texture& patch,
+                                            const Vector2i& tile, const Vector2i& size,
+                                            const Vector2i& offset) {
+  if (!impl_->openFrameGpuEncoder()) {
+    return false;
+  }
+  impl_->frameRecordingOpen = true;
+  gpu::CommandEncoder& encoder = *impl_->frameGpuEncoder;
+  const auto extent = [](const Vector2i& value) {
+    return gpu::Extent2d{static_cast<uint32_t>(value.x), static_cast<uint32_t>(value.y)};
+  };
+  const gpu::Origin2d destination{static_cast<uint32_t>(offset.x), static_cast<uint32_t>(offset.y)};
+  if (encoder.copyTextureToTexture(previous, impl_->ownedTarget, extent(tile)).hasError() ||
+      encoder.copyTextureToTexture(patch, impl_->ownedTarget, extent(size), {}, destination)
+          .hasError()) {
+    impl_->abandonFrameRecording();
+    return false;
+  }
+  return true;
 }
 
 bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,

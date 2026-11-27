@@ -56,6 +56,45 @@ TEST_F(GeodeTargetTextureTest, EmptyFrameIsTransparent) {
   EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
+TEST_F(GeodeTargetTextureTest, DamageCopyReplacesTransparentTexelsWithoutChangingTheSource) {
+  auto renderer = createRenderer();
+  const RenderViewport tileViewport{Vector2d(32, 32)};
+  const RenderViewport patchViewport{Vector2d(8, 8)};
+  const auto drawRect = [&](const Box2d& rect, css::RGBA color) {
+    PaintParams paint;
+    paint.fill = PaintServer::Solid(css::Color(color));
+    renderer.setPaint(paint);
+    renderer.drawRect(rect, StrokeParams{});
+  };
+
+  renderer.beginFrame(tileViewport);
+  drawRect(Box2d({0, 0}, {32, 32}), css::RGBA(255, 0, 0, 255));
+  renderer.endFrame();
+  auto prior = renderer.takeTextureSnapshot();
+  ASSERT_THAT(prior, testing::NotNull());
+
+  renderer.beginFrame(patchViewport);
+  drawRect(Box2d({0, 0}, {4, 8}), css::RGBA(0, 255, 0, 255));
+  renderer.endFrame();
+  auto patch = renderer.takeTextureSnapshot();
+  ASSERT_THAT(patch, testing::NotNull());
+
+  EXPECT_THAT(renderer.copyTextureDamagePatch(tileViewport, *prior, *patch, Vector2i(29, 8)),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(renderer.copyTextureDamagePatch(tileViewport, *prior, *patch, Vector2i(8, 8)),
+              testing::Optional(testing::IsTrue()));
+  EXPECT_THAT(renderer.lastFrameTimings().counters.submits, testing::Eq(1u));
+  const auto output = renderer.takeSnapshot();
+  ASSERT_THAT(output.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(output, 6, 10), test::RgbaEq(255, 0, 0, 255)) << "outside the patch";
+  EXPECT_THAT(PixelAt(output, 10, 10), test::RgbaEq(0, 255, 0, 255)) << "opaque patch texel";
+  EXPECT_THAT(PixelAt(output, 14, 10), IsTransparent()) << "transparent patch texel replaces red";
+  const auto original = prior->takeSnapshot();
+  ASSERT_THAT(original.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(original, 14, 10), test::RgbaEq(255, 0, 0, 255))
+      << "a held presentation keeps its original tile";
+}
+
 // ---------------------------------------------------------------------------
 // setTargetTexture
 // ---------------------------------------------------------------------------
