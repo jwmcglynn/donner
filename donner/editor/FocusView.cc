@@ -368,8 +368,15 @@ void AppendAttributeCssReferences(const xml::XMLNode& node, const xml::XMLQualif
                                   const VariableLinkSink& variables,
                                   std::vector<FragmentReference>* out,
                                   FocusTraversalBudget* budget) {
-  // Both var() and url() require a literal function-opening parenthesis.
-  if (value.find('(') == std::string_view::npos) {
+  if (!attr.namespacePrefix.empty()) {
+    return;
+  }
+  const bool inlineStyle = attr.name == "style";
+  if (!inlineStyle && !svg::PropertyRegistry::isPresentationAttributeName(attr.name)) {
+    return;
+  }
+  // Charge each inspection, including reverse passes and values that produce no references.
+  if ((budget && !budget->consume(value.size())) || value.find('(') == std::string_view::npos) {
     return;
   }
   std::optional<xml::XMLDecodedTextSourceMap> mapping;
@@ -384,15 +391,12 @@ void AppendAttributeCssReferences(const xml::XMLNode& node, const xml::XMLQualif
     }
     return mapping ? mapping->mapRange(local) : std::nullopt;
   };
-  if (!attr.namespacePrefix.empty()) {
-    return;
-  }
-  if (attr.name == "style") {
+  if (inlineStyle) {
     for (const auto& declaration :
          css::parser::DeclarationListParser::ParseOnlyDeclarations(value)) {
       AppendParsedReferences(declaration.values, value, project, &element, variables, out, budget);
     }
-  } else if (svg::PropertyRegistry::isPresentationAttributeName(attr.name)) {
+  } else {
     AppendParsedReferences(css::parser::ValueParser::Parse(value), value, project, &element,
                            variables, out, budget);
   }
@@ -451,7 +455,7 @@ std::vector<FragmentReference> ReferencedFragments(std::string_view source,
 
     const std::string_view value = *attrValue;
     AppendAttributeCssReferences(*xmlNode, attrName, value, element, variables, &result, budget);
-    if (attrName.name == "href") {
+    if (attrName.name == "href" && (!budget || budget->consume(value.size()))) {
       AppendHrefFragmentReference(value, valueOffset, &result);
     }
   }

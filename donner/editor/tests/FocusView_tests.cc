@@ -2026,6 +2026,42 @@ TEST(FocusViewTest, RepeatedRuleMatchesReuseParsingAndChargeCopiedUrlNames) {
   EXPECT_GE(urlWorkWithFiveMatches, urlWorkWithTwoMatches + 3 * (longUrl.size() - shortUrl.size()));
 }
 
+TEST(FocusViewTest, ReverseAttributeScansChargeBytesBeforeParsing) {
+  const auto work = [](std::string_view attribute) {
+    const std::string source =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="paint"/></defs>)svg" +
+        std::string("<rect ") + std::string(attribute) +
+        R"svg(/><rect fill="url(#paint)"/></svg>)svg";
+    EditorApp app;
+    EXPECT_TRUE(app.loadFromString(source));
+    const auto& document = app.document().document();
+    const auto paint = document.querySelector("#paint");
+    EXPECT_THAT(paint, testing::Optional(testing::_));
+    if (!paint) {
+      return std::size_t{};
+    }
+    const auto partition = ComputeFocusPartition(document, *paint);
+    EXPECT_FALSE(partition.resourceLimitExceeded);
+    EXPECT_THAT(partition.referenceLinks,
+                ElementsAre(ReferenceLinkIs(PointForNeedle(source, "#paint"),
+                                            PointForAuthoredId(source, "paint"))));
+    return partition.traversalWork;
+  };
+
+  for (const auto& [shortValue, longValue] :
+       {std::pair{std::string_view(R"(style="fill:blue")"),
+                  std::string_view(R"(style="fill:blue /* note */")")},
+        std::pair{std::string_view(R"attr(fill="rgb(1,2,3)/*x*/")attr"),
+                  std::string_view(R"attr(fill="rgb(1,2,3)/* note */")attr")},
+        std::pair{std::string_view(R"(href="icon.svg")"),
+                  std::string_view(R"(href="watercolor.svg")")}}) {
+    SCOPED_TRACE(longValue);
+    const auto baseline = work(shortValue);
+    // Focus first discovers referring elements, then inspects them again to map the ropes.
+    EXPECT_GE(work(longValue), baseline + 2 * (longValue.size() - shortValue.size()));
+  }
+}
+
 TEST(FocusViewTest, IndexedFallbacksUseEachSubjectAndRefreshOnSourceEdit) {
   constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
 <style>rect { fill:var(--ink, var(--second, url(#paint))); }</style>
