@@ -2673,6 +2673,28 @@ void StyleSystem::computePreparedStyle(const Registry& registry, Entity entity,
   }
 }
 
+namespace {
+
+void RefreshInlineCustomPropertyLocations(PropertyRegistry& properties,
+                                          std::span<const css::Declaration> declarations) {
+  for (const auto& declaration : declarations) {
+    if (!std::string_view(declaration.name).starts_with("--") ||
+        declaration.variableReferences == css::VariableReferences::Invalid) {
+      continue;
+    }
+    const auto winner = properties.unparsedProperties.find(declaration.name);
+    if (winner != properties.unparsedProperties.end() &&
+        winner->second.specificity.isStyleAttribute() &&
+        winner->second.declaration.important == declaration.important) {
+      // The last matching declaration at the selected importance owns the authored name.
+      winner->second.declaration.sourceOffset = declaration.sourceOffset;
+      winner->second.declaration.nameSourceByteLength = declaration.nameSourceByteLength;
+    }
+  }
+}
+
+}  // namespace
+
 bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
                               bool invalidateCachedStyle) {
   auto& styleComponent = handle.get_or_emplace<StyleComponent>();
@@ -2699,11 +2721,20 @@ bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
   }
   const std::string mergedStyle = css::mergeStyleDeclarations(
       existingDeclarations, updateDeclarations, existingSpellings, updateSpellings);
-  // Apply the update in authored order so an invalid later value leaves its last accepted
-  // predecessor in effect. The merged pass refreshes offsets in the complete attribute.
-  if (!candidate.updateStyle(style) || !candidate.updateStyle(mergedStyle)) {
+  // Apply the update in authored order so a later invalid value cannot displace a valid
+  // predecessor. The merged attribute supplies source offsets, not another cascade pass.
+  if (!candidate.updateStyle(style)) {
     return false;
   }
+  css::parser::DeclarationListParser::SecurityStats mergedStats;
+  const auto mergedDeclarations =
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(mergedStyle, &mergedStats);
+  if (mergedStats.rejected) {
+    return false;
+  }
+  candidate.editProperties([&](PropertyRegistry& properties) {
+    RefreshInlineCustomPropertyLocations(properties, mergedDeclarations);
+  });
 
   attributes.setAttribute(*handle.registry(), xml::XMLQualifiedName("style"),
                           RcString(mergedStyle));

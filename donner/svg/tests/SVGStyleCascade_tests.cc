@@ -159,6 +159,40 @@ TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleKeepsTheLastValidPaint) {
               Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
 }
 
+TEST(SVGStyleCascadeTests, InlineSourceRefreshKeepsAcceptedShorthandAndLonghandUpdates) {
+  auto doc = instantiateSubtree(R"svg(
+    <text id="font" style="font: 10px serif; --Tone: blue !important; --tone: green"/>
+    <path id="marker" style="marker: url(#original)"/>
+  )svg");
+  auto text = doc.querySelector("#font");
+  auto path = doc.querySelector("#marker");
+  ASSERT_THAT(text, Optional(testing::_));
+  ASSERT_THAT(path, Optional(testing::_));
+  text->updateStyle("--tone: green");
+  std::ignore = text->getComputedStyle();
+  const auto verifySourceName = [&](std::string_view name, std::string_view authored) {
+    const auto range = FindCustomPropertyDeclaration(*text, name);
+    ASSERT_THAT(range, Optional(testing::_));
+    const auto start = doc.source().find(authored);
+    ASSERT_NE(start, std::string_view::npos);
+    EXPECT_THAT(range->start, testing::Eq(FileOffset::Offset(start)));
+    EXPECT_THAT(range->end, testing::Eq(FileOffset::Offset(start + name.size())));
+  };
+  verifySourceName("--tone", "--tone: green");
+  verifySourceName("--Tone", "--Tone: blue");
+
+  text->updateStyle("font-size: 30px; font-size: invalid");
+  EXPECT_THAT(text->getComputedStyle().fontSize.get(), Optional(Lengthd(30, Lengthd::Unit::Px)));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*text, "--tone"), testing::Eq(std::nullopt));
+  text->updateStyle("font-size: 36px !important; font-size: invalid");
+  EXPECT_THAT(text->getComputedStyle().fontSize.get(), Optional(Lengthd(36, Lengthd::Unit::Px)));
+
+  path->updateStyle("marker-end: url(#changed); marker-end: invalid");
+  const auto& markers = path->getComputedStyle();
+  EXPECT_THAT(markers.markerStart.get(), Optional(Reference(RcString("#original"))));
+  EXPECT_THAT(markers.markerEnd.get(), Optional(Reference(RcString("#changed"))));
+}
+
 TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleTerminatesEofRecoveredConstructs) {
   for (const std::string_view declaration :
        {"--note: x /*", "--note: var(--fallback, x /*", "--note: foo(",
