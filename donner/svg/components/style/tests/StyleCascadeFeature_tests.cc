@@ -426,6 +426,18 @@ TEST_F(StyleSystemTest, PresentationVariableEditsRetainOnlyTheCurrentAttribute) 
   fill(css::RGBA::RGB(0, 128, 0));
 }
 
+TEST_F(StyleSystemTest, PresentationStrokeWidthUsesInheritedCustomProperty) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--inherited-width: 5px">
+      <g><rect id="target" stroke-width="var(--inherited-width)"/></g>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto* properties = ComputedFor(*target).properties();
+  ASSERT_THAT(properties, NotNull());
+  EXPECT_THAT(properties->strokeWidth.get(), testing::Optional(Eq(Lengthd(5, Lengthd::Unit::Px))));
+}
+
 TEST_F(StyleSystemTest, HiddenPresentationVariablesTrackReplacementAndRemoval) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg">
