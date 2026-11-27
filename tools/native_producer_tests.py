@@ -34,6 +34,22 @@ def workflow():
     return (Path(__file__).resolve().parents[1] / ".github/workflows/bcr_preflight.yml").read_text()
 
 
+def _upload_expectations(upload, platform):
+    errors = []
+    expected = {
+        "name": "donner-native-symbols-" + platform + "-${{ needs.prepare.outputs.source_commit }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        "path": "${{ runner.temp }}/donner-native-symbols/" + platform + "/",
+        "if-no-files-found": "error", "retention-days": "90",
+        "compression-level": "0", "overwrite": "false",
+    }
+    for key, value in expected.items():
+        if "          " + key + ": " + value + "\n" not in upload:
+            errors.append("unreviewed diagnostic upload " + key)
+    if "continue-on-error:" in upload or "always()" in upload:
+        errors.append("upload failure may be ignored")
+    return errors
+
+
 def admission_errors(text):
     errors = []
     for job, platform in (("cli-linux", "linux-x86-64"), ("cli-macos", "darwin-arm64")):
@@ -49,17 +65,7 @@ def admission_errors(text):
             errors.append("not trusted main only")
         if "uses: actions/upload-artifact@v7" not in upload:
             errors.append("unreviewed diagnostic transfer")
-        expected = {
-            "name": "donner-native-symbols-" + platform + "-${{ needs.prepare.outputs.source_commit }}-${{ github.run_id }}-${{ github.run_attempt }}",
-            "path": "${{ runner.temp }}/donner-native-symbols/" + platform + "/",
-            "if-no-files-found": "error", "retention-days": "90",
-            "compression-level": "0", "overwrite": "false",
-        }
-        for key, value in expected.items():
-            if "          " + key + ": " + value + "\n" not in upload:
-                errors.append("unreviewed diagnostic upload " + key)
-        if "continue-on-error:" in upload or "always()" in upload:
-            errors.append("upload failure may be ignored")
+        errors.extend(_upload_expectations(upload, platform))
     after = text.split("\n  attest-artifacts:\n", 1)[1]
     if "donner-native-symbols" in after:
         errors.append("diagnostics entered candidate inventory")
@@ -86,31 +92,38 @@ class NativeProducerPlanTest(unittest.TestCase):
             self.assertFalse(any("tools.native_producer" in c.argv for c in commands))
             self.assertFalse(any("--copt=-gline-tables-only" in c.argv for c in commands))
 
+    def _assert_release_debug_flags(self, command, platform):
+        self.assertEqual(command[1:3], ("--nosystem_rc", "--nohome_rc"))
+        self.assertIn("--copt=-Os", command)
+        self.assertIn("--copt=-gline-tables-only", command)
+        self.assertNotIn("--config=latest_llvm", command)
+        self.assertFalse(any(flag.startswith("--xcode_version") for flag in command))
+        for flag in ("--remote_cache=", "--remote_executor=", "--disk_cache=", "--remote_upload_local_results=false", "--bes_backend=", "--bes_results_url="):
+            self.assertIn(flag, command)
+        if platform == "linux-x86-64":
+            self.assertIn("--linkopt=-Wl,--build-id=sha1", command)
+        if platform == "darwin-arm64":
+            self.assertIn("--output_groups=+dsyms", command)
+            self.assertIn("--apple_generate_dsym", command)
+
     def test_native_both_lock_passes_pair_symbols_and_use_fresh_cli(self):
         for platform in producer.PLATFORMS:
             commands = bcr_preflight.cli_plan(bcr_preflight.Layout("/temp"), platform, COMMIT, "1", "1", native=True)
             builds = [c.argv for c in commands if c.argv[0] == "bazelisk" and "build" in c.argv[:4]]
             for command in builds:
-                self.assertEqual(command[1:3], ("--nosystem_rc", "--nohome_rc"))
-                self.assertIn("--copt=-Os", command)
-                self.assertIn("--copt=-gline-tables-only", command)
-                self.assertNotIn("--config=latest_llvm", command)
-                self.assertFalse(any(flag.startswith("--xcode_version") for flag in command))
-                for flag in ("--remote_cache=", "--remote_executor=", "--disk_cache=", "--remote_upload_local_results=false", "--bes_backend=", "--bes_results_url="):
-                    self.assertIn(flag, command)
-                if platform == "linux-x86-64":
-                    self.assertIn("--linkopt=-Wl,--build-id=sha1", command)
-                if platform == "darwin-arm64":
-                    self.assertIn("--output_groups=+dsyms", command)
-                    self.assertIn("--apple_generate_dsym", command)
+                self._assert_release_debug_flags(command, platform)
             package = next(c.argv for c in commands if "tools.release_cli" in c.argv)
             self.assertEqual(package[package.index("--binary") + 1], "/temp/donner-native-delivery/" + platform + "/donner-cli")
             self.assertEqual(commands[-1].argv[4], "finalize")
-            if platform == "darwin-arm64":
-                self.assertTrue(any("//donner/editor:editor_impl" in command for command in builds))
-                editor = next(c.argv for c in commands if "tools.release_macos_editor" in c.argv)
-                self.assertIn("--delivery-symbols", editor)
-                self.assertIn("bazel-bin/donner/editor/editor_impl.dSYM", editor)
+
+    def test_darwin_editor_requests_the_native_pair_and_uses_its_symbols(self):
+        commands = bcr_preflight.cli_plan(
+            bcr_preflight.Layout("/temp"), "darwin-arm64", COMMIT, "1", "1", native=True,
+        )
+        self.assertTrue(any("//donner/editor:editor_impl" in command.argv for command in commands))
+        editor = next(c.argv for c in commands if "tools.release_macos_editor" in c.argv)
+        self.assertIn("--delivery-symbols", editor)
+        self.assertIn("bazel-bin/donner/editor/editor_impl.dSYM", editor)
 
     def test_strip_failure_stops_before_packaging_or_finalization(self):
         commands = bcr_preflight.cli_plan(bcr_preflight.Layout("/temp"), "linux-x86-64", COMMIT, "1", "1", native=True)
@@ -173,47 +186,54 @@ class NativeCustodyTest(unittest.TestCase):
         self.mocks.enter_context(patch.object(native_delivery, "_tool", return_value=""))
         self.mocks.enter_context(patch.object(producer, "_mach_code_data", return_value="c" * 64))
 
+    def _write_archive_fixture(self, platform, product, binary):
+        archive_name = producer.ARCHIVES[platform] if product == "cli" else producer.EDITOR_ARCHIVE
+        output = self.temp / ("donner-cli-" + producer.PLATFORMS[platform] if product == "cli" else "donner-editor-macos")
+        output.mkdir()
+        archive = output / archive_name
+        archive.write_bytes(b"verified product archive")
+        provenance = {"source_commit": COMMIT, "source_tree": "b" * 40, "producer_run_id": "1", "producer_attempt": "1",
+                      "platform": platform, "archive_sha256": digest(archive.read_bytes()),
+                      "archive_size": archive.stat().st_size}
+        if product == "cli":
+            provenance.update(binary_sha256=digest(binary.read_bytes()), binary_size=binary.stat().st_size)
+        else:
+            provenance["files"] = {"Donner SVG Editor.app/Contents/MacOS/Donner":
+                                   {"sha256": digest(binary.read_bytes()), "size": binary.stat().st_size}}
+        (output / (archive_name + ".provenance")).write_text(json.dumps(provenance))
+
+    def _write_pair_fixture(self, work, stage, platform, product):
+        parent = stage / product
+        parent.mkdir(mode=0o700)
+        symbol = parent / producer._symbol_name(platform, product)
+        symbol.parent.mkdir(parents=True, exist_ok=True)
+        symbol.write_bytes(b"paired public source lines")
+        if platform == "darwin-arm64":
+            (parent / "binary.dSYM/Contents/Info.plist").write_bytes(b"<plist>shipping product</plist>")
+        binary = work / ("donner-cli" if product == "cli" else "editor/Donner.app/Contents/MacOS/Donner")
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"fresh stripped product with final seal")
+        metadata = {"schema": 1, "platform": platform,
+                    "identity": "1" * 40 if platform == "linux-x86-64" else "11111111-1111-1111-1111-111111111111",
+                    "source_sha256": digest(b"unstripped input"), "source_size": 100,
+                    "binary_sha256": digest(binary.read_bytes()), "binary_size": binary.stat().st_size,
+                    "symbol_file": producer._symbol_name(platform, product),
+                    "symbol_sha256": digest(symbol.read_bytes()),
+                    "unwind_sections_sha256": UNWIND if platform == "linux-x86-64" else MACH_UNWIND}
+        if platform == "darwin-arm64":
+            metadata.update(final_binary_sha256=digest(binary.read_bytes()),
+                            final_binary_size=binary.stat().st_size, final_seal="ad-hoc", code_data_sha256="c" * 64)
+        if product == "editor":
+            metadata.update(binary_sha256=digest(b"prepared before app seal"), binary_size=24)
+        (parent / "delivery.json").write_text(json.dumps(metadata))
+        return binary
+
     def fixture(self, platform="linux-x86-64"):
         producer.initialize(self.temp, platform)
         work, stage = producer.roots(self.temp, platform)
         for product in (("cli", "editor") if platform == "darwin-arm64" else ("cli",)):
-            parent = stage / product
-            parent.mkdir(mode=0o700)
-            symbol = parent / producer._symbol_name(platform, product)
-            symbol.parent.mkdir(parents=True, exist_ok=True)
-            symbol.write_bytes(b"paired public source lines")
-            if platform == "darwin-arm64":
-                (parent / "binary.dSYM/Contents/Info.plist").write_bytes(b"<plist>shipping product</plist>")
-            binary = work / ("donner-cli" if product == "cli" else "editor/Donner.app/Contents/MacOS/Donner")
-            binary.parent.mkdir(parents=True, exist_ok=True)
-            binary.write_bytes(b"fresh stripped product with final seal")
-            metadata = {"schema": 1, "platform": platform,
-                        "identity": "1" * 40 if platform == "linux-x86-64" else "11111111-1111-1111-1111-111111111111",
-                        "source_sha256": digest(b"unstripped input"), "source_size": 100,
-                        "binary_sha256": digest(binary.read_bytes()), "binary_size": binary.stat().st_size,
-                        "symbol_file": producer._symbol_name(platform, product),
-                        "symbol_sha256": digest(symbol.read_bytes()),
-                        "unwind_sections_sha256": UNWIND if platform == "linux-x86-64" else MACH_UNWIND}
-            if platform == "darwin-arm64":
-                metadata.update(final_binary_sha256=digest(binary.read_bytes()),
-                                final_binary_size=binary.stat().st_size, final_seal="ad-hoc", code_data_sha256="c" * 64)
-            if product == "editor":
-                metadata.update(binary_sha256=digest(b"prepared before app seal"), binary_size=24)
-            (parent / "delivery.json").write_text(json.dumps(metadata))
-            archive_name = producer.ARCHIVES[platform] if product == "cli" else producer.EDITOR_ARCHIVE
-            output = self.temp / ("donner-cli-" + producer.PLATFORMS[platform] if product == "cli" else "donner-editor-macos")
-            output.mkdir()
-            archive = output / archive_name
-            archive.write_bytes(b"verified product archive")
-            provenance = {"source_commit": COMMIT, "source_tree": "b" * 40, "producer_run_id": "1", "producer_attempt": "1",
-                          "platform": platform, "archive_sha256": digest(archive.read_bytes()),
-                          "archive_size": archive.stat().st_size}
-            if product == "cli":
-                provenance.update(binary_sha256=digest(binary.read_bytes()), binary_size=binary.stat().st_size)
-            else:
-                provenance["files"] = {"Donner SVG Editor.app/Contents/MacOS/Donner":
-                                       {"sha256": digest(binary.read_bytes()), "size": binary.stat().st_size}}
-            (output / (archive_name + ".provenance")).write_text(json.dumps(provenance))
+            binary = self._write_pair_fixture(work, stage, platform, product)
+            self._write_archive_fixture(platform, product, binary)
         return work, stage
 
     def test_mac_cli_compares_code_before_and_after_delivery(self):

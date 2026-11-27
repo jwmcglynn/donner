@@ -91,6 +91,48 @@ def prepare_cli(temp, platform, binary, dsym=None):
     return result
 
 
+def _mach_section_fields(section):
+    fields = {}
+    for name, pattern in (
+        ("name", r"sectname ([A-Za-z0-9_]{1,16})\s"),
+        ("segment", r"segname ([A-Za-z0-9_]{1,16})\s"),
+        ("address", r"\baddr (0x[0-9a-fA-F]+)"),
+        ("size", r"\bsize (0x[0-9a-fA-F]+)"),
+        ("offset", r"\boffset ([0-9]+)"),
+        ("flags", r"\bflags (0x[0-9a-fA-F]+)"),
+    ):
+        match = re.search(pattern, section)
+        if not match:
+            raise ValueError("native Mach-O section metadata is invalid")
+        fields[name] = match[1]
+    return fields
+
+
+def _section_digest(image, offset, size):
+    image.seek(offset)
+    digest = sha256()
+    while size:
+        block = image.read(min(65536, size))
+        if not block:
+            raise ValueError("native Mach-O section was truncated")
+        digest.update(block)
+        size -= len(block)
+    return digest.hexdigest()
+
+
+def _mach_section_record(image, fields, length, inspected):
+    size, offset, flags = int(fields["size"], 16), int(fields["offset"]), int(fields["flags"], 16)
+    record = {"address": int(fields["address"], 16), "size": size, "flags": flags}
+    if flags & 0xff in (1, 12, 18):  # Mach-O zero-fill sections have no file payload.
+        record["zero_fill"] = True
+        return record, inspected
+    inspected += size
+    if offset + size > length or inspected > length:
+        raise ValueError("native Mach-O section exceeds its file byte bound")
+    record.update(offset=offset, sha256=_section_digest(image, offset, size))
+    return record, inspected
+
+
 def _mach_code_data(path):
     """Fingerprint mapped code/data sections; signing may change only link-edit metadata."""
     native_delivery.validate_image(path, "darwin-arm64")
@@ -103,43 +145,53 @@ def _mach_code_data(path):
     sections, inspected = {}, 0
     with path.open("rb") as image:
         for section in commands.split("Section\n")[1:]:
-            fields = {}
-            for name, pattern in (("name", r"sectname ([A-Za-z0-9_]{1,16})\s"),
-                                  ("segment", r"segname ([A-Za-z0-9_]{1,16})\s"),
-                                  ("address", r"\baddr (0x[0-9a-fA-F]+)"),
-                                  ("size", r"\bsize (0x[0-9a-fA-F]+)"),
-                                  ("offset", r"\boffset ([0-9]+)"),
-                                  ("flags", r"\bflags (0x[0-9a-fA-F]+)")):
-                match = re.search(pattern, section)
-                if not match:
-                    raise ValueError("native Mach-O section metadata is invalid")
-                fields[name] = match[1]
+            fields = _mach_section_fields(section)
             if fields["segment"] == "__LINKEDIT":
                 continue
             key = fields["segment"] + "," + fields["name"]
             if key in sections or len(sections) >= 4096:
                 raise ValueError("native Mach-O section inventory is ambiguous or too large")
-            size, offset, flags = int(fields["size"], 16), int(fields["offset"]), int(fields["flags"], 16)
-            record = {"address": int(fields["address"], 16), "size": size, "flags": flags}
-            if flags & 0xff in (1, 12, 18):  # Mach-O zero-fill section kinds have no file payload.
-                record["zero_fill"] = True
-            else:
-                inspected += size
-                if offset + size > length or inspected > length:
-                    raise ValueError("native Mach-O section exceeds its file byte bound")
-                image.seek(offset)
-                h, remaining = sha256(), size
-                while remaining:
-                    block = image.read(min(65536, remaining))
-                    if not block:
-                        raise ValueError("native Mach-O section was truncated")
-                    h.update(block)
-                    remaining -= len(block)
-                record.update(offset=offset, sha256=h.hexdigest())
-            sections[key] = record
-    if "__TEXT,__text" not in sections or not sections["__TEXT,__text"]["size"]:
+            sections[key], inspected = _mach_section_record(image, fields, length, inspected)
+    if not sections.get("__TEXT,__text", {}).get("size"):
         raise ValueError("native Mach-O has no inspected code section")
     return sha256(json.dumps(sections, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _iter_regular_tree(root):
+    pending = [root]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                attributes = entry.stat(follow_symlinks=False)
+                mode = attributes.st_mode
+                if stat.S_ISDIR(mode):
+                    pending.append(path)
+                    yield path, None
+                elif stat.S_ISREG(mode):
+                    yield path, attributes.st_size
+                else:
+                    raise ValueError("native staging contains a link or unsupported entry")
+
+
+def _copy_editor_bundle(app, work):
+    if app.is_symlink() or not app.is_dir():
+        raise ValueError("native editor source bundle is linked or missing")
+    total = 0
+    for count, (_, size) in enumerate(_iter_regular_tree(app), 1):
+        total += size or 0
+        if count > MAX_APP_FILES:
+            raise ValueError("native editor source bundle is too large")
+        if total > MAX_APP_BYTES:
+            raise ValueError("native editor source bundle exceeds its byte budget")
+    work.mkdir(mode=0o700)
+    copied = work / "Donner.app"
+    shutil.copytree(app, copied, copy_function=shutil.copyfile)
+    copied.chmod(0o755)
+    for path, size in _iter_regular_tree(copied):
+        executable = size is None or (app / path.relative_to(copied)).stat().st_mode & 0o111
+        path.chmod(0o755 if executable else 0o644)
+    return copied
 
 
 def prepare_editor(app, work, symbols, dsym):
@@ -148,33 +200,7 @@ def prepare_editor(app, work, symbols, dsym):
     _private(symbols.parent)
     if os.path.lexists(work) or os.path.lexists(symbols):
         raise ValueError("native editor delivery needs fresh work and symbol paths")
-    if app.is_symlink() or not app.is_dir():
-        raise ValueError("native editor source bundle is linked or missing")
-    count, total, pending = 0, 0, [app]
-    while pending:
-        with os.scandir(pending.pop()) as entries:
-            for entry in entries:
-                count += 1
-                if count > MAX_APP_FILES or entry.is_symlink():
-                    raise ValueError("native editor source bundle is linked or too large")
-                if entry.is_dir(follow_symlinks=False):
-                    pending.append(Path(entry.path))
-                elif entry.is_file(follow_symlinks=False):
-                    total += entry.stat(follow_symlinks=False).st_size
-                    if total > MAX_APP_BYTES:
-                        raise ValueError("native editor source bundle exceeds its byte budget")
-                else:
-                    raise ValueError("native editor source bundle has unsupported entries")
-    work.mkdir(mode=0o700)
-    copied = work / "Donner.app"
-    shutil.copytree(app, copied, copy_function=shutil.copyfile)
-    copied.chmod(0o755)
-    for path in copied.rglob("*"):
-        if path.is_dir():
-            path.chmod(0o755)
-        elif path.is_file():
-            original = app / path.relative_to(copied)
-            path.chmod(0o755 if original.stat().st_mode & 0o111 else 0o644)
+    copied = _copy_editor_bundle(app, work)
     executable = copied / "Contents/MacOS/Donner"
     prepared = work / "Donner.prepared"
     before_code = _mach_code_data(executable)
@@ -214,42 +240,57 @@ def _symbol_name(platform, product):
         "donner-cli" if product == "cli" else "editor_impl")
 
 
+def _is_digest(value):
+    return isinstance(value, str) and HEX.fullmatch(value) is not None
+
+
+def _is_symbol_size(value):
+    return type(value) is int and 0 < value <= MAX_SYMBOL_BYTES
+
+
+def _check_unwind(metadata, platform):
+    if platform == "linux-x86-64":
+        permitted = {".eh_frame", ".eh_frame_hdr", ".gcc_except_table"}
+    else:
+        permitted = {"__eh_frame", "__unwind_info"}
+    unwind = metadata["unwind_sections_sha256"]
+    if not isinstance(unwind, dict) or not set(unwind) <= permitted:
+        raise ValueError("native diagnostic unwind inventory is invalid")
+    if not all(_is_digest(digest) for digest in unwind.values()):
+        raise ValueError("native diagnostic unwind inventory is invalid")
+    if platform == "linux-x86-64" and ".eh_frame" not in unwind:
+        raise ValueError("native diagnostic unwind inventory is invalid")
+
+
+def _check_macos_seal(metadata):
+    if (metadata["final_seal"] != "ad-hoc"
+            or not _is_digest(metadata["final_binary_sha256"])
+            or not _is_digest(metadata["code_data_sha256"])
+            or not _is_symbol_size(metadata["final_binary_size"])):
+        raise ValueError("native diagnostic final seal metadata is invalid")
+
+
 def _metadata(stage, platform, product):
     metadata = _json(stage / product / "delivery.json")
-    keys = set(metadata)
-    if keys not in (NATIVE_FIELDS, NATIVE_FIELDS | FINAL_FIELDS):
-        raise ValueError("native diagnostic metadata contains unreviewed fields")
-    identity = metadata.get("identity", "")
+    expected_fields = NATIVE_FIELDS | FINAL_FIELDS if platform == "darwin-arm64" else NATIVE_FIELDS
+    if set(metadata) != expected_fields:
+        raise ValueError("native diagnostic metadata contains unreviewed fields or omits the final macOS seal")
+    identity = metadata["identity"]
     identity_pattern = r"[0-9a-f]{40}" if platform == "linux-x86-64" else r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
-    if (type(metadata.get("schema")) is not int or metadata["schema"] != 1
-            or metadata.get("platform") != platform
+    if (type(metadata["schema"]) is not int or metadata["schema"] != 1
+            or metadata["platform"] != platform
             or not isinstance(identity, str) or not re.fullmatch(identity_pattern, identity)
-            or metadata.get("symbol_file") != _symbol_name(platform, product)):
+            or metadata["symbol_file"] != _symbol_name(platform, product)):
         raise ValueError("native diagnostic identity or symbol path is invalid")
     for name in ("source_sha256", "binary_sha256", "symbol_sha256"):
-        if not isinstance(metadata.get(name), str) or not HEX.fullmatch(metadata[name]):
+        if not _is_digest(metadata[name]):
             raise ValueError("native diagnostic digest is invalid")
     for name in ("source_size", "binary_size"):
-        if type(metadata.get(name)) is not int or not 0 < metadata[name] <= MAX_SYMBOL_BYTES:
+        if not _is_symbol_size(metadata[name]):
             raise ValueError("native diagnostic size is invalid")
-    permitted = ({".eh_frame", ".eh_frame_hdr", ".gcc_except_table"} if platform == "linux-x86-64"
-                 else {"__eh_frame", "__unwind_info"})
-    unwind = metadata.get("unwind_sections_sha256")
-    if (not isinstance(unwind, dict) or not set(unwind) <= permitted
-            or any(not isinstance(h, str) or not HEX.fullmatch(h) for h in unwind.values())
-            or (platform == "linux-x86-64" and ".eh_frame" not in unwind)):
-        raise ValueError("native diagnostic unwind inventory is invalid")
-    if FINAL_FIELDS <= keys:
-        if (metadata["final_seal"] != "ad-hoc" or platform != "darwin-arm64"
-                or not isinstance(metadata["final_binary_sha256"], str)
-                or not HEX.fullmatch(metadata["final_binary_sha256"])
-                or not isinstance(metadata["code_data_sha256"], str)
-                or not HEX.fullmatch(metadata["code_data_sha256"])
-                or type(metadata["final_binary_size"]) is not int
-                or not 0 < metadata["final_binary_size"] <= MAX_SYMBOL_BYTES):
-            raise ValueError("native diagnostic final seal metadata is invalid")
-    elif platform == "darwin-arm64":
-        raise ValueError("native diagnostics are not bound to the final macOS seal")
+    _check_unwind(metadata, platform)
+    if platform == "darwin-arm64":
+        _check_macos_seal(metadata)
     return metadata
 
 
@@ -272,34 +313,95 @@ def _has_private_path(path):
     return False
 
 
+def _verify_inventory_file(path, name, size, allowed):
+    if name not in allowed:
+        raise ValueError("native diagnostic inventory contains an unreviewed file")
+    if not _is_symbol_size(size):
+        raise ValueError("native diagnostic file exceeds its byte budget")
+    if _has_private_path(path):
+        raise ValueError("native diagnostic inventory contains a private build path")
+
+
 def _inventory(stage, platform, include_custody):
     _private(stage)
     allowed = _expected_files(platform)
     if not include_custody:
         allowed.remove("custody.json")
     parents = {str(parent) for name in allowed for parent in Path(name).parents}
-    names, pending = set(), [stage]
-    while pending:
-        with os.scandir(pending.pop()) as entries:
-            for entry in entries:
-                path = Path(entry.path)
-                name = path.relative_to(stage).as_posix()
-                if entry.is_symlink():
-                    raise ValueError("native diagnostic inventory contains a link")
-                if entry.is_dir(follow_symlinks=False):
-                    if name not in parents:
-                        raise ValueError("native diagnostic inventory contains an unreviewed directory")
-                    pending.append(path)
-                    continue
-                if not entry.is_file(follow_symlinks=False) or name not in allowed:
-                    raise ValueError("native diagnostic inventory contains an unreviewed file")
-                if not 0 < entry.stat(follow_symlinks=False).st_size <= MAX_SYMBOL_BYTES:
-                    raise ValueError("native diagnostic file exceeds its byte budget")
-                if _has_private_path(path):
-                    raise ValueError("native diagnostic inventory contains a private build path")
-                names.add(name)
+    names = set()
+    for path, size in _iter_regular_tree(stage):
+        name = path.relative_to(stage).as_posix()
+        if size is None:
+            if name not in parents:
+                raise ValueError("native diagnostic inventory contains an unreviewed directory")
+            continue
+        _verify_inventory_file(path, name, size, allowed)
+        names.add(name)
     if names != allowed:
         raise ValueError("native diagnostic inventory is incomplete")
+
+
+def _verify_symbol_pair(binary, symbol, metadata, final_hash, final_size, platform):
+    if _digest(symbol) != metadata["symbol_sha256"]:
+        raise ValueError("native diagnostic symbol digest differs from its pair")
+    if (binary.is_symlink() or not binary.is_file() or binary.stat().st_size != final_size
+            or _digest(binary) != final_hash):
+        raise ValueError("native diagnostic final executable differs from its pair")
+    native_delivery.validate_image(binary, platform)
+    identity = native_delivery._uuid if platform == "darwin-arm64" else native_delivery._build_id
+    unwind = native_delivery._mach_unwind if platform == "darwin-arm64" else native_delivery._elf_unwind
+    if (identity(binary) != metadata["identity"] or identity(symbol) != metadata["identity"]
+            or unwind(binary) != metadata["unwind_sections_sha256"]):
+        raise ValueError("native diagnostic symbol identity or unwind differs from its executable")
+    if platform == "linux-x86-64":
+        native_delivery._require_elf_source_lines(symbol)
+    else:
+        if _mach_code_data(binary) != metadata["code_data_sha256"]:
+            raise ValueError("native diagnostic code/data differs from its final sealed product")
+        native_delivery._tool("/usr/bin/dwarfdump", "--verify", str(symbol))
+        native_delivery._require_macho_source_lines(symbol)
+
+
+def _verify_provenance(archive, product, platform, commit, run_id, attempt, final_hash, final_size):
+    provenance = _json(archive.with_name(archive.name + ".provenance"))
+    if (provenance.get("source_commit") != commit or provenance.get("producer_run_id") != run_id
+            or provenance.get("producer_attempt") != attempt or provenance.get("platform") != platform):
+        raise ValueError("native diagnostic custody differs from the product producer")
+    if product == "cli":
+        product_hash, product_size = provenance.get("binary_sha256"), provenance.get("binary_size")
+    else:
+        record = provenance.get("files", {}).get("Donner SVG Editor.app/Contents/MacOS/Donner", {})
+        product_hash, product_size = record.get("sha256"), record.get("size")
+    if (product_hash != final_hash or product_size != final_size or archive.is_symlink()
+            or not archive.is_file() or archive.stat().st_size != provenance.get("archive_size")
+            or _digest(archive) != provenance.get("archive_sha256")):
+        raise ValueError("native diagnostic custody differs from the final product bytes")
+    return provenance
+
+
+def _product_custody(temp, platform, product, commit, run_id, attempt):
+    work, stage = roots(temp, platform)
+    metadata = _metadata(stage, platform, product)
+    symbol = stage / product / metadata["symbol_file"]
+    binary = (work / "donner-cli" if product == "cli"
+              else work / "editor/Donner.app/Contents/MacOS/Donner")
+    final_hash = metadata.get("final_binary_sha256", metadata["binary_sha256"])
+    final_size = metadata.get("final_binary_size", metadata["binary_size"])
+    _verify_symbol_pair(binary, symbol, metadata, final_hash, final_size, platform)
+    archive_name = ARCHIVES[platform] if product == "cli" else EDITOR_ARCHIVE
+    directory = (temp / ("donner-cli-" + PLATFORMS[platform]) if product == "cli"
+                 else temp / "donner-editor-macos")
+    provenance = _verify_provenance(
+        directory / archive_name, product, platform, commit, run_id, attempt, final_hash, final_size,
+    )
+    record = {"identity": metadata["identity"], "source_sha256": metadata["source_sha256"],
+              "prepared_binary_sha256": metadata["binary_sha256"], "final_binary_sha256": final_hash,
+              "final_binary_size": final_size, "symbol_file": product + "/" + metadata["symbol_file"],
+              "symbol_sha256": metadata["symbol_sha256"], "archive": archive_name,
+              "archive_sha256": provenance["archive_sha256"]}
+    if platform == "darwin-arm64":
+        record["code_data_sha256"] = metadata["code_data_sha256"]
+    return provenance.get("source_tree"), record
 
 
 def _custody(temp, platform, commit, run_id, attempt, include_custody):
@@ -309,63 +411,11 @@ def _custody(temp, platform, commit, run_id, attempt, include_custody):
     _inventory(stage, platform, include_custody)
     products, source_tree = {}, None
     for product in (("cli", "editor") if platform == "darwin-arm64" else ("cli",)):
-        metadata = _metadata(stage, platform, product)
-        symbol = stage / product / metadata["symbol_file"]
-        if _digest(symbol) != metadata["symbol_sha256"]:
-            raise ValueError("native diagnostic symbol digest differs from its pair")
-        work, _ = roots(temp, platform)
-        binary = (work / "donner-cli" if product == "cli"
-                  else work / "editor/Donner.app/Contents/MacOS/Donner")
-        final_hash = metadata.get("final_binary_sha256", metadata["binary_sha256"])
-        final_size = metadata.get("final_binary_size", metadata["binary_size"])
-        if (binary.is_symlink() or not binary.is_file() or binary.stat().st_size != final_size
-                or _digest(binary) != final_hash):
-            raise ValueError("native diagnostic final executable differs from its pair")
-        native_delivery.validate_image(binary, platform)
-        identity = native_delivery._uuid if platform == "darwin-arm64" else native_delivery._build_id
-        unwind = native_delivery._mach_unwind if platform == "darwin-arm64" else native_delivery._elf_unwind
-        if (identity(binary) != metadata["identity"] or identity(symbol) != metadata["identity"]
-                or unwind(binary) != metadata["unwind_sections_sha256"]):
-            raise ValueError("native diagnostic symbol identity or unwind differs from its executable")
-        if "code_data_sha256" in metadata and _mach_code_data(binary) != metadata["code_data_sha256"]:
-            raise ValueError("native diagnostic code/data differs from its final sealed product")
-        if platform == "linux-x86-64":
-            native_delivery._require_elf_source_lines(symbol)
-        else:
-            native_delivery._tool("/usr/bin/dwarfdump", "--verify", str(symbol))
-            native_delivery._require_macho_source_lines(symbol)
-        archive_name = ARCHIVES[platform] if product == "cli" else EDITOR_ARCHIVE
-        directory = (temp / ("donner-cli-" + PLATFORMS[platform]) if product == "cli"
-                     else temp / "donner-editor-macos")
-        provenance = _json(directory / (archive_name + ".provenance"))
-        final_hash = metadata.get("final_binary_sha256", metadata["binary_sha256"])
-        final_size = metadata.get("final_binary_size", metadata["binary_size"])
-        tree = provenance.get("source_tree")
+        tree, record = _product_custody(temp, platform, product, commit, run_id, attempt)
         if not isinstance(tree, str) or not COMMIT.fullmatch(tree) or (source_tree is not None and tree != source_tree):
             raise ValueError("native diagnostic products differ in source tree")
         source_tree = tree
-        if (provenance.get("source_commit") != commit or provenance.get("producer_run_id") != run_id
-                or provenance.get("producer_attempt") != attempt or provenance.get("platform") != platform):
-            raise ValueError("native diagnostic custody differs from the product producer")
-        if product == "cli":
-            product_hash, product_size = provenance.get("binary_sha256"), provenance.get("binary_size")
-        else:
-            record = provenance.get("files", {}).get("Donner SVG Editor.app/Contents/MacOS/Donner", {})
-            product_hash, product_size = record.get("sha256"), record.get("size")
-        archive = directory / archive_name
-        if (product_hash != final_hash or product_size != final_size or archive.is_symlink()
-                or not archive.is_file() or archive.stat().st_size != provenance.get("archive_size")
-                or _digest(archive) != provenance.get("archive_sha256")):
-            raise ValueError("native diagnostic custody differs from the final product bytes")
-        products[product] = {"identity": metadata["identity"],
-                             "source_sha256": metadata["source_sha256"],
-                             "prepared_binary_sha256": metadata["binary_sha256"],
-                             "final_binary_sha256": final_hash, "final_binary_size": final_size,
-                             "symbol_file": product + "/" + metadata["symbol_file"],
-                             "symbol_sha256": metadata["symbol_sha256"],
-                             "archive": archive_name, "archive_sha256": provenance["archive_sha256"]}
-        if "code_data_sha256" in metadata:
-            products[product]["code_data_sha256"] = metadata["code_data_sha256"]
+        products[product] = record
     return {"schema": 1, "source_commit": commit, "source_tree": source_tree, "producer_run_id": run_id,
             "producer_attempt": attempt, "platform": platform, "products": products}
 
