@@ -98,6 +98,17 @@ struct Declaration {
   std::size_t sourceByteSize = 0;
   /// Byte length of the authored identifier, including CSS escapes. Zero means unavailable.
   std::uint32_t nameSourceByteLength = 0;
+  /// Offsets relative to the declaration name. They survive relocation of an untouched rule.
+  struct AuthoredLayout {
+    std::size_t colonEnd = 0;
+    std::size_t end = 0;
+    std::size_t importantStart = 0;
+  } authored;
+  /// Precise editable spans. Synthetic or incomplete constructs have no such range.
+  [[nodiscard]] std::optional<SourceRange> authoredNameRange() const;
+  [[nodiscard]] std::optional<SourceRange> authoredValueRange() const;
+  [[nodiscard]] std::optional<SourceRange> authoredPriorityRange() const;
+  [[nodiscard]] std::optional<SourceRange> authoredDeclarationRange() const;
   bool important = false;  ///< Whether the declaration ends with `!important`.
   /// Syntax classification of the values at construction or parser finalization.
   VariableReferences variableReferences = VariableReferences::None;

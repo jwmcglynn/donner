@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <functional>
+#include <limits>
 
 #include "donner/css/Declaration.h"
 #include "donner/css/Token.h"
@@ -98,11 +99,34 @@ private:
   T& tokenizer_;
 };
 
+inline std::size_t RelativeDeclarationOffset(FileOffset name, FileOffset point,
+                                             std::size_t width = 0) {
+  if (!name.offset || !point.offset || *point.offset < *name.offset ||
+      width > std::numeric_limits<std::size_t>::max() - *point.offset) {
+    return 0;
+  }
+  return *point.offset - *name.offset + width;
+}
+
+inline void RecordAuthoredComponent(Declaration& declaration, const ComponentValue& component,
+                                    std::size_t& bangStart) {
+  const auto span = component.authoredRange();
+  declaration.authored.end = declaration.authored.end && span
+                                 ? RelativeDeclarationOffset(declaration.sourceOffset, span->end)
+                                 : 0;
+  const auto* token = std::get_if<Token>(&component.value);
+  const auto* delim = token ? token->tryGet<Token::Delim>() : nullptr;
+  if (delim && delim->value == '!') {
+    bangStart = RelativeDeclarationOffset(declaration.sourceOffset, token->offset());
+  }
+}
+
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <DeclarationTokenizer T>
 std::optional<Declaration> consumeDeclarationGeneric(
     T& tokenizer, Token::Ident&& ident, const FileOffset& offset,
     ComponentValueParsingBudget* aggregateBudget = nullptr) {
+  std::size_t colonEnd = 0;
   {
     bool hadColon = false;
 
@@ -118,6 +142,7 @@ std::optional<Declaration> consumeDeclarationGeneric(
         return std::nullopt;
       } else {
         hadColon = true;
+        colonEnd = RelativeDeclarationOffset(offset, item.offset(), 1);
       }
     }
 
@@ -128,6 +153,9 @@ std::optional<Declaration> consumeDeclarationGeneric(
 
   Declaration declaration(std::move(ident.value), {}, offset);
   declaration.nameSourceByteLength = ident.sourceByteLength;
+  declaration.authored.colonEnd = colonEnd;
+  declaration.authored.end = colonEnd;
+  std::size_t bangStart = 0;
 
   bool lastWasImportantBang = false;
   bool hitNonWhitespace = false;
@@ -163,11 +191,13 @@ std::optional<Declaration> consumeDeclarationGeneric(
         return std::nullopt;
       }
 
+      RecordAuthoredComponent(declaration, componentValue, bangStart);
       // Scan for important.
       if (Token* valueToken = std::get_if<Token>(&componentValue.value)) {
         if (lastWasImportantBang && valueToken->is<Token::Ident>() &&
             valueToken->get<Token::Ident>().value.equalsLowercase("important")) {
           declaration.important = true;
+          declaration.authored.importantStart = bangStart;
           lastWasImportantBang = false;
         } else {
           lastWasImportantBang =

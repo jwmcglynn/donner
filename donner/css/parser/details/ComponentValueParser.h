@@ -172,6 +172,10 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode,
   while (!tokenizer.isEOF()) {
     auto token = tokenizer.next();
     if (token.tokenIndex() == endingTokenIndex) {
+      if (token.sourceByteLength() && result.sourceOffset.offset && token.offset().offset) {
+        result.sourceByteLength =
+            *token.offset().offset - *result.sourceOffset.offset + token.sourceByteLength();
+      }
       return result;
     } else {
       auto recursionGuard = parsingContext.addLevel();
@@ -204,6 +208,10 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, const Fi
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
     if (token.is<Token::CloseParenthesis>()) {
+      if (token.sourceByteLength() && result.sourceOffset.offset && token.offset().offset) {
+        result.sourceByteLength =
+            *token.offset().offset - *result.sourceOffset.offset + token.sourceByteLength();
+      }
       return result;
     } else {
       auto recursionGuard = parsingContext.addLevel();

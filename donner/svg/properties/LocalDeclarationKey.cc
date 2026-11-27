@@ -169,10 +169,11 @@ private:
   }
   void append(const css::ComponentValue& value) { appendMembers<1>(value); }
   void append(const css::Declaration& value) {
-    const auto& [name, values, offset, range, bytes, nameSourceByteLength, important, references] =
-        value;
+    const auto& [name, values, offset, range, bytes, nameSourceByteLength, authored, important,
+                 references] = value;
     // Authored name widths are queried from the source declaration, never a cached style.
     static_cast<void>(nameSourceByteLength);
+    static_cast<void>(authored);
     // Pack the two flags in the existing final byte of the key.
     const auto flags = static_cast<std::uint8_t>((static_cast<unsigned>(references) << 1) |
                                                  static_cast<unsigned>(important));
@@ -186,7 +187,12 @@ private:
   void append(const css::Token::AtKeyword& value) { appendMembers<1>(value); }
   void append(const css::Token::String& value) { appendMembers<1>(value); }
   void append(const css::Token::BadString& value) { appendMembers<1>(value); }
-  void append(const css::Token::Url& value) { appendMembers<1>(value); }
+  void append(const css::Token::Url& value) {
+    const auto& [url, payloadOffset, payloadLength] = value;
+    static_cast<void>(payloadOffset);
+    static_cast<void>(payloadLength);
+    append(url);
+  }
   void append(const css::Token::Delim& value) { appendMembers<1>(value); }
   void append(const css::Token::Whitespace& value) { appendMembers<1>(value); }
   void append(const css::Token::Function& value) { appendMembers<1>(value); }

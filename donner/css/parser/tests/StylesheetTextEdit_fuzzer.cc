@@ -21,7 +21,8 @@ void Require(bool condition, std::source_location location = std::source_locatio
 }
 
 void CheckComponent(const ComponentValue& incremental, const ComponentValue& full) {
-  Require(incremental == full && incremental.sourceOffset() == full.sourceOffset());
+  Require(incremental == full && incremental.sourceOffset() == full.sourceOffset() &&
+          incremental.authoredRange() == full.authoredRange());
   std::visit(
       [&](const auto& value) {
         if constexpr (requires { value.values; }) {
@@ -97,6 +98,10 @@ void CheckRule(const SelectorRule& actual, const SelectorRule& expected) {
   for (std::size_t j = 0; j < actual.declarations.size(); ++j) {
     const auto& local = actual.declarations[j];
     const auto& reference = expected.declarations[j];
+    Require(local.authoredNameRange() == reference.authoredNameRange());
+    Require(local.authoredValueRange() == reference.authoredValueRange());
+    Require(local.authoredPriorityRange() == reference.authoredPriorityRange());
+    Require(local.authoredDeclarationRange() == reference.authoredDeclarationRange());
     Require(local.sourceByteSize == reference.sourceByteSize &&
             local.variableReferences == reference.variableReferences);
     for (std::size_t k = 0; k < local.values.size(); ++k) {

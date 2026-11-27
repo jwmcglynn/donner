@@ -299,10 +299,11 @@ struct Token {
      *
      * @param value Url value, not including the surrounding 'url(' and ')' characters.
      */
-    explicit Url(RcString value) : value(std::move(value)) {}
+    explicit Url(RcString value, std::size_t payloadOffset = 0, std::size_t payloadLength = 0)
+        : value(std::move(value)), payloadOffset(payloadOffset), payloadLength(payloadLength) {}
 
     /// Equality operator.
-    bool operator==(const Url& other) const = default;
+    bool operator==(const Url& other) const { return value == other.value; }
 
     /**
      * Ostream output operator.
@@ -321,6 +322,10 @@ struct Token {
 
     /// Url value, not including the surrounding 'url(' and ')' characters.
     RcString value;
+    /// Relative source extent of the URL payload, excluding the function and surrounding
+    /// whitespace.
+    std::size_t payloadOffset = 0;
+    std::size_t payloadLength = 0;
   };
 
   /**
@@ -777,7 +782,8 @@ struct Token {
    * @param value Token value.
    * @param offset Offset within the source string where this token starts.
    */
-  Token(TokenValue&& value, size_t offset) : value_(std::move(value)), offset_(offset) {}
+  Token(TokenValue&& value, size_t offset, size_t sourceByteLength = 0)
+      : value_(std::move(value)), offset_(offset), sourceByteLength_(sourceByteLength) {}
 
   // Special members are declared here and defaulted in Token.cc. Token.h is included
   // across most of the codebase, and implicit (inline) special members instantiate the
@@ -812,6 +818,8 @@ struct Token {
    * Returns the offset within the source string where this token starts.
    */
   FileOffset offset() const { return FileOffset::Offset(offset_); }
+  /// Exact byte length consumed by the tokenizer, or zero for a synthetic token.
+  [[nodiscard]] size_t sourceByteLength() const { return sourceByteLength_; }
   /// Set the absolute source offset after a verified stylesheet splice.
   void setSourceOffset(std::size_t offset) { offset_ = offset; }
 
@@ -992,6 +1000,7 @@ struct Token {
 private:
   TokenValue value_;
   size_t offset_;
+  size_t sourceByteLength_;
 };
 
 }  // namespace donner::css

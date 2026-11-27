@@ -192,4 +192,47 @@ TEST(DeclarationListParser, BoundsAggregateInlineComponentValuesAndAtRules) {
   EXPECT_EQ(atRuleStats.componentValues, DeclarationListParser::kMaximumComponentValues);
 }
 
+TEST(DeclarationListParser, IncompleteTokensHaveNoEditableValueOrDeclarationRange) {
+  for (const std::string_view source :
+       {"--x: red /* unfinished", "--x: url(#paint", "--x: \"unfinished", "--x: var(--o, red"}) {
+    SCOPED_TRACE(source);
+    const auto declarations = DeclarationListParser::ParseOnlyDeclarations(source);
+    ASSERT_THAT(declarations, ::testing::SizeIs(1));
+    EXPECT_THAT(declarations.front().authoredDeclarationRange(), ::testing::Eq(std::nullopt));
+    EXPECT_THAT(declarations.front().authoredValueRange(), ::testing::Eq(std::nullopt));
+  }
+}
+
+TEST(DeclarationListParser, RecordsEditableNameValuePriorityAndNestedReferenceSpans) {
+  constexpr std::string_view text =
+      R"CSS( --p\61 int /*type*/: var(--ink, url( #spectrum )) /*keep*/ !important ; --empty: ; )CSS";
+  const auto declarations = DeclarationListParser::ParseOnlyDeclarations(text);
+  ASSERT_THAT(declarations, ::testing::SizeIs(2));
+  const auto spelling = [&](const std::optional<SourceRange>& range) {
+    if (!range || !range->start.offset || !range->end.offset) {
+      return std::string_view{};
+    }
+    return text.substr(*range->start.offset, *range->end.offset - *range->start.offset);
+  };
+  const auto& paint = declarations.front();
+  EXPECT_THAT(spelling(paint.authoredNameRange()), ::testing::Eq(R"(--p\61 int)"));
+  EXPECT_THAT(spelling(paint.authoredValueRange()), ::testing::Eq("var(--ink, url( #spectrum ))"));
+  EXPECT_THAT(spelling(paint.authoredPriorityRange()), ::testing::Eq("!important"));
+  EXPECT_THAT(
+      spelling(paint.authoredDeclarationRange()),
+      ::testing::Eq(R"(--p\61 int /*type*/: var(--ink, url( #spectrum )) /*keep*/ !important)"));
+  ASSERT_THAT(paint.values, ::testing::SizeIs(1));
+  const auto& fn = std::get<Function>(paint.values.front().value);
+  ASSERT_THAT(fn.values, ::testing::Not(::testing::IsEmpty()));
+  EXPECT_THAT(spelling(fn.values.front().authoredRange()), ::testing::Eq("--ink"));
+  const auto& urlToken = std::get<Token>(fn.values.back().value);
+  const auto& url = urlToken.get<Token::Url>();
+  EXPECT_THAT(text.substr(*urlToken.offset().offset + url.payloadOffset, url.payloadLength),
+              ::testing::Eq("#spectrum"));
+  const auto emptyValue = declarations.back().authoredValueRange();
+  ASSERT_THAT(emptyValue, ::testing::Optional(::testing::_));
+  EXPECT_THAT(emptyValue->start.offset, ::testing::Optional(text.rfind(':') + 1));
+  EXPECT_EQ(emptyValue->start, emptyValue->end);
+}
+
 }  // namespace donner::css::parser
