@@ -2,7 +2,9 @@
 /// @file
 
 #include <cstddef>
+#include <functional>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -70,6 +72,25 @@ struct SVGStyleRuleAtSourceOffset {
   bool operator==(const SVGStyleRuleAtSourceOffset& other) const = default;
 };
 
+/// Borrow the declaration tokens of one exact authored stylesheet rule during the call.
+/// @param stylesheet Embedded stylesheet owner.
+/// @param ruleIndex Rule index in the parsed stylesheet.
+/// @param expectedRuleRange Authored CSS range identifying the same rule.
+/// @param visit Receives the stylesheet bytes and declaration span only for the callback lifetime.
+/// @return True if the identified rule still matches and the visitor ran.
+bool VisitAuthoredStylesheetDeclarations(
+    const SVGStyleElement& stylesheet, std::size_t ruleIndex, const SourceRange& expectedRuleRange,
+    const std::function<void(std::string_view, std::span<const css::Declaration>)>& visit);
+
+/// Whether the element's prepared cascade supplies a usable value for the case-sensitive name.
+/// A disjoint or unprepared document state has no answer. A valid imported value can be present
+/// even when it has no source range in this document.
+/// @param element Element whose prepared cascade supplies the value.
+/// @param name Decoded, case-sensitive custom-property identifier.
+/// @return Whether the value is usable, or \c std::nullopt when the cascade cannot answer.
+std::optional<bool> HasPreparedCustomPropertyValue(const SVGElement& element,
+                                                   std::string_view name);
+
 /// Collect stylesheet rules that match \p element.
 ///
 /// Match collection is complete, while optional document source ranges are projected through a
@@ -77,8 +98,10 @@ struct SVGStyleRuleAtSourceOffset {
 /// \ref MapStylesheetSourceRange for an exact individual source mapping.
 ///
 /// @param element Element to inspect.
+/// @param includeDeclarations Project declaration ranges as well as the rule and selector.
 /// @return Matched stylesheet rules in cascade scan order.
-std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element);
+std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element,
+                                                          bool includeDeclarations = true);
 
 /// Collect source-backed author stylesheet rules in \p document, optionally with the built-in user
 /// agent stylesheet rules.
@@ -93,8 +116,10 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
 /// Collect one document-local author rule and its declarations at a source byte offset.
 /// @param document SVG document to inspect.
 /// @param documentSourceOffset Offset inside the complete authored CSS rule.
+/// @param includeDeclarations Copy and map declaration tokens in the result.
+/// @return The matching author rule, or \c std::nullopt when no rule has that source offset.
 std::optional<SVGStylesheetRule> CollectStylesheetRuleAtSourceOffset(
-    const SVGDocument& document, std::size_t documentSourceOffset);
+    const SVGDocument& document, std::size_t documentSourceOffset, bool includeDeclarations = true);
 
 /// Return true when an author stylesheet rule in \p document matches on tree position.
 ///
@@ -119,6 +144,38 @@ bool AuthorStyleDependsOnTreePosition(const SVGDocument& document);
 /// @return Original document range, or nullopt for stale, source-less, or discontinuous text.
 std::optional<SourceRange> MapStylesheetSourceRange(const SVGStyleElement& stylesheet,
                                                     const SourceRange& cssRange);
+
+/// Source ranges returned by one bounded, read-only custom-property provenance query.
+struct SVGCustomPropertyDeclarationBatch {
+  /// One declaration-name range per requested name, in request order.
+  std::vector<std::optional<SourceRange>> declarations;
+  /// Aggregate query work consumed from the caller's allowance.
+  std::size_t work = 0;
+  /// True when the query stopped at the aggregate work ceiling.
+  bool budgetExceeded = false;
+  /// True when every result is authoritative for the prepared document state.
+  bool complete = false;
+};
+
+/**
+ * Find the source declarations supplying several custom properties to one element.
+ *
+ * Matching, layer ordering, inheritance walks, and declaration scans are shared across names.
+ * Input names and all cascade work consume one caller-supplied aggregate allowance. A budget
+ * refusal consumes the remaining allowance and returns no partial answers. Unprepared or stale
+ * document state is incomplete but does not report a budget refusal.
+ *
+ * Names are case sensitive. Results preserve request order and duplicates; invalid, missing,
+ * guaranteed-invalid, or source-less winners have an empty result slot.
+ * A request above the defensive name-count cap is refused before allocating result slots.
+ *
+ * @param element Concrete SVG element whose cascade supplies the values.
+ * @param names Decoded custom-property identifiers, including their two leading hyphens.
+ * @param maxWork Aggregate work allowed for this query.
+ * @return Ordered declaration ranges and the status of the bounded query.
+ */
+SVGCustomPropertyDeclarationBatch FindCustomPropertyDeclarations(
+    const SVGElement& element, std::span<const std::string_view> names, std::size_t maxWork);
 
 /// Find the source span of the declaration supplying a custom property to this element.
 ///

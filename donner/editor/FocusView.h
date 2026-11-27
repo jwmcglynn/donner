@@ -123,11 +123,13 @@ struct ReferenceHighlightSummary {
  *
  * @param document Source-backed SVG document to inspect.
  * @param sourceOffset Byte offset in \p document source.
+ * @param selection Current editor selection for element-dependent custom properties.
  * @return Style focus information, or \c std::nullopt when \p sourceOffset is not inside a
  * source-backed stylesheet rule.
  */
 [[nodiscard]] std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(
-    const svg::SVGDocument& document, std::size_t sourceOffset);
+    const svg::SVGDocument& document, std::size_t sourceOffset,
+    std::span<const svg::SVGElement> selection = {});
 
 /**
  * Compute a focus partition for a stylesheet rule under \p sourceOffset.

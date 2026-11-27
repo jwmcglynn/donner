@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <ostream>
 #include <span>
@@ -342,6 +343,12 @@ SourcePoint PointForNeedle(std::string_view source, std::string_view needle) {
   return SourcePoint{.line = line, .column = static_cast<int>(offset - lineStart)};
 }
 
+SourcePoint PointForAuthoredId(std::string_view source, std::string_view id) {
+  SourcePoint point = PointForNeedle(source, std::string("id=\"") + std::string(id) + "\"");
+  point.column += 4;
+  return point;
+}
+
 SourcePoint PointForOpeningTagEnd(std::string_view source, std::string_view openingTagStart) {
   const std::size_t startOffset = OffsetForNeedle(source, openingTagStart);
   const std::size_t closeOffset = source.find('>', startOffset);
@@ -385,10 +392,6 @@ bool ContainsLine(const std::vector<LineRange>& ranges, int line) {
   });
 }
 
-bool ContainsLink(const std::vector<FocusReferenceLink>& links, const FocusReferenceLink& needle) {
-  return std::ranges::find(links, needle) != links.end();
-}
-
 bool ContainsElement(const std::vector<svg::SVGElement>& elements,
                      const std::optional<svg::SVGElement>& needle) {
   return needle.has_value() && std::ranges::find(elements, *needle) != elements.end();
@@ -409,6 +412,76 @@ std::vector<FocusReferenceLink> SortLinks(std::vector<FocusReferenceLink> links)
               return a.to.column < b.to.column;
             });
   return links;
+}
+
+TEST(FocusViewTest, CssRopesUseExactWinningDeclarationAndFragmentId) {
+  constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
+<style>
+  .group { --Ink: red; }
+  #g { --Ink: #224466; }
+  .art { stroke: var(--Ink); fill: url(#spectrum); }
+</style>
+<defs><linearGradient id="spectrum"><stop offset="0"/></linearGradient></defs>
+<g class="group" id="g"><rect class="art" id="selection" width="16" height="16"/></g>
+</svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const auto target = app.document().document().querySelector("#selection");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  std::ignore = target->getComputedStyle();
+  const auto partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(PointForNeedleAfter(source, "--Ink", "var("),
+                                                PointForNeedle(source, "--Ink: #224466"))));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(PointForNeedle(source, "#spectrum"),
+                                                PointForNeedle(source, "spectrum\"><stop"))));
+}
+
+TEST(FocusViewTest, RepeatedVariableUsesConnectToTheWinnerForEachSelectedElement) {
+  constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
+<style>
+.swatch { fill:var(--paint); stroke:var(--paint) }
+.warm { --paint: coral }
+.cool { --paint: indigo }
+</style>
+<rect class="swatch warm" id="first"/><circle class="swatch cool" id="second"/>
+</svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  auto& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
+  std::ignore = first->getComputedStyle();
+  std::ignore = second->getComputedStyle();
+  const std::array selection{*first, *second};
+  const auto partition = ComputeFocusPartition(document, selection);
+  EXPECT_FALSE(partition.resourceLimitExceeded);
+  for (const auto property : {"fill:var(", "stroke:var("}) {
+    const auto use = PointForNeedleAfter(source, "--paint", property);
+    EXPECT_THAT(partition.referenceLinks,
+                testing::Contains(ReferenceLinkIs(use, PointForNeedle(source, "--paint: coral"))));
+    EXPECT_THAT(partition.referenceLinks,
+                testing::Contains(ReferenceLinkIs(use, PointForNeedle(source, "--paint: indigo"))));
+  }
+}
+
+TEST(FocusViewTest, UrlUnderCaretResolvesWithoutAnyMatchingShape) {
+  constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
+<style>.unused { fill: var(--missing, var(--second, url(#spectrum))) }</style>
+<defs><linearGradient id="spectrum"/></defs>
+</svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const auto focus = ComputeStyleFocusAtSourceOffset(app.document().document(),
+                                                     OffsetForNeedle(source, "#spectrum") + 3);
+  ASSERT_THAT(focus, testing::Optional(testing::_));
+  EXPECT_THAT(focus->impactedElements, IsEmpty());
+  EXPECT_THAT(focus->partition.referenceLinks,
+              ElementsAre(ReferenceLinkIs(PointForNeedle(source, "#spectrum"),
+                                          PointForAuthoredId(source, "spectrum"))));
 }
 
 TEST(FocusViewTest, ShowsSelectedElementAndAncestorTagsOnly) {
@@ -475,17 +548,16 @@ TEST(FocusViewTest, IncludesReferencedPaintAndCompositingElements) {
   EXPECT_THAT(partition.dimmed,
               ElementsAre(LineRangeIs(0, 2), LineRangeIs(10, 11), LineRangeIs(15, 16)));
   EXPECT_THAT(partition.hidden, ElementsAre(LineRangeIs(14, 15)));
-  EXPECT_THAT(
-      SortLinks(partition.referenceLinks),
-      ElementsAre(
-          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#base"),
-                          PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="base")")),
-          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#paint"),
-                          PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="paint")")),
-          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#clip"),
-                          PointForOpeningTagEnd(kReferencedSvg, R"(<clipPath id="clip")")),
-          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#shadow"),
-                          PointForOpeningTagEnd(kReferencedSvg, R"(<filter id="shadow")"))));
+  EXPECT_THAT(SortLinks(partition.referenceLinks),
+              ElementsAre(ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#base"),
+                                          PointForOpeningTagEnd(kReferencedSvg,
+                                                                R"(<linearGradient id="base")")),
+                          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#paint"),
+                                          PointForAuthoredId(kReferencedSvg, "paint")),
+                          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#clip"),
+                                          PointForAuthoredId(kReferencedSvg, "clip")),
+                          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#shadow"),
+                                          PointForAuthoredId(kReferencedSvg, "shadow"))));
 }
 
 TEST(FocusViewTest, ParsesQuotedUrlReferencesAndWhitespaceTrimmedHref) {
@@ -513,24 +585,19 @@ TEST(FocusViewTest, ParsesQuotedUrlReferencesAndWhitespaceTrimmedHref) {
   EXPECT_FALSE(ContainsLine(partition.referenceColor,
                             PointForNeedle(kLooseReferenceSyntaxSvg, R"(<use id="ignored")").line));
 
-  EXPECT_TRUE(ContainsLink(
+  EXPECT_THAT(
       partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kLooseReferenceSyntaxSvg, "#paint"),
-          .to = PointForOpeningTagEnd(kLooseReferenceSyntaxSvg, R"(<linearGradient id="paint")"),
-      }));
-  EXPECT_TRUE(ContainsLink(
+      testing::Contains(ReferenceLinkIs(PointForNeedle(kLooseReferenceSyntaxSvg, "#paint"),
+                                        PointForAuthoredId(kLooseReferenceSyntaxSvg, "paint"))));
+  EXPECT_THAT(
       partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kLooseReferenceSyntaxSvg, "#base"),
-          .to = PointForOpeningTagEnd(kLooseReferenceSyntaxSvg, R"(<linearGradient id="base")"),
-      }));
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedle(kLooseReferenceSyntaxSvg, "#shape"),
-                       .to = PointForNeedle(kLooseReferenceSyntaxSvg, R"(<rect id="shape")"),
-                   }));
+      testing::Contains(ReferenceLinkIs(
+          PointForNeedle(kLooseReferenceSyntaxSvg, "#base"),
+          PointForOpeningTagEnd(kLooseReferenceSyntaxSvg, R"(<linearGradient id="base")"))));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(
+                  PointForNeedle(kLooseReferenceSyntaxSvg, "#shape"),
+                  PointForNeedle(kLooseReferenceSyntaxSvg, R"(<rect id="shape")"))));
 }
 
 TEST(FocusViewTest, ReferenceSummaryHandlesLooseReferenceSyntax) {
@@ -568,18 +635,14 @@ TEST(FocusViewTest, ParsesSingleQuotedAndUnquotedUrlReferenceBoundaries) {
   EXPECT_TRUE(
       ContainsLine(partition.referenceColor,
                    PointForNeedle(kAdditionalReferenceSyntaxSvg, R"(<clipPath id="accent")").line));
-  EXPECT_TRUE(ContainsLink(partition.referenceLinks,
-                           FocusReferenceLink{
-                               .from = PointForNeedle(kAdditionalReferenceSyntaxSvg, "#paint"),
-                               .to = PointForOpeningTagEnd(kAdditionalReferenceSyntaxSvg,
-                                                           R"(<linearGradient id="paint")"),
-                           }));
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kAdditionalReferenceSyntaxSvg, "#accent"),
-          .to = PointForOpeningTagEnd(kAdditionalReferenceSyntaxSvg, R"(<clipPath id="accent")"),
-      }));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(
+                  ReferenceLinkIs(PointForNeedle(kAdditionalReferenceSyntaxSvg, "#paint"),
+                                  PointForAuthoredId(kAdditionalReferenceSyntaxSvg, "paint"))));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(
+                  ReferenceLinkIs(PointForNeedle(kAdditionalReferenceSyntaxSvg, "#accent"),
+                                  PointForAuthoredId(kAdditionalReferenceSyntaxSvg, "accent"))));
   EXPECT_GE(partition.referenceLinks.size(), 2u);
 }
 
@@ -594,12 +657,10 @@ TEST(FocusViewTest, ParsesUrlReferenceWithWhitespaceAfterOpeningQuote) {
   EXPECT_TRUE(ContainsLine(
       partition.referenceColor,
       PointForNeedle(kWhitespaceAfterUrlQuoteSvg, R"(<linearGradient id="paint")").line));
-  EXPECT_TRUE(ContainsLink(
+  EXPECT_THAT(
       partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kWhitespaceAfterUrlQuoteSvg, "#paint"),
-          .to = PointForOpeningTagEnd(kWhitespaceAfterUrlQuoteSvg, R"(<linearGradient id="paint")"),
-      }));
+      testing::Contains(ReferenceLinkIs(PointForNeedle(kWhitespaceAfterUrlQuoteSvg, "#paint"),
+                                        PointForAuthoredId(kWhitespaceAfterUrlQuoteSvg, "paint"))));
 }
 
 TEST(FocusViewTest, MissingReferencesDoNotCreateSourceLinksOrSummaryEntries) {
@@ -651,12 +712,10 @@ TEST(FocusViewTest, SourceLocationLossDropsFocusRatherThanGuessingRanges) {
 
   const FocusPartition partitionWithMissingReferenceRange =
       ComputeFocusPartition(app.document().document(), *target);
-  EXPECT_FALSE(
-      ContainsLink(partitionWithMissingReferenceRange.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedle(kReferencedSvg, "#paint"),
-                       .to = PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="paint")"),
-                   }));
+  EXPECT_THAT(
+      partitionWithMissingReferenceRange.referenceLinks,
+      testing::Not(testing::Contains(ReferenceLinkIs(
+          PointForNeedle(kReferencedSvg, "#paint"), PointForAuthoredId(kReferencedSvg, "paint")))));
   EXPECT_FALSE(ContainsLine(partitionWithMissingReferenceRange.referenceColor,
                             PointForNeedle(kReferencedSvg, R"(<linearGradient id="paint")").line));
 
@@ -669,7 +728,7 @@ TEST(FocusViewTest, SourceLocationLossDropsFocusRatherThanGuessingRanges) {
   EXPECT_TRUE(ComputeFocusPartition(app.document().document(), *target).empty());
 }
 
-TEST(FocusViewTest, MissingResourceOpeningTagLocationFallsBackToNodeStartForLinks) {
+TEST(FocusViewTest, UrlUsesAuthoredIdWhenOpeningTagLocationIsMissing) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kReferencedSvg));
   std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
@@ -683,12 +742,9 @@ TEST(FocusViewTest, MissingResourceOpeningTagLocationFallsBackToNodeStartForLink
 
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedle(kReferencedSvg, "#paint"),
-                       .to = PointForNeedle(kReferencedSvg, R"(<linearGradient id="paint")"),
-                   }));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#paint"),
+                                                PointForAuthoredId(kReferencedSvg, "paint"))));
 }
 
 TEST(FocusViewTest, MissingSelectedAncestorSourceRangeReturnsEmptyPartition) {
@@ -786,9 +842,8 @@ TEST(FocusViewTest, GroupSelectionDrawsOnlyOwnReferenceArrows) {
   EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(2, 4)));
   EXPECT_THAT(partition.hidden, IsEmpty());
   EXPECT_THAT(SortLinks(partition.referenceLinks),
-              ElementsAre(ReferenceLinkIs(
-                  PointForNeedle(kSubtreeReferencedSvg, "#arrow"),
-                  PointForOpeningTagEnd(kSubtreeReferencedSvg, R"(<marker id="arrow")"))));
+              ElementsAre(ReferenceLinkIs(PointForNeedle(kSubtreeReferencedSvg, "#arrow"),
+                                          PointForAuthoredId(kSubtreeReferencedSvg, "arrow"))));
 }
 
 TEST(FocusViewTest, IncludesMatchedCssRulesAndCssDeclarationReferences) {
@@ -815,18 +870,13 @@ TEST(FocusViewTest, IncludesMatchedCssRulesAndCssDeclarationReferences) {
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="sibling")").line));
 
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForOpeningTagEnd(kCssReferencedSvg, R"(<rect id="target")"),
-                       .to = PointForNeedle(kCssReferencedSvg, ".cls-92"),
-                   }));
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kCssReferencedSvg, "#paint"),
-          .to = PointForOpeningTagEnd(kCssReferencedSvg, R"(<linearGradient id="paint")"),
-      }));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(
+                  ReferenceLinkIs(PointForOpeningTagEnd(kCssReferencedSvg, R"(<rect id="target")"),
+                                  PointForNeedle(kCssReferencedSvg, ".cls-92"))));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(PointForNeedle(kCssReferencedSvg, "#paint"),
+                                                PointForAuthoredId(kCssReferencedSvg, "paint"))));
 }
 
 TEST(FocusViewTest, StyleOffsetFocusIncludesImpactedElementsAndCssDeclarationReferences) {
@@ -851,23 +901,17 @@ TEST(FocusViewTest, StyleOffsetFocusIncludesImpactedElementsAndCssDeclarationRef
   EXPECT_TRUE(ContainsLine(partition->hidden,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="sibling")").line));
 
-  EXPECT_TRUE(
-      ContainsLink(partition->referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForOpeningTagEnd(kCssReferencedSvg, R"(<rect id="target")"),
-                       .to = PointForNeedle(kCssReferencedSvg, ".cls-92"),
-                   }));
-  EXPECT_FALSE(ContainsLink(partition->referenceLinks,
-                            FocusReferenceLink{
-                                .from = PointForNeedle(kCssReferencedSvg, ".cls-92"),
-                                .to = PointForNeedle(kCssReferencedSvg, R"(<rect id="target")"),
-                            }));
-  EXPECT_TRUE(ContainsLink(
-      partition->referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kCssReferencedSvg, "#paint"),
-          .to = PointForOpeningTagEnd(kCssReferencedSvg, R"(<linearGradient id="paint")"),
-      }));
+  EXPECT_THAT(partition->referenceLinks,
+              testing::Contains(
+                  ReferenceLinkIs(PointForOpeningTagEnd(kCssReferencedSvg, R"(<rect id="target")"),
+                                  PointForNeedle(kCssReferencedSvg, ".cls-92"))));
+  EXPECT_THAT(partition->referenceLinks,
+              testing::Not(testing::Contains(
+                  ReferenceLinkIs(PointForNeedle(kCssReferencedSvg, ".cls-92"),
+                                  PointForNeedle(kCssReferencedSvg, R"(<rect id="target")")))));
+  EXPECT_THAT(partition->referenceLinks,
+              testing::Contains(ReferenceLinkIs(PointForNeedle(kCssReferencedSvg, "#paint"),
+                                                PointForAuthoredId(kCssReferencedSvg, "paint"))));
 }
 
 TEST(FocusViewTest, StyleOffsetFocusUsesSelectorListBranchUnderCursor) {
@@ -1057,18 +1101,14 @@ TEST(FocusViewTest, SelectingMultipleElementsIncludesCssRuleLinksForEachSelectio
       ContainsLine(partition.referenceColor, PointForNeedle(kGroupedCssChildrenSvg, ".glow").line));
   EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kGroupedCssChildrenSvg, ".bright").line));
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForOpeningTagEnd(kGroupedCssChildrenSvg, R"(<path id="boltA")"),
-                       .to = PointForNeedle(kGroupedCssChildrenSvg, ".glow"),
-                   }));
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForOpeningTagEnd(kGroupedCssChildrenSvg, R"(<path id="boltB")"),
-                       .to = PointForNeedle(kGroupedCssChildrenSvg, ".bright"),
-                   }));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(
+                  PointForOpeningTagEnd(kGroupedCssChildrenSvg, R"(<path id="boltA")"),
+                  PointForNeedle(kGroupedCssChildrenSvg, ".glow"))));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(
+                  PointForOpeningTagEnd(kGroupedCssChildrenSvg, R"(<path id="boltB")"),
+                  PointForNeedle(kGroupedCssChildrenSvg, ".bright"))));
 }
 
 TEST(FocusViewTest, SelectingReferencedResourceIncludesReferringElementsAndCssRules) {
@@ -1100,32 +1140,22 @@ TEST(FocusViewTest, SelectingReferencedResourceIncludesReferringElementsAndCssRu
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kResourceReferrersSvg, R"(<rect id="sibling")").line));
 
-  EXPECT_TRUE(ContainsLink(
+  EXPECT_THAT(partition.referenceLinks, testing::Contains(ReferenceLinkIs(
+                                            PointForNeedle(kResourceReferrersSvg, "#paint"),
+                                            PointForAuthoredId(kResourceReferrersSvg, "paint"))));
+  EXPECT_THAT(
       partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kResourceReferrersSvg, "#paint"),
-          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
-      }));
-  EXPECT_TRUE(ContainsLink(
+      testing::Contains(ReferenceLinkIs(
+          PointForNeedleAfter(kResourceReferrersSvg, "#paint", R"(<linearGradient id="chained")"),
+          PointForOpeningTagEnd(kResourceReferrersSvg, R"(<radialGradient id="paint")"))));
+  EXPECT_THAT(
       partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kResourceReferrersSvg, "#paint",
-                                      R"(<linearGradient id="chained")"),
-          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
-      }));
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from =
-              PointForNeedleAfter(kResourceReferrersSvg, "#paint", R"(<circle id="attrTarget")"),
-          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
-      }));
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedle(kResourceReferrersSvg, "#chained"),
-          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<linearGradient id="chained")"),
-      }));
+      testing::Contains(ReferenceLinkIs(
+          PointForNeedleAfter(kResourceReferrersSvg, "#paint", R"(<circle id="attrTarget")"),
+          PointForAuthoredId(kResourceReferrersSvg, "paint"))));
+  EXPECT_THAT(partition.referenceLinks, testing::Contains(ReferenceLinkIs(
+                                            PointForNeedle(kResourceReferrersSvg, "#chained"),
+                                            PointForAuthoredId(kResourceReferrersSvg, "chained"))));
 }
 
 TEST(FocusViewTest, ReferenceHighlightSummaryCountsReverseReferences) {
@@ -1268,12 +1298,10 @@ TEST(FocusViewTest, ForwardFilterDependencyDoesNotReverseExpandOtherFilterReferr
   EXPECT_FALSE(ContainsLine(partition.referenceColor,
                             PointForNeedle(kFilterFanoutSvg, R"(<path id="otherUser")").line));
 
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kFilterFanoutSvg, "#glow", R"(<path id="letterD")"),
-          .to = PointForOpeningTagEnd(kFilterFanoutSvg, R"(<filter id="glow")"),
-      }));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(
+                  PointForNeedleAfter(kFilterFanoutSvg, "#glow", R"(<path id="letterD")"),
+                  PointForAuthoredId(kFilterFanoutSvg, "glow"))));
 }
 
 TEST(FocusViewTest, SelectingFilterResourceStillIncludesTransitiveReferrers) {
@@ -1293,18 +1321,13 @@ TEST(FocusViewTest, SelectingFilterResourceStillIncludesTransitiveReferrers) {
   EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kFilterFanoutSvg, R"(<path id="otherUser")").line));
 
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kFilterFanoutSvg, "#glow", R"(<filter id="other")"),
-          .to = PointForOpeningTagEnd(kFilterFanoutSvg, R"(<filter id="glow")"),
-      }));
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedle(kFilterFanoutSvg, "#other"),
-                       .to = PointForOpeningTagEnd(kFilterFanoutSvg, R"(<filter id="other")"),
-                   }));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(
+                  PointForNeedleAfter(kFilterFanoutSvg, "#glow", R"(<filter id="other")"),
+                  PointForOpeningTagEnd(kFilterFanoutSvg, R"(<filter id="glow")"))));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::Contains(ReferenceLinkIs(PointForNeedle(kFilterFanoutSvg, "#other"),
+                                                PointForAuthoredId(kFilterFanoutSvg, "other"))));
 }
 
 TEST(FocusViewTest, ReferencedGradientOmitsCssRulesMatchedOnlyByStopDescendants) {
@@ -1622,7 +1645,7 @@ TEST(FocusViewTest, CyclicResourceContextTerminatesWhileSummaryRemainsDirect) {
                   ReferenceLinkIs(PointForNeedle(source, "#first"),
                                   PointForOpeningTagEnd(source, R"(<linearGradient id="first")")),
                   ReferenceLinkIs(PointForNeedleAfter(source, "#first", R"(<rect id="target")"),
-                                  PointForOpeningTagEnd(source, R"(<linearGradient id="first")"))));
+                                  PointForAuthoredId(source, "first"))));
   const std::vector<svg::SVGElement> selection{*target};
   const ReferenceHighlightSummary summary =
       ComputeReferenceHighlightSummary(app.document().document(), selection);
@@ -1757,12 +1780,12 @@ TEST(FocusViewTest, UnrelatedStylesheetResourcesDoNotEnterTheSelectionSummary) {
   const auto partition = ComputeFocusPartition(app.document().document(), *target);
   EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(7, 8)));
   EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(1, 2), LineRangeIs(4, 5)));
-  EXPECT_THAT(partition.referenceLinks,
-              testing::UnorderedElementsAre(
-                  ReferenceLinkIs(PointForOpeningTagEnd(source, R"(<rect id="target")"),
-                                  PointForNeedle(source, ".hit")),
-                  ReferenceLinkIs(PointForNeedle(source, "#paint"),
-                                  PointForOpeningTagEnd(source, R"(<linearGradient id="paint")"))));
+  EXPECT_THAT(
+      partition.referenceLinks,
+      testing::UnorderedElementsAre(
+          ReferenceLinkIs(PointForOpeningTagEnd(source, R"(<rect id="target")"),
+                          PointForNeedle(source, ".hit")),
+          ReferenceLinkIs(PointForNeedle(source, "#paint"), PointForAuthoredId(source, "paint"))));
 }
 
 TEST(FocusViewTest, ReverseCssFanoutExpandsFiveAndSummarizesSixWithoutLosingTheCount) {
@@ -1918,9 +1941,8 @@ TEST(FocusViewTest, DomAttributeReflectionUpdatesTheReferenceSummaryAndConnector
   EXPECT_THAT(reflected, testing::HasSubstr("fill=\"url(#accent)\""));
   const auto partition = ComputeFocusPartition(app.document().document(), *target);
   EXPECT_THAT(partition.referenceLinks,
-              ElementsAre(ReferenceLinkIs(
-                  PointForNeedle(reflected, "#accent"),
-                  PointForOpeningTagEnd(reflected, R"(<linearGradient id="accent")"))));
+              ElementsAre(ReferenceLinkIs(PointForNeedle(reflected, "#accent"),
+                                          PointForAuthoredId(reflected, "accent"))));
 }
 
 TEST(FocusViewTest, ElementAndStyleFocusRespectReentrantConcurrentDocumentReadAccess) {
@@ -1969,4 +1991,171 @@ TEST(FocusViewTest, OversizedSelectionReportsElementTruncationAndRetainsBoundedS
 }
 
 }  // namespace
+TEST(FocusViewTest, RepeatedRuleMatchesReuseParsingAndChargeCopiedUrlNames) {
+  const auto work = [](std::size_t count, std::string_view value) {
+    std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>rect { --tokens: ";
+    source += value;
+    source += "; }</style><g id='group'>";
+    for (std::size_t i = 0; i < count; ++i) {
+      source += "<rect/>";
+    }
+    source += "</g></svg>";
+    EditorApp app;
+    EXPECT_TRUE(app.loadFromString(source));
+    auto& document = app.document().document();
+    const auto group = document.querySelector("#group");
+    EXPECT_THAT(group, testing::Optional(testing::_));
+    if (!group) {
+      return std::size_t{};
+    }
+    const std::array selected{*group};
+    const auto summary = ComputeReferenceHighlightSummary(document, selected);
+    EXPECT_FALSE(summary.resourceLimitExceeded);
+    EXPECT_THAT(summary.referencedElements, IsEmpty());
+    return summary.traversalWork;
+  };
+  const auto extraWithTwoMatches = work(2, "0 1 2 3 4 5") - work(2, "0");
+  const auto extraWithFiveMatches = work(5, "0 1 2 3 4 5") - work(5, "0");
+  EXPECT_GT(extraWithTwoMatches, 0u);
+  EXPECT_EQ(extraWithFiveMatches, extraWithTwoMatches);
+
+  constexpr std::string_view shortUrl = "url(#a)";
+  constexpr std::string_view longUrl = "url(#watercolor)";
+  const auto urlWorkWithTwoMatches = work(2, longUrl) - work(2, shortUrl);
+  const auto urlWorkWithFiveMatches = work(5, longUrl) - work(5, shortUrl);
+  EXPECT_GE(urlWorkWithFiveMatches, urlWorkWithTwoMatches + 3 * (longUrl.size() - shortUrl.size()));
+}
+
+TEST(FocusViewTest, ReverseAttributeScansChargeBytesBeforeParsing) {
+  const auto work = [](std::string_view attribute) {
+    const std::string source =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="paint"/></defs>)svg" +
+        std::string("<rect ") + std::string(attribute) +
+        R"svg(/><rect fill="url(#paint)"/></svg>)svg";
+    EditorApp app;
+    EXPECT_TRUE(app.loadFromString(source));
+    auto& document = app.document().document();
+    const auto paint = document.querySelector("#paint");
+    EXPECT_THAT(paint, testing::Optional(testing::_));
+    if (!paint) {
+      return std::size_t{};
+    }
+    const auto partition = ComputeFocusPartition(document, *paint);
+    EXPECT_FALSE(partition.resourceLimitExceeded);
+    EXPECT_THAT(partition.referenceLinks,
+                ElementsAre(ReferenceLinkIs(PointForNeedle(source, "#paint"),
+                                            PointForAuthoredId(source, "paint"))));
+    return partition.traversalWork;
+  };
+
+  for (const auto& [shortValue, longValue] :
+       {std::pair{std::string_view(R"(style="fill:blue")"),
+                  std::string_view(R"(style="fill:blue /* note */")")},
+        std::pair{std::string_view(R"attr(fill="rgb(1,2,3)/*x*/")attr"),
+                  std::string_view(R"attr(fill="rgb(1,2,3)/* note */")attr")},
+        std::pair{std::string_view(R"(href="icon.svg")"),
+                  std::string_view(R"(href="watercolor.svg")")}}) {
+    SCOPED_TRACE(longValue);
+    const auto baseline = work(shortValue);
+    // Focus first discovers referring elements, then inspects them again to map the ropes.
+    EXPECT_GE(work(longValue), baseline + 2 * (longValue.size() - shortValue.size()));
+  }
+}
+
+TEST(FocusViewTest, CachedFallbackLookupsChargeNameBytesForEachSubject) {
+  const auto work = [](std::string_view name, std::size_t count) {
+    std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>rect { fill: var(";
+    source += name;
+    source += ", url(#paint)); }</style><defs><linearGradient id='paint'/></defs><g>";
+    for (std::size_t i = 0; i < count; ++i) {
+      source += "<rect/>";
+    }
+    source += "</g></svg>";
+    EditorApp app;
+    EXPECT_THAT(app.loadFromString(source), testing::IsTrue());
+    auto& document = app.document().document();
+    const auto group = document.querySelector("g");
+    EXPECT_THAT(group, testing::Optional(testing::_));
+    if (!group) {
+      return std::size_t{};
+    }
+    for (auto child = group->firstChild(); child; child = child->nextSibling()) {
+      std::ignore = child->getComputedStyle();
+    }
+    const std::array selection{*group};
+    const auto summary = ComputeReferenceHighlightSummary(document, selection);
+    EXPECT_THAT(summary.resourceLimitExceeded, testing::IsFalse());
+    EXPECT_THAT(FocusElementIds(summary.referencedElements), ElementsAre("paint"));
+    return summary.traversalWork;
+  };
+
+  constexpr std::string_view shortName = "--ink";
+  constexpr std::string_view longName = "--watercolor";
+  const auto shortSingle = work(shortName, 1);
+  const auto longSingle = work(longName, 1);
+  EXPECT_GE(work(longName, 2) + shortSingle,
+            work(shortName, 2) + longSingle + longName.size() - shortName.size());
+}
+
+TEST(FocusViewTest, IndexedFallbacksUseEachSubjectAndRefreshOnSourceEdit) {
+  constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
+<style>rect { fill:var(--ink, var(--second, url(#paint))); }</style>
+<defs><linearGradient id="paint"/><linearGradient id="alternate"/></defs>
+<g id="group"><rect id="set" style="--ink:blue"/><rect id="missing"/></g>
+</svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  auto& document = app.document().document();
+  const auto set = document.querySelector("#set");
+  const auto missing = document.querySelector("#missing");
+  const auto paint = document.querySelector("#paint");
+  ASSERT_THAT(set, testing::Optional(testing::_));
+  ASSERT_THAT(missing, testing::Optional(testing::_));
+  ASSERT_THAT(paint, testing::Optional(testing::_));
+  std::ignore = set->getComputedStyle();
+  std::ignore = missing->getComputedStyle();
+  const std::array chosen{*set, *missing};
+  EXPECT_THAT(
+      FocusElementIds(ComputeReferenceHighlightSummary(document, chosen).referencedElements),
+      ElementsAre("paint"));
+  const std::array reverse{*paint};
+  EXPECT_THAT(
+      FocusElementIds(ComputeReferenceHighlightSummary(document, reverse).referencingElements),
+      ElementsAre("missing"));
+
+  const auto start = source.find("#paint");
+  const auto edit = document.applySourceEdit({
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 6)},
+      .replacement = "#alternate",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(edit.applied);
+  std::ignore = set->getComputedStyle();
+  std::ignore = missing->getComputedStyle();
+  EXPECT_THAT(
+      FocusElementIds(ComputeReferenceHighlightSummary(document, chosen).referencedElements),
+      ElementsAre("alternate"));
+  EXPECT_THAT(ComputeReferenceHighlightSummary(document, reverse).referencingElements, IsEmpty());
+}
+
+TEST(FocusViewTest, EncodedInlineReferencesPreserveAuthoredRopeEndpoints) {
+  constexpr std::string_view source = R"SVG(<svg xmlns="http://www.w3.org/2000/svg">
+<defs><linearGradient id="paint"/></defs>
+<rect id="target" style="fill:url(#p&#97;int); stroke:url(#p&#97;int)"/>
+</svg>)SVG";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  auto& document = app.document().document();
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto partition = ComputeFocusPartition(document, *target);
+  EXPECT_FALSE(partition.resourceLimitExceeded);
+  const auto destination = PointForAuthoredId(source, "paint");
+  for (const auto prefix : {"fill:url(", "stroke:url("}) {
+    EXPECT_THAT(partition.referenceLinks,
+                testing::Contains(ReferenceLinkIs(PointForNeedleAfter(source, "#p&#97;int", prefix),
+                                                  destination)));
+  }
+}
+
 }  // namespace donner::editor

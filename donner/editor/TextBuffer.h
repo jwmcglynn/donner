@@ -591,30 +591,35 @@ public:
     return std::min(index, static_cast<int>(line.size()));
   }
 
-  /**
-   * Given a line and character index within that line, return the 'visual' column.
-   * If your editor expands tabs, you could calculate offset. Placeholder here.
-   */
-  int getCharacterColumn(int line, int index) const {
-    if (line >= static_cast<int>(lines_.size())) {
+  /// Progress through a line when mapping nondecreasing UTF-8 byte indices.
+  struct LineColumnCursor {
+    int nextByte = 0;  ///< Byte position after the last decoded glyph.
+    int column = 0;    ///< Corresponding editor column, including tab expansion.
+  };
+
+  /// Resolve a byte index using a cursor for this line. Reset the cursor when changing lines.
+  /// @param line Zero-based line index.
+  /// @param index UTF-8 byte index, nondecreasing between calls using the same cursor.
+  /// @param cursor Current byte and column position, advanced by this call.
+  /// @return Editor column at the requested byte index.
+  int getCharacterColumn(int line, int index, LineColumnCursor& cursor) const {
+    if (line < 0 || line >= static_cast<int>(lines_.size())) {
       return 0;
     }
-
-    const auto& lineContent = lines_[line];
-    int col = 0;
-    int i = 0;
-
-    while (i < index && i < static_cast<int>(lineContent.size())) {
-      char c = lineContent[i].character;
-      i += glyphByteLength(c);
-      if (c == '\t') {
-        col = (col / tabSize_) * tabSize_ + tabSize_;
-      } else {
-        col++;
-      }
+    const auto& content = lines_[line];
+    const int limit = std::min(index, static_cast<int>(content.size()));
+    while (cursor.nextByte < limit) {
+      const char c = content[cursor.nextByte].character;
+      cursor.nextByte += glyphByteLength(c);
+      cursor.column = c == '\t' ? (cursor.column / tabSize_ + 1) * tabSize_ : cursor.column + 1;
     }
+    return cursor.column;
+  }
 
-    return col;
+  /// Resolve a single byte index to its editor column.
+  int getCharacterColumn(int line, int index) const {
+    LineColumnCursor cursor;
+    return getCharacterColumn(line, index, cursor);
   }
 
   /**

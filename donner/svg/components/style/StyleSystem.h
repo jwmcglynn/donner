@@ -5,6 +5,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -563,6 +565,14 @@ struct StyleRuleAtSourceOffset {
   bool operator==(const StyleRuleAtSourceOffset& other) const = default;
 };
 
+/// Internal result of one aggregate custom-property provenance query.
+struct CustomPropertyDeclarationBatchResult {
+  std::vector<std::optional<SourceRange>> declarations;
+  std::size_t work = 0;
+  bool budgetExceeded = false;
+  bool complete = false;
+};
+
 /**
  * Computes stylesheet information for elements, applying the CSS cascade and inheritance rules.
  *
@@ -763,9 +773,11 @@ public:
    * absent. Individual source mapping through \ref mapStylesheetSourceRange remains exact.
    *
    * @param handle Entity handle to trace stylesheet matches for.
+   * @param includeDeclarations Project declarations in addition to rule and selector ranges.
    * @return Matched stylesheet rules in cascade scan order.
    */
-  std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle) const;
+  std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle,
+                                                         bool includeDeclarations = true) const;
 
   /// Number of stylesheet source indices constructed on this thread.
   static std::size_t StylesheetSourceIndexBuildsForTesting();
@@ -774,9 +786,21 @@ public:
   std::optional<SourceRange> mapStylesheetSourceRange(Registry& registry, Entity stylesheetEntity,
                                                       const SourceRange& cssRange) const;
 
-  /// Look up source provenance for an already-computed custom value.
-  std::optional<SourceRange> findCustomPropertyDeclaration(EntityHandle handle,
-                                                           std::string_view name) const;
+  /// Check whether the prepared cascade contains a usable custom property.
+  /// @param handle Element whose computed style is inspected.
+  /// @param name Decoded, case-sensitive custom-property identifier.
+  /// @return Whether the value exists, or \c std::nullopt if the source or style is unavailable.
+  static std::optional<bool> preparedCustomPropertyHasValue(EntityHandle handle,
+                                                            std::string_view name);
+  /// Maximum defensive work accepted by the legacy one-name query.
+  static constexpr std::size_t kMaximumCustomPropertyDeclarationQueryWork = 16 * 1024 * 1024;
+  /// Resolve source provenance for multiple prepared custom properties with one work allowance.
+  /// @param handle Element whose computed style supplies the values.
+  /// @param names Custom-property identifiers in request order.
+  /// @param maxWork Remaining query work available to the caller.
+  /// @return Declaration name ranges and the batch query status.
+  CustomPropertyDeclarationBatchResult findCustomPropertyDeclarations(
+      EntityHandle handle, std::span<const std::string_view> names, std::size_t maxWork) const;
 
   /**
    * Find the author stylesheet rule at \p documentSourceOffset.

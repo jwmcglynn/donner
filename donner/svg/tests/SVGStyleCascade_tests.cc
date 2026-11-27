@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <span>
 #include <string_view>
 #include <tuple>
 #include <vector>
@@ -717,5 +719,125 @@ TEST(SVGStyleCascadeTests, AuthorStyleDependsOnTreePositionReportsDescendantSele
   EXPECT_TRUE(AuthorStyleDependsOnTreePosition(doc));
 }
 
+auto OptionalAuthoredSourceRangeIs(std::size_t start, std::size_t end) {
+  return Optional(
+      testing::AllOf(testing::Field("start", &SourceRange::start, FileOffset::Offset(start)),
+                     testing::Field("end", &SourceRange::end, FileOffset::Offset(end))));
+}
+
+TEST(SVGStyleCascadeTests, CustomPropertySourceBatchSharesCascadeAndPreservesRequestOrder) {
+  auto doc = instantiateSubtree(R"svg(
+    <style><![CDATA[
+      @layer base, theme;
+      @layer base { g { --tone: red; --priority: green !important; } }
+      @layer theme {
+        #parent { --t\6fne: blue; --priority: red !important; }
+        rect { --tone: inherit; }
+      }
+    ]]></style>
+    <g id="parent"><rect id="target" style="--local: gold"/></g>
+  )svg");
+  const auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  std::ignore = target->getComputedStyle();
+
+  const std::vector<std::string_view> names{"--tone",    "--priority", "--local",
+                                            "--missing", "--tone",     "--Tone"};
+  const auto batch = FindCustomPropertyDeclarations(*target, names, 1024 * 1024);
+  ASSERT_TRUE(batch.complete);
+  EXPECT_FALSE(batch.budgetExceeded);
+  const auto atName = [&](std::string_view authored) {
+    const auto start = doc.source().find(authored);
+    return OptionalAuthoredSourceRangeIs(start, start + authored.size());
+  };
+  const auto missing = testing::Eq(std::nullopt);
+  const auto expectedDeclarations =
+      testing::ElementsAre(atName(R"(--t\6fne)"), atName("--priority"), atName("--local"), missing,
+                           atName(R"(--t\6fne)"), missing);
+  EXPECT_THAT(batch.declarations, expectedDeclarations);
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--tone"), atName(R"(--t\6fne)"));
+
+  std::size_t separateWork = 0;
+  for (const std::string_view name : names) {
+    const std::vector<std::string_view> one{name};
+    const auto separate = FindCustomPropertyDeclarations(*target, one, 1024 * 1024);
+    ASSERT_TRUE(separate.complete);
+    separateWork += separate.work;
+  }
+  EXPECT_LT(batch.work, separateWork);
+
+  ASSERT_GT(batch.work, 0u);
+  const auto exact = FindCustomPropertyDeclarations(*target, names, batch.work);
+  EXPECT_TRUE(exact.complete);
+  EXPECT_FALSE(exact.budgetExceeded);
+  EXPECT_EQ(exact.work, batch.work);
+  EXPECT_THAT(exact.declarations, expectedDeclarations);
+  const auto refused = FindCustomPropertyDeclarations(*target, names, batch.work - 1);
+  EXPECT_FALSE(refused.complete);
+  EXPECT_TRUE(refused.budgetExceeded);
+  EXPECT_EQ(refused.work, batch.work - 1);
+  EXPECT_THAT(refused.declarations,
+              testing::ElementsAre(missing, missing, missing, missing, missing, missing));
+}
+
+TEST(SVGStyleCascadeTests, CustomPropertySourceBatchDistinguishesUnpreparedFromBudgetRefusal) {
+  auto doc = instantiateSubtree(R"(<rect id="target" style="--tone: blue"/>)");
+  const auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  const std::vector<std::string_view> names{"--tone", "--tone", "fill"};
+
+  const auto unprepared = FindCustomPropertyDeclarations(*target, names, 128);
+  EXPECT_FALSE(unprepared.complete);
+  EXPECT_FALSE(unprepared.budgetExceeded);
+  EXPECT_GT(unprepared.work, 0u);
+  EXPECT_LT(unprepared.work, 128u);
+  const auto missing = testing::Eq(std::nullopt);
+  EXPECT_THAT(unprepared.declarations, testing::ElementsAre(missing, missing, missing));
+
+  std::ignore = target->getComputedStyle();
+  const auto noWork = FindCustomPropertyDeclarations(*target, names, 0);
+  EXPECT_FALSE(noWork.complete);
+  EXPECT_TRUE(noWork.budgetExceeded);
+  EXPECT_EQ(noWork.work, 0u);
+}
+
 }  // namespace
+TEST(SVGStyleCascadeTests, CustomPropertySourceChargesEncodedInlineOwnerOnlyOncePerBatch) {
+  constexpr std::string_view encodedName = "--o&#110;e";
+  constexpr std::string_view extra = "ordinary trivia";
+  const auto query = [&](std::string_view comment, std::span<const std::string_view> names) {
+    std::string body = R"svg(<rect id="target" style="--o&#110;e:red; --two:blue;
+        --three:green; --label:'A &amp; B'; /*)svg";
+    body += comment;
+    body += R"svg(*/"/>)svg";
+    auto document = instantiateSubtree(body);
+    const auto target = document.querySelector("#target");
+    EXPECT_THAT(target, Optional(testing::_));
+    if (!target) {
+      return std::size_t{};
+    }
+    std::ignore = target->getComputedStyle();
+    constexpr std::size_t kWork = 4096;
+    const auto batch = FindCustomPropertyDeclarations(*target, names, kWork);
+    EXPECT_TRUE(batch.complete);
+    EXPECT_FALSE(batch.budgetExceeded);
+    EXPECT_THAT(batch.declarations, testing::SizeIs(names.size()));
+    const auto offset = document.source().find(encodedName);
+    if (!batch.declarations.empty()) {
+      EXPECT_THAT(batch.declarations.front(),
+                  OptionalAuthoredSourceRangeIs(offset, offset + encodedName.size()));
+    }
+    if (batch.work > 0) {
+      const auto rejected = FindCustomPropertyDeclarations(*target, names, batch.work - 1);
+      EXPECT_FALSE(rejected.complete);
+      EXPECT_TRUE(rejected.budgetExceeded);
+    }
+    return batch.work;
+  };
+  const std::array<std::string_view, 1> one{"--one"};
+  const std::array<std::string_view, 3> all{"--one", "--two", "--three"};
+  EXPECT_EQ(query(extra, one) - query("", one), 2 * extra.size());
+  EXPECT_EQ(query(extra, all) - query("", all), 2 * extra.size());
+}
+
 }  // namespace donner::svg

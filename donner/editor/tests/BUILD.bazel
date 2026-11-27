@@ -518,6 +518,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "css_source_reference_tests",
+    srcs = ["CssSourceReference_tests.cc"],
+    deps = [
+        "//donner/css",
+        "//donner/editor:css_source_reference",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "focus_view_tests",
     srcs = ["FocusView_tests.cc"],
     # Two traversal-budget cases take about 19 s and 15 s under ASan on the hosted nightly runner,
