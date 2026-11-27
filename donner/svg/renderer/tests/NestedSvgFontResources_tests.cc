@@ -3,10 +3,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
 #include "donner/svg/components/FontResourceGraph.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -398,6 +401,61 @@ TEST(NestedSvgFontResourcesTest, RepeatedChildTargetsReuseCollectionWithinOnePre
   ASSERT_THAT(parsed->renderedFontResources().dependencies, SizeIs(1));
   EXPECT_LE(stats.nestedFontResources.graphBuilds, 1u);
   EXPECT_LE(stats.nestedFontResources.targetCollections, 2u);
+}
+
+TEST(NestedSvgFontResourcesTest, FontIntervalsKeepTheirMembersAcrossDrawOrderShapes) {
+  Registry registry;
+  const Entity consumer = registry.create();
+  const auto empty = components::FontResourceGraph(registry).collect(registry, consumer);
+  EXPECT_THAT(empty.dependencies, IsEmpty());
+  EXPECT_THAT(empty.resourceLimit, testing::IsFalse());
+
+  const auto addInstance = [&](const char* family) {
+    const Entity entity = registry.create();
+    registry.emplace<components::RenderingInstanceComponent>(entity).dataEntity = entity;
+    registry.emplace<components::FontPaintDependenciesComponent>(entity).fontDependencies.push_back(
+        FontFaceDependency{.family = family});
+    return entity;
+  };
+  const Entity middleA = addInstance("middle-a");
+  const Entity outside = addInstance("outside");
+  const Entity last = addInstance("last");
+  const Entity middleB = addInstance("middle-b");
+  const Entity first = addInstance("first");
+  auto& rendered = registry.emplace<components::RenderingInstanceComponent>(consumer);
+  rendered.dataEntity = consumer;
+  rendered.resolvedFill =
+      components::PaintResolvedReference{.reference = {EntityHandle(registry, first)},
+                                         .subtreeInfo = components::SubtreeInfo{first, last}};
+
+  const std::array entities{first, middleA, middleB, last, outside, consumer};
+  for (const auto& orders :
+       {std::array{0, 1, 2, 3, 4, 5}, std::array{-7, 2, 5, 100003, 200003, 300003},
+        std::array{0, 1, 1, 3, 4, 5}}) {
+    SCOPED_TRACE(testing::PrintToString(orders));
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+      registry.get<components::RenderingInstanceComponent>(entities[index]).drawOrder =
+          orders[index];
+    }
+    const auto result = components::FontResourceGraph(registry).collect(registry, consumer);
+    EXPECT_THAT(result.resourceLimit, testing::IsFalse());
+    EXPECT_THAT(result.dependencies,
+                testing::ElementsAre(Field(&FontFaceDependency::family, "first"),
+                                     Field(&FontFaceDependency::family, "last"),
+                                     Field(&FontFaceDependency::family, "middle-a"),
+                                     Field(&FontFaceDependency::family, "middle-b")));
+  }
+
+  registry.remove<components::RenderingInstanceComponent>(middleA);
+  const auto partial = components::FontResourceGraph(registry).collect(registry, consumer);
+  EXPECT_THAT(partial.resourceLimit, testing::IsFalse());
+  EXPECT_THAT(partial.dependencies,
+              testing::ElementsAre(Field(&FontFaceDependency::family, "first"),
+                                   Field(&FontFaceDependency::family, "last"),
+                                   Field(&FontFaceDependency::family, "middle-b")));
+  registry.remove<components::RenderingInstanceComponent>(last);
+  const auto missingEndpoint = components::FontResourceGraph(registry).collect(registry, consumer);
+  EXPECT_THAT(missingEndpoint.resourceLimit, testing::IsTrue());
 }
 
 TEST(NestedSvgFontResourcesTest, DistinctTargetCollectionWorkStopsAtTheAggregateCeiling) {

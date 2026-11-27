@@ -1651,6 +1651,7 @@ donner_cc_library(
     hdrs = ["SvgCorpus.h"],
     # Its headers come through //donner/svg, whose compile follows the text-tier variant of the
     # test that links it, so one variant-neutral compile cannot serve them all.
+    visibility = ["//donner/editor/tests:__pkg__"],
     variant_neutral = False,
     deps = [
         "//donner/base",
@@ -1701,8 +1702,11 @@ donner_cc_test(
 # The rule index only skips rules that cannot match: over the same corpora, the indexed cascade
 # computes every style and reports every matched rule exactly as the cascade that tests every rule.
 donner_cc_test(
-    name = "style_index_differential_tests",
-    srcs = ["StyleIndexDifferential_tests.cc"],
+    name = "style_index_reference_tests",
+    srcs = [
+        "StyleIndexDifferential_tests.cc",
+        "OrderedSnapshotMatcher.h",
+    ],
     data = [
         "//:donner_splash.svg",
         "//donner/svg/renderer/testdata",
@@ -1727,6 +1731,59 @@ donner_cc_test(
         "//donner/svg/renderer",
         "//donner/svg/renderer:rendering_context",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+[
+    donner_cc_test(
+        name = name,
+        local_defines = ["DONNER_LARGE_EDIT_CORPUS=%s" % large],
+        srcs = [
+            "StyleEditCorpus_tests.cc",
+            "OrderedSnapshotMatcher.h",
+        ],
+        data = [
+            "//:donner_splash.svg",
+            "//donner/svg/renderer/testdata",
+            "//third_party/bootstrap-icons:bootstrap-icons.svg",
+            "//third_party/resvg-test-suite:tests",
+        ],
+        # Each case draws both documents repeatedly and compares styles, instances and pixels.
+        shard_count = shards,
+        deps = [
+            ":computed_style_snapshot",
+            ":svg_corpus",
+            "//donner/editor/tests:bitmap_golden_compare",
+            "//donner/svg",
+            "//donner/svg/components:components_core",
+            "//donner/svg/renderer",
+            "//donner/svg/renderer:rendering_context",
+            "@com_google_gtest//:gtest_main",
+        ],
+    )
+    for name, large, shards in [
+        ("style_edit_corpus_tests", 0, 48),
+        ("style_edit_large_corpus_tests", 1, 6),
+    ]
+]
+
+# Preserve the corpus entry points with both independently sharded test populations.
+test_suite(
+    name = "style_index_differential_tests",
+    tests = [
+        ":style_edit_corpus_tests",
+        ":style_edit_large_corpus_tests",
+        ":style_index_reference_tests",
+    ],
+)
+
+test_suite(
+    name = "ci_darwin_style_index_differential_tests",
+    tags = ["manual"],
+    tests = [
+        ":ci_darwin_style_edit_corpus_tests",
+        ":ci_darwin_style_edit_large_corpus_tests",
+        ":ci_darwin_style_index_reference_tests",
     ],
 )
 

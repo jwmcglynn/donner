@@ -421,6 +421,9 @@ build --test_env=DONNER_RENDERER_TEST_VERBOSE
 # Coverage builds
 coverage --config=coverage
 coverage --combined_report=lcov
+# Parallel workers can execute the same instrumented function. Count every visit safely,
+# including when ThreadSanitizer observes the coverage instrumentation itself.
+coverage --copt=-fprofile-update=atomic
 coverage --instrumentation_filter="-test_utils$,//donner[:/]"
 coverage --test_tag_filters=-fuzz_target,-lint,-manual,-perf,-ci-remote-gpu
 # Continue past build/analysis failures so coverage is collected from all tests
@@ -509,6 +512,9 @@ build:ubsan --strip=never
 # repeat its ci-remote-gpu exclusion: those remote-lane wrappers rerun the executable and tests of
 # a local twin these lanes already select. Only the selected tests and their dependencies build;
 # non-test targets never execute here, so building them under a sanitizer adds no signal.
+test:hosted-asan-cache --experimental_circuit_breaker_strategy=failure
+test:hosted-asan-cache --experimental_remote_failure_window_interval=5m
+
 test:asan-lane --config=asan
 test:asan-lane --test_output=errors
 test:asan-lane --build_tests_only

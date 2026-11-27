@@ -496,7 +496,8 @@ bool RemovePresentationDeclaration(const ElementAnchor& handle, DocumentWriteAcc
                                    ElementType elementType, std::string_view name,
                                    TryStyleEdit route) {
   using Clear = PropertyRegistry::PresentationAttributeClear;
-  if (!PropertyRegistry::isPresentationAttributeName(name)) {
+  if (name == "transform" || !PropertyRegistry::isPresentationAttributeName(name)) {
+    // The typed reset must see a pending variable before clearing it, so it invalidates style.
     return false;
   }
   auto* style = handle.try_get<components::StyleComponent>(access);

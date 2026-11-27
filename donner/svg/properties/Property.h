@@ -196,7 +196,7 @@ struct Property {
 
   /// Whether the legacy unlayered cascade allows a parent to replace an explicit value.
   bool shouldPreserveLegacyInheritance(const Property<T, kCascade>& parent) const {
-    return parent.specificity.layerRank() == 0 && specificity.layerRank() == 0 &&
+    return !parent.specificity.hasLayerRank() && !specificity.hasLayerRank() &&
            parent.specificity > specificity;
   }
 

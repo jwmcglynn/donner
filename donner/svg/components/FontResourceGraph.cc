@@ -4,6 +4,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <tuple>
 #include <unordered_set>
 #include <variant>
@@ -208,6 +209,49 @@ bool HasRenderCoverage(const Registry& registry, Entity target) {
   return membership.contains(target) && !membership.resourceLimit();
 }
 
+// A full render assigns each instance a unique slot. Partial renders can leave gaps. Use
+// only the count of live instances for scratch, even when the greatest draw order is large.
+std::vector<std::size_t> DrawOrderSources(const auto& instances) {
+  const std::size_t count = instances.size();
+  std::vector<std::size_t> sources(count, count);
+  for (std::size_t source = 0; source < count; ++source) {
+    const auto destination = static_cast<std::size_t>(instances[source].drawOrder);
+    if (destination >= count || sources[destination] != count) {
+      std::iota(sources.begin(), sources.end(), std::size_t{0});
+      const auto precedes = [&](std::size_t left, std::size_t right) {
+        const int a = instances[left].drawOrder;
+        const int b = instances[right].drawOrder;
+        return a == b ? left < right : a < b;
+      };
+      std::make_heap(sources.begin(), sources.end(), precedes);
+      std::sort_heap(sources.begin(), sources.end(), precedes);
+      break;
+    }
+    sources[destination] = source;
+  }
+  return sources;
+}
+
+void ApplyDrawOrder(auto& instances, std::span<std::size_t> sources) {
+  // Move each nontrivial permutation cycle once instead of sorting large instance records.
+  for (std::size_t first = 0; first < sources.size(); ++first) {
+    auto source = sources[first];
+    if (source == first) {
+      continue;
+    }
+    auto saved = std::move(instances[first]);
+    auto destination = first;
+    while (source != first) {
+      instances[destination] = std::move(instances[source]);
+      sources[destination] = destination;
+      destination = source;
+      source = sources[destination];
+    }
+    instances[destination] = std::move(saved);
+    sources[destination] = destination;
+  }
+}
+
 }  // namespace
 
 void InvalidateFontResourcePreparation(Registry& registry) {
@@ -361,12 +405,14 @@ void FontResourceGraph::appendPaintDependencies(Instance& instance,
 }
 
 bool FontResourceGraph::initializeIntervals() {
-  std::sort(instances_.begin(), instances_.end(),
-            [](const Instance& lhs, const Instance& rhs) { return lhs.drawOrder < rhs.drawOrder; });
   const std::size_t count = instances_.size();
   if (count > std::numeric_limits<std::size_t>::max() / 2) {
     resourceLimit_ = true;
     return false;
+  }
+  {
+    auto sources = DrawOrderSources(instances_);
+    ApplyDrawOrder(instances_, sources);
   }
   dependencies_.resize(count * 2);
   consumers_.resize(count * 2);
