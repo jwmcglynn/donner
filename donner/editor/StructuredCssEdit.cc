@@ -224,6 +224,28 @@ bool InsertBeforeDiscardedCss(std::string_view value, std::size_t start,
 }
 
 template <typename Mapper>
+void PrepareRecoveredDeclarationMove(const css::Declaration& declaration, std::string_view spelling,
+                                     const css::StyleDeclarationEofClosure& closure,
+                                     StructuredCssTarget& target, Mapper map) {
+  const auto start = declaration.sourceOffset;
+  const auto end = FileOffset::Offset(*start.offset + spelling.size());
+  const auto span = map(SourceRange{start, end});
+  if (!span || span->end != target.rule.end || !Contains(*span, target.selectionOffset)) {
+    return;
+  }
+  // A recovered value can lack an authored end. The declaration-list parser still supplies
+  // the complete spelling, so the move can consume the recovered tail at its mapped XML range.
+  target.name = map(declaration.authoredNameRange());
+  if (closure.removeTrailingEscape) {
+    spelling.remove_suffix(1);
+  }
+  target.declaration = *span;
+  target.decodedMoveText.assign(spelling);
+  target.decodedMoveText += closure.suffix;
+  target.declarationClosedForMove = true;
+}
+
+template <typename Mapper>
 bool PrepareInlineDeclarationInsertion(const css::Declaration& last, std::string_view spelling,
                                        std::string_view value, StructuredCssTarget& target,
                                        Mapper map) {
@@ -252,6 +274,7 @@ bool PrepareInlineDeclarationInsertion(const css::Declaration& last, std::string
     return false;
   }
   target.declarationInsertionPrefix = *encoded;
+  PrepareRecoveredDeclarationMove(last, spelling, closure, target, map);
   return true;
 }
 
@@ -449,7 +472,7 @@ std::optional<RcString> EncodeMovedCss(const StructuredCssTarget& from,
   if (from.encoding == Encoding::Unmapped || destination.encoding == Encoding::Unmapped) {
     return std::nullopt;
   }
-  if (SameEncoding(from, destination)) {
+  if (SameEncoding(from, destination) && !from.declarationClosedForMove) {
     return RcString(original);
   }
   switch (destination.encoding) {
@@ -479,16 +502,16 @@ CssReplacement SwapAdjacent(std::string_view source, SourceByteRange item, Sourc
   return {{left.start, right.end}, std::move(bytes)};
 }
 
-CssReplacement CutAndInsert(std::string_view source, SourceByteRange from, std::size_t insertion,
-                            std::string_view bytes) {
-  if (insertion < from.start) {
+CssReplacement CutAndInsert(std::string_view source, SourceByteRange from,
+                            SourceByteRange insertion, std::string_view bytes) {
+  if (insertion.start < from.start) {
     std::string replacement(bytes);
-    replacement += source.substr(insertion, from.start - insertion);
-    return {{insertion, from.end}, std::move(replacement)};
+    replacement += source.substr(insertion.end, from.start - insertion.end);
+    return {{insertion.start, from.end}, std::move(replacement)};
   }
-  std::string replacement(source.substr(from.end, insertion - from.end));
+  std::string replacement(source.substr(from.end, insertion.start - from.end));
   replacement += bytes;
-  return {{from.start, insertion}, std::move(replacement)};
+  return {{from.start, insertion.end}, std::move(replacement)};
 }
 
 std::string TransferSeparator(std::string_view source, SourceByteRange destination) {
@@ -510,7 +533,13 @@ std::string TransferText(std::string_view source, std::string_view moved, Source
   const auto separator = TransferSeparator(source, to);
   std::string bytes;
   if (after) {
-    bytes = declaration && !destination.declarationIncludesSemicolon ? ";" + separator : separator;
+    if (destination.declarationClosedForMove) {
+      bytes = destination.declarationInsertionPrefix;
+    }
+    if (declaration && !destination.declarationIncludesSemicolon) {
+      bytes += ';';
+    }
+    bytes += separator;
   }
   bytes += moved;
   if (declaration && !from.declarationIncludesSemicolon) {
@@ -525,7 +554,7 @@ std::string TransferText(std::string_view source, std::string_view moved, Source
 std::optional<CssReplacement> PlanTransfer(std::string_view source, const StructuredCssTarget& from,
                                            const StructuredCssTarget& destination,
                                            SourceByteRange item, SourceByteRange anchor,
-                                           std::size_t insertion, bool after) {
+                                           SourceByteRange insertion, bool after) {
   const auto encoded = EncodeMovedCss(from, destination, Slice(source, item));
   if (!encoded) {
     return std::nullopt;
@@ -562,8 +591,11 @@ std::optional<CssReplacement> PlanMove(EditorApp& app, std::string_view source,
   if (Overlap(item, anchor)) {
     return std::nullopt;
   }
-  const auto insertion = after ? anchor.end : anchor.start;
-  if (insertion == item.start || insertion == item.end) {
+  const auto position = after ? anchor.end : anchor.start;
+  const SourceByteRange insertion = after && destination.declarationClosedForMove
+                                        ? *destination.insertDeclaration
+                                        : SourceByteRange{position, position};
+  if (position == item.start || position == item.end) {
     return std::nullopt;
   }
   return PlanTransfer(source, from, destination, item, anchor, insertion, after);

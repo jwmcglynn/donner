@@ -907,6 +907,42 @@ TEST(EditorSyncTest, StructuredCssMovesDoNotTreatEntityEndAsADeclarationSeparato
   ASSERT_EQ(text.getText(), original);
 }
 
+TEST(EditorSyncTest, StructuredCssMoveRepairsInlineEofBeforeAddingSeparators) {
+  const auto check = [](std::string_view body, std::string_view item, std::string_view anchor,
+                        bool after, std::string_view expected) {
+    SCOPED_TRACE(body);
+    TextEditor text;
+    text.setText(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg">)svg") +
+                 std::string(body) + "</svg>");
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto from = FindStructuredCssTarget(app, original, original.find(item));
+    const auto to = FindStructuredCssTarget(app, original, original.find(anchor));
+    ASSERT_THAT(from, testing::Optional(testing::_));
+    ASSERT_THAT(to, testing::Optional(testing::_));
+    ASSERT_TRUE(MoveStructuredCss(app, sync, text, *from, *to, after));
+    EXPECT_THAT(text.getText(), testing::HasSubstr(expected));
+    EXPECT_EQ(app.document().document().source(), text.getText());
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().fill.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+    EXPECT_EQ(app.document().document().source(), original);
+  };
+  check(R"svg(<rect id="r" style="fill:red; --x:foo\"/>)svg", "--x:", "fill:red",
+        /*after=*/false, R"(--x:foo\fffd; fill:red;)");
+  check(R"svg(<rect id="r" style="fill:red; --x:'x&#92;"/>)svg", "fill:red", "--x:",
+        /*after=*/true, R"(--x:'x'; fill:red;)");
+  check(R"svg(<rect id="r" style="--x:'x&#92;"/><style>#r {fill:red;}</style>)svg",
+        "--x:", "fill:red", /*after=*/false, R"(#r {--x:'x'; fill:red;})");
+  check(R"svg(<style>#r {fill:red;}</style><rect id="r" style="--x:'x&#92;"/>)svg", "fill:red",
+        "--x:", /*after=*/true, R"(--x:'x'; fill:red;)");
+}
+
 TEST(EditorSyncTest, StructuredCssMovePreservesXmlEncodedCssSeparator) {
   constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
 <rect id="r" style="--x:&quot;x&quot;"/>
