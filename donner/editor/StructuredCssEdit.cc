@@ -20,8 +20,13 @@ namespace donner::editor {
 namespace {
 
 bool MatchesDocumentSource(std::string_view editor, std::string_view document) {
-  return editor == document || (editor.size() == document.size() + 1 && editor.back() == '\n' &&
-                                editor.substr(0, document.size()) == document);
+  // TextBuffer omits one final LF when loading text. The two views must still address
+  // identical bytes everywhere before that terminator.
+  if (editor.size() < document.size()) {
+    std::swap(editor, document);
+  }
+  return editor == document ||
+         (editor.ends_with('\n') && editor.substr(0, editor.size() - 1) == document);
 }
 
 std::optional<SourceByteRange> ByteRange(const std::optional<SourceRange>& range,
@@ -605,7 +610,7 @@ std::optional<StructuredCssTarget> FindStructuredCssTargetInternal(EditorApp& ap
                                                                    std::string_view source,
                                                                    std::size_t offset,
                                                                    bool prepareInsertion) {
-  if (!app.hasDocument() || !app.structuredEditingEnabled() ||
+  if (offset >= source.size() || !app.hasDocument() || !app.structuredEditingEnabled() ||
       app.document().hasPendingMutations()) {
     return std::nullopt;
   }

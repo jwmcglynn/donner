@@ -907,6 +907,55 @@ TEST(EditorSyncTest, StructuredCssMovesDoNotTreatEntityEndAsADeclarationSeparato
   ASSERT_EQ(text.getText(), original);
 }
 
+TEST(EditorSyncTest, StructuredCssUsesLoadedSourceWithOptionalFinalNewline) {
+  constexpr std::string_view body = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<rect style="fill:red; stroke:blue;"/>
+</svg>)svg";
+  const auto check = [&](std::string_view ending, bool move) {
+    SCOPED_TRACE(testing::PrintToString(ending));
+    SCOPED_TRACE(move ? "move" : "edit");
+    const std::string authored = std::string(body) + std::string(ending);
+    TextEditor text;
+    text.setText(authored);
+    const std::string loaded = text.getText();
+    const std::string_view expected =
+        authored.ends_with('\n') ? std::string_view(authored).substr(0, authored.size() - 1)
+                                 : std::string_view(authored);
+    EXPECT_EQ(loaded, expected);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(authored));
+    DocumentSyncController sync(authored);
+    const auto red = loaded.find("red");
+    ASSERT_NE(red, std::string::npos);
+    std::string stale = loaded;
+    stale.replace(red, 3, "tan");
+    EXPECT_THAT(FindStructuredCssTarget(app, stale, red), testing::Eq(std::nullopt));
+    EXPECT_THAT(FindStructuredCssTarget(app, loaded + "\n\n\n", red), testing::Eq(std::nullopt));
+    EXPECT_THAT(FindStructuredCssTarget(app, loaded, loaded.size()), testing::Eq(std::nullopt));
+
+    const auto fill = FindStructuredCssTarget(app, loaded, red);
+    ASSERT_THAT(fill, testing::Optional(testing::_));
+    const std::string_view changed = move ? "stroke:blue; fill:red;" : "fill:tan;";
+    if (move) {
+      const auto stroke = FindStructuredCssTarget(app, loaded, loaded.find("stroke:"));
+      ASSERT_THAT(stroke, testing::Optional(testing::_));
+      ASSERT_TRUE(MoveStructuredCss(app, sync, text, *stroke, *fill, /*after=*/false));
+    } else {
+      ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *fill,
+                                         StructuredCssOperation::ReplaceValue, "tan"));
+    }
+    EXPECT_THAT(text.getText(), testing::HasSubstr(changed));
+    EXPECT_THAT(app.document().document().source(), testing::HasSubstr(changed));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), loaded);
+    EXPECT_EQ(app.document().document().source(), authored);
+  };
+  for (std::string_view ending : {"", "\n", "\n\n", "\r\n"}) {
+    check(ending, /*move=*/false);
+    check(ending, /*move=*/true);
+  }
+}
+
 TEST(EditorSyncTest, StructuredCssMoveRepairsInlineEofBeforeAddingSeparators) {
   const auto check = [](std::string_view body, std::string_view item, std::string_view anchor,
                         bool after, std::string_view expected) {
