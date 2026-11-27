@@ -1389,6 +1389,146 @@ TEST(RenderCoordinatorTest, GeodeCrownClipGuideRendersOnFirstAndSecondHeldMove) 
 // maybeRequestRender - GL-free orchestration that posts an async render request.
 // ---------------------------------------------------------------------------
 
+/// Gives a software-only scheduling test the visible coverage that a real held frame installed.
+void InstallVisibleReleaseCoverage(RenderCoordinator& coordinator, EditorApp& app,
+                                   GlTextureCache& textures, const EditorRasterViewport& raster) {
+  const auto capture = AcceptCapturedScene(coordinator, app);
+  const auto tiles = coordinator.compositedPresentation().resources()->tiles();
+  FramePresentationTestAccess::installActiveRaster(
+      textures, FramePresentationTestAccess::resources(
+                    capture, tiles,
+                    PresentationCoverageDiagnostics{.activeTilesViewportBounded = true,
+                                                    .activeRasterDocumentRect = raster.documentRect,
+                                                    .activeOutputSizePx = raster.outputSizePx}));
+}
+
+/// Composes the worker's emitted tiles in the requested visible raster for strict pixel checks.
+svg::RendererBitmap RasterizeReleasedTiles(const RenderResult& result) {
+  svg::Renderer renderer;
+  const auto& raster = result.rasterViewport;
+  renderer.beginFrame(svg::RenderViewport{Vector2d(raster.outputSizePx)});
+  for (const auto& tile : result.compositedPreview->tiles) {
+    renderer.setTransform(tile.documentFromCachedDocument * raster.outputFromDocument);
+    const Box2d rect(tile.canvasOffsetDoc, tile.canvasOffsetDoc + tile.bitmapDimsDoc);
+    if (tile.textureSnapshot) {
+      EXPECT_THAT(renderer.drawTextureSnapshot(*tile.textureSnapshot, rect, 1.0, true),
+                  testing::IsTrue())
+          << tile.id;
+    } else {
+      EXPECT_THAT(tile.bitmap.empty(), testing::IsFalse()) << tile.id;
+      renderer.drawBitmap(tile.bitmap,
+                          svg::ImageParams{.targetRect = rect, .imageRenderingPixelated = true});
+    }
+  }
+  renderer.endFrame();
+  return renderer.takeSnapshot();
+}
+
+TEST(RenderCoordinatorTest, TranslationReleaseRendersVisiblePixelsBeforeRefreshingOverview) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  const auto target = QuerySelector(app, "#r1");
+  app.setSelection(target);
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool tool;
+  auto viewport = MakeViewport(app);
+  viewport.zoom = 8.0;
+  const auto visible = viewport.rasterViewport();
+  ASSERT_THAT(visible.viewportBounded, testing::IsTrue());
+  InstallVisibleReleaseCoverage(coordinator, app, textures, visible);
+
+  const Transform2d moved = Transform2d::Translate(19.0, 19.0);
+  app.applyMutation(EditorCommand::SetTransformCommand(target, moved));
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  const auto version = app.document().currentFrameVersion();
+  coordinator.compositedPresentation().beginSettling(
+      DragPreview(target.unsafeEntityHandle().entity(), 1, moved.translation(), moved), version);
+
+  ASSERT_THAT(coordinator.maybeRequestRender(app, tool, viewport, &textures), testing::IsTrue());
+  const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+  ASSERT_THAT(posted, testing::Optional(testing::_));
+  EXPECT_THAT(posted->overviewInfillOnly, testing::IsFalse());
+  EXPECT_THAT(posted->rasterViewport.documentRect, testing::Eq(visible.documentRect));
+  EXPECT_THAT(coordinator.overviewInfillRenderTotal(), testing::Eq(0u));
+
+  const auto settled =
+      tests::PollForResult([&] { return coordinator.asyncRenderer().pollResult(); });
+  ASSERT_THAT(settled, testing::Optional(testing::_));
+  ASSERT_THAT(settled->compositedPreview, testing::Optional(testing::_));
+  EXPECT_THAT(settled->version, testing::Eq(version));
+  const auto pixels = RasterizeReleasedTiles(*settled);
+  ASSERT_THAT(pixels.empty(), testing::IsFalse());
+
+  svg::Renderer freshRenderer;
+  AsyncRenderer freshWorker;
+  freshWorker.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  RenderRequest request(freshRenderer, app.document().document());
+  request.captureCpuSnapshot = true;
+  request.rasterViewport = visible;
+  request.version = version;
+  request.documentGeneration = app.document().documentGeneration();
+  freshWorker.requestRender(request);
+  const auto fresh = tests::PollForResult([&] { return freshWorker.pollResult(); });
+  ASSERT_THAT(fresh, testing::Optional(testing::_));
+  ASSERT_THAT(fresh->bitmap.empty(), testing::IsFalse());
+  tests::CompareBitmapToBitmap(pixels, fresh->bitmap, "release_visible_vs_fresh",
+                               tests::PixelmatchIdentityParams());
+
+  // Model the UI accepting the fresh visible version. Overview remains eligible after settling.
+  AcceptCapturedScene(coordinator, app);
+  RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, settled->version,
+                                                   settled->rasterViewport);
+  ASSERT_THAT(coordinator.maybeRequestRender(app, tool, viewport, &textures), testing::IsTrue());
+  const auto overview = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+  ASSERT_THAT(overview, testing::Optional(testing::_));
+  EXPECT_THAT(overview->overviewInfillOnly, testing::IsTrue());
+  EXPECT_THAT(overview->version, testing::Eq(version));
+  ASSERT_THAT(tests::PollForResult([&] { return coordinator.asyncRenderer().pollResult(); }),
+              testing::Optional(testing::_));
+}
+
+TEST(RenderCoordinatorTest, ReleaseKeepsOverviewPriorityWhenVisibleCoverageIsStale) {
+  for (const std::string_view invalidation : {"camera", "style", "document", "evicted tiles"}) {
+    SCOPED_TRACE(invalidation);
+    EditorApp app;
+    ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+    const auto target = QuerySelector(app, "#r1");
+    app.setSelection(target);
+    RenderCoordinator coordinator;
+    GlTextureCache textures;
+    SelectTool tool;
+    auto viewport = MakeViewport(app);
+    viewport.zoom = 8.0;
+    if (invalidation != "evicted tiles") {
+      InstallVisibleReleaseCoverage(coordinator, app, textures, viewport.rasterViewport());
+    }
+    if (invalidation == "camera") {
+      viewport.devicePixelRatio *= 2.0;
+    }
+    if (invalidation == "style") {
+      app.applyMutation(EditorCommand::SetAttributeCommand(target, "fill", "green"));
+      ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+    }
+    if (invalidation == "document") {
+      ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+      app.setSelection(QuerySelector(app, "#r1"));
+    }
+    const auto entity = app.selectedElement()->unsafeEntityHandle().entity();
+    const auto transform = Transform2d::Translate(19.0, 19.0);
+    coordinator.compositedPresentation().beginSettling(
+        DragPreview(entity, 1, transform.translation(), transform),
+        app.document().currentFrameVersion());
+
+    ASSERT_THAT(coordinator.maybeRequestRender(app, tool, viewport, &textures), testing::IsTrue());
+    const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+    ASSERT_THAT(posted, testing::Optional(testing::_));
+    EXPECT_THAT(posted->overviewInfillOnly, testing::IsTrue());
+    ASSERT_THAT(tests::PollForResult([&] { return coordinator.asyncRenderer().pollResult(); }),
+                testing::Optional(testing::_));
+  }
+}
+
 TEST(RenderCoordinatorTest, MaybeRequestRenderNoOpWithoutDocument) {
   EditorApp app;
   RenderCoordinator coordinator;
