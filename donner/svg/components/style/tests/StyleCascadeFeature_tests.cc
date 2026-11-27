@@ -438,6 +438,55 @@ TEST_F(StyleSystemTest, PresentationStrokeWidthUsesInheritedCustomProperty) {
   EXPECT_THAT(properties->strokeWidth.get(), testing::Optional(Eq(Lengthd(5, Lengthd::Unit::Px))));
 }
 
+// Computed-style companion to the bounded adaptation of WPT
+// variable-exponential-blowup.html. Four reused values fit within the production limits.
+// VariableSubstitution_tests checks the fallback when a smaller allowance is exhausted.
+TEST_F(StyleSystemTest, BoundedExponentialReuseComputesInheritedAndNeighboringStyles) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g style="--v0:2;--v1:var(--v0) var(--v0);--v2:var(--v1) var(--v1)">
+        <rect id="target" style="stroke-dasharray:var(--v2);stroke:red;fill:green;opacity:0.5"/>
+      </g>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto& computed = target->getComputedStyle();
+  EXPECT_THAT(computed.strokeDasharray.get(),
+              testing::Optional(testing::ElementsAre(
+                  Lengthd(2, Lengthd::Unit::None), Lengthd(2, Lengthd::Unit::None),
+                  Lengthd(2, Lengthd::Unit::None), Lengthd(2, Lengthd::Unit::None))));
+  EXPECT_THAT(computed.stroke.get(),
+              testing::Optional(Eq(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0))))));
+  EXPECT_THAT(computed.fill.get(),
+              testing::Optional(Eq(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 128, 0))))));
+  EXPECT_THAT(computed.opacity.get(), testing::Optional(Eq(0.5)));
+}
+
+// Computed-style companion to the bounded adaptation of WPT
+// long-variable-reference-crash.html. An inherited variable completes the dash array while
+// neighboring declarations retain their values. VariableSubstitution_tests checks the byte limit.
+TEST_F(StyleSystemTest, BoundedLongReferenceComputesInheritedAndNeighboringStyles) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g style="--tail:4">
+        <rect id="target" style="stroke-dasharray:1 2 3 var(--tail);
+              stroke:red;fill:green;opacity:0.5"/>
+      </g>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto& computed = target->getComputedStyle();
+  EXPECT_THAT(computed.strokeDasharray.get(),
+              testing::Optional(testing::ElementsAre(
+                  Lengthd(1, Lengthd::Unit::None), Lengthd(2, Lengthd::Unit::None),
+                  Lengthd(3, Lengthd::Unit::None), Lengthd(4, Lengthd::Unit::None))));
+  EXPECT_THAT(computed.stroke.get(),
+              testing::Optional(Eq(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0))))));
+  EXPECT_THAT(computed.fill.get(),
+              testing::Optional(Eq(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 128, 0))))));
+  EXPECT_THAT(computed.opacity.get(), testing::Optional(Eq(0.5)));
+}
+
 TEST_F(StyleSystemTest, HiddenPresentationVariablesTrackReplacementAndRemoval) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg">

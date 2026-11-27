@@ -113,7 +113,8 @@ TEST(VariableSubstitution, ParsedDeclarationsRecordWhetherSubstitutionIsRequired
 }
 
 std::optional<std::vector<VariableSubstitutionResult>> CollectDefinitions(
-    std::span<const VariableDefinition> definitions, const VariableLookup& inherited) {
+    std::span<const VariableDefinition> definitions, const VariableLookup& inherited,
+    VariableSubstitutionLimits limits = {}) {
   std::vector<VariableSubstitutionResult> values(definitions.size(),
                                                  {VariableSubstitutionStatus::Invalid, {}});
   const VariableOutputs outputs{
@@ -128,7 +129,7 @@ std::optional<std::vector<VariableSubstitutionResult>> CollectDefinitions(
         return true;
       },
   };
-  if (!ResolveVariableDefinitions(definitions, inherited, outputs)) {
+  if (!ResolveVariableDefinitions(definitions, inherited, outputs, limits)) {
     return std::nullopt;
   }
   return values;
@@ -326,6 +327,42 @@ TEST(VariableSubstitution, PerValueLimitPublishesInvalidAndDependentUsesFallback
       {.components = 1, .bytes = 1024}));
   EXPECT_EQ(Text(values[0].values), "green");
   EXPECT_EQ(values[1].status, VariableSubstitutionStatus::LimitExceeded);
+}
+
+// Bounded adaptation of WPT variable-exponential-blowup.html. A short reuse chain reaches the
+// component limit, letting the dependent choose its fallback.
+TEST(VariableSubstitution, BoundedExponentialReusePublishesInvalidAndUsesFallback) {
+  const auto dependent = Tokens("var(--v2,green)");
+  const auto v2 = Tokens("var(--v1) var(--v1)");
+  const auto v1 = Tokens("var(--v0) var(--v0)");
+  const auto v0 = Tokens("red");
+  const std::vector<VariableDefinition> definitions = {{"--dependent", Values(dependent)},
+                                                       {"--v2", Values(v2)},
+                                                       {"--v1", Values(v1)},
+                                                       {"--v0", Values(v0)}};
+  const auto result = CollectDefinitions(
+      definitions, [](std::string_view) -> std::optional<Values> { return std::nullopt; },
+      {.components = 4, .bytes = 1024});
+  ASSERT_THAT(result, testing::Optional(SizeIs(4)));
+  EXPECT_EQ(Text((*result)[0].values), "green");
+  EXPECT_EQ((*result)[1].status, VariableSubstitutionStatus::LimitExceeded);
+  EXPECT_EQ(Text((*result)[2].values), "red red");
+  EXPECT_EQ(Text((*result)[3].values), "red");
+}
+
+// Bounded adaptation of WPT long-variable-reference-crash.html. A short value and a reduced
+// byte allowance make partial output observable if substitution fails during expansion.
+TEST(VariableSubstitution, BoundedLongReferenceReturnsNoPartialOutput) {
+  const auto tail = Tokens("4px");
+  const auto input = Tokens("1px 2px 3px var(--tail)");
+  const auto result =
+      SubstituteVariables(input,
+                          [&](std::string_view name) -> std::optional<Values> {
+                            return name == "--tail" ? std::optional<Values>(tail) : std::nullopt;
+                          },
+                          {.components = 1024, .bytes = 12});
+  EXPECT_EQ(result.status, VariableSubstitutionStatus::LimitExceeded);
+  EXPECT_THAT(result.values, IsEmpty());
 }
 
 TEST(VariableSubstitution, AggregateAdmissionRefusalStopsBeforePublishingCurrentValue) {
