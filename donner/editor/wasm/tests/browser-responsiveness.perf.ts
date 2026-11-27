@@ -22,6 +22,7 @@ import {
   completedDragFrames,
   dragInputLatencies,
   heldDragPositionCount,
+  physicallyHeldDragPositionCount,
   kPresentationSamplePollMs,
   kReleaseFrameTimeoutMs,
   streamDragInputs,
@@ -544,14 +545,21 @@ async function continuousDrag(
   const latencies = dragInputLatencies(stream, baselineSerial);
   const completedFrames = completedDragFrames(stream, baselineSerial);
   if (!baselineOnly) {
-    const heldPositions = heldDragPositionCount(completedFrames);
+    const stampedHeldPositions = heldDragPositionCount(completedFrames);
+    const crown = phase === "geode-crown";
+    const heldPositions = crown
+      ? physicallyHeldDragPositionCount(stream, completedFrames)
+      : stampedHeldPositions;
+    const heldDetail = crown
+      ? `${heldPositions} represented positions completed before release (${stampedHeldPositions} stamped held)`
+      : `${heldPositions} held positions completed`;
     // The hosted macOS Perf job reports, rather than fails, a miss in Chromium in the masked crown
     // drag (#2106); it enforces Firefox and every other phase, as does every run that does not set
     // report mode.
     await completionCheck(
       "heldDragPositions",
       phase,
-      `${heldPositions} held positions completed`,
+      heldDetail,
       () =>
         expect(heldPositions, "held drag must complete multiple represented positions")
           .toBeGreaterThan(1),
