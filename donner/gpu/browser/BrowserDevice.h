@@ -235,13 +235,15 @@ protected:
                   std::span<const SubmittedCommandBuffer> commandBuffers) override;
 
   /// Replays one command buffer of a submission through the bridge, leaving it finished and
-  /// unsubmitted.
+  /// unsubmitted unless it ends the submission.
   /// @param submissionSerial Serial the runtime assigned.
   /// @param commandBufferIndex Position of this buffer within the submission.
   /// @param commands Commands to replay, in recording order.
+  /// @param finalBuffer Finish and submit together for the final buffer.
   /// @param operation Operation name for diagnostics.
   Status replayCommandBuffer(uint64_t submissionSerial, uint32_t commandBufferIndex,
-                             std::span<const Command> commands, std::string_view operation);
+                             std::span<const Command> commands, bool finalBuffer,
+                             std::string_view operation);
 
   Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
                           uint64_t offsetBytes, uint64_t byteCount) override;

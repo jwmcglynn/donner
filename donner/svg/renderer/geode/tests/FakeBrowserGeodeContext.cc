@@ -29,6 +29,7 @@ public:
     bridge->calls = calls_;
     bridge->queries = queries_;
     bridge->completeOnSubmit = true;
+    bridge->modelsCombinedSubmission = true;
     bridge->publishes = true;
     gpu::browser::BrowserDeviceRequest request =
         gpu::browser::BrowserDeviceRequest::Begin(std::move(bridge));
@@ -123,6 +124,14 @@ std::size_t PayloadBytes(std::string_view line) {
 class RoundTripCounter {
 public:
   void add(std::string_view line) {
+    if (line == "finishAndSubmitCommandBuffers") {
+      combinedSubmission_ = true;
+      return;
+    }
+    if (combinedSubmission_ && line.starts_with("submitCommandBuffers")) {
+      combinedSubmission_ = false;
+      return;
+    }
     const OperationKind* entry = EntryFor(line);
     if (entry != nullptr && entry->model.deferred) {
       defer(PayloadBytes(line));
@@ -173,7 +182,8 @@ private:
     if (line.starts_with("endCommandBuffer")) {
       // A full batch is sent as soon as it fills, and the end of the buffer sends the rest; the
       // first batch carries the deferred calls.
-      counts_.commandBatch += recordedCommands_ / kCommandsPerBatch + 1;
+      const std::size_t queued = recordedCommands_ - (combinedSubmission_ ? 1 : 0);
+      counts_.commandBatch += queued / kCommandsPerBatch + 1;
       recording_ = false;
       deferredCalls_ = 0;
       deferredBytes_ = 0;
@@ -182,6 +192,7 @@ private:
 
   BrowserOwnerRoundTrips counts_;
   bool recording_ = false;
+  bool combinedSubmission_ = false;
   std::size_t recordedCommands_ = 0;
   std::size_t deferredCalls_ = 0;
   std::size_t deferredBytes_ = 0;

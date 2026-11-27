@@ -863,7 +863,7 @@ BridgeStatus EmscriptenBrowserBridge::queueCommand(const char* operation,
   return pendingCommands_.size() >= 1024 ? flushCommands() : BridgeStatus::Success;
 }
 
-BridgeStatus EmscriptenBrowserBridge::flushCommands() {
+BridgeStatus EmscriptenBrowserBridge::flushCommands(std::optional<uint64_t> finalSubmission) {
   std::vector<PendingCommand> commands = std::move(pendingCommands_);
   BridgeStatus result = BridgeStatus::Success;
   const char* failedOperation = nullptr;
@@ -873,8 +873,18 @@ BridgeStatus EmscriptenBrowserBridge::flushCommands() {
           result = command.execute();
           if (result != BridgeStatus::Success) {
             failedOperation = command.operation;
-            break;
+            return;
           }
+        }
+        if (finalSubmission) {
+          result = StatusFromBrowser(
+              donner_gpu_end_command_buffer(logicalDevice_, static_cast<double>(*finalSubmission)));
+          if (result != BridgeStatus::Success) {
+            failedOperation = "endCommandBuffer";
+            return;
+          }
+          result = StatusFromBrowser(donner_gpu_submit_command_buffers(
+              logicalDevice_, static_cast<double>(*finalSubmission)));
         }
       },
       BrowserGpuOperationKind::CommandBatch, &deferredOrigin());
@@ -1048,6 +1058,13 @@ BridgeStatus EmscriptenBrowserBridge::endCommandBuffer(uint64_t submissionSerial
         logicalDevice_, static_cast<double>(submissionSerial)));
   });
   return queued == BridgeStatus::Success ? flushCommands() : queued;
+}
+
+BridgeStatus EmscriptenBrowserBridge::finishAndSubmitCommandBuffers(uint64_t submissionSerial) {
+  if (!UsesBrowserGpuOwner()) {
+    return BrowserBridge::finishAndSubmitCommandBuffers(submissionSerial);
+  }
+  return flushCommands(submissionSerial);
 }
 
 BridgeStatus EmscriptenBrowserBridge::submitCommandBuffers(uint64_t submissionSerial) {
