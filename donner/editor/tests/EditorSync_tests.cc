@@ -1044,6 +1044,7 @@ TEST(EditorSyncTest, StructuredCssInsertsBeforeDiscardedEmbeddedTail) {
     DocumentSyncController sync(original);
     const auto target = FindStructuredCssTarget(app, original, original.find("rect"));
     ASSERT_THAT(target, testing::Optional(testing::_));
+    EXPECT_TRUE(CanInsertStructuredCssDeclaration(app, original, *target));
     ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
                                        StructuredCssOperation::InsertDeclaration, "stroke: red"));
     const std::string expected =

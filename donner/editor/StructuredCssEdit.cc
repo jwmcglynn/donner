@@ -133,6 +133,9 @@ void PrepareEmbeddedDeclarationInsertion(std::string_view css, std::size_t offse
   }
   const auto tail = StartAfterLastSemicolon(qualified->block, start + 1);
   const auto closingBrace = css.size() - 1;
+  if (tail > closingBrace) {
+    return;
+  }
   const auto finalDeclaration = rule.declarations.empty()
                                     ? std::nullopt
                                     : rule.declarations.back().declaration.sourceOffset.offset;
@@ -584,11 +587,29 @@ std::optional<StructuredCssTarget> FindStructuredCssTargetInternal(EditorApp& ap
                             prepareInsertion);
 }
 
+std::optional<StructuredCssTarget> PrepareDeclarationInsertion(EditorApp& app,
+                                                               std::string_view source,
+                                                               const StructuredCssTarget& target) {
+  auto prepared = FindStructuredCssTargetInternal(app, source, target.selectionOffset,
+                                                  /*prepareInsertion=*/true);
+  if (!prepared || prepared->generation != target.generation ||
+      prepared->sourceVersion != target.sourceVersion || prepared->rule != target.rule ||
+      !prepared->insertDeclaration) {
+    return std::nullopt;
+  }
+  return prepared;
+}
+
 }  // namespace
 
 std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
                                                            std::size_t offset) {
   return FindStructuredCssTargetInternal(app, source, offset, /*prepareInsertion=*/false);
+}
+
+bool CanInsertStructuredCssDeclaration(EditorApp& app, std::string_view source,
+                                       const StructuredCssTarget& target) {
+  return PrepareDeclarationInsertion(app, source, target).has_value();
 }
 
 bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEditor& editor,
@@ -600,13 +621,8 @@ bool ApplyStructuredCssEdit(EditorApp& app, DocumentSyncController& sync, TextEd
   }
   if (operation == StructuredCssOperation::InsertDeclaration && !target.inlineStyle) {
     // Only the add action needs the parsed body. Selection and gutter drag use the cached ranges.
-    const auto prepared = FindStructuredCssTargetInternal(app, source, target.selectionOffset,
-                                                          /*prepareInsertion=*/true);
-    if (!prepared || prepared->generation != target.generation ||
-        prepared->sourceVersion != target.sourceVersion) {
-      return false;
-    }
-    const auto edit = MakeReplacement(*prepared, operation, replacement);
+    const auto prepared = PrepareDeclarationInsertion(app, source, target);
+    const auto edit = prepared ? MakeReplacement(*prepared, operation, replacement) : std::nullopt;
     return edit && ApplyReplacement(app, sync, editor, source, *edit, target.sourceVersion);
   }
   const auto edit = MakeReplacement(target, operation, replacement);

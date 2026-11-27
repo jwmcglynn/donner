@@ -62,6 +62,13 @@ enum class StructuredCssOperation {
 std::optional<StructuredCssTarget> FindStructuredCssTarget(EditorApp& app, std::string_view source,
                                                            std::size_t offset);
 
+/// Check whether a declaration can be inserted at the current parsed source boundary.
+/// @param app Active editor document.
+/// @param source Current source pane contents.
+/// @param target Previously resolved, revision-bound CSS target.
+bool CanInsertStructuredCssDeclaration(EditorApp& app, std::string_view source,
+                                       const StructuredCssTarget& target);
+
 /// Apply one CSS operation as one document command and one document undo step.
 /// @param app Active editor document.
 /// @param sync Source owner that mirrors the committed document delta.
