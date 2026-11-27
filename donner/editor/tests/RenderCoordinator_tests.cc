@@ -1445,7 +1445,8 @@ TEST(RenderCoordinatorTest, TranslationReleaseRendersVisiblePixelsBeforeRefreshi
   const auto version = app.document().currentFrameVersion();
   const Transform2d documentFromCachedDocument = Transform2d::Translate(releaseDelta);
   coordinator.compositedPresentation().beginSettling(
-      DragPreview(target.unsafeEntityHandle().entity(), 1, releaseDelta, documentFromCachedDocument),
+      DragPreview(target.unsafeEntityHandle().entity(), 1, releaseDelta,
+                  documentFromCachedDocument),
       version);
 
   ASSERT_THAT(coordinator.maybeRequestRender(app, tool, viewport, &textures), testing::IsTrue());
@@ -1520,7 +1521,8 @@ TEST(RenderCoordinatorTest, ReleaseKeepsOverviewPriorityWhenVisibleCoverageIsSta
     const auto entity = app.selectedElement()->unsafeEntityHandle().entity();
     const auto documentFromCachedDocument = Transform2d::Translate(19.0, 19.0);
     coordinator.compositedPresentation().beginSettling(
-        DragPreview(entity, 1, documentFromCachedDocument.translation(), documentFromCachedDocument),
+        DragPreview(entity, 1, documentFromCachedDocument.translation(),
+                    documentFromCachedDocument),
         app.document().currentFrameVersion());
 
     ASSERT_THAT(coordinator.maybeRequestRender(app, tool, viewport, &textures), testing::IsTrue());
