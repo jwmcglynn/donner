@@ -2522,6 +2522,22 @@ test("only the tracked responsiveness checks go through the completion check hel
   );
 });
 
+test("masked crown failures retain joined drag evidence", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  const drag = spec.slice(spec.indexOf("async function continuousDrag("),
+                          spec.indexOf("// This manual lane measures"));
+  assert.match(drag, /baselineSerial,\s*physicalHeldPositions,\s*stampedHeldPositions,\s*stream,/);
+  const record = drag.indexOf("options.record?.(evidence);");
+  assert.ok(record > 0 && record < drag.indexOf('"heldDragPositions"'));
+  const crown = spec.slice(spec.indexOf("async function maskedCrownDragWithCounters("),
+                           spec.indexOf("// A shape first selected"));
+  assert.match(crown, /record: \(drag\) => \{ report\.drag = drag; \}/);
+  const workers = crown.indexOf("report.workerResults = results;");
+  assert.ok(workers > 0 && workers < crown.indexOf("throw dragFailure"));
+  assert.match(crown, /await maskedCrownDragWithCounters\(page, point, sourceVisible, report\);\s*\} finally \{\s*report\.ownerAfterDrag = await readGpuOwnerDispatchStats/);
+});
+
+
 test("catalog browser gate admits resource failure and warm update acceptance without dropping cases", () => {
   const spec = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
   const titles = [...spec.matchAll(/^test(?:\.\w+)?\(\s*"([^"]+)"/gm)].map(([, title]) => title);

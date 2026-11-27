@@ -504,11 +504,33 @@ async function continuousDrag(
   start: { x: number; y: number },
   direction: number,
   phase: string,
-  scorePhysicalHold = false,
+  options: { scorePhysicalHold?: boolean; record?: (drag: Record<string, unknown>) => void } = {},
 ) {
   const before = await snapshot(page);
   const stream = await streamDragToIdle(page, start, direction);
   const after = await snapshot(page);
+  const gaps = (times: number[]) => times.slice(1).map((time, index) => time - times[index]);
+  const baselineSerial = before.presentation?.completedSerial ?? 0;
+  const latencies = dragInputLatencies(stream, baselineSerial);
+  const completedFrames = completedDragFrames(stream, baselineSerial);
+  const stampedHeldPositions = heldDragPositionCount(completedFrames);
+  const physicalHeldPositions = physicallyHeldDragPositionCount(stream, completedFrames);
+  const cadence = gaps(completedFrames.map((frame) => frame.presentation!.completedAtMs));
+  const evidence = {
+    ...phaseReport(before, after, []),
+    // These are observed frame gaps, not a latched input-to-presentation latency measurement.
+    observedFrameGapsMs: distribution(gaps(stream.frames.map((frame) => frame.atMs))),
+    inputDispatchGapsMs: distribution(gaps(stream.dispatchTimes)),
+    observedFrames: stream.frames.length,
+    presentedInputCount: latencies.length,
+    inputToGpuCompletedFrameMs: distribution(latencies),
+    completedFrameGapsMs: distribution(cadence),
+    baselineSerial,
+    physicalHeldPositions,
+    stampedHeldPositions,
+    stream,
+  };
+  options.record?.(evidence);
   const baselineOnly = process.env.DONNER_BROWSER_BASELINE === "1";
   if (!baselineOnly) {
     expect(after.presentation, "candidate completion telemetry is required").toBeTruthy();
@@ -541,16 +563,9 @@ async function continuousDrag(
   expect(stream.frames.some((frame) => frame.dragging), "the stream must enter drag mode").toBe(
     true,
   );
-  const gaps = (times: number[]) => times.slice(1).map((time, index) => time - times[index]);
-  const baselineSerial = before.presentation?.completedSerial ?? 0;
-  const latencies = dragInputLatencies(stream, baselineSerial);
-  const completedFrames = completedDragFrames(stream, baselineSerial);
   if (!baselineOnly) {
-    const stampedHeldPositions = heldDragPositionCount(completedFrames);
-    const heldPositions = scorePhysicalHold
-      ? physicallyHeldDragPositionCount(stream, completedFrames)
-      : stampedHeldPositions;
-    const heldDetail = scorePhysicalHold
+    const heldPositions = options.scorePhysicalHold ? physicalHeldPositions : stampedHeldPositions;
+    const heldDetail = options.scorePhysicalHold
       ? `${heldPositions} represented positions completed before release (${stampedHeldPositions} stamped held)`
       : `${heldPositions} held positions completed`;
     // The hosted macOS Perf job reports, rather than fails, a miss in Chromium in the masked crown
@@ -576,24 +591,11 @@ async function continuousDrag(
     );
     expect(after.worker?.compositorReadbackCount, "composition must not read GPU tiles back")
       .toBe(0);
-    latencyGate("inputP95", phase, distribution(latencies).p95);
-    latencyGate("inputStall", phase, distribution(latencies).max);
-    const cadence = gaps(completedFrames.map((frame) => frame.presentation!.completedAtMs));
-    latencyGate("completedStall", phase, distribution(cadence).max);
+    latencyGate("inputP95", phase, evidence.inputToGpuCompletedFrameMs.p95);
+    latencyGate("inputStall", phase, evidence.inputToGpuCompletedFrameMs.max);
+    latencyGate("completedStall", phase, evidence.completedFrameGapsMs.max);
   }
-  return {
-    ...phaseReport(before, after, []),
-    // These are observed frame gaps, not a latched input-to-presentation latency measurement.
-    observedFrameGapsMs: distribution(gaps(stream.frames.map((frame) => frame.atMs))),
-    inputDispatchGapsMs: distribution(gaps(stream.dispatchTimes)),
-    observedFrames: stream.frames.length,
-    presentedInputCount: latencies.length,
-    inputToGpuCompletedFrameMs: distribution(latencies),
-    completedFrameGapsMs: distribution(
-      gaps(completedFrames.map((frame) => frame.presentation!.completedAtMs)),
-    ),
-    stream,
-  };
+  return evidence;
 }
 
 // This manual lane measures production frame telemetry. Pixel reads, screenshots and traces
@@ -1867,19 +1869,23 @@ async function maskedCrownDragWithCounters(
   page: Page,
   point: { x: number; y: number },
   sourceVisible: boolean,
+  report: Record<string, unknown>,
 ) {
   const phase = "geode-crown";
   await startWorkerResultCounters(page);
-  let drag: Awaited<ReturnType<typeof continuousDrag>> | undefined;
   let dragFailure: unknown;
   try {
-    drag = await continuousDrag(page, point, 0.25, phase, /*scorePhysicalHold=*/ true);
+    await continuousDrag(page, point, 0.25, phase, {
+      scorePhysicalHold: true,
+      record: (drag) => { report.drag = drag; },
+    });
   } catch (error) {
     dragFailure = error;
   }
   const results = summarizeMaskedDragResults(await stopWorkerResultCounters(page), {
     baselineOnly: process.env.DONNER_BROWSER_BASELINE === "1",
   }) as MaskedDragSummary;
+  report.workerResults = results;
   const baseline = {
     project: test.info().project.name,
     raster: await rasterIdentity(page),
@@ -1914,7 +1920,6 @@ async function maskedCrownDragWithCounters(
   }
   if (dragFailure !== undefined) throw dragFailure;
   if (checkFailures.length > 0) throw checkFailures[0];
-  return { drag, workerResults: results };
 }
 
 test.describe("Geode detailed interactions", () => {
@@ -2020,8 +2025,11 @@ test.describe("Geode detailed interactions", () => {
           // Separate selection from the drag press so this does not enter double-click editing.
           await page.waitForTimeout(500);
           report.ownerBeforeDrag = await readGpuOwnerDispatchStats(page);
-          Object.assign(report, await maskedCrownDragWithCounters(page, point, sourceVisible));
-          report.ownerAfterDrag = await readGpuOwnerDispatchStats(page);
+          try {
+            await maskedCrownDragWithCounters(page, point, sourceVisible, report);
+          } finally {
+            report.ownerAfterDrag = await readGpuOwnerDispatchStats(page).catch(() => null);
+          }
           save("drag finished");
           await page.screenshot({ path: info.outputPath("geode-interaction.png") });
         } finally {
