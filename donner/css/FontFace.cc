@@ -17,6 +17,19 @@
 
 namespace donner::css {
 
+FontFaceDescriptor IdentifyFontFaceDescriptor(std::string_view name) {
+  using D = FontFaceDescriptor;
+  static constexpr std::pair<std::string_view, D> kDescriptors[] = {
+      {"font-family", D::Family}, {"src", D::Source},         {"font-weight", D::Weight},
+      {"font-width", D::Width},   {"font-stretch", D::Width}, {"font-style", D::Style}};
+  for (const auto& [key, descriptor] : kDescriptors) {
+    if (StringUtils::EqualsLowercase(name, key)) {
+      return descriptor;
+    }
+  }
+  return D::Unknown;
+}
+
 namespace {
 
 /// Append a length-prefixed field, so a delimiter inside @p value cannot be read as a field

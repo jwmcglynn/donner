@@ -1060,6 +1060,43 @@ TEST(RenderCoordinatorTest, FrameRequiresAcceptedRasterResources) {
   EXPECT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
 }
 
+TEST(RenderCoordinatorTest, StaticFrameReuseSealsTheLatestUiInputIdentity) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  auto viewport = MakeViewport(app);
+  AcceptCapturedScene(coordinator, app);
+  const auto build = [&](PresentationInputIdentity input) {
+    return coordinator.buildFramePresentation(
+        app, tool, viewport, Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
+        SelectionChromeDetail::Full, true, {}, input);
+  };
+
+  const auto first = build({.pointerPosition = Vector2d(8, 8)});
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(first->inputIdentity().pointerPosition, Vector2d(8, 8));
+  EXPECT_EQ(coordinator.inputIdentityForPresentedFrame(first.get()).pointerPosition,
+            Vector2d(8, 8));
+
+  const auto reused = build({.pointerPosition = Vector2d(16, 8)});
+  ASSERT_EQ(reused, first);
+  EXPECT_EQ(reused->inputIdentity().pointerPosition, Vector2d(8, 8));
+  EXPECT_EQ(coordinator.inputIdentityForPresentedFrame(reused.get()).pointerPosition,
+            Vector2d(16, 8));
+  EXPECT_TRUE(coordinator.frameRepresentsCurrentIntent());
+
+  viewport.panBy(Vector2d(1, 0));
+  const auto rebuilt = build({.pointerPosition = Vector2d(24, 8)});
+  ASSERT_NE(rebuilt, nullptr);
+  EXPECT_NE(rebuilt, reused);
+  const auto rebuiltInput = coordinator.inputIdentityForPresentedFrame(rebuilt.get());
+  EXPECT_EQ(rebuiltInput.pointerPosition, rebuilt->inputIdentity().pointerPosition);
+  EXPECT_EQ(rebuiltInput.mouseDown, rebuilt->inputIdentity().mouseDown);
+  EXPECT_EQ(rebuilt->inputIdentity().pointerPosition, Vector2d(24, 8));
+}
+
 TEST(RenderCoordinatorTest, RendererRefusalRetainsCompleteFrameAndChromeUntilRecovery) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));

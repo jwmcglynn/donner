@@ -201,8 +201,10 @@ private:
   void append(const css::Specificity& value) {
     const auto [a, b, c] = value.abc();
     // Preserve the legacy 32-bit origin field for the common zero-rank representation.
-    const auto priority = static_cast<std::uint32_t>(value.specialValue()) |
-                          (static_cast<std::uint32_t>(value.layerRank()) << 8);
+    auto priority = static_cast<std::uint32_t>(value.specialValue());
+    if (value.hasLayerRank()) {
+      priority |= static_cast<std::uint32_t>(value.layerRank()) << 8;
+    }
     fields(priority, a, b, c);
   }
 
@@ -254,6 +256,9 @@ std::optional<std::string> PropertyRegistry::encodeDeclarationKey(std::size_t ma
     }
     if (entry.substituted) {
       key.fields(std::uint8_t{254}, true, name);
+    }
+    if (entry.variableFromPresentation) {
+      key.fields(std::uint8_t{254}, std::uint8_t{2}, name);
     }
   }
   return std::move(key).finish();

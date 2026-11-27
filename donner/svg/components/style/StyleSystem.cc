@@ -63,6 +63,17 @@
 #include "donner/svg/components/style/StylePassScheduler.h"
 #include "donner/svg/components/text/TextComponent.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_STYLE_SYSTEM_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace donner::svg::components {
 
 namespace {
@@ -3286,35 +3297,41 @@ public:
   }
 
   std::vector<std::size_t> ordered() const {
-    std::vector<std::pair<Priority, std::size_t>> sorted;
-    sorted.reserve(priorities_.size());
-    for (const auto& [index, priority] : priorities_) {
-      sorted.emplace_back(priority, index);
-    }
-    std::ranges::sort(sorted);
     std::vector<std::size_t> result;
-    result.reserve(sorted.size());
-    for (const auto& [_, index] : sorted) {
-      result.push_back(index);
+    for (std::size_t index = 0; index < priorities_.size(); ++index) {
+      if (priorities_[index].rank != 0) {
+        result.push_back(index);
+      }
     }
+    const auto precedes = [&](std::size_t left, std::size_t right) {
+      return priorities_[left] < priorities_[right];
+    };
+    std::ranges::make_heap(result, precedes);
+    std::ranges::sort_heap(result, precedes);
     return result;
   }
 
 private:
-  using Priority = std::pair<std::uint16_t, std::size_t>;
+  struct Priority {
+    std::uint16_t rank = 0;
+    std::size_t sourcePosition = 0;
+    auto operator<=>(const Priority&) const = default;
+  };
 
   void addFace(const css::FontFace& face, std::uint16_t rank) {
     if (const auto index = resources_.registerStylesheetFontFace(face)) {
-      const Priority priority(rank, next_++);
-      auto [current, inserted] = priorities_.try_emplace(*index, priority);
-      if (!inserted) {
-        current->second = std::max(current->second, priority);
+      if (*index >= priorities_.size()) {
+        priorities_.resize(*index + 1);
       }
+      const Priority priority(rank, next_++);
+      priorities_[*index] = std::max(priorities_[*index], priority);
     }
   }
 
   ResourceManagerContext& resources_;
-  std::unordered_map<std::size_t, Priority> priorities_;
+  // Resource indices are stable and bounded by the registered face table. A zero rank denotes
+  // an entry that does not participate in authored layer order.
+  std::vector<Priority> priorities_;
   std::size_t next_ = 0;
 };
 
@@ -3785,3 +3802,8 @@ void StyleSystem::invalidateAll(EntityHandle handle) {
 }
 
 }  // namespace donner::svg::components
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_STYLE_SYSTEM_MINSIZE
+#endif

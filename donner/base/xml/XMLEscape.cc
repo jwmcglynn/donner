@@ -70,28 +70,6 @@ constexpr std::int32_t DecodeUtf8(const std::uint8_t* bytes, int length) {
   return codepoint;
 }
 
-/// Returns true if this codepoint is legal in an XML 1.0 attribute value. The forbidden
-/// set is: NUL, most C0 control characters (everything except tab, LF, CR), the UTF-16
-/// surrogates, and the two Unicode non-characters U+FFFE and U+FFFF.
-constexpr bool IsValidXmlAttributeCodepoint(std::int32_t codepoint) {
-  if (codepoint < 0) {
-    return false;
-  }
-  if (codepoint == 0x00) {
-    return false;
-  }
-  if (codepoint < 0x20 && codepoint != 0x09 && codepoint != 0x0A && codepoint != 0x0D) {
-    return false;
-  }
-  if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
-    return false;  // UTF-16 surrogate half.
-  }
-  if (codepoint == 0xFFFE || codepoint == 0xFFFF) {
-    return false;
-  }
-  return true;
-}
-
 }  // namespace
 
 std::optional<RcString> EscapeAttributeValue(std::string_view value, char quoteChar) {
@@ -114,7 +92,7 @@ std::optional<RcString> EscapeAttributeValue(std::string_view value, char quoteC
     // ASCII fast path: single-byte characters that don't need escaping.
     if (lead < 0x80) {
       const int codepoint = static_cast<int>(lead);
-      if (!IsValidXmlAttributeCodepoint(codepoint)) {
+      if (!IsValidXmlCharacter(codepoint)) {
         return std::nullopt;
       }
       switch (lead) {
@@ -152,7 +130,7 @@ std::optional<RcString> EscapeAttributeValue(std::string_view value, char quoteC
       return std::nullopt;
     }
     const std::int32_t codepoint = DecodeUtf8(bytes + i, seqLen);
-    if (!IsValidXmlAttributeCodepoint(codepoint)) {
+    if (!IsValidXmlCharacter(codepoint)) {
       return std::nullopt;
     }
     out.append(value.substr(i, seqLen));
@@ -175,7 +153,7 @@ std::optional<RcString> EscapeTextContent(std::string_view value) {
 
     if (lead < 0x80) {
       const int codepoint = static_cast<int>(lead);
-      if (!IsValidXmlAttributeCodepoint(codepoint)) {
+      if (!IsValidXmlCharacter(codepoint)) {
         return std::nullopt;
       }
       switch (lead) {
@@ -193,7 +171,7 @@ std::optional<RcString> EscapeTextContent(std::string_view value) {
       return std::nullopt;
     }
     const std::int32_t codepoint = DecodeUtf8(bytes + i, seqLen);
-    if (!IsValidXmlAttributeCodepoint(codepoint)) {
+    if (!IsValidXmlCharacter(codepoint)) {
       return std::nullopt;
     }
     out.append(value.substr(i, seqLen));

@@ -994,6 +994,37 @@ TEST(StylesheetTextEdit, LeadingCommentEditKeepsCommentedRulesInactive) {
               ElementsAreArray(full.rules().front().declarations));
 }
 
+TEST(StylesheetTextEdit, ExposingLeadingCharsetKeepsFreshParseAccounting) {
+  constexpr std::string_view removed = "rect{fill:red}";
+  constexpr std::string_view after = "@charset \"UTF-8\";\ncircle{fill:blue}";
+  const std::string before = std::string(removed) + std::string(after);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto check = [&](const Stylesheet& previous, std::string_view oldSource,
+                         std::string_view newSource, StylesheetParser::TextEdit edit,
+                         std::size_t rawRules) {
+    const auto incremental =
+        StylesheetParser::TryReparseTextEdit(previous, oldSource, newSource, edit);
+    const Stylesheet fresh = StylesheetParser::Parse(newSource, warnings);
+    EXPECT_EQ(fresh.securityStats().rawRules, rawRules);
+    EXPECT_THAT(incremental, testing::Eq(std::nullopt));
+    const auto& actual = incremental ? *incremental : fresh;
+    EXPECT_EQ(actual.securityStats().rawRules, fresh.securityStats().rawRules);
+    EXPECT_EQ(actual.securityStats().componentValues, fresh.securityStats().componentValues);
+    EXPECT_EQ(actual.securityStats().declarations, fresh.securityStats().declarations);
+    ASSERT_THAT(actual.rules(), testing::SizeIs(fresh.rules().size()));
+    for (std::size_t index = 0; index < fresh.rules().size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_THAT(actual.rules()[index].ruleSourceRange,
+                  testing::Eq(fresh.rules()[index].ruleSourceRange));
+      EXPECT_THAT(actual.rules()[index].declarations,
+                  ElementsAreArray(fresh.rules()[index].declarations));
+    }
+  };
+  check(original, before, after, {0, removed.size(), 0}, 1);
+  check(StylesheetParser::Parse(after, warnings), after, before, {0, 0, removed.size()}, 3);
+}
+
 TEST(StylesheetTextEdit, UnterminatedRuleFallsBack) {
   constexpr std::string_view before = "rect{fill:red} circle{fill:blue}";
   const std::size_t start = before.find('}');

@@ -4,16 +4,12 @@
 #include <utility>
 
 #include "donner/base/SmallVector.h"
+#include "donner/css/VariableReference.h"
 
 namespace donner::css {
 namespace {
 
 using Values = std::span<const ComponentValue>;
-
-struct Reference {
-  std::string_view name;
-  std::optional<Values> fallback;
-};
 
 void SkipWhitespace(Values& values) {
   while (!values.empty() && values.front().isToken<Token::Whitespace>()) {
@@ -21,7 +17,38 @@ void SkipWhitespace(Values& values) {
   }
 }
 
-std::optional<Reference> ParseReference(const Function& function) {
+const SimpleBlock* BraceBlock(const ComponentValue& value) {
+  const auto* block = std::get_if<SimpleBlock>(&value.value);
+  return block && block->associatedToken == Token::indexOf<Token::CurlyBracket>() ? block : nullptr;
+}
+
+std::optional<Values> ParseVariableFallback(Values fallback) {
+  Values argument = fallback;
+  SkipWhitespace(argument);
+  const auto* wrapper = argument.empty() ? nullptr : BraceBlock(argument.front());
+  if (wrapper) {
+    argument = argument.subspan(1);
+    SkipWhitespace(argument);
+    if (!argument.empty()) {
+      return std::nullopt;
+    }
+    // A braced argument contributes its contents, including any commas, to substitution.
+    fallback = wrapper->values;
+  }
+  for (const auto& value : fallback) {
+    const auto* delim = value.tryGetToken<Token::Delim>();
+    if (value.isToken<Token::Semicolon>() || (delim && delim->value == '!')) {
+      return std::nullopt;
+    }
+  }
+  return fallback;
+}
+
+}  // namespace
+
+namespace details {
+
+std::optional<VariableReference> ParseVariableReference(const Function& function) {
   Values args(function.values);
   SkipWhitespace(args);
   if (args.empty()) {
@@ -33,21 +60,22 @@ std::optional<Reference> ParseReference(const Function& function) {
   }
   args = args.subspan(1);
   SkipWhitespace(args);
-  Reference result{std::string_view(ident->value), std::nullopt};
+  VariableReference result{std::string_view(ident->value), std::nullopt};
   if (!args.empty()) {
     if (!args.front().isToken<Token::Comma>()) {
       return std::nullopt;
     }
-    result.fallback = args.subspan(1);
-    for (const auto& value : *result.fallback) {
-      const auto* delim = value.tryGetToken<Token::Delim>();
-      if (value.isToken<Token::Semicolon>() || (delim && delim->value == '!')) {
-        return std::nullopt;
-      }
+    result.fallback = ParseVariableFallback(args.subspan(1));
+    if (!result.fallback) {
+      return std::nullopt;
     }
   }
   return result;
 }
+
+}  // namespace details
+
+namespace {
 
 VariableReferences Inspect(Values input, const std::function<void(std::string_view)>* visit) {
   VariableReferences status = VariableReferences::None;
@@ -63,7 +91,7 @@ VariableReferences Inspect(Values input, const std::function<void(std::string_vi
     rest = rest.subspan(1);
     if (const auto* function = std::get_if<Function>(&value.value)) {
       if (function->name.equalsLowercase("var")) {
-        const auto ref = ParseReference(*function);
+        const auto ref = details::ParseVariableReference(*function);
         if (!ref) {
           return VariableReferences::Invalid;
         }
@@ -154,7 +182,7 @@ private:
   }
 
   VariableSubstitutionStatus reference(const Function& function, const Level& level) {
-    const auto ref = ParseReference(function);
+    const auto ref = details::ParseVariableReference(function);
     if (!ref || level.computed) {
       return VariableSubstitutionStatus::Invalid;
     }

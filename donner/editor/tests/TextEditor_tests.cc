@@ -18,6 +18,7 @@
 
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/XmlAutocomplete.h"
 
 namespace donner::editor {
 
@@ -462,6 +463,9 @@ protected:
   [[nodiscard]] bool ReplaceOpened() const { return editor.replaceOpened_; }
   [[nodiscard]] bool AutocompleteOpened() const { return editor.autocompleteOpened_; }
   [[nodiscard]] int AutocompleteIndex() const { return editor.autocompleteIndex_; }
+  [[nodiscard]] const auto& AutocompleteSuggestions() const {
+    return editor.autocompleteSuggestions_;
+  }
   [[nodiscard]] int AutocompleteSuggestionCount() const {
     return static_cast<int>(editor.autocompleteSuggestions_.size());
   }
@@ -4769,6 +4773,100 @@ TEST_F(TextEditorTests, BuildSuggestionsUsesStructuredProviderReplacementRange) 
   EXPECT_EQ(AutocompleteSuggestion(0).second, RcString("replacement"));
 }
 
+TEST_F(TextEditorTests, CssCompletionSelectionReplacesTheTokenizerRangeAndIsUndoable) {
+  constexpr std::string_view kSource = R"(<svg><rect style="fill: no"/></svg>)";
+  editor.setText(kSource);
+  editor.setCursorPosition(Coordinates(0, static_cast<int>(kSource.find("no") + 2)));
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    const XmlAutocompleteContext context =
+        DetectXmlAutocompleteContext(request.source, request.cursorOffset);
+    constexpr std::array<std::string_view, 2> keywords{"none", "nonzero"};
+    TextEditor::AutocompleteResponse response{
+        .replaceStartOffset = context.replaceStartOffset,
+        .replaceEndOffset = context.replaceEndOffset,
+    };
+    for (const auto& suggestion :
+         BuildXmlAutocompleteSuggestions(context, {.propertyKeywords = keywords})) {
+      response.suggestions.push_back(
+          {RcString(suggestion.displayText), RcString(suggestion.insertText)});
+    }
+    return response;
+  });
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+  ASSERT_TRUE(AutocompleteOpened());
+  ASSERT_THAT(AutocompleteSuggestions(),
+              ElementsAre(testing::Pair(RcString("none"), RcString("none")),
+                          testing::Pair(RcString("nonzero"), RcString("nonzero"))));
+  AutocompleteSelectDirect();
+
+  EXPECT_EQ(editor.getText(), R"(<svg><rect style="fill: none"/></svg>)");
+  editor.undo();
+  EXPECT_EQ(editor.getText(), R"(<svg><rect style="fill: no"/></svg>)");
+}
+
+TEST_F(TextEditorTests, CssSelectorCompletionReplacesALoneClassMarkerAndIsUndoable) {
+  constexpr std::string_view kSource = "<svg><style>.</style></svg>";
+  editor.setText(kSource);
+  editor.setCursorPosition(Coordinates(0, static_cast<int>(kSource.find('.') + 1)));
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    const XmlAutocompleteContext context =
+        DetectXmlAutocompleteContext(request.source, request.cursorOffset);
+    static const std::vector<std::string> classes{"card"};
+    TextEditor::AutocompleteResponse response{
+        .replaceStartOffset = context.replaceStartOffset,
+        .replaceEndOffset = context.replaceEndOffset,
+    };
+    for (const auto& suggestion :
+         BuildXmlAutocompleteSuggestions(context, {.classNames = classes})) {
+      response.suggestions.push_back(
+          {RcString(suggestion.displayText), RcString(suggestion.insertText)});
+    }
+    return response;
+  });
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+  ASSERT_TRUE(AutocompleteOpened());
+  AutocompleteSelectDirect();
+  EXPECT_EQ(editor.getText(), "<svg><style>.card</style></svg>");
+  editor.undo();
+  EXPECT_EQ(editor.getText(), kSource);
+}
+
+TEST_F(TextEditorTests, CssValueCompletionPreservesEarlierXmlEntitySourceAndIsUndoable) {
+  constexpr std::string_view kSource =
+      R"(<svg><rect style="font-family:&quot;serif&quot;; display:no"/></svg>)";
+  editor.setText(kSource);
+  editor.setCursorPosition(Coordinates(0, static_cast<int>(kSource.find("no\"") + 2)));
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    const XmlAutocompleteContext context =
+        DetectXmlAutocompleteContext(request.source, request.cursorOffset);
+    TextEditor::AutocompleteResponse response{
+        .replaceStartOffset = context.replaceStartOffset,
+        .replaceEndOffset = context.replaceEndOffset,
+    };
+    for (const auto& suggestion : BuildXmlAutocompleteSuggestions(context)) {
+      response.suggestions.push_back(
+          {RcString(suggestion.displayText), RcString(suggestion.insertText)});
+    }
+    return response;
+  });
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+  ASSERT_TRUE(AutocompleteOpened());
+  AutocompleteSelectDirect();
+  EXPECT_EQ(editor.getText(),
+            R"(<svg><rect style="font-family:&quot;serif&quot;; display:none"/></svg>)");
+  editor.undo();
+  EXPECT_EQ(editor.getText(), kSource);
+}
+
 TEST_F(TextEditorTests, BuildSuggestionsProviderEmptyResponseSuppressesFallback) {
   editor.setText("alpha beta gamma");
   editor.setCursorPosition(Coordinates(0, 8));
@@ -5881,8 +5979,8 @@ TEST_F(TextEditorTests, DirectFoldMarkerRenderingTogglesFoldAndDrawsConnections)
 TEST_F(TextEditorTests, DarkPaletteUsesGraphiteDesignLanguage) {
   const TextEditor::Palette& palette = TextEditor::getDarkPalette();
   EXPECT_EQ(palette[static_cast<int>(ColorIndex::Background)], 0xff191615u);
-  EXPECT_EQ(palette[static_cast<int>(ColorIndex::Keyword)], 0xffb7d135u);
-  EXPECT_EQ(palette[static_cast<int>(ColorIndex::String)], 0xff74b7f0u);
+  EXPECT_EQ(palette[static_cast<int>(ColorIndex::Keyword)], 0xff9399ffu);
+  EXPECT_EQ(palette[static_cast<int>(ColorIndex::String)], 0xffa5dda8u);
   EXPECT_EQ(palette[static_cast<int>(ColorIndex::ErrorMessage)], 0xff6a61f0u);
   EXPECT_NE(palette[static_cast<int>(ColorIndex::Default)],
             palette[static_cast<int>(ColorIndex::Comment)]);

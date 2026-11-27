@@ -1,9 +1,12 @@
 #pragma once
 /// @file
 
+#include <array>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -19,8 +22,9 @@ struct PositionedStyle {
   /// Tag name and child index of each step from the root, with `~branch N` for the root of the
   /// Nth offscreen shadow tree of an entity.
   std::string position;
-  /// Computed properties, or nullopt when the entity has no computed style.
-  std::optional<PropertyRegistry> properties;
+  /// Independent snapshot of the computed values, shared among entries captured from the same
+  /// record.
+  std::shared_ptr<const PropertyRegistry> properties;
   /// Final stop and flood opacities.
   std::optional<ComputedResourceOpacities> resourceOpacities;
   /// Whether fill is inherited from an external-use host.
@@ -57,5 +61,12 @@ std::vector<PositionedEntity> PositionedEntities(SVGDocument& document);
  * @param document Document whose computed styles are read; nothing is computed.
  */
 std::vector<PositionedStyle> PositionedStyles(SVGDocument& document);
+
+/// Ordered rendering data with entity references normalized to document tree positions.
+using PositionedRenderInstance =
+    std::tuple<std::string, int, bool, bool, std::string, Transform2d, std::array<std::string, 8>>;
+
+/// Capture each render instance and its paint, clip, mask, filter and marker targets.
+std::vector<PositionedRenderInstance> PositionedRenderInstances(SVGDocument& document);
 
 }  // namespace donner::svg::components

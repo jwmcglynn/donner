@@ -120,6 +120,18 @@ void CheckStylesheet(const Stylesheet& incremental, const Stylesheet& full) {
   }
 }
 
+Stylesheet ApplyTextEditOrFullParse(const Stylesheet& current, std::string_view before,
+                                    std::string_view after, StylesheetParser::TextEdit edit,
+                                    ParseWarningSink& warnings) {
+  Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  const auto incremental = StylesheetParser::TryReparseTextEdit(current, before, after, edit);
+  if (!incremental) {
+    return fresh;
+  }
+  CheckStylesheet(*incremental, fresh);
+  return *incremental;
+}
+
 std::size_t U16(const uint8_t* bytes) {
   return std::size_t(bytes[0]) | (std::size_t(bytes[1]) << 8);
 }
@@ -136,15 +148,20 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, std::size_t size) {
   const auto inserted = payload.substr(split);
   const std::size_t offset = U16(data + 2) % (before.size() + 1);
   const std::size_t removed = U16(data + 4) % (before.size() - offset + 1);
+  const std::string removedText(before.substr(offset, removed));
   std::string after(before);
   after.replace(offset, removed, inserted);
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
-  const Stylesheet original = StylesheetParser::Parse(before, warnings);
-  if (const auto splice = StylesheetParser::TryReparseTextEdit(
-          original, before, after, {offset, removed, inserted.size()})) {
-    CheckStylesheet(*splice, StylesheetParser::Parse(after, warnings));
-  }
+  Stylesheet current = StylesheetParser::Parse(before, warnings);
+  current = ApplyTextEditOrFullParse(current, before, after, {offset, removed, inserted.size()},
+                                     warnings);
+
+  std::string restored(after);
+  restored.replace(offset, inserted.size(), removedText);
+  Require(restored == before);
+  (void)ApplyTextEditOrFullParse(current, after, restored,
+                                 {offset, inserted.size(), removedText.size()}, warnings);
   return 0;
 }
 
