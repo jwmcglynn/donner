@@ -25,8 +25,9 @@ struct StructuredCssTarget {
   std::optional<SourceByteRange> name;         ///< Authored property name.
   std::optional<SourceByteRange> value;        ///< Authored property value.
   std::optional<SourceByteRange> priority;     ///< Authored importance annotation.
-  SourceByteRange insertDeclaration;           ///< Insertion point or trailing escape to replace.
-  std::string declarationInsertionPrefix;      ///< XML-encoded CSS EOF closers.
+  std::optional<SourceByteRange> insertDeclaration;  ///< Insertion point or trailing escape.
+  bool declarationInsertionBeforeTail = false;       ///< Keep discarded trailing source separate.
+  std::string declarationInsertionPrefix;            ///< XML-encoded CSS EOF closers.
   StructuredCssSourceEncoding encoding = StructuredCssSourceEncoding::Unmapped;  ///< Context.
   std::string decodedMoveText;  ///< Original CSS token bytes before XML encoding.
   char attributeQuote = '\0';   ///< Original delimiter for an inline style attribute.

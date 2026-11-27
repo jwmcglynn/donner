@@ -1031,6 +1031,41 @@ TEST(EditorSyncTest, StructuredCssInsertsBeforeDiscardedInlineTail) {
   check("fill:red; invalid calc(", "fill:red; stroke: red; invalid calc(");
 }
 
+TEST(EditorSyncTest, StructuredCssInsertsBeforeDiscardedEmbeddedTail) {
+  const auto check = [](std::string_view styleText, std::string_view editedStyleText) {
+    SCOPED_TRACE(styleText);
+    constexpr std::string_view prefix = R"svg(<svg xmlns="http://www.w3.org/2000/svg"><style>)svg";
+    constexpr std::string_view suffix = R"svg(</style><rect id="r"/></svg>)svg";
+    TextEditor text;
+    text.setText(std::string(prefix) + std::string(styleText) + std::string(suffix));
+    const std::string original = text.getText();
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(original));
+    DocumentSyncController sync(original);
+    const auto target = FindStructuredCssTarget(app, original, original.find("rect"));
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_TRUE(ApplyStructuredCssEdit(app, sync, text, *target,
+                                       StructuredCssOperation::InsertDeclaration, "stroke: red"));
+    const std::string expected =
+        std::string(prefix) + std::string(editedStyleText) + std::string(suffix);
+    EXPECT_EQ(text.getText(), expected);
+    EXPECT_EQ(app.document().document().source(), expected);
+    const auto rect = app.document().document().querySelector("#r");
+    ASSERT_THAT(rect, testing::Optional(testing::_));
+    EXPECT_THAT(rect->getComputedStyle().stroke.get(),
+                testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+    UndoStructuredCssForTest(app, sync, text);
+    EXPECT_EQ(text.getText(), original);
+    EXPECT_EQ(app.document().document().source(), original);
+  };
+  check("rect { fill:red; invalid }", "rect { fill:red; stroke: red; invalid }");
+  check("rect { invalid fn(a;b) }", "rect { stroke: red; invalid fn(a;b) }");
+  check("rect &#123; fill:red&#59; invalid &#125;",
+        "rect &#123; fill:red&#59; stroke: red; invalid &#125;");
+  check("<![CDATA[rect { --note:{a;b}; invalid fn(a;b) }]]>",
+        "<![CDATA[rect { --note:{a;b}; stroke: red; invalid fn(a;b) }]]>");
+}
+
 TEST(EditorSyncTest, StructuredCssDoesNotUseInnerBraceAsTheRuleInsertionPoint) {
   const auto check = [](std::string_view closingBrace) {
     TextEditor text;
