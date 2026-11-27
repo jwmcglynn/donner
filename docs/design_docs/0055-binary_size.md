@@ -87,6 +87,17 @@ noted as follow-on surfaces but are not the primary focus.
   - [x] Record final-vs-baseline numbers per target and the ranked remaining
         opportunities; rewrite this doc's status.
 
+## Editor Wasm follow-on
+
+The size-optimized editor merges similar functions after Asyncify and compacts
+the output under its existing inlining limits, with memory packing disabled.
+The shipped module measured 10,922,607 bytes raw and 3,514,308 bytes gzipped,
+down from 11,077,968 and 3,537,438 on the same release configuration. The
+largest function body stayed under 40,000 bytes, and the three data segments,
+typed imports and exports, and the other 66 packaged files were unchanged.
+These measurements apply to the editor module. Renderer Wasm and native
+linked size are measured separately.
+
 ## Proposed Architecture
 
 The report is produced by `tools/binary_size.sh`, run from any Donner checkout:
