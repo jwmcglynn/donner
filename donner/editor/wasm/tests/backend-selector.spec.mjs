@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
+const packageUrl = "https://example.test/editor/v1/";
 const bootstrapUrl = new URL("../editor-bootstrap.js", import.meta.url);
 
 function makeCanvas(properties = {}) {
@@ -43,7 +44,7 @@ function makeWindow(properties = {}) {
 // is built once here. The page effects they all care about - appended nodes,
 // pending timers and animation frames, console output, loader classes - are
 // captured for every caller; a caller that does not read one simply ignores it.
-async function runBootstrap({ canvas, window, elements = {}, globals = {}, now } = {}) {
+async function runBootstrap({ canvas, window, elements = {}, globals = {}, now, runtime } = {}) {
   const source = await readFile(bootstrapUrl, "utf8");
   const animationFrames = [];
   const appended = [];
@@ -78,6 +79,7 @@ async function runBootstrap({ canvas, window, elements = {}, globals = {}, now }
     },
     document: {
       body: { appendChild: (node) => appended.push(node) },
+      currentScript: { src: new URL("editor-bootstrap.js", packageUrl).href, dataset: { runtime } },
       createElement: (tagName) => ({ tagName: tagName.toUpperCase(), addEventListener() {} }),
       getElementById: (id) => pageElements[id],
       head: { appendChild: (node) => appended.push(node) },
@@ -88,6 +90,7 @@ async function runBootstrap({ canvas, window, elements = {}, globals = {}, now }
     performance: { now: now ?? (() => ++defaultNowMs), timeOrigin: 0 },
     requestAnimationFrame: (callback) => animationFrames.push(callback),
     setTimeout: (callback, delayMs) => timers.push([callback, delayMs]),
+    URL,
     window,
     ...globals,
   });
@@ -157,7 +160,7 @@ async function loadTouchPointerBridge() {
 }
 
 // A page that can start the editor, so the reveal path is reachable.
-async function loadReadyHandoff({ now, resourceLoader } = {}) {
+async function loadReadyHandoff({ now, resourceLoader, runtime } = {}) {
   const properties = { isSecureContext: true };
   if (resourceLoader) properties.DonnerPackagedResourceLoader = resourceLoader;
   const { window, windowHandlers } = makeWindow(properties);
@@ -168,6 +171,7 @@ async function loadReadyHandoff({ now, resourceLoader } = {}) {
       SharedArrayBuffer: function SharedArrayBuffer() {},
     },
     now,
+    runtime,
     window,
   });
   return { ...harness, windowHandlers };
@@ -188,16 +192,23 @@ test("bootstrap publishes the Geode-only served-page backend", async () => {
   assert.equal(context.window.__donnerBackend, "geode");
 });
 
-test("bootstrap starts the Wasm download before loading JavaScript glue", async () => {
-  const { appended } = await loadReadyHandoff();
-  assert.equal(appended[0]?.tagName, "LINK");
-  assert.equal(appended[0]?.rel, "preload");
-  assert.equal(appended[0]?.as, "fetch");
-  assert.equal(appended[0]?.type, "application/wasm");
-  assert.equal(appended[0]?.href, "editor.wasm");
-  assert.equal(appended[1]?.tagName, "SCRIPT");
-  assert.equal(appended[1]?.src, "editor.js");
-});
+for (const runtime of [undefined, "asyncify"]) {
+  test(`bootstrap preloads the selected Wasm before its glue (${runtime ?? "primary"})`, async () => {
+    const { appended, context } = await loadReadyHandoff({ runtime });
+    const stem = runtime === "asyncify" ? "editor-asyncify" : "editor";
+    const wasmUrl = new URL(stem + ".wasm", packageUrl).href;
+    const glueUrl = new URL(stem + ".js", packageUrl).href;
+    assert.equal(appended[0]?.tagName, "LINK");
+    assert.equal(appended[0]?.rel, "preload");
+    assert.equal(appended[0]?.as, "fetch");
+    assert.equal(appended[0]?.type, "application/wasm");
+    assert.equal(appended[0]?.href, wasmUrl);
+    assert.equal(appended[1]?.tagName, "SCRIPT");
+    assert.equal(appended[1]?.src, glueUrl);
+    assert.equal(context.Module.mainScriptUrlOrBlob, glueUrl);
+    assert.equal(context.Module.locateFile("editor.wasm", packageUrl), wasmUrl);
+  });
+}
 
 test("touch pointer bridge emits one captured mouse drag", async () => {
   const { canvas, captured, dispatched, handlers, released } = await loadTouchPointerBridge();
