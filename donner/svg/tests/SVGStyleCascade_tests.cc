@@ -21,6 +21,26 @@ namespace {
 using css::Color;
 using css::RGBA;
 
+TEST(SVGStyleCascadeTests, ProgrammaticDocumentReportsMatchedRuleWithoutSourceRanges) {
+  SVGDocument document;
+  SVGStyleElement stylesheet = SVGStyleElement::Create(document);
+  stylesheet.setContents(".hit { fill: red; }");
+  document.svgElement().appendChild(stylesheet);
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setClassName("hit");
+  document.svgElement().appendChild(rect);
+
+  std::vector<SVGMatchedStyleRule> matches = CollectMatchedStyleRules(rect);
+  std::erase_if(matches, [](const auto& match) { return match.isUserAgentStylesheet; });
+  ASSERT_THAT(matches, testing::SizeIs(1));
+  EXPECT_THAT(matches[0].stylesheetElement, Optional(testing::_));
+  EXPECT_THAT(matches[0].ruleCssRange, Optional(testing::_));
+  EXPECT_THAT(matches[0].selectorCssRange, Optional(testing::_));
+  EXPECT_THAT(matches[0].ruleSourceRange, testing::Eq(std::nullopt));
+  EXPECT_THAT(matches[0].selectorSourceRange, testing::Eq(std::nullopt));
+  EXPECT_THAT(matches[0].declarationSourceRanges, testing::IsEmpty());
+}
+
 TEST(SVGStyleCascadeTests, CustomPropertySourceUsesNormalAndImportantLayerWinners) {
   auto doc = instantiateSubtree(R"svg(
     <style><![CDATA[
