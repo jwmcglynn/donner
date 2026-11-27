@@ -953,6 +953,184 @@ TEST(StylesheetParser, FontFaceSrcKeepsStringUrlAndIdentFormat) {
           "urlfallback", ElementsAre(UrlFontSourceIs("font-string.woff", "opentype", IsEmpty())))));
 }
 
+auto SourceRangeIs(const SourceRange& expected) {
+  return AllOf(Field("start", &SourceRange::start, Eq(expected.start)),
+               Field("end", &SourceRange::end, Eq(expected.end)));
+}
+
+TEST(StylesheetTextEdit, RebasedTypedValuesEqualAFullParse) {
+  constexpr std::string_view before = "g{opacity:0.5} rect{fill:red} :not(:is(.a)){x:calc(1 + 2)}";
+  const std::size_t start = before.find("red");
+  std::string after(before);
+  after.replace(start, 3, "purple");
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto updated = StylesheetParser::TryReparseTextEdit(original, before, after, {start, 3, 6});
+  ASSERT_THAT(updated, testing::Optional(testing::_));
+  const Stylesheet full = StylesheetParser::Parse(after, warnings);
+  ASSERT_EQ(updated->rules().size(), full.rules().size());
+  for (std::size_t i = 0; i < full.rules().size(); ++i) {
+    const auto& actual = updated->rules()[i];
+    const auto& expected = full.rules()[i];
+    EXPECT_THAT(actual.ruleSourceRange, SourceRangeIs(expected.ruleSourceRange));
+    EXPECT_THAT(actual.selectorSourceRange, SourceRangeIs(expected.selectorSourceRange));
+    EXPECT_THAT(actual.declarations, testing::ElementsAreArray(expected.declarations));
+  }
+  EXPECT_EQ(updated->securityStats().componentValues, full.securityStats().componentValues);
+}
+
+TEST(StylesheetTextEdit, LeadingCommentEditKeepsCommentedRulesInactive) {
+  constexpr std::string_view before = "/* outer /* quiet */ rect { fill: red; }";
+  constexpr std::string_view replacement = "circle { fill: blue; } /*";
+  const std::size_t start = before.find("/*", 2);
+  std::string after(before);
+  after.replace(start, 2, replacement);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto updated =
+      StylesheetParser::TryReparseTextEdit(original, before, after, {start, 2, replacement.size()});
+  ASSERT_THAT(updated, testing::Optional(testing::_));
+  const Stylesheet full = StylesheetParser::Parse(after, warnings);
+  ASSERT_THAT(full.rules(), testing::SizeIs(1));
+  ASSERT_THAT(updated->rules(), testing::SizeIs(1));
+  EXPECT_THAT(updated->rules().front().ruleSourceRange,
+              SourceRangeIs(full.rules().front().ruleSourceRange));
+  EXPECT_THAT(updated->rules().front().selectorSourceRange,
+              SourceRangeIs(full.rules().front().selectorSourceRange));
+  EXPECT_THAT(updated->rules().front().declarations,
+              ElementsAreArray(full.rules().front().declarations));
+}
+
+TEST(StylesheetTextEdit, ExposingLeadingCharsetKeepsFreshParseAccounting) {
+  constexpr std::string_view removed = "rect{fill:red}";
+  constexpr std::string_view after = "@charset \"UTF-8\";\ncircle{fill:blue}";
+  const std::string before = std::string(removed) + std::string(after);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto check = [&](const Stylesheet& previous, std::string_view oldSource,
+                         std::string_view newSource, StylesheetParser::TextEdit edit,
+                         std::size_t rawRules) {
+    const auto incremental =
+        StylesheetParser::TryReparseTextEdit(previous, oldSource, newSource, edit);
+    const Stylesheet fresh = StylesheetParser::Parse(newSource, warnings);
+    EXPECT_EQ(fresh.securityStats().rawRules, rawRules);
+    EXPECT_THAT(incremental, testing::Eq(std::nullopt));
+    const auto& actual = incremental ? *incremental : fresh;
+    EXPECT_EQ(actual.securityStats().rawRules, fresh.securityStats().rawRules);
+    EXPECT_EQ(actual.securityStats().componentValues, fresh.securityStats().componentValues);
+    EXPECT_EQ(actual.securityStats().declarations, fresh.securityStats().declarations);
+    ASSERT_THAT(actual.rules(), testing::SizeIs(fresh.rules().size()));
+    for (std::size_t index = 0; index < fresh.rules().size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_THAT(actual.rules()[index].ruleSourceRange,
+                  SourceRangeIs(fresh.rules()[index].ruleSourceRange));
+      EXPECT_THAT(actual.rules()[index].declarations,
+                  ElementsAreArray(fresh.rules()[index].declarations));
+    }
+  };
+  check(original, before, after, {0, removed.size(), 0}, 1);
+  check(StylesheetParser::Parse(after, warnings), after, before, {0, 0, removed.size()}, 3);
+}
+
+TEST(StylesheetTextEdit, ReachingRawRuleLimitRequiresFullParse) {
+  constexpr std::string_view before = "rect{fill:red}";
+  constexpr std::string_view added = "circle{stroke:blue} \n";
+  const std::string after = std::string(before) + std::string(added);
+  constexpr StylesheetParser::TextEdit edit{before.size(), 0, added.size()};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet parsed = StylesheetParser::Parse(before, warnings);
+  const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  const auto withRawCount = [&](std::size_t count) {
+    auto stats = parsed.securityStats();
+    stats.rawRules = count;
+    return Stylesheet(std::vector<SelectorRule>(parsed.rules().begin(), parsed.rules().end()), {},
+                      stats);
+  };
+
+  // Seed only the aggregate count. The real rule window needs just one short insertion.
+  const auto below = StylesheetParser::TryReparseTextEdit(
+      withRawCount(RuleParser::kMaximumRules - 2), before, after, edit);
+  ASSERT_THAT(below, testing::Optional(testing::_));
+  EXPECT_EQ(below->securityStats().rawRules, RuleParser::kMaximumRules - 1);
+  ASSERT_THAT(below->rules(), testing::SizeIs(fresh.rules().size()));
+  EXPECT_THAT(below->rules().back().declarations,
+              ElementsAreArray(fresh.rules().back().declarations));
+
+  const auto atLimit = StylesheetParser::TryReparseTextEdit(
+      withRawCount(RuleParser::kMaximumRules - 1), before, after, edit);
+  EXPECT_THAT(atLimit, testing::Eq(std::nullopt));
+}
+
+TEST(StylesheetTextEdit, UnterminatedRuleFallsBack) {
+  constexpr std::string_view before = "rect{fill:red} circle{fill:blue}";
+  const std::size_t start = before.find('}');
+  std::string after(before);
+  after.erase(start, 1);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  EXPECT_THAT(StylesheetParser::TryReparseTextEdit(original, before, after, {start, 1, 0}),
+              testing::Eq(std::nullopt));
+}
+
+TEST(StylesheetParser, IncrementalEditRelocatesNestedCustomPropertyTokens) {
+  constexpr std::string_view before =
+      "rect { fill: red; } circle { --payload: f([red]); fill: var(--payload, blue); }";
+  const std::size_t start = before.find("red");
+  std::string after(before);
+  after.replace(start, 3, "purple");
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  const auto incremental =
+      StylesheetParser::TryReparseTextEdit(original, before, after, {start, 3, 6});
+  ASSERT_THAT(incremental, testing::Optional(testing::_));
+  const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  ASSERT_THAT(incremental->rules(), testing::SizeIs(2));
+  ASSERT_THAT(fresh.rules(), testing::SizeIs(2));
+  const auto& declarations = incremental->rules()[1].declarations;
+  const auto& freshDeclarations = fresh.rules()[1].declarations;
+  ASSERT_THAT(declarations, testing::SizeIs(2));
+  ASSERT_THAT(freshDeclarations, testing::SizeIs(2));
+  EXPECT_THAT(declarations, ElementsAreArray(freshDeclarations));
+  const auto nestedOffset = [](const Declaration& declaration) {
+    const auto& function = declaration.values.front().get<Function>();
+    const auto& block = function.values.front().get<SimpleBlock>();
+    return block.values.front().sourceOffset();
+  };
+  EXPECT_THAT(nestedOffset(declarations[0]), Eq(nestedOffset(freshDeclarations[0])));
+  EXPECT_EQ(declarations[1].variableReferences, VariableReferences::Valid);
+}
+
+TEST(StylesheetParser, IncrementalEditLeavesLayeredStylesheetsToFullParse) {
+  constexpr std::string_view before = "@layer reset, palette; rect { fill: red; }";
+  const std::size_t start = before.find("red");
+  std::string after(before);
+  after.replace(start, 3, "blue");
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  ASSERT_THAT(original.layers(), testing::NotNull());
+  EXPECT_THAT(StylesheetParser::TryReparseTextEdit(original, before, after, {start, 3, 4}),
+              testing::Eq(std::nullopt));
+}
+
+TEST(StylesheetParser, IncrementalDeletionCannotHideNewlyEligibleImport) {
+  constexpr std::string_view first = "rect { fill: red; }";
+  constexpr std::string_view after = "@import 'theme.css'; circle { fill: blue; }";
+  const std::string before = std::string(first) + std::string(after);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet original = StylesheetParser::Parse(before, warnings);
+  EXPECT_THAT(original.imports(), IsEmpty());
+  EXPECT_THAT(original.securityStats().hasImportRule, testing::IsTrue());
+  EXPECT_THAT(StylesheetParser::TryReparseTextEdit(original, before, after, {0, first.size(), 0}),
+              testing::Eq(std::nullopt));
+
+  const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  EXPECT_THAT(fresh.imports(), ElementsAre(ImportIs("theme.css", 0)));
+  ASSERT_THAT(fresh.rules(), testing::SizeIs(1));
+  EXPECT_THAT(fresh.rules()[0].ruleSourceRange.start, Eq(FileOffset::Offset(after.find("circle"))));
+  EXPECT_THAT(fresh.rules()[0].selectorSourceRange.end,
+              Eq(FileOffset::Offset(after.find("circle") + std::string_view("circle").size())));
+}
+
 TEST(StylesheetParser, RetainsFontFacesInNestedLayers) {
   ParseWarningSink warnings;
   const auto stylesheet = StylesheetParser::Parse(R"css(

@@ -914,6 +914,40 @@ TEST(SVGDocument, ApplySourceEditProjectsStyleMutationWithSourceMap) {
   EXPECT_EQ(editedRule->stylesheetEntity, style.unsafeEntityHandle().entity());
 }
 
+TEST(SVGDocument, ASourceEditReusesTheUnchangedStylesheetRule) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style id="style">rect{fill:red}
+      .unchanged-suffix-with-a-long-selector-name{stroke:blue}</style>
+      <rect/>
+    </svg>
+  )");
+  const auto style = document.querySelector("#style").value();
+  const auto& sheet = style.entityHandle().get<components::StylesheetComponent>();
+  const auto suffixClass = [](const css::Stylesheet& css) -> const RcString& {
+    const auto& chain = css.rules()[1].selector.entries.front();
+    return std::get<css::ClassSelector>(chain.entries.front().compoundSelector.entries.front())
+        .name;
+  };
+  ASSERT_THAT(sheet.stylesheet.rules(), testing::SizeIs(2));
+  const RcString before = suffixClass(sheet.stylesheet);
+  const auto oldSuffix = sheet.stylesheet.rules()[1].ruleSourceRange.start.offset.value();
+  const auto offset = document.source().find("red");
+  ASSERT_NE(offset, std::string_view::npos);
+  const auto edited = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 3)},
+      .replacement = "purple",
+      .sourceVersion = document.sourceVersion(),
+  });
+  EXPECT_THAT(edited.applied, testing::IsTrue());
+  EXPECT_THAT(edited.diagnostic, Eq(std::nullopt));
+  ASSERT_THAT(sheet.stylesheet.rules(), testing::SizeIs(2));
+  EXPECT_EQ(suffixClass(sheet.stylesheet).data(), before.data());
+  EXPECT_EQ(sheet.stylesheet.rules()[1].ruleSourceRange.start.offset, oldSuffix + 3);
+  EXPECT_THAT(sheet.stylesheet.rules()[0].declarations.front().values.front().toCssText(),
+              Eq("purple"));
+}
+
 TEST(SVGDocument, StyleProjectionCombinesDataAndCDataTextChildren) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">

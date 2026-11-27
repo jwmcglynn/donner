@@ -130,7 +130,9 @@ std::optional<std::size_t> StylesheetPayloadBytes(std::size_t projectedSourceByt
 }
 
 void MarkStylesheetChanged(EntityHandle handle);
-std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node);
+std::optional<ParseDiagnostic> ProjectStyleContents(
+    EntityHandle handle, const xml::XMLNode& node,
+    std::span<const xml::XMLSourceDelta> deltas = {});
 
 SourceRange MutationRange(std::string_view source, const xml::XMLMutation& mutation) {
   if (!mutation.attributeName.name.empty()) {
@@ -192,8 +194,31 @@ std::optional<EntityHandle> TextElementHandleForNodeValueMutation(
   return std::nullopt;
 }
 
+std::optional<ParseDiagnostic> ProjectTextValue(EntityHandle handle, std::string_view source,
+                                                const xml::XMLMutation& mutation) {
+  const RcString& value = *mutation.value;
+  const std::optional<std::size_t> projectedBytes = ProjectedContentBytes(value.size(), 1);
+  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  if (!projectedBytes.has_value() ||
+      !budget.reserve(handle.entity(), *projectedBytes,
+                      components::ParsedPayloadResourceBudget::Category::ProjectedText)) {
+    if (!projectedBytes.has_value()) {
+      budget.recordRejection();
+    }
+    return ParseDiagnostic::Error("Text content exceeds the document parsed-payload budget",
+                                  MutationRange(source, mutation));
+  }
+  auto& text = handle.get<components::TextComponent>();
+  text.text = value;
+  text.textChunks.clear();
+  text.textChunks.emplace_back(value);
+  (void)components::InvalidateTextLayout(handle);
+  return std::nullopt;
+}
+
 std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
-                                                     const xml::XMLMutation& mutation) {
+                                                     const xml::XMLMutation& mutation,
+                                                     std::span<const xml::XMLSourceDelta> deltas) {
   if (!mutation.value.has_value()) {
     return ParseDiagnostic::Error("XML NodeValueChanged mutation is missing a value",
                                   MutationRange(source, mutation));
@@ -215,29 +240,12 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
   }
 
   if (targetHandle->all_of<components::TextComponent>()) {
-    const std::optional<std::size_t> projectedBytes =
-        ProjectedContentBytes(mutation.value->size(), 1);
-    auto& budget = targetHandle->registry()->ctx().get<components::ParsedPayloadResourceBudget>();
-    if (!projectedBytes.has_value() ||
-        !budget.reserve(targetHandle->entity(), *projectedBytes,
-                        components::ParsedPayloadResourceBudget::Category::ProjectedText)) {
-      if (!projectedBytes.has_value()) {
-        budget.recordRejection();
-      }
-      return ParseDiagnostic::Error("Text content exceeds the document parsed-payload budget",
-                                    MutationRange(source, mutation));
-    }
-    auto& text = targetHandle->get<components::TextComponent>();
-    text.text = *mutation.value;
-    text.textChunks.clear();
-    text.textChunks.emplace_back(*mutation.value);
-    (void)components::InvalidateTextLayout(*targetHandle);
-    return std::nullopt;
+    return ProjectTextValue(*targetHandle, source, mutation);
   }
 
   if (targetHandle->all_of<components::StylesheetComponent>() && targetNode.has_value()) {
     if (std::optional<ParseDiagnostic> diagnostic =
-            ProjectStyleContents(*targetHandle, *targetNode)) {
+            ProjectStyleContents(*targetHandle, *targetNode, deltas)) {
       return diagnostic;
     }
 
@@ -513,28 +521,56 @@ std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xm
   return std::nullopt;
 }
 
-std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node) {
-  if (!handle.all_of<components::ElementTypeComponent>() ||
-      handle.get<components::ElementTypeComponent>().type() != ElementType::Style) {
-    return std::nullopt;
+std::optional<std::size_t> MapContiguousStyleEdit(const components::StylesheetSourceMap& map,
+                                                  std::size_t documentOffset, std::size_t length) {
+  for (const auto& segment : map.segments()) {
+    if (!segment.documentStartOffset.offset ||
+        documentOffset < *segment.documentStartOffset.offset) {
+      continue;
+    }
+    const std::size_t relative = documentOffset - *segment.documentStartOffset.offset;
+    const std::size_t segmentLength = segment.cssEndOffset - segment.cssStartOffset;
+    if (relative <= segmentLength && length <= segmentLength - relative) {
+      return segment.cssStartOffset + relative;
+    }
   }
+  return std::nullopt;
+}
 
-  auto* stylesheet = handle.try_get<components::StylesheetComponent>();
-  if (stylesheet == nullptr) {
-    return std::nullopt;
+bool ProjectIncrementalStyleEdit(components::StylesheetComponent& projected,
+                                 const components::StylesheetComponent& previous,
+                                 std::string_view combined,
+                                 const components::StylesheetSourceMap& sourceMap,
+                                 std::span<const xml::XMLSourceDelta> deltas) {
+  if (deltas.size() != 1) {
+    return false;
   }
-  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
-  if (!stylesheet->isCssType()) {
-    (void)budget.reserve(handle.entity(), 0,
-                         components::ParsedPayloadResourceBudget::Category::Stylesheet);
-    return std::nullopt;
+  const auto& delta = deltas.front();
+  const auto before = MapContiguousStyleEdit(previous.sourceMap, delta.offset, delta.removedLength);
+  const auto after = MapContiguousStyleEdit(sourceMap, delta.offset, delta.insertedLength);
+  if (!before || before != after) {
+    return false;
   }
+  const std::string_view oldText(previous.text);
+  if (*before > oldText.size() || *after > combined.size() ||
+      oldText.substr(*before, delta.removedLength).find('&') != std::string_view::npos ||
+      combined.substr(*after, delta.insertedLength).find('&') != std::string_view::npos) {
+    return false;
+  }
+  return projected.applyTextEdit(previous, combined, sourceMap, *before, delta.removedLength,
+                                 delta.insertedLength);
+}
 
+struct ProjectedStyleSize {
+  std::size_t bytes;
+  std::size_t chunks;
+};
+
+ParseResult<ProjectedStyleSize> CountStyleProjection(const xml::XMLNode& node,
+                                                     std::size_t maximumChunks) {
   std::size_t contentBytes = 0;
   std::size_t chunkCount = 0;
   bool foundContentChild = false;
-  const std::size_t maximumChunks =
-      handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
@@ -561,6 +597,118 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
                                   node.getNodeLocation().value_or(FallbackRange()));
   }
 
+  return ProjectedStyleSize{contentBytes, chunkCount};
+}
+
+struct ProjectedStyleContents {
+  std::string text;
+  components::StylesheetSourceMap map;
+};
+
+void AddProjectedSourceSegment(components::StylesheetSourceMap& sourceMap,
+                               const std::optional<SourceRange>& location, std::size_t cssStart,
+                               std::size_t length) {
+  if (location && location->start.offset && location->end.offset &&
+      *location->end.offset >= *location->start.offset &&
+      *location->end.offset - *location->start.offset == length) {
+    sourceMap.addSegment(cssStart, cssStart + length, location->start);
+  }
+}
+
+ParseResult<ProjectedStyleContents> ReadStyleProjection(const xml::XMLNode& node,
+                                                        std::size_t contentBytes) {
+  std::string combined;
+  combined.reserve(contentBytes);
+  components::StylesheetSourceMap sourceMap;
+  bool foundTextChild = false;
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      foundTextChild = true;
+      if (std::optional<RcString> value = child->value()) {
+        const std::size_t cssStartOffset = combined.size();
+        combined += *value;
+        std::optional<SourceRange> childValueLocation = child->getValueLocation();
+        if (!childValueLocation.has_value() && child->type() == xml::XMLNode::Type::Data) {
+          childValueLocation = child->getNodeLocation();
+        }
+
+        AddProjectedSourceSegment(sourceMap, childValueLocation, cssStartOffset, value->size());
+      }
+    } else {
+      return ParseDiagnostic::Error(
+          "Unexpected <style> element contents",
+          child->getNodeLocation().value_or(node.getNodeLocation().value_or(
+              SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)})));
+    }
+  }
+
+  if (!foundTextChild) {
+    combined = node.value().value_or(RcString(""));
+    // SVG style projection stores its text on the element after the original XML Data children
+    // have been consumed. A source edit therefore reparses the element value directly. Retain
+    // that value's source span so style focus and reference ropes can still find its rules.
+    AddProjectedSourceSegment(sourceMap, node.getValueLocation(), 0, combined.size());
+  }
+  sourceMap.setCssLength(combined.size());
+
+  return ProjectedStyleContents{std::move(combined), std::move(sourceMap)};
+}
+
+void ParseProjectedStylesheet(components::StylesheetComponent& projected,
+                              const components::StylesheetComponent& previous,
+                              ProjectedStyleContents contents,
+                              std::span<const xml::XMLSourceDelta> deltas) {
+  if (!ProjectIncrementalStyleEdit(projected, previous, contents.text, contents.map, deltas)) {
+    projected.parseStylesheet(std::string_view(contents.text), std::move(contents.map));
+  }
+}
+
+std::optional<ParseDiagnostic> CommitStylesheetProjection(
+    EntityHandle handle, const xml::XMLNode& node, std::size_t projectedSourceBytes,
+    components::ParsedPayloadResourceBudget& budget, components::StylesheetComponent& stylesheet,
+    components::StylesheetComponent projected) {
+  const std::optional<std::size_t> retainedBytes = StylesheetPayloadBytes(
+      projectedSourceBytes, projected.stylesheet.securityStats(), projected.selectorCacheBytes());
+  if (!retainedBytes.has_value() ||
+      !budget.reserve(handle.entity(), *retainedBytes,
+                      components::ParsedPayloadResourceBudget::Category::Stylesheet)) {
+    if (!retainedBytes.has_value()) {
+      budget.recordRejection();
+    }
+    return ParseDiagnostic::Error("Stylesheet exceeds the document parsed-payload budget",
+                                  node.getNodeLocation().value_or(FallbackRange()));
+  }
+  stylesheet = std::move(projected);
+  return std::nullopt;
+}
+
+std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node,
+                                                    std::span<const xml::XMLSourceDelta> deltas) {
+  if (!handle.all_of<components::ElementTypeComponent>() ||
+      handle.get<components::ElementTypeComponent>().type() != ElementType::Style) {
+    return std::nullopt;
+  }
+
+  auto* stylesheet = handle.try_get<components::StylesheetComponent>();
+  if (stylesheet == nullptr) {
+    return std::nullopt;
+  }
+  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  if (!stylesheet->isCssType()) {
+    (void)budget.reserve(handle.entity(), 0,
+                         components::ParsedPayloadResourceBudget::Category::Stylesheet);
+    return std::nullopt;
+  }
+
+  const auto counts = CountStyleProjection(node, handle.registry()
+                                                     ->ctx()
+                                                     .get<components::SVGDocumentContext>()
+                                                     .maximumContentProjectionChunks);
+  if (counts.hasError()) {
+    return counts.error();
+  }
+  const auto [contentBytes, chunkCount] = counts.result();
   const std::optional<std::size_t> projectedSourceBytes =
       ProjectedContentBytes(contentBytes, chunkCount);
   const std::optional<std::size_t> preflightBytes =
@@ -576,70 +724,17 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
                                   node.getNodeLocation().value_or(FallbackRange()));
   }
 
-  std::string combined;
-  combined.reserve(contentBytes);
-  components::StylesheetSourceMap sourceMap;
-  bool foundTextChild = false;
-  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
-      foundTextChild = true;
-      if (std::optional<RcString> value = child->value()) {
-        const std::size_t cssStartOffset = combined.size();
-        combined += *value;
-        const std::size_t cssEndOffset = combined.size();
-        std::optional<SourceRange> childValueLocation = child->getValueLocation();
-        if (!childValueLocation.has_value() && child->type() == xml::XMLNode::Type::Data) {
-          childValueLocation = child->getNodeLocation();
-        }
-
-        if (childValueLocation.has_value() && childValueLocation->start.offset.has_value() &&
-            childValueLocation->end.offset.has_value() &&
-            *childValueLocation->end.offset >= *childValueLocation->start.offset &&
-            *childValueLocation->end.offset - *childValueLocation->start.offset == value->size()) {
-          sourceMap.addSegment(cssStartOffset, cssEndOffset, childValueLocation->start);
-        }
-      }
-    } else {
-      return ParseDiagnostic::Error(
-          "Unexpected <style> element contents",
-          child->getNodeLocation().value_or(node.getNodeLocation().value_or(
-              SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)})));
-    }
+  auto contents = ReadStyleProjection(node, contentBytes);
+  if (contents.hasError()) {
+    return contents.error();
   }
-
-  if (!foundTextChild) {
-    combined = node.value().value_or(RcString(""));
-    // SVG style projection stores its text on the element after the original XML Data children
-    // have been consumed. A source edit therefore reparses the element value directly. Retain
-    // that value's source span so style focus and reference ropes can still find its rules.
-    if (const std::optional<SourceRange> valueLocation = node.getValueLocation();
-        valueLocation.has_value() && valueLocation->start.offset.has_value() &&
-        valueLocation->end.offset.has_value() &&
-        *valueLocation->end.offset >= *valueLocation->start.offset &&
-        *valueLocation->end.offset - *valueLocation->start.offset == combined.size()) {
-      sourceMap.addSegment(0, combined.size(), valueLocation->start);
-    }
-  }
-  sourceMap.setCssLength(combined.size());
 
   components::StylesheetComponent projected;
   projected.type = stylesheet->type;
   projected.isUserAgentStylesheet = stylesheet->isUserAgentStylesheet;
-  projected.parseStylesheet(std::string_view(combined), std::move(sourceMap));
-  const std::optional<std::size_t> retainedBytes = StylesheetPayloadBytes(
-      *projectedSourceBytes, projected.stylesheet.securityStats(), projected.selectorCacheBytes());
-  if (!retainedBytes.has_value() ||
-      !budget.reserve(handle.entity(), *retainedBytes,
-                      components::ParsedPayloadResourceBudget::Category::Stylesheet)) {
-    if (!retainedBytes.has_value()) {
-      budget.recordRejection();
-    }
-    return ParseDiagnostic::Error("Stylesheet exceeds the document parsed-payload budget",
-                                  node.getNodeLocation().value_or(FallbackRange()));
-  }
-  *stylesheet = std::move(projected);
-  return std::nullopt;
+  ParseProjectedStylesheet(projected, *stylesheet, std::move(contents.result()), deltas);
+  return CommitStylesheetProjection(handle, node, *projectedSourceBytes, budget, *stylesheet,
+                                    std::move(projected));
 }
 
 bool IsAttributeMutation(xml::XMLMutation::Kind kind) {
@@ -1481,7 +1576,7 @@ xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent
     DetachedNodeCollectionDeferral collectionDeferral =
         documentState_->deferDetachedNodeCollection();
     result = xmlDocument().applySourceEdit(intent);
-    applyXMLMutations(result);
+    applyXMLMutations(result, true);
   }
   components::NodeLifetimeCollector::Collect(documentState_->registry());
 
@@ -1717,7 +1812,10 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
   return xml::XMLDocument::CreateFromRegistry(documentState_->sharedRegistry());
 }
 
-void SVGDocument::applyXMLMutations(xml::ApplySourceEditResult& result) {
+void SVGDocument::applyXMLMutations(xml::ApplySourceEditResult& result, bool sourceEdit) {
+  const std::span<const xml::XMLSourceDelta> deltas =
+      sourceEdit ? std::span<const xml::XMLSourceDelta>(result.sourceDeltas)
+                 : std::span<const xml::XMLSourceDelta>();
   std::unordered_set<Entity> projectedRoots;
   for (const xml::XMLMutation& mutation : result.mutations) {
     // Subtree projection already consumes the final child/value state in this XML edit batch.
@@ -1731,7 +1829,7 @@ void SVGDocument::applyXMLMutations(xml::ApplySourceEditResult& result) {
     if (covered && mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
       continue;
     }
-    std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+    std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation, deltas);
     if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
       result.diagnostic = std::move(projectionDiagnostic);
     }
@@ -1741,7 +1839,8 @@ void SVGDocument::applyXMLMutations(xml::ApplySourceEditResult& result) {
   }
 }
 
-std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutation& mutation) {
+std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(
+    const xml::XMLMutation& mutation, std::span<const xml::XMLSourceDelta> deltas) {
   if (mutation.kind == xml::XMLMutation::Kind::SourceDiagnosticChanged) {
     // Never an edit failure: the wrapped XML result already carries this edit's own failure,
     // while this mutation also fires when an unrelated older span shifts under a successful
@@ -1750,7 +1849,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
-    return applyNodeValueXMLMutation(mutation);
+    return applyNodeValueXMLMutation(mutation, deltas);
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeRemoved) {
@@ -1789,13 +1888,13 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 }
 
 std::optional<ParseDiagnostic> SVGDocument::applyNodeValueXMLMutation(
-    const xml::XMLMutation& mutation) {
+    const xml::XMLMutation& mutation, std::span<const xml::XMLSourceDelta> deltas) {
   const std::optional<xml::XMLNode> element = NodeValueMutationElement(mutation);
   std::optional<ParseDiagnostic> diagnostic;
   if (mutation.value.has_value() && element.has_value() && CanReparseDescriptiveText(*element)) {
     diagnostic = reparseDescriptiveText(*element);
   } else {
-    diagnostic = ApplyNodeValueChanged(source(), mutation);
+    diagnostic = ApplyNodeValueChanged(source(), mutation, deltas);
   }
   if (element) {
     if (diagnostic) {

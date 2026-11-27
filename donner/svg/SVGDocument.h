@@ -635,14 +635,15 @@ private:
    *
    * @param result XML edit result whose mutations to apply.
    */
-  void applyXMLMutations(xml::ApplySourceEditResult& result);
+  void applyXMLMutations(xml::ApplySourceEditResult& result, bool sourceEdit = false);
 
   /**
    * Apply a single XML mutation to this SVG document's semantic projection.
    *
    * @param mutation XML mutation emitted by the source-edit layer.
    */
-  std::optional<ParseDiagnostic> applyXMLMutation(const xml::XMLMutation& mutation);
+  std::optional<ParseDiagnostic> applyXMLMutation(const xml::XMLMutation& mutation,
+                                                  std::span<const xml::XMLSourceDelta> deltas);
 
   /**
    * Apply a text or CDATA value change to the SVG projection: the new content of a text or style
@@ -651,7 +652,8 @@ private:
    *
    * @param mutation NodeValueChanged mutation emitted by the source-edit layer.
    */
-  std::optional<ParseDiagnostic> applyNodeValueXMLMutation(const xml::XMLMutation& mutation);
+  std::optional<ParseDiagnostic> applyNodeValueXMLMutation(
+      const xml::XMLMutation& mutation, std::span<const xml::XMLSourceDelta> deltas);
 
   /**
    * Parse the text of a `<title>`, `<desc>` or `<metadata>` element again, through the parser that

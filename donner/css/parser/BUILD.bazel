@@ -162,3 +162,11 @@ donner_cc_fuzzer(
         ":parser",
     ],
 )
+
+
+donner_cc_fuzzer(
+    name = "stylesheet_text_edit_fuzzer",
+    srcs = ["tests/StylesheetTextEdit_fuzzer.cc"],
+    corpus = "tests/stylesheet_text_edit_corpus",
+    deps = [":parser"],
+)

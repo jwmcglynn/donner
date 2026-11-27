@@ -802,6 +802,8 @@ struct Token {
    * Returns the offset within the source string where this token starts.
    */
   FileOffset offset() const { return FileOffset::Offset(offset_); }
+  /// Set the absolute source offset after a verified stylesheet splice.
+  void setSourceOffset(std::size_t offset) { offset_ = offset; }
 
   /**
    * Check if the token is of the given type.

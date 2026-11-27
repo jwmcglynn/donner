@@ -229,7 +229,26 @@ struct StylesheetComponent {
   void parseStylesheet(const RcStringOrRef& str, StylesheetSourceMap sourceMap,
                        ParseWarningSink& warnings);
 
+  /**
+   * Install a prepared rule-window splice from the previous projection, when supported.
+   * @param previous Previous projection.
+   * @param updatedText New CSS text.
+   * @param updatedSourceMap New source mapping.
+   * @param offset Local CSS byte offset of the edit.
+   * @param removedLength Old byte count.
+   * @param insertedLength New byte count.
+   * @param changed Optional verified rule ranges, set only when the splice succeeds.
+   * @return True when the splice was installed, false when a full parse is needed.
+   */
+  bool applyTextEdit(const StylesheetComponent& previous, std::string_view updatedText,
+                     const StylesheetSourceMap& updatedSourceMap, std::size_t offset,
+                     std::size_t removedLength, std::size_t insertedLength,
+                     css::EditedRuleWindow* changed = nullptr);
+
 private:
+  void installParsedStylesheet(const RcStringOrRef& str, StylesheetSourceMap newSourceMap,
+                               css::Stylesheet parsed);
+
   /// Recompute the dependency summary and the rule indexes from \ref stylesheet and
   /// \ref importedStylesheets.
   void rebuildSelectorCaches();

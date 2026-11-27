@@ -43,6 +43,15 @@ struct StylesheetLayers {
   std::vector<LayerId> fontFaceLayers;
 };
 
+/// Qualified rule indices replaced by a verified text splice. The two counts refer to the
+/// previous and updated stylesheet respectively; unaffected suffix rules may shift.
+struct EditedRuleWindow {
+  std::size_t oldBegin;
+  std::size_t oldCount;
+  std::size_t newBegin;
+  std::size_t newCount;
+};
+
 /**
  * A rule in a stylesheet, which consists of a selector and a list of declarations.
  *
@@ -113,6 +122,10 @@ public:
     std::size_t declarations = 0;
     std::size_t componentValues = 0;
     bool rejected = false;
+    /// An import directive appeared, including one rejected by its position or conditions.
+    bool hasImportRule = false;
+    /// Raw top-level entries charged by RuleParser, including ignored rules.
+    std::size_t rawRules = 0;
   };
 
   /// Maximum declarations retained across one stylesheet.
