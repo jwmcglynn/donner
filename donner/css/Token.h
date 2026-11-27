@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -61,11 +63,15 @@ struct Token {
      * Create an identifier token.
      *
      * @param value Identifier value.
+     * @param sourceLength Byte count before decoding CSS escapes.
      */
-    explicit Ident(RcString value) : value(std::move(value)) {}
+    explicit Ident(RcString value, std::size_t sourceLength = 0)
+        : value(std::move(value)),
+          sourceByteLength(sourceLength <= UINT32_MAX ? static_cast<std::uint32_t>(sourceLength)
+                                                      : 0) {}
 
     /// Equality operator.
-    bool operator==(const Ident& other) const = default;
+    bool operator==(const Ident& other) const { return value == other.value; }
 
     /**
      * Ostream output operator.
@@ -82,7 +88,8 @@ struct Token {
       return os << "Ident(" << obj.value << ")";
     }
 
-    RcString value;  ///< Identifier value.
+    RcString value;                      ///< Identifier value.
+    std::uint32_t sourceByteLength = 0;  ///< Raw identifier span, or zero when unavailable.
   };
 
   /**
@@ -329,6 +336,9 @@ struct Token {
    * will tokenize as a \ref Function instead.
    */
   struct BadUrl {
+    /// True if the invalid URL ended at EOF instead of its closing parenthesis.
+    bool closedAtEof = false;
+
     /// Equality operator.
     bool operator==(const BadUrl&) const { return true; }
 

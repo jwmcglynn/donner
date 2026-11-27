@@ -535,7 +535,7 @@ Token Tokenizer::consumeIdentLikeToken() {
     return token<Token::Function>(nameCharsConsumed + 1, std::move(name));
   } else {
     // Otherwise, create an <ident-token> with its value set to `name` and return it.
-    return token<Token::Ident>(nameCharsConsumed, std::move(name));
+    return token<Token::Ident>(nameCharsConsumed, std::move(name), nameCharsConsumed);
   }
 }
 
@@ -613,8 +613,7 @@ Token Tokenizer::consumeRemnantsOfBadUrl(const std::string_view badUrl,
     const char ch = badUrl[i];
 
     if (ch == ')') {
-      ++i;
-      break;
+      return token<Token::BadUrl>(i + 1 + charsConsumedBefore);
     } else if (i + 1 < badUrl.size() && isValidEscape(badUrl[i], badUrl[i + 1])) {
       // the input stream starts with a valid escape: Consume an escaped code point. This allows
       // an escaped right parenthesis ("\)") to be encountered without ending the <bad-url-token>.
@@ -626,7 +625,7 @@ Token Tokenizer::consumeRemnantsOfBadUrl(const std::string_view badUrl,
     }
   }
 
-  return token<Token::BadUrl>(i + charsConsumedBefore);
+  return token<Token::BadUrl>(i + charsConsumedBefore, /*closedAtEof=*/true);
 }
 
 }  // namespace donner::css::parser::details

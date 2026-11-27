@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstddef>
+#include <cstdint>
 #include <ostream>
 #include <span>
 #include <string>
@@ -95,6 +96,8 @@ struct Declaration {
   SourceRange sourceRange;
   /// Serialized declaration bytes, computed once by the parser for cascade-work accounting.
   std::size_t sourceByteSize = 0;
+  /// Byte length of the authored identifier, including CSS escapes. Zero means unavailable.
+  std::uint32_t nameSourceByteLength = 0;
   bool important = false;  ///< Whether the declaration ends with `!important`.
   /// Syntax classification of the values at construction or parser finalization.
   VariableReferences variableReferences = VariableReferences::None;
@@ -143,9 +146,13 @@ struct DeclarationOrAtRule {
  *
  * @param existing Existing declarations.
  * @param updates Updated declarations to apply.
+ * @param existingSpellings Optional original text, in the same order as existing.
+ * @param updateSpellings Optional original text, in the same order as updates.
  * @return Merged style string with declarations separated by "; ".
  */
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
-                                   std::span<const Declaration> updates);
+                                   std::span<const Declaration> updates,
+                                   std::span<const std::string_view> existingSpellings = {},
+                                   std::span<const std::string_view> updateSpellings = {});
 
 }  // namespace donner::css

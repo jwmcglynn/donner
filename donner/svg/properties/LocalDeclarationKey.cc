@@ -89,6 +89,9 @@ private:
     }
   }
 
+  // An invalid URL has no semantic payload. Its authored closure only controls source edits.
+  void append(const css::Token::BadUrl&) {}
+
   void append(const css::Token& token) {
     fields(token.tokenIndex(), token.offset());
     token.visit([this](const auto& value) { this->append(value); });
@@ -156,17 +159,30 @@ private:
   void append(const FileOffset& value) { appendMembers<2>(value); }
   void append(const FileOffset::LineInfo& value) { appendMembers<2>(value); }
   void append(const SourceRange& value) { appendMembers<2>(value); }
-  void append(const css::Function& value) { appendMembers<3>(value); }
-  void append(const css::SimpleBlock& value) { appendMembers<3>(value); }
+  void append(const css::Function& value) {
+    // EOF closure affects source-preserving edits, not the function's computed value.
+    fields(value.name, value.values, value.sourceOffset);
+  }
+  void append(const css::SimpleBlock& value) {
+    // EOF closure affects source-preserving edits, not the block's computed value.
+    fields(value.associatedToken, value.values, value.sourceOffset);
+  }
   void append(const css::ComponentValue& value) { appendMembers<1>(value); }
   void append(const css::Declaration& value) {
-    const auto& [name, values, offset, range, bytes, important, references] = value;
+    const auto& [name, values, offset, range, bytes, nameSourceByteLength, important, references] =
+        value;
+    // Authored name widths are queried from the source declaration, never a cached style.
+    static_cast<void>(nameSourceByteLength);
     // Pack the two flags in the existing final byte of the key.
     const auto flags = static_cast<std::uint8_t>((static_cast<unsigned>(references) << 1) |
                                                  static_cast<unsigned>(important));
     fields(name, values, offset, range, bytes, flags);
   }
-  void append(const css::Token::Ident& value) { appendMembers<1>(value); }
+  void append(const css::Token::Ident& value) {
+    const auto& [identifier, sourceByteLength] = value;
+    static_cast<void>(sourceByteLength);
+    append(identifier);
+  }
   void append(const css::Token::AtKeyword& value) { appendMembers<1>(value); }
   void append(const css::Token::String& value) { appendMembers<1>(value); }
   void append(const css::Token::BadString& value) { appendMembers<1>(value); }

@@ -22,6 +22,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/resources/StylesheetImportLoader.h"
@@ -148,6 +149,25 @@ TEST_F(CssImportTest, ImportIsFetchedAndPrecedesLocalRules) {
   // Equal specificity: the importing sheet's own rule comes later in the cascade and wins.
   EXPECT_THAT(stroke(document), Optional(kBlue));
   EXPECT_THAT(warnings_.warnings(), IsEmpty());
+}
+
+TEST_F(CssImportTest, ImportedCustomPropertyWinnerHasNoDocumentLocation) {
+  respond("theme.css", "rect { --tone: green !important; --local: green; }");
+  SVGDocument document = parse(R"svg(
+    <style>@import 'theme.css'; rect { --tone: red; --local: red; }</style>
+    <rect id="r" style="fill: var(--tone); stroke: var(--local)" />
+  )svg");
+  prepare(document);
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, Optional(testing::_));
+  EXPECT_THAT(fill(document), Optional(kGreen));
+  EXPECT_THAT(stroke(document), Optional(kRed));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*element, "--tone"), testing::Eq(std::nullopt));
+  const auto local = FindCustomPropertyDeclaration(*element, "--local");
+  ASSERT_THAT(local, Optional(testing::_));
+  const auto start = document.source().find("--local: red");
+  EXPECT_EQ(local->start, FileOffset::Offset(start));
+  EXPECT_EQ(local->end, FileOffset::Offset(start + 7));
 }
 
 TEST_F(CssImportTest, LayerStatementEstablishesOrderBeforeImports) {

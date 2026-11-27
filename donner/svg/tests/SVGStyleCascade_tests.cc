@@ -1,11 +1,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -17,6 +20,224 @@ namespace {
 
 using css::Color;
 using css::RGBA;
+
+TEST(SVGStyleCascadeTests, CustomPropertySourceUsesNormalAndImportantLayerWinners) {
+  auto doc = instantiateSubtree(R"svg(
+    <style><![CDATA[
+      @layer base, theme;
+      @layer base { #parent { --normal: red; --priority: green !important; } }
+      @layer theme {
+        g { --n\6frmal: blue; --priority: red !important; }
+        rect { --normal: inherit; --priority: unset; fill: var(--normal); }
+      }
+    ]]></style>
+    <g id="parent"><rect id="target"/></g>
+  )svg");
+  const auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--normal"), testing::Eq(std::nullopt));
+  std::ignore = target->getComputedStyle();
+  const auto normal = FindCustomPropertyDeclaration(*target, "--normal");
+  ASSERT_THAT(normal, Optional(testing::_));
+  EXPECT_EQ(normal->start, FileOffset::Offset(doc.source().find(R"(--n\6frmal)")));
+  EXPECT_EQ(normal->end, FileOffset::Offset(doc.source().find(R"(--n\6frmal)") + 10));
+  const auto priority = FindCustomPropertyDeclaration(*target, "--priority");
+  ASSERT_THAT(priority, Optional(testing::_));
+  EXPECT_EQ(priority->start, FileOffset::Offset(doc.source().find("--priority: green")));
+  EXPECT_EQ(priority->end, FileOffset::Offset(doc.source().find("--priority: green") + 10));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--Normal"), testing::Eq(std::nullopt));
+}
+
+TEST(SVGStyleCascadeTests, CustomPropertySourceMapsInlineXmlReferencesAndLiveEdits) {
+  auto doc = instantiateSubtree(R"svg(
+    <style>rect { --t&#111;ne: red; --blocked: blue; --cycle: red; }</style>
+    <rect id="target" style="--other: &amp;; --t&#111;n&#x65;: blue; --blocked: initial;
+        --cycle: var(--cycle); fill: var(--tone)" />
+  )svg");
+  const auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  std::ignore = target->getComputedStyle();
+  constexpr std::string_view authoredName = "--t&#111;n&#x65;";
+  const auto before = FindCustomPropertyDeclaration(*target, "--tone");
+  ASSERT_THAT(before, Optional(testing::_));
+  const auto start = doc.source().find(authoredName);
+  EXPECT_EQ(before->start, FileOffset::Offset(start));
+  EXPECT_EQ(before->end, FileOffset::Offset(start + authoredName.size()));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--blocked"), testing::Eq(std::nullopt));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--cycle"), testing::Eq(std::nullopt));
+
+  const auto result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + authoredName.size())},
+      .replacement = "--Tone",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(result.applied);
+  std::ignore = target->getComputedStyle();
+  const auto after = FindCustomPropertyDeclaration(*target, "--tone");
+  ASSERT_THAT(after, Optional(testing::_));
+  EXPECT_EQ(after->start, FileOffset::Offset(doc.source().find("--t&#111;ne: red")));
+  EXPECT_EQ(after->end, FileOffset::Offset(doc.source().find("--t&#111;ne: red") + 11));
+  const auto sheet = doc.querySelector("style");
+  ASSERT_THAT(sheet, Optional(testing::_));
+  const auto stylesheet = sheet->tryCast<SVGStyleElement>();
+  ASSERT_THAT(stylesheet, Optional(testing::_));
+  const auto projected =
+      MapStylesheetSourceRange(*stylesheet, {FileOffset::Offset(7), FileOffset::Offset(13)});
+  EXPECT_THAT(projected,
+              Optional(testing::AllOf(
+                  testing::Field("start", &SourceRange::start, testing::Eq(after->start)),
+                  testing::Field("end", &SourceRange::end, testing::Eq(after->end)))));
+  const auto uppercase = FindCustomPropertyDeclaration(*target, "--Tone");
+  ASSERT_THAT(uppercase, Optional(testing::_));
+  EXPECT_EQ(uppercase->start, FileOffset::Offset(doc.source().find("--Tone: blue")));
+  EXPECT_EQ(uppercase->end, FileOffset::Offset(doc.source().find("--Tone: blue") + 6));
+}
+
+TEST(SVGStyleCascadeTests, CustomPropertySourceTracksCompleteMergedInlineStyle) {
+  auto doc = instantiateSubtree(R"svg(
+    <rect id="target" style="fill: red; --Tone: blue !important; --tone: green" />
+    <rect id="escaped" style="--T\6fne: purple" />
+  )svg");
+  auto target = doc.querySelector("#target");
+  const auto escapedTarget = doc.querySelector("#escaped");
+  ASSERT_THAT(target, Optional(testing::_));
+  ASSERT_THAT(escapedTarget, Optional(testing::_));
+  std::ignore = target->getComputedStyle();
+  std::ignore = escapedTarget->getComputedStyle();
+
+  constexpr std::string_view escapedName = R"(--T\6fne)";
+  const auto escaped = FindCustomPropertyDeclaration(*escapedTarget, "--Tone");
+  ASSERT_THAT(escaped, Optional(testing::_));
+  EXPECT_EQ(escaped->start, FileOffset::Offset(doc.source().find(escapedName)));
+  EXPECT_EQ(escaped->end, FileOffset::Offset(doc.source().find(escapedName) + escapedName.size()));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*escapedTarget, "--tone"), testing::Eq(std::nullopt));
+
+  // This semantically and textually identical update leaves both the attribute and source intact.
+  // Refresh metadata from the complete merged attribute so the declaration offset still points
+  // after fill, rather than to byte zero of the update fragment.
+  target->updateStyle("--tone: green");
+  std::ignore = target->getComputedStyle();
+  const auto unchanged = FindCustomPropertyDeclaration(*target, "--tone");
+  ASSERT_THAT(unchanged, Optional(testing::_));
+  const auto unchangedStart = doc.source().find("--tone: green");
+  EXPECT_EQ(unchanged->start, FileOffset::Offset(unchangedStart));
+  EXPECT_EQ(unchanged->end, FileOffset::Offset(unchangedStart + 6));
+  const auto important = FindCustomPropertyDeclaration(*target, "--Tone");
+  ASSERT_THAT(important, Optional(testing::_));
+  const auto importantStart = doc.source().find("--Tone: blue !important");
+  EXPECT_EQ(important->start, FileOffset::Offset(importantStart));
+  EXPECT_EQ(important->end, FileOffset::Offset(importantStart + 6));
+
+  target->updateStyle("--tone: gold !important");
+  std::ignore = target->getComputedStyle();
+  EXPECT_THAT(FindCustomPropertyDeclaration(*target, "--tone"), testing::Eq(std::nullopt))
+      << "a semantic attribute edit invalidates the old document-source projection";
+  const auto merged = target->getAttribute("style");
+  ASSERT_THAT(merged, Optional(testing::_));
+  auto reparsed = instantiateSubtree(R"(<rect id="target" style=")" +
+                                     std::string(std::string_view(*merged)) + R"("/>)");
+  const auto reparsedTarget = reparsed.querySelector("#target");
+  ASSERT_THAT(reparsedTarget, Optional(testing::_));
+  std::ignore = reparsedTarget->getComputedStyle();
+  const auto changed = FindCustomPropertyDeclaration(*reparsedTarget, "--tone");
+  ASSERT_THAT(changed, Optional(testing::_));
+  const auto changedStart = reparsed.source().find("--tone: gold !important");
+  EXPECT_EQ(changed->start, FileOffset::Offset(changedStart));
+  EXPECT_EQ(changed->end, FileOffset::Offset(changedStart + 6));
+}
+
+TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleKeepsTheLastValidPaint) {
+  auto doc = instantiateSubtree(R"(<rect id="target" style="fill: red" />)");
+  auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  target->updateStyle("fill: not-a-color");
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  target->updateStyle("fill: blue; fill: not-a-color");
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
+}
+
+TEST(SVGStyleCascadeTests, InlineSourceRefreshKeepsAcceptedShorthandAndLonghandUpdates) {
+  auto doc = instantiateSubtree(R"svg(
+    <text id="font" style="font: 10px serif; --Tone: blue !important; --tone: green"/>
+    <path id="marker" style="marker: url(#original)"/>
+  )svg");
+  auto text = doc.querySelector("#font");
+  auto path = doc.querySelector("#marker");
+  ASSERT_THAT(text, Optional(testing::_));
+  ASSERT_THAT(path, Optional(testing::_));
+  text->updateStyle("--tone: green");
+  std::ignore = text->getComputedStyle();
+  const auto verifySourceName = [&](std::string_view name, std::string_view authored) {
+    const auto range = FindCustomPropertyDeclaration(*text, name);
+    ASSERT_THAT(range, Optional(testing::_));
+    const auto start = doc.source().find(authored);
+    ASSERT_NE(start, std::string_view::npos);
+    EXPECT_THAT(range->start, testing::Eq(FileOffset::Offset(start)));
+    EXPECT_THAT(range->end, testing::Eq(FileOffset::Offset(start + name.size())));
+  };
+  verifySourceName("--tone", "--tone: green");
+  verifySourceName("--Tone", "--Tone: blue");
+
+  text->updateStyle("font-size: 30px; font-size: invalid");
+  EXPECT_THAT(text->getComputedStyle().fontSize.get(), Optional(Lengthd(30, Lengthd::Unit::Px)));
+  EXPECT_THAT(FindCustomPropertyDeclaration(*text, "--tone"), testing::Eq(std::nullopt));
+  text->updateStyle("font-size: 36px !important; font-size: invalid");
+  EXPECT_THAT(text->getComputedStyle().fontSize.get(), Optional(Lengthd(36, Lengthd::Unit::Px)));
+
+  path->updateStyle("marker-end: url(#changed); marker-end: invalid");
+  const auto& markers = path->getComputedStyle();
+  EXPECT_THAT(markers.markerStart.get(), Optional(Reference(RcString("#original"))));
+  EXPECT_THAT(markers.markerEnd.get(), Optional(Reference(RcString("#changed"))));
+}
+
+TEST(SVGStyleCascadeTests, UpdatingAnInlineStyleTerminatesEofRecoveredConstructs) {
+  for (const std::string_view declaration :
+       {"--note: x /*", "--note: var(--fallback, x /*", "--note: foo(",
+        "--note: outer([inner{value", R"(--note: "/*)", R"(--note: "/*")", "--note: url(path",
+        R"(--n\6fte: f\6f o()"}) {
+    SCOPED_TRACE(declaration);
+    auto doc = instantiateSubtree(std::string(R"(<rect style='fill: red; )") +
+                                  std::string(declaration) + R"('/>)");
+    auto target = doc.querySelector("rect");
+    ASSERT_THAT(target, Optional(testing::_));
+    target->updateStyle("fill: blue");
+    const auto merged = target->getAttribute("style");
+    ASSERT_THAT(merged, Optional(testing::_));
+    auto reparsed =
+        instantiateSubtree(R"(<rect style=')" + std::string(std::string_view(*merged)) + R"('/>)");
+    const auto restored = reparsed.querySelector("rect");
+    ASSERT_THAT(restored, Optional(testing::_));
+    EXPECT_THAT(restored->getComputedStyle().fill.get(),
+                Optional(PaintServer::Solid(Color(RGBA(0, 0, 255, 255)))));
+  }
+}
+
+TEST(SVGStyleCascadeTests, UnrelatedInlineUpdatePreservesEscapedCustomPropertySpelling) {
+  auto doc =
+      instantiateSubtree(R"SVG(<rect id="target" style="--a\:b: red; fill: var(--a\:b)" />)SVG");
+  auto target = doc.querySelector("#target");
+  ASSERT_THAT(target, Optional(testing::_));
+  target->updateStyle("opacity: 0.5");
+  const auto merged = target->getAttribute("style");
+  ASSERT_THAT(merged, Optional(testing::_));
+  EXPECT_THAT(std::string(std::string_view(*merged)),
+              testing::Eq(R"(--a\:b: red; fill: var(--a\:b); opacity: 0.5)"));
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  auto reparsed = instantiateSubtree(R"(<rect id="target" style=")" +
+                                     std::string(std::string_view(*merged)) + R"("/>)");
+  const auto again = reparsed.querySelector("#target");
+  ASSERT_THAT(again, Optional(testing::_));
+  EXPECT_THAT(again->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(Color(RGBA(255, 0, 0, 255)))));
+  const auto range = FindCustomPropertyDeclaration(*again, "--a:b");
+  ASSERT_THAT(range, Optional(testing::_));
+  EXPECT_EQ(range->start, FileOffset::Offset(reparsed.source().find(R"(--a\:b)")));
+  EXPECT_EQ(range->end, FileOffset::Offset(reparsed.source().find(R"(--a\:b)") + 6));
+}
 
 TEST(SVGStyleCascadeTests, LayerPrecedenceComputesCustomValuesBeforeInheritance) {
   auto doc = instantiateSubtree(R"(

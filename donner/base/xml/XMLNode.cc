@@ -1,12 +1,15 @@
 #include "donner/base/xml/XMLNode.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <memory>
 #include <string>
 #include <type_traits>
 #include <utility>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/Utf8.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLNodeTypeComponent.h"
@@ -50,6 +53,7 @@ struct ProjectedTextRecord {
   std::shared_ptr<XMLSourceStore> store;
   std::shared_ptr<ProjectionRecordBudget> budget;
   SourceAnchorSpan span;
+  std::optional<SourceAnchorSpan> valueSpan;
   ResolvedSourceSpan range;
   std::size_t prefixEnd = 0;
   Entity originalNode;
@@ -58,11 +62,13 @@ struct ProjectedTextRecord {
 
   ProjectedTextRecord(std::shared_ptr<XMLSourceStore> sourceStore,
                       std::shared_ptr<ProjectionRecordBudget> recordBudget,
-                      SourceAnchorSpan sourceSpan, ResolvedSourceSpan sourceRange, Entity node,
-                      XMLNode::Type nodeType, RcString text)
+                      SourceAnchorSpan sourceSpan, std::optional<SourceAnchorSpan> payloadSpan,
+                      ResolvedSourceSpan sourceRange, Entity node, XMLNode::Type nodeType,
+                      RcString text)
       : store(std::move(sourceStore)),
         budget(std::move(recordBudget)),
         span(sourceSpan),
+        valueSpan(payloadSpan),
         range(sourceRange),
         originalNode(node),
         type(nodeType),
@@ -77,6 +83,7 @@ struct ProjectedTextRecord {
     std::swap(store, other.store);
     std::swap(budget, other.budget);
     std::swap(span, other.span);
+    std::swap(valueSpan, other.valueSpan);
     std::swap(range, other.range);
     std::swap(prefixEnd, other.prefixEnd);
     std::swap(originalNode, other.originalNode);
@@ -88,6 +95,10 @@ struct ProjectedTextRecord {
     if (store) {
       store->invalidateAnchor(span.start);
       store->invalidateAnchor(span.end);
+      if (valueSpan) {
+        store->invalidateAnchor(valueSpan->start);
+        store->invalidateAnchor(valueSpan->end);
+      }
     }
     if (budget) {
       --budget->liveRecords;
@@ -441,15 +452,17 @@ void CaptureProjectedText(EntityHandle child, EntityHandle parent) {
   if (budget->liveBytes > maximumBytes || value.size() > maximumBytes - budget->liveBytes) {
     return;
   }
-  // Transfer the existing anchors. Clearing the child retires its other source anchors;
-  // parent destruction or record invalidation retires this pair exactly once.
+  // The record takes ownership before clearing the child's source metadata.
   const SourceAnchorSpan anchors = *std::exchange(source->anchorSpan, std::nullopt);
+  const auto type = child.get<XMLNodeTypeComponent>().type();
+  const auto valueAnchors =
+      type == XMLNode::Type::CData ? std::exchange(source->valueSpan, std::nullopt) : std::nullopt;
   const auto position = std::lower_bound(
       records.records.begin(), records.records.end(), span->start,
       [](const auto& record, std::size_t start) { return record.range.start < start; });
   const std::size_t index = std::distance(records.records.begin(), position);
-  records.records.emplace(position, store, budget, anchors, *span, child.entity(),
-                          child.get<XMLNodeTypeComponent>().type(), value);
+  records.records.emplace(position, store, budget, anchors, valueAnchors, *span, child.entity(),
+                          type, value);
   UpdateProjectionPrefix(records, index);
 }
 
@@ -649,6 +662,206 @@ std::optional<XMLAttributeSourceLocation> XMLNode::getAttributeSourceLocation(
       .valueRange = *valueRange,
       .quote = anchors->quote,
   };
+}
+
+namespace {
+
+constexpr std::array<std::pair<std::string_view, char32_t>, 5> kXmlCharacterReferences{{
+    {"&amp;", U'&'},
+    {"&apos;", U'\''},
+    {"&quot;", U'"'},
+    {"&lt;", U'<'},
+    {"&gt;", U'>'},
+}};
+
+std::optional<char32_t> DecodeSourceCharacterReference(std::string_view text) {
+  const auto builtin =
+      std::ranges::find(kXmlCharacterReferences, text, [](const auto& ref) { return ref.first; });
+  if (builtin != kXmlCharacterReferences.end()) {
+    return builtin->second;
+  }
+  if (!text.starts_with("&#")) {
+    return std::nullopt;
+  }
+  text.remove_prefix(2);
+  text.remove_suffix(1);
+  const bool hex = text.starts_with('x');
+  if (hex) {
+    text.remove_prefix(1);
+  }
+  std::uint32_t value = 0;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), value, hex ? 16 : 10);
+  if (result.ec != std::errc() || result.ptr != text.data() + text.size() ||
+      !Utf8::IsValidCodepoint(value)) {
+    return std::nullopt;
+  }
+  return static_cast<char32_t>(value);
+}
+
+struct DecodedSourceUnit {
+  std::size_t rawBytes;
+  std::size_t decodedBytes;
+};
+
+std::optional<DecodedSourceUnit> MatchDecodedSourceUnit(std::string_view raw,
+                                                        std::string_view decoded) {
+  if (raw.front() != '&') {
+    return !decoded.empty() && raw.front() == decoded.front()
+               ? std::optional(DecodedSourceUnit{1, 1})
+               : std::nullopt;
+  }
+  const auto semicolon = raw.find(';');
+  if (semicolon == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const auto codepoint = DecodeSourceCharacterReference(raw.substr(0, semicolon + 1));
+  if (!codepoint) {
+    return std::nullopt;
+  }
+  char utf8[4];
+  const auto* end = Utf8::Append(*codepoint, utf8);
+  const std::string_view translated(utf8, static_cast<std::size_t>(end - utf8));
+  return decoded.starts_with(translated)
+             ? std::optional(DecodedSourceUnit{semicolon + 1, translated.size()})
+             : std::nullopt;
+}
+
+std::optional<SourceRange> ProjectDecodedXmlRange(std::string_view raw, std::string_view decoded,
+                                                  std::size_t start, std::size_t end,
+                                                  std::size_t rawStart) {
+  const auto makeRange = [&](std::size_t first, std::size_t last) {
+    return SourceRange{FileOffset::Offset(rawStart + first), FileOffset::Offset(rawStart + last)};
+  };
+  if (raw == decoded) {
+    return makeRange(start, end);
+  }
+  std::optional<std::size_t> mappedStart, mappedEnd;
+  std::size_t rawOffset = 0;
+  std::size_t decodedOffset = 0;
+  for (;;) {
+    if (decodedOffset == start) {
+      mappedStart = rawOffset;
+    }
+    if (decodedOffset == end) {
+      mappedEnd = rawOffset;
+    }
+    if (rawOffset == raw.size()) {
+      break;
+    }
+    const auto unit = MatchDecodedSourceUnit(raw.substr(rawOffset), decoded.substr(decodedOffset));
+    if (!unit) {
+      return std::nullopt;
+    }
+    rawOffset += unit->rawBytes;
+    decodedOffset += unit->decodedBytes;
+  }
+  if (decodedOffset != decoded.size() || !mappedStart || !mappedEnd) {
+    return std::nullopt;
+  }
+  return makeRange(*mappedStart, *mappedEnd);
+}
+
+std::optional<SourceRange> MapDecodedRange(std::string_view source, const SourceRange& authored,
+                                           std::string_view decoded,
+                                           const SourceRange& decodedRange) {
+  const auto start = decodedRange.start.offset;
+  const auto end = decodedRange.end.offset;
+  if (!start || !end || *start > *end || *end > decoded.size() || !authored.start.offset ||
+      !authored.end.offset) {
+    return std::nullopt;
+  }
+  const std::size_t rawStart = *authored.start.offset;
+  const std::size_t rawEnd = *authored.end.offset;
+  if (rawStart > rawEnd || rawEnd > source.size()) {
+    return std::nullopt;
+  }
+  return ProjectDecodedXmlRange(source.substr(rawStart, rawEnd - rawStart), decoded, *start, *end,
+                                rawStart);
+}
+
+std::optional<SourceRange> ProjectedRecordValueRange(std::string_view source,
+                                                     const XMLSourceStore& store,
+                                                     const ProjectedTextRecord& record) {
+  if (record.store.get() != &store) {
+    return std::nullopt;
+  }
+  if (record.type == XMLNode::Type::CData && !record.valueSpan) {
+    return std::nullopt;
+  }
+  const auto span = store.resolveSpan(record.valueSpan.value_or(record.span));
+  if (!span || span->start > span->end || span->end > source.size()) {
+    return std::nullopt;
+  }
+  return SourceRange{FileOffset::Offset(span->start), FileOffset::Offset(span->end)};
+}
+
+std::optional<SourceRange> MapProjectedRecords(const ProjectedTextRecordsComponent& records,
+                                               const XMLSourceStore& store,
+                                               std::string_view decoded, std::size_t start,
+                                               std::size_t end) {
+  const std::string_view source = store.source();
+  std::size_t position = 0;
+  std::optional<SourceRange> result;
+  for (const auto& record : records.records) {
+    const std::string_view value(record.value);
+    if (!decoded.substr(position).starts_with(value)) {
+      return std::nullopt;
+    }
+    if (start >= position && end - position <= value.size()) {
+      const auto authored = ProjectedRecordValueRange(source, store, record);
+      if (!authored) {
+        return std::nullopt;
+      }
+      result = MapDecodedRange(
+          source, *authored, value,
+          {FileOffset::Offset(start - position), FileOffset::Offset(end - position)});
+    }
+    position += value.size();
+  }
+  return position == decoded.size() ? result : std::nullopt;
+}
+
+}  // namespace
+
+std::optional<SourceRange> XMLNode::mapDecodedAttributeRange(
+    const XMLQualifiedNameRef& name, const SourceRange& decodedRange) const {
+  const auto decoded = getAttribute(name);
+  const auto location = getAttributeSourceLocation(name);
+  const auto* store = GetSourceStore(handle_);
+  return decoded && location && store
+             ? MapDecodedRange(store->source(), location->valueRange, *decoded, decodedRange)
+             : std::nullopt;
+}
+
+std::optional<SourceRange> XMLNode::mapDecodedTextRange(const SourceRange& decodedRange) const {
+  const auto* store = GetSourceStore(handle_);
+  if (!store || (type() != Type::Data && type() != Type::CData)) {
+    return std::nullopt;
+  }
+  auto location = getValueLocation();
+  if (!location && type() == Type::Data) {
+    location = getNodeLocation();
+  }
+  const auto decoded = value();
+  return decoded && location ? MapDecodedRange(store->source(), *location, *decoded, decodedRange)
+                             : std::nullopt;
+}
+
+std::optional<SourceRange> XMLNode::mapProjectedTextRange(std::string_view decodedText,
+                                                          const SourceRange& decodedRange) const {
+  const auto* store = GetSourceStore(handle_);
+  const auto start = decodedRange.start.offset;
+  const auto end = decodedRange.end.offset;
+  if (!store || !start || !end || *start >= *end || *end > decodedText.size()) {
+    return std::nullopt;
+  }
+  const auto valueRange = getValueLocation();
+  if (const auto decoded = value();
+      valueRange && decoded && std::string_view(*decoded) == decodedText) {
+    return MapDecodedRange(store->source(), *valueRange, decodedText, decodedRange);
+  }
+  const auto* records = handle_.try_get<ProjectedTextRecordsComponent>();
+  return records ? MapProjectedRecords(*records, *store, decodedText, *start, *end) : std::nullopt;
 }
 
 void XMLNode::setAttributeSourceLocation(const XMLQualifiedNameRef& name, SourceRange fullRange,
