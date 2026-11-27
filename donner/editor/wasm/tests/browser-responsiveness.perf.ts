@@ -504,6 +504,7 @@ async function continuousDrag(
   start: { x: number; y: number },
   direction: number,
   phase: string,
+  scorePhysicalHold = false,
 ) {
   const before = await snapshot(page);
   const stream = await streamDragToIdle(page, start, direction);
@@ -546,11 +547,10 @@ async function continuousDrag(
   const completedFrames = completedDragFrames(stream, baselineSerial);
   if (!baselineOnly) {
     const stampedHeldPositions = heldDragPositionCount(completedFrames);
-    const crown = phase === "geode-crown";
-    const heldPositions = crown
+    const heldPositions = scorePhysicalHold
       ? physicallyHeldDragPositionCount(stream, completedFrames)
       : stampedHeldPositions;
-    const heldDetail = crown
+    const heldDetail = scorePhysicalHold
       ? `${heldPositions} represented positions completed before release (${stampedHeldPositions} stamped held)`
       : `${heldPositions} held positions completed`;
     // The hosted macOS Perf job reports, rather than fails, a miss in Chromium in the masked crown
@@ -1873,7 +1873,7 @@ async function maskedCrownDragWithCounters(
   let drag: Awaited<ReturnType<typeof continuousDrag>> | undefined;
   let dragFailure: unknown;
   try {
-    drag = await continuousDrag(page, point, 0.25, phase);
+    drag = await continuousDrag(page, point, 0.25, phase, /*scorePhysicalHold=*/ true);
   } catch (error) {
     dragFailure = error;
   }
