@@ -87,16 +87,15 @@ noted as follow-on surfaces but are not the primary focus.
   - [x] Record final-vs-baseline numbers per target and the ranked remaining
         opportunities; rewrite this doc's status.
 
-## Editor Wasm follow-on
+## Editor Wasm
 
-The size-optimized editor merges similar functions after Asyncify and compacts
-the output under its existing inlining limits, with memory packing disabled.
-The shipped module measured 10,922,607 bytes raw and 3,514,308 bytes gzipped,
-down from 11,077,968 and 3,537,438 on the same release configuration. The
-largest function body stayed under 40,000 bytes, and the three data segments,
-typed imports and exports, and the other 66 packaged files were unchanged.
-These measurements apply to the editor module. Renderer Wasm and native
-linked size are measured separately.
+The editor release profile merges similar functions after Asyncify and compacts
+the result under the existing inlining limits. Memory packing stays disabled
+to limit startup compilation work in threaded browsers.
+`//donner/editor/wasm:hosted_wasm_geode_package_size_tests` enforces module
+raw and gzip size, the largest function body, the data segment count, and
+the complete package size. Renderer Wasm and native linked size have their own
+checks.
 
 ## Proposed Architecture
 
