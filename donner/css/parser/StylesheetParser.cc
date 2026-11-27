@@ -1413,7 +1413,7 @@ bool CanReparseQualifiedEdit(const Stylesheet& old, std::string_view before, std
                              StylesheetParser::TextEdit edit) {
   return !old.securityStats().rejected && !old.securityStats().hasImportRule && !old.layers() &&
          old.imports().empty() && old.fontFaces().empty() && !before.starts_with("@charset") &&
-         IsWholeTextEdit(before, after, edit);
+         !after.starts_with("@charset") && IsWholeTextEdit(before, after, edit);
 }
 
 std::optional<std::size_t> VerifiedWindowEnd(std::span<const SelectorRule> rules, RuleWindow window,
