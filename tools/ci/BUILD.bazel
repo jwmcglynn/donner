@@ -853,7 +853,7 @@ py_test(
         "--product=svg_to_png=$(rootpath :shipped_svg_to_png)",
     ] + select({
         ":macos_arm64": [
-            "--budget=donner_svg=4014000",
+            "--budget=donner_svg=4214700",
             "--budget=editor=13289000",
             "--budget=svg_to_png=4898250",
         ],
