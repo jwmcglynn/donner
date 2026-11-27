@@ -838,6 +838,7 @@ bool CompositorController::rasterizeLayerDamage(CompositorLayer& layer,
       geometry.surfaceFromCanvas * Transform2d::Translate(Vector2d(-rect->left, -rect->top));
   RendererDriver patchDriver(*offscreen, false, nullptr, styleWork_);
   patchDriver.setConservativeEarlyLeafCulling(true);
+  patchDriver.setDamageMaskElisionEnabled(true);
   if (!patchDriver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
                                                 patchViewport, patchSurface,
                                                 [this]() { return isCancelled(); })) {

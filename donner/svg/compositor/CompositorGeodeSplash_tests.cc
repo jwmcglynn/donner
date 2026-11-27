@@ -19,6 +19,7 @@
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/CompositorControllerInternal.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -675,6 +676,85 @@ TEST(CompositorGeodeBudgetTest, SpanTooLargeForTheBudgetIsStruckBehindAnEditedSp
       EXPECT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureCount, ::testing::Eq(0))
           << "a span drawn directly is not drawn into a tile again";
     }
+  }
+}
+
+class MaskProofRenderer : public RendererGeode {
+public:
+  void pushMask(const std::optional<Box2d>& bounds, MaskType type,
+                ColorInterpolation interpolation) override {
+    ++maskPasses;
+    RendererGeode::pushMask(bounds, type, interpolation);
+  }
+
+  int maskPasses = 0;
+};
+
+TEST(CompositorGeodeSplashTest, DamageMaskProofMatchesFullMaskAndRejectsUnsafeCases) {
+  struct Case {
+    const char* label;
+    const char* attributes;
+    const char* useAttributes;
+    double left;
+    bool elides;
+    bool animateOpacity = false;
+  };
+  for (const Case& test : {
+           Case{"white", "", "fill='white'", 24, true},
+           Case{"opaque alpha", "mask-type='alpha'", "fill='navy'", 24, true},
+           Case{"translated use", "", "fill='white' transform='translate(3 4)'", 24, true},
+           Case{"edge", "", "fill='white'", 8, false},
+           Case{"region edge", "x='30'", "fill='white'", 24, false},
+           Case{"nonwhite luminance", "", "fill='navy'", 24, false},
+           Case{"transparent", "", "fill='white' fill-opacity='.5'", 24, false},
+           Case{"stroke", "", "fill='white' stroke='black'", 24, false},
+           Case{"filter", "", "fill='white' filter='url(#f)'", 24, false},
+           Case{"animated opacity", "", "fill='white'", 24, false, true},
+           Case{"rotated use", "", "fill='white' transform='rotate(6)'", 24, false},
+       }) {
+    SCOPED_TRACE(test.label);
+    const std::string source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><defs>"
+        "<path id='contour' d='M8 8 L120 8 L120 120 L8 120 Z'/>"
+        "<filter id='f'><feGaussianBlur stdDeviation='2'/></filter>"
+        "<mask id='m' maskUnits='userSpaceOnUse' y='0' width='128' height='128' " +
+        std::string(test.attributes) + "><use href='#contour' " + test.useAttributes + ">" +
+        (test.animateOpacity ? "<animate attributeName='fill-opacity' from='1' to='.5' dur='1s'/>"
+                             : "") +
+        "</use></mask></defs><g id='owner' mask='url(#m)'>"
+        "<rect width='60' height='60' fill='#b09cfe'/>"
+        "<path d='M14 20 L50 30 L16 42 Z' fill='#ffd043' fill-opacity='.6'/>"
+        "</g></svg>";
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_FALSE(parsed.hasError());
+    SVGDocument document = std::move(parsed.result());
+    document.setCanvasSize(128, 128);
+    if (test.animateOpacity) {
+      document.setTime(0.5);
+    }
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    const auto owner = document.querySelector("#owner");
+    ASSERT_THAT(owner, testing::Optional(testing::_));
+    const Entity first = owner->unsafeEntityHandle().entity();
+    Registry& registry = document.registry();
+    const auto& ownerInstance = registry.get<components::RenderingInstanceComponent>(first);
+    const Entity last = ownerInstance.subtreeLastEntity;
+    RenderViewport viewport;
+    viewport.size = Vector2d(24, 24);
+    const Transform2d surface = Transform2d::Translate(-test.left, -20);
+    MaskProofRenderer normalRenderer;
+    MaskProofRenderer provingRenderer;
+    RendererDriver normal(normalRenderer);
+    RendererDriver proving(provingRenderer);
+    proving.setDamageMaskElisionEnabled(true);
+    ASSERT_TRUE(normal.drawEntityRangeInterruptibly(registry, first, last, viewport, surface, {}));
+    ASSERT_TRUE(proving.drawEntityRangeInterruptibly(registry, first, last, viewport, surface, {}));
+    EXPECT_GT(normalRenderer.maskPasses, 0);
+    EXPECT_EQ(provingRenderer.maskPasses, test.elides ? 0 : normalRenderer.maskPasses);
+    editor::tests::CompareBitmapToBitmap(provingRenderer.takeSnapshot(),
+                                         normalRenderer.takeSnapshot(), test.label,
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 

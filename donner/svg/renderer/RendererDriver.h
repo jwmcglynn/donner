@@ -276,6 +276,9 @@ public:
   /// for bounded damage renders after their caller rules out nonlocal effects in the owner tree.
   void setConservativeEarlyLeafCulling(bool enabled) { earlyLeafViewportCulling_ = enabled; }
 
+  /// Opt in only for a fresh cropped damage render with normal blending and no filters.
+  void setDamageMaskElisionEnabled(bool enabled) { damageMaskElisionEnabled_ = enabled; }
+
   /**
    * Draw order of the last instance among the mask, marker and pattern content drawn for an
    * instance, or the instance's own draw order when it draws none. That content is instantiated
@@ -405,6 +408,12 @@ private:
   [[nodiscard]] bool drawPreparedEntityRange(Registry& registry, Entity firstEntity,
                                              Entity lastEntity,
                                              const std::function<bool()>& shouldCancel);
+  int renderRangeMask(RenderingInstanceView& view, Registry& registry,
+                      const components::RenderingInstanceComponent& instance,
+                      const components::ComputedStyleComponent& style, Entity entity, Entity first,
+                      Entity last);
+  [[nodiscard]] bool skipOpaqueDamageMask(RenderingInstanceView& view, Registry& registry,
+                                          const components::RenderingInstanceComponent& instance);
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);
@@ -702,6 +711,8 @@ private:
     return drawSurfaceSize_.value_or(renderingSize_);
   }
   bool earlyLeafViewportCulling_ = false;
+  bool damageMaskElisionEnabled_ = false;
+  bool allowDamageMaskElisionInRange_ = false;
   TextPreparationStats textPreparationStats_;
   std::unique_ptr<RendererDriverTextFrameCache> textFrameCache_;
   std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork_;
