@@ -76,6 +76,17 @@ TEST_F(TextureRegistrationTest, ExportRefusesARegistrationAndALostProducer) {
   EXPECT_THAT(producer_->exportTexture(owned), IsGpuError(GpuErrorType::DeviceLost));
 }
 
+TEST_F(TextureRegistrationTest, DefaultSampledViewDoesNotCacheAnImportedTexture) {
+  const Texture owner = MakeSharedTexture(*producer_);
+  const Texture registration =
+      GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owner))));
+  EXPECT_THAT(consumer_->borrowDefaultSampledTextureView(owner, {"wrong device"}),
+              IsGpuError(GpuErrorType::DeviceMismatch));
+  EXPECT_THAT(GetResultOrFail(consumer_->borrowDefaultSampledTextureView(registration, {"import"})),
+              Eq(std::nullopt));
+  EXPECT_THAT(consumer_->createTextureView(registration, {"transient import"}), IsOk());
+}
+
 /// A backend whose runtime devices never share a native device refuses both halves by name. The
 /// recording backend inherits that default.
 TEST_F(TextureRegistrationTest, ABackendThatCannotShareRefusesByName) {
@@ -764,6 +775,16 @@ TEST_F(TextureRegistrationTest, ASurfaceFrameIsExportedOnlyWhereItsReadersShareI
       producer_->exportTexture(held.texture),
       IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("the frame a surface has out")));
   EXPECT_THAT(producer_->abandonCurrentTexture(separate), IsOk());
+}
+
+TEST_F(TextureRegistrationTest, DefaultSampledViewDoesNotCacheAnAcquiredFrame) {
+  int layer = 0;
+  const Surface surface = ConfiguredSurface(*producer_, layer);
+  const SurfaceTexture frame = GetResultOrFail(producer_->acquireCurrentTexture(surface));
+  EXPECT_THAT(GetResultOrFail(
+                  producer_->borrowDefaultSampledTextureView(frame.texture, {"acquired frame"})),
+              Eq(std::nullopt));
+  EXPECT_THAT(producer_->abandonCurrentTexture(surface), IsOk());
 }
 
 /// A backend failure while exporting a surface frame keeps its own cause, rather than the

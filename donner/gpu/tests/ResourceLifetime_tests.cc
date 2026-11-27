@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <set>
@@ -50,11 +51,20 @@ public:
   /// Backend releases observed, as `<name>#<slot>` strings in release order.
   const std::vector<std::string>& backendReleases() const { return backendReleases_; }
 
+  void duringNextViewCreation(std::function<void()> callback) { onNextView_ = std::move(callback); }
+  void duringNextRelease(std::function<void()> callback) { onNextRelease_ = std::move(callback); }
+
 protected:
   Status onCreateBuffer(uint32_t, const BufferDescriptor&) override { return OkStatus(); }
   Status onCreateTexture(uint32_t, const TextureDescriptor&) override { return OkStatus(); }
   Status onCreateTextureView(uint32_t, uint32_t, const TextureViewDescriptor&) override {
+    if (auto callback = std::exchange(onNextView_, {})) {
+      callback();
+    }
     return OkStatus();
+  }
+  void onDestroyTextureBacking(uint32_t slot) override {
+    backendReleases_.push_back("backing#" + std::to_string(slot));
   }
   Status onCreateSampler(uint32_t, const SamplerDescriptor&) override { return OkStatus(); }
   Status onCreateBindGroupLayout(uint32_t, const BindGroupLayoutDescriptor&) override {
@@ -75,6 +85,9 @@ protected:
   }
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override {
     backendReleases_.push_back(std::string(resourceName) + "#" + std::to_string(slotIndex));
+    if (auto callback = std::exchange(onNextRelease_, {})) {
+      callback();
+    }
   }
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
@@ -84,6 +97,8 @@ protected:
   Status onSubmit(uint64_t, std::span<const SubmittedCommandBuffer>) override { return OkStatus(); }
 
 private:
+  std::function<void()> onNextView_;
+  std::function<void()> onNextRelease_;
   uint64_t completedSerial_ = 0;
   std::vector<std::string> backendReleases_;
 };
@@ -114,6 +129,143 @@ protected:
 
   ManualCompletionDevice device_;
 };
+
+TEST_F(DeferredDestructionTests, DefaultSampledViewSharesTextureLifetimeThroughSubmission) {
+  const TextureDescriptor descriptor{"source",
+                                     {4, 4},
+                                     TextureFormat::RGBA8Unorm,
+                                     TextureUsage::Sampled | TextureUsage::RenderAttachment};
+  Texture texture = GetResultOrFail(device_.createTexture(descriptor));
+  const auto view = GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"first"}));
+  ASSERT_THAT(view, testing::Optional(testing::_));
+  const auto again = GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"again"}));
+  ASSERT_THAT(again, testing::Optional(testing::_));
+  EXPECT_THAT(again->slotIndex(), Eq(view->slotIndex()));
+  EXPECT_THAT(again->generation(), Eq(view->generation()));
+  const auto textureSlot = texture.slotIndex();
+  const auto oldGeneration = texture.generation();
+
+  auto encoder = GetResultOrFail(device_.createCommandEncoder());
+  auto pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
+      "cached view", {{*view, LoadOp::Clear, StoreOp::Store, {0.0, 0.0, 0.0, 0.0}}}}));
+  ASSERT_THAT(pass->end(), IsOk());
+  const uint64_t serial = GetResultOrFail(device_.submit(GetResultOrFail(encoder->finish())));
+  ASSERT_THAT(device_.destroyTexture(std::move(texture)), IsOk());
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(), IsEmpty());
+
+  device_.completeUpTo(serial);
+  device_.poll();
+  EXPECT_THAT(device_.backendReleases(),
+              ElementsAre("textureView#" + std::to_string(view->slotIndex()),
+                          "texture#" + std::to_string(textureSlot)));
+  const Texture replacement = GetResultOrFail(device_.createTexture(descriptor));
+  ASSERT_THAT(replacement.slotIndex(), Eq(textureSlot));
+  EXPECT_THAT(replacement.generation(), Ne(oldGeneration));
+  const auto fresh =
+      GetResultOrFail(device_.borrowDefaultSampledTextureView(replacement, {"replacement"}));
+  ASSERT_THAT(fresh, testing::Optional(testing::_));
+  ASSERT_THAT(fresh->slotIndex(), Eq(view->slotIndex()));
+  EXPECT_THAT(fresh->generation(), Ne(view->generation()));
+}
+
+TEST_F(DeferredDestructionTests, DroppingAnOwnedTextureAlsoReleasesItsDefaultView) {
+  uint32_t textureSlot = 0;
+  uint32_t viewSlot = 0;
+  {
+    const Texture texture = GetResultOrFail(device_.createTexture(
+        TextureDescriptor{"source", {4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+    const auto view =
+        GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"borrowed view"}));
+    ASSERT_THAT(view, testing::Optional(testing::_));
+    textureSlot = texture.slotIndex();
+    viewSlot = view->slotIndex();
+  }
+  EXPECT_THAT(device_.backendReleases(), ElementsAre("textureView#" + std::to_string(viewSlot),
+                                                     "texture#" + std::to_string(textureSlot)));
+}
+
+TEST_F(DeferredDestructionTests, DefaultViewRechecksTextureAfterBackendCreation) {
+  const TextureDescriptor descriptor{
+      "source", {4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled};
+  Texture texture = GetResultOrFail(device_.createTexture(descriptor));
+  std::vector<Texture> other;
+  std::optional<TextureViewRef> inner;
+  device_.duringNextViewCreation([&] {
+    for (int i = 0; i < 32; ++i) {
+      other.push_back(GetResultOrFail(device_.createTexture(descriptor)));
+    }
+    inner = GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"inner view"}));
+  });
+  const auto outer =
+      GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"outer view"}));
+  ASSERT_THAT(inner, testing::Optional(testing::_));
+  ASSERT_THAT(outer, testing::Optional(testing::_));
+  EXPECT_THAT(outer->slotIndex(), Eq(inner->slotIndex()));
+  EXPECT_THAT(outer->generation(), Eq(inner->generation()));
+
+  Texture retired = GetResultOrFail(device_.createTexture(descriptor));
+  device_.duringNextViewCreation(
+      [&] { EXPECT_THAT(device_.destroyTextureBacking(std::move(retired)), IsOk()); });
+  EXPECT_THAT(device_.borrowDefaultSampledTextureView(retired, {"obsolete view"}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(DeferredDestructionTests, DefaultViewRechecksTextureWhenSurplusViewIsReleased) {
+  Texture texture = GetResultOrFail(device_.createTexture(
+      TextureDescriptor{"source", {4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+  device_.duringNextViewCreation([&] {
+    const auto inner =
+        GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"inner view"}));
+    ASSERT_THAT(inner, testing::Optional(testing::_));
+    device_.duringNextRelease(
+        [&] { EXPECT_THAT(device_.destroyTextureBacking(std::move(texture)), IsOk()); });
+  });
+  EXPECT_THAT(device_.borrowDefaultSampledTextureView(texture, {"surplus view"}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(texture.isValid(), IsFalse());
+}
+
+TEST_F(DeferredDestructionTests, CachedDefaultViewRefusesDeviceLoss) {
+  const TextureDescriptor descriptor{
+      "source", {4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled};
+  const Texture texture = GetResultOrFail(device_.createTexture(descriptor));
+  ASSERT_THAT(GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"view"})),
+              testing::Optional(testing::_));
+  device_.markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds(1),
+                                   "test-injected loss");
+  EXPECT_THAT(device_.borrowDefaultSampledTextureView(texture, {"cached view"}),
+              IsGpuError(GpuErrorType::DeviceLost));
+
+  ManualCompletionDevice other;
+  const Texture duringCreation = GetResultOrFail(other.createTexture(descriptor));
+  other.duringNextViewCreation([&] {
+    other.markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds(1),
+                                   "loss during view creation");
+  });
+  EXPECT_THAT(other.borrowDefaultSampledTextureView(duringCreation, {"new view"}),
+              IsGpuError(GpuErrorType::DeviceLost));
+}
+
+TEST_F(DeferredDestructionTests, ExplicitBackingReleaseRetiresTheDefaultViewFirst) {
+  Texture texture = GetResultOrFail(device_.createTexture(
+      TextureDescriptor{"source", {4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+  const auto view = GetResultOrFail(device_.borrowDefaultSampledTextureView(texture, {"view"}));
+  ASSERT_THAT(view, testing::Optional(testing::_));
+  const auto textureSlot = texture.slotIndex();
+  const auto formerIdentity =
+      Texture::CreateForBackend(textureSlot, texture.generation(), texture.deviceId());
+  device_.duringNextRelease([&] {
+    EXPECT_THAT(texture.isValid(), IsFalse());
+    EXPECT_THAT(device_.borrowDefaultSampledTextureView(formerIdentity, {"retiring view"}),
+                IsGpuError(GpuErrorType::InvalidHandle));
+  });
+  ASSERT_THAT(device_.destroyTextureBacking(std::move(texture)), IsOk());
+  EXPECT_THAT(device_.backendReleases(),
+              ElementsAre("textureView#" + std::to_string(view->slotIndex()),
+                          "backing#" + std::to_string(textureSlot),
+                          "texture#" + std::to_string(textureSlot)));
+}
 
 TEST_F(DeferredDestructionTests, DestroyOfUnsubmittedResourceReleasesImmediately) {
   Buffer buffer = createReadbackBuffer();

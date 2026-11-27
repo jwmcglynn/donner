@@ -371,6 +371,14 @@ public:
   Result<TextureView> createTextureView(const Texture& texture,
                                         const TextureViewDescriptor& descriptor);
 
+  /// Borrow the immutable default sampled view kept by an owned texture, creating it on first use.
+  /// The reference is valid only while the texture remains live, including through submission.
+  /// @param texture Source texture on this device.
+  /// @param descriptor Debug label used on creation.
+  /// @return A view, empty for non-owning or non-sampleable textures, or a validation error.
+  Result<std::optional<TextureViewRef>> borrowDefaultSampledTextureView(
+      const Texture& texture, const TextureViewDescriptor& descriptor);
+
   /**
    * Creates a sampler.
    *
@@ -1442,6 +1450,12 @@ private:
   };
   /// Validated per-texture state.
   struct TextureRecord {
+    explicit TextureRecord(TextureDescriptor descriptor) : descriptor(std::move(descriptor)) {}
+    TextureRecord(const TextureRecord&) = delete;
+    TextureRecord& operator=(const TextureRecord&) = delete;
+    TextureRecord(TextureRecord&&) noexcept = default;
+    TextureRecord& operator=(TextureRecord&&) noexcept = default;
+
     TextureDescriptor descriptor;  //!< Creation descriptor.
     /// Whether the backing is an allocation this device made and still owns, set at creation
     /// whether or not an observer is installed. \ref destroyTextureBacking reports the end of that
@@ -1452,7 +1466,16 @@ private:
     /// when it happens. An export can keep the allocation alive after this device's ownership
     /// ends; \ref sharedTextureTailBytes counts those bytes.
     bool ownsAllocation = false;
+    bool retiringBacking = false;  //!< Blocks new borrowed views during explicit backing release.
+    TextureView defaultSampledView{};  //!< Owned full-texture view, kept until texture retirement.
   };
+  static_assert(!std::is_copy_constructible_v<TextureRecord> &&
+                std::is_nothrow_move_constructible_v<TextureRecord>);
+  // These helpers re-resolve identity after backend calls without an additional backend probe.
+  Result<TextureRecord*> lookupLiveOwnedTexture(uint32_t slot, uint32_t generation);
+  Result<TextureViewRef> createDefaultSampledTextureView(const Texture& texture,
+                                                         const TextureViewDescriptor& descriptor);
+
   /// Validated per-view state. Consumers re-resolve the viewed texture through
   /// \ref resolveViewedTexture on every use, so a view cannot outlive its texture unnoticed.
   struct TextureViewRecord {

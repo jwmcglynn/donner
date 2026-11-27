@@ -214,7 +214,14 @@ bool ResolveQuadViews(gpu::Device& device, GeodeTransientResources& resourceAren
     return true;
   };
 
-  if (!retainView(texture, "GeodeImageBlitView", outViews.source)) {
+  auto source = device.borrowDefaultSampledTextureView(
+      texture, gpu::TextureViewDescriptor{"GeodeImageBlitView"});
+  if (source.hasError()) {
+    return false;
+  }
+  if (source.result()) {
+    outViews.source = *source.result();
+  } else if (!retainView(texture, "GeodeImageBlitView", outViews.source)) {
     return false;
   }
   outViews.mask = outViews.source;
