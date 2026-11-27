@@ -12,8 +12,12 @@ namespace donner::editor {
 
 /// A named reference as written in an authored CSS declaration.
 struct CssSourceReference {
-  enum class Kind { CustomProperty, FragmentUrl };
-  Kind kind;
+  /// Syntactic form of the reference.
+  enum class Kind {
+    CustomProperty,  ///< A custom-property identifier inside var().
+    FragmentUrl,     ///< A document-local URL fragment.
+  };
+  Kind kind;              ///< Syntactic form of this reference.
   std::string_view name;  ///< CSS-decoded custom name or fragment ID without '#'.
   SourceRange spelling;   ///< Bytes in the parsed CSS source, before mapping into XML.
 };
@@ -28,6 +32,12 @@ struct CssSourceReferenceHooks {
 /// Visit CSS references in lexical order. The visitor returns false to stop traversal.
 /// When available, the prepared-value predicate selects the active var() fallback. A missing
 /// answer leaves the fallback unvisited. Without a predicate all authored fallbacks are visited.
+/// @param values Parsed CSS component values to inspect.
+/// @param cssSource Authored CSS against which the components' offsets were measured.
+/// @param visit Callback for each reference. Borrowed names are valid only during traversal.
+/// @param hasValue Optional predicate for a usable prepared custom-property value.
+/// @param hooks Optional callbacks to charge work and track entry to and exit from fallbacks.
+/// @return True if traversal completed, or false if the visitor or accounting stopped it.
 bool VisitCssSourceReferences(
     std::span<const css::ComponentValue> values, std::string_view cssSource,
     const std::function<bool(const CssSourceReference&)>& visit,

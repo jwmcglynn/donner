@@ -72,15 +72,12 @@ struct SVGStyleRuleAtSourceOffset {
   bool operator==(const SVGStyleRuleAtSourceOffset& other) const = default;
 };
 
-/// Read one parsed rule of a source-backed style element without enumerating unrelated sheets.
-std::optional<SVGStylesheetRule> GetAuthoredStylesheetRule(const SVGStyleElement& stylesheet,
-                                                           std::size_t ruleIndex);
-
 /// Borrow the declaration tokens of one exact authored stylesheet rule during the call.
 /// @param stylesheet Embedded stylesheet owner.
 /// @param ruleIndex Rule index in the parsed stylesheet.
 /// @param expectedRuleRange Authored CSS range identifying the same rule.
-/// @param visit Receives the stylesheet bytes and borrowed declaration span.
+/// @param visit Receives the stylesheet bytes and declaration span only for the callback lifetime.
+/// @return True if the identified rule still matches and the visitor ran.
 bool VisitAuthoredStylesheetDeclarations(
     const SVGStyleElement& stylesheet, std::size_t ruleIndex, const SourceRange& expectedRuleRange,
     const std::function<void(std::string_view, std::span<const css::Declaration>)>& visit);
@@ -88,6 +85,9 @@ bool VisitAuthoredStylesheetDeclarations(
 /// Whether the element's prepared cascade supplies a usable value for the case-sensitive name.
 /// A disjoint or unprepared document state has no answer. A valid imported value can be present
 /// even when it has no source range in this document.
+/// @param element Element whose prepared cascade supplies the value.
+/// @param name Decoded, case-sensitive custom-property identifier.
+/// @return Whether the value is usable, or \c std::nullopt when the cascade cannot answer.
 std::optional<bool> HasPreparedCustomPropertyValue(const SVGElement& element,
                                                    std::string_view name);
 
@@ -117,6 +117,7 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
 /// @param document SVG document to inspect.
 /// @param documentSourceOffset Offset inside the complete authored CSS rule.
 /// @param includeDeclarations Copy and map declaration tokens in the result.
+/// @return The matching author rule, or \c std::nullopt when no rule has that source offset.
 std::optional<SVGStylesheetRule> CollectStylesheetRuleAtSourceOffset(
     const SVGDocument& document, std::size_t documentSourceOffset, bool includeDeclarations = true);
 
@@ -171,6 +172,7 @@ struct SVGCustomPropertyDeclarationBatch {
  * @param element Concrete SVG element whose cascade supplies the values.
  * @param names Decoded custom-property identifiers, including their two leading hyphens.
  * @param maxWork Aggregate work allowed for this query.
+ * @return Ordered declaration ranges and the status of the bounded query.
  */
 SVGCustomPropertyDeclarationBatch FindCustomPropertyDeclarations(
     const SVGElement& element, std::span<const std::string_view> names, std::size_t maxWork);

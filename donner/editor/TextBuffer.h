@@ -598,6 +598,10 @@ public:
   };
 
   /// Resolve a byte index using a cursor for this line. Reset the cursor when changing lines.
+  /// @param line Zero-based line index.
+  /// @param index UTF-8 byte index, nondecreasing between calls using the same cursor.
+  /// @param cursor Current byte and column position, advanced by this call.
+  /// @return Editor column at the requested byte index.
   int getCharacterColumn(int line, int index, LineColumnCursor& cursor) const {
     if (line < 0 || line >= static_cast<int>(lines_.size())) {
       return 0;

@@ -116,20 +116,6 @@ std::optional<SVGStylesheetRule> FindProjectedRuleAtOffset(Registry& registry, s
 
 }  // namespace
 
-std::optional<SVGStylesheetRule> GetAuthoredStylesheetRule(const SVGStyleElement& owner,
-                                                           std::size_t index) {
-  return owner.withReadAccess(
-      [&](DocumentReadAccess& access, EntityHandle handle) -> std::optional<SVGStylesheetRule> {
-        const auto* sheet = handle.try_get<StylesheetComponent>();
-        if (!sheet || sheet->isUserAgentStylesheet || !sheet->isCssType() ||
-            index >= sheet->stylesheet.rules().size()) {
-          return std::nullopt;
-        }
-        return ToPublicStylesheetRule(access.registry(), handle.entity(), index, *sheet,
-                                      sheet->stylesheet.rules()[index]);
-      });
-}
-
 bool VisitAuthoredStylesheetDeclarations(
     const SVGStyleElement& stylesheet, std::size_t ruleIndex, const SourceRange& expectedRuleRange,
     const std::function<void(std::string_view, std::span<const css::Declaration>)>& visit) {
