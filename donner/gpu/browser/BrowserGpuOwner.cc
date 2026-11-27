@@ -490,7 +490,7 @@ void ProcessBrowserGpuOwnerWait() {
 
 void ProcessBrowserGpuOwnerBeforeFrame() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (gProcessingBatch || gCanvasFrameActive || !IsBrowserGpuOwnerThread() ||
+  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gCanvasFrameActive ||
       gOwnerWaitStats[kRequested].load(std::memory_order_relaxed) ==
           gOwnerWaitStats[kFinished].load(std::memory_order_relaxed)) {
     return;
