@@ -2186,7 +2186,7 @@ bool RenderCoordinator::canSettleOnVisibleRaster(const EditorApp& app,
                                                  const GlTextureCache* textures,
                                                  Entity selectedEntity) const {
   if (!rasterViewport.viewportBounded || pendingRepair_ || presentationNeedsCoverage_ ||
-      pendingRenderTreeRebuild_ || !compositedPresentation_.isWaitingForFullRender()) {
+      pendingRenderTreeRebuild_) {
     return false;
   }
   const auto settling = compositedPresentation_.activePreviewForPresentation(std::nullopt);
@@ -2200,10 +2200,18 @@ bool RenderCoordinator::canSettleOnVisibleRaster(const EditorApp& app,
   return capture && capture->identity().sameContent(currentPresentationIdentity(app));
 }
 
-bool RenderCoordinator::needsOverviewForRender(EditorApp& app,
+bool RenderCoordinator::needsOverviewForRender(EditorApp& app, const ViewportState& viewport,
                                                const EditorRasterViewport& rasterViewport,
                                                bool hasActiveDrag, const GlTextureCache* textures,
-                                               bool willCommitCanvas) {
+                                               bool willCommitCanvas,
+                                               SelectedRenderDemand& selection) {
+  // An overview of the intermediate pose would also evict the visible compositor's raster
+  // before it settles. A covered translation release presents the final visible pixels first.
+  if (!hasActiveDrag && !willCommitCanvas &&
+      canSettleOnVisibleRaster(app, viewport, rasterViewport, textures, selection.entity)) {
+    selection.useVisibleRaster = true;
+    return false;
+  }
   return needsOverviewInfillForViewport(app, rasterViewport, hasActiveDrag, textures) ||
          (textures != nullptr && rasterViewport.viewportBounded && willCommitCanvas);
 }
@@ -2367,15 +2375,9 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   selection.entity = selectedCompositedEntity(app);
   selection.useVisibleRaster = selectedPrewarmFallbackApplies(app.document().documentGeneration(),
                                                               selection.entity, rasterViewport);
-  // A same-camera translation release needs its final visible pixels first. An overview of
-  // the intermediate pose would also evict the visible compositor's raster before it settles.
-  const bool settleVisibleFirst =
-      !dragPreview && !canvas.willCommit &&
-      canSettleOnVisibleRaster(app, viewport, rasterViewport, textures, selection.entity);
-  selection.useVisibleRaster |= settleVisibleFirst;
   const bool requestOverviewInfill =
-      !settleVisibleFirst && needsOverviewForRender(app, rasterViewport, dragPreview.has_value(),
-                                                    textures, canvas.willCommit);
+      needsOverviewForRender(app, viewport, rasterViewport, dragPreview.has_value(), textures,
+                             canvas.willCommit, selection);
   selection.forceRasterization = selection.entity != entt::null &&
                                  selection.entity == pendingSelectedLayerRasterizationEntity_;
   const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(

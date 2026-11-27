@@ -591,9 +591,10 @@ private:
   bool canSettleOnVisibleRaster(const EditorApp& app, const ViewportState& viewport,
                                 const EditorRasterViewport& rasterViewport,
                                 const GlTextureCache* textures, Entity selectedEntity) const;
-  bool needsOverviewForRender(EditorApp& app, const EditorRasterViewport& rasterViewport,
-                              bool hasActiveDrag, const GlTextureCache* textures,
-                              bool willCommitCanvas);
+  bool needsOverviewForRender(EditorApp& app, const ViewportState& viewport,
+                              const EditorRasterViewport& rasterViewport, bool hasActiveDrag,
+                              const GlTextureCache* textures, bool willCommitCanvas,
+                              SelectedRenderDemand& selection);
   bool canPostViewportRender(bool selectedViewportDeferred, bool needsOverviewInfill,
                              bool captureNeeded, bool supersedeInFlight);
   void prepareSelectedRenderSchedule(EditorApp& app, const ViewportState& viewport,
