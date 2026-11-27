@@ -608,6 +608,10 @@ py_test(
         "63000",
         "--max-total-raw-bytes",
         "14880000",
+        # The complete install contains both independently bounded runtimes. This
+        # storage ceiling leaves room above the expected 20.1 MB combined package.
+        "--max-deployment-raw-bytes",
+        "21200000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # The abort hook's page record and the thread role it reads from C++.

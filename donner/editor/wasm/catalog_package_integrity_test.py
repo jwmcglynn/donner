@@ -99,8 +99,7 @@ def validate_resources(package: Path, module: bytes) -> dict:
     return {"packaged_resource_count": len(identities), "packaged_resource_bytes": total}
 
 
-def _validate_browser_bridge_exports(package: Path) -> None:
-    path = package / "editor.js"
+def _validate_browser_bridge_exports(path: Path) -> None:
     if path.stat().st_size > 1024 * 1024:
         raise ValueError("Browser glue exceeds inspection bound")
     glue = path.read_text()
@@ -113,16 +112,13 @@ def _validate_browser_bridge_exports(package: Path) -> None:
             raise ValueError(f"Missing public resource bridge export: {name}")
 
 
-def validate_package(package: Path, native_notices: Path | None = None) -> dict:
+def _validate_runtime(package: Path, native_notices: Path | None, stem: str) -> dict:
     manifest = json.loads((package / "catalog-fonts.json").read_text())
     fonts = manifest["fonts"]
     if len(fonts) != 12 or {font["family"] for font in fonts} != FAMILIES:
         raise ValueError("The complete twelve-family catalog must be packaged")
-    modules = list(package.glob("*.wasm"))
-    if len(modules) != 1:
-        raise ValueError("Expected exactly one Wasm module")
-    module = modules[0].read_bytes()
-    _validate_browser_bridge_exports(package)
+    module = (package / (stem + ".wasm")).read_bytes()
+    _validate_browser_bridge_exports(package / (stem + ".js"))
     resources = validate_resources(package, module)
     expected_paths = set()
     total = 0
@@ -142,6 +138,21 @@ def validate_package(package: Path, native_notices: Path | None = None) -> dict:
     if b"SIL OPEN FONT LICENSE" not in notices:
         raise ValueError("Catalog font license text is missing")
     return {"families": len(fonts), "deferred_font_bytes": total, "notice_bytes": len(notices), **resources}
+
+
+def validate_package(package: Path, native_notices: Path | None = None) -> dict:
+    expected = {"editor.wasm"}
+    if (package / "index.html").is_file() and "data-asyncify-fallback" in (
+            package / "index.html").read_text():
+        expected.add("editor-asyncify.wasm")
+    if {path.name for path in package.glob("*.wasm")} != expected:
+        raise ValueError("Wasm module set differs from the entrypoint")
+    result = _validate_runtime(package, native_notices, "editor")
+    if "editor-asyncify.wasm" in expected:
+        _validate_runtime(package, native_notices, "editor-asyncify")
+    elif (package / "editor-asyncify.js").exists():
+        raise ValueError("Unexpected Asyncify runtime glue")
+    return result
 
 
 # These bound build-input materialization, independently of shipping resource budgets.

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import gzip
 import io
 import tempfile
@@ -149,11 +150,20 @@ class PackageSizeAccountingTest(unittest.TestCase):
             self.assertEqual(_wasm_section_vector_count(wasm_path, 12), 0)
 
 
+def _for_each_runtime(check):
+    @functools.wraps(check)
+    def run(test):
+        for name, wasm, js in test.runtimes:
+            with test.subTest(runtime=name):
+                check(test, wasm, js, name)
+    return run
+
+
 class WasmPackageSizeTest(unittest.TestCase):
     payload_budget_mode: str = "enforce"
     package_dir: Path | None
-    wasm_path: Path
-    js_path: Path
+    runtimes: list[tuple[str, Path, Path]]
+    max_deployment_raw_bytes: int | None
     prefix: str
     max_wasm_raw_bytes: int
     max_wasm_gzip_bytes: int
@@ -170,18 +180,23 @@ class WasmPackageSizeTest(unittest.TestCase):
             self.skipTest("no package directory budget for this module")
         total_raw_bytes = _package_raw_size(self.package_dir)
         print(f"{self.prefix}-package-total-size raw={total_raw_bytes}")
+        runtime_sizes = [wasm.stat().st_size + js.stat().st_size for _, wasm, js in self.runtimes]
+        largest_selected = total_raw_bytes - sum(runtime_sizes) + max(runtime_sizes)
+        if self.max_deployment_raw_bytes is not None:
+            _check_payload_budget(
+                self, "deployment_raw", total_raw_bytes, self.max_deployment_raw_bytes,
+                "complete dual-runtime deployment exceeded its raw storage budget", self.prefix,
+                enforce=self.payload_budget_mode == "enforce",
+            )
         _check_payload_budget(
-            self,
-            "total_raw",
-            total_raw_bytes,
-            self.max_total_raw_bytes,
-            f"{self.prefix} package raw size exceeded its production budget",
-            self.prefix,
-            enforce=self.payload_budget_mode == "enforce",
+            self, "total_raw", largest_selected, self.max_total_raw_bytes,
+            f"{self.prefix} single-runtime package raw size exceeded its production budget",
+            self.prefix, enforce=self.payload_budget_mode == "enforce",
         )
 
-    def test_javascript_bridge_contract_names_survive_minification(self) -> None:
-        javascript = self.js_path.read_text(encoding="utf-8")
+    @_for_each_runtime
+    def test_javascript_bridge_contract_names_survive_minification(self, wasm_path, js_path, prefix) -> None:
+        javascript = js_path.read_text(encoding="utf-8")
         for property_name in self.expected_js_properties:
             self.assertIn(
                 property_name,
@@ -189,24 +204,24 @@ class WasmPackageSizeTest(unittest.TestCase):
                 f"JavaScript minification renamed the cross-language bridge {property_name!r}",
             )
 
-    def test_javascript_omits_backend_incompatible_runtime_support(self) -> None:
-        javascript = self.js_path.read_text(encoding="utf-8")
+    @_for_each_runtime
+    def test_javascript_omits_backend_incompatible_runtime_support(self, wasm_path, js_path, prefix) -> None:
+        javascript = js_path.read_text(encoding="utf-8")
         for token in self.forbidden_js_tokens:
             self.assertFalse(
                 token in javascript,
                 f"backend-incompatible JavaScript runtime support remains: {token!r}",
             )
 
-    def test_shipped_payload_fits_compressed_budgets(self) -> None:
-        wasm_path = self.wasm_path
-        js_path = self.js_path
+    @_for_each_runtime
+    def test_shipped_payload_fits_compressed_budgets(self, wasm_path, js_path, prefix) -> None:
         self.assertTrue(wasm_path.is_file(), f"missing shipped Wasm module: {wasm_path}")
         self.assertTrue(js_path.is_file(), f"missing shipped JavaScript glue: {js_path}")
 
         wasm_gzip_bytes = _compressed_size(wasm_path)
         js_gzip_bytes = _compressed_size(js_path)
         print(
-            f"{self.prefix}-package-size "
+            f"{prefix}-package-size "
             f"wasm_raw={wasm_path.stat().st_size} wasm_gzip={wasm_gzip_bytes} "
             f"js_raw={js_path.stat().st_size} js_gzip={js_gzip_bytes}"
         )
@@ -216,7 +231,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             wasm_path.stat().st_size,
             self.max_wasm_raw_bytes,
             "Wasm module raw decode/compile size exceeded its production budget",
-            self.prefix,
+            prefix,
             enforce=self.payload_budget_mode == "enforce",
         )
         _check_payload_budget(
@@ -225,7 +240,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             wasm_gzip_bytes,
             self.max_wasm_gzip_bytes,
             "Wasm module compressed transfer size exceeded its production budget",
-            self.prefix,
+            prefix,
             enforce=self.payload_budget_mode == "enforce",
         )
         _check_payload_budget(
@@ -234,7 +249,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             js_path.stat().st_size,
             self.max_js_raw_bytes,
             "JavaScript glue raw parse size exceeded its production budget",
-            self.prefix,
+            prefix,
             enforce=self.payload_budget_mode == "enforce",
         )
         _check_payload_budget(
@@ -243,34 +258,36 @@ class WasmPackageSizeTest(unittest.TestCase):
             js_gzip_bytes,
             self.max_js_gzip_bytes,
             "JavaScript glue compressed transfer size exceeded its production budget",
-            self.prefix,
+            prefix,
             enforce=self.payload_budget_mode == "enforce",
         )
 
-    def test_wasm_functions_fit_browser_tier_compiler_budget(self) -> None:
+    @_for_each_runtime
+    def test_wasm_functions_fit_browser_tier_compiler_budget(self, wasm_path, js_path, prefix) -> None:
         if self.max_wasm_function_body_bytes is None:
             self.skipTest("no function-body budget for this module")
-        function_body_sizes = _wasm_function_body_sizes(self.wasm_path)
+        function_body_sizes = _wasm_function_body_sizes(wasm_path)
         largest_body_bytes = max(function_body_sizes, default=0)
         print(
-            f"{self.prefix}-wasm-function-size "
+            f"{prefix}-wasm-function-size "
             f"largest_body={largest_body_bytes} function_count={len(function_body_sizes)}"
         )
         _check_payload_budget(
             self, "wasm_function_body", largest_body_bytes, self.max_wasm_function_body_bytes,
-            "one Wasm function exceeds the browser tier-compiler complexity budget", self.prefix,
+            "one Wasm function exceeds the browser tier-compiler complexity budget", prefix,
             enforce=self.payload_budget_mode == "enforce",
         )
 
-    def test_static_memory_initializer_fits_browser_tier_compiler_budget(self) -> None:
+    @_for_each_runtime
+    def test_static_memory_initializer_fits_browser_tier_compiler_budget(self, wasm_path, js_path, prefix) -> None:
         if self.max_wasm_data_segments is None:
             self.skipTest("no data-segment budget for this module")
-        data_segment_count = _wasm_section_vector_count(self.wasm_path, 11)
-        print(f"{self.prefix}-wasm-data-segments count={data_segment_count}")
+        data_segment_count = _wasm_section_vector_count(wasm_path, 11)
+        print(f"{prefix}-wasm-data-segments count={data_segment_count}")
         _check_payload_budget(
             self, "wasm_data_segments", data_segment_count, self.max_wasm_data_segments,
             "the Wasm module has enough passive data segments to create a pathological memory "
-            "initializer", self.prefix, enforce=self.payload_budget_mode == "enforce",
+            "initializer", prefix, enforce=self.payload_budget_mode == "enforce",
         )
 
 
@@ -288,6 +305,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-js-raw-bytes", type=int, required=True)
     parser.add_argument("--max-js-gzip-bytes", type=int, required=True)
     parser.add_argument("--max-total-raw-bytes", type=int)
+    parser.add_argument("--max-deployment-raw-bytes", type=int)
     parser.add_argument("--expected-js-property", action="append", default=[])
     parser.add_argument("--forbidden-js-token", action="append", default=[])
     args, unittest_args = parser.parse_known_args()
@@ -295,8 +313,21 @@ if __name__ == "__main__":
         parser.error("pass --package-dir, or both --wasm-file and --js-file")
     WasmPackageSizeTest.payload_budget_mode = args.payload_budget_mode
     WasmPackageSizeTest.package_dir = args.package_dir
-    WasmPackageSizeTest.wasm_path = args.wasm_file or args.package_dir / "editor.wasm"
-    WasmPackageSizeTest.js_path = args.js_file or args.package_dir / "editor.js"
+    WasmPackageSizeTest.runtimes = [
+        (args.metric_prefix, args.wasm_file or args.package_dir / "editor.wasm",
+         args.js_file or args.package_dir / "editor.js"),
+    ]
+    WasmPackageSizeTest.max_deployment_raw_bytes = args.max_deployment_raw_bytes
+    if args.max_deployment_raw_bytes is not None:
+        if args.package_dir is None:
+            parser.error("the deployment budget requires a package directory")
+    if (args.package_dir is not None
+            and (args.package_dir / "index.html").is_file()
+            and "data-asyncify-fallback" in (args.package_dir / "index.html").read_text()):
+        WasmPackageSizeTest.runtimes.append(
+            (args.metric_prefix + "-asyncify", args.package_dir / "editor-asyncify.wasm",
+             args.package_dir / "editor-asyncify.js"),
+        )
     WasmPackageSizeTest.prefix = args.metric_prefix
     WasmPackageSizeTest.max_wasm_raw_bytes = args.max_wasm_raw_bytes
     WasmPackageSizeTest.max_wasm_gzip_bytes = args.max_wasm_gzip_bytes
