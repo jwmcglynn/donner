@@ -3241,6 +3241,10 @@ bool PropertyRegistry::isPresentationAttributeName(std::string_view name) {
   return kValidPresentationAttributes.contains(name);
 }
 
+bool PropertyRegistry::retainsDeclarationSource(std::string_view name) {
+  return kValidPresentationAttributes.contains(name) && !kProperties.find(name);
+}
+
 size_t PropertyRegistry::numPropertiesSet() const {
   const auto selfProperties = allProperties();
 

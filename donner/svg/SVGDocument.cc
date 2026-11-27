@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "donner/base/Utils.h"
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/base/xml/XMLSourceStore.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -48,6 +49,7 @@
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/text/TextEngine.h"
 
@@ -131,8 +133,8 @@ std::optional<std::size_t> StylesheetPayloadBytes(std::size_t projectedSourceByt
 
 void MarkStylesheetChanged(EntityHandle handle);
 std::optional<ParseDiagnostic> ProjectStyleContents(
-    EntityHandle handle, const xml::XMLNode& node,
-    std::span<const xml::XMLSourceDelta> deltas = {});
+    EntityHandle handle, const xml::XMLNode& node, std::span<const xml::XMLSourceDelta> deltas = {},
+    bool* narrowed = nullptr);
 
 SourceRange MutationRange(std::string_view source, const xml::XMLMutation& mutation) {
   if (!mutation.attributeName.name.empty()) {
@@ -216,6 +218,19 @@ std::optional<ParseDiagnostic> ProjectTextValue(EntityHandle handle, std::string
   return std::nullopt;
 }
 
+std::optional<ParseDiagnostic> ApplyStylesheetValueChanged(
+    EntityHandle stylesheet, const xml::XMLNode& node,
+    std::span<const xml::XMLSourceDelta> deltas) {
+  bool narrowed = false;
+  if (auto diagnostic = ProjectStyleContents(stylesheet, node, deltas, &narrowed)) {
+    return diagnostic;
+  }
+  if (!narrowed) {
+    MarkStylesheetChanged(stylesheet);
+  }
+  return std::nullopt;
+}
+
 std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
                                                      const xml::XMLMutation& mutation,
                                                      std::span<const xml::XMLSourceDelta> deltas) {
@@ -244,13 +259,7 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
   }
 
   if (targetHandle->all_of<components::StylesheetComponent>() && targetNode.has_value()) {
-    if (std::optional<ParseDiagnostic> diagnostic =
-            ProjectStyleContents(*targetHandle, *targetNode, deltas)) {
-      return diagnostic;
-    }
-
-    MarkStylesheetChanged(*targetHandle);
-    return std::nullopt;
+    return ApplyStylesheetValueChanged(*targetHandle, *targetNode, deltas);
   }
 
   return ParseDiagnostic::Error(
@@ -541,7 +550,8 @@ bool ProjectIncrementalStyleEdit(components::StylesheetComponent& projected,
                                  const components::StylesheetComponent& previous,
                                  std::string_view combined,
                                  const components::StylesheetSourceMap& sourceMap,
-                                 std::span<const xml::XMLSourceDelta> deltas) {
+                                 std::span<const xml::XMLSourceDelta> deltas,
+                                 css::EditedRuleWindow* changed) {
   if (deltas.size() != 1) {
     return false;
   }
@@ -558,7 +568,7 @@ bool ProjectIncrementalStyleEdit(components::StylesheetComponent& projected,
     return false;
   }
   return projected.applyTextEdit(previous, combined, sourceMap, *before, delta.removedLength,
-                                 delta.insertedLength);
+                                 delta.insertedLength, changed);
 }
 
 struct ProjectedStyleSize {
@@ -655,19 +665,100 @@ ParseResult<ProjectedStyleContents> ReadStyleProjection(const xml::XMLNode& node
   return ProjectedStyleContents{std::move(combined), std::move(sourceMap)};
 }
 
-void ParseProjectedStylesheet(components::StylesheetComponent& projected,
-                              const components::StylesheetComponent& previous,
-                              ProjectedStyleContents contents,
-                              std::span<const xml::XMLSourceDelta> deltas) {
-  if (!ProjectIncrementalStyleEdit(projected, previous, contents.text, contents.map, deltas)) {
-    projected.parseStylesheet(std::string_view(contents.text), std::move(contents.map));
+std::optional<css::EditedRuleWindow> ParseProjectedStylesheet(
+    components::StylesheetComponent& projected, const components::StylesheetComponent& previous,
+    ProjectedStyleContents contents, std::span<const xml::XMLSourceDelta> deltas) {
+  css::EditedRuleWindow changed{};
+  if (ProjectIncrementalStyleEdit(projected, previous, contents.text, contents.map, deltas,
+                                  &changed)) {
+    projected.importGeneration = previous.importGeneration;
+    return changed;
   }
+  projected.parseStylesheet(std::string_view(contents.text), std::move(contents.map));
+  return std::nullopt;
+}
+
+/**
+ * Borrow the authored bytes of one parsed rule.
+ * @param sheet Owning stylesheet. The returned view aliases `sheet.text` and remains valid only
+ *   while that storage is alive and unchanged.
+ * @param rule Rule whose local source range is mapped into the stylesheet text.
+ * @return Borrowed rule bytes, or an empty view when the retained range is invalid.
+ */
+std::string_view RuleSourceText(const components::StylesheetComponent& sheet UTILS_LIFETIME_BOUND,
+                                const css::SelectorRule& rule) {
+  const std::string_view source(sheet.text);
+  const auto start = rule.ruleSourceRange.start.offset;
+  const auto end = rule.ruleSourceRange.end.offset;
+  if (!start || !end || *end <= *start || *end > source.size()) {
+    return {};
+  }
+  return source.substr(*start, *end - *start);
+}
+
+bool RuleRetainsSource(const css::SelectorRule& rule) {
+  return std::ranges::any_of(rule.declarations, [](const auto& declaration) {
+    const std::string_view name(declaration.name);
+    return name.starts_with("--") ||
+           declaration.variableReferences != css::VariableReferences::None ||
+           PropertyRegistry::retainsDeclarationSource(name);
+  });
+}
+
+/**
+ * Trim text-identical rules from both ends of an edited rule window.
+ * @param previous Owner of the first returned span.
+ * @param projected Owner of the second returned span.
+ * @param edit Old and new rule ranges produced by incremental stylesheet parsing.
+ * @return Borrowed changed-rule spans. The first remains valid only while
+ *   `previous.stylesheet` is alive and unchanged. The second remains valid only while
+ *   `projected.stylesheet` is alive and unchanged.
+ */
+std::pair<std::span<const css::SelectorRule>, std::span<const css::SelectorRule>>
+TrimUnchangedWindowRules(const components::StylesheetComponent& previous UTILS_LIFETIME_BOUND,
+                         const components::StylesheetComponent& projected UTILS_LIFETIME_BOUND,
+                         const css::EditedRuleWindow& edit) {
+  auto removed = previous.stylesheet.rules().subspan(edit.oldBegin, edit.oldCount);
+  auto added = projected.stylesheet.rules().subspan(edit.newBegin, edit.newCount);
+  const auto sameText = [&](const css::SelectorRule& oldRule, const css::SelectorRule& newRule) {
+    const auto oldText = RuleSourceText(previous, oldRule);
+    return !oldText.empty() && oldText == RuleSourceText(projected, newRule) &&
+           (oldRule.ruleSourceRange.start == newRule.ruleSourceRange.start ||
+            !RuleRetainsSource(oldRule));
+  };
+  while (!removed.empty() && !added.empty() && sameText(removed.front(), added.front())) {
+    removed = removed.subspan(1);
+    added = added.subspan(1);
+  }
+  while (!removed.empty() && !added.empty() && sameText(removed.back(), added.back())) {
+    removed = removed.first(removed.size() - 1);
+    added = added.first(added.size() - 1);
+  }
+  return {removed, added};
+}
+
+bool TryNarrowStylesheetEdit(Registry& registry, const components::StylesheetComponent& previous,
+                             const components::StylesheetComponent& projected,
+                             const css::EditedRuleWindow& edit) {
+  if (previous.dependencySummary.usesHas() || projected.dependencySummary.usesHas()) {
+    return false;
+  }
+  // Retained deferred declarations can embed offsets into the original stylesheet.
+  const auto oldRules = previous.stylesheet.rules();
+  if (previous.text.size() != projected.text.size() &&
+      std::ranges::any_of(oldRules.subspan(edit.oldBegin + edit.oldCount), RuleRetainsSource)) {
+    return false;
+  }
+  const auto [removed, added] = TrimUnchangedWindowRules(previous, projected, edit);
+  return components::StyleSystem::invalidateStylesheetRules(registry, removed, added,
+                                                            components::ApplyLiveStyleUpdate);
 }
 
 std::optional<ParseDiagnostic> CommitStylesheetProjection(
     EntityHandle handle, const xml::XMLNode& node, std::size_t projectedSourceBytes,
     components::ParsedPayloadResourceBudget& budget, components::StylesheetComponent& stylesheet,
-    components::StylesheetComponent projected) {
+    components::StylesheetComponent projected, std::optional<css::EditedRuleWindow> edit,
+    bool* narrowed) {
   const std::optional<std::size_t> retainedBytes = StylesheetPayloadBytes(
       projectedSourceBytes, projected.stylesheet.securityStats(), projected.selectorCacheBytes());
   if (!retainedBytes.has_value() ||
@@ -679,12 +770,16 @@ std::optional<ParseDiagnostic> CommitStylesheetProjection(
     return ParseDiagnostic::Error("Stylesheet exceeds the document parsed-payload budget",
                                   node.getNodeLocation().value_or(FallbackRange()));
   }
+  if (narrowed && edit) {
+    *narrowed = TryNarrowStylesheetEdit(*handle.registry(), stylesheet, projected, *edit);
+  }
   stylesheet = std::move(projected);
   return std::nullopt;
 }
 
 std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node,
-                                                    std::span<const xml::XMLSourceDelta> deltas) {
+                                                    std::span<const xml::XMLSourceDelta> deltas,
+                                                    bool* narrowed) {
   if (!handle.all_of<components::ElementTypeComponent>() ||
       handle.get<components::ElementTypeComponent>().type() != ElementType::Style) {
     return std::nullopt;
@@ -732,9 +827,10 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   components::StylesheetComponent projected;
   projected.type = stylesheet->type;
   projected.isUserAgentStylesheet = stylesheet->isUserAgentStylesheet;
-  ParseProjectedStylesheet(projected, *stylesheet, std::move(contents.result()), deltas);
+  const auto changed =
+      ParseProjectedStylesheet(projected, *stylesheet, std::move(contents.result()), deltas);
   return CommitStylesheetProjection(handle, node, *projectedSourceBytes, budget, *stylesheet,
-                                    std::move(projected));
+                                    std::move(projected), changed, narrowed);
 }
 
 bool IsAttributeMutation(xml::XMLMutation::Kind kind) {

@@ -872,6 +872,15 @@ public:
   static bool isPresentationAttributeName(std::string_view name);
 
   /**
+   * Whether an authored stylesheet value may retain its original tokens and source offsets.
+   *
+   * @param name Canonical parsed declaration name. Ordinary property names are lowercase. Custom
+   *   property names retain their authored case. Lookup is case-sensitive and does not normalize.
+   * @return True for a presentation attribute not represented in the fixed property table.
+   */
+  static bool retainsDeclarationSource(std::string_view name);
+
+  /**
    * Returns true if a presentation attribute participates in inheritance.
    *
    * This uses the underlying property cascade metadata instead of a hand-maintained list in DOM

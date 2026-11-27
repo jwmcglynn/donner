@@ -310,9 +310,6 @@ const CascadeEditTarget kSplashTarget = SplashEditTarget();
 const CascadeEditTarget kSyntheticTarget = SyntheticEditTarget();
 const CascadeEditTarget kIconsTarget = BootstrapIconsEditTarget();
 
-// A frame after an edit that restyles the whole document discards every computed style once and
-// cascades each styled entity once, so it does the work of the edited document's first frame.
-constexpr StyleCascadeCounters kSplashRestyle{622, 1384, 1382, 1386, 1, 0};
 // The splash rebuilds its shadow occurrences even when only the edited light node restyles.
 constexpr StyleCascadeCounters kSplashNarrowEdit{176, 353, 353, 353, 0, 0};
 constexpr StyleCascadeCounters kIconsNarrowEdit{1, 1, 1, 1, 0, 0};
@@ -353,9 +350,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     KeystrokeFrame, CssCascadeWorkTest,
     ::testing::Values(
-        Keystroke("DeclarationValue", CascadeKeystroke::DeclarationValue, kSplashRestyle),
-        Keystroke("SelectorLetterInserted", CascadeKeystroke::Selector,
-                  {622, 1383, 1381, 1385, 1, 0}, kForwardKeystroke),
+        Keystroke("DeclarationValue", CascadeKeystroke::DeclarationValue, {1, 3, 3, 3, 0, 0}),
+        Keystroke("SelectorLetterInserted", CascadeKeystroke::Selector, {1, 2, 2, 2, 0, 0},
+                  kForwardKeystroke),
         // The unclosed rule absorbs the rules after it, so fewer rules are candidates.
         Keystroke("ClosingBraceDeleted", CascadeKeystroke::ClosingBrace,
                   {622, 1246, 1244, 1245, 1, 0}, kForwardKeystroke),

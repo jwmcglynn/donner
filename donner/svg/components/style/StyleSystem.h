@@ -22,7 +22,8 @@
 
 namespace donner::css {
 struct Declaration;
-}
+struct SelectorRule;
+}  // namespace donner::css
 
 namespace donner::svg::components {
 
@@ -65,6 +66,11 @@ struct UnindexedCascadeForTesting {};
 
 /// Runs the ordinary cascade without its ancestor filter for differential comparisons.
 struct UnfilteredCascadeForTesting {};
+
+/// Test-only rule-to-element allowance for the old-and-new stylesheet edit scan.
+struct StylesheetEditScanLimitsForTesting {
+  std::size_t ruleElementMatches;  //!< Maximum selector-rule and element pairs to inspect.
+};
 
 /** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
 class StyleResourceBudget {
@@ -815,6 +821,58 @@ public:
   ///   fallback values.
   /// @param parent Computed declarations inherited from the referencing element.
   static void inheritExternalParent(PropertyRegistry& properties, const PropertyRegistry& parent);
+
+  /**
+   * Run one selective frame against a tentative warning sink.
+   * @param registry Prepared document registry containing the style budget and dirty style slots.
+   * @param warningSink Destination for warnings, updated only after the callback succeeds.
+   * @param scheduler Scheduler forwarded to the style callback.
+   * @param compute Non-null callback that computes the dirty frame styles and returns false when
+   *   its pass must be abandoned, including budget refusal.
+   * @return True after the callback succeeds and its warnings are committed. Returns false without
+   *   committing tentative warnings when the callback declines the pass.
+   */
+  static bool computeEditedFrameStyles(
+      Registry& registry, ParseWarningSink& warningSink, StylePassScheduler scheduler,
+      bool (*compute)(Registry&, ParseWarningSink&, StylePassScheduler, bool (*)(const Registry&)));
+
+  /**
+   * Apply styles through the retained renderer after a selective edit scan.
+   * @param registry Document registry containing the marked style targets.
+   * @param warningSink Destination for accepted diagnostics.
+   * @param scheduler Scheduler available to the style pass.
+   * @return False when the edit requires a full render-tree rebuild.
+   */
+  using ApplyRetainedStyle = bool (*)(Registry& registry, ParseWarningSink& warningSink,
+                                      StylePassScheduler scheduler);
+
+  /**
+   * Mark an admitted list of edited styles, recording the last rendered order when available.
+   * @param registry Built document registry containing `RenderTreeState` and every affected entity.
+   * @param affected Valid tree entities admitted by the edit analysis. An empty span is a no-op.
+   * @param applyRetained Optional retained-update callback. A null callback selects ordinary
+   *   style-cascade invalidation. An entity without a retained order also selects that path.
+   */
+  static void markEditedStyleTargets(Registry& registry, std::span<const Entity> affected,
+                                     ApplyRetainedStyle applyRetained);
+
+  /**
+   * Schedule a bounded selective style pass for the union of old and new rule matches.
+   * @param registry Built document registry eligible for a selective edit scan. A pending full
+   *   rebuild/restyle, prior budget refusal, unsupported subtree boundary, or oversized scan makes
+   *   the call decline.
+   * @param removed Previous rules replaced or removed by the source edit.
+   * @param added Replacement or inserted rules from the updated stylesheet.
+   * @param applyRetained Optional retained-update callback forwarded to
+   *   \ref markEditedStyleTargets. A null callback selects ordinary style-cascade invalidation.
+   * @return True after the complete old-and-new scan marks every affected subtree. Returns false
+   *   without clearing the matched-properties cache or marking styles when the caller must fully
+   *   restyle.
+   */
+  static bool invalidateStylesheetRules(Registry& registry,
+                                        std::span<const css::SelectorRule> removed,
+                                        std::span<const css::SelectorRule> added,
+                                        ApplyRetainedStyle applyRetained);
 
   /**
    * Returns true if any stylesheet loaded into \p registry contains an attribute selector that

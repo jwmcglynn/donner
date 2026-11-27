@@ -34,6 +34,8 @@
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/style/CustomPropertyMap.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/StyleCascadeMetrics.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -109,6 +111,11 @@ SVGDocument ParseSource(std::string_view source) {
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_THAT(parsed, NoParseError());
   return std::move(parsed.result());
+}
+
+void ExpectSameStyleOutputs(SVGDocument& actual, SVGDocument& reference) {
+  EXPECT_THAT(PositionedStyles(actual), ::testing::ElementsAreArray(PositionedStyles(reference)));
+  EXPECT_THAT(MatchedRules(actual), ::testing::ElementsAreArray(MatchedRules(reference)));
 }
 
 TEST(MatchedPropertiesCache, SharedRecordStaysImmutableWhenOneHolderRestyles) {
@@ -1355,6 +1362,422 @@ TEST(StyleIndexDifferential, StylesheetEditsRebuildTheIndex) {
   }
   ExpectSameCascade(indexed, unindexed);
   ExpectSameCascade(indexed, cacheDisabled);
+}
+
+TEST(StyleIndexDifferential, SourceRuleEditMatchesOldAndNewSubtreesAndUseInstances) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <style>.old { fill: red; } .control { fill: blue; }</style>
+      <g class="old"><rect id="loses" width="5" height="5"/></g>
+      <defs><g id="template" class="new"><rect width="5" height="5"/></g></defs>
+      <use href="#template" x="10"/>
+      <rect id="untouched" class="control" x="20" width="5" height="5"/>
+    </svg>)svg";
+  auto actual = ParseSource(kSource);
+  Renderer renderer;
+  renderer.draw(actual);
+  const auto control = actual.querySelector("#untouched");
+  ASSERT_THAT(control, testing::Optional(testing::_));
+  const EntityHandle controlHandle = control->unsafeEntityHandle();
+  const auto untouched = controlHandle.get<ComputedStyleComponent>().style;
+  ASSERT_THAT(untouched.get(), testing::NotNull());
+  const auto before = Counters(actual);
+  const std::size_t start = kSource.find(".old");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 4)},
+      .replacement = ".new",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+
+  auto expected = ParseSource(actual.source());
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  const auto work = Counters(actual) - before;
+  EXPECT_THAT(work.fullClears, testing::Eq(0u));
+  EXPECT_THAT(work.elementsCascaded, testing::Gt(0u));
+  EXPECT_THAT(controlHandle.get<ComputedStyleComponent>().style.get(),
+              testing::Eq(untouched.get()));
+  ExpectSameStyleOutputs(actual, expected);
+  EXPECT_THAT(PositionedRenderInstances(actual),
+              ::testing::ElementsAreArray(PositionedRenderInstances(expected)));
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_rule_source_edit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleIndexDifferential, WholeRuleInsertionAndDeletionMatchFreshCascade) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.base { fill: red; }</style>
+      <rect id="target" class="base added"/>
+    </svg>)svg";
+  constexpr std::string_view insertedRule = ".added { stroke: blue; }";
+  auto actual = ParseSource(source);
+  std::ignore = PrepareFirstFrameWithDiagnostics(actual);
+
+  const auto applyAndCompare = [&](SourceRange range, std::string_view replacement) {
+    const auto before = Counters(actual);
+    const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+        .range = range,
+        .replacement = replacement,
+        .sourceVersion = actual.sourceVersion(),
+    });
+    ASSERT_THAT(edit.applied, testing::IsTrue());
+    EXPECT_THAT(actual.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute,
+                testing::IsFalse());
+    auto expected = ParseSource(actual.source());
+    const auto actualPass = PrepareFirstFrameWithDiagnostics(actual);
+    const auto expectedPass = PrepareFirstFrameWithDiagnostics(expected);
+    EXPECT_THAT((Counters(actual) - before).fullClears, testing::Eq(0u));
+    EXPECT_THAT(actualPass.styleBudgetRejected, testing::IsFalse());
+    EXPECT_THAT(actualPass.styles, testing::ElementsAreArray(expectedPass.styles));
+    ExpectSameStyleOutputs(actual, expected);
+  };
+
+  const std::size_t insertion = std::string_view(actual.source()).find("</style>");
+  ASSERT_THAT(insertion, testing::Ne(std::string_view::npos));
+  applyAndCompare({FileOffset::Offset(insertion), FileOffset::Offset(insertion)}, insertedRule);
+
+  const std::size_t removal = std::string_view(actual.source()).find(insertedRule);
+  ASSERT_THAT(removal, testing::Ne(std::string_view::npos));
+  applyAndCompare({FileOffset::Offset(removal), FileOffset::Offset(removal + insertedRule.size())},
+                  "");
+}
+
+TEST(StyleIndexDifferential, StylesheetRuleScanBudgetFallsBackToFreshCascade) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>.hot:not(.hot) { fill: tan; }</style>
+      <rect id="target" class="hot"/>
+    </svg>)svg";
+  std::string editedSource(source);
+  constexpr std::string_view oldSelector = ".hot:not(.hot)";
+  constexpr std::string_view newSelector = ".hot";
+  const std::size_t selectorOffset = editedSource.find(oldSelector);
+  ASSERT_THAT(selectorOffset, testing::Ne(std::string::npos));
+  editedSource.replace(selectorOffset, oldSelector.size(), newSelector);
+
+  auto unlimited = ParseSource(source);
+  auto limited = ParseSource(source);
+  auto expected = ParseSource(editedSource);
+  const auto removeUserAgentStylesheet = [](SVGDocument& document) {
+    auto& registry = document.registry();
+    std::vector<Entity> userAgentSheets;
+    for (auto view = registry.view<StylesheetComponent>(); const Entity entity : view) {
+      if (view.get<StylesheetComponent>(entity).isUserAgentStylesheet) {
+        userAgentSheets.push_back(entity);
+      }
+    }
+    for (const Entity entity : userAgentSheets) {
+      registry.remove<StylesheetComponent>(entity);
+    }
+  };
+  for (SVGDocument* document : {&unlimited, &limited, &expected}) {
+    removeUserAgentStylesheet(*document);
+  }
+  std::ignore = PrepareFirstFrameWithDiagnostics(unlimited);
+  std::ignore = PrepareFirstFrameWithDiagnostics(limited);
+  const auto expectedPass = PrepareFirstFrameWithDiagnostics(expected);
+  ASSERT_THAT(expectedPass.styleBudgetRejected, testing::IsFalse());
+  ASSERT_THAT(expectedPass.counters.rulesTested, testing::Eq(1u));
+
+  auto& limitedRegistry = limited.registry();
+  limitedRegistry.ctx().emplace<StylesheetEditScanLimitsForTesting>(
+      expectedPass.counters.rulesTested);
+
+  const SourceRange range{FileOffset::Offset(selectorOffset),
+                          FileOffset::Offset(selectorOffset + oldSelector.size())};
+  const auto apply = [&](SVGDocument& document) {
+    const auto edit = document.applySourceEdit(xml::XMLEditIntent{
+        .range = range,
+        .replacement = newSelector,
+        .sourceVersion = document.sourceVersion(),
+    });
+    ASSERT_THAT(edit.applied, testing::IsTrue());
+  };
+  apply(unlimited);
+  apply(limited);
+  EXPECT_THAT(unlimited.registry().ctx().get<RenderTreeState>().needsFullStyleRecompute,
+              testing::IsFalse());
+  EXPECT_THAT(limitedRegistry.ctx().get<RenderTreeState>().needsFullStyleRecompute,
+              testing::IsTrue());
+
+  const auto unlimitedPass = PrepareFirstFrameWithDiagnostics(unlimited);
+  const auto limitedPass = PrepareFirstFrameWithDiagnostics(limited);
+  EXPECT_THAT(unlimitedPass.counters.fullClears, testing::Eq(0u));
+  EXPECT_THAT(limitedPass.counters.fullClears, testing::Eq(1u));
+  EXPECT_THAT(limitedPass.styleBudgetRejected, testing::IsFalse());
+  EXPECT_THAT(limitedPass.styles, testing::ElementsAreArray(expectedPass.styles));
+  ExpectSameStyleOutputs(limited, expected);
+}
+
+TEST(StyleIndexDifferential, SourceCustomPropertyEditSelectivelyRestylesItsConsumers) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>.hot { --tone: #f00; } rect { fill: var(--tone, green); }</style>
+      <g class="hot"><rect id="edited" width="8" height="8"/></g>
+      <rect id="clean" x="8" width="8" height="8"/>
+    </svg>)svg";
+  auto actual = ParseSource(source);
+  Renderer renderer;
+  renderer.draw(actual);
+  const auto control = actual.querySelector("#clean");
+  ASSERT_THAT(control, testing::Optional(testing::_));
+  const auto cleanHandle = control->unsafeEntityHandle();
+  const auto cleanRecord = cleanHandle.get<ComputedStyleComponent>().style;
+  const auto before = Counters(actual);
+  const auto start = source.find("#f00");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 4)},
+      .replacement = "#00f",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+  auto expected = ParseSource(actual.source());
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  const auto work = Counters(actual) - before;
+  EXPECT_THAT(work.fullClears, testing::Eq(0u));
+  EXPECT_THAT(work.elementsCascaded, testing::Eq(2u));
+  EXPECT_THAT(cleanHandle.get<ComputedStyleComponent>().style.get(),
+              testing::Eq(cleanRecord.get()));
+  ExpectSameStyleOutputs(actual, expected);
+  const auto target = actual.querySelector("#edited");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const PaintServer blue = PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255)));
+  EXPECT_THAT(target->getComputedStyle().fill.get(), testing::Optional(blue));
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_selective_custom_value",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleIndexDifferential, SourceRuleEditPreservesShiftedCustomTokenOffsets) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>.old { fill: red; } .spacer { fill: blue; } #r { --tone: rgb(0, 0, 255); fill: var(--tone); }</style>
+      <rect id="r" width="8" height="8"/>
+    </svg>)svg";
+  auto actual = ParseSource(kSource);
+  Renderer renderer;
+  renderer.draw(actual);
+  const auto before = Counters(actual);
+  const std::size_t start = kSource.find(".old");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start + 4), FileOffset::Offset(start + 4)},
+      .replacement = "er",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+  auto expected = ParseSource(actual.source());
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  EXPECT_THAT((Counters(actual) - before).fullClears, testing::Eq(1u));
+  ExpectSameStyleOutputs(actual, expected);
+
+  const auto target = actual.querySelector("#r");
+  const auto referenceTarget = expected.querySelector("#r");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_THAT(referenceTarget, testing::Optional(testing::_));
+  const auto tokenOffset = [](const SVGElement& element) -> std::optional<FileOffset> {
+    const auto* slot = element.unsafeEntityHandle().try_get<ComputedStyleComponent>();
+    if (!slot || !slot->style || !slot->style->customProperties) {
+      return std::nullopt;
+    }
+    const auto* sequence = slot->style->customProperties->find("--tone");
+    return sequence && !sequence->tokens().empty()
+               ? std::optional(sequence->tokens().front().sourceOffset())
+               : std::nullopt;
+  };
+  const auto freshOffset = tokenOffset(*referenceTarget);
+  ASSERT_THAT(freshOffset, testing::Optional(testing::_));
+  EXPECT_THAT(tokenOffset(*target), testing::Eq(freshOffset));
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_shifted_custom_values",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleIndexDifferential, SourceRuleEditMarksPendingOpacityTargetForGeometryRebuild) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>#r { width: 4px; height: 8px; fill: red; }</style>
+      <rect id="r" />
+    </svg>)svg";
+  auto actual = ParseSource(source);
+  Renderer renderer;
+  renderer.draw(actual);
+  auto target = actual.querySelector("#r");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  target->setAttribute("opacity", "0.5");
+  const auto handle = target->unsafeEntityHandle();
+  ASSERT_THAT(handle.try_get<ComputedStyleComponent>(), testing::IsNull());
+  const auto paintDirty = [&] {
+    return handle.get<DirtyFlagsComponent>().test(DirtyFlagsComponent::Paint);
+  };
+  ASSERT_THAT(paintDirty(), testing::IsFalse());
+
+  const auto start = std::string_view(actual.source()).find("4px");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 1)},
+      .replacement = "8",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+  EXPECT_THAT(paintDirty(), testing::IsTrue());
+
+  auto expected = ParseSource(actual.source());
+  auto referenceTarget = expected.querySelector("#r");
+  ASSERT_THAT(referenceTarget, testing::Optional(testing::_));
+  referenceTarget->setAttribute("opacity", "0.5");
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  ExpectSameStyleOutputs(actual, expected);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_geometry_after_pending_opacity",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleIndexDifferential, SourceRuleEditLayerOrderUsesCanonicalFrame) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>
+        @layer base, theme;
+        @layer base { #r { --tone: red; } }
+        @layer theme { rect { --tone: blue; fill: var(--tone); } }
+      </style>
+      <rect id="r" width="8" height="8"/>
+    </svg>)svg";
+  auto actual = ParseSource(kSource);
+  Renderer renderer;
+  renderer.draw(actual);
+  const auto before = Counters(actual);
+  constexpr std::string_view order = "base, theme";
+  const auto start = kSource.find(order);
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + order.size())},
+      .replacement = "theme, base",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+  auto expected = ParseSource(actual.source());
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  EXPECT_THAT((Counters(actual) - before).fullClears, testing::Eq(1u));
+  ExpectSameStyleOutputs(actual, expected);
+  const auto target = actual.querySelector("#r");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const PaintServer red = PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)));
+  EXPECT_THAT(target->getComputedStyle().fill.get(), testing::Optional(red));
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_layer_order_edit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleIndexDifferential, SourceRuleHasEditFallsBackToCanonicalFrame) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>g:has(.old) { fill: red; }</style>
+      <g><rect class="new" width="8" height="8"/></g>
+    </svg>)svg";
+  auto actual = ParseSource(kSource);
+  Renderer renderer;
+  renderer.draw(actual);
+  const auto before = Counters(actual);
+  const std::size_t start = kSource.find(".old");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 4)},
+      .replacement = ".new",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+
+  auto expected = ParseSource(actual.source());
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  EXPECT_THAT((Counters(actual) - before).fullClears, testing::Eq(1u));
+  ExpectSameStyleOutputs(actual, expected);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_has_source_edit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleIndexDifferential, SourceRuleEditPreservesShiftedDeferredValueOffsets) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>.old { fill: red; } .spacer { fill: blue; } #r { width: 8px; }</style>
+      <rect id="r" class="new" height="8"/>
+    </svg>)svg";
+  auto actual = ParseSource(kSource);
+  Renderer renderer;
+  renderer.draw(actual);
+  const auto before = Counters(actual);
+  const std::size_t start = kSource.find(".old");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start + 4), FileOffset::Offset(start + 4)},
+      .replacement = "er",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+
+  auto expected = ParseSource(actual.source());
+  Renderer reference;
+  reference.draw(expected);
+  renderer.draw(actual);
+  EXPECT_THAT((Counters(actual) - before).fullClears, testing::Eq(1u));
+  ExpectSameStyleOutputs(actual, expected);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), reference.takeSnapshot(),
+                                       "stylesheet_shifted_deferred_value",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(StyleIndexDifferential, SourceRuleEditAfterRefusalReplaysCanonicalFrame) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <style>.old { fill: red; } .control { fill: blue; }</style>
+      <rect class="old" width="4" height="4"/>
+      <rect class="control" x="8" width="4" height="4"/>
+    </svg>)svg";
+  auto actual = ParseSource(kSource);
+  StyleResourceBudget::Limits initialLimits;
+  initialLimits.ruleElementMatches = 1;
+  auto& ctx = actual.registry().ctx();
+  ctx.emplace<StyleResourceBudget>(initialLimits);
+  const auto initial = PrepareFirstFrameWithDiagnostics(actual);
+  ASSERT_THAT(initial.counters.budgetRejections, testing::Gt(0u));
+  ctx.erase<StyleResourceBudget>();
+  ctx.emplace<StyleResourceBudget>();
+
+  const std::size_t start = kSource.find(".old");
+  ASSERT_THAT(start, testing::Ne(std::string_view::npos));
+  const auto edit = actual.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(start + 4)},
+      .replacement = ".new",
+      .sourceVersion = actual.sourceVersion(),
+  });
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+
+  auto expected = ParseSource(actual.source());
+  const auto fresh = PrepareFirstFrameWithDiagnostics(expected);
+  const auto replayed = PrepareFirstFrameWithDiagnostics(actual);
+  EXPECT_THAT(replayed.counters.fullClears, testing::Eq(1u));
+  EXPECT_THAT(replayed.styleBudgetRejected, testing::IsFalse());
+  EXPECT_THAT(replayed.warnings, ::testing::ElementsAreArray(fresh.warnings));
+  ExpectSameStyleOutputs(actual, expected);
+  EXPECT_THAT(PositionedRenderInstances(actual),
+              ::testing::ElementsAreArray(PositionedRenderInstances(expected)));
 }
 
 TEST(StyleIndexDifferential, StylesheetEditsReplaceAncestorHashes) {

@@ -4312,14 +4312,22 @@ TEST(AsyncRendererTest, SelectedSplashStylesheetSourceEditMatchesFreshCompositor
   const std::size_t initialFillOffset = source.find(originalFill, ruleOffset);
   ASSERT_NE(initialFillOffset, std::string::npos);
   source.replace(initialFillOffset, originalFill.size(), "fill: red;");
+  const std::size_t svgEnd = source.rfind("</svg>");
+  ASSERT_NE(svgEnd, std::string::npos);
+  source.insert(
+      svgEnd,
+      R"(<rect id="Cached_Style_Probe" class="cls-5" x="10" y="10" width="20" height="20"/>)");
 
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(source));
   app.document().document().setCanvasSize(892, 512);
   const auto selected = app.document().document().querySelector("#Donner_D");
   ASSERT_TRUE(selected.has_value());
+  const auto cachedStyleProbe = app.document().document().querySelector("#Cached_Style_Probe");
+  ASSERT_THAT(cachedStyleProbe, ::testing::Optional(::testing::_));
   app.setSelection(*selected);
   const Entity entity = selected->unsafeEntityHandle().entity();
+  ASSERT_NE(cachedStyleProbe->unsafeEntityHandle().entity(), entity);
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -4367,7 +4375,7 @@ TEST(AsyncRendererTest, SelectedSplashStylesheetSourceEditMatchesFreshCompositor
   ASSERT_TRUE(green.has_value());
   ASSERT_TRUE(green->compositedPreview.has_value());
   EXPECT_GT(asyncRenderer.compositorRenderFrameStats().cachedTileCount, 0)
-      << "stylesheet edits must re-rasterize cached compositor layers";
+      << "a stylesheet edit matching an unselected element must re-rasterize its cached layer";
   const auto greenLayer = findSelectedLayer(green->compositedPreview->tiles);
   ASSERT_NE(greenLayer, green->compositedPreview->tiles.end());
   const auto countersAfter = asyncRenderer.compositorFastPathCountersForTesting();
