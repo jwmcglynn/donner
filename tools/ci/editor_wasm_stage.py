@@ -12,7 +12,7 @@ so the workflow step is a single invocation. Uploading what it stages stays in t
                  $RUNNER_TEMP/editor-wasm-package-geode, and write `package_target` and
                  `handoff_dir`.
   candidate      Stage $RUNNER_TEMP/donner-editor-wasm-geode-$GITHUB_SHA from the handoff: the
-                 checked package under site/, the served files with a gzip-encoded editor.wasm
+                 checked package under site/, the served files with gzip-encoded editor modules
                  under deploy/, the proved MODULE.bazel.lock, provenance.json and a SHA256SUMS
                  manifest of site/ and deploy/. Needs PACKAGE_TARGET, GITHUB_RUN_ID and
                  GITHUB_RUN_ATTEMPT; writes `candidate_dir`.
@@ -38,24 +38,27 @@ from collections.abc import Callable, Mapping
 
 PACKAGE_ALIAS = "//tools/ci:editor_wasm_package"
 # The files every package serves besides the catalog fonts that catalog-fonts.json lists.
+WASM_MODULES = ("editor.wasm", "editor-asyncify.wasm")
 SITE_FILES = (
     "CatalogFontNotices.txt",
     "browser-file-dialogs.js",
     "catalog-fonts.js",
     "catalog-fonts.json",
     "donner_icon.svg",
+    "editor-asyncify.js",
     "editor-bootstrap.js",
+    "editor-jspi.js",
     "editor.css",
     "editor.js",
-    "editor.wasm",
+    *WASM_MODULES,
     "enable-threads.js",
     "index.html",
     "packaged-resources.js",
     "packaged-resources.json",
     "packaged-resource-loader.js",
 )
-# The served files copied unchanged to deploy/; editor.wasm is served gzip-encoded instead.
-DEPLOY_FILES = tuple(name for name in SITE_FILES if name != "editor.wasm")
+# The server negotiates a precompressed representation of each runtime module.
+DEPLOY_FILES = tuple(name for name in SITE_FILES if name not in WASM_MODULES)
 MAX_DEPLOYED_WASM_GZIP_BYTES = 20 * 1024 * 1024
 NPM_LOCKFILE = "donner/editor/wasm/tests/package-lock.json"
 LABEL = re.compile(r"//[a-zA-Z0-9_./-]+:[a-zA-Z0-9_./-]+")
@@ -270,16 +273,17 @@ def stage_candidate(environ: Mapping[str, str]) -> None:
         _copy_file(site_dir / name, deploy_dir / name)
     _copy_tree(site_dir / "fonts", deploy_dir / "fonts")
     _copy_tree(site_dir / "assets", deploy_dir / "assets")
-    compressed = deploy_dir / "editor.wasm.gz"
-    with open(compressed, "wb") as stream:
-        status = subprocess.run(["gzip", "-n", "-9", "-c", str(site_dir / "editor.wasm")],
-                                stdout=stream, check=False).returncode
-    if status != 0:
-        raise StageError("gzip failed with exit status %d" % status, status)
-    size = compressed.stat().st_size
-    if size > MAX_DEPLOYED_WASM_GZIP_BYTES:
-        raise StageError("editor.wasm.gz is %d bytes, over the %d byte limit" % (
-            size, MAX_DEPLOYED_WASM_GZIP_BYTES))
+    for module in WASM_MODULES:
+        compressed = deploy_dir / (module + ".gz")
+        with compressed.open("wb") as stream:
+            status = subprocess.run(["gzip", "-n", "-9", "-c", str(site_dir / module)],
+                                    stdout=stream, check=False).returncode
+        if status != 0:
+            raise StageError("gzip failed with exit status %d" % status, status)
+        size = compressed.stat().st_size
+        if size > MAX_DEPLOYED_WASM_GZIP_BYTES:
+            raise StageError("%s is %d bytes, over the %d byte limit" % (
+                compressed.name, size, MAX_DEPLOYED_WASM_GZIP_BYTES))
 
     # lockfile_sha256 is the browser harness npm lock; generated_lock_sha256 is the
     # MODULE.bazel.lock proved by the package build and retained beside the package.

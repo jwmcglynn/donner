@@ -225,6 +225,9 @@ class EditorWasmStageTest(unittest.TestCase):
         (package / "editor.js").write_text("\n".join(f"Module.{name}={name};" for name in (
             "callMain", "HEAPU8", "_malloc", "_free", "_DonnerPackagedResourceManifest",
             "_DonnerInstallPackagedResource", "_DonnerFailPackagedResource")))
+        (package / "editor-asyncify.js").write_bytes((package / "editor.js").read_bytes())
+        (package / "editor-asyncify.wasm").write_bytes(b"\0asm\1\0\0\0\0\2\1a")
+        (package / "editor-jspi.js").write_text("probe")
         (package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
         fonts = []
         for index, family in enumerate(FAMILIES):
@@ -265,11 +268,12 @@ class EditorWasmStageTest(unittest.TestCase):
         self.assertEqual(self.output.read_text(), "candidate_dir=%s\n" % candidate)
         self.assertEqual(_files(candidate / "site"), expected)
         deploy = _files(candidate / "deploy")
-        compressed = deploy.pop("editor.wasm.gz")
-        self.assertEqual(gzip.decompress(compressed), expected.pop("editor.wasm"))
-        # gzip -n: no name and no timestamp, so the bytes depend only on the module.
-        self.assertEqual(compressed[3] & 0x08, 0)
-        self.assertEqual(compressed[4:8], b"\0\0\0\0")
+        for module in ("editor.wasm", "editor-asyncify.wasm"):
+            compressed = deploy.pop(module + ".gz")
+            self.assertEqual(gzip.decompress(compressed), expected.pop(module))
+            # gzip -n omits both the source filename and timestamp.
+            self.assertEqual(compressed[3] & 0x08, 0)
+            self.assertEqual(compressed[4:8], b"\0\0\0\0")
         self.assertEqual(deploy, expected)
         module_lock = (self.runner_temp / "editor-wasm-module.lock").read_bytes()
         # The candidate retains the proved module lock outside the served trees.
@@ -337,6 +341,8 @@ class EditorWasmStageTest(unittest.TestCase):
             "mismatched-resource-metadata": lambda package: (package / "packaged-resources.js").write_text("wrong"),
             "extra-font": lambda package: (package / "fonts/extra.woff2").write_bytes(b"x"),
             "extra-root-file": lambda package: (package / "unexpected.txt").write_text("x"),
+            "missing-fallback": lambda package: (package / "editor-asyncify.wasm").unlink(),
+            "missing-selector": lambda package: (package / "editor-jspi.js").unlink(),
             "missing-broker": lambda package: (package / "catalog-fonts.js").unlink(),
             "missing-file-dialogs": lambda package: (package / "browser-file-dialogs.js").unlink(),
             "missing-module-lock":

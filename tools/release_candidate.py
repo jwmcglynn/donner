@@ -110,6 +110,11 @@ EDITOR_RESOURCE_FILES = {f"{prefix}/{name}" for prefix in ("site", "deploy")
                                       "packaged-resource-loader.js")}
 
 EDITOR_DIALOG_FILES = {"site/browser-file-dialogs.js", "deploy/browser-file-dialogs.js"}
+EDITOR_FALLBACK_FILES = {
+    "site/editor-asyncify.wasm", "deploy/editor-asyncify.wasm.gz",
+    *(f"{tree}/{name}" for tree in ("site", "deploy")
+      for name in ("editor-jspi.js", "editor-asyncify.js")),
+}
 
 
 def _canonical_bytes(value: dict) -> bytes:
@@ -335,6 +340,8 @@ def _verify_role_files(role: str, names: set[str], version: str) -> None:
         required.update(_editor_resource_files(names))
         if names & EDITOR_RESOURCE_FILES:
             required.update(EDITOR_RESOURCE_FILES)
+        if names & EDITOR_FALLBACK_FILES:
+            required.update(EDITOR_FALLBACK_FILES)
         if names & EDITOR_DIALOG_FILES:
             required.update(EDITOR_DIALOG_FILES)
     elif role == "bcr-entry":
@@ -558,10 +565,8 @@ def _historical_dialog_digest(read, raw_digest: str) -> str:
     raise ValueError("unrecognized historical editor dialog script packaging")
 
 
-def _dialog_source_objects(root, commit):
+def _editor_source_objects(root, commit, names):
     prefix = "donner/editor/wasm/"
-    names = ("browser-file-dialogs.js", "browser-file-dialogs.release.json", "BUILD.bazel",
-             "tests/BUILD.bazel", "tests/pnpm-lock.yaml")
     git = ["git", "--no-replace-objects", "-C", str(root)]
     listing = subprocess.check_output([*git, "ls-tree", "-z", "--full-tree", _commit(commit, "editor source"),
                                        "--", *(prefix + name for name in names)])
@@ -572,13 +577,14 @@ def _dialog_source_objects(root, commit):
         meta, path = entry.decode("ascii").split("\t")
         mode, kind, oid = meta.split()
         if mode not in ("100644", "100755") or kind != "blob":
-            raise ValueError("editor dialog script inputs must be committed regular files")
+            raise ValueError("editor package inputs must be committed regular files")
         objects[path.removeprefix(prefix)] = oid
     return objects
 
 
 def _source_bound_dialog_digest(root: Path, commit: str) -> str | None:
-    objects = _dialog_source_objects(root, commit)
+    objects = _editor_source_objects(root, commit, ("browser-file-dialogs.js", "browser-file-dialogs.release.json",
+                                                  "BUILD.bazel", "tests/BUILD.bazel", "tests/pnpm-lock.yaml"))
 
     def read(name):
         if name not in objects:
@@ -607,6 +613,33 @@ def _verify_editor_dialog_script(root: Path, commit: str, expected: dict[str, st
     actual = {name: expected[name] for name in EDITOR_DIALOG_FILES if name in expected}
     if actual != required:
         raise ValueError("editor dialog script differs from the selected source")
+
+
+def _editor_runtime_modules(root: Path, commit: str, expected: dict[str, str]) -> tuple[str, ...]:
+    """Bind the runtime inventory to the default index in the selected source revision."""
+    names = ("index.html", "editor-jspi.js")
+    objects = _editor_source_objects(root, commit, names)
+    git = ["git", "--no-replace-objects", "-C", str(root), "cat-file", "blob"]
+    index = subprocess.check_output([*git, objects["index.html"]]) if "index.html" in objects else b""
+    dual_runtime = b"data-asyncify-fallback" in index
+    extra = EDITOR_FALLBACK_FILES.intersection(expected)
+    if extra != (EDITOR_FALLBACK_FILES if dual_runtime else set()):
+        raise ValueError("editor runtime inventory differs from the selected source")
+    if not dual_runtime:
+        return ("editor.wasm",)
+    if "editor-jspi.js" not in objects:
+        raise ValueError("missing editor runtime selector in the selected source")
+    selector = subprocess.check_output([*git, objects["editor-jspi.js"]])
+    for name, data in (("index.html", index), ("editor-jspi.js", selector)):
+        digest = hashlib.sha256(data).hexdigest()
+        if any(expected.get(f"{tree}/{name}") != digest for tree in ("site", "deploy")):
+            raise ValueError("editor runtime selector or index differs from the selected source")
+    for glue in ("editor.js", "editor-asyncify.js"):
+        if not expected.get("site/" + glue) or expected["site/" + glue] != expected.get("deploy/" + glue):
+            raise ValueError("editor deployed runtime glue differs from the retained copy")
+    if expected["site/editor.wasm"] == expected["site/editor-asyncify.wasm"]:
+        raise ValueError("editor runtime modules must be distinct")
+    return ("editor.wasm", "editor-asyncify.wasm")
 
 
 def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str, str],
@@ -647,8 +680,9 @@ def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str,
     if checksums != {name: sha for name, sha in expected.items() if name.startswith(("site/", "deploy/"))}:
         raise ValueError("editor package checksum manifest differs from retained files")
     _verify_editor_dialog_script(root, commit, expected)
-    _verify_editor_wasm(directory / "site/editor.wasm", directory / "deploy/editor.wasm.gz",
-                        release_macos_editor._expected_build_info(root, commit))
+    identity = release_macos_editor._expected_build_info(root, commit)
+    for name in _editor_runtime_modules(root, commit, expected):
+        _verify_editor_wasm(directory / "site" / name, directory / "deploy" / (name + ".gz"), identity)
     return generated_lock
 
 
