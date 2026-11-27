@@ -786,6 +786,16 @@ public:
         BrowserObjectKind::Texture, destinationTextureId);
   }
 
+  /// Annotate the combined final boundary for the fake Geode transport model.
+  bool modelsCombinedSubmission = false;
+
+  BridgeStatus finishAndSubmitCommandBuffers(uint64_t submissionSerial) override {
+    if (modelsCombinedSubmission) {
+      calls->push_back("finishAndSubmitCommandBuffers");
+    }
+    return BrowserBridge::finishAndSubmitCommandBuffers(submissionSerial);
+  }
+
   BridgeStatus endCommandBuffer(uint64_t submissionSerial) override {
     const std::string line = std::format("endCommandBuffer serial={}", submissionSerial);
     if (const BridgeStatus status = requireEncoder(line); status != BridgeStatus::Success) {

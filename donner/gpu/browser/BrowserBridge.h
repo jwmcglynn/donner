@@ -556,6 +556,13 @@ public:
   /// @param submissionSerial Serial the runtime assigned.
   virtual BridgeStatus submitCommandBuffers(uint64_t submissionSerial) = 0;
 
+  /// Finish the final open buffer and submit this group, stopping on the first refusal.
+  /// @param submissionSerial Serial the runtime assigned.
+  virtual BridgeStatus finishAndSubmitCommandBuffers(uint64_t submissionSerial) {
+    const BridgeStatus finished = endCommandBuffer(submissionSerial);
+    return finished == BridgeStatus::Success ? submitCommandBuffers(submissionSerial) : finished;
+  }
+
   // Host mapping.
 
   /// Begins mapping a buffer range for host reads. @param mappingId Identifier to register the
