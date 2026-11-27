@@ -25,6 +25,8 @@ COMMON_FLAGS = (
     "--config=ci",
     "-c",
     "opt",
+    "--build_tag_filters=perf",
+    "--test_tag_filters=perf",
     "--test_env=DONNER_BROWSER_LATENCY_GATES=report",
     "--test_env=DONNER_BROWSER_COMPLETION_CHECKS=report",
 )
@@ -32,7 +34,7 @@ TEST_FLAGS = (
     "--local_test_jobs=1",
     "--keep_going",
     "--nocache_test_results",
-    "--test_output=summary",
+    "--test_output=all",
     "--test_arg=--grep=masked crown drag",
 )
 
@@ -43,9 +45,24 @@ def write_json(path, value):
     temporary.replace(path)
 
 
+def bazel_for_arm(root, arm):
+    output_root = root / "bazel"
+    return [
+        "bazelisk",
+        f"--output_user_root={output_root}",
+        f"--output_base={output_root / arm}",
+    ]
+
+
+def test_command(root, arm, period):
+    return [
+        *bazel_for_arm(root, arm), "test", *COMMON_FLAGS, *TEST_FLAGS,
+        f"--build_event_json_file={period / 'events.json'}", *TARGETS,
+    ]
+
+
 def run(root):
     checked_out = {}
-    bazel = ["bazelisk", f"--output_user_root={root / 'bazel'}"]
     for arm, revision in REVISIONS.items():
         tree = root / arm
         subprocess.run(["git", "worktree", "add", "--detach", tree, revision], check=True)
@@ -53,25 +70,20 @@ def run(root):
         if observed.strip() != revision:
             raise RuntimeError(f"{arm} checkout does not match its fixed revision")
         checked_out[arm] = tree
-        subprocess.run([*bazel, "build", *COMMON_FLAGS, *TARGETS], cwd=tree, check=True)
+        subprocess.run([*bazel_for_arm(root, arm), "build", *COMMON_FLAGS, *TARGETS], cwd=tree, check=True)
 
     for index, arm in enumerate(ORDER, 1):
         period = root / str(index)
         period.mkdir()
         status = {"arm": arm, "revision": REVISIONS[arm], "bazelExit": None}
         write_json(period / "status.json", status)
-        result = subprocess.run(
-            [
-                *bazel, "test", *COMMON_FLAGS, *TEST_FLAGS,
-                f"--build_event_json_file={period / 'events.json'}", *TARGETS,
-            ],
-            cwd=checked_out[arm],
-            check=False,
-        )
+        result = subprocess.run(test_command(root, arm, period), cwd=checked_out[arm], check=False)
         status["bazelExit"] = result.returncode
         write_json(period / "status.json", status)
         # The next use of this arm's workspace can overwrite all native Bazel test outputs.
-        snapshot_period(root, index)
+        targets = snapshot_period(root, index)
+        if result.returncode not in (0, 3) or not targets:
+            raise RuntimeError(f"{arm} period {index}: Bazel did not complete test selection/execution")
 
 
 def collect_target(event, directory, output_root):

@@ -180,7 +180,7 @@ jobs:
       - name: Checkout the fixed comparison history
         uses: actions/checkout@v7
         with:
-          fetch-depth: 4
+          fetch-depth: 5
           persist-credentials: false
 
       - name: Select pinned Xcode
