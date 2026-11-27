@@ -1,357 +1,69 @@
 name: BCR Preflight
 
-# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
-env:
-  DO_NOT_TRACK: "1"
-  ASPECT_TOOLS_TELEMETRY: "-all"
-
 on:
-  # A pull request runs the preflight only when it changes the registry entry or the preflight
-  # itself: the BCR templates (.bcr), the module file the entry copies (MODULE.bazel), whose
-  # registry admission and consumer resolution on both supported Bazel majors only this
-  # workflow checks, the export rules that shape the source archive (.gitattributes), the
-  # example consumer module, which no other workflow builds, the preflight's own tools
-  # (tools/bcr_*) and the preflight and publication workflows. Every other input, including the
-  # rest of the build graph, is built and tested by CI on the pull request. What only this
-  # workflow checks of those (the release CLI and native editor builds in the release
-  # configuration and their NOTICE coverage) runs nightly on main, so a regression there
-  # surfaces within a day, and a release needs a successful run dispatched on main for its
-  # exact commit (docs/release_candidate.md). Main pushes do not run it.
-  # tools/security_workflow_policy_tests.py checks that the preflight's own tools and the
-  # registry inputs start it and that general build-graph, packaging and source changes do not.
-  pull_request:
-    paths:
-      - .bcr/**
-      - .gitattributes
-      - MODULE.bazel
-      - .github/workflows/bcr_preflight.yml
-      - .github/workflows/publish_bcr.yml
-      - examples/bazel_consumer/**
-      - tools/bcr_*
-  # Every run is the full matrix, which qualifies a release candidate: nightly, on request, and
-  # for a pull request above.
-  schedule:
-    # After the other nightly workflows (latest: Coverage at 08:15 UTC).
-    - cron: "35 8 * * *"
   workflow_dispatch:
-
-# A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
-# Only opened, synchronize and reopened events share the per-PR group. Every other run
-# (schedule, dispatch, or a call from an edit) has a group of its own and is never cancelled.
-# tools/ci_concurrency_policy_tests.py owns this exact setting.
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') && format('ci-{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('ci-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') }}
 
 permissions:
   contents: read
 
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+  PRODUCER_COMMIT: 3f9011f1bf2efec8694795d45875ab5317a2caef
+
 jobs:
-  prepare:
-    runs-on: ubuntu-26.04
-    defaults:
-      run:
-        working-directory: donner
-    outputs:
-      source_commit: ${{ steps.archive.outputs.source_commit }}
-      source_artifact: donner-bcr-source-${{ steps.archive.outputs.producer_run_attempt }}
-      entry_artifact: donner-bcr-entry-${{ steps.archive.outputs.producer_run_attempt }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          path: donner
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Prepare committed source archive
-        id: archive
-        run: |
-          python3 -B -m tools.bcr_source archive \
-            --output "$RUNNER_TEMP/donner-bcr/artifacts" --github-output "$GITHUB_OUTPUT"
-
-      # An explicit ref: without one the checkout asks the REST API for the default branch,
-      # which spends the repository's shared hourly API budget and fails when it is exhausted.
-      - name: Checkout current BCR admission tools and registry metadata
-        uses: actions/checkout@v7
-        with:
-          repository: bazelbuild/bazel-central-registry
-          ref: main
-          path: upstream-bcr
-          persist-credentials: false
-
-      - name: Prepare a disposable registry
-        env:
-          VERSION: ${{ steps.archive.outputs.version }}
-        run: |
-          python3 -B -m tools.bcr_source registry --upstream ../upstream-bcr \
-            --output "$RUNNER_TEMP/donner-bcr/registry" --version "$VERSION"
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
-          package-manager-cache: false
-
-      - name: Generate the candidate BCR entry without publishing
-        uses: bazel-contrib/publish-to-bcr@v1.7.0
-        with:
-          tag: v${{ steps.archive.outputs.version }}
-          module-version: ${{ steps.archive.outputs.version }}
-          # Select the root template set; MODULE.bazel is read from the archive.
-          module-roots: .
-          templates-dir: donner/.bcr
-          local-registry: ${{ runner.temp }}/donner-bcr/registry
-          local-artifact-path: ${{ runner.temp }}/donner-bcr/artifacts
-          attest: false
-
-      - name: Validate registry admission against the candidate bytes
-        env:
-          SOURCE_COMMIT: ${{ steps.archive.outputs.source_commit }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 -B -m tools.bcr_preflight admission --upstream ../upstream-bcr
-
-      - name: Preserve candidate source bytes
-        uses: actions/upload-artifact@v7
-        with:
-          name: donner-bcr-source-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/artifacts/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
-
-      - name: Preserve admission evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: donner-bcr-entry-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/donner-bcr/registry/
-            ${{ runner.temp }}/donner-bcr/admission.json
-          if-no-files-found: ignore
-          retention-days: 90
-
-  consumer:
-    needs: prepare
+  native-producer:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, xcode-27]
-        bazel: ['7.x', '8.x']
+        include:
+          - os: ubuntu-26.04
+            platform: linux-x86-64
+            architecture: x86_64
+          - os: xcode-27
+            platform: darwin-arm64
+            architecture: arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 65
     env:
-      USE_BAZEL_VERSION: ${{ matrix.bazel }}
-      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Select pinned Xcode
-        if: runner.os == 'macOS'
-        shell: bash
-        run: tools/ci_select_macos_xcode.sh
-      - uses: bazel-contrib/setup-bazel@0.19.2
-        with:
-          bazelisk-cache: true
-          disk-cache: bcr-${{ matrix.os }}-${{ matrix.bazel }}-${{ env.DONNER_CI_XCODE_IDENTITY }}
-          repository-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.prepare.outputs.source_artifact }}
-          path: ${{ runner.temp }}/donner-bcr/artifacts
-      - uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.prepare.outputs.entry_artifact }}
-          path: ${{ runner.temp }}/donner-bcr/entry
-      # Test and build from a consumer module, then audit the configured
-      # closure of the Donner libraries it built (tools/bcr_preflight.py).
-      - name: Exercise the archive through registry resolution
-        run: python3 -B -m tools.bcr_preflight consumer
-
-  cli-linux:
-    needs: prepare
-    runs-on: ubuntu-26.04
-    env:
-      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: bazel-contrib/setup-bazel@0.19.2
-        with:
-          bazelisk-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-      - name: Install CLI build dependencies
-        run: sudo apt-get install -y clang libncurses-dev lld
-      # Resolve, prove the lockfile, test NOTICE coverage, then package
-      # (tools/bcr_preflight.py).
-      - name: Build and bind the Linux CLI to the preflight candidate
-        run: python3 -B -m tools.bcr_preflight cli --platform linux-x86-64
-      - name: Retain paired native diagnostics
-        if: ${{ github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: donner-native-symbols-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-native-symbols/linux-x86-64/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
-          overwrite: false
-      - uses: actions/upload-artifact@v7
-        with:
-          name: donner-cli-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-cli-linux/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
-
-  cli-macos:
-    needs: prepare
-    runs-on: xcode-27
-    env:
-      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
-      # Free space, in GiB, required before the build.
+      PLATFORM: ${{ matrix.platform }}
+      ARCHITECTURE: ${{ matrix.architecture }}
       MIN_FREE_DISK_GIB: "45"
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.PRODUCER_COMMIT }}
           persist-credentials: false
+
       - name: Select pinned Xcode
-        shell: bash
+        if: runner.os == 'macOS'
         run: tools/ci_select_macos_xcode.sh
+
       - name: Free hosted macOS disk
-        shell: bash
+        if: runner.os == 'macOS'
         run: tools/ci/free_hosted_macos_disk.sh
+
       - uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          cache-save: false
+
+      - name: Install CLI build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y clang libncurses-dev lld
+
       - name: Check runner disk space
-        shell: bash
+        if: runner.os == 'macOS'
         run: tools/ci_check_runner_disk.sh
-      - name: Build and bind the macOS CLI to the preflight candidate
-        run: python3 -B -m tools.bcr_preflight cli --platform darwin-arm64
-      - name: Retain paired native diagnostics
-        if: ${{ github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: donner-native-symbols-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-native-symbols/darwin-arm64/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
-          overwrite: false
-      - uses: actions/upload-artifact@v7
-        with:
-          name: donner-cli-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-cli-macos/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
-      - uses: actions/upload-artifact@v7
-        with:
-          name: donner-editor-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-editor-macos/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
 
-  attest-artifacts:
-    if: github.ref == 'refs/heads/main'
-    needs: [prepare, cli-linux, cli-macos]
-    runs-on: ubuntu-26.04
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
-    env:
-      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.prepare.outputs.source_artifact }}
-          path: ${{ runner.temp }}/donner-bcr/source
-      # The CLI artifacts are bound to the attempt that built them; the release path pins that.
-      - id: cli-linux-artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: donner-cli-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/cli-linux
-      - id: cli-macos-artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: donner-cli-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/cli-macos
-      - id: editor-macos-artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: donner-editor-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/editor-macos
-      - name: Explain missing CLI artifacts
-        if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
-        run: python3 -B -m tools.bcr_preflight explain-missing-cli
-      - name: Verify the exact preflight source and CLI bytes
-        run: python3 -B -m tools.bcr_preflight verify --with-source
-      - name: Attest the preflight build artifacts
-        uses: actions/attest-build-provenance@v4.2.2
-        with:
-          subject-path: |
-            ${{ runner.temp }}/donner-bcr/editor-macos/donner-editor_darwin_arm64.zip
-            ${{ runner.temp }}/donner-bcr/editor-macos/donner-editor_darwin_arm64.zip.bazel.lock
-            ${{ runner.temp }}/donner-bcr/editor-macos/donner-editor_darwin_arm64.zip.NOTICE.txt
-            ${{ runner.temp }}/donner-bcr/source/*.tar.gz
-            ${{ runner.temp }}/donner-bcr/cli-linux/donner-cli_linux_x86_64.tar.gz
-            ${{ runner.temp }}/donner-bcr/cli-linux/donner-cli_linux_x86_64.tar.gz.bazel.lock
-            ${{ runner.temp }}/donner-bcr/cli-linux/donner-cli_linux_x86_64.tar.gz.NOTICE.txt
-            ${{ runner.temp }}/donner-bcr/cli-macos/donner-cli_darwin_arm64.zip
-            ${{ runner.temp }}/donner-bcr/cli-macos/donner-cli_darwin_arm64.zip.bazel.lock
-            ${{ runner.temp }}/donner-bcr/cli-macos/donner-cli_darwin_arm64.zip.NOTICE.txt
-
-  qualify:
-    needs: [prepare, consumer, cli-linux, cli-macos]
-    runs-on: ubuntu-26.04
-    env:
-      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.prepare.outputs.source_artifact }}
-          path: ${{ runner.temp }}/donner-bcr/artifacts
-      # The CLI artifacts are bound to the attempt that built them; the release path pins that.
-      - id: cli-linux-artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: donner-cli-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/cli-linux
-      - id: cli-macos-artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: donner-cli-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/cli-macos
-      - id: editor-macos-artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: donner-editor-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/editor-macos
-      - name: Explain missing CLI artifacts
-        if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
-        run: python3 -B -m tools.bcr_preflight explain-missing-cli
-      - name: Verify both CLI artifacts from this preflight attempt
-        run: python3 -B -m tools.bcr_preflight verify
-      - name: Bind the source archive to the completed test matrix
+      - name: Verify fresh paired release products without publishing
+        shell: bash
         run: |
-          python3 -B -m tools.bcr_source qualify --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" \
-            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: donner-bcr-qualified-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-bcr/artifacts/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
+          set -euo pipefail
+          test "$(uname -m)" = "$ARCHITECTURE"
+          test "$(git rev-parse HEAD)" = "$PRODUCER_COMMIT"
+          python3 -B -m tools.bcr_preflight --temp "$RUNNER_TEMP" --commit "$PRODUCER_COMMIT" \
+            cli --platform "$PLATFORM" --prepare-native-delivery
+          # The producer has validated the exact digest, identity and allowlisted pair.
+          # Print that JSON receipt only. The executable and symbols stay on the runner.
+          cat "$RUNNER_TEMP/donner-native-symbols/$PLATFORM/custody.json"
