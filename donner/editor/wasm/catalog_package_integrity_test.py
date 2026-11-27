@@ -459,6 +459,21 @@ class CatalogPackageValidationTest(unittest.TestCase):
     def test_complete_deferred_package_passes(self):
         self.assertEqual(validate_package(self.package)["deferred_font_bytes"], 64 * 12)
 
+    def test_dual_runtime_requires_and_validates_both_pairs(self):
+        (self.package / "index.html").write_text(
+            '<script data-asyncify-fallback src="editor-jspi.js"></script>')
+        with self.assertRaisesRegex(ValueError, "Wasm module set"):
+            validate_package(self.package)
+
+        alternate = self.package / "editor-asyncify.wasm"
+        alternate.write_bytes((self.package / "editor.wasm").read_bytes())
+        glue = self.package / "editor-asyncify.js"
+        glue.write_text(self.glue)
+        self.assertEqual(validate_package(self.package)["deferred_font_bytes"], 64 * 12)
+        glue.write_text("Module.callMain=callMain;")
+        with self.assertRaisesRegex(ValueError, "Missing public resource bridge export"):
+            validate_package(self.package)
+
     def test_compact_shipping_catalog_preserves_audit_and_payload_authentication(self):
         from donner.editor.wasm.package_web_files import package_files
 

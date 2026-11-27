@@ -312,24 +312,17 @@ or a deliberate feature removal (operator decision, surfaced not taken).
 ## Editor Wasm suspension
 
 The threaded editor can yield to the browser while GPU work finishes. The default
-web package uses Emscripten Asyncify, which instruments C++ calls so the browser
-can suspend and resume them. The editor also supports a smaller, opt-in build
-that delegates suspension to the browser's WebAssembly JavaScript Promise
-Integration (JSPI) implementation. Both builds retain the editor's rendering
-features. Choose one package for a deployment.
+package carries two independently built runtime pairs and one shared asset set.
+The smaller pair uses WebAssembly JavaScript Promise Integration (JSPI).
+The compatibility pair uses Emscripten Asyncify instrumentation to suspend and
+resume C++ calls. Startup selects one pair before requesting either module or
+glue and uses the same glue for its pthreads.
 
-```sh
-bazel build --config=editor-wasm \
-  --//donner/editor/wasm:browser_managed_suspension=true \
-  //donner/editor/wasm:wasm_web_package
-```
-
-The opt-in package checks a real suspending Wasm import and promise-returning
-export in a shared-memory worker before requesting the editor module or glue.
-The timer probe does not depend on visible animation frames. A browser that
-cannot complete the check gets instructions to use
-the standard package. Each build is self-contained and a startup requests one
-flavor.
+The selector tests a real suspending Wasm import and promise-returning export
+in a shared-memory worker. The timer probe does not depend on visible animation
+frames. Failed probes select Asyncify. After choosing a runtime, the loader
+keeps that choice through startup and shutdown. Both runtimes use the same
+rendering features and resource manifests.
 
 Timer and animation-frame callbacks start a new JavaScript stack. Scheduled
 editor work in the JSPI build enters through a named promise-returning Wasm
@@ -338,18 +331,14 @@ worker frame driver schedules its next tick after the promise settles.
 Generation and admission checks still guard queued events and shutdown.
 Presentation keeps the original fence deadline.
 
-To qualify the optional build, pass the same flag to the existing
-`//donner/editor/wasm/tests:chromium_editor_startup_test`,
-`//donner/editor/wasm/tests:chromium_editor_smoke_test`,
-`//donner/editor/wasm/tests:ci_darwin_perf_browser_responsiveness_perf_test_firefox_dpr1`,
-and `//donner/editor/wasm/tests:webkit_editor_carousel_test` targets. Startup
-checks that missing suspension support requests neither editor Wasm nor glue.
-Firefox checks held motion, pixel transfer, and a new frame after delayed
-completion releases. Chromium smoke covers shutdown while raster work is
-held. The affected graph also runs
-`//donner/editor/wasm/tests:ci_darwin_chromium_editor_jspi_startup_test` against the
-opt-in package and asserts the expected bootstrap is served. Default
-publication uses the standard package.
+The package size check applies the Wasm and JavaScript ceilings to each
+runtime, bounds one runtime plus its shared assets, and separately bounds
+the full dual-runtime installation. A single-runtime installation can also
+be built explicitly. The Chromium JSPI startup test verifies that its
+JSPI-only package refuses an unsupported worker before requesting editor
+assets. Firefox checks held motion, pixel transfer, and a new frame after
+delayed completion releases. Chromium smoke covers shutdown while raster
+work is held.
 
 ## Ranked opportunities
 
