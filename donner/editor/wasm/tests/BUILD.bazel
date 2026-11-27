@@ -369,7 +369,7 @@ editor_browser_test(
     name = "chromium_editor_startup_test",
     project = "chromium-default",
     sources = [":editor_browser_startup_sources"],
-    specs = ["boot-presentation.spec.ts", "browser-backend-selection.spec.ts"],
+    specs = ["boot-presentation.spec.ts", "browser-backend-selection.spec.ts", "default-runtime-selection.spec.ts"],
 )
 
 editor_browser_test(
@@ -394,6 +394,7 @@ editor_browser_test(
         "browser-backend-selection.spec.ts",
         "browser-presentation-regression.spec.ts",
         "browser-surface-recovery.spec.ts",
+        "default-runtime-selection.spec.ts",
         "smoke.spec.ts",
     ],
 )
@@ -402,7 +403,7 @@ editor_browser_test(
     name = "webkit_editor_carousel_test",
     project = "webkit-geode-carousel",
     sources = [":editor_browser_presentation_sources", ":editor_browser_smoke_sources"],
-    specs = ["browser-presentation-regression.spec.ts", "smoke.spec.ts"],
+    specs = ["browser-presentation-regression.spec.ts", "default-runtime-selection.spec.ts", "smoke.spec.ts"],
 )
 
 editor_browser_test(
