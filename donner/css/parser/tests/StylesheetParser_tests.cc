@@ -953,6 +953,11 @@ TEST(StylesheetParser, FontFaceSrcKeepsStringUrlAndIdentFormat) {
           "urlfallback", ElementsAre(UrlFontSourceIs("font-string.woff", "opentype", IsEmpty())))));
 }
 
+auto SourceRangeIs(const SourceRange& expected) {
+  return AllOf(Field("start", &SourceRange::start, Eq(expected.start)),
+               Field("end", &SourceRange::end, Eq(expected.end)));
+}
+
 TEST(StylesheetTextEdit, RebasedTypedValuesEqualAFullParse) {
   constexpr std::string_view before = "g{opacity:0.5} rect{fill:red} :not(:is(.a)){x:calc(1 + 2)}";
   const std::size_t start = before.find("red");
@@ -967,8 +972,8 @@ TEST(StylesheetTextEdit, RebasedTypedValuesEqualAFullParse) {
   for (std::size_t i = 0; i < full.rules().size(); ++i) {
     const auto& actual = updated->rules()[i];
     const auto& expected = full.rules()[i];
-    EXPECT_EQ(actual.ruleSourceRange, expected.ruleSourceRange);
-    EXPECT_EQ(actual.selectorSourceRange, expected.selectorSourceRange);
+    EXPECT_THAT(actual.ruleSourceRange, SourceRangeIs(expected.ruleSourceRange));
+    EXPECT_THAT(actual.selectorSourceRange, SourceRangeIs(expected.selectorSourceRange));
     EXPECT_THAT(actual.declarations, testing::ElementsAreArray(expected.declarations));
   }
   EXPECT_EQ(updated->securityStats().componentValues, full.securityStats().componentValues);
@@ -988,8 +993,10 @@ TEST(StylesheetTextEdit, LeadingCommentEditKeepsCommentedRulesInactive) {
   const Stylesheet full = StylesheetParser::Parse(after, warnings);
   ASSERT_THAT(full.rules(), testing::SizeIs(1));
   ASSERT_THAT(updated->rules(), testing::SizeIs(1));
-  EXPECT_EQ(updated->rules().front().ruleSourceRange, full.rules().front().ruleSourceRange);
-  EXPECT_EQ(updated->rules().front().selectorSourceRange, full.rules().front().selectorSourceRange);
+  EXPECT_THAT(updated->rules().front().ruleSourceRange,
+              SourceRangeIs(full.rules().front().ruleSourceRange));
+  EXPECT_THAT(updated->rules().front().selectorSourceRange,
+              SourceRangeIs(full.rules().front().selectorSourceRange));
   EXPECT_THAT(updated->rules().front().declarations,
               ElementsAreArray(full.rules().front().declarations));
 }
@@ -1016,13 +1023,42 @@ TEST(StylesheetTextEdit, ExposingLeadingCharsetKeepsFreshParseAccounting) {
     for (std::size_t index = 0; index < fresh.rules().size(); ++index) {
       SCOPED_TRACE(index);
       EXPECT_THAT(actual.rules()[index].ruleSourceRange,
-                  testing::Eq(fresh.rules()[index].ruleSourceRange));
+                  SourceRangeIs(fresh.rules()[index].ruleSourceRange));
       EXPECT_THAT(actual.rules()[index].declarations,
                   ElementsAreArray(fresh.rules()[index].declarations));
     }
   };
   check(original, before, after, {0, removed.size(), 0}, 1);
   check(StylesheetParser::Parse(after, warnings), after, before, {0, 0, removed.size()}, 3);
+}
+
+TEST(StylesheetTextEdit, ReachingRawRuleLimitRequiresFullParse) {
+  constexpr std::string_view before = "rect{fill:red}";
+  constexpr std::string_view added = "circle{stroke:blue} \n";
+  const std::string after = std::string(before) + std::string(added);
+  constexpr StylesheetParser::TextEdit edit{before.size(), 0, added.size()};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet parsed = StylesheetParser::Parse(before, warnings);
+  const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  const auto withRawCount = [&](std::size_t count) {
+    auto stats = parsed.securityStats();
+    stats.rawRules = count;
+    return Stylesheet(std::vector<SelectorRule>(parsed.rules().begin(), parsed.rules().end()), {},
+                      stats);
+  };
+
+  // Seed only the aggregate count. The real rule window needs just one short insertion.
+  const auto below = StylesheetParser::TryReparseTextEdit(
+      withRawCount(RuleParser::kMaximumRules - 2), before, after, edit);
+  ASSERT_THAT(below, testing::Optional(testing::_));
+  EXPECT_EQ(below->securityStats().rawRules, RuleParser::kMaximumRules - 1);
+  ASSERT_THAT(below->rules(), testing::SizeIs(fresh.rules().size()));
+  EXPECT_THAT(below->rules().back().declarations,
+              ElementsAreArray(fresh.rules().back().declarations));
+
+  const auto atLimit = StylesheetParser::TryReparseTextEdit(
+      withRawCount(RuleParser::kMaximumRules - 1), before, after, edit);
+  EXPECT_THAT(atLimit, testing::Eq(std::nullopt));
 }
 
 TEST(StylesheetTextEdit, UnterminatedRuleFallsBack) {
@@ -1060,7 +1096,7 @@ TEST(StylesheetParser, IncrementalEditRelocatesNestedCustomPropertyTokens) {
     const auto& block = function.values.front().get<SimpleBlock>();
     return block.values.front().sourceOffset();
   };
-  EXPECT_EQ(nestedOffset(declarations[0]), nestedOffset(freshDeclarations[0]));
+  EXPECT_THAT(nestedOffset(declarations[0]), Eq(nestedOffset(freshDeclarations[0])));
   EXPECT_EQ(declarations[1].variableReferences, VariableReferences::Valid);
 }
 
@@ -1090,9 +1126,9 @@ TEST(StylesheetParser, IncrementalDeletionCannotHideNewlyEligibleImport) {
   const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
   EXPECT_THAT(fresh.imports(), ElementsAre(ImportIs("theme.css", 0)));
   ASSERT_THAT(fresh.rules(), testing::SizeIs(1));
-  EXPECT_EQ(fresh.rules()[0].ruleSourceRange.start, FileOffset::Offset(after.find("circle")));
-  EXPECT_EQ(fresh.rules()[0].selectorSourceRange.end,
-            FileOffset::Offset(after.find("circle") + std::string_view("circle").size()));
+  EXPECT_THAT(fresh.rules()[0].ruleSourceRange.start, Eq(FileOffset::Offset(after.find("circle"))));
+  EXPECT_THAT(fresh.rules()[0].selectorSourceRange.end,
+              Eq(FileOffset::Offset(after.find("circle") + std::string_view("circle").size())));
 }
 
 TEST(StylesheetParser, RetainsFontFacesInNestedLayers) {

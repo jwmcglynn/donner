@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "donner/base/Utils.h"
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/base/xml/XMLSourceStore.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -677,7 +678,14 @@ std::optional<css::EditedRuleWindow> ParseProjectedStylesheet(
   return std::nullopt;
 }
 
-std::string_view RuleSourceText(const components::StylesheetComponent& sheet,
+/**
+ * Borrow the authored bytes of one parsed rule.
+ * @param sheet Owning stylesheet. The returned view aliases `sheet.text` and remains valid only
+ *   while that storage is alive and unchanged.
+ * @param rule Rule whose local source range is mapped into the stylesheet text.
+ * @return Borrowed rule bytes, or an empty view when the retained range is invalid.
+ */
+std::string_view RuleSourceText(const components::StylesheetComponent& sheet UTILS_LIFETIME_BOUND,
                                 const css::SelectorRule& rule) {
   const std::string_view source(sheet.text);
   const auto start = rule.ruleSourceRange.start.offset;
@@ -697,9 +705,18 @@ bool RuleRetainsSource(const css::SelectorRule& rule) {
   });
 }
 
+/**
+ * Trim text-identical rules from both ends of an edited rule window.
+ * @param previous Owner of the first returned span.
+ * @param projected Owner of the second returned span.
+ * @param edit Old and new rule ranges produced by incremental stylesheet parsing.
+ * @return Borrowed changed-rule spans. The first remains valid only while
+ *   `previous.stylesheet` is alive and unchanged. The second remains valid only while
+ *   `projected.stylesheet` is alive and unchanged.
+ */
 std::pair<std::span<const css::SelectorRule>, std::span<const css::SelectorRule>>
-TrimUnchangedWindowRules(const components::StylesheetComponent& previous,
-                         const components::StylesheetComponent& projected,
+TrimUnchangedWindowRules(const components::StylesheetComponent& previous UTILS_LIFETIME_BOUND,
+                         const components::StylesheetComponent& projected UTILS_LIFETIME_BOUND,
                          const css::EditedRuleWindow& edit) {
   auto removed = previous.stylesheet.rules().subspan(edit.oldBegin, edit.oldCount);
   auto added = projected.stylesheet.rules().subspan(edit.newBegin, edit.newCount);
