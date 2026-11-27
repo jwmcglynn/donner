@@ -73,7 +73,8 @@ constexpr std::size_t kStartLatencyBucketStart = 48;  // Eight disjoint latency 
 constexpr std::size_t kCanvasFrameActiveUs = 56;
 constexpr std::size_t kCanvasFrames = 57;
 constexpr std::size_t kReceivedDuringCanvasFrame = 58;
-std::array<std::atomic<uint32_t>, 59> gOwnerWaitStats{};
+constexpr std::size_t kPreFrameDispatches = 59;
+std::array<std::atomic<uint32_t>, 60> gOwnerWaitStats{};
 static_assert(kBufferWriteSizeBucketStart + 7 == kBufferWrite256);
 static_assert(kStartLatencyBucketStart + kBrowserGpuOwnerStartLatencyBucketUpperUs.size() + 1 ==
               kCanvasFrameActiveUs);
@@ -143,9 +144,12 @@ std::size_t OperationCounter(BrowserGpuOperationKind kind) {
   FatalAbort("gpu-owner.operation-kind", {{"kind", static_cast<std::int64_t>(kind)}});
 }
 
-std::size_t ExecuteReadyBatch() {
+std::size_t ExecuteReadyBatch(bool beforeFrame = false) {
   const double started = emscripten_get_now();
-  const std::size_t count = gReady.executeBatch();
+  const std::size_t count = beforeFrame ? gReady.executeBatchWhile([started](std::size_t admitted) {
+    return admitted < kMaximumInlineCalls && emscripten_get_now() - started < kMaximumInlineMs;
+  })
+                                        : gReady.executeBatch();
   if (count) {
     gOwnerWaitStats[kBatches].fetch_add(1, std::memory_order_relaxed);
     RecordMaximum(kMaximumBatchSize, static_cast<double>(count));
@@ -400,6 +404,7 @@ void RegisterBrowserGpuOwner() {
       'canvasFrameActiveMs': Atomics.load(HEAPU32, index + 56) / 1000,
       'canvasFrames': Atomics.load(HEAPU32, index + 57),
       'receivedDuringCanvasFrame': Atomics.load(HEAPU32, index + 58),
+      'preFrameDispatches': Atomics.load(HEAPU32, index + 59),
       'timingSaturated': [10, 11, 20, 44, 45, 46, 47, 56].some(
           (offset) => Atomics.load(HEAPU32, index + offset) === 4294967295),
     });
@@ -479,6 +484,24 @@ void ProcessBrowserGpuOwnerWait() {
   ExecuteReadyBatch();
   RecordMaximum(kMaximumPumpUs, (emscripten_get_now() - started) * 1000.0);
   gProcessingOwnerWait = false;
+  gProcessingBatch = false;
+#endif
+}
+
+void ProcessBrowserGpuOwnerBeforeFrame() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if (gProcessingBatch || gCanvasFrameActive || !IsBrowserGpuOwnerThread() ||
+      gOwnerWaitStats[kRequested].load(std::memory_order_relaxed) ==
+          gOwnerWaitStats[kFinished].load(std::memory_order_relaxed)) {
+    return;
+  }
+  // Pull already-posted SDK notifications into the FIFO before entering the canvas scope.
+  // Receiving does not dispatch inline while this guard is set, so waiting producers cannot
+  // issue another request until the detached, bounded callback prefix starts.
+  gProcessingBatch = true;
+  emscripten_proxy_execute_queue(gNotificationQueue);
+  const std::size_t count = ExecuteReadyBatch(/*beforeFrame=*/true);
+  gOwnerWaitStats[kPreFrameDispatches].fetch_add(count, std::memory_order_relaxed);
   gProcessingBatch = false;
 #endif
 }

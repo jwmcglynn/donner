@@ -77,6 +77,10 @@ void RunOnBrowserGpuOwner(Function&& operation,
 /// The editor's futex adapter calls this between finite wait slices; it does not run JS promises.
 void ProcessBrowserGpuOwnerWait();
 
+/// Service pending GPU owner requests before the next canvas frame acquires its surface.
+/// Only a bounded callback prefix runs before the frame. The existing pulse handles the rest.
+void ProcessBrowserGpuOwnerBeforeFrame();
+
 /// Whether this owner is already executing a GPU batch; nested editor frames must defer.
 [[nodiscard]] bool IsBrowserGpuOwnerDispatchActive();
 
