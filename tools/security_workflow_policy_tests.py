@@ -4140,6 +4140,23 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                               "--test_tag_filters=%s" % tag, "--build_tag_filters=%s" % tag], lane)
         self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
 
+    def test_ubsan_reserves_hosted_disk_without_duplicating_its_action_cache(self):
+        ubsan = _jobs(self.sanitizers)["ubsan"]
+        cleanup = _step_body(ubsan, "Free hosted runner disk")
+        self.assertIn("run: tools/ci/free_runner_disk.sh\n", cleanup)
+        self.assertLess(ubsan.index("- name: Free hosted runner disk"),
+                        ubsan.index("- name: Install system dependencies"))
+
+        setup = _step_body(ubsan, "Setup Bazel")
+        self.assertNotIn("disk-cache:", setup)
+        self.assertIn("repository-cache: true", setup)
+        self.assertIn("external-cache: true", setup)
+        self.assertIn("cache-save: ${{ github.event_name != 'pull_request' && "
+                      "github.ref == 'refs/heads/main' }}", setup)
+        runner = _job_key(ubsan, "runs-on")
+        self.assertIn(runner, HOSTED_IMAGES)
+        self.assertTrue(runner.startswith("ubuntu-"), runner)
+
     def test_sanitizer_lanes_keep_their_scope_and_filters(self):
         # Exact lists: an extra or overriding flag in a lane fails too, and the order is pinned.
         filters = ["--build_tests_only", "--test_tag_filters=-fuzz_target,-ci-remote-gpu",

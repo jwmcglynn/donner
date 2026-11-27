@@ -2703,9 +2703,9 @@ donner_perf_cc_test(
 # it with `--config=geode` for the GPU backend).
 donner_perf_cc_test(
     name = "external_use_sprite_tests",
-    # Under ASan on the hosted nightly runner the unsharded correctness target took 48 s and once
-    # timed out at its 60 s `size = "small"` limit. Sharding keeps each shard well under that limit.
-    correctness_shard_count = 4,
+    # Six shards separate the warning replay case that hit the ASan deadline from the long
+    # sprite redraw and warning sink limit cases that originally shared its 60 s shard.
+    correctness_shard_count = 6,
     correctness_srcs = ["ExternalUseSpriteCorrectness_tests.cc"],
     wallclock_srcs = ["ExternalUseSpriteWallclock_tests.cc"],
     deps = [
