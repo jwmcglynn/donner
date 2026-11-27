@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -12,6 +13,12 @@
 #include "donner/base/RcString.h"
 
 namespace donner::css {
+
+/// Descriptors supported by Donner's @font-face parser.
+enum class FontFaceDescriptor { Unknown, Family, Source, Weight, Width, Style };
+
+/// Look up an ASCII case-insensitive descriptor, including the font-stretch alias for font-width.
+FontFaceDescriptor IdentifyFontFaceDescriptor(std::string_view name);
 
 /**
  * A single entry listed in `src:`-either a local face, a URL, or inline data.

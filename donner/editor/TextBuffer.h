@@ -85,6 +85,11 @@ enum class ColorIndex {
   GlobalVariable,
   LocalVariable,
   FunctionArgument,
+  CssAtRule,
+  CssSelector,
+  CssCustomProperty,
+  CssFunction,
+  CssColor,
   Max
 };
 
@@ -97,6 +102,12 @@ struct Glyph {
   ColorIndex colorIndex = ColorIndex::Default;  //!< Color to use for this character
   bool isComment : 1;                           //!< Part of a single-line comment
   bool isMultiLineComment : 1;                  //!< Part of a multi-line comment
+
+  bool hasCssColor : 1 =
+      false;  //!< Cached CSS token color takes precedence over the XML line pass.
+  unsigned char cssRegionKind : 2 = 0;  //!< Previously painted CSS grammar, or zero for XML.
+
+  std::uint8_t svgMarkupColor = 0;  //!< XML token role, or Default for dictionary-based coloring.
 
   /// Create a character with its syntax-color index.
   /// @param c Character stored in the glyph.

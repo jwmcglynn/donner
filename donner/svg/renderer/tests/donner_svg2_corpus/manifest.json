@@ -385,7 +385,9 @@
         "provenance": "Manually constructed solid green reference from CSS Cascade 5 layer precedence."
       },
       "assertion": "An important declaration in an earlier layer overrides later layers and unlayered declarations.",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/styling/StylingUsingCSS/req-01"
+      ],
       "capabilities": []
     },
     {
@@ -399,7 +401,9 @@
         "provenance": "Manually constructed solid green reference from CSS Cascade 5 layer precedence."
       },
       "assertion": "A normal declaration in the first author layer overrides the presentation attribute.",
-      "spec_requirements": [],
+      "spec_requirements": [
+        "svg2-cr-20181004/styling/PresentationAttributes/req-01"
+      ],
       "capabilities": []
     }
   ]

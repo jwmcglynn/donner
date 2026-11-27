@@ -510,8 +510,11 @@ std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
       .entity = preview->entity,
       .extraEntities = preview->extraEntities,
       .translation = preview->translation,
+      .pointerDocumentPoint = preview->pointerDocumentPoint,
+      .mouseDown = preview->mouseDown,
       .documentFromCachedDocument = preview->documentFromCachedDocument,
       .dragGeneration = preview->dragGeneration,
+      .contentIdentity = preview->contentIdentity,
   };
 }
 
@@ -549,6 +552,7 @@ bool SameRequestedDragPreview(const std::optional<RenderRequest::DragPreview>& l
   return lhs->entity == rhs->entity && lhs->extraEntities == rhs->extraEntities &&
          lhs->interactionKind == rhs->interactionKind &&
          lhs->dragGeneration == rhs->dragGeneration && lhs->translation == rhs->translation &&
+         lhs->contentIdentity.sameContent(rhs->contentIdentity) &&
          SameTransform(lhs->documentFromCachedDocument, rhs->documentFromCachedDocument);
 }
 
@@ -1461,17 +1465,27 @@ PresentationIdentity RenderCoordinator::currentPresentationIdentity(const Editor
           .presentationEpoch = presentationEpoch_};
 }
 
-FramePresentationInput RenderCoordinator::makeFrameInput(EditorApp& app, SelectTool& tool,
-                                                         const ViewportState& viewport,
-                                                         const Box2d& paneClipRect,
-                                                         SelectionChromeDetail detail,
-                                                         bool includeChrome) {
+FramePresentationInput RenderCoordinator::makeFrameInput(
+    EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
+    SelectionChromeDetail detail, bool includeChrome, PresentationInputIdentity inputIdentity) {
   auto desired = compositedPresentation_.activePreviewForPresentation(tool.activeDragPreview());
   if (desired.has_value()) {
     desired->contentIdentity.presentationEpoch = presentationEpoch_;
   }
+  std::optional<PresentationInputIdentity> representedResourceInputIdentity;
+  const auto represented = compositedPresentation_.presentationPreview(desired);
+  if (desired.has_value() && represented.has_value() && represented->entity == desired->entity &&
+      represented->dragGeneration == desired->dragGeneration &&
+      represented->contentIdentity.sameContent(desired->contentIdentity)) {
+    representedResourceInputIdentity = PresentationInputIdentity{
+        .pointerPosition = viewport.documentToScreen(represented->pointerDocumentPoint),
+        .mouseDown = represented->mouseDown,
+    };
+  }
   FramePresentationInput input{
       .frameId = nextPresentationFrameId_++,
+      .inputIdentity = inputIdentity,
+      .representedResourceInputIdentity = representedResourceInputIdentity,
       .viewport = viewport,
       .paneClipRect = paneClipRect,
       .selection = selectedPresentationEntities(app),
@@ -1687,8 +1701,10 @@ void RenderCoordinator::installFrameDecision(
     const FramePresentationInput& input,
     const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
     std::shared_ptr<const FramePresentation> next) {
+  const bool pixelsRepresentInput =
+      FrameCarriesInput(*next, input) || input.representedResourceInputIdentity.has_value();
   frameRepresentsCurrentIntent_ =
-      (input.selection.empty() || next->hasSelectionGeometry()) && FrameCarriesInput(*next, input);
+      (input.selection.empty() || next->hasSelectionGeometry()) && pixelsRepresentInput;
   framePresentation_ = std::move(next);
   immediateOverlaySnapshot_ = framePresentation_->chrome();
   selectionBoundsCache_.displayedBoundsDoc = framePresentation_->selectionBounds();
@@ -1717,13 +1733,15 @@ void RenderCoordinator::retireIncompatibleTextFrame(const FramePresentationInput
 
 std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentation(
     EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
-    SelectionChromeDetail detail, bool includeChrome, FramePresentationAdmission admit) {
+    SelectionChromeDetail detail, bool includeChrome, FramePresentationAdmission admit,
+    PresentationInputIdentity inputIdentity) {
   auto& cost = lastFrameCostBreakdown_.overlay;
   const auto live = tool.activeDragPreview();
   cost.hasLiveDragPreview = live.has_value();
   cost.liveDragTranslationDoc = live.has_value() ? live->translation : Vector2d::Zero();
   const auto resources = compositedPresentation_.resources();
   frameRepresentsCurrentIntent_ = false;
+  staticFrameInputIdentity_.reset();
   if (!app.hasDocument()) {
     framePresentation_.reset();
     return nullptr;
@@ -1738,13 +1756,18 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
     return framePresentation_;
   }
   const auto buildStart = std::chrono::steady_clock::now();
-  auto input = makeFrameInput(app, tool, viewport, paneClipRect, detail, includeChrome);
+  auto input =
+      makeFrameInput(app, tool, viewport, paneClipRect, detail, includeChrome, inputIdentity);
   if (const auto selectedSource = FramePresentation::CaptureForFrame(resources, input)) {
     refreshFrameSelectionCapture(app, selectedSource, input.selection);
   }
   refreshLivePathCapture(app, input);
   if (canReuseFrame(input, resources)) {
     frameRepresentsCurrentIntent_ = true;
+    // The immutable document resources are pointer-independent in this path. This UI frame still
+    // seals its current input so a completed presentation can prove which sidebar/overlay state it
+    // drew without restamping a pointer-dependent document frame.
+    staticFrameInputIdentity_ = input.inputIdentity;
     recordFramePresentationCost(input, tool, MillisecondsSince(buildStart));
     return framePresentation_;
   }

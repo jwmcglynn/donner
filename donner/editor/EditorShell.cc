@@ -36,6 +36,7 @@
 #include "donner/base/StringUtils.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/CssSourceSyntax.h"
 #include "donner/editor/DisclosureChevron.h"
 #include "donner/editor/DocumentPresentationCompositor.h"
 #include "donner/editor/DocumentSave.h"
@@ -1549,7 +1550,7 @@ void EditorShell::queueBackgroundFontPreviews() {
 }
 
 void EditorShell::configureSourceAutocomplete() {
-  textEditor_.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+  textEditor_.setAutocompleteProvider([this](const TextEditor::AutocompleteRequest& request)
                                           -> std::optional<TextEditor::AutocompleteResponse> {
     XmlAutocompleteContext context =
         DetectXmlAutocompleteContext(request.source, request.cursorOffset);
@@ -1557,10 +1558,40 @@ void EditorShell::configureSourceAutocomplete() {
       return std::nullopt;
     }
 
+    XmlAutocompleteSelectorCatalog selectorCatalog;
+    if (context.kind == XmlAutocompleteContextKind::CssSelector && app_.hasDocument()) {
+      if (auto access = app_.document().document().tryReadAccess(); access.has_value()) {
+        std::vector<svg::SVGElement> pending{app_.document().document().svgElement()};
+        while (!pending.empty() && !selectorCatalog.full()) {
+          const svg::SVGElement element = pending.back();
+          pending.pop_back();
+          const RcString className = element.className();
+          selectorCatalog.addClassList(className);
+          const RcString id = element.id();
+          selectorCatalog.addId(id);
+          for (auto child = element.firstChild(); child; child = child->nextSibling()) {
+            pending.push_back(*child);
+          }
+        }
+        selectorCatalog.finish();
+      }
+    }
+    std::vector<std::string> customPropertyNames;
+    if (context.kind == XmlAutocompleteContextKind::CssDeclarationName ||
+        context.kind == XmlAutocompleteContextKind::CssVariableName) {
+      customPropertyNames = CollectDeclaredCustomPropertyNames(request.source);
+    }
+
     TextEditor::AutocompleteResponse response;
     response.replaceStartOffset = context.replaceStartOffset;
     response.replaceEndOffset = context.replaceEndOffset;
-    for (const XmlAutocompleteSuggestion& suggestion : BuildXmlAutocompleteSuggestions(context)) {
+    const XmlAutocompleteData data{
+        .classNames = selectorCatalog.classNames(),
+        .ids = selectorCatalog.ids(),
+        .customPropertyNames = customPropertyNames,
+    };
+    for (const XmlAutocompleteSuggestion& suggestion :
+         BuildXmlAutocompleteSuggestions(context, data)) {
       response.suggestions.push_back(TextEditor::AutocompleteSuggestion{
           .displayText = RcString(suggestion.displayText),
           .insertText = RcString(suggestion.insertText),
@@ -5846,12 +5877,15 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
 
 void EditorShell::recordPresentationIdentity(const FramePresentation* frame) {
 #ifdef DONNER_EDITOR_WGPU
-  window_.setPresentationFrameIdentity(frame != nullptr ? frame->frameId() : 0,
-                                       frame != nullptr ? frame->identity().captureId : 0,
-                                       frame != nullptr ? frame->identity().documentGeneration : 0,
-                                       frame != nullptr ? frame->identity().version : 0,
-                                       renderCoordinator_.frameRepresentsCurrentIntent(),
-                                       frame != nullptr ? frame->viewport().zoom : 0.0);
+  const PresentationInputIdentity inputIdentity =
+      renderCoordinator_.inputIdentityForPresentedFrame(frame);
+  window_.setPresentationFrameIdentity(
+      frame != nullptr ? frame->frameId() : 0, frame != nullptr ? frame->identity().captureId : 0,
+      frame != nullptr ? frame->identity().documentGeneration : 0,
+      frame != nullptr ? frame->identity().version : 0, inputIdentity.pointerPosition.x,
+      inputIdentity.pointerPosition.y, inputIdentity.mouseDown,
+      renderCoordinator_.frameRepresentsCurrentIntent(),
+      frame != nullptr ? frame->viewport().zoom : 0.0);
 #endif
 }
 
@@ -5973,13 +6007,19 @@ void EditorShell::renderRenderPanePresentation(
 #else
   const FramePresentationAdmission admit;
 #endif
+  const ImGuiIO& io = ImGui::GetIO();
+  const PresentationInputIdentity inputIdentity{
+      .pointerPosition = Vector2d(io.MousePos.x, io.MousePos.y),
+      .mouseDown = io.MouseDown[0],
+  };
   const auto frame =
       showSamplePicker_
           ? nullptr
           : renderCoordinator_.buildFramePresentation(
                 app_, selectTool_, presentedDocumentViewport, paneRect,
                 selectionChromeDetailForActiveTool(),
-                previewAllowsEditing(!contentOnlyCaptureThisFrame_ && !showSamplePicker_), admit);
+                previewAllowsEditing(!contentOnlyCaptureThisFrame_ && !showSamplePicker_), admit,
+                inputIdentity);
   const auto chipGesturePreview = frame != nullptr ? activeGesturePreview : std::nullopt;
 #ifndef DONNER_EDITOR_WGPU
   if (documentPresentationCompositor_ != nullptr && frame != nullptr) {

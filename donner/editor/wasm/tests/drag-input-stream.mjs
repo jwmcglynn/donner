@@ -28,6 +28,8 @@
  * reads which inputs completed.
  */
 export const kReleaseFrameTimeoutMs = 20500;
+export const kPresentationSamplePollMs = 8;
+const kPointerMatchTolerance = 1e-6;
 
 /**
  * @typedef {{ inputRepresented: boolean, mouseDown: boolean, completedSerial: number,
@@ -38,9 +40,10 @@ export const kReleaseFrameTimeoutMs = 20500;
  *   selectedCount?: number, dragging?: boolean, workerMs?: number, completedResults?: number,
  *   readbackCount?: unknown, readbackPollIterations?: unknown,
  *   presentation?: DragPresentation }} DragFrame One sampled editor frame.
- * @typedef {{ startedAtMs: number, finishedAtMs: number, dispatchTimes: number[],
+ * @typedef {{ startedAtMs: number, pressDispatchedAtMs: number, finishedAtMs: number,
+ *   dispatchTimes: number[],
  *   dispatchPoints: Array<{ x: number, y: number }>, frames: DragFrame[],
- *   end: { x: number, y: number }, releasedAtMs: number,
+ *   start: { x: number, y: number }, end: { x: number, y: number }, releasedAtMs: number,
  *   releaseFrame: DragPresentation | null }} DragStream One drag's dispatched inputs, sampled
  *   frames, mouse-up time, and its release frame if that completed by the release deadline.
  */
@@ -48,11 +51,12 @@ export const kReleaseFrameTimeoutMs = 20500;
 /**
  * Press, drag and release in the page, sampling the editor's frame statistics.
  * @param {{ start: { x: number, y: number }, direction: number,
- *   releaseFrameTimeoutMs: number }} options Where the drag starts, the signed fraction of its
+ *   releaseFrameTimeoutMs: number, presentationSamplePollMs: number }} options Where the drag
+ *   starts, the signed fraction of its
  *   120 by 72 pixel travel, and `kReleaseFrameTimeoutMs`.
  * @returns {Promise<DragStream>}
  */
-export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs }) {
+export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs, presentationSamplePollMs }) {
   const state = window;
   const canvas = document.querySelector("canvas#canvas");
   const dispatch = (type, x, y, buttons) => {
@@ -75,6 +79,7 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
   let previousFrame = state.__donnerFrameLoopStats?.renderedFrames ?? 0;
   let observing = true;
   let sampleId = 0;
+  let sampleTimeoutId = 0;
   // Samples the current frame when it differs from the last sample. The stream keeps at most 256
   // samples before the final one, which follows the release wait, so it holds the release frame
   // whenever that completed in time.
@@ -108,8 +113,17 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
     sample(false);
     if (observing) sampleId = requestAnimationFrame(observe);
   };
+  // GPU submission completion is not synchronized to animation frames. In particular, Firefox can
+  // publish two completed held-drag presentations between successive rAF callbacks. Poll the
+  // bounded completion snapshot as well so a later completion cannot erase evidence of the first.
+  const observeCompletion = () => {
+    sample(false);
+    if (observing) sampleTimeoutId = setTimeout(observeCompletion, presentationSamplePollMs);
+  };
   const startedAtMs = performance.now();
   observe();
+  observeCompletion();
+  const pressDispatchedAtMs = performance.now();
   dispatch("mousedown", start.x, start.y, 1);
   let end = start;
   let releasedAtMs = 0;
@@ -156,14 +170,17 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
     }
     observing = false;
     cancelAnimationFrame(sampleId);
+    clearTimeout(sampleTimeoutId);
     sample(true);
   }
   const stream = {
     startedAtMs,
+    pressDispatchedAtMs,
     finishedAtMs: performance.now(),
     dispatchTimes,
     dispatchPoints,
     frames,
+    start,
     end,
     releasedAtMs,
     releaseFrame,
@@ -173,7 +190,9 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
 }
 
 /**
- * Whether a sampled frame is a completed frame of this drag that represents one of its inputs.
+ * Whether a sampled frame completed after this drag began and independently claims that its sealed
+ * pointer/button input is represented by the pixels. Callers separately match that pointer to an
+ * input dispatched before the completion.
  * @param {DragFrame} frame Sampled frame.
  * @param {DragStream} stream The drag's stream.
  * @param {number} baselineSerial Completed serial before the drag started.
@@ -185,6 +204,11 @@ function completesThisDrag(frame, stream, baselineSerial) {
       && frame.presentation.completedSerial > baselineSerial
       && frame.presentation.completedAtMs >= stream.startedAtMs,
   );
+}
+
+function matchesDispatchedPoint(point, presentation) {
+  return Math.abs(point.x - presentation.pointerX) <= kPointerMatchTolerance
+    && Math.abs(point.y - presentation.pointerY) <= kPointerMatchTolerance;
 }
 
 /**
@@ -199,7 +223,7 @@ export function dragInputLatencies(stream, baselineSerial) {
     const frame = stream.frames.find((sample) =>
       completesThisDrag(sample, stream, baselineSerial)
       && stream.dispatchPoints.findLastIndex((applied, appliedIndex) =>
-          applied.x === sample.presentation.pointerX && applied.y === sample.presentation.pointerY
+          matchesDispatchedPoint(applied, sample.presentation)
           && stream.dispatchTimes[appliedIndex] <= sample.presentation.completedAtMs
         ) >= index
       && sample.presentation.completedAtMs >= stream.dispatchTimes[index]
@@ -220,9 +244,13 @@ export function completedDragFrames(stream, baselineSerial) {
   for (const frame of stream.frames) {
     if (
       completesThisDrag(frame, stream, baselineSerial)
-      && stream.dispatchPoints.some((point) =>
-        point.x === frame.presentation.pointerX && point.y === frame.presentation.pointerY
-      )
+      && ((frame.presentation.mouseDown
+          && stream.pressDispatchedAtMs <= frame.presentation.completedAtMs
+          && matchesDispatchedPoint(stream.start, frame.presentation))
+        || stream.dispatchPoints.some((point, index) =>
+          matchesDispatchedPoint(point, frame.presentation)
+            && stream.dispatchTimes[index] <= frame.presentation.completedAtMs
+        ))
     ) {
       completions.set(frame.presentation.completedSerial, frame);
     }

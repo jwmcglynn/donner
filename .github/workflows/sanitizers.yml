@@ -82,8 +82,8 @@ jobs:
       - name: Test //donner/... with ASan
         run: |
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:asan_exclusions -- \
-            bazelisk test --config=asan-lane -- //donner/... -//donner/svg/renderer/geode/...
-          bazelisk test --config=asan-lane-no-leaks \
+            bazelisk test --config=hosted-asan-cache --config=asan-lane -- //donner/... -//donner/svg/renderer/geode/...
+          bazelisk test --config=hosted-asan-cache --config=asan-lane-no-leaks \
             //donner/svg/renderer/geode/... //tools/ci:asan_no_leak_tests
 
       - name: Retain failed test evidence

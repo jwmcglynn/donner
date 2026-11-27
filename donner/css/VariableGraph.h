@@ -32,7 +32,8 @@ struct VariableOutputs {
 /// Returns false on an invalid definition list, bounded graph-work exhaustion, aggregate admission
 /// refusal, or output refusal. No result is published after a refusal; the caller discards any
 /// earlier staged results. An invalid individual value, including one that exceeds a per-value
-/// limit, is published as such.
+/// limit, is published as such. Admission covers expanded values and each newly marked cycle
+/// participant. Cycle marking charges work without charging output bytes.
 bool ResolveVariableDefinitions(std::span<const VariableDefinition> local,
                                 const VariableLookup& inherited, const VariableOutputs& outputs,
                                 VariableSubstitutionLimits limits = {},

@@ -69,6 +69,11 @@ struct UnindexedCascadeForTesting {};
 /// Runs the ordinary cascade without its ancestor filter for differential comparisons.
 struct UnfilteredCascadeForTesting {};
 
+/// Test-only rule-to-element allowance for the old-and-new stylesheet edit scan.
+struct StylesheetEditScanLimitsForTesting {
+  std::size_t ruleElementMatches;
+};
+
 /** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
 class StyleResourceBudget {
 public:

@@ -147,6 +147,8 @@ struct BackendOps {
   bool (*supportsFeature)(RendererBackendFeature feature);
   /// Creates a fresh renderer instance for the backend.
   std::unique_ptr<RendererInterface> (*createInstance)(bool verbose);
+  /// Wait for work submitted by instances from this backend before a test snapshot.
+  void (*waitForSubmittedFrame)() = nullptr;
 };
 
 /**
@@ -224,5 +226,9 @@ RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document);
  * @return A new renderer instance.
  */
 std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose = false);
+
+/// Capture a frame from an instance returned by CreateActiveRendererInstance after its draw
+/// completes. Software GPU test backends keep their normal bounded wait and pixel assertions.
+RendererBitmap SnapshotActiveFrame(RendererInterface& renderer);
 
 }  // namespace donner::svg

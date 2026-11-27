@@ -69,6 +69,9 @@ TEST(VariableSubstitution, DistinguishesMissingAndEmptyAndPreservesFallbackComma
   const auto fallback = SubstituteVariables(Tokens("var(--a,var(--b,blue, green))"), lookup);
   EXPECT_EQ(fallback.status, VariableSubstitutionStatus::Resolved);
   EXPECT_EQ(Text(fallback.values), "blue, green");
+  const auto bareBlockFallback = SubstituteVariables(Tokens("var(--a,abc {})"), lookup);
+  EXPECT_EQ(bareBlockFallback.status, VariableSubstitutionStatus::Resolved);
+  EXPECT_EQ(Text(bareBlockFallback.values), "abc {}");
   const auto emptyFallback = SubstituteVariables(Tokens("var(--a,)"), lookup);
   EXPECT_EQ(emptyFallback.status, VariableSubstitutionStatus::Resolved);
   EXPECT_THAT(emptyFallback.values, IsEmpty());
@@ -188,6 +191,35 @@ TEST(VariableSubstitution, OverlappingCyclesInvalidateTheirUnion) {
     EXPECT_EQ((*result)[i].status, VariableSubstitutionStatus::Invalid) << i;
   }
   EXPECT_EQ(Text((*result)[5].values), "valid");
+}
+
+TEST(VariableSubstitution, EachActiveCycleFrameIsChargedOnce) {
+  const auto outer = Tokens("var(--inner,teal)");
+  const auto inner = Tokens("var(--inner,var(--branch,navy))");
+  const auto branch = Tokens("var(--outer,olive)");
+  const std::vector<VariableDefinition> definitions = {
+      {"--outer", Values(outer)}, {"--inner", Values(inner)}, {"--branch", Values(branch)}};
+
+  std::vector<VariableSubstitutionStatus> statuses;
+  const VariableOutputs outputs{
+      [](std::size_t) -> std::optional<Values> { return std::nullopt; },
+      [&](std::size_t, VariableSubstitutionResult value) {
+        statuses.push_back(value.status);
+        return true;
+      },
+  };
+  std::vector<std::pair<std::size_t, std::size_t>> charges;
+  EXPECT_TRUE(ResolveVariableDefinitions(
+      definitions, [](std::string_view) -> std::optional<Values> { return std::nullopt; }, outputs,
+      {},
+      [&](std::size_t work, std::size_t bytes) {
+        charges.emplace_back(work, bytes);
+        return true;
+      }));
+  EXPECT_THAT(statuses,
+              ElementsAre(VariableSubstitutionStatus::Invalid, VariableSubstitutionStatus::Invalid,
+                          VariableSubstitutionStatus::Invalid));
+  EXPECT_THAT(charges, ElementsAre(testing::Pair(1u, 0u), testing::Pair(2u, 0u)));
 }
 
 TEST(VariableSubstitution, InitialLocalValueShadowsAnInheritedValue) {

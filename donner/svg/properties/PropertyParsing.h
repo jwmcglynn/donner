@@ -29,6 +29,8 @@ struct UnparsedProperty {
   std::shared_ptr<const css::Declaration> presentationVariable = nullptr;
   /// Geometry parsing still needs to validate this substituted value.
   bool substituted = false;
+  /// The pending winner was authored as an SVG presentation attribute.
+  bool variableFromPresentation = false;
 
   /// One unresolved declaration can own more than one longhand.
   std::shared_ptr<const css::Declaration> variableSource = nullptr;

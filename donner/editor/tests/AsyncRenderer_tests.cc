@@ -1349,8 +1349,11 @@ TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget
       .extraEntities = {r2Entity},
       .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
       .translation = Vector2d(16.0, 4.0),
+      .pointerDocumentPoint = Vector2d(31.0, 19.0),
+      .mouseDown = true,
       .documentFromCachedDocument = Transform2d::Translate(Vector2d(16.0, 4.0)),
       .dragGeneration = 17,
+      .contentIdentity = PresentationIdentity{.documentGeneration = 1, .version = 1},
   };
   asyncRenderer.requestRender(request);
 
@@ -1360,6 +1363,11 @@ TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget
   ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
   EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
             std::vector<Entity>{r2Entity});
+  EXPECT_EQ(result->compositedPreview->representedDragPreview->pointerDocumentPoint,
+            Vector2d(31.0, 19.0));
+  EXPECT_TRUE(result->compositedPreview->representedDragPreview->mouseDown);
+  EXPECT_TRUE(result->compositedPreview->representedDragPreview->contentIdentity.sameContent(
+      PresentationIdentity{.documentGeneration = 1, .version = 1}));
 
   const auto dragTileFor = [&](Entity entity) {
     return std::ranges::find_if(result->compositedPreview->tiles,
@@ -4306,16 +4314,16 @@ TEST(AsyncRendererTest, SelectedSplashStylesheetSourceEditMatchesFreshCompositor
   source.replace(initialFillOffset, originalFill.size(), "fill: red;");
   const std::size_t svgEnd = source.rfind("</svg>");
   ASSERT_NE(svgEnd, std::string::npos);
-  source.insert(svgEnd,
-                R"(<rect id="Cached_Style_Probe" class="cls-5" x="10" y="10" width="20" height="20"/>)");
+  source.insert(
+      svgEnd,
+      R"(<rect id="Cached_Style_Probe" class="cls-5" x="10" y="10" width="20" height="20"/>)");
 
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(source));
   app.document().document().setCanvasSize(892, 512);
   const auto selected = app.document().document().querySelector("#Donner_D");
   ASSERT_TRUE(selected.has_value());
-  const auto cachedStyleProbe =
-      app.document().document().querySelector("#Cached_Style_Probe");
+  const auto cachedStyleProbe = app.document().document().querySelector("#Cached_Style_Probe");
   ASSERT_TRUE(cachedStyleProbe.has_value());
   app.setSelection(*selected);
   const Entity entity = selected->unsafeEntityHandle().entity();

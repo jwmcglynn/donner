@@ -122,11 +122,17 @@ struct RenderRequest {
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
     /// Active drag translation represented by this request. Selection prewarms use zero.
     Vector2d translation = Vector2d::Zero();
+    /// Pointer position represented by this request, in document coordinates.
+    Vector2d pointerDocumentPoint = Vector2d::Zero();
+    /// Button state represented by this request.
+    bool mouseDown = false;
     /// Active affine transform represented by this request, relative to the
     /// drag-start cached document. Selection prewarms use identity.
     Transform2d documentFromCachedDocument = Transform2d();
     /// Monotonic id for the active drag gesture. Selection prewarms use zero.
     std::uint64_t dragGeneration = 0;
+    /// Document/content lifetime in which this gesture was captured.
+    PresentationIdentity contentIdentity;
     /// True when this request must re-rasterize the promoted drag layer instead of only publishing
     /// updated compose metadata. Used for scheduler-requested affine recaptures that keep scaled
     /// drag previews crisp.

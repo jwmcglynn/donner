@@ -185,11 +185,11 @@ as well.
 
 `TextEditor::getDarkPalette()` follows the same Graphite base while using semantic hues for syntax:
 
-- teal for structural keywords and known identifiers
-- warm amber for strings and type-like values
-- green for numeric values
-- coral for errors and breakpoints
-- neutral gray for comments, punctuation, line numbers, and ordinary identifiers
+- coral for SVG element names and CSS type selectors, blue for attributes and properties
+- mint for quoted strings and URLs, orange for numbers and dimensions
+- amber for CSS class and ID selectors, violet for at-rules, pink for custom properties
+- turquoise for functions and periwinkle for hexadecimal color literals
+- muted slate for punctuation and comments
 
 Selection remains Signal Teal at 50 percent alpha so focus-reference connectors and selected source
 ranges remain legible.

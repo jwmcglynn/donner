@@ -67,6 +67,17 @@
 #include "donner/svg/components/style/StylePassScheduler.h"
 #include "donner/svg/components/text/TextComponent.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_STYLE_SYSTEM_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace donner::svg::components {
 
 namespace {
@@ -2663,6 +2674,28 @@ void StyleSystem::computePreparedStyle(const Registry& registry, Entity entity,
   }
 }
 
+namespace {
+
+void RefreshInlineCustomPropertyLocations(PropertyRegistry& properties,
+                                          std::span<const css::Declaration> declarations) {
+  for (const auto& declaration : declarations) {
+    if (!std::string_view(declaration.name).starts_with("--") ||
+        declaration.variableReferences == css::VariableReferences::Invalid) {
+      continue;
+    }
+    const auto winner = properties.unparsedProperties.find(declaration.name);
+    if (winner != properties.unparsedProperties.end() &&
+        winner->second.specificity.isStyleAttribute() &&
+        winner->second.declaration.important == declaration.important) {
+      // The last matching declaration at the selected importance owns the authored name.
+      winner->second.declaration.sourceOffset = declaration.sourceOffset;
+      winner->second.declaration.nameSourceByteLength = declaration.nameSourceByteLength;
+    }
+  }
+}
+
+}  // namespace
+
 bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
                               bool invalidateCachedStyle) {
   auto& styleComponent = handle.get_or_emplace<StyleComponent>();
@@ -2689,11 +2722,20 @@ bool StyleSystem::updateStyle(EntityHandle handle, std::string_view style,
   }
   const std::string mergedStyle = css::mergeStyleDeclarations(
       existingDeclarations, updateDeclarations, existingSpellings, updateSpellings);
-  // Apply the update in authored order so an invalid later value leaves its last accepted
-  // predecessor in effect. The merged pass refreshes offsets in the complete attribute.
-  if (!candidate.updateStyle(style) || !candidate.updateStyle(mergedStyle)) {
+  // Apply the update in authored order so a later invalid value cannot displace a valid
+  // predecessor. The merged attribute supplies source offsets, not another cascade pass.
+  if (!candidate.updateStyle(style)) {
     return false;
   }
+  css::parser::DeclarationListParser::SecurityStats mergedStats;
+  const auto mergedDeclarations =
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(mergedStyle, &mergedStats);
+  if (mergedStats.rejected) {
+    return false;
+  }
+  candidate.editProperties([&](PropertyRegistry& properties) {
+    RefreshInlineCustomPropertyLocations(properties, mergedDeclarations);
+  });
 
   attributes.setAttribute(*handle.registry(), xml::XMLQualifiedName("style"),
                           RcString(mergedStyle));
@@ -3996,35 +4038,41 @@ public:
   }
 
   std::vector<std::size_t> ordered() const {
-    std::vector<std::pair<Priority, std::size_t>> sorted;
-    sorted.reserve(priorities_.size());
-    for (const auto& [index, priority] : priorities_) {
-      sorted.emplace_back(priority, index);
-    }
-    std::ranges::sort(sorted);
     std::vector<std::size_t> result;
-    result.reserve(sorted.size());
-    for (const auto& [_, index] : sorted) {
-      result.push_back(index);
+    for (std::size_t index = 0; index < priorities_.size(); ++index) {
+      if (priorities_[index].rank != 0) {
+        result.push_back(index);
+      }
     }
+    const auto precedes = [&](std::size_t left, std::size_t right) {
+      return priorities_[left] < priorities_[right];
+    };
+    std::ranges::make_heap(result, precedes);
+    std::ranges::sort_heap(result, precedes);
     return result;
   }
 
 private:
-  using Priority = std::pair<std::uint16_t, std::size_t>;
+  struct Priority {
+    std::uint16_t rank = 0;
+    std::size_t sourcePosition = 0;
+    auto operator<=>(const Priority&) const = default;
+  };
 
   void addFace(const css::FontFace& face, std::uint16_t rank) {
     if (const auto index = resources_.registerStylesheetFontFace(face)) {
-      const Priority priority(rank, next_++);
-      auto [current, inserted] = priorities_.try_emplace(*index, priority);
-      if (!inserted) {
-        current->second = std::max(current->second, priority);
+      if (*index >= priorities_.size()) {
+        priorities_.resize(*index + 1);
       }
+      const Priority priority(rank, next_++);
+      priorities_[*index] = std::max(priorities_[*index], priority);
     }
   }
 
   ResourceManagerContext& resources_;
-  std::unordered_map<std::size_t, Priority> priorities_;
+  // Resource indices are stable and bounded by the registered face table. A zero rank denotes
+  // an entry that does not participate in authored layer order.
+  std::vector<Priority> priorities_;
   std::size_t next_ = 0;
 };
 
@@ -4348,7 +4396,13 @@ bool StyleSystem::invalidateStylesheetRules(Registry& registry,
     return false;
   }
   const auto* existing = registry.ctx().find<StyleResourceBudget>();
-  StyleResourceBudget scan(existing ? existing->limits() : StyleResourceBudget::Limits());
+  StyleResourceBudget::Limits scanLimits =
+      existing ? existing->limits() : StyleResourceBudget::Limits();
+  if (const auto* testing = registry.ctx().find<StylesheetEditScanLimitsForTesting>()) {
+    scanLimits.ruleElementMatches =
+        std::min(scanLimits.ruleElementMatches, testing->ruleElementMatches);
+  }
+  StyleResourceBudget scan(scanLimits);
   std::vector<Entity> affected;
   if (!MatchChangedRules(registry, removed, scan, affected) ||
       !MatchChangedRules(registry, added, scan, affected) ||
@@ -4489,3 +4543,8 @@ void StyleSystem::invalidateAll(EntityHandle handle) {
 }
 
 }  // namespace donner::svg::components
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_STYLE_SYSTEM_MINSIZE
+#endif
