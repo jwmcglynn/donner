@@ -1371,9 +1371,9 @@ Status BrowserDevice::onSubmit(uint64_t submissionSerial,
   if (Status status = checkUsable(kOperation); status.hasError()) {
     return status;
   }
-  // Each buffer is recorded through its own browser command encoder and finished without
-  // reaching the queue; the whole submission is handed over once below, so the buffers execute
-  // in recording order and the submission completes once.
+  // Each buffer is recorded through its own browser command encoder. The final buffer is
+  // finished and submitted with the earlier buffers in recording order. An empty span still
+  // submits directly so the submission serial can complete.
   for (size_t index = 0; index < commandBuffers.size(); ++index) {
     if (Status status = replayCommandBuffer(submissionSerial, static_cast<uint32_t>(index),
                                             commandBuffers[index].commands,
