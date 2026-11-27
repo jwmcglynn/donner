@@ -136,7 +136,7 @@ and benchmarks compare work as well as values. Avoiding constant overhead on ord
 that do not use custom properties or layers remains an accepted optimization area; changes must
 preserve imports, inheritance, cache identity, mutation invalidation and every resource limit.
 
-The shipped editor Wasm package is limited to 11,274,000 raw bytes and 3,550,000 gzip bytes by
+Each shipped editor Wasm runtime is limited to 11,274,000 raw bytes and 3,550,000 gzip bytes by
 `//donner/editor/wasm:wasm_geode_package_size_tests`.
 
 ## Testing and Validation
