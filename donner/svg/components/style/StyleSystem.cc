@@ -3638,7 +3638,12 @@ bool StyleSystem::invalidateStylesheetRules(Registry& registry,
     return false;
   }
   const auto* existing = registry.ctx().find<StyleResourceBudget>();
-  StyleResourceBudget scan(existing ? existing->limits() : StyleResourceBudget::Limits());
+  StyleResourceBudget::Limits scanLimits =
+      existing ? existing->limits() : StyleResourceBudget::Limits();
+  if (const auto* testing = registry.ctx().find<StylesheetEditScanLimitsForTesting>()) {
+    scanLimits.ruleElementMatches = testing->ruleElementMatches;
+  }
+  StyleResourceBudget scan(scanLimits);
   std::vector<Entity> affected;
   if (!MatchChangedRules(registry, removed, scan, affected) ||
       !MatchChangedRules(registry, added, scan, affected) ||

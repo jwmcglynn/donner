@@ -1683,10 +1683,8 @@ TEST(StyleIndexDifferential, StylesheetRuleScanBudgetFallsBackToFreshCascade) {
   ASSERT_THAT(expectedPass.counters.rulesTested, testing::Eq(1u));
 
   auto& limitedRegistry = limited.registry();
-  limitedRegistry.ctx().erase<StyleResourceBudget>();
-  StyleResourceBudget::Limits limits;
-  limits.ruleElementMatches = expectedPass.counters.rulesTested;
-  limitedRegistry.ctx().emplace<StyleResourceBudget>(limits);
+  limitedRegistry.ctx().emplace<StylesheetEditScanLimitsForTesting>(
+      expectedPass.counters.rulesTested);
 
   const SourceRange range{FileOffset::Offset(selectorOffset),
                           FileOffset::Offset(selectorOffset + oldSelector.size())};
