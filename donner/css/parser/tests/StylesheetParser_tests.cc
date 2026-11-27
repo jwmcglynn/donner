@@ -1025,6 +1025,35 @@ TEST(StylesheetTextEdit, ExposingLeadingCharsetKeepsFreshParseAccounting) {
   check(StylesheetParser::Parse(after, warnings), after, before, {0, 0, removed.size()}, 3);
 }
 
+TEST(StylesheetTextEdit, ReachingRawRuleLimitRequiresFullParse) {
+  constexpr std::string_view before = "rect{fill:red}";
+  constexpr std::string_view added = "circle{stroke:blue} \n";
+  const std::string after = std::string(before) + std::string(added);
+  constexpr StylesheetParser::TextEdit edit{before.size(), 0, added.size()};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet parsed = StylesheetParser::Parse(before, warnings);
+  const Stylesheet fresh = StylesheetParser::Parse(after, warnings);
+  const auto withRawCount = [&](std::size_t count) {
+    auto stats = parsed.securityStats();
+    stats.rawRules = count;
+    return Stylesheet(std::vector<SelectorRule>(parsed.rules().begin(), parsed.rules().end()), {},
+                      stats);
+  };
+
+  // Seed only the aggregate count. The real rule window needs just one short insertion.
+  const auto below = StylesheetParser::TryReparseTextEdit(
+      withRawCount(RuleParser::kMaximumRules - 2), before, after, edit);
+  ASSERT_THAT(below, testing::Optional(testing::_));
+  EXPECT_EQ(below->securityStats().rawRules, RuleParser::kMaximumRules - 1);
+  ASSERT_THAT(below->rules(), testing::SizeIs(fresh.rules().size()));
+  EXPECT_THAT(below->rules().back().declarations,
+              ElementsAreArray(fresh.rules().back().declarations));
+
+  const auto atLimit = StylesheetParser::TryReparseTextEdit(
+      withRawCount(RuleParser::kMaximumRules - 1), before, after, edit);
+  EXPECT_THAT(atLimit, testing::Eq(std::nullopt));
+}
+
 TEST(StylesheetTextEdit, UnterminatedRuleFallsBack) {
   constexpr std::string_view before = "rect{fill:red} circle{fill:blue}";
   const std::size_t start = before.find('}');
