@@ -233,6 +233,7 @@ donner_cc_fuzzer(
     srcs = ["tests/StyleCascadeDifferential_fuzzer.cc"],
     corpus = "tests/style_cascade_differential_corpus",
     deps = [
+        ":custom_property_map",
         ":style_system",
         "//donner/base",
         "//donner/base/tasks:task_scheduler",
@@ -280,6 +281,7 @@ donner_cc_test(
     name = "style_system_tests",
     srcs = [
         "tests/StyleSystem_tests.cc",
+        "tests/StyleSystemTest.h",
     ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
@@ -289,7 +291,6 @@ donner_cc_test(
         "geode",
     ],
     deps = [
-        ":custom_property_map",
         ":style_ancestor_filter",
         ":style_system",
         "//donner/base:base_test_utils",
@@ -297,6 +298,23 @@ donner_cc_test(
         "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/animation:components",
         "//donner/svg/components/shadow:shadow_tree_system",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "style_cascade_feature_tests",
+    srcs = [
+        "tests/StyleCascadeFeature_tests.cc",
+        "tests/StyleSystemTest.h",
+    ],
+    deps = [
+        ":custom_property_map",
+        ":style_system",
+        "//donner/base:base_test_utils",
+        "//donner/css",
+        "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
     ],

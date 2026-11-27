@@ -87,9 +87,9 @@ ComputedRectComponent::ComputedRectComponent(
     const RectPresentationAttributeParseFn* parseFn =
         kProperties.find(static_cast<std::string_view>(name));
     if (parseFn != nullptr) {
-      auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
-                                                   property.declaration, property.specificity,
-                                                   parser::PropertyParseBehavior::Default));
+      auto maybeError = (*parseFn)(
+          properties,
+          parser::PropertyParseFnParams::Create(property, parser::PropertyParseBehavior::Default));
       if (maybeError) {
         warningSink.add(std::move(maybeError.value()));
       }

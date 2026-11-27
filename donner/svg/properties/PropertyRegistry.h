@@ -750,6 +750,22 @@ public:
   std::optional<ParseDiagnostic> parseProperty(const css::Declaration& declaration,
                                                css::Specificity specificity);
 
+  /// Whether this presentation attribute currently owns a pending substitution.
+  [[nodiscard]] bool hasPendingPresentationVariable(std::string_view name) const;
+  /// Remove an old pending presentation value, preserving a new concrete write.
+  bool discardPendingPresentationVariable(std::string_view name);
+
+  /// Whether any ordinary declaration is still waiting for variable substitution.
+  [[nodiscard]] bool hasPendingVariableDeclarations() const;
+
+  /// Cheap prefilter for registries whose parsers have never admitted variable declarations.
+  [[nodiscard]] bool mayHaveVariableInputs() const { return mayHaveVariableInputs_; }
+
+  /// Resolve winning variable declarations before the ordinary inheritance step.
+  [[nodiscard]] std::optional<FileOffset> resolveVariableDeclarations(
+      const css::VariableLookup& lookup,
+      const std::function<bool(std::size_t, std::size_t)>& admit);
+
   /// Store a winning custom declaration for computed-style resolution after inheritance.
   /// @return True if the name belongs to a custom property.
   bool storeCustomProperty(const css::Declaration& declaration, css::Specificity specificity);
@@ -883,6 +899,32 @@ public:
   friend std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry);
 
 private:
+  void storeDeferredProperty(const css::Declaration& declaration, css::Specificity specificity);
+  void discardSupersededVariableDeclarations();
+  void applyResolvedVariableGroup(const parser::UnparsedProperty& original,
+                                  const css::Declaration& declaration, PropertyRegistry& resolved,
+                                  bool parsed);
+
+  bool removePendingPresentationVariable(std::string_view name, bool clearMarkers);
+
+  std::optional<ParseResult<bool>> parseVariablePresentationAttribute(std::string_view name,
+                                                                      std::string_view value,
+                                                                      css::Specificity specificity);
+
+  std::optional<ParseDiagnostic> deferResourceColorVariable(std::size_t index,
+                                                            const css::Declaration& declaration,
+                                                            css::Specificity specificity,
+                                                            bool presentation);
+  std::optional<ParseDiagnostic> parseVariableDeclaration(const css::Declaration& declaration,
+                                                          css::Specificity specificity);
+  std::optional<ParseDiagnostic> deferVariableDeclaration(const css::Declaration& declaration,
+                                                          css::Specificity specificity,
+                                                          bool presentation = false);
+
+  void writeVariableAwareDeclaration(const RcString& name, const css::Declaration& declaration,
+                                     css::Specificity specificity, bool presentation, bool wins,
+                                     std::shared_ptr<const css::Declaration> variable = nullptr);
+
   std::optional<std::string> encodeDeclarationKey(std::size_t maximumBytes) const;
 
   /// Retains both origins while an inline resource color overlays an attribute or stylesheet.
@@ -895,6 +937,10 @@ private:
 
   /// Inline-origin state is fixed size and independent of the number of declarations.
   std::array<std::optional<InlineResourceColor>, kResourceColorCount> inlineResourceColors_;
+
+  // Sticky across edits. Variable declarations enter through the parser; removing a declaration
+  // may leave this true, which only selects the regular exact check.
+  bool mayHaveVariableInputs_ = false;
 
   /// Returns the stable color property stored in this registry.
   Property<css::Color>& resourceColor(std::size_t index) UTILS_LIFETIME_BOUND;

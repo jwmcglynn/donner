@@ -159,7 +159,13 @@ private:
   void append(const css::Function& value) { appendMembers<3>(value); }
   void append(const css::SimpleBlock& value) { appendMembers<3>(value); }
   void append(const css::ComponentValue& value) { appendMembers<1>(value); }
-  void append(const css::Declaration& value) { appendMembers<6>(value); }
+  void append(const css::Declaration& value) {
+    const auto& [name, values, offset, range, bytes, important, references] = value;
+    // Pack the two flags in the existing final byte of the key.
+    const auto flags = static_cast<std::uint8_t>((static_cast<unsigned>(references) << 1) |
+                                                 static_cast<unsigned>(important));
+    fields(name, values, offset, range, bytes, flags);
+  }
   void append(const css::Token::Ident& value) { appendMembers<1>(value); }
   void append(const css::Token::AtKeyword& value) { appendMembers<1>(value); }
   void append(const css::Token::String& value) { appendMembers<1>(value); }
@@ -239,7 +245,16 @@ std::optional<std::string> PropertyRegistry::encodeDeclarationKey(std::size_t ma
     if (key.oversize()) {
       break;
     }
-    key.fields(std::uint8_t{255}, name, entry.specificity, entry.declaration);
+    key.fields(std::uint8_t{255}, name, entry.specificity, entry.sourceDeclaration());
+    if (entry.presentationVariable) {
+      key.fields(std::uint8_t{254}, false, name, *entry.presentationVariable);
+    }
+    if (entry.substituted) {
+      key.fields(std::uint8_t{254}, true, name);
+    }
+    if (entry.variableFromPresentation) {
+      key.fields(std::uint8_t{254}, std::uint8_t{2}, name);
+    }
   }
   return std::move(key).finish();
 }

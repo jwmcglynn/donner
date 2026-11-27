@@ -40,7 +40,9 @@
     "tests/geometry/css-length-values/rect-inline-unitless-zero.svg": "sha256:03baf937d4f99af653071358ee64c7645a59cd927e91d9d6b908c32e059c56ec",
     "tests/geometry/css-length-values/rect-inline-unitless-zero.png": "sha256:8166481dd11e8cbcd8abfce8921f5df33815998f401c85a5b1387f492a15aaad",
     "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.svg": "sha256:9cd71f8fa0a62d278deb519f54f3a7fd317ac8383a599f5e2d544406795d0d04",
-    "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.png": "sha256:557a27608856288948e56c52d6e53e785ea66b5ffd1284883431c7961eaa2526"
+    "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.png": "sha256:557a27608856288948e56c52d6e53e785ea66b5ffd1284883431c7961eaa2526",
+    "tests/structure/use/custom-property-fill.svg": "sha256:46bd84eb68e7137798d78862911536e6b51cfeaec8c08b55becd3a5296973e8c",
+    "tests/structure/use/custom-property-fill.png": "sha256:d2c53baa50216732528c59eff076e7ecc33752e83615986e4bab05cc251d9a06"
   },
   "tests": [
     {
@@ -349,6 +351,22 @@
       "assertion": "The invalid nonzero unitless stylesheet declaration x:8 leaves the rectangle presentation attribute x=4 effective.",
       "spec_requirements": [
         "svg2-cr-20181004/geometry/XProperty/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/structure/use/custom-property-fill",
+      "input": "tests/structure/use/custom-property-fill.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/structure/use/custom-property-fill.png",
+        "width": 16,
+        "height": 8,
+        "provenance": "Manually constructed reference with solid red and solid blue eight-pixel squares."
+      },
+      "assertion": "Each use instance paints the referenced rect with the custom property inherited from its own use host.",
+      "spec_requirements": [
+        "svg2-cr-20181004/structure/UseElement/req-01"
       ],
       "capabilities": []
     }

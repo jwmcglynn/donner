@@ -204,6 +204,7 @@ std::optional<Declaration> consumeDeclarationGeneric(
     return std::nullopt;
   }
   declaration.sourceByteSize = declaration.toCssText().size();
+  declaration.variableReferences = InspectVariableReferences(declaration.values);
   return declaration;
 }
 

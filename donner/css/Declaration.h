@@ -10,6 +10,7 @@
 
 #include "donner/base/RcString.h"
 #include "donner/css/Rule.h"
+#include "donner/css/VariableSubstitution.h"
 
 namespace donner::css {
 
@@ -37,7 +38,9 @@ struct Declaration {
         values(std::move(values)),
         sourceOffset(sourceOffset),
         sourceRange{sourceOffset, sourceOffset},
-        important(important) {}
+        important(important),
+        variableReferences(this->values.empty() ? VariableReferences::None
+                                                : InspectVariableReferences(this->values)) {}
 
   /// Destructor.
   ~Declaration() = default;
@@ -93,6 +96,8 @@ struct Declaration {
   /// Serialized declaration bytes, computed once by the parser for cascade-work accounting.
   std::size_t sourceByteSize = 0;
   bool important = false;  ///< Whether the declaration ends with `!important`.
+  /// Syntax classification of the values at construction or parser finalization.
+  VariableReferences variableReferences = VariableReferences::None;
 };
 
 /**

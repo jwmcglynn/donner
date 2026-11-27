@@ -59,9 +59,9 @@ ComputedCircleComponent::ComputedCircleComponent(
     const CirclePresentationAttributeParseFn* parseFn =
         kProperties.find(static_cast<std::string_view>(name));
     if (parseFn != nullptr) {
-      auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
-                                                   property.declaration, property.specificity,
-                                                   parser::PropertyParseBehavior::AllowUserUnits));
+      auto maybeError =
+          (*parseFn)(properties, parser::PropertyParseFnParams::Create(
+                                     property, parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError) {
         warningSink.add(std::move(maybeError.value()));
       }

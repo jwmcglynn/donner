@@ -1392,7 +1392,7 @@ bool ApplyStyledPathData(const ComputedStyleComponent& style, Property<RcString>
   const auto& properties = style.properties()->unparsedProperties;
   if (auto it = properties.find("d"); it != properties.end()) {
     auto maybeError = Parse(
-        parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
+        parser::PropertyParseFnParams::Create(it->second,
                                               parser::PropertyParseBehavior::AllowUserUnits),
         [](const parser::PropertyParseFnParams& params) {
           return parser::ParsePathDataProperty(params.components());
@@ -1418,10 +1418,10 @@ ComputedPathComponent* PrepareShapePath(EntityHandle handle, const PathComponent
 
   if (path.splineOverride) {
     return output.set(handle, path.splineOverride.value());
-  } else if (actualD.isSpecified()) {
+  } else if (const auto data = actualD.get()) {
     // `Property::get()` hands back a fresh optional, so this has to be a value rather than a
     // reference into a temporary. Copying an RcString shares its buffer.
-    const RcString pathData = actualD.get().value();
+    const RcString& pathData = *data;
 
     // Reuse the retained spline when it was parsed from this exact string. The shape pass runs
     // over every shape on every prepare, and re-parsing path data that has not changed is the

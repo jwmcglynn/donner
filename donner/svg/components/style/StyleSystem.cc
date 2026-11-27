@@ -27,6 +27,7 @@
 #include "donner/base/xml/components/XMLValueComponent.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
+#include "donner/css/VariableGraph.h"
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
@@ -621,6 +622,7 @@ std::optional<Lengthd> SampleFontLength(const ContextualLengthSample& sample, Le
 Lengthd BaseFontLength(const PropertyRegistry& properties, double parentSize) {
   switch (properties.fontSize.state) {
     case PropertyState::NotSet:
+    case PropertyState::PendingSubstitution:
     case PropertyState::Inherit:
     case PropertyState::ExplicitUnset: return Lengthd(parentSize, Lengthd::Unit::Px);
     default:
@@ -1091,39 +1093,106 @@ CustomPropertyMap::Action CustomPropertyAction(const css::Declaration& declarati
   }
 }
 
-[[gnu::noinline]] void ResolveCustomProperties(ComputedStyle& record,
-                                               StyleSystem::CascadePass& pass) {
-  auto& deferred = record.properties.unparsedProperties;
-  const auto& account = pass.budget.retainedStyleBytes();
-  SmallVector<CustomPropertyMap::Change, 4> changes;
-  bool refused = pass.budget.rejected();
-  for (auto it = deferred.begin();
-       it != deferred.end() && std::string_view(it->first).starts_with("--");
-       it = deferred.erase(it)) {
-    if (refused) {
-      continue;
-    }
-    const auto action = CustomPropertyAction(it->second.declaration);
-    auto tokens = action == CustomPropertyMap::Action::Set
-                      ? TokenSequence::Create(account, it->second.declaration.values)
-                      : nullptr;
-    refused = action == CustomPropertyMap::Action::Set && !tokens;
-    if (!refused) {
-      changes.push_back({it->first, action, std::move(tokens)});
-    }
-  }
-  if (!refused) {
-    auto result = CustomPropertyMap::Overlay(account, record.customProperties,
-                                             std::span(changes.data(), changes.size()));
-    if (result) {
-      record.customProperties = std::move(*result);
+using CustomTokens = std::span<const css::ComponentValue>;
+
+std::optional<CustomTokens> InheritedVariable(const ComputedStyle& record, std::string_view name) {
+  const auto* value = record.customProperties ? record.customProperties->find(name) : nullptr;
+  return value ? std::optional(value->tokens()) : std::nullopt;
+}
+
+// Definitions borrow the winning declarations until the graph has published all its results.
+// Each retained sequence is admitted immediately, before any subsequent expansion can reference it.
+class CustomVariableOverlay {
+public:
+  void collect(const RcString& name, const css::Declaration& decl) {
+    const auto action = CustomPropertyAction(decl);
+    if (action == CustomPropertyMap::Action::Inherit ||
+        action == CustomPropertyMap::Action::Unset) {
       return;
     }
+    const bool initial = action == CustomPropertyMap::Action::Initial;
+    definitions_.push_back({std::string_view(name),
+                            initial ? std::nullopt : std::optional(CustomTokens(decl.values))});
+    changes_.push_back({name, CustomPropertyMap::Action::Initial, nullptr});
+    hasReferences_ |= !initial && decl.variableReferences != css::VariableReferences::None;
   }
-  // An unavailable override must not expose the inherited value it replaced.
-  record.customProperties.reset();
-  pass.cache.clear();
-  pass.budget.noteRetainedCustomPropertyRefusal();
+
+  bool apply(ComputedStyle& record, StyleSystem::CascadePass& pass, ParseWarningSink& warnings) {
+    const auto& account = pass.budget.retainedStyleBytes();
+    if (hasReferences_) {
+      if (!resolve(record, pass, warnings)) {
+        return false;
+      }
+    } else {
+      for (std::size_t i = 0; i < definitions_.size(); ++i) {
+        if (definitions_[i].value && !store(i, *definitions_[i].value, account)) {
+          return false;
+        }
+      }
+    }
+    auto next = CustomPropertyMap::Overlay(account, record.customProperties, changes_);
+    if (!next) {
+      return false;
+    }
+    record.customProperties = std::move(*next);
+    return true;
+  }
+
+private:
+  bool store(std::size_t i, CustomTokens value,
+             const std::shared_ptr<RetainedStyleBytes>& account) {
+    changes_[i].value = TokenSequence::Create(account, value);
+    changes_[i].action = CustomPropertyMap::Action::Set;
+    return bool(changes_[i].value);
+  }
+
+  bool resolve(const ComputedStyle& record, StyleSystem::CascadePass& pass,
+               ParseWarningSink& warnings) {
+    const css::VariableOutputs outputs{
+        [&](std::size_t i) -> std::optional<CustomTokens> {
+          return changes_[i].value ? std::optional(changes_[i].value->tokens()) : std::nullopt;
+        },
+        [&](std::size_t i, css::VariableSubstitutionResult value) {
+          if (value.status == css::VariableSubstitutionStatus::LimitExceeded &&
+              pass.budget.reportVariableLimitWarning()) {
+            warnings.add(ParseDiagnostic::Error("CSS variable substitution limit exceeded",
+                                                FileOffset::Offset(0)));
+          }
+          return value.status != css::VariableSubstitutionStatus::Resolved ||
+                 store(i, value.values, pass.budget.retainedStyleBytes());
+        }};
+    return css::ResolveVariableDefinitions(
+        definitions_, [&](std::string_view name) { return InheritedVariable(record, name); },
+        outputs, {},
+        [&](std::size_t components, std::size_t bytes) {
+          return pass.budget.reserveGeneratedDeclarationWork(components, bytes);
+        });
+  }
+
+  std::vector<css::VariableDefinition> definitions_;
+  std::vector<CustomPropertyMap::Change> changes_;
+  bool hasReferences_ = false;
+};
+
+[[gnu::noinline]] void ResolveCustomProperties(ComputedStyle& record,
+                                               StyleSystem::CascadePass& pass,
+                                               ParseWarningSink& warnings) {
+  auto& deferred = record.properties.unparsedProperties;
+  auto firstOrdinary = deferred.begin();
+  CustomVariableOverlay overlay;
+  while (firstOrdinary != deferred.end() &&
+         std::string_view(firstOrdinary->first).starts_with("--")) {
+    overlay.collect(firstOrdinary->first, firstOrdinary->second.declaration);
+    ++firstOrdinary;
+  }
+  const bool accepted = !pass.budget.rejected() && overlay.apply(record, pass, warnings);
+  deferred.erase(deferred.begin(), firstOrdinary);
+  if (!accepted) {
+    // A refused override must not expose the inherited value it replaced.
+    record.customProperties.reset();
+    pass.cache.clear();
+    pass.budget.noteRetainedCustomPropertyRefusal();
+  }
 }
 
 void RetainComputedRecord(StyleSystem::CascadePass& pass, ComputedStyle& record,
@@ -2341,7 +2410,8 @@ namespace {
 bool HasShallowLocalStyle(const StyleComponent* local) {
   return !kNativeStyleStackAdmission || !local ||
          std::ranges::all_of(local->properties().unparsedProperties, [](const auto& item) {
-           return RuleIndex::IsDeclarationShallowForParallelCascade(item.second.declaration);
+           return RuleIndex::IsDeclarationShallowForParallelCascade(
+               item.second.sourceDeclaration());
          });
 }
 }  // namespace
@@ -2594,33 +2664,26 @@ struct StyleSystem::PendingStyleDeclarations {
     return record;
   }
 
-  std::shared_ptr<ComputedStyle> materializeWithAnimation(const Registry& registry,
-                                                          Entity dataEntity,
-                                                          const StyleComponent* local,
+  std::shared_ptr<ComputedStyle> materializeWhenRequested(const StyleComponent* local,
                                                           ParseWarningSink& sink, bool defer) {
-    if (defer) {
-      return nullptr;
-    }
-    auto record = materialize(local, sink);
-    ApplyAnimatedStyle(registry, dataEntity, record->properties);
-    return record;
+    return defer ? nullptr : materialize(local, sink);
   }
 
-  std::shared_ptr<ComputedStyle> finishMaterialization(const Registry& registry, Entity dataEntity,
-                                                       const StyleComponent* local,
+  std::shared_ptr<ComputedStyle> finishMaterialization(const StyleComponent* local,
                                                        ParseWarningSink& sink,
                                                        std::shared_ptr<ComputedStyle> record) {
     if (record) {
       return record;
     }
     const auto attempts = sink.warningAttempts();
-    record = materializeWithAnimation(registry, dataEntity, local, sink, false);
+    record = materialize(local, sink);
     UTILS_RELEASE_ASSERT(sink.warningAttempts() == attempts);
     return record;
   }
 
   void admit(const css::Declaration& declaration, css::Specificity specificity,
              const StyleComponent* local, ParseWarningSink& sink) {
+    hasVariableInputs |= declaration.variableReferences == css::VariableReferences::Valid;
     constexpr std::size_t kMaximumDeferredDeclarations = 4096;
     if (!streamed && entries.size() == kMaximumDeferredDeclarations) {
       streamed = materialize(local, sink);
@@ -2635,6 +2698,9 @@ struct StyleSystem::PendingStyleDeclarations {
 
   SmallVector<Pending, 4> entries;
   std::shared_ptr<ComputedStyle> streamed;
+  bool hasVariableInputs = false;
+
+  bool requiresPrivateResolution() const { return streamed || hasVariableInputs; }
 };
 
 void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEntity,
@@ -2817,7 +2883,8 @@ void StyleSystem::resolveRelativeFontProperties(const Registry& registry, Entity
 }
 
 [[gnu::always_inline]] inline bool StyleSystem::computeCustomProperties(
-    ComputedStyle& record, const ComputedStyleComponent* parent, CascadePass& pass) {
+    ComputedStyle& record, const ComputedStyleComponent* parent, CascadePass& pass,
+    ParseWarningSink& warnings) {
   if (parent && parent->style && parent->style->customProperties) {
     record.customProperties = parent->style->customProperties;
   }
@@ -2829,9 +2896,61 @@ void StyleSystem::resolveRelativeFontProperties(const Registry& registry, Entity
     pass.staging->declined_ = true;
     return false;
   }
-  ResolveCustomProperties(record, pass);
+  ResolveCustomProperties(record, pass, warnings);
   return true;
 }
+
+[[gnu::always_inline]] inline bool StyleSystem::resolveComputedVariables(
+    ComputedStyle& record, const ComputedStyleComponent* parent, CascadePass& pass,
+    ParseWarningSink& warnings) {
+  return computeCustomProperties(record, parent, pass, warnings) &&
+         (!record.properties.mayHaveVariableInputs() ||
+          resolvePendingVariables(record, pass, warnings));
+}
+
+[[gnu::noinline]] bool StyleSystem::resolvePendingVariables(ComputedStyle& record,
+                                                            CascadePass& pass,
+                                                            ParseWarningSink& warnings) {
+  if (!record.properties.hasPendingVariableDeclarations()) {
+    return true;
+  }
+  if (pass.staging) {
+    // Generated work must use the canonical owner's declaration budget.
+    pass.staging->declined_ = true;
+    return false;
+  }
+  const auto exhaustedAt = record.properties.resolveVariableDeclarations(
+      [&](std::string_view name) -> std::optional<std::span<const css::ComponentValue>> {
+        const auto* sequence =
+            record.customProperties ? record.customProperties->find(name) : nullptr;
+        return sequence ? std::optional(sequence->tokens()) : std::nullopt;
+      },
+      [&](std::size_t count, std::size_t bytes) {
+        return pass.budget.reserveGeneratedDeclarationWork(count, bytes);
+      });
+  if (exhaustedAt && pass.budget.reportVariableLimitWarning()) {
+    warnings.add(ParseDiagnostic::Warning("CSS variable expansion exceeds the style work limit",
+                                          *exhaustedAt));
+  }
+  return true;
+}
+
+namespace {
+
+bool HasInlineVariableInputs(const StyleComponent* local) {
+  return local && local->properties().mayHaveVariableInputs() &&
+         std::ranges::any_of(local->properties().unparsedProperties, [](const auto& item) {
+           return item.second.sourceDeclaration().variableReferences ==
+                      css::VariableReferences::Valid ||
+                  item.second.presentationVariable;
+         });
+}
+
+bool CanShareDeclarationValues(bool streamedOrVariable, const StyleComponent* local) {
+  return !streamedOrVariable && !HasInlineVariableInputs(local);
+}
+
+}  // namespace
 
 void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
                                         ComputedStyleComponent& computedStyle, CascadePass& pass,
@@ -2864,9 +2983,10 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
                        pass.testFilter);
 
   PopulateMatchedPropertiesKey(registry, handle, dataEntity, parent, styleComponent, cacheKey);
-  MatchedCacheState cacheState =
-      PrepareMatchedCacheState(registry, dataEntity, parent, occurrence,
-                               declarations.streamed != nullptr, cacheKey, styleBudget);
+  MatchedCacheState cacheState = PrepareMatchedCacheState(
+      registry, dataEntity, parent, occurrence,
+      !CanShareDeclarationValues(declarations.requiresPrivateResolution(), styleComponent),
+      cacheKey, styleBudget);
   if (!serial) {
     RuleTrace::bindPreparedInputs(capture, registry, parent, cacheKey, cacheState);
   }
@@ -2880,8 +3000,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   // a worker entry whose original parse produced no warnings. With an unpublished parent,
   // defer the redundant local parse until after the ordinary late cache probe.
   const bool deferMaterialization = RuleTrace::mayDeferMaterialization(replay, cacheState);
-  auto record = declarations.materializeWithAnimation(registry, dataEntity, styleComponent, early,
-                                                      deferMaterialization);
+  auto record = declarations.materializeWhenRequested(styleComponent, early, deferMaterialization);
   auto* animationBudget = serial ? serial->animationBudget() : nullptr;
   const bool warningBeforeParent = early.warningAttempts() != warningAttemptsBefore;
   diagnostics.beforeParent();
@@ -2893,12 +3012,12 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
     RuleTrace::rememberCacheOutcome(capture, replay, pass.cache);
     return;
   }
-  record = declarations.finishMaterialization(registry, dataEntity, styleComponent, early,
-                                              std::move(record));
-  if (!computeCustomProperties(*record, cacheState.parentStyle, pass)) {
+  record = declarations.finishMaterialization(styleComponent, early, std::move(record));
+  if (!resolveComputedVariables(*record, cacheState.parentStyle, pass, late)) {
     return;
   }
   PropertyRegistry& properties = record->properties;
+  ApplyAnimatedStyle(registry, dataEntity, properties);
   ApplyContextualFontSize(registry, animationBudget, dataEntity, cacheState.parentStyle,
                           properties);
   const auto resourceOpacities = ApplyScalarAnimationStyles(

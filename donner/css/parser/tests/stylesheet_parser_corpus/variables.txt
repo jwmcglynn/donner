@@ -1,0 +1,1 @@
+rect { --base: blue; --cycle: var(--cycle); fill: var(--cycle, var(--base)); }

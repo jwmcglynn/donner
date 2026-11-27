@@ -20,6 +20,7 @@
 #include "donner/base/Utils.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/css/parser/DeclarationListParser.h"
+#include "donner/css/parser/ValueParser.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/core/Stroke.h"
@@ -526,10 +527,10 @@ ParseResult<TextDecorationStyle> ParseDecorationStyle(
                 : ParseResult<TextDecorationStyle>(InvalidDecoration());
 }
 
-/// Set one longhand of the `text-decoration` shorthand when the declaration wins the cascade.
+/// Set one longhand of a shorthand when the declaration wins the cascade.
 template <typename T, PropertyCascade kCascade>
-void ApplyDecorationLonghand(Property<T, kCascade>& property,
-                             const parser::PropertyParseFnParams& params, std::optional<T> value) {
+void ApplyShorthandLonghand(Property<T, kCascade>& property,
+                            const parser::PropertyParseFnParams& params, std::optional<T> value) {
   if (property.isSpecified() && params.specificity < property.specificity) {
     return;
   }
@@ -551,11 +552,10 @@ std::optional<ParseDiagnostic> ApplyTextDecoration(PropertyRegistry& registry,
     }
     values = parsed.result();
   }
-  ApplyDecorationLonghand(registry.textDecoration, params, std::optional(values.lines));
-  ApplyDecorationLonghand(registry.textDecorationStyle, params, std::optional(values.style));
-  ApplyDecorationLonghand(registry.textDecorationColor, params, values.color);
-  ApplyDecorationLonghand(registry.textDecorationThickness, params,
-                          std::optional(values.thickness));
+  ApplyShorthandLonghand(registry.textDecoration, params, std::optional(values.lines));
+  ApplyShorthandLonghand(registry.textDecorationStyle, params, std::optional(values.style));
+  ApplyShorthandLonghand(registry.textDecorationColor, params, values.color);
+  ApplyShorthandLonghand(registry.textDecorationThickness, params, std::optional(values.thickness));
   return std::nullopt;
 }
 
@@ -1259,6 +1259,22 @@ ParseResult<Reference> ParseReference(std::string_view tag,
   err.reason = "Invalid url reference";
   err.range.start = firstComponent.sourceOffset();
   return err;
+}
+
+std::optional<ParseDiagnostic> ApplyMarkerShorthand(PropertyRegistry& registry,
+                                                    const parser::PropertyParseFnParams& params) {
+  std::optional<Reference> marker;
+  if (params.explicitState == PropertyState::NotSet) {
+    auto parsed = ParseReference("marker", params.components());
+    if (parsed.hasError()) {
+      return std::move(parsed.error());
+    }
+    marker = std::move(parsed.result());
+  }
+  ApplyShorthandLonghand(registry.markerStart, params, marker);
+  ApplyShorthandLonghand(registry.markerMid, params, marker);
+  ApplyShorthandLonghand(registry.markerEnd, params, std::move(marker));
+  return std::nullopt;
 }
 
 ParseResult<std::optional<ClipPath>> ParseClipPathValue(
@@ -3031,47 +3047,8 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseReference("marker-end", params.components());
                        },
                        &registry.markerEnd);
-                 }},  //
-                {"marker",
-                 [](PropertyRegistry& registry,
-                    const parser::PropertyParseFnParams& params) -> std::optional<ParseDiagnostic> {
-                   // First, parse the shorthand value as a Reference
-                   const auto parseResult = ParseReference("marker", params.components());
-                   if (!parseResult.hasResult()) {
-                     return parseResult.error();
-                   }
-
-                   const Reference& markerValue = parseResult.result();
-
-                   // Now, set marker-start, marker-mid, and marker-end using the Parse function
-                   std::optional<ParseDiagnostic> error;
-
-                   // Set marker-start
-                   error = Parse(
-                       params,
-                       [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                           -> ParseResult<Reference> { return markerValue; },
-                       &registry.markerStart);
-                   assert(!error && "Unexpected error parsing marker shorthand property");
-
-                   // Set marker-mid
-                   error = Parse(
-                       params,
-                       [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                           -> ParseResult<Reference> { return markerValue; },
-                       &registry.markerMid);
-                   assert(!error && "Unexpected error parsing marker shorthand property");
-
-                   // Set marker-end
-                   error = Parse(
-                       params,
-                       [markerValue](const parser::PropertyParseFnParams& /*unused*/)
-                           -> ParseResult<Reference> { return markerValue; },
-                       &registry.markerEnd);
-                   assert(!error && "Unexpected error parsing marker shorthand property");
-
-                   return std::nullopt;  // Parsing succeeded
-                 }},                     //
+                 }},                               //
+                {"marker", ApplyMarkerShorthand},  //
             }));
 
 bool ResolveInsetLengthArray(std::array<Lengthd, 4>& values, const FontMetrics& metrics) {
@@ -3283,6 +3260,25 @@ void PropertyRegistry::inherit(const PropertyRegistry& parent, PropertyInheritOp
   inlineResourceColors_.fill(std::nullopt);
 }
 
+namespace {
+
+std::size_t PendingDeclarationBytes(const std::map<RcString, parser::UnparsedProperty>& entries) {
+  SmallVector<const css::Declaration*, 4> charged;
+  std::size_t bytes = 0;
+  for (const auto& [_, entry] : entries) {
+    for (const auto* source : {entry.variableSource.get(), entry.presentationVariable.get()}) {
+      if (source && std::ranges::find(charged, source) == charged.end()) {
+        charged.push_back(source);
+        SaturatingAdd(bytes, sizeof(css::Declaration));
+        AddComponentValuesBytes(bytes, source->values);
+      }
+    }
+  }
+  return bytes;
+}
+
+}  // namespace
+
 std::size_t PropertyRegistry::complexPropertyBytes() const {
   std::size_t result = 0;
   if (const StrokeDasharray* dasharray = strokeDasharray.getStoredValue()) {
@@ -3306,12 +3302,17 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
                     path->data.retainedBytes().value_or(std::numeric_limits<std::size_t>::max()));
     }
   }
+  bool hasSharedDeclarations = false;
   for (const auto& entry : unparsedProperties) {
     const parser::UnparsedProperty& property = entry.second;
     using MapValue = decltype(unparsedProperties)::value_type;
     SaturatingAdd(result, sizeof(MapValue) + 3 * sizeof(void*));
 
     AddComponentValuesBytes(result, property.declaration.values);
+    hasSharedDeclarations |= property.variableSource || property.presentationVariable;
+  }
+  if (hasSharedDeclarations) {
+    SaturatingAdd(result, PendingDeclarationBytes(unparsedProperties));
   }
   return result;
 }
@@ -3353,6 +3354,7 @@ ParseResult<bool> PropertyRegistry::parseResourceColorAttribute(
   if (auto error = parseResourceColor(index, params)) {
     return std::move(*error);
   }
+  discardPendingPresentationVariable(resourceColor(index).name);
   return true;
 }
 
@@ -3371,8 +3373,348 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseResourceColor(
   return error;
 }
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_PENDING_PROPERTY_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
+namespace {
+
+bool IsPendingVariable(const parser::UnparsedProperty& value) {
+  return value.sourceDeclaration().variableReferences == css::VariableReferences::Valid &&
+         !std::string_view(value.sourceDeclaration().name).starts_with("--");
+}
+
+css::Declaration VariableUnset(const css::Declaration& source) {
+  std::vector<css::ComponentValue> unset;
+  unset.emplace_back(css::Token(css::Token::Ident(RcString("unset")), 0));
+  return css::Declaration(source.name, std::move(unset), source.sourceOffset, source.important);
+}
+
+// These operations run only when a variable declaration owns a pending field.
+struct VariableField {
+  std::string_view name;
+  PropertyState& state;
+  css::Specificity& specificity;
+  void* value;
+  void (*resetValue)(void*);
+  void (*installValue)(void*, void*);
+
+  bool isSpecified() const { return state != PropertyState::NotSet; }
+  void reset(PropertyState newState, css::Specificity priority) const {
+    resetValue(value);
+    state = newState;
+    specificity = priority;
+  }
+  // The same field accessor selected both values, so their optional storage types agree.
+  void install(VariableField source) const {
+    installValue(value, source.value);
+    state = source.state;
+    specificity = source.specificity;
+  }
+};
+
+template <typename Value>
+void ResetVariableValue(void* storage) {
+  static_cast<std::optional<Value>*>(storage)->reset();
+}
+
+template <typename Value>
+void InstallVariableValue(void* destination, void* source) {
+  *static_cast<std::optional<Value>*>(destination) =
+      std::move(*static_cast<std::optional<Value>*>(source));
+}
+
+using VariableFieldAccessor = VariableField (*)(PropertyRegistry&);
+
+template <std::size_t Index>
+VariableField GetVariableField(PropertyRegistry& registry) {
+  auto fields = registry.allPropertiesMutable();
+  auto& property = std::get<Index>(fields);
+  using Value = typename std::remove_reference_t<decltype(property)>::Type;
+  return {property.name,
+          property.state,
+          property.specificity,
+          &property.value,
+          ResetVariableValue<Value>,
+          InstallVariableValue<Value>};
+}
+
+template <std::size_t... Index>
+constexpr auto VariableFieldAccessors(std::index_sequence<Index...>) {
+  return std::array<VariableFieldAccessor, sizeof...(Index)>{GetVariableField<Index>...};
+}
+
+constexpr auto kVariableFields =
+    VariableFieldAccessors(std::make_index_sequence<PropertyRegistry::numProperties()>());
+
+struct SelectedVariableField {
+  VariableFieldAccessor get;
+  VariableField field;
+};
+
+std::optional<SelectedVariableField> FindVariableField(PropertyRegistry& registry,
+                                                       std::string_view name) {
+  for (auto get : kVariableFields) {
+    VariableField field = get(registry);
+    if (field.name == name) {
+      return SelectedVariableField{get, field};
+    }
+  }
+  return std::nullopt;
+}
+
+std::shared_ptr<const css::Declaration> PreviousPresentationVariable(
+    const parser::UnparsedProperty& previous, css::Specificity specificity) {
+  if (specificity.isStyleAttribute() && previous.variableFromPresentation &&
+      IsPendingVariable(previous)) {
+    return previous.variableSource;
+  }
+  return previous.presentationVariable;
+}
+
+}  // namespace
+
+void PropertyRegistry::writeVariableAwareDeclaration(
+    const RcString& name, const css::Declaration& declaration, css::Specificity specificity,
+    bool presentation, bool wins, std::shared_ptr<const css::Declaration> variable) {
+  if (!variable && declaration.variableReferences == css::VariableReferences::Valid) {
+    variable = std::make_shared<const css::Declaration>(declaration);
+  }
+  mayHaveVariableInputs_ |= static_cast<bool>(variable);
+  // The lightweight entry identifies the destination; its raw token tree has one owner.
+  const auto storedDeclaration = [&] {
+    return variable ? css::Declaration(declaration.name, {}, declaration.sourceOffset,
+                                       declaration.important)
+                    : declaration;
+  };
+  auto previous = unparsedProperties.find(name);
+  if (!wins) {
+    if (!presentation) {
+      return;
+    }
+    if (previous != unparsedProperties.end() && !previous->second.variableFromPresentation) {
+      previous->second.presentationVariable = std::move(variable);
+      return;
+    }
+    // A concrete inline winner has no deferred entry. Keep the latest attribute here so an
+    // inline edit can reveal it and an attribute edit can replace or remove it.
+  }
+  std::shared_ptr<const css::Declaration> presentationVariable;
+  if (previous != unparsedProperties.end() && !presentation) {
+    presentationVariable = PreviousPresentationVariable(previous->second, specificity);
+  }
+  unparsedProperties.insert_or_assign(
+      name,
+      parser::UnparsedProperty{storedDeclaration(), specificity, std::move(presentationVariable),
+                               false, presentation, variable});
+}
+
+std::optional<ParseDiagnostic> PropertyRegistry::deferResourceColorVariable(
+    std::size_t index, const css::Declaration& declaration, css::Specificity specificity,
+    bool presentation) {
+  auto params = parser::PropertyParseFnParams::Create(
+      declaration, specificity, parser::PropertyParseBehavior::AllowUserUnits);
+  params.explicitState = PropertyState::PendingSubstitution;
+  if (auto error = parseResourceColor(index, params)) {
+    return error;
+  }
+  const auto& output = resourceColor(index);
+  writeVariableAwareDeclaration(declaration.name, declaration, params.specificity, presentation,
+                                output.state == PropertyState::PendingSubstitution &&
+                                    output.specificity == params.specificity);
+  return std::nullopt;
+}
+
+std::optional<ParseDiagnostic> PropertyRegistry::deferVariableDeclaration(
+    const css::Declaration& declaration, css::Specificity specificity, bool presentation) {
+  for (std::size_t index = 0; index < kResourceColorCount; ++index) {
+    if (resourceColor(index).name == declaration.name) {
+      return deferResourceColorVariable(index, declaration, specificity, presentation);
+    }
+  }
+  PropertyRegistry targets;
+  if (auto error = targets.parseProperty(VariableUnset(declaration), specificity)) {
+    return error;
+  }
+  const auto effective =
+      declaration.important ? css::Specificity::Important(specificity) : specificity;
+  // Use the actual property parser to identify all fields a shorthand can replace. A later
+  // concrete declaration clears its marker only if it wins the ordinary cascade.
+  const auto variable = std::make_shared<const css::Declaration>(declaration);
+  for (auto get : kVariableFields) {
+    if (!get(targets).isSpecified()) {
+      continue;
+    }
+    const auto property = get(*this);
+    const bool wins = !property.isSpecified() || property.specificity <= effective;
+    if (wins) {
+      property.reset(PropertyState::PendingSubstitution, effective);
+    }
+    writeVariableAwareDeclaration(RcString(property.name), declaration, effective, presentation,
+                                  wins, variable);
+  }
+  for (const auto& [name, _] : targets.unparsedProperties) {
+    const auto current = unparsedProperties.find(name);
+    writeVariableAwareDeclaration(
+        name, declaration, effective, presentation,
+        current == unparsedProperties.end() || current->second.specificity <= effective, variable);
+  }
+  return std::nullopt;
+}
+
+namespace {
+
+bool ParseExpandedVariable(PropertyRegistry& properties, const css::Declaration& declaration,
+                           const parser::UnparsedProperty& winner) {
+  if (winner.variableFromPresentation && RequiresCssLengthUnits(declaration.name)) {
+    const auto* parse = kProperties.find(declaration.name);
+    UTILS_RELEASE_ASSERT(parse);
+    return !(*parse)(properties, parser::PropertyParseFnParams::Create(
+                                     declaration, winner.specificity,
+                                     parser::PropertyParseBehavior::AllowUserUnits));
+  }
+  return !properties.parseProperty(declaration, winner.specificity);
+}
+
+}  // namespace
+
+bool PropertyRegistry::hasPendingVariableDeclarations() const {
+  if (!mayHaveVariableInputs_) {
+    return false;
+  }
+  return std::ranges::any_of(unparsedProperties, [](const auto& item) {
+    return IsPendingVariable(item.second) || item.second.presentationVariable;
+  });
+}
+
+void PropertyRegistry::discardSupersededVariableDeclarations() {
+  // Remove placeholders superseded by concrete declarations before substituting any tokens.
+  std::erase_if(unparsedProperties, [&](const auto& item) {
+    if (!IsPendingVariable(item.second)) {
+      return false;
+    }
+    const auto field = FindVariableField(*this, item.first);
+    if (!field) {
+      return false;
+    }
+    if (!field->field.isSpecified() && item.second.specificity == css::Specificity()) {
+      field->field.reset(PropertyState::PendingSubstitution, item.second.specificity);
+    }
+    return field->field.state != PropertyState::PendingSubstitution;
+  });
+}
+
+std::optional<FileOffset> PropertyRegistry::resolveVariableDeclarations(
+    const css::VariableLookup& lookup, const std::function<bool(std::size_t, std::size_t)>& admit) {
+  discardSupersededVariableDeclarations();
+  std::optional<FileOffset> exhaustedAt;
+
+  for (auto first = unparsedProperties.begin(); first != unparsedProperties.end();
+       first = std::find_if(unparsedProperties.begin(), unparsedProperties.end(),
+                            [](const auto& item) { return IsPendingVariable(item.second); })) {
+    if (!IsPendingVariable(first->second)) {
+      continue;
+    }
+    const auto original = first->second;
+    auto expanded =
+        css::SubstituteVariables(original.sourceDeclaration().values, lookup, {}, admit);
+    if (!exhaustedAt && expanded.status == css::VariableSubstitutionStatus::LimitExceeded) {
+      exhaustedAt = original.sourceDeclaration().sourceOffset;
+    }
+    auto declaration = VariableUnset(original.sourceDeclaration());
+    if (expanded.status == css::VariableSubstitutionStatus::Resolved) {
+      declaration.values = std::move(expanded.values);
+    }
+    PropertyRegistry resolved;
+    const bool parsed = ParseExpandedVariable(resolved, declaration, original);
+    if (!parsed) {
+      declaration = VariableUnset(original.sourceDeclaration());
+    }
+    applyResolvedVariableGroup(original, declaration, resolved, parsed);
+  }
+  for (auto& [_, entry] : unparsedProperties) {
+    entry.presentationVariable.reset();
+  }
+  return exhaustedAt;
+}
+
+void PropertyRegistry::applyResolvedVariableGroup(const parser::UnparsedProperty& original,
+                                                  const css::Declaration& declaration,
+                                                  PropertyRegistry& resolved, bool parsed) {
+  // A shorthand may own several fields. Apply one expansion only to the fields it still owns.
+  for (auto it = unparsedProperties.begin(); it != unparsedProperties.end();) {
+    if (!IsPendingVariable(it->second) || it->second.specificity != original.specificity ||
+        it->second.variableSource != original.variableSource) {
+      ++it;
+      continue;
+    }
+    if (const auto field = FindVariableField(*this, it->first)) {
+      const auto value = field->get(resolved);
+      if (parsed && value.isSpecified()) {
+        field->field.install(value);
+      } else {
+        field->field.reset(PropertyState::ExplicitUnset, original.specificity);
+      }
+      it = unparsedProperties.erase(it);
+    } else {
+      it->second.declaration = declaration;
+      it->second.variableSource.reset();
+      it->second.substituted = true;
+      ++it;
+    }
+  }
+}
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute pop
+#endif
+
+void PropertyRegistry::storeDeferredProperty(const css::Declaration& declaration,
+                                             css::Specificity specificity) {
+  const auto effective =
+      declaration.important ? css::Specificity::Important(specificity) : specificity;
+  const auto [previous, inserted] = unparsedProperties.try_emplace(
+      declaration.name, parser::UnparsedProperty{declaration, effective});
+  if (!inserted && IsPendingVariable(previous->second) &&
+      previous->second.specificity <= effective) {
+    writeVariableAwareDeclaration(declaration.name, declaration, effective, false, true);
+  }
+}
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
+std::optional<ParseDiagnostic> PropertyRegistry::parseVariableDeclaration(
+    const css::Declaration& declaration, css::Specificity specificity) {
+  if (storeCustomProperty(declaration, specificity)) {
+    return std::nullopt;
+  }
+  if (declaration.variableReferences == css::VariableReferences::Valid) {
+    return deferVariableDeclaration(declaration, specificity);
+  }
+  ParseDiagnostic error;
+  error.reason = "Invalid CSS variable reference";
+  error.range.start = declaration.sourceOffset;
+  return error;
+}
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                                css::Specificity specificity) {
+  if (declaration.variableReferences != css::VariableReferences::None) {
+    return parseVariableDeclaration(declaration, specificity);
+  }
   const std::string_view name(declaration.name);
   if (name == "flood-color" || name == "stop-color" || name == "lighting-color") {
     return parseResourceColor(
@@ -3394,11 +3736,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
 
   // Only store unparsed properties if they are valid presentation attribute names.
   if (kValidPresentationAttributes.contains(name)) {
-    unparsedProperties.emplace(
-        std::make_pair(declaration.name, parser::UnparsedProperty{declaration, specificity}));
-  } else if (name.size() > 2 && name.starts_with("--")) {
-    std::ignore = storeCustomProperty(declaration, specificity);
-  } else {
+    storeDeferredProperty(declaration, specificity);
+  } else if (!storeCustomProperty(declaration, specificity)) {
     ParseDiagnostic err;
     err.reason = "Unknown property '" + declaration.name + "'";
     err.range.start = declaration.sourceOffset;
@@ -3418,11 +3757,18 @@ bool PropertyRegistry::parseInlineResourceColor(
     return false;
   }
   const std::size_t index = static_cast<std::size_t>(color - selectedColors.begin());
-  const auto params =
+  if (declaration.variableReferences == css::VariableReferences::Invalid) {
+    return true;
+  }
+  auto params =
       parser::PropertyParseFnParams::Create(declaration, css::Specificity::StyleAttribute(),
                                             parser::PropertyParseBehavior::AllowUserUnits);
   if (color->isSpecified() && params.specificity < color->specificity) {
     return true;
+  }
+  const bool variable = declaration.variableReferences == css::VariableReferences::Valid;
+  if (variable) {
+    params.explicitState = PropertyState::PendingSubstitution;
   }
   const auto error = parser::Parse(
       params,
@@ -3444,8 +3790,9 @@ bool PropertyRegistry::parseInlineResourceColor(
     inlineResourceColors_[index].emplace(InlineResourceColor{resourceColor(index), *color});
   }
   refreshResourceColor(index);
-  unparsedProperties.insert_or_assign(
-      declaration.name, parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+  writeVariableAwareDeclaration(declaration.name, declaration,
+                                variable ? params.specificity : css::Specificity::StyleAttribute(),
+                                false, true);
   return true;
 }
 
@@ -3455,6 +3802,10 @@ bool PropertyRegistry::storeCustomProperty(const css::Declaration& declaration,
   if (name.size() <= 2 || !name.starts_with("--")) {
     return false;
   }
+  if (declaration.variableReferences == css::VariableReferences::Invalid) {
+    return true;
+  }
+  mayHaveVariableInputs_ |= declaration.variableReferences == css::VariableReferences::Valid;
   if (declaration.important) {
     specificity = css::Specificity::Important(specificity);
   }
@@ -3509,8 +3860,21 @@ void PropertyRegistry::clearStyleAttributeProperties() {
     }
   });
 
-  std::erase_if(unparsedProperties,
-                [](const auto& entry) { return entry.second.specificity.isStyleAttribute(); });
+  for (auto it = unparsedProperties.begin(); it != unparsedProperties.end();) {
+    if (!it->second.specificity.isStyleAttribute()) {
+      ++it;
+    } else if (const auto base = it->second.presentationVariable) {
+      it->second = {css::Declaration(base->name, {}, base->sourceOffset, base->important),
+                    css::Specificity(),
+                    {},
+                    false,
+                    true,
+                    base};
+      ++it;
+    } else {
+      it = unparsedProperties.erase(it);
+    }
+  }
 }
 
 namespace {
@@ -3537,11 +3901,72 @@ PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearResourceColo
   return cleared ? PresentationAttributeClear::Cleared : PresentationAttributeClear::NotSet;
 }
 
+namespace {
+
+bool IsPendingPresentationVariable(const parser::UnparsedProperty& entry, std::string_view name) {
+  return entry.variableFromPresentation && IsPendingVariable(entry) &&
+         entry.sourceDeclaration().name == name;
+}
+
+}  // namespace
+
+bool PropertyRegistry::hasPendingPresentationVariable(std::string_view name) const {
+  if (!mayHaveVariableInputs_) {
+    return false;
+  }
+  return std::ranges::any_of(unparsedProperties, [&](const auto& entry) {
+    return IsPendingPresentationVariable(entry.second, name) ||
+           (entry.second.presentationVariable && entry.second.presentationVariable->name == name);
+  });
+}
+
+bool PropertyRegistry::discardPendingPresentationVariable(std::string_view name) {
+  return removePendingPresentationVariable(name, false);
+}
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
+bool PropertyRegistry::removePendingPresentationVariable(std::string_view name, bool clearMarkers) {
+  if (!mayHaveVariableInputs_) {
+    return false;
+  }
+  bool removed = false;
+  for (auto it = unparsedProperties.begin(); it != unparsedProperties.end();) {
+    if (IsPendingPresentationVariable(it->second, name)) {
+      if (clearMarkers) {
+        const auto field = FindVariableField(*this, it->first);
+        if (field && field->field.state == PropertyState::PendingSubstitution &&
+            field->field.specificity == it->second.specificity) {
+          field->field.reset(PropertyState::NotSet, css::Specificity());
+        }
+      }
+      it = unparsedProperties.erase(it);
+      removed = true;
+    } else {
+      auto& base = it->second.presentationVariable;
+      if (base && base->name == name) {
+        base.reset();
+        removed = true;
+      }
+      ++it;
+    }
+  }
+  return removed;
+}
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearPresentationAttribute(
     std::string_view name) {
+  const bool pendingRemoved = removePendingPresentationVariable(name, true);
   for (std::size_t index = 0; index < kResourceColorCount; ++index) {
     if (name == resourceColor(index).name) {
-      return clearResourceColorPresentation(index);
+      const auto result = clearResourceColorPresentation(index);
+      return pendingRemoved ? PresentationAttributeClear::Cleared : result;
     }
   }
 
@@ -3555,7 +3980,7 @@ PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearPresentation
     return PresentationAttributeClear::NotStored;
   }
   bool writes = false;
-  bool cleared = false;
+  bool cleared = pendingRemoved;
   auto properties = allPropertiesMutable();
   const auto writtenProperties = written.allProperties();
   forEachProperty<0, numProperties()>([&](auto i) {
@@ -3568,6 +3993,26 @@ PropertyRegistry::PresentationAttributeClear PropertyRegistry::clearPresentation
     return PresentationAttributeClear::NotStored;
   }
   return cleared ? PresentationAttributeClear::Cleared : PresentationAttributeClear::NotSet;
+}
+
+std::optional<ParseResult<bool>> PropertyRegistry::parseVariablePresentationAttribute(
+    std::string_view name, std::string_view value, css::Specificity specificity) {
+  // A CSS function needs a literal opening parenthesis. Escapes can spell the function name.
+  if (value.find('(') == std::string_view::npos ||
+      value.find_first_of("vV\\") == std::string_view::npos) {
+    return std::nullopt;
+  }
+  css::Declaration declaration(RcString(name), css::parser::ValueParser::Parse(value));
+  if (declaration.variableReferences == css::VariableReferences::None) {
+    return std::nullopt;
+  }
+  auto error = declaration.variableReferences == css::VariableReferences::Invalid
+                   ? parseProperty(declaration, specificity)
+                   : deferVariableDeclaration(declaration, specificity, true);
+  if (error) {
+    return ParseResult<bool>(std::move(*error));
+  }
+  return ParseResult<bool>(true);
 }
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
@@ -3590,6 +4035,10 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
     return false;
   }
 
+  if (auto variable = parseVariablePresentationAttribute(name, value, specificity)) {
+    return std::move(*variable);
+  }
+
   parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
   params.specificity = specificity;
 
@@ -3606,6 +4055,7 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
       return std::move(maybeError.value());
     }
 
+    discardPendingPresentationVariable(name);
     return true;
   }
 
@@ -3630,6 +4080,7 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
       return std::move(maybeError.value());
     }
 
+    discardPendingPresentationVariable(name);
     return true;
   }
 
@@ -3829,3 +4280,7 @@ std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
 }
 
 }  // namespace donner::svg
+
+#if defined(DONNER_APPLE_PENDING_PROPERTY_MINSIZE)
+#undef DONNER_APPLE_PENDING_PROPERTY_MINSIZE
+#endif

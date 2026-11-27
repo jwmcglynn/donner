@@ -90,6 +90,7 @@ donner_cc_fuzzer(
         "tests/DeclarationListParser_fuzzer.cc",
     ],
     corpus = "tests/declaration_list_parser_corpus",
+    dictionary = "tests/cascade_parser.dict",
     deps = [
         ":parser",
     ],
@@ -123,6 +124,7 @@ donner_cc_fuzzer(
         "tests/StylesheetParser_fuzzer.cc",
     ],
     corpus = "tests/stylesheet_parser_corpus",
+    dictionary = "tests/cascade_parser.dict",
     deps = [
         ":parser",
     ],

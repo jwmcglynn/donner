@@ -1073,6 +1073,10 @@ def _fuzzer_soak_test_impl(ctx):
     for file in files:
         arguments.append('"${TEST_SRCDIR}/${TEST_WORKSPACE}/"' + _shell_quote(file.short_path))
     flags = [_shell_quote(flag) for flag in ctx.attr.fuzz_args]
+    if ctx.file.dictionary:
+        dictionary = ctx.file.dictionary
+        flags.append('"-dict=${TEST_SRCDIR}/${TEST_WORKSPACE}/"' + _shell_quote(dictionary.short_path))
+        files.append(dictionary)
     command = arguments[:2] + flags + arguments[2:] + ['"$@"']
     ctx.actions.write(
         executable,
@@ -1091,6 +1095,7 @@ _fuzzer_soak_test = rule(
     attrs = {
         "binary": attr.label(executable = True, cfg = "target", mandatory = True),
         "corpus": attr.label(allow_files = True, mandatory = True),
+        "dictionary": attr.label(allow_single_file = True),
         "fuzz_args": attr.string_list(),
         "runtime_data": attr.label_list(allow_files = True),
         "_runner": attr.label(
@@ -1122,6 +1127,7 @@ def donner_cc_fuzzer(
         routing_manifest_visibility = None,
         full_text_only = False,
         extra_soak_tags = [],
+        dictionary = None,
         data = [],
         **kwargs):
     """
@@ -1131,6 +1137,7 @@ def donner_cc_fuzzer(
       name: Rule name.
       corpus: Path to a corpus directory, or a filegroup rule for the corpus.
       deps: List of dependencies.
+      dictionary: Optional libFuzzer dictionary file for the soak entry point.
       data: Explicit runtime fixtures shared by raw, corpus and soak entry points.
       per_input_timeout_seconds: libFuzzer `-timeout` for `{name}_soak`. This is a hang guard,
         not a latency budget: it only has to separate an input that never finishes from a slow
@@ -1234,6 +1241,7 @@ def donner_cc_fuzzer(
         name = name + "_soak",
         binary = ":" + name + "_bin",
         corpus = corpus_name,
+        dictionary = dictionary,
         fuzz_args = fuzz_time_args + ["-report_slow_units=%d" % _SOAK_SLOW_UNIT_SECONDS] + select({
             "//build_defs:asan_fuzzer_enabled": [
                 "-timeout=%d" % max(per_input_timeout_seconds, _ASAN_FUZZER_PER_INPUT_TIMEOUT_SECONDS),

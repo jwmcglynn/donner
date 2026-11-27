@@ -1,13 +1,16 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <tuple>
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -112,6 +115,63 @@ PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
   return PreserveAspectRatio::Default();
 }
 
+bool AppendSvgTransformFunction(std::string& text, const css::Function& function) {
+  const std::string_view name(function.name);
+  if (!std::ranges::all_of(name, StringUtils::IsAsciiAlpha)) {
+    return false;
+  }
+  text.append(name);
+  text.push_back('(');
+  for (const auto& argument : function.values) {
+    if (const auto* number = argument.tryGetToken<css::Token::Number>()) {
+      const std::string_view spelling(number->valueString);
+      if (spelling.empty() || spelling.find_first_not_of("0123456789+-.eE") != spelling.npos) {
+        return false;
+      }
+      text.append(spelling);
+      // Substitution can place two number tokens next to each other. Keep their boundaries.
+      text.push_back(' ');
+    } else if (argument.isToken<css::Token::Comma>()) {
+      text.push_back(',');
+    } else if (!argument.isToken<css::Token::Whitespace>()) {
+      return false;
+    }
+  }
+  text.push_back(')');
+  return true;
+}
+
+[[gnu::noinline]] std::optional<Transform2d> ParseSvgTransformTokens(
+    std::span<const css::ComponentValue> components) {
+  // Only number lists with validated function names reach the ordinary SVG text parser.
+  // CSS dimensions and other token types retain their interpretation in the CSS parser.
+  std::string text;
+  for (const auto& component : components) {
+    if (component.isToken<css::Token::Comma>()) {
+      text.push_back(',');
+    } else if (!component.isToken<css::Token::Whitespace>()) {
+      const auto* function = std::get_if<css::Function>(&component.value);
+      if (!function || !AppendSvgTransformFunction(text, *function)) {
+        return std::nullopt;
+      }
+    }
+  }
+  auto svg = parser::TransformParser::Parse(text);
+  return svg.hasResult() ? std::optional(svg.result()) : std::nullopt;
+}
+
+parser::PropertyParseFnParams DeferredTransformParams(const parser::UnparsedProperty& property) {
+  if (property.substituted) {
+    return parser::PropertyParseFnParams::Create(property,
+                                                 parser::PropertyParseBehavior::AllowUserUnits);
+  }
+  parser::PropertyParseFnParams params;
+  params.valueOrComponents = property.declaration.values;
+  params.specificity = property.specificity;
+  params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
+  return params;
+}
+
 void ApplyUnparsedProperties(SizedElementProperties& properties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
                              ParseWarningSink& warningSink) {
@@ -119,9 +179,9 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
     const SizedElementPresentationAttributeParseFn* parseFn =
         kProperties.find(static_cast<std::string_view>(name));
     if (parseFn != nullptr) {
-      auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
-                                                   property.declaration, property.specificity,
-                                                   parser::PropertyParseBehavior::AllowUserUnits));
+      auto maybeError =
+          (*parseFn)(properties, parser::PropertyParseFnParams::Create(
+                                     property, parser::PropertyParseBehavior::AllowUserUnits));
       if (maybeError) {
         warningSink.add(std::move(maybeError.value()));
       }
@@ -771,36 +831,37 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
 const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransformComponentWithStyle(
     EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
     ParseWarningSink& warningSink) {
-  std::optional<TransformComponent> shadowTransform;
+  std::optional<TransformComponent> substitutedTransform;
   EntityHandle lightEntity = handle;
   if (const auto* shadowComponent = lightEntity.try_get<ShadowEntityComponent>()) {
     lightEntity = EntityHandle(*handle.registry(), shadowComponent->lightEntity);
   }
 
-  TransformComponent& transform = lightEntity.get<TransformComponent>();
+  auto* transform = &lightEntity.get<TransformComponent>();
 
   // TODO(jwmcglynn): This should avoid recomputing the transform each request.
   const auto& properties = style.properties()->unparsedProperties;
   if (auto it = properties.find("transform"); it != properties.end()) {
     const parser::UnparsedProperty& property = it->second;
-
-    parser::PropertyParseFnParams params;
-    params.valueOrComponents = property.declaration.values;
-    params.specificity = property.specificity;
-    params.parseBehavior = parser::PropertyParseBehavior::AllowUserUnits;
+    if (property.substituted) {
+      // Computed values can differ between shadow occurrences and disappear after an edit.
+      transform = &substitutedTransform.emplace(*transform);
+    }
+    const auto params = DeferredTransformParams(property);
 
     auto maybeError = Parse(
         params,
-        [](const parser::PropertyParseFnParams& params) {
-          if (const std::string_view* str =
-                  std::get_if<std::string_view>(&params.valueOrComponents)) {
-            return parser::TransformParser::Parse(*str).map<CssTransform>(
-                [](const Transform2d& transform) { return CssTransform(transform); });
-          } else {
-            return parser::CssTransformParser::Parse(params.components());
+        [&](const parser::PropertyParseFnParams& input) -> ParseResult<CssTransform> {
+          const auto components = input.components();
+          auto result = parser::CssTransformParser::Parse(components);
+          if (result.hasError() && property.variableFromPresentation) {
+            if (const auto svg = ParseSvgTransformTokens(components)) {
+              return CssTransform(*svg);
+            }
           }
+          return result;
         },
-        &transform.transform);
+        &transform->transform);
 
     if (maybeError) {
       warningSink.add(std::move(maybeError.value()));
@@ -808,8 +869,8 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   }
 
   auto& computedTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
-  if (transform.transform.get()) {
-    computedTransform.rawCssTransform = transform.transform.get().value();
+  if (const auto* raw = transform->transform.getStoredValue()) {
+    computedTransform.rawCssTransform = *raw;
     const TransformOrigin originValue = style.properties()->transformOrigin.get().value();
 
     // The transform-origin is relative to the element's bounding box.
@@ -836,12 +897,9 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
     computedTransform.transformOrigin = absoluteOrigin;
 
     // The transform itself is also computed relative to the element's bounding box.
-    computedTransform.parentFromEntity =
-        transform.transform.get().value().compute(percentageBox, fontMetrics);
-
+    computedTransform.parentFromEntity = raw->compute(percentageBox, fontMetrics);
   } else {
-    computedTransform.parentFromEntity = Transform2d();
-    computedTransform.transformOrigin = Vector2d();
+    computedTransform = {};
   }
 
   return computedTransform;

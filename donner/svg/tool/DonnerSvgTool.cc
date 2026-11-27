@@ -49,6 +49,17 @@
 #include "donner/svg/text/TextTier.h"
 #include "donner/svg/tool/DonnerSvgToolUtils.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_CLI_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_CLI_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 namespace donner::svg {
 namespace {
 
@@ -1100,3 +1111,8 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
 }
 
 }  // namespace donner::svg
+
+#if defined(DONNER_APPLE_CLI_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_CLI_MINSIZE
+#endif

@@ -52,23 +52,35 @@ std::string PropertyKey(const RcString& name) {
 }
 
 bool ReplacesStyleDeclaration(const Declaration& previous, const Declaration& next) {
-  return next.important || !previous.important || !std::string_view(next.name).starts_with("--");
+  const bool respectsImportance = std::string_view(next.name).starts_with("--") ||
+                                  next.variableReferences == VariableReferences::Valid ||
+                                  previous.variableReferences == VariableReferences::Valid;
+  return next.important || !previous.important || !respectsImportance;
+}
+
+std::unordered_map<std::string, size_t> SelectStyleUpdates(std::span<const Declaration> updates) {
+  // Build set of update property names for O(1) lookup.
+  std::unordered_map<std::string, size_t> updateIndexByName;
+  updateIndexByName.reserve(updates.size());
+  for (size_t i = 0; i < updates.size(); ++i) {
+    if (updates[i].variableReferences == VariableReferences::Invalid) {
+      continue;
+    }
+    // Custom properties and ordinary variable values retain importance before source order.
+    const auto [it, inserted] = updateIndexByName.try_emplace(PropertyKey(updates[i].name), i);
+    if (!inserted && ReplacesStyleDeclaration(updates[it->second], updates[i])) {
+      it->second = i;
+    }
+  }
+
+  return updateIndexByName;
 }
 
 }  // namespace
 
 std::string mergeStyleDeclarations(std::span<const Declaration> existing,
                                    std::span<const Declaration> updates) {
-  // Build set of update property names for O(1) lookup.
-  std::unordered_map<std::string, size_t> updateIndexByName;
-  updateIndexByName.reserve(updates.size());
-  for (size_t i = 0; i < updates.size(); ++i) {
-    // Custom properties retain importance before using source order.
-    const auto [it, inserted] = updateIndexByName.try_emplace(PropertyKey(updates[i].name), i);
-    if (!inserted && ReplacesStyleDeclaration(updates[it->second], updates[i])) {
-      it->second = i;
-    }
-  }
+  const auto updateIndexByName = SelectStyleUpdates(updates);
 
   // Collect existing declarations not overridden by updates.
   std::vector<const Declaration*> merged;
@@ -85,7 +97,8 @@ std::string mergeStyleDeclarations(std::span<const Declaration> existing,
   // Emit the selected occurrences in source order.
   for (size_t i = 0; i < updates.size(); ++i) {
     const std::string key = PropertyKey(updates[i].name);
-    if (updateIndexByName[key] == i) {
+    const auto selected = updateIndexByName.find(key);
+    if (selected != updateIndexByName.end() && selected->second == i) {
       merged.push_back(&updates[i]);
     }
   }
