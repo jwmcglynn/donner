@@ -333,6 +333,7 @@ def _custody(temp, platform, commit, run_id, attempt, include_custody):
             native_delivery._require_elf_source_lines(symbol)
         else:
             native_delivery._tool("/usr/bin/dwarfdump", "--verify", str(symbol))
+            native_delivery._require_macho_source_lines(symbol)
         archive_name = ARCHIVES[platform] if product == "cli" else EDITOR_ARCHIVE
         directory = (temp / ("donner-cli-" + PLATFORMS[platform]) if product == "cli"
                      else temp / "donner-editor-macos")

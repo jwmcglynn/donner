@@ -72,6 +72,17 @@ class NativeDeliveryTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "architecture or executable header"):
                     delivery.validate_image_header(image, platform)
 
+    def test_macos_dwarf_requires_a_live_source_row(self):
+        for line, expected in (
+            (b"0x0000000100000360 1 42 0 0 0 0 is_stmt prologue_end", True),
+            (b"0x0000000100000360 1 42 0 0 0 0 end_sequence", False),
+            (b"0x0000000000000000 1 42 0 0 0 0 is_stmt", False),
+            (b"0x0000000100000360 0 42 0 0 0 0 is_stmt", False),
+            (b"No debug information was found", False),
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(delivery._usable_macho_source_row(line), expected)
+
     def test_wrong_architecture_fails_before_copy_or_platform_tools(self):
         image = bytearray(LINUX_HEADER)
         struct.pack_into("<H", image, 18, 183)

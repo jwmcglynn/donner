@@ -169,6 +169,7 @@ class NativeCustodyTest(unittest.TestCase):
         self.mocks.enter_context(patch.object(native_delivery, "_elf_unwind", return_value=UNWIND))
         self.mocks.enter_context(patch.object(native_delivery, "_mach_unwind", return_value=MACH_UNWIND))
         self.mocks.enter_context(patch.object(native_delivery, "_require_elf_source_lines"))
+        self.mocks.enter_context(patch.object(native_delivery, "_require_macho_source_lines"))
         self.mocks.enter_context(patch.object(native_delivery, "_tool", return_value=""))
         self.mocks.enter_context(patch.object(producer, "_mach_code_data", return_value="c" * 64))
 
@@ -262,6 +263,13 @@ class NativeCustodyTest(unittest.TestCase):
         path.write_text(json.dumps(metadata))
         with self.assertRaisesRegex(ValueError, "final macOS seal"):
             producer.finalize(self.temp, "darwin-arm64", COMMIT, "1", "1")
+
+    def test_macos_uuid_match_without_decoded_lines_refuses_custody(self):
+        self.fixture("darwin-arm64")
+        with patch.object(native_delivery, "_require_macho_source_lines",
+                          side_effect=ValueError("no usable DWARF source lines")):
+            with self.assertRaisesRegex(ValueError, "DWARF source lines"):
+                producer.finalize(self.temp, "darwin-arm64", COMMIT, "1", "1")
 
     def test_repeated_or_linked_staging_is_refused(self):
         self.fixture()

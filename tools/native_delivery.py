@@ -134,34 +134,46 @@ def _usable_source_row(line: bytes) -> bool:
             and int(address, 16) > 0)
 
 
-def _decoded_line_chunk(pending: bytes, chunk: bytes) -> tuple[bytes, bool]:
+def _usable_macho_source_row(line: bytes) -> bool:
+    fields = line.split()
+    if len(fields) < 5 or b"end_sequence" in fields:
+        return False
+    address, number = fields[:2]
+    return (len(number) <= 10 and number.isdigit() and int(number) > 0
+            and re.fullmatch(rb"0x[0-9a-fA-F]{1,16}", address) is not None
+            and int(address, 16) > 0)
+
+
+def _decoded_line_chunk(pending: bytes, chunk: bytes,
+                        usable_row=_usable_source_row) -> tuple[bytes, bool]:
     lines = (pending + chunk).split(b"\n")
     if any(len(line) > MAX_TOOL_BYTES for line in lines):
         raise ValueError("native delivery decoded source line exceeds its limit")
-    return lines[-1], any(_usable_source_row(line) for line in lines[:-1])
+    return lines[-1], any(usable_row(line) for line in lines[:-1])
 
 
-def _read_decoded_lines(pipe, deadline: float) -> bool:
+def _read_decoded_lines(pipe, deadline: float, usable_row, command: str) -> bool:
     pending, found = b"", False
     with selectors.DefaultSelector() as selected:
         selected.register(pipe, selectors.EVENT_READ)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not selected.select(remaining):
-                raise subprocess.TimeoutExpired("readelf decoded source lines", 120)
+                raise subprocess.TimeoutExpired(command + " decoded source lines", 120)
             chunk = os.read(pipe.fileno(), 65536)
             if not chunk:
-                return found or _usable_source_row(pending)
-            pending, usable = _decoded_line_chunk(pending, chunk)
+                return found or usable_row(pending)
+            pending, usable = _decoded_line_chunk(pending, chunk, usable_row)
             found = found or usable
 
 
-def _has_decoded_source_lines(arguments: tuple[str, ...], timeout_seconds: float = 120) -> bool:
+def _has_decoded_source_lines(arguments: tuple[str, ...], timeout_seconds: float = 120,
+                              *, usable_row=_usable_source_row) -> bool:
     """Drain decoded rows with bounded memory, even when a real image exceeds 1 MiB of rows."""
     deadline = time.monotonic() + timeout_seconds
     with subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
         try:
-            found = _read_decoded_lines(process.stdout, deadline)
+            found = _read_decoded_lines(process.stdout, deadline, usable_row, arguments[0])
             result = process.wait(timeout=max(0, deadline - time.monotonic()))
             if result:
                 raise subprocess.CalledProcessError(result, arguments)
@@ -175,6 +187,13 @@ def _has_decoded_source_lines(arguments: tuple[str, ...], timeout_seconds: float
 def _require_elf_source_lines(path: Path) -> None:
     if not _has_decoded_source_lines(("readelf", "--wide", "--debug-dump=decodedline", str(path))):
         raise ValueError("native delivery ELF has no usable DWARF source lines")
+
+
+def _require_macho_source_lines(path: Path) -> None:
+    if not _has_decoded_source_lines(
+            ("/usr/bin/dwarfdump", "--debug-line", str(path)),
+            usable_row=_usable_macho_source_row):
+        raise ValueError("native delivery dSYM has no usable DWARF source lines")
 
 
 def _copy_dsym(source: Path, symbols: Path, identity: str) -> Path:
