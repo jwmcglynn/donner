@@ -9,6 +9,13 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 # ownership, mapping and device-loss behavior under the normal test gate instead of reachable only
 # from a browser.
 
+config_setting(
+    name = "gpu_owner_trace",
+    constraint_values = ["@platforms//os:emscripten"],
+    define_values = {"donner_test_gpu_owner_trace": "true"},
+    visibility = ["//donner/editor:__pkg__"],
+)
+
 donner_cc_library(
     name = "browser_device",
     srcs = [
@@ -28,6 +35,10 @@ donner_cc_library(
         "BrowserShareReleaseQueue.h",
         "BrowserWireCodes.h",
     ],
+    local_defines = select({
+        ":gpu_owner_trace": ["DONNER_TEST_GPU_OWNER_TRACE"],
+        "//conditions:default": [],
+    }),
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",
@@ -52,6 +63,10 @@ donner_cc_library(
         "BrowserGpuOwner.h",
         "EmscriptenBrowserBridge.h",
     ],
+    local_defines = select({
+        ":gpu_owner_trace": ["DONNER_TEST_GPU_OWNER_TRACE"],
+        "//conditions:default": [],
+    }),
     target_compatible_with = select({
         "@platforms//cpu:wasm32": [],
         "@platforms//cpu:wasm64": [],

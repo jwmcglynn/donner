@@ -25,6 +25,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -34,6 +35,44 @@
 #include "donner/gpu/browser/BrowserObjectTable.h"
 
 namespace donner::gpu::browser {
+
+#if defined(__EMSCRIPTEN_PTHREADS__) && defined(DONNER_TEST_GPU_OWNER_TRACE)
+namespace detail {
+
+/// Scalar diagnostic data never enters the browser bridge's request ABI.
+struct CreationTraceIdentity {
+  uint32_t viewSite = 0;
+  uint32_t device = 0;
+  uint32_t textureLifetime = 0;
+};
+
+inline std::atomic<uint32_t> gCreationTraceEpoch{0};
+inline thread_local CreationTraceIdentity gCreationTraceIdentity;
+
+class ScopedCreationTraceIdentity {
+public:
+  ScopedCreationTraceIdentity(bool armed, CreationTraceIdentity identity) : armed_(armed) {
+    if (armed_) {
+      previous_ = std::exchange(gCreationTraceIdentity, identity);
+    }
+  }
+  ~ScopedCreationTraceIdentity() {
+    if (armed_) {
+      gCreationTraceIdentity = previous_;
+    }
+  }
+
+private:
+  bool armed_;
+  CreationTraceIdentity previous_{};
+};
+
+inline bool CreationTraceIsArmed() {
+  return (gCreationTraceEpoch.load(std::memory_order_relaxed) & 1u) != 0;
+}
+
+}  // namespace detail
+#endif
 
 /**
  * What the browser side reports for one bridge call.

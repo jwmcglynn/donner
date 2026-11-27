@@ -287,11 +287,41 @@ void EmscriptenBrowserBridge::flushDeferredCalls() {
 
 namespace {
 
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+template <BrowserGpuCreationApi Api>
+class ScopedCreationApi {
+public:
+  ScopedCreationApi() {
+    if constexpr (Api != BrowserGpuCreationApi::None) {
+      previous_ = SetBrowserGpuCreationApi(Api);
+    }
+  }
+  ~ScopedCreationApi() {
+    if constexpr (Api != BrowserGpuCreationApi::None) {
+      SetBrowserGpuCreationApi(previous_);
+    }
+  }
+
+private:
+  BrowserGpuCreationApi previous_ = BrowserGpuCreationApi::None;
+};
+
+#define DONNER_TRACE_CREATION_API(Name) , BrowserGpuCreationApi::Name
+#else
+#define DONNER_TRACE_CREATION_API(Name)
+#endif
+
 /// Dispatch only the imported JavaScript primitive; callbacks cannot allocate or lock C++ state.
 /// The thread's deferred calls ride along ahead of it.
 template <auto Function, BrowserGpuOperationKind Kind = BrowserQueryKind<Function>(),
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+          BrowserGpuCreationApi Api = BrowserGpuCreationApi::None,
+#endif
           typename... Args>
 auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+  const ScopedCreationApi<Api> trace;
+#endif
   using Result = decltype(Function(args...));
   if constexpr (std::is_void_v<Result>) {
     RunAfterDeferredCalls([&] { Function(args...); }, Kind);
@@ -626,22 +656,35 @@ BridgeStatus EmscriptenBrowserBridge::registerSharedTexture(BrowserObjectId id,
 BridgeStatus EmscriptenBrowserBridge::createBuffer(BrowserObjectId id, uint64_t byteSize,
                                                    uint32_t usageBits) {
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_create_buffer, BrowserGpuOperationKind::ResourceCreation>(
+      CallBrowserGpu<donner_gpu_create_buffer,
+                     BrowserGpuOperationKind::ResourceCreation DONNER_TRACE_CREATION_API(Buffer)>(
           logicalDevice_, id, static_cast<double>(byteSize), usageBits));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createTexture(BrowserObjectId id, uint32_t width,
                                                     uint32_t height, uint32_t formatCode,
                                                     uint32_t usageBits) {
+#if defined(__EMSCRIPTEN_PTHREADS__) && defined(DONNER_TEST_GPU_OWNER_TRACE)
+  const detail::ScopedCreationTraceIdentity identity(
+      detail::CreationTraceIsArmed(), {.device = logicalDevice_, .textureLifetime = id});
+#endif
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_create_texture, BrowserGpuOperationKind::ResourceCreation>(
+      CallBrowserGpu<donner_gpu_create_texture,
+                     BrowserGpuOperationKind::ResourceCreation DONNER_TRACE_CREATION_API(Texture)>(
           logicalDevice_, id, width, height, formatCode, usageBits));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createTextureView(BrowserObjectId id,
                                                         BrowserObjectId textureId) {
+#if defined(__EMSCRIPTEN_PTHREADS__) && defined(DONNER_TEST_GPU_OWNER_TRACE)
+  const detail::ScopedCreationTraceIdentity identity(
+      detail::CreationTraceIsArmed(), {.viewSite = detail::gCreationTraceIdentity.viewSite,
+                                       .device = logicalDevice_,
+                                       .textureLifetime = textureId});
+#endif
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_create_texture_view, BrowserGpuOperationKind::ResourceCreation>(
+      CallBrowserGpu<donner_gpu_create_texture_view, BrowserGpuOperationKind::ResourceCreation
+                                                         DONNER_TRACE_CREATION_API(TextureView)>(
           logicalDevice_, id, textureId));
 }
 
@@ -649,7 +692,8 @@ BridgeStatus EmscriptenBrowserBridge::createSampler(BrowserObjectId id, uint32_t
                                                     uint32_t minFilterCode, uint32_t addressUCode,
                                                     uint32_t addressVCode) {
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_create_sampler, BrowserGpuOperationKind::ResourceCreation>(
+      CallBrowserGpu<donner_gpu_create_sampler,
+                     BrowserGpuOperationKind::ResourceCreation DONNER_TRACE_CREATION_API(Sampler)>(
           logicalDevice_, id, magFilterCode, minFilterCode, addressUCode, addressVCode));
 }
 
@@ -747,7 +791,8 @@ BridgeStatus EmscriptenBrowserBridge::createPipelineLayout(
 BridgeStatus EmscriptenBrowserBridge::createShaderModule(BrowserObjectId id,
                                                          std::string_view wgsl) {
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_create_shader_module, BrowserGpuOperationKind::ResourceCreation>(
+      CallBrowserGpu<donner_gpu_create_shader_module, BrowserGpuOperationKind::ResourceCreation
+                                                          DONNER_TRACE_CREATION_API(ShaderModule)>(
           logicalDevice_, id, wgsl.data(), static_cast<int>(wgsl.size())));
 }
 

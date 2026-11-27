@@ -1623,6 +1623,9 @@ void AsyncRenderer::workerLoop() {
     const ScopedHeapDelta workerIterationHeapDelta(MemoryStage::WorkerOther);
     const auto workerStart = std::chrono::steady_clock::now();
 #ifdef __EMSCRIPTEN__
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+    const gpu::browser::BrowserGpuCreationTraceRenderScope creationTraceRender;
+#endif
     const gpu::browser::BrowserGpuOwnerDispatchTotals gpuOwnerDispatchesAtStart =
         gpu::browser::ReadBrowserGpuOwnerDispatchTotals();
 #endif

@@ -674,8 +674,26 @@ Status BrowserDevice::onCreateTexture(uint32_t slotIndex, const TextureDescripto
   return OkStatus();
 }
 
-Status BrowserDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlotIndex,
-                                          const TextureViewDescriptor& /*descriptor*/) {
+#if defined(__EMSCRIPTEN_PTHREADS__) && defined(DONNER_TEST_GPU_OWNER_TRACE)
+namespace {
+
+uint32_t TextureViewTraceSite(std::string_view label) {
+  // Only these exact static role labels are ever reported. Other labels map to zero.
+  constexpr std::array<std::string_view, 10> sites = {
+      "GeoEncoderTargetView",       "GeoEncoderMaskView",        "GeoEncoderPatternTileView",
+      "GeodeImageBlitView",         "GeodeImageBlitMaskView",    "GeodeImageBlitBackdropView",
+      "GeodeRetainedQuadView",      "GeodeRetainedQuadMaskView", "GeodeRetainedQuadBackdropView",
+      "GeodeCheckerboardTargetView"};
+  const auto found = std::ranges::find(sites, label);
+  return found == sites.end() ? 0 : static_cast<uint32_t>(found - sites.begin() + 1);
+}
+
+}  // namespace
+#endif
+
+Status BrowserDevice::onCreateTextureView(
+    uint32_t slotIndex, uint32_t textureSlotIndex,
+    [[maybe_unused]] const TextureViewDescriptor& descriptor) {
   static constexpr std::string_view kOperation = "createTextureView";
   if (Status status = checkUsable(kOperation); status.hasError()) {
     return status;
@@ -691,6 +709,11 @@ Status BrowserDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSl
     return std::move(id).error();
   }
 
+#if defined(__EMSCRIPTEN_PTHREADS__) && defined(DONNER_TEST_GPU_OWNER_TRACE)
+  const bool trace = detail::CreationTraceIsArmed();
+  const detail::ScopedCreationTraceIdentity site(
+      trace, {.viewSite = trace ? TextureViewTraceSite(descriptor.label) : 0});
+#endif
   const BridgeStatus status = bridge_->createTextureView(id.result(), textureId.result());
   if (status != BridgeStatus::Success) {
     objects_.remove(BrowserObjectKind::TextureView, slotIndex);

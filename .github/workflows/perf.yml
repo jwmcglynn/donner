@@ -11,6 +11,11 @@ on:
   schedule:
     - cron: "30 7 * * *"
   workflow_dispatch:
+    inputs:
+      trace_firefox_gpu_owner:
+        description: Collect GPU owner timing for the two Firefox DPR2 crown drag cases
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -113,6 +118,7 @@ jobs:
         if: steps.discover.outputs.targets != ''
         env:
           TARGET_TAG: ${{ matrix.target_tag }}
+          TRACE_FIREFOX_GPU_OWNER: ${{ github.event_name == 'workflow_dispatch' && inputs.trace_firefox_gpu_owner && matrix.target_tag == 'perf' }}
         run: |
           set -euo pipefail
           common_flags=(
@@ -123,6 +129,10 @@ jobs:
             --test_env=DONNER_BROWSER_LATENCY_GATES=${{ matrix.latency_gates }}
             --test_env=DONNER_BROWSER_COMPLETION_CHECKS=${{ matrix.completion_checks }}
           )
+          if [[ "$TRACE_FIREFOX_GPU_OWNER" == "true" ]]; then
+            common_flags+=(--define=donner_test_gpu_owner_trace=true
+              --test_env=DONNER_GPU_OWNER_CREATION_TRACE=1)
+          fi
           # Finish compilation before measuring, then run one uncached test at a time.
           bazelisk build "${common_flags[@]}" ${{ steps.discover.outputs.targets }}
           bazelisk test "${common_flags[@]}" \

@@ -29,6 +29,36 @@ enum class BrowserGpuOperationKind {
   PipelineConstruction,
 };
 
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+/// Concrete resource-creation API for the opt-in owner delivery diagnostic.
+enum class BrowserGpuCreationApi : uint32_t {
+  None,
+  Buffer,
+  Texture,
+  TextureView,
+  Sampler,
+  ShaderModule,
+};
+
+/// Change this caller's diagnostic tag without changing the owner dispatch API.
+/// @param api Creation call to tag during the current scope.
+/// @return Previous caller tag, for restoration on scope exit.
+BrowserGpuCreationApi SetBrowserGpuCreationApi(BrowserGpuCreationApi api);
+
+/// Tags resource requests issued by one admitted render iteration, when tracing is armed.
+class BrowserGpuCreationTraceRenderScope {
+public:
+  BrowserGpuCreationTraceRenderScope();
+  ~BrowserGpuCreationTraceRenderScope();
+  BrowserGpuCreationTraceRenderScope(const BrowserGpuCreationTraceRenderScope&) = delete;
+  BrowserGpuCreationTraceRenderScope& operator=(const BrowserGpuCreationTraceRenderScope&) = delete;
+
+private:
+  uint32_t previous_ = 0;
+};
+
+#endif
+
 /// Number of \ref BrowserGpuOperationKind values; per-kind totals are indexed by the enum value.
 inline constexpr std::size_t kBrowserGpuOperationKindCount =
     static_cast<std::size_t>(BrowserGpuOperationKind::PipelineConstruction) + 1;

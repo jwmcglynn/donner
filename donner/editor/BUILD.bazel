@@ -609,6 +609,10 @@ donner_cc_library(
     name = "async_renderer",
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
+    local_defines = select({
+        "//donner/gpu/browser:gpu_owner_trace": ["DONNER_TEST_GPU_OWNER_TRACE"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":captured_presentation",
         ":composited_rendering_mode",

@@ -1828,6 +1828,67 @@ test("the owner stats reader reads each dispatch phase from its own slot", () =>
   assert.equal(scope.__donnerReadGpuOwnerWaitStats().timingSaturated, true);
 });
 
+test("the opt-in owner trace retains slow held renders across the gesture", () => {
+  const reader = gpuOwnerSource.match(
+    /(const epoch = Number\(\$0\) \/ 4;[\s\S]*?\n {4}\};)\n {2}\}, &gCreationTraceEpoch,/,
+  );
+  assert.ok(reader, "the owner trace reader must use its own shared storage");
+  const scope = {};
+  const renderCapacity = 4;
+  const requestCapacity = 2;
+  const width = 17;
+  const stride = 6 + width * requestCapacity;
+  const epoch = new Uint32Array(new SharedArrayBuffer(12));
+  const heap = new Float64Array(4 + renderCapacity * stride);
+  new Function("globalThis", "HEAPU32", "HEAPF64", "$0", "$1", "$2", "$3", "$4", "$5", "$6", "$7", reader[1])(
+    scope, epoch, heap, 0, 0, width, renderCapacity, requestCapacity, 0, 1, 2,
+  );
+  const trace = scope.__donnerGpuOwnerCreationTrace;
+  assert.equal(trace("arm"), null);
+  const firstEpoch = Atomics.load(epoch, 0);
+  assert.equal(firstEpoch % 2, 1);
+  heap.set([renderCapacity + 1, 5, 1, 157]); // Capacity, unscoped count and omitted render requests.
+  const render = (index, ordinal, sent, duration, requests) => {
+    const header = 4 + index * stride;
+    heap.set([ordinal, requests, sent, sent, duration, requests > requestCapacity ? 155 : 0], header);
+    heap.set([1, sent, sent + duration, sent + duration + 1, sent + duration + 2,
+      2, 3, 4, 5, 6, 7, 4, 8, 9, ordinal, index === 2 ? 3 : 4, 1], header + 6);
+  };
+  render(0, 101, 90, 90, 1); // Before actual press, so excluded.
+  render(1, 102, 101, 2, 1);
+  render(2, 103, 105, 40, 1);
+  render(3, 104, 148, 50, 3); // One missed row is reported.
+  Atomics.store(epoch, 1, 1); // An owner request may still be outstanding.
+  const result = trace("stop", 100, 150);
+  assert.equal(Atomics.load(epoch, 0) % 2, 0);
+  assert.equal(result.hasPhysicalBounds, true);
+  assert.equal(result.incomplete, true);
+  assert.equal(result.unscopedRequests, 5);
+  assert.equal(result.omittedRenderRequests, 1);
+  assert.equal(result.firstOmittedRenderSentMs, 157);
+  assert.equal(result.outstandingAtStop, 1);
+  assert.deepEqual(result.retainedRenderOrdinals, [104, 103]);
+  assert.deepEqual(result.turnOrder, ["canvas", "pulse", "waitPump"]);
+  assert.equal(result.windows.length, renderCapacity);
+  assert.equal(result.windows[3].omittedRequests, 1);
+  assert.equal(result.windows[3].firstOmittedSentMs, 155);
+  Atomics.store(epoch, 1, 0);
+  assert.equal(trace("stop", 100, 150).incomplete, false);
+  assert.equal(trace("stop", 100, 156).incomplete, true);
+  assert.deepEqual(result.records.at(-1), {
+    api: "create_buffer", sentMs: 105, receivedMs: 145, startedMs: 146, finishedMs: 147,
+    turnsAtSend: [2, 3, 4], turnsAtReceive: [5, 6, 7],
+    viewSite: 4, logicalDevice: 8, textureLifetimeId: 9, renderOrdinal: 103,
+    operationKind: 3, canvasActiveAtReceive: true,
+  });
+  assert.equal(trace("arm"), null);
+  assert.notEqual(Atomics.load(epoch, 0), firstEpoch);
+  const earlyFailure = trace("stop");
+  assert.equal(earlyFailure.hasPhysicalBounds, false);
+  assert.equal(earlyFailure.incomplete, true);
+  assert.deepEqual(earlyFailure.records, []);
+});
+
 test("a worker result publishes its owner dispatch detail from the slots after the core values", () => {
   const timingPublisher = renderCoordinatorSource.match(
     /void PublishWorkerTimingStats\([\s\S]*?\n\}/,

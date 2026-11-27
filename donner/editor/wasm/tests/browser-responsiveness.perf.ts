@@ -1815,16 +1815,21 @@ async function startWorkerResultCounters(page: Page) {
 }
 
 /** Stop recording and return the counters of the results published since the start. */
-async function stopWorkerResultCounters(page: Page) {
-  return page.evaluate(() => {
+async function stopWorkerResultCounters(page: Page, retainDragStream = false) {
+  return page.evaluate((retainStream) => {
     const state = window as Diagnostics;
     const current = state.__donnerWorkerStats;
     delete (window as { __donnerWorkerStats?: unknown }).__donnerWorkerStats;
     state.__donnerWorkerStats = current;
     const records = state.__donnerWorkerResultCounters ?? [];
     delete state.__donnerWorkerResultCounters;
-    return records;
-  });
+    // The input stream is page-relative. The owner's Emscripten timestamps use epoch ms.
+    return {
+      records,
+      stream: retainStream ? state.__donnerLastDragStream : undefined,
+      inputTimeOriginMs: retainStream ? performance.timeOrigin : undefined,
+    };
+  }, retainDragStream);
 }
 
 /**
@@ -1849,6 +1854,18 @@ type MaskedDragSummary = {
   checkHeldResults: boolean;
 };
 
+function tracePhysicalBounds(report: Record<string, unknown>) {
+  const origin = report.inputTimeOriginMs;
+  const stream = report.physicalDragStream as { pressDispatchedAtMs?: unknown; releasedAtMs?: unknown } | undefined;
+  return typeof origin === "number" && stream &&
+      typeof stream.pressDispatchedAtMs === "number" && typeof stream.releasedAtMs === "number"
+    ? {
+      pressMs: origin + stream.pressDispatchedAtMs,
+      releaseMs: origin + stream.releasedAtMs,
+    }
+    : undefined;
+}
+
 /**
  * Drag the selected masked crown face while recording every worker result's counters. The counters
  * are printed as the held-drag and release baseline, or reported absent for a bundle that predates
@@ -1859,6 +1876,7 @@ async function maskedCrownDragWithCounters(
   page: Page,
   point: { x: number; y: number },
   sourceVisible: boolean,
+  traceReport?: Record<string, unknown>,
 ) {
   const phase = "geode-crown";
   await startWorkerResultCounters(page);
@@ -1869,7 +1887,12 @@ async function maskedCrownDragWithCounters(
   } catch (error) {
     dragFailure = error;
   }
-  const results = summarizeMaskedDragResults(await stopWorkerResultCounters(page), {
+  const capture = await stopWorkerResultCounters(page, Boolean(traceReport));
+  if (traceReport) {
+    traceReport.physicalDragStream = capture.stream;
+    traceReport.inputTimeOriginMs = capture.inputTimeOriginMs;
+  }
+  const results = summarizeMaskedDragResults(capture.records, {
     baselineOnly: process.env.DONNER_BROWSER_BASELINE === "1",
   }) as MaskedDragSummary;
   const baseline = {
@@ -1921,6 +1944,7 @@ test.describe("Geode detailed interactions", () => {
           ...packageHashes(),
         };
         let stopHeartbeat: (() => void) | undefined;
+        let traceWorker: ReturnType<Page["workers"]>[number] | undefined;
         const save = (stage: string) => {
           report.stage = stage;
           fs.writeFileSync(info.outputPath("geode-interaction.json"), JSON.stringify(report));
@@ -2011,13 +2035,32 @@ test.describe("Geode detailed interactions", () => {
           save("crown selected");
           // Separate selection from the drag press so this does not enter double-click editing.
           await page.waitForTimeout(500);
-          report.ownerBeforeDrag = await readGpuOwnerDispatchStats(page);
-          Object.assign(report, await maskedCrownDragWithCounters(page, point, sourceVisible));
-          report.ownerAfterDrag = await readGpuOwnerDispatchStats(page);
+          const trace = info.project.name === "firefox"
+            && process.env.DONNER_GPU_OWNER_CREATION_TRACE === "1";
+          report.ownerBeforeDrag = await readGpuOwnerDispatchStats(page, trace ? {
+            creationTrace: "arm",
+            rememberWorker: (worker) => { traceWorker = worker; },
+          } : undefined);
+          Object.assign(
+            report,
+            await maskedCrownDragWithCounters(page, point, sourceVisible, traceWorker ? report : undefined),
+          );
+          report.ownerAfterDrag = await readGpuOwnerDispatchStats(page, traceWorker ? {
+            creationTrace: "stop", worker: traceWorker, physicalBounds: tracePhysicalBounds(report),
+          } : undefined);
           save("drag finished");
           await page.screenshot({ path: info.outputPath("geode-interaction.png") });
         } finally {
-          report.final = await snapshot(page, true).catch(() => null);
+          if (traceWorker && !("ownerAfterDrag" in report)) {
+            // Always stop, even when the drag failed before recording the input stream.
+            report.final = { lastDragStream: report.physicalDragStream ?? null };
+            report.ownerAfterDrag = await readGpuOwnerDispatchStats(page, {
+              creationTrace: "stop", worker: traceWorker, physicalBounds: tracePhysicalBounds(report),
+            });
+          } else {
+            report.final = await snapshot(page, true).catch(() => null);
+          }
+          delete report.physicalDragStream;
           save("finished");
           stopHeartbeat?.();
           console.log(`geode-interaction ${JSON.stringify(report)}`);
@@ -2096,11 +2139,11 @@ test.describe("fresh selection after zoom", () => {
       await waitForIdle(page);
       // Separate the selection click from the drag press so it cannot become a double click.
       await page.waitForTimeout(400);
-      const selection = await stopWorkerResultCounters(page);
+      const { records: selection } = await stopWorkerResultCounters(page);
 
       await startWorkerResultCounters(page);
       const stream = await streamDragToIdle(page, point, -1);
-      const drag = await stopWorkerResultCounters(page);
+      const { records: drag } = await stopWorkerResultCounters(page);
 
       const promotions = [...selection, ...drag]
         .map((result) => result.interactionPromotion)

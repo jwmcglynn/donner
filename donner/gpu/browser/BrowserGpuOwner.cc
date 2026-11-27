@@ -10,8 +10,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 #include "donner/base/FatalAbort.h"
+#include "donner/gpu/browser/BrowserBridge.h"
 #include "donner/gpu/browser/BrowserGpuTaskQueue.h"
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
@@ -81,6 +83,44 @@ static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
 thread_local uint32_t gRequestedByThisThread = 0;
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+thread_local BrowserGpuCreationApi gCreationApi = BrowserGpuCreationApi::None;
+
+// Only the owner writes the fixed trace. An epoch change invalidates in-flight records.
+using detail::gCreationTraceEpoch;
+std::atomic<uint32_t> gNextCreationTraceRender{1};
+thread_local uint32_t gCreationTraceRender = 0;
+constexpr std::size_t kTraceRenderCapacity = 64;
+constexpr std::size_t kTraceRequestCapacity = 96;
+constexpr std::size_t kTraceWords = 17;
+struct TraceRender {
+  double ordinal = 0.0;
+  double count = 0.0;
+  double firstSentMs = 0.0;
+  double lastSentMs = 0.0;
+  double deliveryMs = 0.0;
+  double firstOmittedSentMs = 0.0;
+  std::array<std::array<double, kTraceWords>, kTraceRequestCapacity> rows{};
+};
+struct DispatchTrace {
+  double renderCount = 0.0;
+  double unscopedCount = 0.0;
+  double omittedRenderRequests = 0.0;
+  double firstOmittedRenderSentMs = 0.0;
+  std::array<TraceRender, kTraceRenderCapacity> renders{};
+};
+DispatchTrace gDispatchTrace;
+static_assert(sizeof(TraceRender) == sizeof(double) * (6 + kTraceWords * kTraceRequestCapacity));
+static_assert(sizeof(DispatchTrace) ==
+              4 * sizeof(double) + kTraceRenderCapacity * sizeof(TraceRender));
+
+std::array<uint32_t, 3> OwnerTurns() {
+  return {gOwnerWaitStats[kCanvasFrames].load(std::memory_order_relaxed),
+          gOwnerWaitStats[kPulses].load(std::memory_order_relaxed),
+          gOwnerWaitStats[kPumpCount].load(std::memory_order_relaxed)};
+}
+#endif
+
 // The queue outlives SDK notification messages, including those pending at owner shutdown.
 em_proxying_queue* gNotificationQueue = nullptr;
 BrowserGpuTaskQueue gReady;
@@ -187,7 +227,86 @@ struct OwnerRequest {
   double receivedMs = 0.0;
   double startedMs = 0.0;
   double finishedMs = 0.0;
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+  uint32_t creationTraceEpoch = 0;
+  BrowserGpuOperationKind kind = BrowserGpuOperationKind::Other;
+  bool canvasActiveAtReceive = false;
+  BrowserGpuCreationApi creationApi = BrowserGpuCreationApi::None;
+  detail::CreationTraceIdentity identity{};
+  uint32_t render = 0;
+  double sentMs = 0.0;
+  std::array<uint32_t, 3> turnsAtSend{};
+  std::array<uint32_t, 3> turnsAtReceive{};
+#endif
 };
+
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+TraceRender* FindTraceRender(uint32_t ordinal) {
+  const auto active = static_cast<std::size_t>(gDispatchTrace.renderCount);
+  for (std::size_t i = active; i > 0; --i) {
+    if (gDispatchTrace.renders[i - 1].ordinal == ordinal) {
+      return &gDispatchTrace.renders[i - 1];
+    }
+  }
+  if (active >= kTraceRenderCapacity) {
+    return nullptr;
+  }
+  TraceRender& render = gDispatchTrace.renders[active];
+  render.ordinal = ordinal;
+  render.count = 0;
+  render.deliveryMs = 0;
+  render.firstOmittedSentMs = 0;
+  ++gDispatchTrace.renderCount;
+  return &render;
+}
+
+void RecordCreationTrace(const OwnerRequest& request) {
+  if (!request.creationTraceEpoch ||
+      request.creationTraceEpoch != gCreationTraceEpoch.load(std::memory_order_relaxed)) {
+    return;
+  }
+  if (!request.render) {
+    ++gDispatchTrace.unscopedCount;
+    return;
+  }
+  TraceRender* render = FindTraceRender(request.render);
+  if (!render) {
+    double& first = gDispatchTrace.firstOmittedRenderSentMs;
+    first = first == 0.0 ? request.sentMs : std::min(first, request.sentMs);
+    ++gDispatchTrace.omittedRenderRequests;
+    return;
+  }
+  const auto index = static_cast<std::size_t>(render->count++);
+  render->firstSentMs = index == 0 ? request.sentMs : render->firstSentMs;
+  render->lastSentMs = request.sentMs;
+  render->deliveryMs += std::max(0.0, request.receivedMs - request.sentMs);
+  if (index >= kTraceRequestCapacity) {
+    if (index == kTraceRequestCapacity) {
+      render->firstOmittedSentMs = request.sentMs;
+    }
+    return;
+  }
+  auto& fields = render->rows[index];
+  fields = {static_cast<double>(request.creationApi),
+            request.sentMs,
+            request.receivedMs,
+            request.startedMs,
+            request.finishedMs,
+            static_cast<double>(request.turnsAtSend[0]),
+            static_cast<double>(request.turnsAtSend[1]),
+            static_cast<double>(request.turnsAtSend[2]),
+            static_cast<double>(request.turnsAtReceive[0]),
+            static_cast<double>(request.turnsAtReceive[1]),
+            static_cast<double>(request.turnsAtReceive[2]),
+            static_cast<double>(request.identity.viewSite),
+            static_cast<double>(request.identity.device),
+            static_cast<double>(request.identity.textureLifetime),
+            static_cast<double>(request.render),
+            static_cast<double>(request.kind),
+            request.canvasActiveAtReceive ? 1.0 : 0.0};
+}
+
+#endif
 
 /// Adds the elapsed time from \p fromMs to \p toMs, or nothing when the clocks disagree on order.
 void AddPhase(std::size_t index, double fromMs, double toMs) {
@@ -257,6 +376,9 @@ void Invoke(void* context) {
   request.startedMs = emscripten_get_now();
   request.operation(request.context);
   request.finishedMs = emscripten_get_now();
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+  RecordCreationTrace(request);
+#endif
   gOwnerWaitStats[kFinished].fetch_add(1, std::memory_order_relaxed);
   emscripten_futex_wake(&request.complete, INT_MAX);
   // This release is the callback's final access to the caller-owned request.
@@ -266,6 +388,12 @@ void Invoke(void* context) {
 void EnqueueRequest(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
   request.receivedMs = emscripten_get_now();
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+  if (request.creationTraceEpoch) {
+    request.turnsAtReceive = OwnerTurns();
+    request.canvasActiveAtReceive = gCanvasFrameActive;
+  }
+#endif
   if (gCanvasFrameActive) {
     gOwnerWaitStats[kReceivedDuringCanvasFrame].fetch_add(1, std::memory_order_relaxed);
   }
@@ -404,6 +532,106 @@ void RegisterBrowserGpuOwner() {
           (offset) => Atomics.load(HEAPU32, index + offset) === 4294967295),
     });
   }, gOwnerWaitStats.data());
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+  EM_ASM({
+    const epoch = Number($0) / 4;
+    const base = Number($1) / 8;
+    const width = $2;
+    const renderCapacity = $3;
+    const requestCapacity = $4;
+    const stride = 6 + requestCapacity * width;
+    const ownerStats = Number($5) / 4;
+    const requestedIndex = $6;
+    const finishedIndex = $7;
+    globalThis['__donnerGpuOwnerCreationTrace'] = (mode, pressMs, releaseMs) => {
+      const active = Atomics.load(HEAPU32, epoch);
+      Atomics.store(HEAPU32, epoch, (active + (active & 1)) >>> 0);
+      if (mode === 'arm') {
+        HEAPF64[base] = HEAPF64[base + 1] = HEAPF64[base + 2] = HEAPF64[base + 3] = 0;
+        Atomics.store(HEAPU32, epoch, ((active | 1) + 2) >>> 0);
+        return null;
+      }
+      const hasPhysicalBounds = Number.isFinite(pressMs) && Number.isFinite(releaseMs)
+        && pressMs < releaseMs;
+      const count = Math.min(HEAPF64[base], renderCapacity);
+      const windows = [];
+      for (let i = 0; i < count; ++i) {
+        const header = base + 4 + i * stride;
+        const requests = HEAPF64[header + 1];
+        const firstSentMs = HEAPF64[header + 2];
+        const lastSentMs = HEAPF64[header + 3];
+        const rows = [];
+        let heldDeliveryMs = 0;
+        let heldRequests = 0;
+        for (let n = 0; n < Math.min(requests, requestCapacity); ++n) {
+          const row = header + 6 + n * width;
+          rows.push(row);
+          const sent = HEAPF64[row + 1];
+          if (hasPhysicalBounds && pressMs <= sent && sent < releaseMs) {
+            heldDeliveryMs += Math.max(0, HEAPF64[row + 2] - sent);
+            ++heldRequests;
+          }
+        }
+        windows.push({
+          rows,
+          summary: {
+            'renderOrdinal': HEAPF64[header],
+            'requests': requests,
+            'omittedRequests': Math.max(0, requests - requestCapacity),
+            'firstSentMs': firstSentMs,
+            'lastSentMs': lastSentMs,
+            'deliveryMs': HEAPF64[header + 4],
+            'firstOmittedSentMs': HEAPF64[header + 5] || null,
+            'heldDeliveryMs': heldDeliveryMs,
+            'heldRequests': heldRequests,
+          },
+        });
+      }
+      const ranked = windows.filter(({summary}) => !hasPhysicalBounds || summary['heldRequests'])
+        .sort((left, right) => hasPhysicalBounds
+          ? right.summary['heldDeliveryMs'] - left.summary['heldDeliveryMs']
+          : right.summary['deliveryMs'] - left.summary['deliveryMs']);
+      const records = [];
+      for (const row of ranked.slice(0, 2).flatMap(({rows}) => rows)) {
+        records.push({
+          'api': ['none', 'create_buffer', 'create_texture', 'create_texture_view',
+                  'create_sampler', 'create_shader_module'][HEAPF64[row]],
+          'sentMs': HEAPF64[row + 1],
+          'receivedMs': HEAPF64[row + 2],
+          'startedMs': HEAPF64[row + 3],
+          'finishedMs': HEAPF64[row + 4],
+          'turnsAtSend': Array.from(HEAPF64.subarray(row + 5, row + 8)),
+          'turnsAtReceive': Array.from(HEAPF64.subarray(row + 8, row + 11)),
+          'viewSite': HEAPF64[row + 11],
+          'logicalDevice': HEAPF64[row + 12],
+          'textureLifetimeId': HEAPF64[row + 13],
+          'renderOrdinal': HEAPF64[row + 14],
+          'operationKind': HEAPF64[row + 15],
+          'canvasActiveAtReceive': HEAPF64[row + 16] !== 0,
+        });
+      }
+      const outstanding = Math.max(0, Atomics.load(HEAPU32, ownerStats + requestedIndex)
+        - Atomics.load(HEAPU32, ownerStats + finishedIndex));
+      const firstOmittedRenderSentMs = HEAPF64[base + 3] || null;
+      const couldMissHeld = (firstOmitted) => firstOmitted !== null && firstOmitted < releaseMs;
+      return ({
+        'turnOrder': ['canvas', 'pulse', 'waitPump'],
+        'hasPhysicalBounds': hasPhysicalBounds,
+        'unscopedRequests': HEAPF64[base + 1],
+        'omittedRenderRequests': HEAPF64[base + 2],
+        'firstOmittedRenderSentMs': firstOmittedRenderSentMs,
+        'outstandingAtStop': outstanding,
+        'incomplete': !hasPhysicalBounds || ranked.length === 0
+          || couldMissHeld(firstOmittedRenderSentMs) || outstanding > 0
+          || windows.some(({summary}) => couldMissHeld(summary['firstOmittedSentMs'])),
+        'windows': windows.map(({summary}) => summary),
+        'retainedRenderOrdinals': ranked.slice(0, 2).map(({summary}) => summary['renderOrdinal']),
+        'records': records,
+      });
+    };
+  }, &gCreationTraceEpoch, &gDispatchTrace, kTraceWords, kTraceRenderCapacity, kTraceRequestCapacity,
+     gOwnerWaitStats.data(), kRequested, kFinished);
+#endif
   // clang-format on
 #endif
 }
@@ -429,6 +657,32 @@ void RecordBrowserBufferWriteSize([[maybe_unused]] std::size_t bytes) {
 #endif
 }
 
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+BrowserGpuCreationTraceRenderScope::BrowserGpuCreationTraceRenderScope() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  previous_ = gCreationTraceRender;
+  if (detail::CreationTraceIsArmed()) {
+    gCreationTraceRender = gNextCreationTraceRender.fetch_add(1, std::memory_order_relaxed);
+  }
+#endif
+}
+
+BrowserGpuCreationTraceRenderScope::~BrowserGpuCreationTraceRenderScope() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  gCreationTraceRender = previous_;
+#endif
+}
+
+BrowserGpuCreationApi SetBrowserGpuCreationApi([[maybe_unused]] BrowserGpuCreationApi api) {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  return std::exchange(gCreationApi, api);
+#else
+  return BrowserGpuCreationApi::None;
+#endif
+}
+
+#endif
+
 void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
                           [[maybe_unused]] BrowserGpuOperationKind kind) {
 #ifdef __EMSCRIPTEN_PTHREADS__
@@ -441,6 +695,18 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
   if (owner && !pthread_equal(owner, pthread_self())) {
     const double requestStartedMs = emscripten_get_now();
     OwnerRequest request{operation, context, {}, {}};
+#ifdef DONNER_TEST_GPU_OWNER_TRACE
+    const uint32_t epoch = gCreationTraceEpoch.load(std::memory_order_relaxed);
+    if (epoch & 1u) {
+      request.creationTraceEpoch = epoch;
+      request.kind = kind;
+      request.creationApi = gCreationApi;
+      request.identity = detail::gCreationTraceIdentity;
+      request.render = gCreationTraceRender;
+      request.sentMs = requestStartedMs;
+      request.turnsAtSend = OwnerTurns();
+    }
+#endif
     gOwnerWaitStats[kRequested].fetch_add(1, std::memory_order_relaxed);
     ++gRequestedByThisThread;
     gOwnerWaitStats[OperationCounter(kind)].fetch_add(1, std::memory_order_relaxed);

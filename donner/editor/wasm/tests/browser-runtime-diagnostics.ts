@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Worker } from "@playwright/test";
 
 export async function boundBrowserDiagnostic<T>(
   work: Promise<T>,
@@ -17,29 +17,46 @@ export async function boundBrowserDiagnostic<T>(
   }
 }
 
-export async function readGpuOwnerDispatchStats(page: Page) {
-  return Promise.any(
-    page.workers().map(async (worker) => {
+export async function readGpuOwnerDispatchStats(
+  page: Page,
+  options?: {
+    creationTrace: "arm" | "stop";
+    physicalBounds?: { pressMs: number; releaseMs: number };
+    worker?: Worker;
+    rememberWorker?: (worker: Worker) => void;
+  },
+) {
+  const workers = options?.worker ? [options.worker] : page.workers();
+  const match = await Promise.any(
+    workers.map(async (worker) => {
       const result = await boundBrowserDiagnostic(
-        worker.evaluate(() => {
+        worker.evaluate(({ trace, physicalBounds }) => {
           const scope = globalThis as typeof globalThis & {
             __donnerReadGpuOwnerWaitStats?: () => unknown;
             __donnerReadGpuObjectStats?: () => unknown;
+            __donnerGpuOwnerCreationTrace?: (mode: string, pressMs?: number, releaseMs?: number) => unknown;
           };
           return scope.__donnerReadGpuOwnerWaitStats
             ? {
               sampledAtMs: performance.now(),
               stats: scope.__donnerReadGpuOwnerWaitStats(),
               gpu: scope.__donnerReadGpuObjectStats?.() ?? null,
+              ...(trace ? {
+                creationTrace: scope.__donnerGpuOwnerCreationTrace?.(
+                  trace, physicalBounds?.pressMs, physicalBounds?.releaseMs,
+                ) ?? null,
+              } : {}),
             }
             : null;
-        }),
+        }, { trace: options?.creationTrace, physicalBounds: options?.physicalBounds }),
         1000,
       );
       if (result === null) throw new Error("GPU owner probe unavailable");
-      return result;
+      return { result, worker };
     }),
   ).catch(() => null);
+  if (match) options?.rememberWorker?.(match.worker);
+  return match?.result ?? null;
 }
 
 export function wgpuDiagnosticOutcome(input?: Window | void) {
