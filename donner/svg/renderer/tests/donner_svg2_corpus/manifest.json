@@ -1,7 +1,7 @@
 {
   "schema": "https://donner.graphics/svg2-suite/corpus-v1.schema.json",
   "corpus": "donner-svg2",
-  "revision": "donner-svg2-m4-seed-v2",
+  "revision": "donner-svg2-m4-seed-v4",
   "integrity": {
     "tests/painting/fill/default-black.svg": "sha256:c4ac6cd200f3bc0187a73144cdf1d79372231e747a3ef5277f5bd63aa8045550",
     "tests/painting/fill/default-black.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
@@ -42,7 +42,11 @@
     "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.svg": "sha256:9cd71f8fa0a62d278deb519f54f3a7fd317ac8383a599f5e2d544406795d0d04",
     "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.png": "sha256:557a27608856288948e56c52d6e53e785ea66b5ffd1284883431c7961eaa2526",
     "tests/structure/use/custom-property-fill.svg": "sha256:46bd84eb68e7137798d78862911536e6b51cfeaec8c08b55becd3a5296973e8c",
-    "tests/structure/use/custom-property-fill.png": "sha256:d2c53baa50216732528c59eff076e7ecc33752e83615986e4bab05cc251d9a06"
+    "tests/structure/use/custom-property-fill.png": "sha256:d2c53baa50216732528c59eff076e7ecc33752e83615986e4bab05cc251d9a06",
+    "tests/styling/cascade-layers/important-reverses-layer-order.svg": "sha256:97f201647b71a842782e570497933e910f9d96cce9dd1e5eb58b225c9cb3483d",
+    "tests/styling/cascade-layers/important-reverses-layer-order.png": "sha256:1729761cb5941f9ddaa14bea37a77056be992f219eff938f2100af26c92fc324",
+    "tests/styling/cascade-layers/first-layer-overrides-presentation.svg": "sha256:2719d7c2ed954034341d81ab505e82b1cd3f47f0842c4734887cc95be2b42c5d",
+    "tests/styling/cascade-layers/first-layer-overrides-presentation.png": "sha256:1729761cb5941f9ddaa14bea37a77056be992f219eff938f2100af26c92fc324"
   },
   "tests": [
     {
@@ -367,6 +371,38 @@
       "assertion": "Each use instance paints the referenced rect with the custom property inherited from its own use host.",
       "spec_requirements": [
         "svg2-cr-20181004/structure/UseElement/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/styling/cascade-layers/important-reverses-layer-order",
+      "input": "tests/styling/cascade-layers/important-reverses-layer-order.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/styling/cascade-layers/important-reverses-layer-order.png",
+        "width": 10,
+        "height": 10,
+        "provenance": "Manually constructed solid green reference from CSS Cascade 5 layer precedence."
+      },
+      "assertion": "An important declaration in an earlier layer overrides later layers and unlayered declarations.",
+      "spec_requirements": [
+        "svg2-cr-20181004/styling/StylingUsingCSS/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/styling/cascade-layers/first-layer-overrides-presentation",
+      "input": "tests/styling/cascade-layers/first-layer-overrides-presentation.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/styling/cascade-layers/first-layer-overrides-presentation.png",
+        "width": 10,
+        "height": 10,
+        "provenance": "Manually constructed solid green reference from CSS Cascade 5 layer precedence."
+      },
+      "assertion": "A normal declaration in the first author layer overrides the presentation attribute.",
+      "spec_requirements": [
+        "svg2-cr-20181004/styling/PresentationAttributes/req-01"
       ],
       "capabilities": []
     }

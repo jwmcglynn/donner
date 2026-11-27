@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "donner/base/EcsRegistry.h"
@@ -499,6 +500,7 @@ ResourceManagerContext::ResourceManagerContext(Registry& registry,
 
 void ResourceManagerContext::onStylesheetDestroy(Registry&, Entity entity) {
   stylesheetFontFaceRegistrations_.erase(entity);
+  layeredFontOrderRevision_.reset();
   importRootsChanged_ = true;
 }
 
@@ -509,6 +511,7 @@ uint64_t ResourceManagerContext::NextCacheGeneration() {
 
 void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
   cacheGeneration_ = NextCacheGeneration();
+  layeredFontOrderRevision_.reset();
   failedImageUrls_.clear();
   for (const Entity entity : registry_.view<DeferredDecodedImageComponent>()) {
     registry_.remove<LoadedImageComponent>(entity);
@@ -551,6 +554,9 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   LoadFontFaces(fontFaces_, fontFaceIndexesToLoad_, loader_ != nullptr, cachedLoader,
                 remainingResourceBytes_, warningSink);
 
+  for (std::size_t index : fontFaceIndexesToLoad_) {
+    fontFaceQueued_[index] = false;
+  }
   fontFaceIndexesToLoad_.clear();
 }
 
@@ -675,11 +681,15 @@ bool ResourceManagerContext::loadStylesheetImports(ParseWarningSink& warningSink
     reloaded = true;
     ParseWarningSink warnings =
         warningSink.isEnabled() ? ParseWarningSink() : ParseWarningSink::Disabled();
+    std::vector<StylesheetImportOrigin> origins;
     std::vector<css::Stylesheet> imported =
-        LoadStylesheetImports(stylesheet.stylesheet, fetch, budget, warnings);
+        LoadStylesheetImports(stylesheet.stylesheet, fetch, budget, warnings, &origins);
     MapImportWarnings(warnings, stylesheet.sourceMap);
     warningSink.merge(std::move(warnings));
-    stylesheet.setImportedStylesheets(std::move(imported), cacheGeneration_);
+    stylesheet.setImportedStylesheets(std::move(imported), cacheGeneration_, std::move(origins));
+  }
+  if (reloaded) {
+    layeredFontOrderRevision_.reset();
   }
   return reloaded;
 }
@@ -732,18 +742,34 @@ std::variant<UrlLoader::Result, RcString> ResourceManagerContext::fetchStyleshee
   return std::move(loaded);
 }
 
+void ResourceManagerContext::queueFontFace(std::size_t index) {
+  if (index >= fontFaceQueued_.size()) {
+    fontFaceQueued_.resize(index + 1, false);
+  }
+  if (!fontFaceQueued_[index]) {
+    fontFaceQueued_[index] = true;
+    fontFaceIndexesToLoad_.push_back(index);
+  }
+}
+
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
   for (const css::FontFace& fontFace : fontFaces) {
     std::string identity = css::FontFaceIdentityKey(fontFace);
     if (auto it = fontFaceIndexByIdentity_.find(identity); it != fontFaceIndexByIdentity_.end()) {
       // Already registered. Re-queue the stored copy so a source that has not resolved yet gets
       // another attempt; one that already resolved is skipped by the load pass.
-      fontFaceIndexesToLoad_.push_back(it->second);
+      queueFontFace(it->second);
+      if (std::ranges::find(programmaticFontFaces_, it->second) == programmaticFontFaces_.end()) {
+        programmaticFontFaces_.push_back(it->second);
+        layeredFontOrderRevision_.reset();
+      }
       continue;
     }
 
     fontFaceIndexByIdentity_.emplace(std::move(identity), fontFaces_.size());
-    fontFaceIndexesToLoad_.push_back(fontFaces_.size());
+    queueFontFace(fontFaces_.size());
+    programmaticFontFaces_.push_back(fontFaces_.size());
+    layeredFontOrderRevision_.reset();
     fontFaces_.push_back(fontFace);
   }
 }
@@ -757,23 +783,49 @@ void ResourceManagerContext::synchronizeStylesheetFontFaces(
   }
   registration = {.data = fontFaces.data(), .size = fontFaces.size(), .revision = revision};
 
-  for (const css::FontFace& fontFace : fontFaces) {
-    std::string identity = css::FontFaceIdentityKey(fontFace);
-    if (const auto it = fontFaceIndexByIdentity_.find(identity);
-        it != fontFaceIndexByIdentity_.end()) {
-      fontFaceIndexesToLoad_.push_back(it->second);
-      continue;
-    }
-    if (stylesheetFontFaceCount_ >= kMaximumStylesheetFontFaces) {
-      stylesheetFontFaceLimitRejected_ = true;
+  for (const auto& face : fontFaces) {
+    if (!registerStylesheetFontFace(face)) {
       break;
     }
-
-    fontFaceIndexByIdentity_.emplace(std::move(identity), fontFaces_.size());
-    fontFaceIndexesToLoad_.push_back(fontFaces_.size());
-    fontFaces_.push_back(fontFace);
-    ++stylesheetFontFaceCount_;
   }
+}
+
+std::optional<std::size_t> ResourceManagerContext::registerStylesheetFontFace(
+    const css::FontFace& face) {
+  std::string identity = css::FontFaceIdentityKey(face);
+  if (const auto found = fontFaceIndexByIdentity_.find(identity);
+      found != fontFaceIndexByIdentity_.end()) {
+    queueFontFace(found->second);
+    return found->second;
+  }
+  if (stylesheetFontFaceCount_ >= kMaximumStylesheetFontFaces) {
+    stylesheetFontFaceLimitRejected_ = true;
+    return std::nullopt;
+  }
+  const std::size_t index = fontFaces_.size();
+  fontFaceIndexByIdentity_.emplace(std::move(identity), index);
+  queueFontFace(index);
+  fontFaces_.push_back(face);
+  ++stylesheetFontFaceCount_;
+  return index;
+}
+
+void ResourceManagerContext::setLayeredStylesheetFontOrder(
+    std::vector<std::size_t> authorOrder, std::optional<std::uint64_t> documentRevision) {
+  std::vector<bool> authored(fontFaces_.size());
+  for (const std::size_t index : authorOrder) {
+    authored[index] = true;
+  }
+  std::vector<std::size_t> order;
+  order.reserve(programmaticFontFaces_.size() + authorOrder.size());
+  for (std::size_t index : programmaticFontFaces_) {
+    if (!authored[index]) {
+      order.push_back(index);
+    }
+  }
+  order.insert(order.end(), authorOrder.begin(), authorOrder.end());
+  layeredFontFaceOrder_ = std::move(order);
+  layeredFontOrderRevision_ = documentRevision;
 }
 
 std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) const {

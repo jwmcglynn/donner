@@ -9,7 +9,19 @@
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/css/parser/StylesheetParser.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/resources/UrlReference.h"
+
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_STYLESHEET_IMPORT_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_STYLESHEET_IMPORT_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 namespace donner::svg::components {
 
@@ -43,12 +55,13 @@ void RebaseFontFaceSources(css::Stylesheet& sheet, std::string_view sheetUrl) {
 class ImportLoader {
 public:
   ImportLoader(const StylesheetImportFetch& fetch, StylesheetImportBudget& budget,
-               ParseWarningSink& warnings)
-      : fetch_(fetch), budget_(budget), warnings_(warnings) {}
+               ParseWarningSink& warnings, std::vector<StylesheetImportOrigin>* origins)
+      : fetch_(fetch), budget_(budget), warnings_(warnings), origins_(origins) {}
 
   void loadRoot(const css::Stylesheet& stylesheet) {
-    for (const css::ImportRule& import : stylesheet.imports()) {
-      loadImport(import.url, "", import.sourceOffset, 1);
+    for (std::size_t i = 0; i < stylesheet.imports().size(); ++i) {
+      const auto& import = stylesheet.imports()[i];
+      loadImport(import.url, "", import.sourceOffset, 1, i);
     }
   }
 
@@ -117,7 +130,7 @@ private:
   }
 
   void loadImport(std::string_view url, std::string_view baseUrl, FileOffset offset,
-                  std::size_t depth) {
+                  std::size_t depth, std::size_t importIndex) {
     std::optional<std::string> resolved = ResolveUrlReference(baseUrl, url);
     if (!resolved.has_value()) {
       warn("CSS @import relative URL cannot be resolved against a non-hierarchical stylesheet URL",
@@ -154,16 +167,27 @@ private:
 
     RebaseFontFaceSources(sheet, *resolved);
     path_.push_back(*resolved);
-    for (const css::ImportRule& nested : sheet.imports()) {
-      loadImport(nested.url, path_.back(), offset, depth + 1);
+    const std::size_t firstChildEntry = result_.size();
+    for (std::size_t i = 0; i < sheet.imports().size(); ++i) {
+      loadImport(sheet.imports()[i].url, path_.back(), offset, depth + 1, i);
     }
     path_.pop_back();
+    if (origins_) {
+      const std::size_t entry = result_.size();
+      for (auto& child : std::span(*origins_).subspan(firstChildEntry)) {
+        if (!child.parentEntry) {
+          child.parentEntry = entry;
+        }
+      }
+      origins_->push_back({importIndex, std::nullopt});
+    }
     result_.push_back(std::move(sheet));
   }
 
   const StylesheetImportFetch& fetch_;
   StylesheetImportBudget& budget_;
   ParseWarningSink& warnings_;
+  std::vector<StylesheetImportOrigin>* origins_;
   /// Resolved URLs of the stylesheets currently being loaded, outermost first.
   std::vector<std::string> path_;
   std::vector<css::Stylesheet> result_;
@@ -174,10 +198,19 @@ private:
 std::vector<css::Stylesheet> LoadStylesheetImports(const css::Stylesheet& stylesheet,
                                                    const StylesheetImportFetch& fetch,
                                                    StylesheetImportBudget& budget,
-                                                   ParseWarningSink& warnings) {
-  ImportLoader loader(fetch, budget, warnings);
+                                                   ParseWarningSink& warnings,
+                                                   std::vector<StylesheetImportOrigin>* origins) {
+  if (origins) {
+    origins->clear();
+  }
+  ImportLoader loader(fetch, budget, warnings, origins);
   loader.loadRoot(stylesheet);
   return loader.takeResult();
 }
 
 }  // namespace donner::svg::components
+
+#if defined(DONNER_APPLE_STYLESHEET_IMPORT_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_STYLESHEET_IMPORT_MINSIZE
+#endif

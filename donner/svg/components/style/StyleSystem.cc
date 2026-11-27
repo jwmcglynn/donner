@@ -47,6 +47,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/CustomPropertyMap.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
+#include "donner/svg/components/style/DocumentLayerOrder.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/MatchedPropertiesCache.h"
 #include "donner/svg/components/style/PaintAnimationStyle.h"
@@ -59,6 +60,17 @@
 #include "donner/svg/components/style/StyleElementView.h"
 #include "donner/svg/components/style/StylePassScheduler.h"
 #include "donner/svg/components/text/TextComponent.h"
+
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_STYLE_SYSTEM_MINSIZE 1
+#endif
+#endif
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 namespace donner::svg::components {
 
@@ -94,15 +106,6 @@ void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& reg
       stylesheet.fontFaceRevision);
 }
 
-/// Register the `@font-face` rules of every stylesheet with the document's resources.
-void SynchronizeAllStylesheetFonts(Registry& registry) {
-  ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    auto [stylesheet] = view.get(stylesheetEntity);
-    SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
-  }
-}
-
 bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
                               const StylesheetComponent& stylesheet) {
   return HasSvgNamespace(registry, entity) && stylesheet.isCssType() &&
@@ -124,6 +127,61 @@ bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent&
   // The built-in sheet has an SVG default namespace; authored namespace handling is separate.
   const auto* type = registry.try_get<ElementTypeComponent>(dataEntity);
   return type && type->inSvgNamespace();
+}
+
+template <typename Visitor>
+void VisitCascadeStylesheets(const Registry& registry, const DocumentLayerOrder* layers,
+                             Visitor visit) {
+  const auto view = registry.view<const StylesheetComponent>();
+  const auto visitRange = [&](const auto& range) {
+    for (Entity entity : range) {
+      if (!visit(view.get<const StylesheetComponent>(entity), entity)) {
+        break;
+      }
+    }
+  };
+  if (layers) {
+    visitRange(layers->stylesheets());
+  } else {
+    visitRange(view);
+  }
+}
+
+class RuleLayerRanks {
+public:
+  RuleLayerRanks(const DocumentLayerOrder* layers, bool userAgent, const css::Stylesheet& sheet)
+      : ranks_(layers && layers->hasRanks() && !userAgent ? std::optional(layers->ranksFor(sheet))
+                                                          : std::nullopt) {}
+
+  std::optional<std::uint16_t> rank(css::LayerId layer) const {
+    if (!ranks_) {
+      return layer == css::kUnlayered ? std::optional<std::uint16_t>(0) : std::nullopt;
+    }
+    const auto rank = ranks_->forLayer(layer);
+    return rank == 0 ? std::nullopt : std::optional(rank);
+  }
+
+private:
+  std::optional<DocumentLayerOrder::SheetRanks> ranks_;
+};
+
+template <typename Visitor>
+bool VisitCascadeImports(const StylesheetComponent& stylesheet, const DocumentLayerOrder* layers,
+                         Visitor visit) {
+  if (layers && !stylesheet.importedStylesheets.empty() &&
+      !layers->allowsImportsOf(stylesheet.stylesheet)) {
+    return true;
+  }
+  // Imported rules precede the importing sheet's own rules in the cascade.
+  UTILS_RELEASE_ASSERT(stylesheet.importedRuleIndexes.size() ==
+                       stylesheet.importedStylesheets.size());
+  for (std::size_t i = 0; i < stylesheet.importedStylesheets.size(); ++i) {
+    if (!visit(stylesheet.contentRevision(), i, stylesheet.importedStylesheets[i],
+               stylesheet.importedRuleIndexes[i], stylesheet.isUserAgentStylesheet)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
@@ -1840,13 +1898,19 @@ std::unique_ptr<CascadeAncestorFilter> MakeAncestorFilter(const Registry& regist
 class StyleSystem::SerialCascade {
 public:
   SerialCascade(Registry& registry, ParseWarningSink& warnings, RuleTraces* traces = nullptr,
-                bool enableFilter = false, bool enableTestFilter = false)
+                bool enableFilter = false, bool enableTestFilter = false,
+                const std::unique_ptr<DocumentLayerOrder>* preparedLayers = nullptr)
       : registry_(registry),
         warnings_(warnings),
         traces_(traces),
+        layers_(preparedLayers ? nullptr : DocumentLayerOrder::Build(registry)),
         pass_{GetStyleResourceBudget(registry), GetStyleCascadeMetrics(registry).counters,
               GetMatchedPropertiesCache(registry)},
         ancestorFilter_(registry, pass_.counters, enableFilter) {
+    pass_.layers = preparedLayers ? preparedLayers->get() : layers_.get();
+    if (pass_.layers) {
+      pass_.layers->reportRefusal(warnings);
+    }
     pass_.ancestorFilter = ancestorFilter_.get();
     if (enableTestFilter) {
       testFilter_ = MakeAncestorFilter(registry, pass_.counters);
@@ -1919,6 +1983,7 @@ private:
   Registry& registry_;
   ParseWarningSink& warnings_;
   RuleTraces* traces_;
+  std::unique_ptr<DocumentLayerOrder> layers_;
   CascadePass pass_;
   PassAncestorFilter ancestorFilter_;
   std::unique_ptr<CascadeAncestorFilter> testFilter_;
@@ -1967,7 +2032,7 @@ public:
   friend class PreparedBatch;
   Worker(const PreparedBatch* owner, const Registry& registry, const StyleResourceBudget& logical,
          StyleResourceBudget::Limits share, std::shared_ptr<const PreparationLease> lease,
-         bool enableFilter, std::uint32_t firstRecord)
+         bool enableFilter, std::uint32_t firstRecord, const DocumentLayerOrder* layers)
       : lease_(std::move(lease)),
         owner_(owner),
         budget_(logical, share),
@@ -1980,6 +2045,7 @@ public:
                            !registry.ctx().contains<DisableMatchedPropertiesCacheForTesting>()) {
     pass_.ancestorFilter = ancestorFilter_.get();
     pass_.testFilter = testFilter_.get();
+    pass_.layers = layers;
   }
 
 private:
@@ -2239,6 +2305,7 @@ struct StyleSystem::PreparedBatch::Impl {
   Impl(Registry& registry, std::size_t contexts)
       : registry(registry),
         logical(GetStyleResourceBudget(registry)),
+        layers(DocumentLayerOrder::Build(registry)),
         contexts(contexts),
         share(logical.remainingWorkLimits(logical.limits())) {
     UTILS_RELEASE_ASSERT(contexts > 0);
@@ -2251,6 +2318,7 @@ struct StyleSystem::PreparedBatch::Impl {
 
   Registry& registry;
   const StyleResourceBudget& logical;
+  const std::unique_ptr<DocumentLayerOrder> layers;
   const std::size_t contexts;
   StyleResourceBudget::Limits share;
   std::mutex workerMutex;
@@ -2372,7 +2440,8 @@ StyleSystem::PreparedBatch::Worker* StyleSystem::PreparedBatch::bindWorker() {
       this, std::as_const(impl_->registry), impl_->logical, impl_->share,
       std::make_shared<PreparationLease>(impl_->logical.retainedStyleBytes(), bytes),
       impl_->enableFilter,
-      static_cast<std::uint32_t>(impl_->workers.size() * StagedRecords::kMaximumRecords));
+      static_cast<std::uint32_t>(impl_->workers.size() * StagedRecords::kMaximumRecords),
+      impl_->layers.get());
   return impl_->workers.emplace(id, std::move(worker)).first->second.get();
 }
 
@@ -2482,7 +2551,7 @@ std::size_t StyleSystem::PreparedBatch::commit(std::span<const Entity> requests,
     }
   }
   SerialCascade cascade(impl_->registry, warnings, replay ? &impl_->traces : nullptr,
-                        impl_->enableFilter, true);
+                        impl_->enableFilter, true, &impl_->layers);
   for (Entity entity : requests) {
     cascade.compute(entity);
   }
@@ -2710,7 +2779,8 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
                                        ParseWarningSink& warningSink,
                                        PendingStyleDeclarations& declarations, RuleTrace* capture,
                                        RuleTrace* replay, StyleAncestorFilter* ancestorFilter,
-                                       CascadeAncestorFilter* testFilter) {
+                                       CascadeAncestorFilter* testFilter,
+                                       const DocumentLayerOrder* layers) {
   const auto admitMatch = [&](const RuleTrace::Match& match) {
     ++counters.rulesMatched;
     cacheKey.addRule(match.revision, match.ordinal, match.position, match.specificity);
@@ -2736,10 +2806,15 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
   const auto applyRules = [&](std::uint64_t sheetRevision, std::size_t sheetOrdinal,
                               const css::Stylesheet& sheet, const RuleIndex& index,
                               bool isUserAgentStylesheet) {
+    const RuleLayerRanks ranks(layers, isUserAgentStylesheet, sheet);
     const std::span<const css::SelectorRule> rules = sheet.rules();
     CollectCandidateRules(rules, index, elementKeys, unindexed, candidates);
     for (const std::uint32_t position : candidates) {
       const css::SelectorRule& rule = rules[position];
+      const auto rank = ranks.rank(rule.layer);
+      if (!rank) {
+        continue;
+      }
       if (!styleBudget.reserveRuleElementMatch()) {
         return false;
       }
@@ -2751,7 +2826,8 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
       if (!match) {
         continue;
       }
-      const auto specificity = CascadeSpecificity(match->specificity, isUserAgentStylesheet);
+      const auto specificity =
+          CascadeSpecificity(match->specificity.withLayerRank(*rank), isUserAgentStylesheet);
       const RuleTrace::Match matched{sheetRevision, sheetOrdinal, position, &rule, specificity};
       recording.append(matched);
       admitMatch(matched);
@@ -2759,26 +2835,18 @@ void StyleSystem::applyStylesheetRules(const Registry& registry, Entity treeEnti
     return true;
   };
 
-  for (auto view = registry.view<const StylesheetComponent>(); auto stylesheetEntity : view) {
-    const auto& stylesheet = view.get<const StylesheetComponent>(stylesheetEntity);
+  const auto applyStylesheet = [&](const StylesheetComponent& stylesheet, Entity stylesheetEntity) {
     if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
-      continue;
+      return true;
     }
-    // Imported rules precede the importing sheet's own rules in the cascade.
-    UTILS_RELEASE_ASSERT(stylesheet.importedRuleIndexes.size() ==
-                         stylesheet.importedStylesheets.size());
-    for (std::size_t i = 0; i < stylesheet.importedStylesheets.size(); ++i) {
-      if (!applyRules(stylesheet.contentRevision(), i, stylesheet.importedStylesheets[i],
-                      stylesheet.importedRuleIndexes[i], stylesheet.isUserAgentStylesheet)) {
-        return;
-      }
+    if (!VisitCascadeImports(stylesheet, layers, applyRules)) {
+      return false;
     }
-    if (!applyRules(stylesheet.contentRevision(), stylesheet.importedStylesheets.size(),
-                    stylesheet.stylesheet, stylesheet.ruleIndex,
-                    stylesheet.isUserAgentStylesheet)) {
-      return;
-    }
-  }
+    return applyRules(stylesheet.contentRevision(), stylesheet.importedStylesheets.size(),
+                      stylesheet.stylesheet, stylesheet.ruleIndex,
+                      stylesheet.isUserAgentStylesheet);
+  };
+  VisitCascadeStylesheets(registry, layers, applyStylesheet);
 }
 
 ResolvedPaintServer StyleSystem::externalHostPaint(Registry& registry, bool stroke) {
@@ -2980,7 +3048,7 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   PendingStyleDeclarations declarations;
   applyStylesheetRules(registry, handle.entity(), dataEntity, styleBudget, counters, cacheKey,
                        styleComponent, early, declarations, capture, replay, pass.ancestorFilter,
-                       pass.testFilter);
+                       pass.testFilter, pass.layers);
 
   PopulateMatchedPropertiesKey(registry, handle, dataEntity, parent, styleComponent, cacheKey);
   MatchedCacheState cacheState = PrepareMatchedCacheState(
@@ -3059,6 +3127,40 @@ void StyleSystem::computePropertiesInto(const Registry& registry, Entity entity,
   }
 }
 
+namespace {
+
+MatchedStyleRule BuildMatchedStyleRule(const StylesheetComponent& stylesheet,
+                                       Entity stylesheetEntity, const css::SelectorRule& rule,
+                                       std::size_t ruleIndex, std::size_t selectorEntryIndex,
+                                       css::Specificity specificity) {
+  MatchedStyleRule matchedRule;
+  matchedRule.stylesheetEntity = stylesheetEntity;
+  matchedRule.ruleIndex = ruleIndex;
+  matchedRule.selectorEntryIndex = selectorEntryIndex;
+  matchedRule.specificity = specificity;
+  matchedRule.isUserAgentStylesheet = stylesheet.isUserAgentStylesheet;
+  matchedRule.ruleSourceRange = stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
+
+  if (selectorEntryIndex < rule.selectorEntrySourceRanges.size()) {
+    matchedRule.selectorSourceRange = stylesheet.sourceMap.mapToDocumentSource(
+        rule.selectorEntrySourceRanges[selectorEntryIndex]);
+  } else {
+    matchedRule.selectorSourceRange =
+        stylesheet.sourceMap.mapToDocumentSource(rule.selectorSourceRange);
+  }
+
+  for (const css::Declaration& declaration : rule.declarations) {
+    if (std::optional<SourceRange> sourceRange =
+            stylesheet.sourceMap.mapToDocumentSource(declaration.sourceRange)) {
+      matchedRule.declarationSourceRanges.push_back(*sourceRange);
+    }
+  }
+
+  return matchedRule;
+}
+
+}  // namespace
+
 std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle handle) const {
   Registry& registry = *handle.registry();
 
@@ -3071,54 +3173,40 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
   const RuleIndexElementView elementKeys(registry, handle.entity(), dataEntity);
   const bool unindexed = registry.ctx().contains<UnindexedCascadeForTesting>();
   std::vector<std::uint32_t> candidates;
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+  const auto layers = DocumentLayerOrder::Build(registry);
+  const auto collect = [&](const StylesheetComponent& stylesheet, Entity stylesheetEntity) {
     if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
-      continue;
+      return true;
     }
+    const RuleLayerRanks ranks(layers.get(), stylesheet.isUserAgentStylesheet,
+                               stylesheet.stylesheet);
     const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
     CollectCandidateRules(rules, stylesheet.ruleIndex, elementKeys, unindexed, candidates);
 
     for (const std::uint32_t ruleIndex : candidates) {
-      if (!styleBudget.reserveRuleElementMatch()) {
-        break;
-      }
       const css::SelectorRule& rule = rules[ruleIndex];
+      const auto rank = ranks.rank(rule.layer);
+      if (!rank) {
+        continue;
+      }
+      if (!styleBudget.reserveRuleElementMatch()) {
+        return false;
+      }
       std::optional<MatchedSelectorEntry> match =
           MatchSelectorRule(rule, adapter, &styleBudget.selectorTraversal());
       if (!match.has_value()) {
         continue;
       }
 
-      const auto specificity =
-          CascadeSpecificity(match->specificity, stylesheet.isUserAgentStylesheet);
+      const auto specificity = CascadeSpecificity(match->specificity.withLayerRank(*rank),
+                                                  stylesheet.isUserAgentStylesheet);
 
-      MatchedStyleRule matchedRule;
-      matchedRule.stylesheetEntity = stylesheetEntity;
-      matchedRule.ruleIndex = ruleIndex;
-      matchedRule.selectorEntryIndex = match->selectorEntryIndex;
-      matchedRule.specificity = specificity;
-      matchedRule.isUserAgentStylesheet = stylesheet.isUserAgentStylesheet;
-      matchedRule.ruleSourceRange = stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
-
-      if (match->selectorEntryIndex < rule.selectorEntrySourceRanges.size()) {
-        matchedRule.selectorSourceRange = stylesheet.sourceMap.mapToDocumentSource(
-            rule.selectorEntrySourceRanges[match->selectorEntryIndex]);
-      } else {
-        matchedRule.selectorSourceRange =
-            stylesheet.sourceMap.mapToDocumentSource(rule.selectorSourceRange);
-      }
-
-      for (const css::Declaration& declaration : rule.declarations) {
-        if (std::optional<SourceRange> sourceRange =
-                stylesheet.sourceMap.mapToDocumentSource(declaration.sourceRange)) {
-          matchedRule.declarationSourceRanges.push_back(*sourceRange);
-        }
-      }
-
-      result.push_back(std::move(matchedRule));
+      result.push_back(BuildMatchedStyleRule(stylesheet, stylesheetEntity, rule, ruleIndex,
+                                             match->selectorEntryIndex, specificity));
     }
-  }
+    return true;
+  };
+  VisitCascadeStylesheets(registry, layers.get(), collect);
 
   return result;
 }
@@ -3180,6 +3268,122 @@ std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
   return std::nullopt;
 }
 
+namespace {
+
+bool HasPotentialLayeredFonts(const StylesheetComponent& sheet) {
+  if (!sheet.isCssType() || sheet.isUserAgentStylesheet || sheet.cascadeFontFaces().empty()) {
+    return false;
+  }
+  return sheet.stylesheet.layers() ||
+         std::ranges::any_of(sheet.importedStylesheets,
+                             [](const auto& imported) { return imported.layers(); });
+}
+
+class StylesheetFontOrder {
+public:
+  explicit StylesheetFontOrder(ResourceManagerContext& resources) : resources_(resources) {}
+
+  void add(const css::Stylesheet& sheet, const DocumentLayerOrder* layers) {
+    const auto faces = sheet.fontFaces();
+    const auto ranks = layers ? layers->ranksFor(sheet) : DocumentLayerOrder::SheetRanks{};
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+      const std::uint16_t rank = layers ? ranks.forLayer(sheet.fontFaceLayer(i)) : 1;
+      if (rank != 0) {
+        addFace(faces[i], rank);
+      }
+    }
+  }
+
+  std::vector<std::size_t> ordered() const {
+    std::vector<std::size_t> result;
+    for (std::size_t index = 0; index < priorities_.size(); ++index) {
+      if (priorities_[index].rank != 0) {
+        result.push_back(index);
+      }
+    }
+    const auto precedes = [&](std::size_t left, std::size_t right) {
+      return priorities_[left] < priorities_[right];
+    };
+    std::ranges::make_heap(result, precedes);
+    std::ranges::sort_heap(result, precedes);
+    return result;
+  }
+
+private:
+  struct Priority {
+    std::uint16_t rank = 0;
+    std::size_t sourcePosition = 0;
+    auto operator<=>(const Priority&) const = default;
+  };
+
+  void addFace(const css::FontFace& face, std::uint16_t rank) {
+    if (const auto index = resources_.registerStylesheetFontFace(face)) {
+      if (*index >= priorities_.size()) {
+        priorities_.resize(*index + 1);
+      }
+      const Priority priority(rank, next_++);
+      priorities_[*index] = std::max(priorities_[*index], priority);
+    }
+  }
+
+  ResourceManagerContext& resources_;
+  // Resource indices are stable and bounded by the registered face table. A zero rank denotes
+  // an entry that does not participate in authored layer order.
+  std::vector<Priority> priorities_;
+  std::size_t next_ = 0;
+};
+
+void AddStylesheetFontLayers(StylesheetFontOrder& order, const StylesheetComponent& sheet,
+                             const DocumentLayerOrder* layers) {
+  if (!layers || layers->allowsImportsOf(sheet.stylesheet)) {
+    for (const auto& imported : sheet.importedStylesheets) {
+      order.add(imported, layers);
+    }
+  }
+  order.add(sheet.stylesheet, layers);
+}
+
+void UpdateLayeredFontOrder(Registry& registry, ResourceManagerContext& resources) {
+  const auto* document = registry.ctx().find<SVGDocumentContext>();
+  const auto revision = document ? std::optional(document->mutationRevision()) : std::nullopt;
+  if (revision && resources.hasLayeredFontOrderFor(*revision)) {
+    return;
+  }
+  const auto layers = DocumentLayerOrder::Build(registry);
+  const auto* activeLayers = layers && layers->hasRanks() ? layers.get() : nullptr;
+  StylesheetFontOrder order(resources);
+  const auto add = [&](Entity entity) {
+    const auto& sheet = registry.get<StylesheetComponent>(entity);
+    if (sheet.isCssType() && HasSvgNamespace(registry, entity)) {
+      AddStylesheetFontLayers(order, sheet, activeLayers);
+    }
+  };
+  if (activeLayers) {
+    std::ranges::for_each(activeLayers->stylesheets(), add);
+  } else {
+    std::ranges::for_each(DocumentLayerOrder::StylesheetsInDocumentOrder(registry), add);
+  }
+  resources.setLayeredStylesheetFontOrder(order.ordered(), revision);
+}
+
+}  // namespace
+
+void StyleSystem::synchronizeDocumentFontFaces(Registry& registry) {
+  auto& resources = registry.ctx().get<ResourceManagerContext>();
+  const auto view = registry.view<const StylesheetComponent>();
+  const auto usesLayers = [&](Entity entity) {
+    return HasPotentialLayeredFonts(view.get<const StylesheetComponent>(entity));
+  };
+  if (resources.layeredFontFaceOrder() || std::ranges::any_of(view, usesLayers)) {
+    UpdateLayeredFontOrder(registry, resources);
+    return;
+  }
+  for (Entity entity : view) {
+    SynchronizeStylesheetFonts(resources, registry, entity,
+                               view.get<const StylesheetComponent>(entity));
+  }
+}
+
 void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink,
                                    FullRestyle fullRestyle, StylePassScheduler scheduler) {
   StyleCascadeMetrics& metrics = GetStyleCascadeMetrics(registry);
@@ -3215,7 +3419,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
     computeMissingStyles(registry, warningSink, scheduler);
   }
 
-  SynchronizeAllStylesheetFonts(registry);
+  synchronizeDocumentFontFaces(registry);
 }
 
 void StyleSystem::computeDirtyStyles(Registry& registry, ParseWarningSink& warningSink,
@@ -3425,3 +3629,8 @@ void StyleSystem::invalidateAll(EntityHandle handle) {
 }
 
 }  // namespace donner::svg::components
+
+#if defined(DONNER_APPLE_STYLE_SYSTEM_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_STYLE_SYSTEM_MINSIZE
+#endif

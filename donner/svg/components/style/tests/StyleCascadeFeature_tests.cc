@@ -287,6 +287,44 @@ TEST_F(StyleSystemTest, SelectedFallbackWhitespaceIsIgnoredAtDeclarationBoundari
   EXPECT_THAT(target->getComputedStyle().opacity.get(), testing::Optional(Eq(0.5)));
 }
 
+// Adapted from CSS Variables WPT var-fallback-braces.html for SVG computed styles.
+TEST_F(StyleSystemTest, BracedVariableFallbacksUnwrapAndRejectTrailingTokens) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>
+        #tight { fill:var(--missing,{rgb(1,2,3)}); }
+        #inside { fill:var(--missing, { rgb(1,2,3) }); }
+        #outside { fill:var(--missing, {rgb(1,2,3)} ); }
+        #invalid { fill:blue; fill:var(--missing,{rgb(1,2,3)} rgb(4,5,6)); }
+        #family { font-family:var(--missing,{Arial, sans-serif}); }
+        #invalid-family { font-family:monospace; font-family:var(--missing,{Arial}, sans-serif); }
+      </style>
+      <rect id="tight"/><rect id="inside"/><rect id="outside"/><rect id="invalid"/>
+      <text id="family"/><text id="invalid-family"/>
+    </svg>)svg");
+  const auto color = [&](std::string_view selector, css::RGBA expected) {
+    SCOPED_TRACE(selector);
+    const auto element = document.querySelector(selector);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    EXPECT_THAT(element->getComputedStyle().fill.get(),
+                testing::Optional(Eq(PaintServer::Solid(css::Color(expected)))));
+  };
+  constexpr auto ink = css::RGBA::RGB(1, 2, 3);
+  color("#tight", ink);
+  color("#inside", ink);
+  color("#outside", ink);
+  color("#invalid", css::RGBA::RGB(0, 0, 255));
+
+  const auto family = document.querySelector("#family");
+  const auto invalidFamily = document.querySelector("#invalid-family");
+  ASSERT_THAT(family, testing::Optional(testing::_));
+  ASSERT_THAT(invalidFamily, testing::Optional(testing::_));
+  EXPECT_THAT(family->getComputedStyle().fontFamily.get(),
+              testing::Optional(ElementsAre(RcString("Arial"), RcString("sans-serif"))));
+  EXPECT_THAT(invalidFamily->getComputedStyle().fontFamily.get(),
+              testing::Optional(ElementsAre(RcString("monospace"))));
+}
+
 TEST_F(StyleSystemTest, InvalidSubstitutedResourceOpacityShadowsPresentationValue) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" style="--bad:red">
@@ -386,6 +424,18 @@ TEST_F(StyleSystemTest, PresentationVariableEditsRetainOnlyTheCurrentAttribute) 
   fill(css::RGBA::RGB(255, 0, 0));
   target->removeAttribute("fill");
   fill(css::RGBA::RGB(0, 128, 0));
+}
+
+TEST_F(StyleSystemTest, PresentationStrokeWidthUsesInheritedCustomProperty) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--inherited-width: 5px">
+      <g><rect id="target" stroke-width="var(--inherited-width)"/></g>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto* properties = ComputedFor(*target).properties();
+  ASSERT_THAT(properties, NotNull());
+  EXPECT_THAT(properties->strokeWidth.get(), testing::Optional(Eq(Lengthd(5, Lengthd::Unit::Px))));
 }
 
 TEST_F(StyleSystemTest, HiddenPresentationVariablesTrackReplacementAndRemoval) {

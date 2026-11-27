@@ -36,7 +36,8 @@ TEST(Specificity, ToString) {
 }
 
 TEST(Specificity, CascadePriorityImportantFactoriesKeepOriginAbcAndObjectSize) {
-  static_assert(sizeof(Specificity) == sizeof(Specificity::ABC) + sizeof(Specificity::SpecialType));
+  // Layer rank and the narrowed origin enum keep the original four-byte priority slot.
+  static_assert(sizeof(Specificity) == 16);
   const auto selector = Specificity::FromABC(1, 2, 3);
   const auto important = Specificity::Important(selector);
   EXPECT_EQ(important.abc().a, 1u);
@@ -60,6 +61,21 @@ TEST(Specificity, CascadePriorityImportantFactoriesKeepOriginAbcAndObjectSize) {
       EXPECT_GT(ranks[high], ranks[low]);
     }
   }
+}
+
+TEST(Specificity, EncodedPriorityPreservesNormalRankAndReversesOnlyImportantRuleOrigins) {
+  constexpr auto first = Specificity::FromABC(10, 0, 0).withLayerRank(1);
+  constexpr auto last = Specificity::FromABC(0, 0, 1).withLayerRank(0xffff);
+  EXPECT_LT(first, last);
+  EXPECT_GT(Specificity::Important(first), Specificity::Important(last));
+  EXPECT_EQ(Specificity::Important(last).layerRank(), 0xffff);
+  EXPECT_EQ(Specificity::Important().layerRank(), 0);
+  EXPECT_GT(Specificity::Important(), Specificity::Important(first));
+  EXPECT_LT(first.toUserAgentSpecificity(), last.toUserAgentSpecificity());
+  EXPECT_GT(Specificity::Important(first.toUserAgentSpecificity()),
+            Specificity::Important(last.toUserAgentSpecificity()));
+  EXPECT_LT(Specificity::Important(Specificity::StyleAttribute().withLayerRank(1)),
+            Specificity::Important(Specificity::StyleAttribute().withLayerRank(2)));
 }
 
 TEST(Specificity, CascadePriorityInlineOriginAndImportantDiagnosticsRemainDistinct) {

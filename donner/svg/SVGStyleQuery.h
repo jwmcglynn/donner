@@ -20,7 +20,7 @@ struct SVGMatchedStyleRule {
   Entity stylesheetEntity = entt::null;  ///< Owning `<style>` or `<svg>` element key.
   std::size_t ruleIndex = 0;             ///< Index of the matched rule within the stylesheet.
   std::size_t selectorEntryIndex = 0;    ///< Index of the matched selector-list entry.
-  css::Specificity specificity;          ///< Selector specificity for this match.
+  css::Specificity specificity;          ///< Selector specificity and its cascade layer rank.
   bool isUserAgentStylesheet = false;    ///< True when this came from the built-in UA stylesheet.
   std::optional<SourceRange> ruleSourceRange;        ///< Matched rule range in SVG source.
   std::optional<SourceRange> selectorSourceRange;    ///< Matched selector branch in SVG source.

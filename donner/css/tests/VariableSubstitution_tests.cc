@@ -69,6 +69,9 @@ TEST(VariableSubstitution, DistinguishesMissingAndEmptyAndPreservesFallbackComma
   const auto fallback = SubstituteVariables(Tokens("var(--a,var(--b,blue, green))"), lookup);
   EXPECT_EQ(fallback.status, VariableSubstitutionStatus::Resolved);
   EXPECT_EQ(Text(fallback.values), "blue, green");
+  const auto bareBlockFallback = SubstituteVariables(Tokens("var(--a,abc {})"), lookup);
+  EXPECT_EQ(bareBlockFallback.status, VariableSubstitutionStatus::Resolved);
+  EXPECT_EQ(Text(bareBlockFallback.values), "abc {}");
   const auto emptyFallback = SubstituteVariables(Tokens("var(--a,)"), lookup);
   EXPECT_EQ(emptyFallback.status, VariableSubstitutionStatus::Resolved);
   EXPECT_THAT(emptyFallback.values, IsEmpty());

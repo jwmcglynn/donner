@@ -2,6 +2,9 @@
 /// @file
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <memory>
 #include <ostream>
 #include <span>
 #include <vector>
@@ -12,6 +15,33 @@
 #include "donner/css/Selector.h"
 
 namespace donner::css {
+
+/// One layer segment in the sheet's local layer tree.
+using LayerId = std::uint16_t;
+/// The implicit sheet root and layer identity of unlayered rules.
+inline constexpr LayerId kUnlayered = std::numeric_limits<LayerId>::max();
+
+/// A layer name segment, scoped to its parent in the same sheet.
+struct LayerNode {
+  LayerId parent;  //!< Sheet-local parent, or the implicit root.
+  RcString name;   //!< Exact decoded identifier. Empty denotes a new anonymous layer.
+};
+
+/// Source-order layer declarations and retained import positions.
+struct LayerEvent {
+  /// An explicit statement, a block, or a retained import.
+  enum class Kind { Statement, Block, Import };
+  Kind kind;
+  std::uint32_t index;  //!< LayerId for a declaration, or index in Stylesheet::imports().
+};
+
+/// Immutable sheet-local layer syntax, allocated only for a sheet that uses layers.
+struct StylesheetLayers {
+  std::vector<LayerNode> nodes;
+  std::vector<LayerEvent> events;
+  /// Sheet-local layer of each font face, populated only when a face is layered.
+  std::vector<LayerId> fontFaceLayers;
+};
 
 /**
  * A rule in a stylesheet, which consists of a selector and a list of declarations.
@@ -35,6 +65,7 @@ struct SelectorRule {
       FileOffset::Offset(0), FileOffset::Offset(0)};  ///< Full selector range in local CSS source.
   std::vector<SourceRange>
       selectorEntrySourceRanges;  ///< Per-entry selector ranges in local CSS source.
+  LayerId layer = kUnlayered;     //!< Sheet-local cascade layer.
 
   /**
    * Output a human-readable representation of the delector to a stream.
@@ -55,7 +86,7 @@ struct SelectorRule {
  * An unconditional `@import` rule retained by the stylesheet parser, such as
  * `@import url("theme.css");`.
  *
- * Only imports that are valid and apply unconditionally are retained. Imports with layer,
+ * Only imports that apply unconditionally are retained. Imports with
  * `supports()` or media conditions other than `all`, and imports that appear after another rule,
  * are diagnosed and dropped by the parser. The parser never resolves or fetches the URL; loading is
  * the responsibility of the document that owns the stylesheet.
@@ -66,6 +97,8 @@ struct ImportRule {
 
   /// Source position of the `@` token in the local CSS source.
   FileOffset sourceOffset = FileOffset::EndOfString();
+
+  LayerId layer = kUnlayered;  //!< Optional named or anonymous import layer.
 };
 
 /**
@@ -84,6 +117,9 @@ public:
 
   /// Maximum declarations retained across one stylesheet.
   static constexpr std::size_t kMaximumDeclarations = 16 * 1024;
+  /// Maximum distinct layer nodes and path depth in one sheet.
+  static constexpr std::size_t kMaximumLayers = 4096;
+  static constexpr std::size_t kMaximumLayerDepth = 32;
 
   /// Default constructor.
   Stylesheet() = default;
@@ -104,10 +140,12 @@ public:
 
   /** Construct a stylesheet with retained `@import` rules and parser accounting. */
   Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces,
-             std::vector<ImportRule>&& imports, SecurityStats securityStats)
+             std::vector<ImportRule>&& imports, SecurityStats securityStats,
+             std::shared_ptr<const StylesheetLayers> layers = nullptr)
       : rules_(std::move(rules)),
         fontFaces_(std::move(fontFaces)),
         imports_(std::move(imports)),
+        layers_(std::move(layers)),
         securityStats_(securityStats) {}
 
   // Copyable and moveable.
@@ -145,6 +183,15 @@ public:
    */
   std::span<const ImportRule> imports() const UTILS_LIFETIME_BOUND { return imports_; }
 
+  /// Layer syntax in source order. A null value leaves ordinary imports in imports() order.
+  const StylesheetLayers* layers() const UTILS_LIFETIME_BOUND { return layers_.get(); }
+
+  /// Local layer of the font face at this position, or the implicit sheet layer.
+  LayerId fontFaceLayer(std::size_t position) const {
+    return layers_ && position < layers_->fontFaceLayers.size() ? layers_->fontFaceLayers[position]
+                                                                : kUnlayered;
+  }
+
   /// Return resource-limit accounting from parsing this stylesheet.
   const SecurityStats& securityStats() const { return securityStats_; }
 
@@ -165,6 +212,7 @@ private:
   std::vector<SelectorRule> rules_;
   std::vector<FontFace> fontFaces_;
   std::vector<ImportRule> imports_;
+  std::shared_ptr<const StylesheetLayers> layers_;
   SecurityStats securityStats_;
 };
 

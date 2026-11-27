@@ -17,6 +17,33 @@ void SkipWhitespace(Values& values) {
   }
 }
 
+const SimpleBlock* BraceBlock(const ComponentValue& value) {
+  const auto* block = std::get_if<SimpleBlock>(&value.value);
+  return block && block->associatedToken == Token::indexOf<Token::CurlyBracket>() ? block : nullptr;
+}
+
+std::optional<Values> ParseVariableFallback(Values fallback) {
+  Values argument = fallback;
+  SkipWhitespace(argument);
+  const auto* wrapper = argument.empty() ? nullptr : BraceBlock(argument.front());
+  if (wrapper) {
+    argument = argument.subspan(1);
+    SkipWhitespace(argument);
+    if (!argument.empty()) {
+      return std::nullopt;
+    }
+    // A braced argument contributes its contents, including any commas, to substitution.
+    fallback = wrapper->values;
+  }
+  for (const auto& value : fallback) {
+    const auto* delim = value.tryGetToken<Token::Delim>();
+    if (value.isToken<Token::Semicolon>() || (delim && delim->value == '!')) {
+      return std::nullopt;
+    }
+  }
+  return fallback;
+}
+
 }  // namespace
 
 namespace details {
@@ -38,12 +65,9 @@ std::optional<VariableReference> ParseVariableReference(const Function& function
     if (!args.front().isToken<Token::Comma>()) {
       return std::nullopt;
     }
-    result.fallback = args.subspan(1);
-    for (const auto& value : *result.fallback) {
-      const auto* delim = value.tryGetToken<Token::Delim>();
-      if (value.isToken<Token::Semicolon>() || (delim && delim->value == '!')) {
-        return std::nullopt;
-      }
+    result.fallback = ParseVariableFallback(args.subspan(1));
+    if (!result.fallback) {
+      return std::nullopt;
     }
   }
   return result;

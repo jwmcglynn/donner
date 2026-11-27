@@ -20,6 +20,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -147,6 +148,104 @@ TEST_F(CssImportTest, ImportIsFetchedAndPrecedesLocalRules) {
   // Equal specificity: the importing sheet's own rule comes later in the cascade and wins.
   EXPECT_THAT(stroke(document), Optional(kBlue));
   EXPECT_THAT(warnings_.warnings(), IsEmpty());
+}
+
+TEST_F(CssImportTest, LayerStatementEstablishesOrderBeforeImports) {
+  respond("theme.css", "rect { fill: blue; stroke: blue !important; }");
+  SVGDocument document = parse(R"(
+    <style>
+      @layer reset, theme;
+      @import 'theme.css' layer(theme);
+      @layer reset { #r { fill: red; stroke: red !important; } }
+    </style>
+  )" + std::string(kRect));
+  prepare(document);
+
+  EXPECT_THAT(fill(document), Optional(kBlue));
+  EXPECT_THAT(stroke(document), Optional(kRed));
+  EXPECT_THAT(warnings_.warnings(), IsEmpty());
+}
+
+TEST_F(CssImportTest, FailedLayeredImportStillEstablishesLayerOrder) {
+  SVGDocument document = parse(R"(
+    <style>
+      @import 'missing.css' layer(early);
+      @layer late { rect { fill: blue; } }
+      @layer early { #r { fill: red; } }
+    </style>
+  )" + std::string(kRect));
+  prepare(document);
+
+  EXPECT_THAT(state_->requests, ElementsAre("missing.css"));
+  EXPECT_THAT(fill(document), Optional(kBlue));
+  EXPECT_THAT(warningReasons(), ElementsAre(HasSubstr("not loaded")));
+}
+
+TEST_F(CssImportTest, RepeatedAnonymousImportsKeepDistinctLayerOccurrences) {
+  respond("red.css", "rect { fill: red; }");
+  respond("blue.css", "rect { fill: blue; }");
+  SVGDocument document = parse(R"(
+    <style>
+      @import 'red.css' layer;
+      @import 'blue.css' layer;
+      @import 'red.css' layer;
+    </style>
+  )" + std::string(kRect));
+  prepare(document);
+
+  EXPECT_THAT(fill(document), Optional(kRed));
+  EXPECT_THAT(warnings_.warnings(), IsEmpty());
+}
+
+TEST_F(CssImportTest, NestedImportsReopenDottedLayersInTheirOwnScope) {
+  respond("outer.css", "@import 'inner.css' layer(part); rect { fill: blue; }");
+  respond("inner.css", "#r { fill: red; stroke: red !important; }");
+  SVGDocument document = parse(R"(
+    <style>
+      @import 'outer.css' layer(theme);
+      @layer theme.part { rect { stroke: blue !important; } }
+    </style>
+  )" + std::string(kRect));
+  prepare(document);
+
+  EXPECT_THAT(fill(document), Optional(kBlue));
+  EXPECT_THAT(stroke(document), Optional(kRed));
+  EXPECT_THAT(warnings_.warnings(), IsEmpty());
+}
+
+TEST_F(CssImportTest, EditingOrderingStatementRecomputesExistingStyles) {
+  SVGDocument document = parse(R"(
+    <style id="order">@layer early, late;</style>
+    <style>@layer late { rect { fill: blue; } }</style>
+    <style>@layer early { rect { fill: red; } }</style>
+  )" + std::string(kRect));
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kBlue));
+
+  const auto order = document.querySelector("#order");
+  ASSERT_THAT(order, Optional(testing::_));
+  order->cast<SVGStyleElement>().setContents("@layer late, early;");
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kRed));
+}
+
+TEST_F(CssImportTest, DetachedLayeredStylesheetDoesNotAffectLiveCascade) {
+  SVGDocument document;
+  auto rect = SVGRectElement::Create(document);
+  rect.setId("r");
+  document.svgElement().appendChild(rect);
+  auto attached = SVGStyleElement::Create(document);
+  attached.setContents("rect { fill: green; }");
+  document.svgElement().appendChild(attached);
+  auto detached = SVGStyleElement::Create(document);
+  detached.setContents("@layer hidden { rect { fill: red !important; } }");
+
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kGreen));
+
+  document.svgElement().appendChild(detached);
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kRed));
 }
 
 TEST_F(CssImportTest, ImportedRulesStillCompeteBySpecificity) {
@@ -440,6 +539,31 @@ TEST_F(CssImportTest, BudgetRefusedImportsRetryWhenAnotherSheetDropsItsImports) 
 
   // Dropping the first sheet's imports frees the budget; the result must not depend on history.
   document.querySelector("#big")->cast<SVGStyleElement>().setContents("circle {}");
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kGreen));
+}
+
+TEST_F(CssImportTest, LayeredImportCanLoadAfterTheFirstFrame) {
+  std::string blocking = "<style id='blocking'>";
+  for (std::size_t i = 0; i < StylesheetImportBudget::kMaximumImports; ++i) {
+    respond("budget" + std::to_string(i) + ".css", "circle { fill: blue; }");
+    blocking += "@import 'budget" + std::to_string(i) + ".css';";
+  }
+  respond("theme.css", "rect { fill: green; }");
+  SVGDocument document = parse(R"(
+    <style>
+      @layer base, theme;
+      @import 'theme.css' layer(theme);
+      @layer base { #r { fill: blue; } }
+    </style>
+  )" + blocking + "</style>" + std::string(kRect));
+  prepare(document);
+  EXPECT_THAT(fill(document), Optional(kBlue));
+  EXPECT_THAT(warningReasons(), ElementsAre(HasSubstr("count exceeds")));
+
+  const auto sheet = document.querySelector("#blocking");
+  ASSERT_THAT(sheet, Optional(testing::_));
+  sheet->cast<SVGStyleElement>().setContents("circle {}");
   prepare(document);
   EXPECT_THAT(fill(document), Optional(kGreen));
 }

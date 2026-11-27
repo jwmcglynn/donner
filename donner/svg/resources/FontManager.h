@@ -221,6 +221,10 @@ public:
    */
   void addFontFace(const css::FontFace& face);
 
+  /// Replace the resource-backed registration sequence, returning whether it changed.
+  bool synchronizeLayeredResourceFaces(std::span<const css::FontFace> registered,
+                                       std::span<const std::size_t> order);
+
   /**
    * Register a mapping from a CSS generic family name (serif, sans-serif, monospace, cursive,
    * fantasy) to a real font family name registered via `addFontFace()`.
@@ -838,6 +842,7 @@ private:
   /// Identity key of every registered `@font-face` rule to the entity holding it. Keeps
   /// re-registration of an unchanged rule from minting a second entity for the same declaration.
   std::unordered_map<std::string, Entity> faceEntities_;
+  std::optional<std::vector<std::string>> layeredResourceKeys_;
 
   /// Registration counter handed to each new face so ties between equally good faces can resolve
   /// to the one declared last without depending on ECS storage order.

@@ -1,0 +1,76 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/requirement-v1.schema.json",
+  "baseline": "svg2-cr-20181004",
+  "requirements": [
+    {
+      "id": "svg2-cr-20181004/styling/StylingUsingCSS/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "dependencies": [
+        "css-cascade-5"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "draft-dependency",
+      "section": "6.1. Styling SVG content using CSS",
+      "anchor": "StylingUsingCSS",
+      "assertion": "Under CSS Cascade Level 5, an important declaration in the earliest author layer takes precedence over important declarations in later layers and outside explicit layers.",
+      "test_ids": [
+        "donner-svg2/styling/cascade-layers/important-reverses-layer-order"
+      ],
+      "rationale": "The SVG 2 baseline requires CSS styling, and the 2022 CSS Cascade Level 5 Candidate Recommendation defines the layer ordering exercised here. This fixture records implementation of that later dependency. The hash covers normalized text from the listed support passages in order.",
+      "artifacts": [
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/styling.html#StylingUsingCSS",
+        "https://www.w3.org/TR/2022/CR-css-cascade-5-20220113/#cascade-layering"
+      ],
+      "source_text_hash": "sha256:179fc5d848b3ad0526676183514816528b016a9a11e1d124df878b7a8f8ea005"
+    },
+    {
+      "id": "svg2-cr-20181004/styling/PresentationAttributes/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "dependencies": [
+        "css-cascade-5"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "draft-dependency",
+      "section": "6.6. Presentation attributes",
+      "anchor": "PresentationAttributes",
+      "assertion": "Under CSS Cascade Level 5, a normal declaration in the first author layer can override the corresponding SVG presentation attribute.",
+      "test_ids": [
+        "donner-svg2/styling/cascade-layers/first-layer-overrides-presentation"
+      ],
+      "rationale": "The SVG 2 baseline describes presentation attributes. This fixture exercises their interaction with author layers from the 2022 CSS Cascade Level 5 Candidate Recommendation. The hash covers normalized text from the listed support passages in order.",
+      "artifacts": [
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/styling.html#PresentationAttributes",
+        "https://www.w3.org/TR/2022/CR-css-cascade-5-20220113/#preshint"
+      ],
+      "source_text_hash": "sha256:f60244a5824bc6797a6835da2cdeeaa63636dd569016e60bc1204ffc39399586"
+    }
+  ]
+}

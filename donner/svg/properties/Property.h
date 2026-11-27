@@ -194,6 +194,12 @@ struct Property {
     return result;
   }
 
+  /// Whether the legacy unlayered cascade allows a parent to replace an explicit value.
+  bool shouldPreserveLegacyInheritance(const Property<T, kCascade>& parent) const {
+    return !parent.specificity.hasLayerRank() && !specificity.hasLayerRank() &&
+           parent.specificity > specificity;
+  }
+
   /**
    * Inherit the property from the parent element in place, with the result of \ref inheritFrom.
    *
@@ -218,8 +224,9 @@ struct Property {
           value = parent.get();
           // Keep current specificity.
           state = PropertyState::Set;
-        } else if (parent.specificity > specificity) {
-          // Inherit from parent, but with a lower specificity.
+        } else if (shouldPreserveLegacyInheritance(parent)) {
+          // Preserve the legacy overwrite rule for styles without document-layer ranks.
+          // A ranked declaration only competes with other declarations on this element.
           value = parent.get();
           specificity = parent.specificity;
           state = PropertyState::Set;
