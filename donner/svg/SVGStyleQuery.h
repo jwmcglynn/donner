@@ -10,12 +10,12 @@
 #include "donner/base/FileOffset.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/Specificity.h"
+#include "donner/svg/SVGStyleElement.h"
 
 namespace donner::svg {
 
 class SVGDocument;
 class SVGElement;
-class SVGStyleElement;
 
 /// Diagnostic record for one stylesheet rule that matched an element.
 struct SVGMatchedStyleRule {
@@ -24,6 +24,9 @@ struct SVGMatchedStyleRule {
   std::size_t selectorEntryIndex = 0;    ///< Index of the matched selector-list entry.
   css::Specificity specificity;          ///< Selector specificity and its cascade layer rank.
   bool isUserAgentStylesheet = false;    ///< True when this came from the built-in UA stylesheet.
+  std::optional<SVGStyleElement> stylesheetElement;  ///< Typed embedded stylesheet owner.
+  std::optional<SourceRange> ruleCssRange;           ///< Rule range in the parsed CSS text.
+  std::optional<SourceRange> selectorCssRange;       ///< Selector range in the parsed CSS text.
   std::optional<SourceRange> ruleSourceRange;        ///< Matched rule range in SVG source.
   std::optional<SourceRange> selectorSourceRange;    ///< Matched selector branch in SVG source.
   std::vector<SourceRange> declarationSourceRanges;  ///< Declaration ranges in SVG source.
@@ -41,9 +44,13 @@ struct SVGStylesheetDeclaration {
 
 /// Stylesheet rule in a document; built-in rules have no document source ranges.
 struct SVGStylesheetRule {
+  bool blockClosedAtEof = false;       ///< No closing brace was authored for the rule block.
   bool isUserAgentStylesheet = false;  ///< True for a built-in rule without document source ranges.
   Entity stylesheetEntity = entt::null;                ///< Owning `<style>` or `<svg>` element key.
   std::size_t ruleIndex = 0;                           ///< Index within the stylesheet.
+  std::optional<SVGStyleElement> stylesheetElement;    ///< Typed embedded stylesheet owner.
+  std::optional<SourceRange> ruleCssRange;             ///< Rule range in the parsed CSS text.
+  std::optional<SourceRange> selectorCssRange;         ///< Selector range in the parsed CSS text.
   std::optional<SourceRange> ruleSourceRange;          ///< Rule range in SVG source.
   std::optional<SourceRange> selectorSourceRange;      ///< Selector range in SVG source.
   std::vector<SVGStylesheetDeclaration> declarations;  ///< Rule declarations.
@@ -65,6 +72,10 @@ struct SVGStyleRuleAtSourceOffset {
 
 /// Collect stylesheet rules that match \p element.
 ///
+/// Match collection is complete, while optional document source ranges are projected through a
+/// bounded annotation cache and may be absent after that cache declines a stylesheet index. Use
+/// \ref MapStylesheetSourceRange for an exact individual source mapping.
+///
 /// @param element Element to inspect.
 /// @return Matched stylesheet rules in cascade scan order.
 std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element);
@@ -78,6 +89,12 @@ std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& elem
 /// @return Author rules and optionally built-in rules in the existing stylesheet scan order.
 std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document,
                                                       bool includeUserAgent = false);
+
+/// Collect one document-local author rule and its declarations at a source byte offset.
+/// @param document SVG document to inspect.
+/// @param documentSourceOffset Offset inside the complete authored CSS rule.
+std::optional<SVGStylesheetRule> CollectStylesheetRuleAtSourceOffset(
+    const SVGDocument& document, std::size_t documentSourceOffset);
 
 /// Return true when an author stylesheet rule in \p document matches on tree position.
 ///

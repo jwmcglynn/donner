@@ -99,6 +99,11 @@ struct InspectorStyleDisplayValue {
 /// can't race the worker.
 class SidebarPresenter {
 public:
+  /// Create the inspector presenter.
+  /// @param sourceCssActions Optional editor-owned structured source controls.
+  explicit SidebarPresenter(std::function<void()> sourceCssActions = {})
+      : sourceCssActions_(std::move(sourceCssActions)) {}
+
   /// Which inspector transform widget owns the in-progress edit.
   enum class TransformField : std::uint8_t {
     PositionX,  ///< Bounds left edge, document space.
@@ -363,6 +368,8 @@ public:
   void commitTransformEditForTesting(EditorApp& app) { commitTransformEdit(app); }
 
 private:
+  std::function<void()> sourceCssActions_;
+  void renderSourceCssActions(EditorApp* liveApp);
   struct TreeNodeSnapshot {
     /// Captured element reference. Valid for as long as the underlying
     /// entity isn't destroyed - for light-tree nodes that only happens

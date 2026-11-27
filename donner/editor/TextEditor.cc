@@ -4133,7 +4133,8 @@ void TextEditor::processReplace(const std::string& findWord, const std::string& 
   } while (replaceAll && textLoc != std::string::npos);
 }
 
-void TextEditor::render(std::string_view title, const ImVec2& size, bool showBorder) {
+void TextEditor::render(std::string_view title, const ImVec2& size, bool showBorder,
+                        const std::function<void()>& extraContextMenu) {
   // TODO: std::string operator+ with string_view is not supported.
   // Avoid this alloc.
   const std::string titleStr{title};
@@ -4177,6 +4178,25 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   renderSourceDiagnosticTooltip();
   renderSourceStructuralMoveTooltip();
 
+  renderScrollbarMarkers();
+  renderContextMenu(titleStr, extraContextMenu);
+  renderFindReplacePanel(titleStr);
+
+  if (handleKeyboardInputs_) {
+    ImGui::PopAllowKeyboardFocus();
+  }
+
+  if (!ignoreImGuiChild_) {
+    ImGui::EndChild();
+  }
+
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar();
+
+  withinRender_ = false;
+}
+
+void TextEditor::renderScrollbarMarkers() {
   // Scrollbar markers
   if (scrollbarMarkers_) {
     ImGuiWindow* window = ImGui::GetCurrentWindowRead();
@@ -4195,7 +4215,10 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
       ImGui::PopClipRect();
     }
   }
+}
 
+void TextEditor::renderContextMenu(const std::string& titleStr,
+                                   const std::function<void()>& extraContextMenu) {
   // Context menu
   if (ImGui::IsMouseClicked(1)) {
     rightClickPos_ = ImGui::GetMousePos();
@@ -4216,6 +4239,9 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
         paste();
       }
     }
+    if (extraContextMenu) {
+      extraContextMenu();
+    }
     if (sourceFocusModeContextMenuVisible_) {
       ImGui::Separator();
       if (ImGui::MenuItem("Source Focus Mode", nullptr, sourceFocusModeContextMenuChecked_)) {
@@ -4224,7 +4250,9 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
     }
     ImGui::EndPopup();
   }
+}
 
+void TextEditor::renderFindReplacePanel(const std::string& titleStr) {
   // Find/Replace window
   if (findOpened_) {
     ImFont* font = ImGui::GetFont();
@@ -4276,27 +4304,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
       findOpened_ = false;
     }
 
-    // Replace functionality
-    if (replaceOpened_) {
-      ImGui::PushItemWidth(calculateUISize(-45));
-      ImGui::NewLine();
-
-      bool shouldReplace = ImGui::InputText((std::string("##ted_replacetb") + titleStr).c_str(),
-                                            &replaceWord_, ImGuiInputTextFlags_EnterReturnsTrue);
-
-      replaceFocused_ = ImGui::IsItemActive();
-      ImGui::PopItemWidth();
-
-      ImGui::SameLine();
-      if (ImGui::Button((std::string(">##replaceOne") + titleStr).c_str()) || shouldReplace) {
-        processReplace(findWord_, replaceWord_);
-      }
-
-      ImGui::SameLine();
-      if (ImGui::Button((std::string(">>##replaceAll") + titleStr).c_str())) {
-        processReplace(findWord_, replaceWord_, true);
-      }
-    }
+    renderReplaceControls(titleStr);
 
     ImGui::EndChild();
     ImGui::PushFont(font);
@@ -4305,19 +4313,30 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
       findOpened_ = false;
     }
   }
+}
 
-  if (handleKeyboardInputs_) {
-    ImGui::PopAllowKeyboardFocus();
+void TextEditor::renderReplaceControls(const std::string& titleStr) {
+  // Replace functionality
+  if (replaceOpened_) {
+    ImGui::PushItemWidth(calculateUISize(-45));
+    ImGui::NewLine();
+
+    bool shouldReplace = ImGui::InputText((std::string("##ted_replacetb") + titleStr).c_str(),
+                                          &replaceWord_, ImGuiInputTextFlags_EnterReturnsTrue);
+
+    replaceFocused_ = ImGui::IsItemActive();
+    ImGui::PopItemWidth();
+
+    ImGui::SameLine();
+    if (ImGui::Button((std::string(">##replaceOne") + titleStr).c_str()) || shouldReplace) {
+      processReplace(findWord_, replaceWord_);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button((std::string(">>##replaceAll") + titleStr).c_str())) {
+      processReplace(findWord_, replaceWord_, true);
+    }
   }
-
-  if (!ignoreImGuiChild_) {
-    ImGui::EndChild();
-  }
-
-  ImGui::PopStyleColor();
-  ImGui::PopStyleVar();
-
-  withinRender_ = false;
 }
 
 void TextEditor::setText(std::string_view text, bool preserveScroll) {

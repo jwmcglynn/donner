@@ -60,4 +60,13 @@ DispatchSourceTextChangeResult DispatchSourceEditIntents(
     EditorApp& app, const std::vector<SourceEditIntent>& intents, std::string_view newSource,
     std::string* previousSourceText, std::optional<std::string>* lastWritebackSourceText);
 
+/// Commit a revision-bound structured source command before mirroring its delta into the editor.
+/// @param app Active editor document owner.
+/// @param edit Planned byte edit against the current document.
+/// @param sourceVersion Expected document-source revision.
+/// @return The authoritative document delta if the command was applied.
+std::optional<xml::XMLSourceDelta> CommitStructuredSourceEdit(EditorApp& app,
+                                                              const SourceEditIntent& edit,
+                                                              std::uint64_t sourceVersion);
+
 }  // namespace donner::editor

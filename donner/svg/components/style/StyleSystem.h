@@ -539,6 +539,8 @@ struct MatchedStyleRule {
   std::size_t selectorEntryIndex = 0;    ///< Index of the matched selector-list entry.
   css::Specificity specificity;          ///< Specificity used for cascading this rule.
   bool isUserAgentStylesheet = false;    ///< True when this came from the built-in UA stylesheet.
+  std::optional<SourceRange> ruleCssRange;           ///< Rule range in the parsed CSS text.
+  std::optional<SourceRange> selectorCssRange;       ///< Selector range in the parsed CSS text.
   std::optional<SourceRange> ruleSourceRange;        ///< Matched rule range in SVG source.
   std::optional<SourceRange> selectorSourceRange;    ///< Matched selector branch in SVG source.
   std::vector<SourceRange> declarationSourceRanges;  ///< Declaration ranges in SVG source.
@@ -756,11 +758,17 @@ public:
    *
    * Only rules of each `<style>` element's own stylesheet are reported; rules loaded through
    * `@import` have no document source and are not indexed by \ref MatchedStyleRule::ruleIndex.
+   * Match collection is complete, but source-range projection is resource-bounded. A matched rule
+   * can therefore retain its stylesheet-local CSS ranges while its document source ranges are
+   * absent. Individual source mapping through \ref mapStylesheetSourceRange remains exact.
    *
    * @param handle Entity handle to trace stylesheet matches for.
    * @return Matched stylesheet rules in cascade scan order.
    */
   std::vector<MatchedStyleRule> collectMatchedStyleRules(EntityHandle handle) const;
+
+  /// Number of stylesheet source indices constructed on this thread.
+  static std::size_t StylesheetSourceIndexBuildsForTesting();
 
   /// Map a decoded range in one embedded stylesheet to original document bytes.
   std::optional<SourceRange> mapStylesheetSourceRange(Registry& registry, Entity stylesheetEntity,

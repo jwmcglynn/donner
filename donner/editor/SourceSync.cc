@@ -446,4 +446,67 @@ DispatchSourceTextChangeResult DispatchSourceEditIntents(
   };
 }
 
+namespace {
+
+bool CanCommitDocumentSourceEdit(EditorApp& app, const SourceEditIntent& edit) {
+  if (!app.structuredEditingEnabled() || !app.hasDocument() ||
+      app.document().hasPendingMutations() || app.document().lastParseError()) {
+    return false;
+  }
+  if (!app.document().usesEditorParserForSourceRecovery()) {
+    return false;
+  }
+  auto& document = app.document().document();
+  return document.withReadAccess([&](svg::DocumentReadAccess&) {
+    const auto size = document.source().size();
+    return edit.offset <= size && edit.removedLength <= size - edit.offset &&
+           CanRecoverWithEditorParser(xml::XMLParser::SourceOptions(document.xmlDocument()));
+  });
+}
+
+bool ProjectCommittedSource(EditorApp& app, const xml::ApplySourceEditResult& result,
+                            const std::vector<SelectionRemapTarget>& beforeSelection) {
+  if (result.scope == xml::ReparseScope::Document) {
+    const auto source = std::string(app.document().document().source());
+    if (!QueueEditorSourceRecovery(app, source)) {
+      return false;
+    }
+    std::ignore = app.flushFrame();
+    return !app.document().hasPendingMutations() && !app.document().lastParseError();
+  }
+  if (result.diagnostic) {
+    return false;
+  }
+  RemapSelectionAfterStructuredSourceEdit(app, beforeSelection);
+  return true;
+}
+
+}  // namespace
+
+std::optional<xml::XMLSourceDelta> CommitStructuredSourceEdit(EditorApp& app,
+                                                              const SourceEditIntent& edit,
+                                                              std::uint64_t sourceVersion) {
+  if (!CanCommitDocumentSourceEdit(app, edit)) {
+    return std::nullopt;
+  }
+  const std::string before(app.document().document().source());
+  const auto selection = CaptureSelectionRemapTargets(app);
+  auto result = app.document().applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(edit.offset),
+                FileOffset::Offset(edit.offset + edit.removedLength)},
+      .replacement = edit.replacement,
+      .sourceVersion = sourceVersion,
+  });
+  if (!result.applied) {
+    return std::nullopt;
+  }
+  if (result.sourceDeltas.size() != 1 || !ProjectCommittedSource(app, result, selection)) {
+    if (QueueEditorSourceRecovery(app, before)) {
+      std::ignore = app.flushFrame();
+    }
+    return std::nullopt;
+  }
+  return std::move(result.sourceDeltas.front());
+}
+
 }  // namespace donner::editor

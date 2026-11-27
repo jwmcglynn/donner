@@ -126,6 +126,7 @@ class TextEditor {
   // once the TextEditor refactor migrates
   // the tests onto `TextEditorCore` directly (commit C3).
   friend class TextEditorTests;
+  friend class EditorShellTestAccess;
   friend class TextEditorTests_UndoReversesInsertion_Test;
   friend class TextEditorTests_RedoRestoresAfterUndo_Test;
   friend class TextEditorTests_MultipleUndoStepsBackthrough_Test;
@@ -300,7 +301,8 @@ public:
   /// @param title ImGui identifier for the editor region.
   /// @param size Requested child size; ImGui uses available space for zero dimensions.
   /// @param showBorder Whether ImGui draws a border around the child.
-  void render(std::string_view title, const ImVec2& size = ImVec2(), bool showBorder = false);
+  void render(std::string_view title, const ImVec2& size = ImVec2(), bool showBorder = false,
+              const std::function<void()>& extraContextMenu = {});
 
   /**
    * Replace the entire buffer with new text.
@@ -1687,6 +1689,12 @@ private:
    * Main internal rendering implementation. Renders editor content and UI.
    * @param title Window title
    */
+  void renderScrollbarMarkers();
+  void renderContextMenu(const std::string& titleStr,
+                         const std::function<void()>& extraContextMenu);
+  void renderFindReplacePanel(const std::string& titleStr);
+  void renderReplaceControls(const std::string& titleStr);
+
   void renderInternal(std::string_view title);
   void rebuildVisualLines(const ImVec2& contentSize);
   [[nodiscard]] bool isLineHiddenByFocus(int lineNo) const;

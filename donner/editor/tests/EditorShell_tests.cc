@@ -1613,6 +1613,24 @@ public:
     return shell.lastConvertTextError_;
   }
 
+  static void RenderStructuredCssInspector(EditorShell& shell) {
+    shell.renderStructuredCssInspector();
+  }
+
+  static void UndoStructuredCss(EditorShell& shell) {
+    shell.applyMenuHistoryActions(MenuBarActions{.undo = true}, /*sourcePaneFocused=*/false);
+    std::ignore = shell.app_.flushFrame();
+    shell.documentSyncController_.applyPendingWritebacks(shell.app_, shell.selectTool_,
+                                                         shell.textEditor_);
+  }
+
+  static ImVec2 SourceLinePoint(const EditorShell& shell, int line, bool gutter) {
+    const auto& source = shell.textEditor_;
+    return {source.uiCursorPos_.x + source.textStart_ +
+                (gutter ? -8.0f * source.uiScale_ : source.charAdvance_.x),
+            source.uiCursorPos_.y + (static_cast<float>(line) + 0.5f) * source.charAdvance_.y};
+  }
+
   static void RenderSourcePane(EditorShell& shell, float paneOriginY, float paneHeight,
                                float paneWidth, ImFont* codeFont) {
     shell.renderSourcePane(/*paneOriginX=*/0.0f, paneOriginY, paneHeight, paneWidth, codeFont);
@@ -8774,6 +8792,161 @@ TEST(EditorShellTest, GlobalShortcutDeleteWhilePenDraftingRemovesAnchorBeforeCan
   EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
   EXPECT_FALSE(EditorShellTestAccess::PenToolIsDrafting(shell));
   EXPECT_TRUE(EditorShellTestAccess::App(shell).hasDocument());
+}
+
+TEST(EditorShellTest, StructuredCssGutterMovesANonAdjacentRuleAndUndoRestoresSource) {
+  constexpr std::string_view authored = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+<style>
+rect {fill:red;}
+/* keep */
+circle {fill:blue;}
+ellipse {fill:green;}
+</style>
+</svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(authored, "rules.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  EditorShellTestAccess::SetSourceFocusMode(shell, false);
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.setWordWrapEnabled(false);
+  const auto original = source.getText();
+  ImGuiIO& io = ImGui::GetIO();
+  io.ConfigInputTrickleEventQueue = false;
+  const auto frame = [&](const ImVec2& mouse, bool down) {
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, down);
+    window.beginFrame();
+    EditorShellTestAccess::RenderSourcePane(shell, 0.0f, 400.0f, 500.0f, window.editorFonts().code);
+    window.endFrame();
+  };
+  frame({10.0f, 10.0f}, false);
+  ASSERT_NE(FindSourceEditorWindow(), nullptr);
+  const auto from = EditorShellTestAccess::SourceLinePoint(shell, 2, /*gutter=*/true);
+  const auto to = EditorShellTestAccess::SourceLinePoint(shell, 5, /*gutter=*/false);
+  frame(from, false);
+  frame(from, true);
+  frame(to, true);
+  frame(to, false);
+  frame(to, false);
+  EXPECT_THAT(source.getText(),
+              testing::HasSubstr(
+                  "/* keep */\ncircle {fill:blue;}\nellipse {fill:green;}\nrect {fill:red;}"));
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).canUndo());
+  EditorShellTestAccess::UndoStructuredCss(shell);
+  frame(to, false);
+  EXPECT_EQ(source.getText(), original);
+  EXPECT_FALSE(source.canUndo());
+}
+
+namespace {
+
+ImVec2 RenderStructuredCssInspectorFrame(gui::EditorWindow& window, EditorShell& shell,
+                                         ImVec2 mouse, bool pressed) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, pressed);
+  window.beginFrame();
+  ImGui::SetNextWindowPos({20.0f, 20.0f}, ImGuiCond_Always);
+  ImGui::SetNextWindowSize({220.0f, 100.0f}, ImGuiCond_Always);
+  ImGui::Begin("Structured CSS inspector fixture", nullptr,
+               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+  EditorShellTestAccess::RenderStructuredCssInspector(shell);
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  ImGui::End();
+  window.endFrame();
+  return {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f};
+}
+
+std::optional<ImVec2> FindInspectorMenuItem(gui::EditorWindow& window, EditorShell& shell,
+                                            const char* label) {
+  const ImGuiContext& context = *ImGui::GetCurrentContext();
+  if (context.OpenPopupStack.empty() || context.OpenPopupStack.back().Window == nullptr) {
+    ADD_FAILURE() << "The CSS source button did not open an Inspector popup";
+    return std::nullopt;
+  }
+  ImGuiWindow* popup = context.OpenPopupStack.back().Window;
+  // MenuItem uses a Selectable inside the item's label scope.
+  const ImGuiID item = ImHashStr("", 0, popup->GetID(label));
+  const auto rect = popup->InnerRect;
+  const float x = rect.Min.x + rect.GetWidth() / 3.0f;
+  for (float y = rect.Min.y + 1.0f; y < rect.Max.y; y += 2.0f) {
+    const ImVec2 pointer{x, y};
+    std::ignore = RenderStructuredCssInspectorFrame(window, shell, pointer, false);
+    if (context.HoveredId == item) {
+      return pointer;
+    }
+  }
+  ADD_FAILURE() << "Inspector menu item was not hoverable: " << label << " in " << rect.GetWidth()
+                << " x " << rect.GetHeight() << " popup";
+  return std::nullopt;
+}
+
+void ClickStructuredCssInspectorItem(gui::EditorWindow& window, EditorShell& shell,
+                                     const char* item) {
+  const ImVec2 button = RenderStructuredCssInspectorFrame(window, shell, {5.0f, 5.0f}, false);
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, false);
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, true);
+  for (int i = 0; i < 4; ++i) {
+    std::ignore = RenderStructuredCssInspectorFrame(window, shell, button, false);
+  }
+  const auto position = FindInspectorMenuItem(window, shell, item);
+  ASSERT_THAT(position, testing::Optional(testing::_)) << item;
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, *position, true);
+  std::ignore = RenderStructuredCssInspectorFrame(window, shell, *position, false);
+}
+
+}  // namespace
+
+TEST(EditorShellTest, StructuredCssInspectorClickMovesEncodedRuleAndUndoRestoresPaint) {
+  constexpr std::string_view authored =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30">
+<style>
+rect { --label:'A &amp; B'; fill:red; }
+/* separator */
+rect { fill:blue; }
+</style>
+<rect id="target" width="30" height="30"/>
+</svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(authored, "rules.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  ImGui::GetIO().ConfigInputTrickleEventQueue = false;
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+  const std::string original = source.getText();
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(original.find("rect { --label")));
+  ClickStructuredCssInspectorItem(window, shell, "Mark CSS item to move");
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(original.find("rect { fill:blue")));
+  ClickStructuredCssInspectorItem(window, shell, "Move marked item after");
+  EXPECT_THAT(source.getText(),
+              testing::HasSubstr(
+                  "rect { fill:blue; }\n/* separator */\nrect { --label:'A &amp; B'; fill:red; }"));
+
+  auto& app = EditorShellTestAccess::App(shell);
+  EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+  ASSERT_EQ(app.document().document().source(), source.getText());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
+  RunShellFrame(window, shell);
+  EXPECT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
+            app.document().currentFrameVersion());
+
+  EditorShellTestAccess::UndoStructuredCss(shell);
+  EXPECT_EQ(source.getText(), original);
+  EXPECT_EQ(app.document().document().source(), original);
+  EXPECT_FALSE(source.canUndo());
+  const auto restored = app.document().document().querySelector("#target");
+  ASSERT_THAT(restored, testing::Optional(testing::_));
+  EXPECT_THAT(restored->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255)))));
 }
 
 TEST(EditorShellTest, SourceFontShortcutsResizeTextAndPreserveCanvasZoomAndSelection) {
