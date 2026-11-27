@@ -111,7 +111,6 @@ jobs:
           persist-credentials: false
 
       - name: Free hosted runner disk
-        shell: bash
         run: tools/ci/free_runner_disk.sh
 
       - name: Install system dependencies
@@ -126,8 +125,6 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.2
         with:
           bazelisk-cache: true
-          # The instrumented output tree already retains UBSan actions. Restoring and resaving a
-          # second local action cache duplicates several GiB and can exhaust the hosted runner.
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
