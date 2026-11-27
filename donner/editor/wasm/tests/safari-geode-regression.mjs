@@ -20,7 +20,9 @@
  *   DONNER_SAFARI_ARTIFACT_DIR    JSON/screenshots output directory (default under /tmp).
  *   DONNER_SAFARI_TIMEOUT_MS      Per-phase timeout in milliseconds (default 30000).
  *   DONNER_SAFARI_EXPECTED_WASM_SHA256
- *                                  Required lowercase SHA-256 of the served editor.wasm.
+ *                                  Required lowercase SHA-256 of the selected runtime module.
+ *   DONNER_SAFARI_RUNTIME_BASENAME   Expected module and glue basename: editor (default)
+ *                                  or editor-asyncify when checking the compatibility path.
  *   DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE=1
  *                                  Explicit exploratory-only bypass for the required digest.
  *   DONNER_SAFARI_REQUIRED=1      Treat unavailable Safari automation as failure, not a skip.
@@ -38,6 +40,7 @@ import path from "node:path";
 const kDriverUrl = process.env.DONNER_SAFARI_DRIVER_URL || "http://127.0.0.1:4445";
 const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 const kRequired = process.env.DONNER_SAFARI_REQUIRED === "1";
+const kRuntimeBasename = process.env.DONNER_SAFARI_RUNTIME_BASENAME || "editor";
 const kExpectedWasmSha256 = process.env.DONNER_SAFARI_EXPECTED_WASM_SHA256 || "";
 const kAllowUnpinnedPackage = process.env.DONNER_SAFARI_ALLOW_UNPINNED_PACKAGE === "1";
 const kMemoryOnly = process.env.DONNER_SAFARI_MEMORY_ONLY === "1";
@@ -542,6 +545,18 @@ async function waitForEditor(driver, label) {
   });
 }
 
+async function verifyLoadedRuntime(driver, packageArtifacts) {
+  const urls = await driver.execute(`
+    const filenames = ["editor.js", "editor.wasm", "editor-asyncify.js", "editor-asyncify.wasm"];
+    return [...new Set(performance.getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .filter((name) => filenames.includes(new URL(name).pathname.split("/").pop())))].sort();
+  `);
+  assert.deepEqual(urls, [packageArtifacts.javascript.url, packageArtifacts.wasm.url].sort(),
+    "Safari must request only the pinned runtime pair");
+  return urls;
+}
+
 async function requireVisibleSafariAnimationFrame(driver) {
   try {
     return await poll("visible Safari automation window", async () => {
@@ -702,6 +717,7 @@ async function runRegression(driver, editorUrl, result) {
   result.visibleAutomation = await requireVisibleSafariAnimationFrame(driver);
 
   result.initial = await waitForEditor(driver, "initial Safari editor startup");
+  result.loadedRuntime = await verifyLoadedRuntime(driver, result.packageArtifacts);
   assert.equal(result.initial.backend, "geode", "package was not Geode");
   assert.equal(
     result.initial.wholeAppWorker,
@@ -1332,6 +1348,7 @@ async function runRegression(driver, editorUrl, result) {
   await installErrorCapture(driver);
   result.visibleAutomationAfterReload = await requireVisibleSafariAnimationFrame(driver);
   result.afterReload = await waitForEditor(driver, "Safari reload after renderer teardown");
+  result.reloadedRuntime = await verifyLoadedRuntime(driver, result.packageArtifacts);
   assert.equal(
     result.afterReload.wholeAppWorker,
     true,
@@ -1432,15 +1449,16 @@ async function main() {
     result.expectedWasmSha256 = expectedWasmSha256;
     result.packageIdentityMode = expectedWasmSha256 === null ? "exploratory-unpinned" : "pinned";
     await checkHttpEndpoint(editorUrl.href, "served Donner package");
+    assert.ok(["editor", "editor-asyncify"].includes(kRuntimeBasename), "unexpected editor runtime basename");
     result.packageArtifacts = {
-      javascript: await artifactEvidence(new URL("editor.js", editorUrl).href),
-      wasm: await artifactEvidence(new URL("editor.wasm", editorUrl).href),
+      javascript: await artifactEvidence(new URL(kRuntimeBasename + ".js", editorUrl).href),
+      wasm: await artifactEvidence(new URL(kRuntimeBasename + ".wasm", editorUrl).href),
     };
     if (expectedWasmSha256 !== null) {
       assert.equal(
         result.packageArtifacts.wasm.sha256,
         expectedWasmSha256,
-        "served transitioned editor.wasm did not match DONNER_SAFARI_EXPECTED_WASM_SHA256",
+        "served runtime module did not match DONNER_SAFARI_EXPECTED_WASM_SHA256",
       );
     }
     try {
