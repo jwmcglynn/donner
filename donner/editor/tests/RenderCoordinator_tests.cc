@@ -1438,12 +1438,15 @@ TEST(RenderCoordinatorTest, TranslationReleaseRendersVisiblePixelsBeforeRefreshi
   ASSERT_THAT(visible.viewportBounded, testing::IsTrue());
   InstallVisibleReleaseCoverage(coordinator, app, textures, visible);
 
-  const Transform2d moved = Transform2d::Translate(19.0, 19.0);
-  app.applyMutation(EditorCommand::SetTransformCommand(target, moved));
+  const Vector2d releaseDelta(19.0, 19.0);
+  const Transform2d parentFromElement = Transform2d::Translate(releaseDelta);
+  app.applyMutation(EditorCommand::SetTransformCommand(target, parentFromElement));
   ASSERT_THAT(app.flushFrame(), testing::IsTrue());
   const auto version = app.document().currentFrameVersion();
+  const Transform2d documentFromCachedDocument = Transform2d::Translate(releaseDelta);
   coordinator.compositedPresentation().beginSettling(
-      DragPreview(target.unsafeEntityHandle().entity(), 1, moved.translation(), moved), version);
+      DragPreview(target.unsafeEntityHandle().entity(), 1, releaseDelta, documentFromCachedDocument),
+      version);
 
   ASSERT_THAT(coordinator.maybeRequestRender(app, tool, viewport, &textures), testing::IsTrue());
   const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
@@ -1515,9 +1518,9 @@ TEST(RenderCoordinatorTest, ReleaseKeepsOverviewPriorityWhenVisibleCoverageIsSta
       app.setSelection(QuerySelector(app, "#r1"));
     }
     const auto entity = app.selectedElement()->unsafeEntityHandle().entity();
-    const auto transform = Transform2d::Translate(19.0, 19.0);
+    const auto documentFromCachedDocument = Transform2d::Translate(19.0, 19.0);
     coordinator.compositedPresentation().beginSettling(
-        DragPreview(entity, 1, transform.translation(), transform),
+        DragPreview(entity, 1, documentFromCachedDocument.translation(), documentFromCachedDocument),
         app.document().currentFrameVersion());
 
     ASSERT_THAT(coordinator.maybeRequestRender(app, tool, viewport, &textures), testing::IsTrue());
