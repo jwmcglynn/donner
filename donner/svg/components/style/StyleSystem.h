@@ -829,7 +829,7 @@ public:
    * @param scheduler Scheduler forwarded to the style callback.
    * @param compute Non-null callback that computes the dirty frame styles and returns false when
    *   its pass must be abandoned, including budget refusal.
-   * @return True after the callback succeeds and its warnings are committed; false without
+   * @return True after the callback succeeds and its warnings are committed. Returns false without
    *   committing tentative warnings when the callback declines the pass.
    */
   static bool computeEditedFrameStyles(
@@ -842,8 +842,8 @@ public:
    * Mark an admitted list of edited styles, recording the last rendered order when available.
    * @param registry Built document registry containing `RenderTreeState` and every affected entity.
    * @param affected Valid tree entities admitted by the edit analysis. An empty span is a no-op.
-   * @param applyRetained Optional retained-update callback. A null callback, or an entity without
-   *   a retained order, selects ordinary style-cascade invalidation instead.
+   * @param applyRetained Optional retained-update callback. A null callback selects ordinary
+   *   style-cascade invalidation. An entity without a retained order also selects that path.
    */
   static void markEditedStyleTargets(Registry& registry, std::span<const Entity> affected,
                                      ApplyRetainedStyle applyRetained);
@@ -856,9 +856,10 @@ public:
    * @param removed Previous rules replaced or removed by the source edit.
    * @param added Replacement or inserted rules from the updated stylesheet.
    * @param applyRetained Optional retained-update callback forwarded to
-   *   \ref markEditedStyleTargets; null selects ordinary style-cascade invalidation.
-   * @return True after the complete old-and-new scan marks every affected subtree; false without
-   *   clearing the matched-properties cache or marking styles when the caller must fully restyle.
+   *   \ref markEditedStyleTargets. A null callback selects ordinary style-cascade invalidation.
+   * @return True after the complete old-and-new scan marks every affected subtree. Returns false
+   *   without clearing the matched-properties cache or marking styles when the caller must fully
+   *   restyle.
    */
   static bool invalidateStylesheetRules(Registry& registry,
                                         std::span<const css::SelectorRule> removed,

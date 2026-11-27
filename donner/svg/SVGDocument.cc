@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "donner/base/Utils.h"
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/base/xml/XMLSourceStore.h"
 #include "donner/base/xml/components/TreeComponent.h"
