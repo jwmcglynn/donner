@@ -1807,6 +1807,8 @@ test("the owner stats reader reads each dispatch phase from its own slot", () =>
     canvasFrames: stats.canvasFrames,
     receivedDuringCanvasFrame: stats.receivedDuringCanvasFrame,
     preFrameDispatches: stats.preFrameDispatches,
+    pulseQueueDispatches: stats.pulseQueueDispatches,
+    postProxyDeliveryMs: stats.postProxyDeliveryMs,
   }, {
     deliveryMs: microseconds("kDeliveryUs"),
     ownerQueueMs: microseconds("kOwnerQueueUs"),
@@ -1816,6 +1818,8 @@ test("the owner stats reader reads each dispatch phase from its own slot", () =>
     canvasFrames: slots.kCanvasFrames + 1,
     receivedDuringCanvasFrame: slots.kReceivedDuringCanvasFrame + 1,
     preFrameDispatches: slots.kPreFrameDispatches + 1,
+    pulseQueueDispatches: slots.kPulseQueueDispatches + 1,
+    postProxyDeliveryMs: microseconds("kPostProxyDeliveryUs"),
   });
   const bucketBounds = gpuOwnerHeader.match(/kBrowserGpuOwnerStartLatencyBucketUpperUs = \{([^}]*)\}/)[1];
   const bucketCount = bucketBounds.split(",").length + 1;
@@ -1824,7 +1828,7 @@ test("the owner stats reader reads each dispatch phase from its own slot", () =>
     Array.from({ length: bucketCount }, (_, bucket) => slots.kStartLatencyBucketStart + bucket + 1),
   );
   assert.equal(slots.kStartLatencyBucketStart + bucketCount, slots.kCanvasFrameActiveUs);
-  assert.equal(slots.kPreFrameDispatches + 1, size, "every slot up to the last is read");
+  assert.equal(slots.kPostProxyDeliveryUs + 1, size, "every slot up to the last is read");
   assert.equal(stats.timingSaturated, false);
   heap[slots.kExecuteUs] = 4294967295;
   assert.equal(scope.__donnerReadGpuOwnerWaitStats().timingSaturated, true);

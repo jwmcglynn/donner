@@ -74,7 +74,9 @@ constexpr std::size_t kCanvasFrameActiveUs = 56;
 constexpr std::size_t kCanvasFrames = 57;
 constexpr std::size_t kReceivedDuringCanvasFrame = 58;
 constexpr std::size_t kPreFrameDispatches = 59;
-std::array<std::atomic<uint32_t>, 60> gOwnerWaitStats{};
+constexpr std::size_t kPulseQueueDispatches = 60;
+constexpr std::size_t kPostProxyDeliveryUs = 61;
+std::array<std::atomic<uint32_t>, 62> gOwnerWaitStats{};
 static_assert(kBufferWriteSizeBucketStart + 7 == kBufferWrite256);
 static_assert(kStartLatencyBucketStart + kBrowserGpuOwnerStartLatencyBucketUpperUs.size() + 1 ==
               kCanvasFrameActiveUs);
@@ -144,9 +146,9 @@ std::size_t OperationCounter(BrowserGpuOperationKind kind) {
   FatalAbort("gpu-owner.operation-kind", {{"kind", static_cast<std::int64_t>(kind)}});
 }
 
-std::size_t ExecuteReadyBatch(bool beforeFrame = false) {
+std::size_t ExecuteReadyBatch(bool limitCallbacks = false) {
   const double started = emscripten_get_now();
-  const std::size_t count = beforeFrame ? gReady.executeBatchWhile([started](std::size_t admitted) {
+  const std::size_t count = limitCallbacks ? gReady.executeBatchWhile([started](std::size_t admitted) {
     return admitted < kMaximumInlineCalls && emscripten_get_now() - started < kMaximumInlineMs;
   })
                                         : gReady.executeBatch();
@@ -199,8 +201,11 @@ void AddPhase(std::size_t index, double fromMs, double toMs) {
 }
 
 /// Splits a completed request's blocked time into delivery, owner queue, execution and wake.
-void RecordRequestPhases(const OwnerRequest& request, double requestStartedMs, double observedMs) {
+void RecordRequestPhases(const OwnerRequest& request, double requestStartedMs,
+                         double proxyReturnedMs, double observedMs) {
   AddPhase(kDeliveryUs, requestStartedMs, request.receivedMs);
+  // The callback may have been delivered before this requester returned from the SDK.
+  AddPhase(kPostProxyDeliveryUs, std::max(requestStartedMs, proxyReturnedMs), request.receivedMs);
   AddPhase(kOwnerQueueUs, request.receivedMs, request.startedMs);
   AddPhase(kExecuteUs, request.startedMs, request.finishedMs);
   AddPhase(kCompletionWakeUs, request.finishedMs, observedMs);
@@ -214,7 +219,8 @@ void RecordRequestPhases(const OwnerRequest& request, double requestStartedMs, d
 }
 
 void WaitForRequest(OwnerRequest& request, double requestStartedMs) {
-  const double deadlineMs = emscripten_get_now() + 10000.0;
+  const double proxyReturnedMs = emscripten_get_now();
+  const double deadlineMs = proxyReturnedMs + 10000.0;
   bool wokeBeforeCompletion = false;
   while (request.complete.load(std::memory_order_acquire) == 0) {
     const double remainingMs = deadlineMs - emscripten_get_now();
@@ -249,7 +255,7 @@ void WaitForRequest(OwnerRequest& request, double requestStartedMs) {
   }
   const double observedMs = emscripten_get_now();
   AddSaturatingCounter(kTotalDispatchWaitUs, (observedMs - requestStartedMs) * 1000.0);
-  RecordRequestPhases(request, requestStartedMs, observedMs);
+  RecordRequestPhases(request, requestStartedMs, proxyReturnedMs, observedMs);
 }
 
 void Invoke(void* context) {
@@ -265,6 +271,11 @@ void Invoke(void* context) {
   emscripten_futex_wake(&request.complete, INT_MAX);
   // This release is the callback's final access to the caller-owned request.
   request.complete.store(1, std::memory_order_release);
+}
+
+bool HasOutstandingRequests() {
+  return gOwnerWaitStats[kRequested].load(std::memory_order_relaxed) !=
+         gOwnerWaitStats[kFinished].load(std::memory_order_relaxed);
 }
 
 void EnqueueRequest(void* context) {
@@ -301,8 +312,22 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_gpu_pulse() {
   gInlineMs = 0.0;
   gOwnerWaitStats[kPulses].fetch_add(1, std::memory_order_relaxed);
   gProcessingBatch = true;
-  const std::size_t count = ExecuteReadyBatch();
+  const bool probeNotifications = gReady.empty() && HasOutstandingRequests();
+  if (probeNotifications) {
+    // This turn already owns the pulse. Receiving SDK work must not post a redundant turn.
+    // The receive callback only appends under gProcessingBatch, so waiting clients cannot
+    // replenish the SDK queue while this drain is in progress.
+    gPulseScheduled = true;
+    emscripten_proxy_execute_queue(gNotificationQueue);
+    gPulseScheduled = false;
+  }
+  // A pulse with ready work still executes its original detached batch. Work discovered by an
+  // otherwise empty pulse gets only the same bounded prefix as the pre-frame path.
+  const std::size_t count = ExecuteReadyBatch(probeNotifications);
   gOwnerWaitStats[kPulseDispatches].fetch_add(count, std::memory_order_relaxed);
+  if (probeNotifications && count != 0) {
+    gOwnerWaitStats[kPulseQueueDispatches].fetch_add(count, std::memory_order_relaxed);
+  }
   gProcessingBatch = false;
 #endif
 }
@@ -405,7 +430,9 @@ void RegisterBrowserGpuOwner() {
       'canvasFrames': Atomics.load(HEAPU32, index + 57),
       'receivedDuringCanvasFrame': Atomics.load(HEAPU32, index + 58),
       'preFrameDispatches': Atomics.load(HEAPU32, index + 59),
-      'timingSaturated': [10, 11, 20, 44, 45, 46, 47, 56].some(
+      'pulseQueueDispatches': Atomics.load(HEAPU32, index + 60),
+      'postProxyDeliveryMs': Atomics.load(HEAPU32, index + 61) / 1000,
+      'timingSaturated': [10, 11, 20, 44, 45, 46, 47, 56, 61].some(
           (offset) => Atomics.load(HEAPU32, index + offset) === 4294967295),
     });
   }, gOwnerWaitStats.data());
@@ -491,8 +518,7 @@ void ProcessBrowserGpuOwnerWait() {
 void ProcessBrowserGpuOwnerBeforeFrame() {
 #ifdef __EMSCRIPTEN_PTHREADS__
   if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gCanvasFrameActive ||
-      gOwnerWaitStats[kRequested].load(std::memory_order_relaxed) ==
-          gOwnerWaitStats[kFinished].load(std::memory_order_relaxed)) {
+      !HasOutstandingRequests()) {
     return;
   }
   // Pull already-posted SDK notifications into the FIFO before entering the canvas scope.
@@ -500,7 +526,7 @@ void ProcessBrowserGpuOwnerBeforeFrame() {
   // issue another request until the detached, bounded callback prefix starts.
   gProcessingBatch = true;
   emscripten_proxy_execute_queue(gNotificationQueue);
-  const std::size_t count = ExecuteReadyBatch(/*beforeFrame=*/true);
+  const std::size_t count = ExecuteReadyBatch(/*limitCallbacks=*/true);
   gOwnerWaitStats[kPreFrameDispatches].fetch_add(count, std::memory_order_relaxed);
   gProcessingBatch = false;
 #endif
