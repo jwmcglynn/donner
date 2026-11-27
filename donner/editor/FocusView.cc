@@ -363,20 +363,24 @@ void AppendParsedReferences(std::span<const css::ComponentValue> values, std::st
       hasValue, hooks);
 }
 
+bool CanInspectCssAttribute(const xml::XMLQualifiedNameRef& attr, std::string_view value,
+                            FocusTraversalBudget* budget) {
+  if (!attr.namespacePrefix.empty()) {
+    return false;
+  }
+  if (attr.name != "style" && !svg::PropertyRegistry::isPresentationAttributeName(attr.name)) {
+    return false;
+  }
+  // Charge each inspection, including reverse passes and values that produce no references.
+  return (!budget || budget->consume(value.size())) && value.find('(') != std::string_view::npos;
+}
+
 void AppendAttributeCssReferences(const xml::XMLNode& node, const xml::XMLQualifiedNameRef& attr,
                                   std::string_view value, const svg::SVGElement& element,
                                   const VariableLinkSink& variables,
                                   std::vector<FragmentReference>* out,
                                   FocusTraversalBudget* budget) {
-  if (!attr.namespacePrefix.empty()) {
-    return;
-  }
-  const bool inlineStyle = attr.name == "style";
-  if (!inlineStyle && !svg::PropertyRegistry::isPresentationAttributeName(attr.name)) {
-    return;
-  }
-  // Charge each inspection, including reverse passes and values that produce no references.
-  if ((budget && !budget->consume(value.size())) || value.find('(') == std::string_view::npos) {
+  if (!CanInspectCssAttribute(attr, value, budget)) {
     return;
   }
   std::optional<xml::XMLDecodedTextSourceMap> mapping;
@@ -391,7 +395,7 @@ void AppendAttributeCssReferences(const xml::XMLNode& node, const xml::XMLQualif
     }
     return mapping ? mapping->mapRange(local) : std::nullopt;
   };
-  if (inlineStyle) {
+  if (attr.name == "style") {
     for (const auto& declaration :
          css::parser::DeclarationListParser::ParseOnlyDeclarations(value)) {
       AppendParsedReferences(declaration.values, value, project, &element, variables, out, budget);
