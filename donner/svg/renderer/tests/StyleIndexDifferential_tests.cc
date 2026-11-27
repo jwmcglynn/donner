@@ -1433,7 +1433,7 @@ TEST(StyleIndexDifferential, WholeRuleInsertionAndDeletionMatchFreshCascade) {
     const auto expectedPass = PrepareFirstFrameWithDiagnostics(expected);
     EXPECT_THAT((Counters(actual) - before).fullClears, testing::Eq(0u));
     EXPECT_THAT(actualPass.styleBudgetRejected, testing::IsFalse());
-    EXPECT_THAT(actualPass.styles, ElementsAreArray(expectedPass.styles));
+    EXPECT_THAT(actualPass.styles, testing::ElementsAreArray(expectedPass.styles));
     ExpectSameStyleOutputs(actual, expected);
   };
 
@@ -1510,7 +1510,7 @@ TEST(StyleIndexDifferential, StylesheetRuleScanBudgetFallsBackToFreshCascade) {
   EXPECT_THAT(unlimitedPass.counters.fullClears, testing::Eq(0u));
   EXPECT_THAT(limitedPass.counters.fullClears, testing::Eq(1u));
   EXPECT_THAT(limitedPass.styleBudgetRejected, testing::IsFalse());
-  EXPECT_THAT(limitedPass.styles, ElementsAreArray(expectedPass.styles));
+  EXPECT_THAT(limitedPass.styles, testing::ElementsAreArray(expectedPass.styles));
   ExpectSameStyleOutputs(limited, expected);
 }
 
